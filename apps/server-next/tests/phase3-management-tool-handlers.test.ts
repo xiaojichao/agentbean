@@ -57,6 +57,7 @@ function makeRepositories(overrides: {
   readonly channel?: { readonly teamId: string; readonly kind: 'channel' | 'direct'; readonly visibility: 'public' | 'private' } | null;
   readonly task?: typeof SOURCE_TASK | null;
   readonly invocations?: readonly Record<string, unknown>[];
+  readonly capsuleRef?: Record<string, unknown> | null;
   readonly runMissing?: boolean;
 } = {}): ServerNextRepositories {
   const teamId = overrides.run?.teamId ?? 'team-1';
@@ -80,6 +81,7 @@ function makeRepositories(overrides: {
     channels: { getById: vi.fn(async () => overrides.channel === undefined ? { id: 'chan-1', teamId: 'team-1', kind: 'channel' as const, visibility: 'public' as const } : overrides.channel) },
     tasks: { getById: vi.fn(async () => overrides.task === undefined ? SOURCE_TASK : overrides.task) },
     teams: { isMember: vi.fn(async () => true) },
+    memory: { capsuleRefs: { getById: vi.fn(async () => overrides.capsuleRef ?? null) } },
   } as unknown as ServerNextRepositories;
 }
 
@@ -122,10 +124,12 @@ describe('createPhase3ManagementToolHandlers', () => {
     const result = await handlers['memory.create_capsule']!({
       schemaVersion: 2, managementPhase: 3, commandId: 'c', managementRunId: 'run-1', workerId: 'worker-agent',
       toolCallId: 'call', toolName: 'memory.create_capsule', leaseToken: 'tok', fencingToken: 1,
+      idempotencyKey: 'capsule-call',
       input: { targetAgentId: 'agent-target', prompt: 'summarize', limit: 3 },
     });
     expect(capsuleService.createCapsule).toHaveBeenCalledWith(expect.objectContaining({
-      teamId: 'team-1', requesterUserId: 'user-1', currentPolicyVersion: 7, prompt: 'summarize',
+      capsuleId: expect.stringMatching(/^capsule-/), teamId: 'team-1', requesterUserId: 'user-1',
+      currentPolicyVersion: 7, prompt: 'summarize',
     }));
     expect(result.capsuleRef).toMatchObject({ id: 'capsule-1' });
   });
@@ -161,6 +165,7 @@ describe('createPhase3ManagementToolHandlers', () => {
     });
     expect(candidateService.proposeCandidate).toHaveBeenCalledWith(expect.objectContaining({
       teamId: 'team-1', sourceAgentId: 'agent-source', sourceInvocationId: 'inv-source',
+      sourceRequesterUserId: 'user-1',
       targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
       sourceRefs: [expect.objectContaining({
         sourceKind: 'message', sourceScopeType: 'channel', sourceScopeRef: 'chan-1',

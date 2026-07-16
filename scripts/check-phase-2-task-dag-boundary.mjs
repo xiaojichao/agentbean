@@ -132,9 +132,12 @@ const rolloutMarkers = [
   'preflightPhase2', 'MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED', 'allowDirectFallbackBeforeBarrier: false',
   'TaskDagViewDto', 'TaskDagPanel', 'acceptTaskDagSnapshot',
 ];
+const phase2RouteBlock = managementRouter.match(
+  /if \(policy\.maxManagementPhase === 2\) \{[\s\S]*?\n      \}\n\n      const diagnostics:/,
+)?.[0] ?? '';
 if (!rolloutMarkers.slice(0, 2).every((marker) => rolloutMigration.includes(marker))
   || !rolloutMarkers.slice(2, 4).every((marker) => managementRouter.includes(marker))
-  || !/requestShape: 'multi-agent',[\s\S]*?allowDirectFallbackBeforeBarrier: false/.test(managementRouter)
+  || !/requestShape: 'multi-agent',[\s\S]*?allowDirectFallbackBeforeBarrier: false/.test(phase2RouteBlock)
   || !taskDagContracts.includes(rolloutMarkers[5])
   || !taskDagPanel.includes(rolloutMarkers[6])
   || !taskDagRevisionGuard.includes(rolloutMarkers[7])) {

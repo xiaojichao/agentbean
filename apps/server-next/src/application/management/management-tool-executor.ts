@@ -14,12 +14,14 @@ import type {
   Phase3MemoryToolRequestV3,
   Phase3MemoryToolResultV3,
   ID,
+  MemoryCapsuleRefDto,
   MemoryScopeType,
   MemorySourceRefDto,
   MemorySourceVisibility,
 } from '../../../../../packages/contracts/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
+import type { MemoryCapsuleRefRecord } from '../memory-repositories.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
@@ -493,7 +495,18 @@ export function createPhase3ManagementToolHandlers(input: {
     'memory.create_capsule': async (request) => {
       const run = await requireRun(repositories, request.managementRunId);
       const requesterUserId = await resolveRequesterUserId(run);
+      const capsuleId = deterministicMemoryResourceId('capsule', run.id, request.idempotencyKey);
+      const existing = await repositories.memory.capsuleRefs.getById({ teamId: run.teamId, id: capsuleId });
+      if (existing) {
+        if (existing.managementRunId !== run.id
+          || existing.targetAgentId !== request.input.targetAgentId
+          || existing.taskId !== request.input.taskId) {
+          throw new Error('MEMORY_TOOL_IDEMPOTENCY_CONFLICT');
+        }
+        return { capsuleRef: capsuleRefRecordDto(existing) };
+      }
       const capsule = await capsuleService.createCapsule({
+        capsuleId,
         teamId: run.teamId,
         requesterUserId,
         managementRunId: request.managementRunId,
@@ -511,11 +524,13 @@ export function createPhase3ManagementToolHandlers(input: {
 
     'memory.propose_candidate': async (request) => {
       const run = await requireRun(repositories, request.managementRunId);
+      const sourceRequesterUserId = await resolveRequesterUserId(run);
       const sourceRefs = await resolveCandidateSources(run.teamId, request.input.sourceRefs);
       const sourceInvocation = await resolveSourceInvocation(request.managementRunId, request.input.sourceRefs);
       const result = await candidateService.proposeCandidate({
         teamId: run.teamId,
         sourceAgentId: sourceInvocation.intent.targetAgentId,
+        sourceRequesterUserId,
         sourceInvocationId: sourceInvocation.id,
         targetAgentId: request.input.targetAgentId,
         managementRunId: request.managementRunId,
@@ -854,6 +869,24 @@ function authority(request: {
 
 function deterministicTaskId(managementRunId: string, parentTaskId: string, clientKey: string): string {
   return `task-${createHash('sha256').update(`${managementRunId}\u0000${parentTaskId}\u0000${clientKey}`).digest('hex').slice(0, 24)}`;
+}
+
+function deterministicMemoryResourceId(prefix: string, managementRunId: string, idempotencyKey: string): string {
+  return `${prefix}-${createHash('sha256').update(`${managementRunId}\u0000${idempotencyKey}`).digest('hex').slice(0, 24)}`;
+}
+
+function capsuleRefRecordDto(record: MemoryCapsuleRefRecord): MemoryCapsuleRefDto {
+  return {
+    schemaVersion: 1,
+    id: record.id,
+    teamId: record.teamId,
+    managementRunId: record.managementRunId,
+    ...(record.taskId ? { taskId: record.taskId } : {}),
+    targetAgentId: record.targetAgentId,
+    contentHash: record.contentHash,
+    authorizationDecisionId: record.authorizationDecisionId,
+    expiresAt: record.expiresAt,
+  };
 }
 
 function isConflictDiagnostic(code: string): boolean {

@@ -16,6 +16,8 @@ import type {
   ManagementWorkerToolResultV1,
   Phase2TaskToolRequestV2,
   Phase2TaskToolResultV2,
+  Phase3MemoryToolRequestV3,
+  Phase3MemoryToolResultV3,
   TaskClaimAcquireAckV1,
   TaskClaimExpiredV1,
   TaskClaimOfferV1,
@@ -24,7 +26,7 @@ import type {
   TaskClaimRenewAckV1,
   TaskClaimRenewV1,
 } from '../../../packages/contracts/src/index.js';
-import { AGENT_EVENTS, parseManagementWorkerPayload, parsePhase2TaskToolResultV2, parseTaskClaimPayload, safeParseManagementWorkerPayload, safeParseTaskClaimPayload } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseManagementWorkerPayload, parsePhase2TaskToolResultV2, parsePhase3MemoryToolResultV3, parseTaskClaimPayload, safeParseManagementWorkerPayload, safeParseTaskClaimPayload } from '../../../packages/contracts/src/index.js';
 
 export interface ManagementWorkerProtocolSocket {
   readonly connected: boolean;
@@ -55,7 +57,7 @@ export interface PiManagerWorkerProtocol {
   releaseLease(input: ManagementLeaseReleaseV1): Promise<ManagementLeaseReleaseAckV1>;
   abortLease(input: ManagementWorkerAbortV1): Promise<ManagementLeaseReleaseAckV1>;
   fetchCheckpoint(input: ManagementCheckpointFetchV1): Promise<ManagementCheckpointResultV1>;
-  executeTool(input: ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2): Promise<ManagementWorkerToolResultV1 | Phase2TaskToolResultV2>;
+  executeTool(input: ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3): Promise<ManagementWorkerToolResultV1 | Phase2TaskToolResultV2 | Phase3MemoryToolResultV3>;
   replayOutbox(input: ManagementOutboxReplayV1): Promise<ManagementOutboxReplayAckV1>;
 }
 
@@ -187,7 +189,7 @@ export function createManagementWorkerProtocol(
       profileId: input.profileId,
       runtimeVersion: input.runtimeVersion,
       supportedProtocolVersions: [1, 2],
-      supportedPhases: [1, 2],
+      supportedPhases: [1, 2, 3],
       ...capability,
     };
     const ack = parseManagementWorkerPayload(
@@ -276,7 +278,9 @@ export function createManagementWorkerProtocol(
         input.socket, AGENT_EVENTS.managementWorker.toolRequest, payload, toolAckTimeoutMs,
       );
       return payload.schemaVersion === 2
-        ? parsePhase2TaskToolResultV2(result)
+        ? payload.managementPhase === 3
+          ? parsePhase3MemoryToolResultV3(result)
+          : parsePhase2TaskToolResultV2(result)
         : parseManagementWorkerPayload('tool-result', result);
     },
     async replayOutbox(payload) {

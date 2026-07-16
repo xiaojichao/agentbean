@@ -244,6 +244,24 @@ test('fails closed when the V3 capability gate wiring disappears', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when daemon stops advertising Phase 3', () => {
+  const result = withFixture('agentbean-phase3-daemon-register-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/management-worker-protocol.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('supportedPhases: [1, 2, 3]', 'supportedPhases: [1, 2]'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when daemon checkpoint phase restoration disappears', () => {
+  const result = withFixture('agentbean-phase3-daemon-checkpoint-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('checkpointManagementPhase', 'removedCheckpointManagementPhase'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when the Phase 3 Memory parser stops enforcing exact keys', () => {
   const result = withFixture('agentbean-phase3-exact-parser-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

@@ -356,6 +356,28 @@ describe('management worker socket integration', () => {
       preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true },
       profileId: 'profile-1',
     });
+
+    const runId = await harness.createPhase3Run();
+    await harness.repositories.memory.capsuleRefs.create({
+      id: 'cap-valid', teamId: 'team-1', managementRunId: runId, taskId: 'root-task',
+      targetAgentId: 'agent-1', contentHash: 'sha256:cap', authorizationDecisionId: 'decision-1',
+      issuedAt: 1, expiresAt: 1_000, createdAt: 1,
+    });
+    await expect(harness.realtime.scheduleManagementRun({ managementRunId: runId, profileId: 'profile-1' }))
+      .resolves.toMatchObject({ ok: true, deviceId: 'device-v3' });
+    const offer = phase3.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
+    const acquired = await phase3.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
+      schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v3',
+    });
+    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      schemaVersion: 1, managementRunId: runId,
+      workerId: (await phase3.trigger(AGENT_EVENTS.managementWorker.register, phase3WorkerRegistration()) as { workerId: string }).workerId,
+      leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
+    })).resolves.toMatchObject({
+      managementRunId: runId,
+      context: { managementPhase: 3, rootTaskId: 'root-task' },
+      checkpoint: { authoritative: { memoryCapsuleIds: ['cap-valid'] } },
+    });
   });
 });
 
@@ -448,6 +470,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     management: repositories.management,
     kernel,
     executeTool,
+    memory: repositories.memory,
     clock: { now: () => clock.now },
     ids: { nextId: () => `scheduler-${++schedulerId}` },
     leaseTokens: { nextToken: () => `lease-secret-${++leaseId}` },
@@ -523,6 +546,16 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
       const created = await kernel.createOrResumeRun({
         teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1', rootTaskId: 'root-task',
         requestKey: 'phase2-run-request', requestHash: 'phase2-run-hash', managementPhase: 2,
+        placementPolicy: { placement: 'device', allowedDeviceIds: input.allowedDeviceIds,
+          allowServerContext: false, requireLocalModelCredentials: true },
+        budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },
+      });
+      return created.run.id;
+    },
+    async createPhase3Run() {
+      const created = await kernel.createOrResumeRun({
+        teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1', rootTaskId: 'root-task',
+        requestKey: 'phase3-run-request', requestHash: 'phase3-run-hash', managementPhase: 3,
         placementPolicy: { placement: 'device', allowedDeviceIds: input.allowedDeviceIds,
           allowServerContext: false, requireLocalModelCredentials: true },
         budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },

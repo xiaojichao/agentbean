@@ -27,6 +27,7 @@ import type { ManagementPreflight } from '../../../../../packages/domain/src/ind
 import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
 import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
+import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
 import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
@@ -45,6 +46,7 @@ export interface DeviceWorkerSchedulerDependencies {
   readonly devices: DeviceRepository;
   readonly messages?: MessageRepository;
   readonly management: ManagementRepositories;
+  readonly memory?: MemoryRepositories;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly kernel: ManagementKernel;
   readonly executeTool: ManagementToolExecutor;
@@ -429,11 +431,13 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             latest: await repositories.management.checkpoints.getLatest(run.id),
             facts: await collectManagementCheckpointFacts(repositories.management, run, {
               tasks: repositories.tasks, coordination: repositories.coordination,
-            }),
+            }, dependencies.memory, dependencies.clock.now()),
           }))
         : {
             latest: await dependencies.management.checkpoints.getLatest(run.id),
-            facts: await collectManagementCheckpointFacts(dependencies.management, run),
+            facts: await collectManagementCheckpointFacts(
+              dependencies.management, run, undefined, dependencies.memory, dependencies.clock.now(),
+            ),
           };
       const latest = snapshot.latest;
       const checkpoint = latest
@@ -460,6 +464,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         workerId: worker.workerId,
         context: {
           schemaVersion: 1,
+          managementPhase: 'managementPhase' in run ? run.managementPhase : 1,
           teamId: run.teamId,
           channelId: run.channelId,
           rootMessageId: run.rootMessageId,

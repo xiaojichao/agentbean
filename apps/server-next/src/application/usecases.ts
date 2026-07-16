@@ -2688,16 +2688,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (management.kind === 'unavailable') {
         return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
       }
-      const phase2ManagedRoot = management.kind === 'managed' && management.managementPhase === 2;
+      const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
       const task = shouldCreateTask
         ? await repositories.tasks.create({
             id: taskId!,
             teamId: messageInput.teamId,
             title: messageInput.body.trim() || '附件',
             description: undefined,
-            status: route.kind === 'dispatch' || phase2ManagedRoot ? 'in_progress' : 'todo',
+            status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
             creatorId: messageInput.userId,
-            assigneeId: route.kind === 'dispatch' && !phase2ManagedRoot ? route.agentId : undefined,
+            assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
             channelId: messageInput.channelId,
             tags: [],
             sortOrder: now,
@@ -2705,7 +2705,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             updatedAt: now,
           })
         : null;
-      if (task && management.kind === 'managed' && management.managementPhase === 2) {
+      if (task && management.kind === 'managed' && management.managementPhase >= 2) {
         await taskCoordinationKernel.bootstrapRootCoordination({
           managementRunId: management.managementRunId,
           taskId: task.id,

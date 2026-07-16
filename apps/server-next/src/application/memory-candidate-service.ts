@@ -80,6 +80,8 @@ export interface MemoryCandidateSourceInput extends MemorySourceRefDto {
 export interface ProposeCandidateInput {
   readonly teamId: ID;
   readonly sourceAgentId: ID;
+  /** Server-authenticated user whose current visibility authorizes the cited sources. */
+  readonly sourceRequesterUserId?: ID;
   readonly sourceInvocationId: ID;
   readonly targetAgentId: ID;
   readonly managementRunId: ID;
@@ -325,7 +327,7 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         });
         for (const ref of input.sourceRefs) {
           await permissions.assertSourceAuthority({
-            teamId: input.teamId, actorId: input.sourceAgentId,
+            teamId: input.teamId, actorId: input.sourceRequesterUserId ?? input.sourceAgentId,
             sourceScopeType: ref.sourceScopeType, sourceScopeRef: ref.sourceScopeRef,
             sourceVisibility: ref.sourceVisibility,
             targetScopeType: input.scopeType, targetScopeRef: input.scopeRef,

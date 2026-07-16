@@ -41,6 +41,7 @@ const ACTOR_SYSTEM: MemoryAuditActorKind = 'system';
 const DEFAULT_CAPSULE_TTL_MS = 15 * 60 * 1000;
 
 export interface CreateCapsuleInput {
+  readonly capsuleId?: ID;
   readonly teamId: ID;
   readonly requesterUserId: ID;
   readonly managementRunId: ID;
@@ -91,7 +92,7 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
       // 最小 Capsule：只冻结普通 team-visible 的 scope-policy 决策；DM/private 来源必须显式授权。
       const scopePolicyMatches = searchResult.matches.filter(isSafeScopePolicyMatch);
 
-      const capsuleId = ids.nextId();
+      const capsuleId = input.capsuleId ?? ids.nextId();
       const issuedAt = input.now;
       const ttlExpiresAt = input.now + (input.ttlMs ?? DEFAULT_CAPSULE_TTL_MS);
       const expiresAt = scopePolicyMatches.reduce(

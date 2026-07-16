@@ -278,4 +278,54 @@ describe('PiManagerWorkerHost', () => {
     expect(protocol.executeTool).not.toHaveBeenCalledWith(expect.objectContaining({ toolName: 'tasks.create_subtasks' }));
     expect(sessions).toHaveLength(2);
   });
+
+  test('从显式 Phase 3 checkpoint 恢复 V3 Session 并调用 Memory tool', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    const baseline = await protocol.fetchCheckpoint({ schemaVersion: 1, managementRunId: 'run-1',
+      workerId: 'worker-1', leaseToken: 'raw-lease-token', fencingToken: 1 });
+    vi.mocked(protocol.fetchCheckpoint).mockResolvedValue({
+      ...baseline,
+      context: { ...baseline.context, managementPhase: 3, rootTaskId: 'root-task' },
+      checkpoint: baseline.checkpoint ? { ...baseline.checkpoint,
+        authoritative: { ...baseline.checkpoint.authoritative, taskGraphRevision: 1,
+          openTaskIds: ['root-task'], taskSnapshots: [
+            { taskId: 'root-task', taskRevision: 1, taskAttempt: 1, status: 'todo' },
+          ] } } : undefined,
+    });
+    vi.mocked(protocol.executeTool).mockResolvedValue({
+      schemaVersion: 2, managementPhase: 3, commandId: 'run-1:search-1',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'search-1',
+      toolName: 'memory.search', ok: true, output: { matches: [] },
+    });
+    let executeTool: Parameters<Parameters<typeof createPiManagerWorkerHost>[0]['createRuntimeFactory']>[0]['toolExecutor'] | undefined;
+    const session: ManagementSession = { prompt: vi.fn(() => new Promise<void>(() => undefined)),
+      steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(), abort: vi.fn(), waitForIdle: vi.fn(),
+      subscribe: vi.fn(() => () => undefined), dispose: vi.fn() };
+    const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn(async () => session) };
+    const host = createPiManagerWorkerHost({ profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: (input) => { executeTool = input.toolExecutor; return runtimeFactory; },
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100 });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-3', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+    expect(runtimeFactory.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ schemaVersion: 2, managementPhase: 3 }),
+    }));
+
+    await expect(executeTool!({ toolCallId: 'search-1', name: 'memory.search',
+      scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',
+        rootMessageId: 'message-1', rootTaskId: 'root-task' },
+      input: { targetAgentId: 'agent-1', query: 'q', limit: 5 },
+      metadata: { name: 'memory.search', effect: 'read', phase: 3, inputSchemaVersion: 1 } }))
+      .resolves.toEqual({ text: JSON.stringify({ matches: [] }) });
+    expect(protocol.executeTool).toHaveBeenLastCalledWith(expect.objectContaining({
+      schemaVersion: 2, managementPhase: 3, toolName: 'memory.search',
+      idempotencyKey: 'run-1:search-1',
+    }));
+  });
 });

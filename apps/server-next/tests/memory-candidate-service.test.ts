@@ -173,6 +173,29 @@ describe.each([
     }
   });
 
+  test('proposeCandidate keeps Agent proposal authority separate from user source visibility', async () => {
+    const proposedActors: string[] = [];
+    const sourceActors: string[] = [];
+    const permissions: MemoryCandidatePermissions = {
+      ...permissivePermissions(),
+      assertProposeAuthority: async ({ actorId }) => { proposedActors.push(actorId); },
+      assertSourceAuthority: async ({ actorId }) => { sourceActors.push(actorId); },
+    };
+    const { service, close } = createHarness(permissions);
+    try {
+      await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceRequesterUserId: 'user-1',
+        sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'use node-pty', sourceRefs: [sourceRef()],
+      });
+      expect(proposedActors).toEqual(['agent-1']);
+      expect(sourceActors).toEqual(['user-1']);
+    } finally {
+      close();
+    }
+  });
+
   test('acceptCandidate creates an active Memory and links acceptedMemoryId', async () => {
     const { service, memory, close } = createHarness(permissivePermissions());
     try {

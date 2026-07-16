@@ -56,6 +56,8 @@ const daemonRuntimeMemory = read('apps/daemon-next/src/memory/runtime-memory-con
 const daemonRuntimeMemoryTests = read('apps/daemon-next/tests/runtime-memory-context.test.ts');
 const daemonExecutor = read('apps/daemon-next/src/executor.ts');
 const daemonProtocol = read('apps/daemon-next/src/index.ts');
+const daemonWorkerProtocol = read('apps/daemon-next/src/management-worker-protocol.ts');
+const daemonWorkerHost = read('apps/daemon-next/src/pi-manager-worker-host.ts');
 const managementToolCatalog = read('packages/pi-management-runtime/src/management-tool-catalog.ts');
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
@@ -66,7 +68,7 @@ const hasChecklist = [...Array(18)].every((_, index) =>
 if (!hasChecklist
   || !/^> 当前 verdict：\*\*Not ready\*\*/m.test(matrix)
   || !matrix.includes('| P3-03 | Green |')
-  || !matrix.includes('Phase 3 runtime 必须保持关闭')
+  || !matrix.includes('Phase 3 默认仍保持关闭')
   || !plan.includes('Phase 3 未完成前')) {
   violations.push('P3_MATRIX_INVALID: P3-01..P3-18, Not ready, and fail-closed rollout are required');
 }
@@ -261,8 +263,17 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !deviceWorkerScheduler.includes('managementPhase3Preflight')
   || !deviceWorkerScheduler.includes('supportsManagementPhase(worker.capability, 3)')
   || !piSessionAdapter.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
-  || !managementWorkerV2.includes('managementPhase: 2 | 3')) {
-  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（executor phase3 分支 + scheduler phase3Preflight + adapter PHASE_3 路由 + context 2|3）is required');
+  || !managementWorkerV2.includes('managementPhase: 2 | 3')
+  || !daemonWorkerProtocol.includes('supportedPhases: [1, 2, 3]')
+  || !daemonWorkerProtocol.includes('parsePhase3MemoryToolResultV3')
+  || !daemonWorkerHost.includes('managementPhase: 1 | 2 | 3')
+  || !daemonWorkerHost.includes('checkpointManagementPhase')
+  || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
+  || !deviceWorkerScheduler.includes('managementPhase:')
+  || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
+  || !serverNextUsecases.includes('managementPhase >= 2')
+  || !managementToolExecutor.includes('sourceRequesterUserId')) {
+  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/coordination/checkpoint + daemon register/parser/host + requester authority）is required');
 }
 
 const runtimeContractMarkers = [
