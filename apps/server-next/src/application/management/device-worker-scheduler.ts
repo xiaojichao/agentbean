@@ -392,6 +392,12 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
     async executeTool(connectionId: string, input: ManagementToolRequest): Promise<ManagementToolResult> {
       const worker = connectedWorker(connectionId, input.workerId, workersById, workerIdByConnection);
       if (!worker) return toolFailure(input, 'MANAGEMENT_WORKER_CONNECTION_MISMATCH');
+      const run = await dependencies.management.runs.getById(input.managementRunId);
+      const requestPhase = 'managementPhase' in input ? input.managementPhase : 1;
+      const runPhase = run && 'managementPhase' in run ? run.managementPhase : 1;
+      if (!run || requestPhase > runPhase || !supportsManagementPhase(worker.capability, requestPhase)) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_PHASE_MISMATCH');
+      }
       const lease = await dependencies.management.leases.get(input.managementRunId);
       const leaseStatus = inspectManagerLease(lease ?? undefined, dependencies.clock.now());
       if (!worker.activeRunIds.has(input.managementRunId)
@@ -611,7 +617,7 @@ function failure(
 function toolFailure(input: ManagementToolRequest, diagnosticCode: string): ManagementToolResult {
   return {
     schemaVersion: input.schemaVersion,
-    ...('managementPhase' in input ? { managementPhase: 2 as const } : {}),
+    ...('managementPhase' in input ? { managementPhase: input.managementPhase } : {}),
     commandId: input.commandId,
     managementRunId: input.managementRunId,
     workerId: input.workerId,

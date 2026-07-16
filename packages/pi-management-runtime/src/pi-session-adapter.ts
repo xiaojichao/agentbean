@@ -70,7 +70,9 @@ function assertSessionContext(input: CreateManagementSessionInput): void {
     ? context?.schemaVersion === 2
     : isNonEmptyString(context.frozenTarget.agentId)
       && (context.frozenTarget.kind === 'custom' || context.frozenTarget.kind === 'agentos-hosted');
-  const validCommon = (context?.schemaVersion === 1 || context?.schemaVersion === 2)
+  const validCommon = (context?.schemaVersion === 1
+    || (context?.schemaVersion === 2
+      && (context.managementPhase === 2 || context.managementPhase === 3)))
     && isNonEmptyString(scope?.teamId)
     && isNonEmptyString(scope?.channelId)
     && isNonEmptyString(scope?.rootMessageId)

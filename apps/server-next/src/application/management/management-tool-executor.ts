@@ -90,8 +90,10 @@ export function createManagementToolExecutor(input: {
       const selectedHandlers = isPhase3
         ? input.phase3Handlers
         : 'managementPhase' in request ? input.phase2Handlers ?? input.handlers : input.handlers;
-      const handler = (selectedHandlers as Partial<Record<string,
-        (value: ManagementToolRequest) => Promise<unknown>>>)[request.toolName];
+      const handler = selectedHandlers
+        ? (selectedHandlers as Partial<Record<string,
+            (value: ManagementToolRequest) => Promise<unknown>>>)[request.toolName]
+        : undefined;
       if (!handler) {
         return { ...base, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false } as ManagementToolResult;
       }

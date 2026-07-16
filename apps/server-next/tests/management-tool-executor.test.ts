@@ -56,6 +56,32 @@ describe('management tool executor', () => {
     await expect(execute({ schemaVersion: 1, commandId: 'command-stale', managementRunId: run.id, workerId: 'worker-1', toolCallId: 'tool-stale', toolName: 'agents.invoke', input: { objective: 'do work', attachmentIds: [] }, leaseToken: 'token', fencingToken: 2, idempotencyKey: 'invoke-2' })).resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED', diagnosticCode: 'LEASE_FUTURE_FENCING_TOKEN' });
   });
 
+  test('returns an unavailable Phase 3 result when handlers are not wired', async () => {
+    const execute = createManagementToolExecutor({
+      kernel: { authorizeWrite: vi.fn() } as never,
+      handlers: {},
+    });
+    await expect(execute({
+      schemaVersion: 2,
+      managementPhase: 3,
+      commandId: 'command-memory-search',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-memory-search',
+      toolName: 'memory.search',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'memory-search-1',
+      input: { query: '目标', limit: 5 },
+    })).resolves.toMatchObject({
+      schemaVersion: 2,
+      managementPhase: 3,
+      ok: false,
+      errorCode: 'UNAVAILABLE',
+      diagnosticCode: 'TOOL_NOT_WIRED',
+    });
+  });
+
   test('does not echo arbitrary handler errors through client diagnostics', async () => {
     const persistence = createInMemoryManagementPersistence();
     const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => 'unused' } });

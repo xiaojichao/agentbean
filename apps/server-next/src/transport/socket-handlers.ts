@@ -4,6 +4,7 @@ import {
   makeFailure,
   parseManagementWorkerRegisterV2,
   parsePhase2TaskToolRequestV2,
+  parsePhase3MemoryToolRequestV3,
   safeParseManagementWorkerPayload,
   safeParseTaskClaimPayload,
   type DispatchRequestDto,
@@ -11,6 +12,7 @@ import {
   type ManagementWorkerPayloadMapV1,
   type ManagementWorkerRegisterV2,
   type Phase2TaskToolRequestV2,
+  type Phase3MemoryToolRequestV3,
   type TaskClaimAcquireV1,
   type TaskClaimReleaseV1,
   type TaskClaimRenewV1,
@@ -138,7 +140,7 @@ export interface ManagementWorkerSocketHandlers {
   leaseRenew(payload: ManagementWorkerPayloadMapV1['lease-renew']): Promise<unknown>;
   leaseRelease(payload: ManagementWorkerPayloadMapV1['lease-release']): Promise<unknown>;
   abort(payload: ManagementWorkerPayloadMapV1['abort']): Promise<unknown>;
-  toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2): Promise<unknown>;
+  toolRequest(payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3): Promise<unknown>;
   checkpointFetch(payload: ManagementWorkerPayloadMapV1['checkpoint-fetch']): Promise<unknown>;
   outboxReplay(payload: ManagementWorkerPayloadMapV1['outbox-replay']): Promise<unknown>;
 }
@@ -638,12 +640,15 @@ function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release'>(
 function bindManagementWorkerToolRequest(
   socket: SocketLike,
   event: string,
-  handler: (payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2) => Promise<unknown>,
+  handler: (payload: ManagementWorkerPayloadMapV1['tool-request'] | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3) => Promise<unknown>,
 ): void {
   socket.on(event, async (payload, ack) => {
     try {
       if (payload && typeof payload === 'object' && (payload as { schemaVersion?: unknown }).schemaVersion === 2) {
-        ack?.(await handler(parsePhase2TaskToolRequestV2(payload)));
+        const phase = (payload as { managementPhase?: unknown }).managementPhase;
+        ack?.(await handler(phase === 3
+          ? parsePhase3MemoryToolRequestV3(payload)
+          : parsePhase2TaskToolRequestV2(payload)));
         return;
       }
       const parsed = safeParseManagementWorkerPayload('tool-request', payload);

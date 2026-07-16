@@ -109,6 +109,25 @@ describe('management worker socket integration', () => {
       input: {},
     })).resolves.toMatchObject({ ok: true, output: { status: 'running' } });
     expect(harness.toolHandler).toHaveBeenCalledOnce();
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.toolRequest, {
+      schemaVersion: 2,
+      managementPhase: 3,
+      commandId: 'command-phase-3',
+      managementRunId: harness.runId,
+      workerId: authority.workerId,
+      toolCallId: 'tool-phase-3',
+      toolName: 'memory.search',
+      leaseToken: 'lease-secret-1',
+      fencingToken: 1,
+      idempotencyKey: 'memory-search-1',
+      input: { query: '目标', limit: 5 },
+    })).resolves.toMatchObject({
+      schemaVersion: 2,
+      managementPhase: 3,
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      diagnosticCode: 'MANAGEMENT_WORKER_PHASE_MISMATCH',
+    });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
       schemaVersion: 1,
       managementRunId: harness.runId,

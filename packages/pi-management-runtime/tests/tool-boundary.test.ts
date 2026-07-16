@@ -259,6 +259,29 @@ describe('management tool boundary', () => {
     })).rejects.toThrow(/P1_SESSION_CONTEXT_INVALID/);
   });
 
+  it('rejects an unknown management phase instead of falling back to Phase 2 tools', async () => {
+    await expect(createManagementRuntimeFactory({
+      model: { id: 'invalid-phase', async respond() { return modelResponse([]); } },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'invalid-phase', version: 1, content: 'No.' },
+      mode: 'managed',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 4,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-1',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-1',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    } as never)).rejects.toThrow(/P1_SESSION_CONTEXT_INVALID/);
+  });
+
   it('rejects an invalid frozen target when Phase 2 provides one', async () => {
     const input = phase2SessionInput('invalid-target');
     await expect(createManagementRuntimeFactory({
