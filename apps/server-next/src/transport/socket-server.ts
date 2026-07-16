@@ -181,7 +181,9 @@ export function attachServerNextNamespaces(
           userId: identity.userId,
           currentDeviceId: identity.currentDeviceId,
         });
-        const localDevice = devices.ok ? devices.devices.find((device) => device.isLocal) : undefined;
+        const localDevice = devices.ok
+          ? devices.devices.find((device) => device.isLocal && device.ownerId === identity.userId)
+          : undefined;
         if (!localDevice) {
           ack?.({ ok: false, error: 'PERMISSION_DENIED' });
           return;

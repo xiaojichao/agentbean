@@ -1443,6 +1443,33 @@ describe('server-next Socket.IO namespaces', () => {
     }
   });
 
+  test('rejects a local Memory summary hint for a Device owned by another Team member', async () => {
+    const socket = new IntegrationFakeSocket() as IntegrationFakeSocket & {
+      handshake: { auth: { token: string; currentDeviceId: string } };
+    };
+    socket.handshake = { auth: { token: 'user-token', currentDeviceId: 'device-other' } };
+    const namespace = new IntegrationFakeNamespace();
+    namespace.nextSocket = socket;
+    const listDevices = vi.fn(async () => makeSuccess({
+      devices: [{
+        id: 'device-other', teamId: 'team-1', ownerId: 'user-2', status: 'online' as const, isLocal: true,
+      }],
+    }));
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({
+        user: { id: 'user-1' }, currentTeam: { id: 'team-1' }, teams: [],
+      })),
+      listDevices,
+    } as unknown as ServerNextUseCases;
+    attachServerNextNamespaces(new IntegrationFakeServer(namespace), app);
+
+    await expect(socket.trigger(WEB_EVENTS.memory.localSummary, { teamId: 'team-1' }))
+      .resolves.toEqual({ ok: false, error: 'PERMISSION_DENIED' });
+    expect(listDevices).toHaveBeenCalledWith({
+      teamId: 'team-1', userId: 'user-1', currentDeviceId: 'device-other',
+    });
+  });
+
   test('handles DM start, list, and snapshot through custom socket handlers', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
