@@ -29,7 +29,7 @@ export interface ManagementEventPayloadMapV1 {
     readonly resultReferenceId: ID;
     readonly requestHash: string;
     /** Body-free tool output required to short-circuit an idempotent replay. */
-    readonly output:
+    readonly output?:
       | Phase3ManagementWorkerToolOutputMapV1['memory.create_capsule']
       | Phase3ManagementWorkerToolOutputMapV1['memory.propose_candidate']
       | Phase3ManagementWorkerToolOutputMapV1['memory.link_sources'];

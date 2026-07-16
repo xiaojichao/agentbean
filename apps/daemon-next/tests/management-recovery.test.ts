@@ -23,14 +23,14 @@ describe('management worker recovery', () => {
       resultReferenceId: 'invocation-1',
     }));
 
-    await replayManagementOutboxForLease({
+    await expect(replayManagementOutboxForLease({
       authority: {
         managementRunId: 'run-1', workerId: 'worker-new',
         leaseToken: 'current-lease-token', fencingToken: 2,
       },
       protocol: { replayOutbox } as never,
       outbox: { list: () => [item], remove } as never,
-    });
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 0 });
 
     expect(replayOutbox).toHaveBeenCalledWith({
       schemaVersion: 1,
@@ -52,14 +52,14 @@ describe('management worker recovery', () => {
       toolName: 'memory.create_capsule', createdAt: 1,
     };
     const remove = vi.fn(async () => undefined);
-    await replayManagementOutboxForLease({
+    await expect(replayManagementOutboxForLease({
       authority: { managementRunId: 'run-1', workerId: 'worker-new',
         leaseToken: 'current-lease-token', fencingToken: 2 },
       protocol: { replayOutbox: vi.fn(async (payload) => ({ schemaVersion: 1 as const,
         commandId: payload.commandId, managementRunId: payload.managementRunId,
         idempotencyKey: payload.idempotencyKey, disposition: 'rejected' as const })) } as never,
       outbox: { list: () => [item], remove } as never,
-    });
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 1 });
     expect(remove).not.toHaveBeenCalled();
   });
 

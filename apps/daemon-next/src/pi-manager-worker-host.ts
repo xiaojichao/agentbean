@@ -213,7 +213,12 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     activeLeases.set(lease.managementRunId, lease);
 
     try {
-      await replayManagementOutboxForLease({ authority: lease, protocol: input.protocol, outbox: input.outbox });
+      const replay = await replayManagementOutboxForLease({
+        authority: lease, protocol: input.protocol, outbox: input.outbox,
+      });
+      if (replay.unresolvedMemoryWriteCount > 0) {
+        throw new Error('MANAGEMENT_MEMORY_OUTBOX_UNRESOLVED');
+      }
       const restored = await input.protocol.fetchCheckpoint({
         schemaVersion: 1,
         managementRunId: lease.managementRunId,
@@ -404,7 +409,8 @@ export async function replayManagementOutboxForLease(input: {
   readonly authority: ManagementWorkerLeaseProofV1;
   readonly protocol: Pick<PiManagerWorkerProtocol, 'replayOutbox'>;
   readonly outbox: Pick<ManagementDurableOutbox, 'list' | 'remove'>;
-}): Promise<void> {
+}): Promise<{ unresolvedMemoryWriteCount: number }> {
+  let unresolvedMemoryWriteCount = 0;
   for (const item of input.outbox.list()) {
     if (item.managementRunId !== input.authority.managementRunId) continue;
     const payload: ManagementOutboxReplayV1 = {
@@ -419,6 +425,7 @@ export async function replayManagementOutboxForLease(input: {
       if (result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) {
         // A Memory side effect may have committed immediately before its receipt. Retain the
         // body-free durable entry until the server can prove committed/conflict on a later lease.
+        unresolvedMemoryWriteCount += 1;
         continue;
       }
       if (result.disposition === 'existing' || result.disposition === 'committed'
@@ -429,6 +436,7 @@ export async function replayManagementOutboxForLease(input: {
       // Keep the durable entry for the next reconnect/reacquire attempt.
     }
   }
+  return { unresolvedMemoryWriteCount };
 }
 
 function runtimeContext(restored: ManagementCheckpointResultV1): ManagementSessionContextV1 | ManagementSessionContextV2 {

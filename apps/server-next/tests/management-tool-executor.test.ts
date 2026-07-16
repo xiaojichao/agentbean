@@ -132,6 +132,65 @@ describe('management tool executor', () => {
     expect(createCapsule).toHaveBeenCalledTimes(1);
   });
 
+  test('fails closed when an upgraded legacy Memory receipt has no replay output', async () => {
+    const createCapsule = vi.fn();
+    const execute = createManagementToolExecutor({
+      kernel: {
+        authorizeWrite: vi.fn(),
+        inspectMemoryToolReceipt: vi.fn(async () => {
+          throw new Error('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
+        }),
+      } as never,
+      handlers: {},
+      phase3Handlers: { 'memory.create_capsule': createCapsule },
+    });
+    await expect(execute({
+      schemaVersion: 2, managementPhase: 3, commandId: 'legacy-receipt-command',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'legacy-receipt-call',
+      toolName: 'memory.create_capsule', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'legacy-receipt', input: { targetAgentId: 'agent-1', prompt: '目标', limit: 3 },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'UNAVAILABLE',
+      diagnosticCode: 'MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE' });
+    expect(createCapsule).not.toHaveBeenCalled();
+  });
+
+  test('does not append a receipt when the run becomes terminal during the Memory handler', async () => {
+    const persistence = createInMemoryManagementPersistence();
+    let id = 0;
+    const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 },
+      ids: { nextId: () => `race-${++id}` } });
+    const { run } = await kernel.createOrResumeRun({
+      teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'root-task', rootMessageId: 'message-1',
+      requestKey: 'terminal-race', requestHash: 'terminal-race-hash', managementPhase: 3,
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      budget: { maxSubtasks: 2, maxDepth: 1, maxExternalInvocations: 2 },
+    });
+    await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1',
+      host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
+    const handler = vi.fn(async () => {
+      const current = await persistence.repositories.runs.getById(run.id);
+      if (!current) throw new Error('TEST_RUN_REQUIRED');
+      await persistence.repositories.runs.update({ ...current, status: 'cancelled',
+        updatedAt: 11, completedAt: 11 });
+      return { memoryId: 'memory-1' };
+    });
+    const execute = createManagementToolExecutor({ kernel, handlers: {},
+      phase3Handlers: { 'memory.link_sources': handler } });
+    await expect(execute({
+      schemaVersion: 2, managementPhase: 3, commandId: 'terminal-race-command',
+      managementRunId: run.id, workerId: 'worker-1', toolCallId: 'terminal-race-call',
+      toolName: 'memory.link_sources', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'terminal-race-key', input: { memoryId: 'memory-1', sourceRefs: [] },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT',
+      diagnosticCode: 'MANAGEMENT_RUN_TERMINAL' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    await expect(persistence.repositories.events.list(run.id)).resolves.not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ event: expect.objectContaining({
+        type: 'memory-tool-completed',
+      }) })]),
+    );
+  });
+
   test('does not echo arbitrary handler errors through client diagnostics', async () => {
     const persistence = createInMemoryManagementPersistence();
     const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => 'unused' } });

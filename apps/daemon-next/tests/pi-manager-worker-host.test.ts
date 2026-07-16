@@ -136,6 +136,38 @@ describe('PiManagerWorkerHost', () => {
     })).toBe(false);
   });
 
+  test('存在未解析 Memory outbox 时阻止恢复新 Session', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    vi.mocked(protocol.replayOutbox).mockImplementation(async (payload) => ({
+      schemaVersion: 1, commandId: payload.commandId, managementRunId: payload.managementRunId,
+      idempotencyKey: payload.idempotencyKey, disposition: 'rejected',
+    }));
+    const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn() };
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => runtimeFactory,
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => [{
+        schemaVersion: 1 as const, managementRunId: 'run-1', commandId: 'memory-command',
+        idempotencyKey: 'memory-key', requestHash: 'memory-hash',
+        toolName: 'memory.create_capsule' as const, createdAt: 1,
+      }]), size: vi.fn(() => 1) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+
+    expect(runtimeFactory.createSession).not.toHaveBeenCalled();
+    expect(protocol.abortLease).toHaveBeenCalledWith(expect.objectContaining({
+      reasonCode: 'session-start-failed',
+    }));
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
   test('maxConcurrentLeases=1 时同步预留已接受 offer，拒绝并发超卖', async () => {
     const { protocol, handlers } = createProtocolHarness();
     const host = createPiManagerWorkerHost({

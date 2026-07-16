@@ -260,6 +260,9 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
 }
 
 // P3-09 slice 2b：V3 capability 门禁接线（executor 按 phase 值分发 + scheduler preflight + adapter 路由）。
+const memoryReceiptRecordBody = managementKernel.match(
+  /async recordMemoryToolReceipt[\s\S]*?async recordInvocationTerminal/,
+)?.[0] ?? '';
 if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('request.managementPhase === 3')
   || managementToolExecutor.includes('managementPhase: 2 as const')
@@ -274,6 +277,7 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
   || !daemonWorkerHost.includes('includeMemoryCapsules')
   || !daemonWorkerHost.includes('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)')
+  || !daemonWorkerHost.includes('replay.unresolvedMemoryWriteCount > 0')
   || !daemonWorkerHost.includes('.filter(([, nested]) => nested !== undefined)')
   || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
   || !deviceWorkerScheduler.includes('managementPhase:')
@@ -288,8 +292,10 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('recordMemoryToolReceipt')
   || !managementToolExecutor.includes("receipt.disposition === 'existing'")
   || !managementKernel.includes("type: 'memory-tool-completed'")
+  || !managementKernel.includes('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE')
   || !managementKernel.includes('assertMemoryToolRunWritable(run)')
-  || !managementEventContract.includes('readonly output:')
+  || !memoryReceiptRecordBody.includes('assertMemoryToolRunWritable(run)')
+  || !managementEventContract.includes('readonly output?:')
   || !managementEventValidator.includes('assertPhase3MemoryToolOutput')) {
   violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（server preflight/DAG/checkpoint/receipt + daemon register/parser/host/recovery + requester authority）is required');
 }

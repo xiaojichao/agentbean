@@ -20,6 +20,11 @@ describe('Phase 3 Memory tool receipt validator', () => {
       }, createdAt: 10,
     } as const;
     expect(parseMemoryToolManagementEvent(event)).toEqual(event);
+    expect(parseMemoryToolManagementEvent({ ...event, payload: {
+      toolName: event.payload.toolName,
+      resultReferenceId: event.payload.resultReferenceId,
+      requestHash: event.payload.requestHash,
+    } })).toMatchObject({ payload: { resultReferenceId: 'capsule-1' } });
     expect(() => parseMemoryToolManagementEvent({ ...event,
       payload: { ...event.payload, prompt: 'must-not-persist' } })).toThrow(/INVALID_MANAGEMENT_EVENT/);
     expect(() => parseMemoryToolManagementEvent({ ...event,

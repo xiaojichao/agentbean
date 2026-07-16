@@ -291,6 +291,28 @@ test('fails closed when terminal runs can start new Memory writes', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when legacy Memory receipts without output are treated as success', () => {
+  const result = withFixture('agentbean-phase3-memory-legacy-receipt-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-kernel.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replaceAll('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE', 'REMOVED_RECEIPT_OUTPUT_GUARD'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when a run can become terminal before receipt append', () => {
+  const result = withFixture('agentbean-phase3-memory-terminal-race-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-kernel.ts');
+    const source = readFileSync(path, 'utf8');
+    const marker = 'assertMemoryToolRunWritable(run);';
+    const index = source.lastIndexOf(marker);
+    writeFileSync(path, `${source.slice(0, index)}${source.slice(index + marker.length)}`);
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when legacy V2 checkpoint phase inference disappears', () => {
   const result = withFixture('agentbean-phase3-v2-checkpoint-compat-', (fixture) => {
     const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
@@ -305,6 +327,16 @@ test('fails closed when rejected Memory outbox entries are discarded', () => {
     const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
     writeFileSync(path, readFileSync(path, 'utf8')
       .replace('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)', 'false'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when unresolved Memory outbox no longer blocks Session recovery', () => {
+  const result = withFixture('agentbean-phase3-memory-outbox-session-gate-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8')
+      .replace('replay.unresolvedMemoryWriteCount > 0', 'false'));
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);

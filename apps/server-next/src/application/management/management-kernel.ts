@@ -278,7 +278,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
     }): Promise<{ disposition: 'new' } | {
       disposition: 'existing';
       resultReferenceId: string;
-      output: ManagementEventPayloadMapV1['memory-tool-completed']['output'];
+      output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
     }> {
       return unitOfWork.run(async (transactionRepositories) => {
         await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
@@ -289,6 +289,9 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
             || existing.event.payload.toolName !== input.toolName
             || existing.event.payload.requestHash !== input.requestHash) {
             throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+          }
+          if (existing.event.payload.output === undefined) {
+            throw new ManagementConflictError('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
           }
           return { disposition: 'existing' as const,
             resultReferenceId: existing.event.payload.resultReferenceId,
@@ -306,7 +309,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
       resultReferenceId: string;
       requestHash: string;
-      output: ManagementEventPayloadMapV1['memory-tool-completed']['output'];
+      output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
     }): Promise<ManagementEventRecord> {
       return unitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
@@ -314,6 +317,14 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
           requestHash: input.requestHash, output: structuredClone(input.output) } as const;
         const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
+        const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+          .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+        if (existing) {
+          if (existing.event.type === 'memory-tool-completed' && existing.payloadHash === payloadHash) return existing;
+          throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+        }
+        const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+        assertMemoryToolRunWritable(run);
         return appendValidatedManagementEventInTransaction(transactionRepositories, {
           managementRunId: input.authority.managementRunId,
           type: 'memory-tool-completed', actorKind: 'manager', actorId: input.authority.workerId,
