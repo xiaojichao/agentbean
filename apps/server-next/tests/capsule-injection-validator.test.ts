@@ -103,6 +103,23 @@ async function addSource(repositories: ServerNextRepositories, memoryId: string)
   });
 }
 
+async function seedExplicitGrant(
+  repositories: ServerNextRepositories,
+  input: { version?: number; status?: 'active' | 'revoked'; issuedAt?: number },
+): Promise<void> {
+  const version = input.version ?? 1;
+  const status = input.status ?? 'active';
+  const issuedAt = input.issuedAt ?? 1;
+  await repositories.memoryUnitOfWork.run(async (memory) => {
+    await memory.grants.create({
+      id: 'grant-team', version, teamId: 'team-1', sourceScopeType: 'team', sourceScopeRef: 'team-1',
+      targetAgentId: 'agent-1', authorizedContentKind: 'decision', authorizedRedactionLevel: 'summary-only',
+      status, issuedByUserId: 'user-1', issuedAt, expiresAt: 1_000_000,
+      revokedAt: status === 'revoked' ? issuedAt : undefined,
+    });
+  });
+}
+
 const BASE_POLICY_VERSION = 7;
 
 describe.each([
@@ -128,6 +145,58 @@ describe.each([
       expect(result.capsuleExpired).toBe(false);
       expect(result.decisions).toHaveLength(capsule.items.length);
       expect(result.decisions.every((decision) => decision.allowed)).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('allows a fresh explicit-grant summary and never injects the original body', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-private', 'private original body');
+      await seedExplicitGrant(harness.repositories, {});
+      harness.permissions.scopeVisibility = 'explicit-grant';
+      harness.permissions.sourceScopeVisibility = 'explicit-grant';
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 's', limit: 10, now: 5_000,
+        currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(capsule.items).toHaveLength(1);
+      expect(capsule.items[0]).toMatchObject({
+        content: 's', redactionLevel: 'summary-only',
+        authorization: { mode: 'explicit-grant', grantId: 'grant-team', grantVersion: 1 },
+      });
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions).toEqual([{ memoryId: 'mem-private', allowed: true, item: capsule.items[0] }]);
+      expect(JSON.stringify(result)).not.toContain('private original body');
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('fails closed after an explicit grant is revoked and versioned', async () => {
+    const harness = createHarness();
+    try {
+      await seedMemory(harness.repositories, 'mem-private', 'private original body');
+      await seedExplicitGrant(harness.repositories, {});
+      harness.permissions.scopeVisibility = 'explicit-grant';
+      harness.permissions.sourceScopeVisibility = 'explicit-grant';
+      const capsule = await harness.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1',
+        targetAgentId: 'agent-1', prompt: 's', limit: 10, now: 5_000,
+        currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      await seedExplicitGrant(harness.repositories, { version: 2, status: 'revoked', issuedAt: 5_500 });
+
+      const result = await harness.validator.validateCapsuleForInjection({
+        capsule, requesterUserId: 'user-1', now: 6_000, currentPolicyVersion: BASE_POLICY_VERSION,
+      });
+      expect(result.decisions).toMatchObject([
+        { memoryId: 'mem-private', allowed: false, reason: 'CAPSULE_GRANT_MISMATCH' },
+      ]);
     } finally {
       harness.close();
     }

@@ -15,6 +15,7 @@ import type {
   MemoryAuditEventRecord,
   MemoryCapsuleItemManifestRecord,
   MemoryCapsuleRefRecord,
+  MemoryGrantRecord,
   MemorySourceRecord,
 } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
@@ -29,9 +30,9 @@ import { assertServerMemoryScope } from './memory-repository-validation.js';
  * 最小 Memory 集合打包成可撤销投影（Capsule），逐项冻结脱敏后内容、来源指纹、授权决策与期限，
  * 供后续 inject（P3-07/13）逐字段复验。
  *
- * 本片范围（「最小」）：仅打包 **scope-policy** match（team/channel/task/agent/user 可见、无需
- * explicit-grant 的记忆），脱敏级别 none。explicit-grant（dm/private 经 grant 共享）的 item 需要
- * 把多个 grant 映射成单一 authorization，留待与 P3-07 复验协同的后续切片。
+ * 普通 scope-policy item 保留完整正文；DM/private item 只有在搜索结果能收敛为一个 active grant
+ * 时才进入 Capsule，并冻结该 grant 的版本、授权内容类型、脱敏级别与期限。需要多个 grant 的 item
+ * 无法由单一 authorization 完整表达，创建端直接 fail-closed。
  *
  * Capsule 正文不重复持久化；只保存可用于 restart/recovery 重建的无正文 item manifest、权威 ref
  * 与 capsule-created 审计。权限过滤、脱敏与排序复用 CollaborativeMemorySearchService。
@@ -86,22 +87,25 @@ export function createMemoryCapsuleService(deps: MemoryCapsuleServiceDeps): Memo
         userId: input.userId,
         prompt: input.prompt,
         now: input.now,
-        limit: input.limit,
-        accessMode: 'scope-policy',
+        // 先完成授权/来源 hard gate 与全量排序，再在可安全表达为单一 authorization 的投影上截断。
+        limit: 100,
       });
-      // 最小 Capsule：只冻结普通 team-visible 的 scope-policy 决策；DM/private 来源必须显式授权。
-      const scopePolicyMatches = searchResult.matches.filter(isSafeScopePolicyMatch);
+      const matches = searchResult.matches.filter(isSafeCapsuleMatch).slice(0, normalizeLimit(input.limit));
 
       const capsuleId = input.capsuleId ?? ids.nextId();
       const issuedAt = input.now;
       const ttlExpiresAt = input.now + (input.ttlMs ?? DEFAULT_CAPSULE_TTL_MS);
-      const expiresAt = scopePolicyMatches.reduce(
-        (earliest, match) => Math.min(earliest, match.item.validUntil ?? earliest),
+      const expiresAt = matches.reduce(
+        (earliest, match) => Math.min(
+          earliest,
+          match.item.validUntil ?? earliest,
+          match.grants[0]?.expiresAt ?? earliest,
+        ),
         ttlExpiresAt,
       );
-      const items = scopePolicyMatches.map((match) => buildScopePolicyItem(
-        match, ids.nextId(), input, issuedAt, expiresAt,
-      ));
+      const items = matches.map((match) => match.accessMode === 'explicit-grant'
+        ? buildExplicitGrantItem(match, match.grants[0]!, ids.nextId(), input, issuedAt, expiresAt)
+        : buildScopePolicyItem(match, ids.nextId(), input, issuedAt, expiresAt));
 
       const capsule: MemoryCapsuleDto = {
         schemaVersion: 1,
@@ -214,6 +218,16 @@ function isSafeScopePolicyMatch(match: CollaborativeMemorySearchMatch): boolean 
     && match.sources.every((source) => source.sourceVisibility === 'team');
 }
 
+function isSafeCapsuleMatch(match: CollaborativeMemorySearchMatch): boolean {
+  if (isSafeScopePolicyMatch(match)) return true;
+  return match.accessMode === 'explicit-grant'
+    && match.grants.length === 1
+    && match.grants[0]?.status === 'active'
+    // Server Capsule 绝不携带 DM/private 原文；显式授权也只能交付 summary 投影。
+    && (match.grants[0]?.authorizedContentKind === 'summary'
+      || match.grants[0]?.authorizedRedactionLevel === 'summary-only');
+}
+
 function emptyCapsuleAudit(
   id: ID,
   input: CreateCapsuleInput,
@@ -304,6 +318,58 @@ function buildScopePolicyItem(
     authorization,
     expiresAt,
   };
+}
+
+function buildExplicitGrantItem(
+  match: CollaborativeMemorySearchMatch,
+  grant: MemoryGrantRecord,
+  decisionId: ID,
+  input: CreateCapsuleInput,
+  issuedAt: UnixMs,
+  expiresAt: UnixMs,
+): MemoryCapsuleItemDto {
+  const item = match.item;
+  const sourceRefs: MemorySourceRefDto[] = match.sources.map(toSourceRefDto);
+  const sourceRefsHash = hashSourceRefs(sourceRefs);
+  const contentHash = hashMemoryContent(item.content);
+  const contentKind = grant.authorizedContentKind;
+  const redactionLevel = grant.authorizedRedactionLevel;
+  const authorization: MemoryCapsuleAuthorizationDto = {
+    schemaVersion: 1,
+    decisionId,
+    mode: 'explicit-grant',
+    policyVersion: input.currentPolicyVersion,
+    grantId: grant.id,
+    grantVersion: grant.version,
+    targetAgentId: input.targetAgentId,
+    sourceScopeType: grant.sourceScopeType,
+    sourceScopeRef: grant.sourceScopeRef,
+    sourceRefsHash,
+    contentHash,
+    authorizedContentKind: contentKind,
+    authorizedRedactionLevel: redactionLevel,
+    issuedAt,
+    expiresAt,
+  };
+
+  return {
+    schemaVersion: 1,
+    memoryId: item.id,
+    scopeType: item.scopeType,
+    scopeRef: item.scopeRef,
+    sourceVisibility: grant.sourceScopeType === 'dm' ? 'dm-participants' : 'private',
+    contentKind,
+    redactionLevel,
+    content: item.content,
+    sourceRefs,
+    authorization,
+    expiresAt,
+  };
+}
+
+function normalizeLimit(limit: number): number {
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.min(Math.floor(limit), 100);
 }
 
 function memoryContentKind(kind: MemoryKind): MemoryContentKind {

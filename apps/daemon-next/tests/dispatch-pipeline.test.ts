@@ -191,6 +191,38 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     ]);
   });
 
+  test('observes a completed workspace run into profile-isolated local Memory', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-')));
+    const localMemoryBaseDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-home-')));
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
+      runtimes: [], agents: [], serverUrl: 'http://server.test', localMemoryBaseDir,
+      executor: async () => ({
+        body: 'failed safely',
+        workspaceRun: {
+          status: 'failed', cwd, command: 'npm test', exitCode: 1,
+          logExcerpt: 'vitest tests failed; cookie=must-not-leak', startedAt: 1_000, completedAt: 2_000,
+        },
+      }),
+    });
+    await client.start();
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-observe', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-observe', prompt: 'run tests',
+      customAgent: { adapterKind: 'codex', command: 'codex', cwd },
+    });
+
+    const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+    expect(store.list()).toMatchObject([{
+      agentId: 'agent-1', sourceKind: 'workspace_run', summary: '已确认失败（测试失败）：npm test',
+      structured: { sourceRunIds: ['disp-observe'] },
+    }]);
+    expect(JSON.stringify(store.list())).not.toContain('must-not-leak');
+    expect(harness.emits.some((event) => event.event === AGENT_EVENTS.dispatch.result)).toBe(true);
+  });
+
   test('still reports dispatch result when no customAgent.cwd (no workspace, no scan)', async () => {
     const harness = createFakeSocket();
     const client = createDaemonProtocolClient({
@@ -326,6 +358,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
 
   test('start recovers a completed persisted workspace run that was not reported before daemon restart', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const localMemoryBaseDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-recover-memory-')));
     const harness = createFakeSocket();
     const workspace = prepareWorkspaceRun(cwd, 'disp-recover');
     persistWorkspaceRunResponse(workspace, 'recovered reply');
@@ -335,6 +368,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       channelId: 'chan-1',
       status: 'succeeded',
       cwd,
+      command: 'npm run build:daemon-next',
       exitCode: 0,
       startedAt: 1000,
       completedAt: 2000,
@@ -360,7 +394,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const executor = vi.fn(async () => ({ body: 'should not run' }));
     const client = createDaemonProtocolClient({
       socket: harness.socket,
-      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok', profileId: 'profile-a' },
       runtimes: [],
       agents: [{
         name: 'Codex',
@@ -370,6 +404,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         cwd,
       }],
       serverUrl: 'http://server.test',
+      localMemoryBaseDir,
       fetch: async () => new Response('{}', { status: 200 }),
       executor,
     });
@@ -411,6 +446,11 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
     const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
     expect(typeof reportedManifest.reportedAt).toBe('number');
+    const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: localMemoryBaseDir });
+    expect(store.list()).toMatchObject([{
+      sourceKind: 'workspace_run', summary: '已验证成功：npm run build:daemon-next',
+      structured: { sourceRunIds: ['disp-recover'] },
+    }]);
   });
 
   test('recovery keeps unaccepted ACK runs unreported and retries them on reconnect', async () => {

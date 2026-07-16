@@ -51,6 +51,8 @@ import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 import { prepareDispatchRuntimeMemory } from './memory/runtime-memory-context.js';
 import { listLocalMemoryGovernanceSummaries } from './memory/local-memory-governance.js';
+import { createLocalMemoryStore, type LocalMemoryStore } from './memory/local-memory-store.js';
+import { observeDispatchOutcome, type ObserveDispatchOutcomeInput } from './memory/outcome-observer.js';
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -175,6 +177,8 @@ export interface CreateDaemonProtocolClientInput {
    * Defaults to os.homedir(); must match the value the runtime scanner uses.
    */
   homeDir?: string;
+  /** Device-local Memory base directory override for isolated embedding/tests. */
+  localMemoryBaseDir?: string;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
   onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
   /**
@@ -200,6 +204,37 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
+  const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
+  const observeOutcomeBestEffort = async (
+    request: Pick<DispatchRequestPayload, 'id' | 'agentId' | 'customAgent'>,
+    result: ObserveDispatchOutcomeInput['result'],
+  ) => {
+    const cwd = result.workspaceRun?.cwd ?? request.customAgent?.cwd;
+    if (!device.profileId || !result.workspaceRun || !cwd) return;
+    try {
+      let store = localMemoryStores.get(cwd);
+      if (!store) {
+        store = createLocalMemoryStore({ profileId: device.profileId, cwd, baseDir: input.localMemoryBaseDir });
+        localMemoryStores.set(cwd, store);
+      }
+      await observeDispatchOutcome({
+        store: await store,
+        request: {
+          id: request.id,
+          agentId: request.agentId,
+          ...(request.customAgent ? { customAgent: {
+            cwd: request.customAgent.cwd,
+            adapterKind: request.customAgent.adapterKind,
+          } } : {}),
+        },
+        result,
+      });
+    } catch (error) {
+      // Store 初始化失败可能是瞬时文件系统问题；不要永久缓存 rejected Promise。
+      localMemoryStores.delete(cwd);
+      console.warn(`daemon observe dispatch ${request.id} failed (non-blocking): ${readErrorMessage(error)}`);
+    }
+  };
 
   return {
     get deviceId() { return currentDeviceId || undefined; },
@@ -430,6 +465,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
+          await observeOutcomeBestEffort(request, result);
+
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
@@ -502,6 +539,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             : {}),
           workspaceRun: run.workspaceRun,
         };
+        await observeOutcomeBestEffort({
+          id: run.runId,
+          agentId: run.agentId,
+        }, { workspaceRun: run.workspaceRun });
         outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, payload, {
           isDeliveredAck: isDispatchResultDeliveredAck,
           onDelivered: () => markWorkspaceRunReported(run, Date.now()),

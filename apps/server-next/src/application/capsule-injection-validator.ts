@@ -7,7 +7,13 @@ import {
   type MemoryCapsuleAuthorizationDenialReason,
   type MemoryInjectionDenialReason,
 } from '../../../../packages/domain/src/index.js';
-import type { MemoryAuditActorKind, MemoryRepositories, MemorySourceRecord } from './memory-repositories.js';
+import type {
+  MemoryAuditActorKind,
+  MemoryGrantRecord,
+  MemoryItemRecord,
+  MemoryRepositories,
+  MemorySourceRecord,
+} from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
 import type { MemorySearchPermissions } from './collaborative-memory-search-service.js';
 
@@ -135,7 +141,19 @@ export function createCapsuleInjectionValidator(
     const memoryItem = await memory.items.getById({ teamId, id: item.memoryId });
     if (!memoryItem) return deny(item, 'MEMORY_NOT_FOUND');
 
-    // 2. fresh scope 可见性：不信冻结的 'team'，重新查。hidden→不可见；explicit-grant→scope-policy item 失效。
+    const currentGrantRecord = item.authorization.mode === 'explicit-grant' && item.authorization.grantId
+      ? await memory.grants.getCurrent({ teamId, id: item.authorization.grantId })
+      : undefined;
+    const currentGrant = currentGrantRecord ?? undefined;
+    if (item.authorization.mode === 'explicit-grant' && !currentGrant) {
+      return deny(item, 'CAPSULE_GRANT_MISSING');
+    }
+    if (currentGrant && !grantMatchesAuthorization(currentGrant, item, targetAgentId)) {
+      return deny(item, 'CAPSULE_GRANT_MISMATCH');
+    }
+
+    // 2. fresh scope 可见性：不信冻结的可见性，重新查。hidden→不可见；需要显式授权的 scope
+    // 必须由 Capsule 冻结的同一个 grant 覆盖。
     const visibility = await permissions.evaluateScopeVisibility({
       teamId, requesterUserId, targetAgentId,
       memoryId: item.memoryId, scopeType: memoryItem.scopeType, scopeRef: memoryItem.scopeRef,
@@ -144,10 +162,18 @@ export function createCapsuleInjectionValidator(
     if (visibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
       return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
     }
+    if (visibility === 'explicit-grant' && currentGrant
+      && !grantCoversScope(currentGrant, memoryItem.scopeType, memoryItem.scopeRef)) {
+      return deny(item, 'CAPSULE_GRANT_MISMATCH');
+    }
     if (
+      memoryItem.scopeType !== item.scopeType
+      || memoryItem.scopeRef !== item.scopeRef
+    ) return deny(item, 'CAPSULE_SCOPE_MISMATCH');
+    if (item.authorization.mode === 'scope-policy' && (
       memoryItem.scopeType !== item.authorization.sourceScopeType
       || memoryItem.scopeRef !== item.authorization.sourceScopeRef
-    ) return deny(item, 'CAPSULE_SCOPE_MISMATCH');
+    )) return deny(item, 'CAPSULE_SCOPE_MISMATCH');
 
     // 3. fresh 来源可用性 + fresh 状态（active / 未 validUntil 过期）。
     const sources = await memory.sources.listByMemory({ teamId, memoryId: item.memoryId });
@@ -164,6 +190,10 @@ export function createCapsuleInjectionValidator(
       if (sourceVisibility === 'hidden') return deny(item, 'MEMORY_SCOPE_NOT_VISIBLE');
       if (sourceVisibility === 'explicit-grant' && item.authorization.mode !== 'explicit-grant') {
         return deny(item, 'CAPSULE_EXPLICIT_GRANT_REQUIRED');
+      }
+      if (sourceVisibility === 'explicit-grant' && currentGrant
+        && !grantCoversScope(currentGrant, source.sourceScopeType, source.sourceScopeRef)) {
+        return deny(item, 'CAPSULE_GRANT_MISMATCH');
       }
       if (!await permissions.isSourceAvailable({ teamId, requesterUserId, targetAgentId, now, source })) {
         return deny(item, 'MEMORY_SOURCE_UNAVAILABLE');
@@ -183,24 +213,29 @@ export function createCapsuleInjectionValidator(
     if (hashSourceRefs(sourceRefs) !== item.authorization.sourceRefsHash) {
       return deny(item, 'CAPSULE_SOURCE_REFS_HASH_MISMATCH');
     }
-    if (hashMemoryContent(memoryItem.content) !== item.authorization.contentHash) {
+    const freshContent = currentGrant === undefined
+      ? memoryItem.content
+      : projectFreshContent(memoryItem, currentGrant);
+    if (freshContent === undefined || hashMemoryContent(freshContent) !== item.authorization.contentHash) {
       return deny(item, 'CAPSULE_CONTENT_HASH_MISMATCH');
     }
-    const currentGrant = item.authorization.mode === 'explicit-grant' && item.authorization.grantId
-      ? await loadCurrentGrant(memory, teamId, item.authorization.grantId)
-      : undefined;
     const authorization = evaluateMemoryCapsuleAuthorization({
       authorization: item.authorization,
       targetAgentId,
-      sourceScopeType: item.scopeType,
-      sourceScopeRef: item.scopeRef,
+      sourceScopeType: item.authorization.sourceScopeType,
+      sourceScopeRef: item.authorization.sourceScopeRef,
       sourceVisibility: item.sourceVisibility,
       sourceRefsHash: hashSourceRefs(item.sourceRefs),
       contentHash: hashMemoryContent(item.content),
       contentKind: item.contentKind,
       redactionLevel: item.redactionLevel,
       currentPolicyVersion,
-      currentGrant,
+      currentGrant: currentGrant && {
+        id: currentGrant.id,
+        version: currentGrant.version,
+        revoked: currentGrant.status === 'revoked',
+        expiresAt: currentGrant.expiresAt,
+      },
       delivery: 'server-hosted',
       now,
     });
@@ -224,19 +259,30 @@ function deny(item: MemoryCapsuleItemDto, reason: CapsuleInjectionDenialReason):
   return { memoryId: item.memoryId, allowed: false, reason };
 }
 
-async function loadCurrentGrant(
-  memory: MemoryRepositories,
-  teamId: ID,
-  grantId: ID,
-) {
-  const grant = await memory.grants.getCurrent({ teamId, id: grantId });
-  if (!grant) return undefined;
-  return {
-    id: grant.id,
-    version: grant.version,
-    revoked: grant.status === 'revoked',
-    expiresAt: grant.expiresAt,
-  };
+function grantMatchesAuthorization(
+  grant: MemoryGrantRecord,
+  item: MemoryCapsuleItemDto,
+  targetAgentId: ID,
+): boolean {
+  const authorization = item.authorization;
+  return grant.targetAgentId === targetAgentId
+    && grant.sourceScopeType === authorization.sourceScopeType
+    && grant.sourceScopeRef === authorization.sourceScopeRef
+    && grant.authorizedContentKind === authorization.authorizedContentKind
+    && grant.authorizedRedactionLevel === authorization.authorizedRedactionLevel;
+}
+
+function grantCoversScope(grant: MemoryGrantRecord, scopeType: string, scopeRef: ID): boolean {
+  return grant.sourceScopeType === scopeType && grant.sourceScopeRef === scopeRef;
+}
+
+function projectFreshContent(item: MemoryItemRecord, grant: MemoryGrantRecord): string | undefined {
+  if (grant.authorizedRedactionLevel === 'sensitive-removed') return undefined;
+  if (grant.authorizedContentKind === 'summary' || grant.authorizedRedactionLevel === 'summary-only') {
+    const summary = item.summary?.trim();
+    return summary || undefined;
+  }
+  return item.content;
 }
 
 function toSourceRefDto(record: Pick<MemorySourceRecord, 'sourceKind' | 'sourceId' | 'snapshotHash'>) {
