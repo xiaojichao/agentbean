@@ -24,7 +24,7 @@
 | P3-14 | Green | Web Memory/Candidate/冲突/来源/执行详情治理 | Settings 新增 Memory 治理面：协作 Memory 查看/创建/编辑/停用/替代/软删除、grant 签发/撤销、Candidate 接受/拒绝/合并、来源失效和授权状态；Capsule/Invocation 展示 policy/grant version、期限与 deny 状态，Workspace Run 详情可反查 Invocation/Capsule。Server snapshot 每次按 Team/Channel/DM/Task 当前权限过滤，权限变化通过 `memory:changed` + reconnect 重新取数并 fail closed；当前 Device 仅按次 RPC 返回脱敏治理摘要，正文和完整路径不回传 Server。contracts/server/daemon/web 定向测试与 build 覆盖。 |
 | P3-15 | Green | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task/artifact/workspace-run/invocation 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除、Task 与频道级联删除，双后端 parity）；E2E 闭环已补（`memory-source-invalidation-e2e.test.ts`：真实 message 删除 usecase + production permissions→过期→旧 Capsule inject 拒；单来源全失、多来源分次全失、部分失效逐来源检查，双后端 parity） |
 | P3-16 | Red | checkpoint/recovery 不恢复无效 Capsule/Candidate | Capsule 半边已接生产 recovery：worker checkpoint fetch 调用 runtime truth provider，重建 manifest 并按当前 Memory/source/grant/policy 复验；无效 ref 从 authoritative 移除并触发 rebuild，双后端测试覆盖。Candidate 是独立 `memory_candidates` review 队列，不属于 checkpoint authoritative，且没有 expired 状态；仍缺“恢复后不重新暴露来源已失效的未决 Candidate”的明确语义、实现与 E2E，完成前保持 Red。 |
-| P3-17 | Red | 两个真实外部 Agent 跨 Task Memory 正负 smoke | 未执行 |
+| P3-17 | Yellow | 两个真实外部 Agent 跨 Task Memory 正负 smoke | smoke 脚本已写（`phase-3-cross-agent-memory-smoke.test.ts`：正场景 A 经 phase3 create_capsule 打包授权→B inject 复用；负场景 来源失效→B inject 拒绝；mock permissions 验证 handler/capsule/inject 代码链路）；待真实两个 LLM Agent 环境跑（真实 permissions + 外部 Agent 调 memory 工具） |
 | P3-18 | Red | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | 未执行 |
 
 ## 当前放行边界
