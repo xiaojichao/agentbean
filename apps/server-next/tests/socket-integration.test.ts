@@ -1468,6 +1468,30 @@ describe('server-next Socket.IO namespaces', () => {
     expect(listDevices).not.toHaveBeenCalled();
   });
 
+  test('requires browsers with an invalid Device token to re-link securely', async () => {
+    const socket = new IntegrationFakeSocket() as IntegrationFakeSocket & {
+      handshake: { auth: { token: string; currentDeviceId: string; deviceToken: string } };
+    };
+    socket.handshake = {
+      auth: { token: 'user-token', currentDeviceId: 'device-1', deviceToken: 'invalid-device-token' },
+    };
+    const namespace = new IntegrationFakeNamespace();
+    namespace.nextSocket = socket;
+    const listDevices = vi.fn();
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({
+        user: { id: 'user-1' }, currentTeam: { id: 'team-1' }, teams: [],
+        deviceCredentialStatus: 'invalid' as const,
+      })),
+      listDevices,
+    } as unknown as ServerNextUseCases;
+    attachServerNextNamespaces(new IntegrationFakeServer(namespace), app);
+
+    await expect(socket.trigger(WEB_EVENTS.memory.localSummary, { teamId: 'team-1' }))
+      .resolves.toEqual({ ok: false, error: 'DEVICE_ATTESTATION_REQUIRED' });
+    expect(listDevices).not.toHaveBeenCalled();
+  });
+
   test('revalidates an invite Device token after the daemon finishes deviceHello', async () => {
     const socket = new IntegrationFakeSocket() as IntegrationFakeSocket & {
       handshake: { auth: { token: string; currentDeviceId: string; deviceToken: string } };
@@ -1483,6 +1507,7 @@ describe('server-next Socket.IO namespaces', () => {
       return makeSuccess({
         user: { id: 'user-1' }, currentTeam: { id: 'team-1' }, teams: [],
         ...(whoamiCalls > 1 ? { verifiedCurrentDeviceId: 'device-1' } : {}),
+        deviceCredentialStatus: whoamiCalls > 1 ? 'verified' as const : 'pending' as const,
       });
     });
     const listDevices = vi.fn(async () => makeSuccess({

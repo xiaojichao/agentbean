@@ -29,6 +29,8 @@ export interface AuthenticatedUserIdentity {
   verifiedCurrentDeviceId?: string | null;
   /** 当前连接是否提供了 device bearer credential。 */
   hasDeviceToken?: boolean;
+  /** Device bearer credential 的服务端校验状态。 */
+  deviceCredentialStatus?: 'verified' | 'pending' | 'invalid';
 }
 
 export interface AuthenticatedUserProvider {

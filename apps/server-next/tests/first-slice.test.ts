@@ -5130,11 +5130,15 @@ describe('server-next first-slice use cases', () => {
     })).resolves.toMatchObject({
       ok: true,
       verifiedCurrentDeviceId: 'device-1',
+      deviceCredentialStatus: 'verified',
     });
     await expect(app.whoami({
       token: login.token,
       deviceToken: 'abn_device.invalid.signature',
-    })).resolves.not.toHaveProperty('verifiedCurrentDeviceId');
+    })).resolves.toMatchObject({
+      ok: true,
+      deviceCredentialStatus: 'invalid',
+    });
     await app.reportDeviceRuntimes({
       teamId: 'team-1',
       deviceId: 'device-1',

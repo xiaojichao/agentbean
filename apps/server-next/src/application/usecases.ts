@@ -251,6 +251,7 @@ export interface WhoamiResult {
   user: UserDto;
   currentTeam: TeamDto;
   verifiedCurrentDeviceId?: string;
+  deviceCredentialStatus?: 'verified' | 'pending' | 'invalid';
 }
 
 export interface ListTeamsResult {
@@ -1083,6 +1084,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User has no team membership');
       }
       let verifiedCurrentDeviceId: string | undefined;
+      let deviceCredentialStatus: WhoamiResult['deviceCredentialStatus'];
       if (whoamiInput.deviceToken) {
         const credentials = verifyDeviceToken(whoamiInput.deviceToken, sessionSecret);
         if (credentials?.ownerId === userId) {
@@ -1091,13 +1093,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             : await findDeviceByCredentials(repositories, credentials.teamId, credentials);
           if (device?.ownerId === userId && device.teamId === credentials.teamId) {
             verifiedCurrentDeviceId = device.id;
+            deviceCredentialStatus = 'verified';
+          } else {
+            deviceCredentialStatus = credentials.deviceId ? 'invalid' : 'pending';
           }
+        } else {
+          deviceCredentialStatus = 'invalid';
         }
       }
       return makeSuccess({
         user: { ...toUserDto(user), primaryTeamId: currentTeam.id },
         currentTeam: toTeamDto(currentTeam, currentTeam.currentUserRole),
         ...(verifiedCurrentDeviceId ? { verifiedCurrentDeviceId } : {}),
+        ...(deviceCredentialStatus ? { deviceCredentialStatus } : {}),
       });
     },
 

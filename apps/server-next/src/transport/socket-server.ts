@@ -175,7 +175,8 @@ export function attachServerNextNamespaces(
         if (!identity.hasToken || !identity.userId || !identity.verifiedCurrentDeviceId || !teamId) {
           ack?.({
             ok: false,
-            error: identity.currentDeviceId && !identity.hasDeviceToken
+            error: identity.deviceCredentialStatus === 'invalid'
+              || (identity.currentDeviceId && !identity.hasDeviceToken)
               ? 'DEVICE_ATTESTATION_REQUIRED'
               : 'PERMISSION_DENIED',
           });
@@ -902,7 +903,7 @@ function createAuthenticatedUserResolver(
     const deviceToken = socketDeviceToken(socket);
     // An invite credential may not resolve until the daemon completes deviceHello. Keep the
     // authenticated user cache, but re-check an unresolved device credential on later requests.
-    if (cached && (!deviceToken || cached.verifiedCurrentDeviceId)) {
+    if (cached && (!deviceToken || cached.deviceCredentialStatus !== 'pending')) {
       return cached;
     }
     const currentDeviceId = socketCurrentDeviceId(socket);
@@ -926,6 +927,9 @@ function createAuthenticatedUserResolver(
       currentDeviceId,
       verifiedCurrentDeviceId: result.ok ? (result.verifiedCurrentDeviceId ?? null) : null,
       hasDeviceToken: Boolean(deviceToken),
+      deviceCredentialStatus: result.ok && deviceToken
+        ? (result.deviceCredentialStatus ?? (result.verifiedCurrentDeviceId ? 'verified' : 'pending'))
+        : undefined,
     };
     return cached;
   }) as AuthenticatedUserProvider;
