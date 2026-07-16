@@ -546,6 +546,54 @@ describe.each([
       harness.close();
     }
   });
+
+  test('linkSources rejects unauthorized source promotion without partial writes', async () => {
+    const denied = createHarness({
+      ...permissivePermissions(),
+      assertSourceAuthority: async () => { throw new Error('MEMORY_SOURCE_NOT_AUTHORIZED'); },
+    });
+    try {
+      const created = await denied.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'decision',
+        scopeType: 'task', scopeRef: 'task-1', content: 'protected decision',
+      });
+      await expect(denied.service.linkSources({
+        teamId: 'team-1', actorId: 'user-1', memoryId: created.item.id,
+        sourceRefs: [sourceRef('private-msg')],
+      })).rejects.toThrow(/MEMORY_SOURCE_NOT_AUTHORIZED/);
+      expect(await denied.repositories.memory.sources.listByMemory({
+        teamId: 'team-1', memoryId: created.item.id,
+      })).toHaveLength(0);
+      const audit = await denied.repositories.memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'memory', subjectId: created.item.id,
+      });
+      expect(audit.map((event) => event.eventType)).not.toContain('source-linked');
+    } finally {
+      denied.close();
+    }
+  });
+
+  test('linkSources refuses terminal Memory records', async () => {
+    const harness = createHarness();
+    try {
+      const created = await harness.service.createMemory({
+        teamId: 'team-1', actorId: 'user-1', kind: 'decision',
+        scopeType: 'task', scopeRef: 'task-1', content: 'deleted decision',
+      });
+      await harness.service.deleteMemory({
+        teamId: 'team-1', actorId: 'user-1', memoryId: created.item.id,
+      });
+      await expect(harness.service.linkSources({
+        teamId: 'team-1', actorId: 'user-1', memoryId: created.item.id,
+        sourceRefs: [sourceRef('late-msg')],
+      })).rejects.toThrow(/MEMORY_INVALID_TRANSITION/);
+      expect(await harness.repositories.memory.sources.listByMemory({
+        teamId: 'team-1', memoryId: created.item.id,
+      })).toHaveLength(0);
+    } finally {
+      harness.close();
+    }
+  });
 });
 
 test('createMemory and issueGrant authorize inside the Memory unit of work', async () => {

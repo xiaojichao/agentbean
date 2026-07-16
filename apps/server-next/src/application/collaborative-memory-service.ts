@@ -481,6 +481,14 @@ export function createCollaborativeMemoryService(
           teamId: input.teamId, actorId: input.actorId,
           scopeType: item.scopeType, scopeRef: item.scopeRef,
         });
+        if (item.status !== 'active' && item.status !== 'candidate') {
+          throw new Error('MEMORY_INVALID_TRANSITION');
+        }
+        await assertSourceAuthorities({
+          ...input,
+          scopeType: item.scopeType,
+          scopeRef: item.scopeRef,
+        });
         const now = clock.now();
         for (const ref of input.sourceRefs) {
           await memory.sources.create(toSourceRecord(input.teamId, item.id, ref, now));
