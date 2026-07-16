@@ -391,8 +391,30 @@ function legacyTeamDatabase(): DatabaseWithClose {
       tags_json TEXT NOT NULL DEFAULT '[]', sort_order REAL NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
-    CREATE TABLE team_management_policies (team_id TEXT PRIMARY KEY);
-    CREATE TABLE management_runs (id TEXT PRIMARY KEY);
+    CREATE TABLE team_management_policies (
+      team_id TEXT PRIMARY KEY,
+      mode TEXT NOT NULL CHECK (mode IN ('direct', 'shadow', 'managed')),
+      placement_policy_json TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE management_runs (
+      id TEXT PRIMARY KEY,
+      team_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      root_task_id TEXT,
+      root_message_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      placement_policy_json TEXT NOT NULL,
+      active_worker_id TEXT,
+      checkpoint_revision INTEGER NOT NULL DEFAULT 0,
+      budget_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      target_agent_id TEXT,
+      target_kind TEXT
+    );
     CREATE TABLE agent_invocations (id TEXT PRIMARY KEY);
   `);
   const insert = db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, 1)');
