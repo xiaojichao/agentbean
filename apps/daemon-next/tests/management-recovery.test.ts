@@ -45,7 +45,7 @@ describe('management worker recovery', () => {
     expect(remove).toHaveBeenCalledWith(item);
   });
 
-  test('Memory 副作用与 receipt 之间崩溃时保留 rejected outbox，等待后续权威确认', async () => {
+  test('服务端权威 rejected Memory replay 时删除已确定失败的 outbox', async () => {
     const item: ManagementDurableOutboxItem = {
       schemaVersion: 1, managementRunId: 'run-1', commandId: 'command-memory',
       idempotencyKey: 'memory-1', requestHash: 'request-hash-memory',
@@ -59,8 +59,8 @@ describe('management worker recovery', () => {
         commandId: payload.commandId, managementRunId: payload.managementRunId,
         idempotencyKey: payload.idempotencyKey, disposition: 'rejected' as const })) } as never,
       outbox: { list: () => [item], remove } as never,
-    })).resolves.toEqual({ unresolvedMemoryWriteCount: 1 });
-    expect(remove).not.toHaveBeenCalled();
+    })).resolves.toEqual({ unresolvedMemoryWriteCount: 0 });
+    expect(remove).toHaveBeenCalledWith(item);
   });
 
   test('Memory outbox 回放异常时保留 entry 并阻断新 Session', async () => {

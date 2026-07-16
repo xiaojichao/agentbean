@@ -211,7 +211,8 @@ async function createHarness(options: { rootTask?: boolean; dispatchEmitFailure?
     ? vi.fn(async () => { throw new Error('device offline'); })
     : vi.fn();
   const handlers = createPhase1ManagementToolHandlers({ repositories, kernel, clock, ids, onDispatchCreated, pollIntervalMs: 1, terminalTimeoutMs: 2_000 });
-  const execute = createManagementToolExecutor({ kernel, handlers });
+  const execute = createManagementToolExecutor({ kernel,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork, handlers });
   const app = createServerNextUseCases({ repositories, clock, ids, managementKernel: kernel });
   return { repositories, kernel, execute, app, onDispatchCreated, runId: run.run.id };
 }

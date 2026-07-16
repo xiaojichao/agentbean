@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   AgentRecord,
   ArtifactRecord,
@@ -27,6 +28,10 @@ import {
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
 import { createMemoryUnitOfWork } from '../../application/memory-unit-of-work.js';
 import {
+  createManagementMemoryUnitOfWork,
+  type ManagementMemoryTransactionRepositories,
+} from '../../application/management-memory-unit-of-work.js';
+import {
   cloneMemoryRepositoryMemoryState,
   createInMemoryMemoryRepositories,
   createMemoryRepositoryMemoryState,
@@ -39,6 +44,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const taskCoordination = createInMemoryTaskCoordinationRepositories(taskCoordinationState);
   const memoryState = createMemoryRepositoryMemoryState();
   const memory = createInMemoryMemoryRepositories(memoryState);
+  const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
@@ -63,6 +69,22 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
 
   let repositories!: ServerNextRepositories;
+  const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
+    const active = managementMemoryContext.getStore();
+    if (active) return operation(active);
+    return management.unitOfWork.run(async (managementRepositories) => {
+      const snapshot = cloneMemoryRepositoryMemoryState(memoryState);
+      try {
+        return await managementMemoryContext.run(
+          { management: managementRepositories, memory },
+          () => operation({ management: managementRepositories, memory }),
+        );
+      } catch (error) {
+        restoreMemoryRepositoryMemoryState(memoryState, snapshot);
+        throw error;
+      }
+    });
+  });
   repositories = {
     management: management.repositories,
     managementUnitOfWork: management.unitOfWork,
@@ -111,15 +133,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     ),
     memory,
     memoryUnitOfWork: createMemoryUnitOfWork((operation) =>
-      management.unitOfWork.run(async () => {
-        const snapshot = cloneMemoryRepositoryMemoryState(memoryState);
-        try {
-          return await operation(memory);
-        } catch (error) {
-          restoreMemoryRepositoryMemoryState(memoryState, snapshot);
-          throw error;
-        }
-      })),
+      managementMemoryUnitOfWork.run(({ memory: transactionMemory }) => operation(transactionMemory))),
+    managementMemoryUnitOfWork,
     users: {
       async create(input) {
         users.set(input.id, input);

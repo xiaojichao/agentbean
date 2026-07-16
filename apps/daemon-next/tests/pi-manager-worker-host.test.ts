@@ -138,10 +138,7 @@ describe('PiManagerWorkerHost', () => {
 
   test('存在未解析 Memory outbox 时阻止恢复新 Session', async () => {
     const { protocol, handlers } = createProtocolHarness();
-    vi.mocked(protocol.replayOutbox).mockImplementation(async (payload) => ({
-      schemaVersion: 1, commandId: payload.commandId, managementRunId: payload.managementRunId,
-      idempotencyKey: payload.idempotencyKey, disposition: 'rejected',
-    }));
+    vi.mocked(protocol.replayOutbox).mockRejectedValue(new Error('ack timeout'));
     const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn() };
     const host = createPiManagerWorkerHost({
       profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
@@ -388,6 +385,8 @@ describe('PiManagerWorkerHost', () => {
     expect(outbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
       toolName: 'memory.create_capsule', idempotencyKey: 'run-1:capsule-1',
     }));
-    expect(outbox.remove).not.toHaveBeenCalled();
+    expect(outbox.remove).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'memory.create_capsule', idempotencyKey: 'run-1:capsule-1',
+    }));
   });
 });

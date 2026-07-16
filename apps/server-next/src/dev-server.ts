@@ -1289,6 +1289,7 @@ function createDefaultManagementRuntime(
     kernel,
     executeTool: createManagementToolExecutor({
       kernel,
+      managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
       handlers: createPhase1ManagementToolHandlers({
         repositories,
         kernel,

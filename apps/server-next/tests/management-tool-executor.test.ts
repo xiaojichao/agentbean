@@ -1,11 +1,22 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
+import { createManagementMemoryUnitOfWork } from '../src/application/management-memory-unit-of-work.js';
 import { createManagementToolExecutor, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { createSubtaskAcceptanceService } from '../src/application/management/subtask-acceptance-service.js';
 import { createInMemoryManagementPersistence } from '../src/infra/memory/management-repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { createSubtaskEvidenceHarness } from './subtask-evidence-harness.js';
+
+const unusedManagementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) =>
+  operation({ management: {} as never, memory: {} as never }));
+
+function managementMemoryUnitOfWorkFor(
+  persistence: ReturnType<typeof createInMemoryManagementPersistence>,
+) {
+  return createManagementMemoryUnitOfWork((operation) =>
+    persistence.unitOfWork.run((management) => operation({ management, memory: {} as never })));
+}
 
 describe('management tool executor', () => {
   test('routes agents.invoke by envelope version without overriding the frozen-target Phase 1 handler', async () => {
@@ -15,6 +26,7 @@ describe('management tool executor', () => {
         id: 'phase2-message', snapshotHash: 'server-hash', capturedAt: 1 }] }));
     const execute = createManagementToolExecutor({
       kernel: { authorizeWrite: vi.fn() } as never,
+      managementMemoryUnitOfWork: unusedManagementMemoryUnitOfWork,
       handlers: { 'agents.invoke': phase1 },
       phase2Handlers: { 'agents.invoke': phase2 },
     });
@@ -46,6 +58,7 @@ describe('management tool executor', () => {
     await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1', host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
     const execute = createManagementToolExecutor({
       kernel,
+      managementMemoryUnitOfWork: managementMemoryUnitOfWorkFor(persistence),
       handlers: {
         'context.get_management_state': async () => ({ status: 'running', checkpointRevision: 0, lastEventSequence: 2 }),
       },
@@ -59,6 +72,7 @@ describe('management tool executor', () => {
   test('returns an unavailable Phase 3 result when handlers are not wired', async () => {
     const execute = createManagementToolExecutor({
       kernel: { authorizeWrite: vi.fn() } as never,
+      managementMemoryUnitOfWork: unusedManagementMemoryUnitOfWork,
       handlers: {},
     });
     await expect(execute({
@@ -86,6 +100,7 @@ describe('management tool executor', () => {
     const search = vi.fn(async () => ({ matches: [] }));
     const execute = createManagementToolExecutor({
       kernel: { authorizeWrite: vi.fn(async () => { throw new Error('LEASE_STALE_FENCING_TOKEN'); }) } as never,
+      managementMemoryUnitOfWork: unusedManagementMemoryUnitOfWork,
       handlers: {},
       phase3Handlers: { 'memory.search': search },
     });
@@ -117,7 +132,8 @@ describe('management tool executor', () => {
       targetAgentId: 'agent-1', contentHash: 'sha256:content',
       authorizationDecisionId: 'decision-1', expiresAt: 100,
     } }));
-    const execute = createManagementToolExecutor({ kernel, handlers: {},
+    const execute = createManagementToolExecutor({ kernel,
+      managementMemoryUnitOfWork: managementMemoryUnitOfWorkFor(persistence), handlers: {},
       phase3Handlers: { 'memory.create_capsule': createCapsule } });
     const request = {
       schemaVersion: 2 as const, managementPhase: 3 as const, commandId: 'command-memory',
@@ -127,10 +143,14 @@ describe('management tool executor', () => {
       input: { targetAgentId: 'agent-1', prompt: 'original prompt', limit: 3 },
     };
 
-    await expect(execute(request)).resolves.toMatchObject({ ok: true,
-      output: { capsuleRef: { id: 'capsule-1' } } });
-    await expect(execute(request)).resolves.toMatchObject({ ok: true,
-      output: { capsuleRef: { id: 'capsule-1' } } });
+    await expect(Promise.all([execute(request), execute(request)])).resolves.toEqual([
+      expect.objectContaining({ ok: true, output: expect.objectContaining({
+        capsuleRef: expect.objectContaining({ id: 'capsule-1' }),
+      }) }),
+      expect.objectContaining({ ok: true, output: expect.objectContaining({
+        capsuleRef: expect.objectContaining({ id: 'capsule-1' }),
+      }) }),
+    ]);
     await expect(execute({ ...request, input: { ...request.input, prompt: 'changed prompt' } }))
       .resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT',
         diagnosticCode: 'MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT' });
@@ -154,10 +174,11 @@ describe('management tool executor', () => {
     const execute = createManagementToolExecutor({
       kernel: {
         authorizeWrite: vi.fn(),
-        inspectMemoryToolReceipt: vi.fn(async () => {
+        inspectMemoryToolReceiptInTransaction: vi.fn(async () => {
           throw new Error('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
         }),
       } as never,
+      managementMemoryUnitOfWork: unusedManagementMemoryUnitOfWork,
       handlers: {},
       phase3Handlers: { 'memory.create_capsule': createCapsule },
     });
@@ -191,7 +212,8 @@ describe('management tool executor', () => {
         updatedAt: 11, completedAt: 11 });
       return { memoryId: 'memory-1' };
     });
-    const execute = createManagementToolExecutor({ kernel, handlers: {},
+    const execute = createManagementToolExecutor({ kernel,
+      managementMemoryUnitOfWork: managementMemoryUnitOfWorkFor(persistence), handlers: {},
       phase3Handlers: { 'memory.link_sources': handler } });
     await expect(execute({
       schemaVersion: 2, managementPhase: 3, commandId: 'terminal-race-command',
@@ -208,10 +230,54 @@ describe('management tool executor', () => {
     );
   });
 
+  test('rolls back Memory side effects atomically when receipt persistence fails', async () => {
+    const repositories = createInMemoryRepositories();
+    let id = 0;
+    const kernel = createManagementKernel({ repositories: repositories.management,
+      unitOfWork: repositories.managementUnitOfWork, clock: { now: () => 10 },
+      ids: { nextId: () => `atomic-${++id}` } });
+    const { run } = await kernel.createOrResumeRun({
+      teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'root-task', rootMessageId: 'message-1',
+      requestKey: 'atomic-memory', requestHash: 'atomic-memory-hash', managementPhase: 3,
+      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+      budget: { maxSubtasks: 2, maxDepth: 1, maxExternalInvocations: 2 },
+    });
+    await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1',
+      host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
+    const handler = vi.fn(async () => {
+      await repositories.memoryUnitOfWork.run((memory) => memory.capsuleRefs.create({
+        id: 'capsule-side-effect', teamId: 'team-1', managementRunId: run.id,
+        targetAgentId: 'agent-1', contentHash: 'sha256:content',
+        authorizationDecisionId: 'decision-1', issuedAt: 10, expiresAt: 100, createdAt: 10,
+      }));
+      return { memoryId: 'capsule-side-effect' };
+    });
+    const atomicKernel = { ...kernel,
+      recordMemoryToolReceiptInTransaction: vi.fn(async () => {
+        throw new Error('MANAGEMENT_RUN_TERMINAL');
+      }) } as typeof kernel;
+    const execute = createManagementToolExecutor({ kernel: atomicKernel,
+      managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+      handlers: {}, phase3Handlers: { 'memory.link_sources': handler } });
+    await expect(execute({
+      schemaVersion: 2, managementPhase: 3, commandId: 'atomic-command', managementRunId: run.id,
+      workerId: 'worker-1', toolCallId: 'atomic-call', toolName: 'memory.link_sources',
+      leaseToken: 'token', fencingToken: 1, idempotencyKey: 'atomic-key',
+      input: { memoryId: 'capsule-side-effect', sourceRefs: [] },
+    })).resolves.toMatchObject({ ok: false, diagnosticCode: 'MANAGEMENT_RUN_TERMINAL' });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(atomicKernel.recordMemoryToolReceiptInTransaction).toHaveBeenCalledOnce();
+    await expect(repositories.memory.capsuleRefs.getById({ teamId: 'team-1', id: 'capsule-side-effect' }))
+      .resolves.toBeNull();
+    await expect(repositories.management.runs.getById(run.id)).resolves.toMatchObject({ status: 'running' });
+  });
+
   test('does not echo arbitrary handler errors through client diagnostics', async () => {
     const persistence = createInMemoryManagementPersistence();
     const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => 'unused' } });
-    const execute = createManagementToolExecutor({ kernel, handlers: { 'context.get_root_message': async () => { throw new Error('provider secret sk-live-123'); } } });
+    const execute = createManagementToolExecutor({ kernel,
+      managementMemoryUnitOfWork: managementMemoryUnitOfWorkFor(persistence),
+      handlers: { 'context.get_root_message': async () => { throw new Error('provider secret sk-live-123'); } } });
     const result = await execute({ schemaVersion: 1, commandId: 'command-1', managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'tool-1', toolName: 'context.get_root_message', input: {} });
     expect(result).toMatchObject({ ok: false, diagnosticCode: 'TOOL_EXECUTION_FAILED' });
     expect(JSON.stringify(result)).not.toContain('sk-live-123');
@@ -241,6 +307,7 @@ describe('management tool executor', () => {
     const acceptanceService = createSubtaskAcceptanceService({
       unitOfWork: repositories.taskCoordinationUnitOfWork, clock, ids });
     const execute = createManagementToolExecutor({ kernel: managementKernel,
+      managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
       handlers: createPhase2ManagementToolHandlers({ kernel: taskKernel, acceptanceService }) });
     const envelope = { schemaVersion: 2 as const, managementPhase: 2 as const,
       managementRunId: 'run-1', workerId: 'worker-1', leaseToken: 'lease-token', fencingToken: 1 };

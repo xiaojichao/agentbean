@@ -22,6 +22,7 @@ import type {
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
 import type { MemoryCapsuleRefRecord } from '../memory-repositories.js';
+import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
@@ -76,6 +77,7 @@ const PHASE_3_MEMORY_WRITE_TOOLS = new Set<string>([
 
 export function createManagementToolExecutor(input: {
   readonly kernel: ManagementKernel;
+  readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   readonly handlers: AnyToolHandlers;
   readonly phase2Handlers?: Phase2ToolHandlers;
   readonly phase3Handlers?: Phase3ToolHandlers;
@@ -118,27 +120,25 @@ export function createManagementToolExecutor(input: {
       const requestHash = memoryWrite
         ? hashManagementCommandInput({ toolName: request.toolName, input: request.input })
         : undefined;
-      if (memoryWrite) {
-        const receipt = await input.kernel.inspectMemoryToolReceipt({
-          authority: authority(request), idempotencyKey: request.idempotencyKey,
-          toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
-          requestHash: requestHash!,
-        });
-        if (receipt.disposition === 'existing') {
-          return { ...base, ok: true, output: receipt.output } as ManagementToolResult;
-        }
-      }
-      const output = await handler(request);
-      if (memoryWrite) {
-        await input.kernel.recordMemoryToolReceipt({
-          authority: authority(request), idempotencyKey: request.idempotencyKey,
-          toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
-          resultReferenceId: memoryToolResultReference(request.toolName, output), requestHash: requestHash!,
-          output: output as Phase3ManagementWorkerToolOutputMapV1[
-            'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources'
-          ],
-        });
-      }
+      const output = memoryWrite
+        ? await input.managementMemoryUnitOfWork.run(async ({ management }) => {
+          const receiptInput = {
+            authority: authority(request), idempotencyKey: request.idempotencyKey,
+            toolName: request.toolName as 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources',
+            requestHash: requestHash!,
+          };
+          const receipt = await input.kernel.inspectMemoryToolReceiptInTransaction(management, receiptInput);
+          if (receipt.disposition === 'existing') return receipt.output;
+          const atomicOutput = await handler(request);
+          await input.kernel.recordMemoryToolReceiptInTransaction(management, {
+            ...receiptInput, resultReferenceId: memoryToolResultReference(request.toolName, atomicOutput),
+            output: atomicOutput as Phase3ManagementWorkerToolOutputMapV1[
+              'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources'
+            ],
+          });
+          return atomicOutput;
+        })
+        : await handler(request);
       return { ...base, ok: true, output } as ManagementToolResult;
     } catch (error) {
       const code = error instanceof Error ? error.message : 'UNKNOWN';

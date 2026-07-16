@@ -322,20 +322,37 @@ test('fails closed when legacy V2 checkpoint phase inference disappears', () => 
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
-test('fails closed when rejected Memory outbox entries are discarded', () => {
-  const result = withFixture('agentbean-phase3-memory-outbox-retention-', (fixture) => {
+test('fails closed when rejected Memory verdicts are retained as permanently unresolved', () => {
+  const result = withFixture('agentbean-phase3-memory-rejected-verdict-', (fixture) => {
     const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
-    writeFileSync(path, readFileSync(path, 'utf8')
-      .replace('PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)', 'false'));
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      "const result = await input.protocol.replayOutbox(payload);",
+      "const result = await input.protocol.replayOutbox(payload);\n      if (result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) continue;",
+    ));
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
-test('fails closed when failed Memory writes discard outbox before a receipt verdict', () => {
-  const result = withFixture('agentbean-phase3-memory-outbox-tool-error-', (fixture) => {
-    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
-    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('unresolvedMemoryWrite', 'removedMemoryWriteGate'));
+test('fails closed when Memory side effects and receipts stop sharing one transaction', () => {
+  const result = withFixture('agentbean-phase3-memory-atomic-receipt-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll(
+      'managementMemoryUnitOfWork.run',
+      'removedAtomicMemoryWrite.run',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when the atomic Memory transaction becomes optional', () => {
+  const result = withFixture('agentbean-phase3-memory-optional-transaction-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;',
+      'readonly managementMemoryUnitOfWork?: ManagementMemoryUnitOfWork;',
+    ));
   });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);

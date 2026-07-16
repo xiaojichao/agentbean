@@ -20,6 +20,8 @@ const memoryMigration = read('apps/server-next/src/infra/sqlite/migrations/team/
 const capsuleRefMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0016_management_phase_3_capsule_refs.sql');
 const capsuleManifestMigration = read('apps/server-next/src/infra/sqlite/migrations/team/0020_management_phase_3_capsule_item_manifests.sql');
 const sqliteRepositories = read('apps/server-next/src/infra/sqlite/repositories.ts');
+const inMemoryRepositories = read('apps/server-next/src/infra/memory/repositories.ts');
+const managementMemoryUnitOfWork = read('apps/server-next/src/application/management-memory-unit-of-work.ts');
 const memoryBackends = [
   read('apps/server-next/src/infra/memory/memory-repositories.ts'),
   read('apps/server-next/src/infra/sqlite/memory-repositories.ts'),
@@ -261,7 +263,7 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
 
 // P3-09 slice 2b：V3 capability 门禁接线（executor 按 phase 值分发 + scheduler preflight + adapter 路由）。
 const memoryReceiptRecordBody = managementKernel.match(
-  /async recordMemoryToolReceipt[\s\S]*?async recordInvocationTerminal/,
+  /async function recordMemoryToolReceiptInTransaction[\s\S]*?\n  return \{/,
 )?.[0] ?? '';
 const outboxReplayBody = daemonWorkerHost.match(
   /export async function replayManagementOutboxForLease[\s\S]*?function runtimeContext/,
@@ -279,8 +281,8 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !daemonWorkerHost.includes('checkpointManagementPhase')
   || !daemonWorkerHost.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
   || !daemonWorkerHost.includes('includeMemoryCapsules')
-  || !daemonWorkerHost.includes('unresolvedMemoryWrite')
-  || (outboxReplayBody.match(/PHASE_3_MEMORY_WRITE_TOOL_NAMES\.has\(item\.toolName\)/g)?.length ?? 0) < 2
+  || daemonWorkerHost.includes("result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES")
+  || (outboxReplayBody.match(/PHASE_3_MEMORY_WRITE_TOOL_NAMES\.has\(item\.toolName\)/g)?.length ?? 0) < 1
   || !daemonWorkerHost.includes('replay.unresolvedMemoryWriteCount > 0')
   || !daemonWorkerHost.includes('.filter(([, nested]) => nested !== undefined)')
   || !runtimeTypes.includes('memoryCapsuleIds?: readonly string[]')
@@ -295,9 +297,15 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !managementToolExecutor.includes('sourceRequesterUserId')
   || !managementToolExecutor.includes("isPhase3 && request.toolName === 'memory.search'")
   || !managementToolExecutor.includes("result.candidate.status === 'conflict' ? 'conflict' : 'candidate'")
-  || !managementToolExecutor.includes('inspectMemoryToolReceipt')
-  || !managementToolExecutor.includes('recordMemoryToolReceipt')
+  || !managementToolExecutor.includes('inspectMemoryToolReceiptInTransaction')
+  || !managementToolExecutor.includes('managementMemoryUnitOfWork.run')
+  || managementToolExecutor.includes('managementMemoryUnitOfWork?:')
+  || !managementToolExecutor.includes('recordMemoryToolReceiptInTransaction')
   || !managementToolExecutor.includes("receipt.disposition === 'existing'")
+  || !managementMemoryUnitOfWork.includes('ManagementMemoryTransactionRepositories')
+  || !serverDevRuntime.includes('managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork')
+  || !inMemoryRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
+  || !sqliteRepositories.includes('AsyncLocalStorage<ManagementMemoryTransactionRepositories>')
   || !managementKernel.includes("type: 'memory-tool-completed'")
   || !managementKernel.includes('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE')
   || !managementKernel.includes('assertMemoryToolRunWritable(run)')

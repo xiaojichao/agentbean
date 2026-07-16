@@ -301,10 +301,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
 
     try {
       const result = await input.protocol.executeTool(request);
-      const unresolvedMemoryWrite = PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(toolName) && !result.ok;
-      if (outboxItem && (result.ok || (!result.retryable && !unresolvedMemoryWrite))) {
-        await input.outbox.remove(outboxItem);
-      }
+      if (outboxItem && (result.ok || !result.retryable)) await input.outbox.remove(outboxItem);
       return result.ok
         ? { text: JSON.stringify(result.output) }
         : toolError(result.diagnosticCode ?? result.errorCode);
@@ -425,12 +422,6 @@ export async function replayManagementOutboxForLease(input: {
     };
     try {
       const result = await input.protocol.replayOutbox(payload);
-      if (result.disposition === 'rejected' && PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(item.toolName)) {
-        // A Memory side effect may have committed immediately before its receipt. Retain the
-        // body-free durable entry until the server can prove committed/conflict on a later lease.
-        unresolvedMemoryWriteCount += 1;
-        continue;
-      }
       if (result.disposition === 'existing' || result.disposition === 'committed'
         || result.disposition === 'conflict' || result.disposition === 'rejected') {
         await input.outbox.remove(item);

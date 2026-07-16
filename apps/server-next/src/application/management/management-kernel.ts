@@ -56,8 +56,78 @@ export interface LeaseAuthorityInput {
   readonly fencingToken: number;
 }
 
+export interface RecordMemoryToolReceiptInput {
+  readonly authority: LeaseAuthorityInput;
+  readonly idempotencyKey: string;
+  readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+  readonly resultReferenceId: string;
+  readonly requestHash: string;
+  readonly output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
+}
+
+export interface InspectMemoryToolReceiptInput {
+  readonly authority: LeaseAuthorityInput;
+  readonly idempotencyKey: string;
+  readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
+  readonly requestHash: string;
+}
+
+export type InspectMemoryToolReceiptResult = { readonly disposition: 'new' } | {
+  readonly disposition: 'existing';
+  readonly resultReferenceId: string;
+  readonly output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
+};
+
 export function createManagementKernel(dependencies: ManagementKernelDependencies) {
   const { repositories, unitOfWork, clock, ids } = dependencies;
+
+  async function inspectMemoryToolReceiptInTransaction(
+    transactionRepositories: ManagementRepositories,
+    input: InspectMemoryToolReceiptInput,
+  ): Promise<InspectMemoryToolReceiptResult> {
+    await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
+    const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+      .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+    if (existing) {
+      if (existing.event.type !== 'memory-tool-completed'
+        || existing.event.payload.toolName !== input.toolName
+        || existing.event.payload.requestHash !== input.requestHash) {
+        throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+      }
+      if (existing.event.payload.output === undefined) {
+        throw new ManagementConflictError('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
+      }
+      return { disposition: 'existing', resultReferenceId: existing.event.payload.resultReferenceId,
+        output: structuredClone(existing.event.payload.output) };
+    }
+    const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+    assertMemoryToolRunWritable(run);
+    return { disposition: 'new' };
+  }
+
+  async function recordMemoryToolReceiptInTransaction(
+    transactionRepositories: ManagementRepositories,
+    input: RecordMemoryToolReceiptInput,
+  ): Promise<ManagementEventRecord> {
+    const now = clock.now();
+    await authorizeManagementWrite(transactionRepositories, input.authority, now);
+    const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
+      requestHash: input.requestHash, output: structuredClone(input.output) } as const;
+    const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
+    const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
+      .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
+    if (existing) {
+      if (existing.event.type === 'memory-tool-completed' && existing.payloadHash === payloadHash) return existing;
+      throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
+    }
+    const run = await requireRun(transactionRepositories, input.authority.managementRunId);
+    assertMemoryToolRunWritable(run);
+    return appendValidatedManagementEventInTransaction(transactionRepositories, {
+      managementRunId: input.authority.managementRunId,
+      type: 'memory-tool-completed', actorKind: 'manager', actorId: input.authority.workerId,
+      idempotencyKey: input.idempotencyKey, payload,
+    }, now, ids, { payloadHash, parseEvent: parseMemoryToolManagementEvent });
+  }
 
   return {
     async createOrResumeRun(input: CreateOrResumeManagementRunInput): Promise<{ run: ManagementRunRecord; disposition: 'created' | 'existing' }> {
@@ -270,67 +340,28 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
       await authorizeManagementWrite(repositories, authority, clock.now());
     },
 
-    async inspectMemoryToolReceipt(input: {
-      authority: LeaseAuthorityInput;
-      idempotencyKey: string;
-      toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
-      requestHash: string;
-    }): Promise<{ disposition: 'new' } | {
-      disposition: 'existing';
-      resultReferenceId: string;
-      output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
-    }> {
-      return unitOfWork.run(async (transactionRepositories) => {
-        await authorizeManagementWrite(transactionRepositories, input.authority, clock.now());
-        const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
-          .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
-        if (existing) {
-          if (existing.event.type !== 'memory-tool-completed'
-            || existing.event.payload.toolName !== input.toolName
-            || existing.event.payload.requestHash !== input.requestHash) {
-            throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
-          }
-          if (existing.event.payload.output === undefined) {
-            throw new ManagementConflictError('MEMORY_TOOL_RECEIPT_OUTPUT_UNAVAILABLE');
-          }
-          return { disposition: 'existing' as const,
-            resultReferenceId: existing.event.payload.resultReferenceId,
-            output: structuredClone(existing.event.payload.output) };
-        }
-        const run = await requireRun(transactionRepositories, input.authority.managementRunId);
-        assertMemoryToolRunWritable(run);
-        return { disposition: 'new' as const };
-      });
+    async inspectMemoryToolReceipt(input: InspectMemoryToolReceiptInput): Promise<InspectMemoryToolReceiptResult> {
+      return unitOfWork.run((transactionRepositories) =>
+        inspectMemoryToolReceiptInTransaction(transactionRepositories, input));
     },
 
-    async recordMemoryToolReceipt(input: {
-      authority: LeaseAuthorityInput;
-      idempotencyKey: string;
-      toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
-      resultReferenceId: string;
-      requestHash: string;
-      output: NonNullable<ManagementEventPayloadMapV1['memory-tool-completed']['output']>;
-    }): Promise<ManagementEventRecord> {
-      return unitOfWork.run(async (transactionRepositories) => {
-        const now = clock.now();
-        await authorizeManagementWrite(transactionRepositories, input.authority, now);
-        const payload = { toolName: input.toolName, resultReferenceId: input.resultReferenceId,
-          requestHash: input.requestHash, output: structuredClone(input.output) } as const;
-        const payloadHash = hashManagementEventPayload({ type: 'memory-tool-completed', payload });
-        const existing = (await transactionRepositories.events.list(input.authority.managementRunId))
-          .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
-        if (existing) {
-          if (existing.event.type === 'memory-tool-completed' && existing.payloadHash === payloadHash) return existing;
-          throw new ManagementConflictError('MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT');
-        }
-        const run = await requireRun(transactionRepositories, input.authority.managementRunId);
-        assertMemoryToolRunWritable(run);
-        return appendValidatedManagementEventInTransaction(transactionRepositories, {
-          managementRunId: input.authority.managementRunId,
-          type: 'memory-tool-completed', actorKind: 'manager', actorId: input.authority.workerId,
-          idempotencyKey: input.idempotencyKey, payload,
-        }, now, ids, { payloadHash, parseEvent: parseMemoryToolManagementEvent });
-      });
+    async inspectMemoryToolReceiptInTransaction(
+      transactionRepositories: ManagementRepositories,
+      input: InspectMemoryToolReceiptInput,
+    ): Promise<InspectMemoryToolReceiptResult> {
+      return inspectMemoryToolReceiptInTransaction(transactionRepositories, input);
+    },
+
+    async recordMemoryToolReceipt(input: RecordMemoryToolReceiptInput): Promise<ManagementEventRecord> {
+      return unitOfWork.run((transactionRepositories) =>
+        recordMemoryToolReceiptInTransaction(transactionRepositories, input));
+    },
+
+    async recordMemoryToolReceiptInTransaction(
+      transactionRepositories: ManagementRepositories,
+      input: RecordMemoryToolReceiptInput,
+    ): Promise<ManagementEventRecord> {
+      return recordMemoryToolReceiptInTransaction(transactionRepositories, input);
     },
 
     async recordInvocationTerminal(input: {

@@ -495,6 +495,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
   const toolHandler = vi.fn(async () => ({ status: 'running' as const, checkpointRevision: 0, lastEventSequence: 2 }));
   const executeTool = createManagementToolExecutor({
     kernel,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     handlers: { 'context.get_management_state': toolHandler },
   });
   let schedulerId = 0;

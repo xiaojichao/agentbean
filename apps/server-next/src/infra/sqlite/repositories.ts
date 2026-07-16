@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -25,6 +26,10 @@ import { createSqliteManagementPersistence } from './management-repositories.js'
 import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
 import { createMemoryUnitOfWork } from '../../application/memory-unit-of-work.js';
+import {
+  createManagementMemoryUnitOfWork,
+  type ManagementMemoryTransactionRepositories,
+} from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
 
 export interface SqliteStatement {
@@ -149,8 +154,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const management = createSqliteManagementPersistence(teamDb);
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
   const memory = createSqliteMemoryRepositories(teamDb);
+  const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
 
   let repositories!: ServerNextRepositories;
+  const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
+    const active = managementMemoryContext.getStore();
+    if (active) return operation(active);
+    return management.unitOfWork.run((managementRepositories) =>
+      managementMemoryContext.run(
+        { management: managementRepositories, memory },
+        () => operation({ management: managementRepositories, memory }),
+      ));
+  });
   repositories = {
     management: management.repositories,
     managementUnitOfWork: management.unitOfWork,
@@ -176,7 +191,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     ),
     memory,
     memoryUnitOfWork: createMemoryUnitOfWork((operation) =>
-      management.unitOfWork.run(() => operation(memory))),
+      managementMemoryUnitOfWork.run(({ memory: transactionMemory }) => operation(transactionMemory))),
+    managementMemoryUnitOfWork,
     users: {
       async create(user) {
         globalDb

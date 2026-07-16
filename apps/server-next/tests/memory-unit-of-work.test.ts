@@ -124,6 +124,36 @@ describe.each([
     }
   });
 
+  test('atomically rolls back Management receipt state and Memory side effects together', async () => {
+    const fixture = createFixture();
+    try {
+      await expect(fixture.repositories.managementMemoryUnitOfWork.run(async ({ management, memory }) => {
+        await management.runs.create({
+          schemaVersion: 1, id: 'run-atomic', teamId: 'team-1', channelId: 'channel-1',
+          rootMessageId: 'message-1', mode: 'managed', status: 'running',
+          placementPolicy: { placement: 'device', allowServerContext: false,
+            requireLocalModelCredentials: true },
+          checkpointRevision: 0,
+          budget: { maxSubtasks: 2, maxDepth: 1, maxExternalInvocations: 2 },
+          createdAt: 1, updatedAt: 1,
+        });
+        await fixture.repositories.memoryUnitOfWork.run((nestedMemory) =>
+          nestedMemory.items.create(item('memory-atomic')));
+        await memory.auditEvents.append(audit('memory-atomic', 'audit-atomic'));
+        throw new Error('receipt append failed');
+      })).rejects.toThrow('receipt append failed');
+
+      await expect(fixture.repositories.management.runs.getById('run-atomic')).resolves.toBeNull();
+      await expect(fixture.repositories.memory.items.getById({ teamId: 'team-1', id: 'memory-atomic' }))
+        .resolves.toBeNull();
+      await expect(fixture.repositories.memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'memory', subjectId: 'memory-atomic',
+      })).resolves.toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('uses optimistic item updates and immutable sequential grant versions', async () => {
     const fixture = createFixture();
     try {
