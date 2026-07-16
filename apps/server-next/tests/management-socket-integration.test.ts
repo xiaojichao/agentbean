@@ -120,7 +120,7 @@ describe('management worker socket integration', () => {
       leaseToken: 'lease-secret-1',
       fencingToken: 1,
       idempotencyKey: 'memory-search-1',
-      input: { query: '目标', limit: 5 },
+      input: { targetAgentId: 'agent-1', query: '目标', limit: 5 },
     })).resolves.toMatchObject({
       schemaVersion: 2,
       managementPhase: 3,

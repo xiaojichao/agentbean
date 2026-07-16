@@ -230,7 +230,7 @@ describe('management tool boundary', () => {
     expect(requests[0]?.tools.find((tool) => tool.name === 'memory.search')?.inputSchema).toMatchObject({
       type: 'object',
       additionalProperties: false,
-      required: ['query', 'limit'],
+      required: ['targetAgentId', 'query', 'limit'],
     });
     expect(requests[0]?.sessionContext).toMatchObject({ schemaVersion: 2, managementPhase: 3 });
     await session.dispose();
@@ -609,13 +609,13 @@ describe('Phase 3 Memory tool definitions', () => {
         required: string[];
       }]));
     const expectedKeys = new Map([
-      ['memory.search', ['query', 'limit', 'taskId', 'channelId', 'userId']],
+      ['memory.search', ['targetAgentId', 'query', 'limit', 'taskId', 'channelId', 'userId']],
       ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId']],
       ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs', 'taskId']],
       ['memory.link_sources', ['memoryId', 'sourceRefs']],
     ]);
     const expectedRequired = new Map([
-      ['memory.search', ['query', 'limit']],
+      ['memory.search', ['targetAgentId', 'query', 'limit']],
       ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit']],
       ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs']],
       ['memory.link_sources', ['memoryId', 'sourceRefs']],

@@ -127,7 +127,7 @@ if (!capsuleRefMigrationMarkers.every((marker) => capsuleRefMigration.includes(m
 
 const usecaseMarkers = [
   'createCollaborativeMemoryService', 'MemoryPermissions', 'createMemory',
-  'updateMemory', 'supersedeMemory', 'deleteMemory', 'issueGrant', 'revokeGrant',
+  'updateMemory', 'supersedeMemory', 'deleteMemory', 'issueGrant', 'revokeGrant', 'linkSources',
 ];
 if (!usecaseMarkers.every((marker) => collaborativeMemoryService.includes(marker))
   || !collaborativeMemoryTests.includes('describe.each')

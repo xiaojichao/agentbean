@@ -292,8 +292,8 @@ describe('Phase 2 management worker contracts', () => {
       snapshotHash: 'sha256:source-1',
     };
     expect(parsePhase3MemoryToolInputV1('memory.search', {
-      query: 'deployment result', taskId: 'task-1', limit: 10,
-    })).toEqual({ query: 'deployment result', taskId: 'task-1', limit: 10 });
+      targetAgentId: 'agent-1', query: 'deployment result', taskId: 'task-1', limit: 10,
+    })).toEqual({ targetAgentId: 'agent-1', query: 'deployment result', taskId: 'task-1', limit: 10 });
     expect(parsePhase3MemoryToolInputV1('memory.create_capsule', {
       targetAgentId: 'agent-1', prompt: 'continue the task', channelId: 'channel-1', limit: 5,
     })).toMatchObject({ targetAgentId: 'agent-1', limit: 5 });
@@ -306,7 +306,8 @@ describe('Phase 2 management worker contracts', () => {
 
     const invalidCases: Array<() => unknown> = [
       () => parsePhase3MemoryToolInputV1('memory.search', { query: 'q', limit: 1, secret: 'forbidden' }),
-      () => parsePhase3MemoryToolInputV1('memory.search', { query: '', limit: 1 }),
+      () => parsePhase3MemoryToolInputV1('memory.search', { targetAgentId: 'agent-1', query: '', limit: 1 }),
+      () => parsePhase3MemoryToolInputV1('memory.search', { query: 'q', limit: 1 }),
       () => parsePhase3MemoryToolInputV1('memory.search', { query: 'q', limit: 101 }),
       () => parsePhase3MemoryToolInputV1('memory.create_capsule', {
         targetAgentId: '', prompt: 'p', limit: 1,
@@ -340,7 +341,7 @@ describe('Phase 3 Memory tool request/result contracts', () => {
     leaseToken: 'lease-1',
     fencingToken: 1,
     idempotencyKey: 'idempotency-1',
-    input: { query: 'runtime decision', limit: 8 },
+    input: { targetAgentId: 'agent-1', query: 'runtime decision', limit: 8 },
   };
 
   test('parses a valid Phase 3 memory.search request and rejects phase/tool drift', () => {
