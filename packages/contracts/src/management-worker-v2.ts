@@ -4,7 +4,8 @@ import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
 import type { AgentInvocationResultDto } from './invocation.js';
-import type { MemoryCapsuleRefDto, MemoryContentKind, MemorySourceRefDto } from './management-memory.js';
+import type { MemoryCapsuleRefDto, MemoryContentKind, MemoryScopeType, MemorySourceRefDto } from './management-memory.js';
+import { MEMORY_SCOPE_TYPES } from './management-memory.js';
 
 export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.create_subtasks',
@@ -123,8 +124,9 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
 }
 
 /**
- * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId 来自 session
- * context，不由 Agent 传入。这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
+ * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId，以及提议来源
+ * sourceAgentId / sourceInvocationId 来自 Server 已校验的 run/invocation context，不由 Agent 传入。
+ * 这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
  * 不变量的 Agent 侧入口（search 只读；create_capsule 投影；propose_candidate 进 review 队列；
  * link_sources 补来源）。
  */
@@ -146,8 +148,12 @@ export interface Phase3ManagementWorkerToolInputMapV1 {
     readonly userId?: ID;
   };
   readonly 'memory.propose_candidate': {
+    readonly targetAgentId: ID;
+    readonly scopeType: MemoryScopeType;
+    readonly scopeRef: ID;
     readonly contentKind: MemoryContentKind;
     readonly proposedContent: string;
+    readonly proposedSummary?: string;
     readonly sourceRefs: readonly MemorySourceRefDto[];
     readonly taskId?: ID;
   };
@@ -699,11 +705,17 @@ function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMa
     return;
   }
   if (toolName === 'memory.propose_candidate') {
-    assertExactMemoryKeys(value, ['contentKind', 'proposedContent', 'sourceRefs', 'taskId'],
-      ['contentKind', 'proposedContent', 'sourceRefs']);
+    assertExactMemoryKeys(value,
+      ['targetAgentId', 'scopeType', 'scopeRef',
+        'contentKind', 'proposedContent', 'proposedSummary', 'sourceRefs', 'taskId'],
+      ['targetAgentId', 'scopeType', 'scopeRef',
+        'contentKind', 'proposedContent', 'sourceRefs']);
     if (!MEMORY_CONTENT_KINDS.includes(value.contentKind as typeof MEMORY_CONTENT_KINDS[number])
+      || !MEMORY_SCOPE_TYPES.includes(value.scopeType as typeof MEMORY_SCOPE_TYPES[number])
+      || !nonEmpty(value.targetAgentId) || !nonEmpty(value.scopeRef)
       || !nonEmpty(value.proposedContent)
-      || (value.taskId !== undefined && !nonEmpty(value.taskId))) {
+      || (value.taskId !== undefined && !nonEmpty(value.taskId))
+      || (value.proposedSummary !== undefined && !nonEmpty(value.proposedSummary))) {
       throw new Error('MEMORY_TOOL_INPUT_INVALID');
     }
     assertMemorySourceRefs(value.sourceRefs);

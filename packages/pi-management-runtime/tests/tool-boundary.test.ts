@@ -611,13 +611,13 @@ describe('Phase 3 Memory tool definitions', () => {
     const expectedKeys = new Map([
       ['memory.search', ['targetAgentId', 'query', 'limit', 'taskId', 'channelId', 'userId']],
       ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit', 'taskId', 'channelId', 'userId']],
-      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs', 'taskId']],
+      ['memory.propose_candidate', ['targetAgentId', 'scopeType', 'scopeRef', 'contentKind', 'proposedContent', 'proposedSummary', 'sourceRefs', 'taskId']],
       ['memory.link_sources', ['memoryId', 'sourceRefs']],
     ]);
     const expectedRequired = new Map([
       ['memory.search', ['targetAgentId', 'query', 'limit']],
       ['memory.create_capsule', ['targetAgentId', 'prompt', 'limit']],
-      ['memory.propose_candidate', ['contentKind', 'proposedContent', 'sourceRefs']],
+      ['memory.propose_candidate', ['targetAgentId', 'scopeType', 'scopeRef', 'contentKind', 'proposedContent', 'sourceRefs']],
       ['memory.link_sources', ['memoryId', 'sourceRefs']],
     ]);
     for (const name of MEMORY_TOOLS) {
