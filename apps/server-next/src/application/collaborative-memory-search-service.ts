@@ -59,6 +59,8 @@ export interface SearchCollaborativeMemoriesInput {
   readonly limit: number;
   /** Optional hard gate applied before relevance ranking and limit truncation. */
   readonly accessMode?: CollaborativeMemoryAccessMode;
+  /** Internal projection gate applied before relevance ranking and limit truncation. */
+  readonly matchFilter?: (match: CollaborativeMemorySearchCandidate) => boolean;
   readonly expectedGrantVersions?: readonly { readonly id: ID; readonly version: number }[];
 }
 
@@ -69,12 +71,15 @@ export type MemorySearchExclusionReason =
   | 'MEMORY_EXPIRED'
   | 'MEMORY_SOURCE_UNAVAILABLE';
 
-export interface CollaborativeMemorySearchMatch {
+export interface CollaborativeMemorySearchCandidate {
   readonly item: MemoryItemRecord;
   readonly sources: readonly MemorySourceRecord[];
   readonly tags: readonly string[];
   readonly accessMode: CollaborativeMemoryAccessMode;
   readonly grants: readonly MemoryGrantRecord[];
+}
+
+export interface CollaborativeMemorySearchMatch extends CollaborativeMemorySearchCandidate {
   readonly score: number;
   readonly reasons: readonly MemoryRankingReason[];
 }
@@ -111,7 +116,7 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
       })));
       const candidates = [...new Map(itemLists.flat().map((item) => [item.id, item])).values()]
         .sort((left, right) => left.id.localeCompare(right.id));
-      const eligible: Array<Omit<CollaborativeMemorySearchMatch, 'score' | 'reasons'>> = [];
+      const eligible: CollaborativeMemorySearchCandidate[] = [];
       const excluded: Array<{ memoryId: ID; reason: MemorySearchExclusionReason }> = [];
 
       for (const item of candidates) {
@@ -175,9 +180,12 @@ export function createCollaborativeMemorySearchService(deps: CollaborativeMemory
         });
       }
 
-      const rankable = input.accessMode === undefined
+      const accessModeFiltered = input.accessMode === undefined
         ? eligible
         : eligible.filter((entry) => entry.accessMode === input.accessMode);
+      const rankable = input.matchFilter === undefined
+        ? accessModeFiltered
+        : accessModeFiltered.filter(input.matchFilter);
       const ranked = rankMemories(rankable.map((entry) => entry.item), input);
       const byId = new Map(rankable.map((entry) => [entry.item.id, entry]));
       return {

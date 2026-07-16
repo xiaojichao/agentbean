@@ -51,6 +51,8 @@ import { createRescanController, type RescanController } from './rescan.js';
 import { createDispatchOutbox, type DispatchOutbox } from './outbox.js';
 import { prepareDispatchRuntimeMemory } from './memory/runtime-memory-context.js';
 import { listLocalMemoryGovernanceSummaries } from './memory/local-memory-governance.js';
+import { createLocalMemoryStore, type LocalMemoryStore } from './memory/local-memory-store.js';
+import { observeDispatchOutcome, type ObserveDispatchOutcomeInput } from './memory/outcome-observer.js';
 
 export interface DaemonProtocolSocket {
   readonly connected: boolean;
@@ -175,6 +177,10 @@ export interface CreateDaemonProtocolClientInput {
    * Defaults to os.homedir(); must match the value the runtime scanner uses.
    */
   homeDir?: string;
+  /** Device-local Memory base directory override for isolated embedding/tests. */
+  localMemoryBaseDir?: string;
+  /** Injectable local Memory observer for embedding/tests. */
+  outcomeObserver?: typeof observeDispatchOutcome;
   onScanChanged?: (snapshot: DaemonScanSnapshot) => Promise<void> | void;
   onCredentialsChanged?: (credentials: DaemonDeviceCredentialsUpdate) => Promise<void> | void;
   /**
@@ -200,6 +206,52 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
+  const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
+  const localMemoryObservationTails = new Map<string, Promise<void>>();
+  const outcomeObserver = input.outcomeObserver ?? observeDispatchOutcome;
+  const observeOutcomeBestEffort = async (
+    request: Pick<DispatchRequestPayload, 'id' | 'agentId' | 'customAgent'>,
+    result: ObserveDispatchOutcomeInput['result'],
+  ) => {
+    const cwd = result.workspaceRun?.cwd ?? request.customAgent?.cwd;
+    if (!device.profileId || !result.workspaceRun || !cwd) return;
+    try {
+      let store = localMemoryStores.get(cwd);
+      if (!store) {
+        store = createLocalMemoryStore({ profileId: device.profileId, cwd, baseDir: input.localMemoryBaseDir });
+        localMemoryStores.set(cwd, store);
+      }
+      await outcomeObserver({
+        store: await store,
+        request: {
+          id: request.id,
+          agentId: request.agentId,
+          ...(request.customAgent ? { customAgent: {
+            cwd: request.customAgent.cwd,
+            adapterKind: request.customAgent.adapterKind,
+          } } : {}),
+        },
+        result,
+      });
+    } catch (error) {
+      // Store 初始化失败可能是瞬时文件系统问题；不要永久缓存 rejected Promise。
+      localMemoryStores.delete(cwd);
+      console.warn(`daemon observe dispatch ${request.id} failed (non-blocking): ${readErrorMessage(error)}`);
+    }
+  };
+  const scheduleOutcomeObservation = (
+    request: Pick<DispatchRequestPayload, 'id' | 'agentId' | 'customAgent'>,
+    result: ObserveDispatchOutcomeInput['result'],
+  ) => {
+    const cwd = result.workspaceRun?.cwd ?? request.customAgent?.cwd;
+    if (!device.profileId || !result.workspaceRun || !cwd) return;
+    const previous = localMemoryObservationTails.get(cwd) ?? Promise.resolve();
+    const current = previous.then(() => observeOutcomeBestEffort(request, result));
+    localMemoryObservationTails.set(cwd, current);
+    void current.finally(() => {
+      if (localMemoryObservationTails.get(cwd) === current) localMemoryObservationTails.delete(cwd);
+    });
+  };
 
   return {
     get deviceId() { return currentDeviceId || undefined; },
@@ -281,6 +333,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             profileId: device.profileId,
             teamId,
             cwds: Array.from(knownRecoveryCwds),
+            baseDir: input.localMemoryBaseDir,
           });
           ack?.({ ok: true, summaries });
         } catch {
@@ -446,6 +499,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               ? { onDelivered: () => markWorkspaceRunManifestReported(reportedManifestPath, Date.now()) }
               : {}),
           });
+          scheduleOutcomeObservation(request, result);
         } catch (error) {
           if (cancelledDispatchIds.delete(request.id)) {
             return;
@@ -506,6 +560,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           isDeliveredAck: isDispatchResultDeliveredAck,
           onDelivered: () => markWorkspaceRunReported(run, Date.now()),
         });
+        scheduleOutcomeObservation({
+          id: run.runId,
+          agentId: run.agentId,
+        }, { workspaceRun: run.workspaceRun });
       } catch (error) {
         console.warn(`daemon recover workspace run ${run.runId} failed: ${error instanceof Error ? error.message : String(error)}`);
       }

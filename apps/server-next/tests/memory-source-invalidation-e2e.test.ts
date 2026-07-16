@@ -8,6 +8,7 @@ import type {
   ServerNextRepositories,
 } from '../src/index.js';
 import { createMemorySourceInvalidationService } from '../src/application/memory-source-invalidation-service.js';
+import { createMemoryGovernanceService } from '../src/application/memory-governance-service.js';
 import { createCapsuleInjectionValidator } from '../src/application/capsule-injection-validator.js';
 import { createMemoryCapsuleService } from '../src/application/memory-capsule-service.js';
 import { createServerMemorySearchPermissions } from '../src/application/server-memory-permissions.js';
@@ -160,6 +161,19 @@ describe.each([
         [{ sourceKind: 'message', sourceId: 'message-production' }],
         { teamId, userId },
       );
+      await harness.repositories.memory.candidates.create({
+        schemaVersion: 1, id: 'candidate-production', teamId, managementRunId: 'run-production',
+        sourceAgentId: 'agent-production', sourceInvocationId: 'invocation-production',
+        targetAgentId: 'agent-production', scopeType: 'team', scopeRef: teamId,
+        contentKind: 'fact', proposedContent: 'production candidate',
+        projectionHash: 'sha256:candidate-production', status: 'candidate', conflictMemoryIds: [],
+        createdAt: 1, updatedAt: 1,
+      });
+      await harness.repositories.memory.candidateSources.create({
+        candidateId: 'candidate-production', teamId, sourceKind: 'message', sourceId: 'message-production',
+        snapshotHash: 'sha256:message-production', sourceScopeType: 'team', sourceScopeRef: teamId,
+        sourceVisibility: 'team', createdAt: 1,
+      });
 
       const permissions = createServerMemorySearchPermissions(harness.repositories);
       const searchService = createCollaborativeMemorySearchService({
@@ -199,6 +213,14 @@ describe.each([
       if (!deleted.ok) throw new Error(`message delete failed: ${deleted.error}`);
       await expect(harness.repositories.memory.items.getById({ teamId, id: 'mem-production' }))
         .resolves.toMatchObject({ status: 'expired' });
+      await expect(harness.repositories.memory.candidates.getById({ teamId, id: 'candidate-production' }))
+        .resolves.toMatchObject({ status: 'rejected', decidedBy: 'system' });
+      // 模拟进程重启后重新创建 governance service：Candidate 只能作为终态历史出现，不能恢复为未决。
+      const recoveredSnapshot = await createMemoryGovernanceService({ repositories: harness.repositories, clock })
+        .getSnapshot({ teamId, userId });
+      expect(recoveredSnapshot.candidates).toMatchObject([{
+        id: 'candidate-production', status: 'rejected', sourceState: 'source-invalid',
+      }]);
       await expect(validator.validateCapsuleForInjection({
         capsule,
         requesterUserId: userId,

@@ -97,4 +97,24 @@ describe('Memory governance snapshot', () => {
 
     expect(snapshot.capsules).toEqual([]);
   });
+
+  test('does not re-expose a pending Candidate whose source is missing after recovery', async () => {
+    await repositories.memory.candidates.create({
+      schemaVersion: 1, id: 'candidate-orphaned', teamId: 'team-1', managementRunId: 'run-1',
+      sourceAgentId: 'agent-source', sourceInvocationId: 'invocation-orphaned', targetAgentId: 'agent-target',
+      scopeType: 'team', scopeRef: 'team-1', contentKind: 'fact', proposedContent: 'Orphaned candidate',
+      projectionHash: 'sha256:orphaned', status: 'candidate', conflictMemoryIds: [], createdAt: 10, updatedAt: 10,
+    });
+    await repositories.memory.candidateSources.create({
+      candidateId: 'candidate-orphaned', teamId: 'team-1', sourceKind: 'message', sourceId: 'missing-message',
+      snapshotHash: 'sha256:missing', sourceScopeType: 'team', sourceScopeRef: 'team-1',
+      sourceVisibility: 'team', createdAt: 10,
+    });
+
+    const snapshot = await createMemoryGovernanceService({ repositories, clock: { now: () => 100 } })
+      .getSnapshot({ teamId: 'team-1', userId: 'user-1' });
+
+    expect(snapshot.candidates).toEqual([]);
+    expect(snapshot.invocations).toEqual([]);
+  });
 });

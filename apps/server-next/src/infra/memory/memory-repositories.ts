@@ -298,6 +298,13 @@ export function createInMemoryMemoryRepositories(
           .filter((record) => record.teamId === input.teamId && record.candidateId === input.candidateId)
           .sort(compareCandidateSource);
       },
+      async listBySource(input) {
+        return [...state.candidateSources.values()]
+          .filter((record) => record.teamId === input.teamId
+            && record.sourceKind === input.sourceKind
+            && record.sourceId === input.sourceId)
+          .sort(compareCandidateSource);
+      },
     },
   };
 }

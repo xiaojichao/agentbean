@@ -279,11 +279,20 @@ export function assertMemoryCapsuleItemManifestRecord(record: MemoryCapsuleItemM
       || authorization.grantVersion! < 1) {
     throw new Error('memory capsule item grant authorization is invalid');
   }
-  if (authorization.sourceScopeType !== record.scopeType
-    || authorization.sourceScopeRef !== record.scopeRef
+  assertServerMemoryScope(authorization.sourceScopeType, authorization.sourceScopeRef);
+  if ((authorization.mode === 'scope-policy'
+    && (authorization.sourceScopeType !== record.scopeType
+      || authorization.sourceScopeRef !== record.scopeRef))
     || authorization.authorizedContentKind !== record.contentKind
     || authorization.authorizedRedactionLevel !== record.redactionLevel) {
     throw new Error('memory capsule item authorization projection mismatch');
+  }
+  const expectedContentField = record.redactionLevel === 'summary-only'
+    || (authorization.mode === 'explicit-grant' && record.contentKind === 'summary')
+    ? 'summary'
+    : 'content';
+  if (record.contentField !== expectedContentField) {
+    throw new Error('memory capsule item content field does not match projection');
   }
   if (record.expiresAt !== undefined && record.expiresAt > authorization.expiresAt) {
     throw new Error('memory capsule item expiry exceeds authorization');

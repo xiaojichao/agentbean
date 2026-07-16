@@ -86,6 +86,27 @@ describe.each([
     }
   });
 
+  test('applies the projection gate before ranking limit truncation', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.memory.items.create(item('task-unsafe', 'task', 'task-1'));
+      await fixture.repositories.memory.items.create(item('team-safe', 'team', 'team-1'));
+      const service = createCollaborativeMemorySearchService({
+        repositories: fixture.repositories.memory,
+        permissions,
+      });
+
+      const result = await service.search({
+        ...query(), taskId: 'task-1', prompt: 'raw secret content', limit: 1,
+        matchFilter: (match) => match.item.id !== 'task-unsafe',
+      });
+
+      expect(result.matches.map((entry) => entry.item.id)).toEqual(['team-safe']);
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('uses only the current live grant and fails closed on version drift', async () => {
     const fixture = createFixture();
     try {

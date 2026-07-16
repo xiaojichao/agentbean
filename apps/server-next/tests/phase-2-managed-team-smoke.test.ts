@@ -43,6 +43,7 @@ interface ExecutionRecord {
   deviceLabel: string;
   dispatchId: string;
   prompt: string;
+  memoryContext?: unknown;
 }
 
 const requireFromServer = createRequire(new URL('../package.json', import.meta.url));
@@ -55,8 +56,8 @@ afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()?.();
 });
 
-describe('Phase 2 managed 真实双 Agent smoke', () => {
-  test('open claim 竞态、targeted dependency、交付验收与人工审核形成一条真实纵向链路', async () => {
+describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
+  test('Agent A 来源经 Capsule 交给 Agent B，B 仅提 Candidate，最终由用户合并冲突', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-phase2-managed-team-'));
     cleanups.push(async () => rmSync(dataDir, { recursive: true, force: true }));
     const server = await startServerNextDevServer({
@@ -78,13 +79,17 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
     });
     const web = createWebSocketClient(webSocket);
     const registered = await web.register({ username: 'owner', password: 'secret', teamName: 'Team' }) as {
+      token: string;
       user: { id: string };
       currentTeam: { id: string };
       defaultChannel: { id: string };
     };
     const teamId = registered.currentTeam.id;
     const userId = registered.user.id;
+    const token = registered.token;
     const channelId = registered.defaultChannel.id;
+    const authenticatedWebSocket = await connectClient(`${server.baseUrl}/web`, { auth: { token } });
+    cleanups.push(async () => authenticatedWebSocket.disconnect());
 
     const deviceA = await registerDeviceAndAgent({
       socket: agentSocketA, web, teamId, userId, machineId: 'phase2-device-a',
@@ -95,6 +100,13 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
       agentName: 'Agent B', skillName: 'phase2-agent-b',
     });
     const agentIds = [deviceA.agentId, deviceB.agentId];
+    const createdMemory = await authenticatedWebSocket.emitWithAck(WEB_EVENTS.memory.create, {
+      token, userId, teamId, kind: 'decision', scopeType: 'team', scopeRef: teamId,
+      content: '所有 AgentBean 构建与验收统一使用 Node 24。',
+      summary: 'AgentBean 使用 Node 24。', tags: ['phase3-smoke'],
+    }) as { ok: boolean; memory: { item: { id: string } } };
+    if (!createdMemory.ok) throw new Error(`SMOKE_MEMORY_CREATE_FAILED:${JSON.stringify(createdMemory)}`);
+    expect(createdMemory).toMatchObject({ ok: true, memory: { item: { id: expect.any(String) } } });
     const capabilitiesByAgentId = new Map([
       [deviceA.agentId, 'phase2-agent-a'],
       [deviceB.agentId, 'phase2-agent-b'],
@@ -129,6 +141,9 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
       openInvocation?: Record<string, unknown>;
       replayInvocation?: Record<string, unknown>;
       targetedInvocation?: Record<string, unknown>;
+      capsule?: Record<string, unknown>;
+      candidate?: Record<string, unknown>;
+      replayCandidate?: Record<string, unknown>;
       staleResult?: { isError?: boolean; body: Record<string, unknown> };
       rootDelivery?: Record<string, unknown>;
       error?: string;
@@ -153,7 +168,8 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
         async createSession({ context }) {
           if (context.schemaVersion !== 2) throw new Error('PHASE_2_CONTEXT_REQUIRED');
           return scriptedManagerSession({
-            context, toolExecutor, agentIds, capabilitiesByAgentId, state: managerState,
+            context, toolExecutor, agentIds, capabilitiesByAgentId, teamId,
+            seededMemoryId: createdMemory.memory.item.id, state: managerState,
           });
         },
       }),
@@ -187,21 +203,21 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
     });
 
     await expect(webSocket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
-      userId, teamId, mode: 'managed', maxManagementPhase: 2,
+      userId, teamId, mode: 'managed', maxManagementPhase: 3,
       placementPolicy: {
         placement: 'device', allowedDeviceIds: [deviceA.deviceId, deviceB.deviceId],
         allowServerContext: false, requireLocalModelCredentials: true,
       },
-    })).resolves.toMatchObject({ ok: true, policy: { mode: 'managed', maxManagementPhase: 2 } });
+    })).resolves.toMatchObject({ ok: true, policy: { mode: 'managed', maxManagementPhase: 3 } });
 
     const sent = await webSocket.emitWithAck(WEB_EVENTS.message.send, {
-      userId, teamId, channelId, body: '请按依赖顺序完成 Phase 2 smoke',
-      asTask: true, clientMessageId: 'phase-2-managed-team-message',
+      userId, teamId, channelId, body: '请按依赖顺序完成 Phase 3 跨 Agent Memory smoke',
+      asTask: true, clientMessageId: 'phase-3-managed-memory-message',
     }) as { ok: boolean; task?: { id: string }; management?: { managementPhase?: number } };
     expect(sent).toMatchObject({
       ok: true,
       task: { id: expect.any(String) },
-      management: { managementPhase: 2 },
+      management: { managementPhase: 3 },
     });
     managerState.rootTaskId = sent.task!.id;
 
@@ -219,12 +235,45 @@ describe('Phase 2 managed 真实双 Agent smoke', () => {
     const openLoserId = agentIds.find((agentId) => agentId !== openWinnerId)!;
     expect(managerState.targetedClaim?.claimedAgentId).toBe(openLoserId);
     expect(managerState.openInvocation).toEqual(managerState.replayInvocation);
+    expect(managerState.candidate).toEqual(managerState.replayCandidate);
+    expect(managerState.candidate).toMatchObject({ status: 'conflict', candidateId: expect.any(String) });
     expect(managerState.staleResult).toMatchObject({
       isError: true,
       body: { error: expect.stringMatching(/STALE|FUTURE|CONFLICT/) },
     });
     expect(executions.filter((record) => record.agentId === openWinnerId)).toHaveLength(1);
     expect(executions.filter((record) => record.agentId === openLoserId)).toHaveLength(1);
+    const targetExecution = executions.find((record) => record.agentId === openLoserId)!;
+    if (!targetExecution.memoryContext) {
+      const diagnostic = await authenticatedWebSocket.emitWithAck(WEB_EVENTS.memory.snapshot, { token, userId, teamId });
+      throw new Error(`SMOKE_CAPSULE_NOT_INJECTED:${JSON.stringify({
+        capsule: managerState.capsule, targetExecution, diagnostic,
+      })}`);
+    }
+    const capsuleRef = managerState.capsule!.capsuleRef as { id: string };
+    expect(targetExecution.memoryContext).toMatchObject([{
+      content: '所有 AgentBean 构建与验收统一使用 Node 24。',
+      provenance: {
+        origin: 'server', capsuleId: capsuleRef.id,
+        sourceRefs: [expect.objectContaining({ sourceKind: 'message' })],
+      },
+    }]);
+
+    const beforeMerge = await authenticatedWebSocket.emitWithAck(WEB_EVENTS.memory.snapshot, { token, userId, teamId }) as {
+      ok: boolean;
+      snapshot: { candidates: Array<{ id: string; status: string; conflictMemoryIds: string[] }> };
+    };
+    const candidateId = managerState.candidate!.candidateId as string;
+    expect(beforeMerge.snapshot.candidates).toMatchObject([{
+      id: candidateId,
+      status: 'conflict', conflictMemoryIds: [createdMemory.memory.item.id],
+    }]);
+    await expect(authenticatedWebSocket.emitWithAck(WEB_EVENTS.memory.candidateMerge, {
+      token, userId, teamId, candidateId,
+      conflictMemoryId: createdMemory.memory.item.id,
+    })).resolves.toMatchObject({ ok: true, candidate: { candidate: {
+      status: 'merged', mergedIntoMemoryId: expect.any(String),
+    } } });
 
     const dag = await webSocket.emitWithAck(WEB_EVENTS.task.dag, {
       userId, teamId, rootTaskId: sent.task!.id,
@@ -260,6 +309,8 @@ function scriptedManagerSession(input: {
   toolExecutor: ManagementToolExecutor;
   agentIds: readonly string[];
   capabilitiesByAgentId: ReadonlyMap<string, string>;
+  teamId: string;
+  seededMemoryId: string;
   state: {
     rootTaskId?: string;
     openTaskId?: string;
@@ -269,6 +320,9 @@ function scriptedManagerSession(input: {
     openInvocation?: Record<string, unknown>;
     replayInvocation?: Record<string, unknown>;
     targetedInvocation?: Record<string, unknown>;
+    capsule?: Record<string, unknown>;
+    candidate?: Record<string, unknown>;
+    replayCandidate?: Record<string, unknown>;
     staleResult?: { isError?: boolean; body: Record<string, unknown> };
     rootDelivery?: Record<string, unknown>;
     error?: string;
@@ -304,6 +358,10 @@ function scriptedManagerSession(input: {
       input.state.replayInvocation = await callTool(
         input.toolExecutor, input.context, 'agents.invoke', openInvokeInput, 'invoke-open');
       await acceptDelivery(input.toolExecutor, input.context, openClaim, input.state.openInvocation, 'accept-open');
+      const openEvidenceRefs = toMemorySourceRefs(input.state.openInvocation.evidenceRefs);
+      await callTool(input.toolExecutor, input.context, 'memory.link_sources', {
+        memoryId: input.seededMemoryId, sourceRefs: openEvidenceRefs,
+      }, 'link-open-memory');
 
       const stale = await callToolResult(input.toolExecutor, input.context, 'tasks.retry', {
         taskId: openTaskId, expectedTaskRevision: 999, reasonCode: 'SMOKE_STALE_REVISION',
@@ -336,17 +394,43 @@ function scriptedManagerSession(input: {
       const targetedClaim = await waitForClaim(
         input.toolExecutor, input.context, targetedTaskId, 'targeted');
       input.state.targetedClaim = targetedClaim;
+      input.state.capsule = await callTool(input.toolExecutor, input.context, 'memory.create_capsule', {
+        targetAgentId: targetedAgentId,
+        prompt: 'AgentBean Node 24 构建验收要求',
+        limit: 3,
+        taskId: targetedTaskId,
+      }, 'create-targeted-capsule');
       input.state.targetedInvocation = await callTool(input.toolExecutor, input.context, 'agents.invoke', {
         taskId: targetedTaskId, expectedTaskRevision: targetedClaim.taskRevision,
         taskAttempt: targetedClaim.taskAttempt, claimLeaseId: targetedClaim.claimLeaseId,
-        objective: '完成 targeted 分支', attachmentIds: [],
+        targetAgentId: targetedAgentId,
+        objective: '读取最小 Memory Capsule 并完成 targeted 分支', attachmentIds: [],
+        memoryCapsuleRef: input.state.capsule.capsuleRef,
       }, 'invoke-targeted');
       await acceptDelivery(
         input.toolExecutor, input.context, targetedClaim, input.state.targetedInvocation, 'accept-targeted');
+      const targetedEvidenceRefs = toMemorySourceRefs(input.state.targetedInvocation.evidenceRefs);
+      await callTool(input.toolExecutor, input.context, 'memory.link_sources', {
+        memoryId: input.seededMemoryId, sourceRefs: targetedEvidenceRefs,
+      }, 'link-targeted-memory');
+      const proposeInput = {
+        targetAgentId: targetedAgentId,
+        scopeType: 'team',
+        scopeRef: input.teamId,
+        contentKind: 'decision',
+        proposedContent: 'Agent B 已确认 AgentBean 构建与验收统一使用 Node 24。',
+        proposedSummary: 'Agent B 确认 Node 24。',
+        sourceRefs: targetedEvidenceRefs,
+        taskId: targetedTaskId,
+      };
+      input.state.candidate = await callTool(
+        input.toolExecutor, input.context, 'memory.propose_candidate', proposeInput, 'propose-targeted-memory');
+      input.state.replayCandidate = await callTool(
+        input.toolExecutor, input.context, 'memory.propose_candidate', proposeInput, 'propose-targeted-memory');
 
       const rootDelivery = await callToolResult(
         input.toolExecutor, input.context, 'review.submit_root_delivery', {
-          body: '两个 Agent 已按依赖顺序完成任务，请人工审核。',
+          body: '两个 Agent 已按依赖顺序完成任务；Agent B 的 Memory 结论仍待人工治理。',
           contributingInvocationIds: [
             input.state.openInvocation.invocationId,
             input.state.targetedInvocation.invocationId,
@@ -436,11 +520,32 @@ async function callToolResult(
     metadata: {
       name,
       effect: name === 'tasks.wait' ? 'read' : 'write',
-      phase: 2,
+      phase: name.startsWith('memory.') ? 3 : 2,
       inputSchemaVersion: 1,
     },
   });
   return { ...(result.isError ? { isError: true } : {}), body: JSON.parse(result.text) as Record<string, unknown> };
+}
+
+function toMemorySourceRefs(value: unknown): Array<{
+  schemaVersion: 1;
+  sourceKind: 'message';
+  sourceId: string;
+  snapshotHash: string;
+}> {
+  if (!Array.isArray(value)) throw new Error('SMOKE_EVIDENCE_REFS_REQUIRED');
+  const refs = value.flatMap((entry) => {
+    const ref = entry as { kind?: unknown; id?: unknown; snapshotHash?: unknown };
+    // 跨 Task Capsule 只冻结 Agent 可共同读取的交付 message；Task/Invocation 追溯由
+    // candidate.taskId / sourceInvocationId 保留，避免把另一个 Agent 不可见的 Task 原文带出 scope。
+    if (ref.kind !== 'message') return [];
+    if (typeof ref.id !== 'string' || typeof ref.snapshotHash !== 'string') {
+      throw new Error(`SMOKE_EVIDENCE_REF_INVALID:${JSON.stringify(ref)}`);
+    }
+    return [{ schemaVersion: 1 as const, sourceKind: ref.kind, sourceId: ref.id, snapshotHash: ref.snapshotHash }];
+  });
+  if (refs.length === 0) throw new Error('SMOKE_EVIDENCE_REFS_REQUIRED');
+  return refs;
 }
 
 function createDispatchClient(input: {
@@ -460,6 +565,7 @@ function createDispatchClient(input: {
         deviceLabel: input.deviceLabel,
         dispatchId: request.id,
         prompt: request.prompt,
+        memoryContext: request.memoryContext,
       });
       return `${input.deviceLabel}:${request.prompt}`;
     },
@@ -525,8 +631,10 @@ async function reportAgentSkill(
   });
 }
 
-async function connectClient(url: string): Promise<ClientSocket> {
-  const socket = createClient(url, { transports: ['websocket'], forceNew: true, reconnection: false });
+async function connectClient(url: string, options: Record<string, unknown> = {}): Promise<ClientSocket> {
+  const socket = createClient(url, {
+    transports: ['websocket'], forceNew: true, reconnection: false, ...options,
+  });
   await new Promise<void>((resolve, reject) => {
     socket.on('connect', () => resolve());
     socket.on('connect_error', (error) => reject(error));

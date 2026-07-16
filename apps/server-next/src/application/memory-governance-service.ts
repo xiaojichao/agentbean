@@ -64,6 +64,11 @@ export function createMemoryGovernanceService(input: {
           teamId: request.teamId,
           candidateId: candidate.id,
         });
+        const currentSourceState = await candidateSourceState(sources, now);
+        // 来源删除级联是 best-effort；若进程在删除与级联之间退出，恢复后的首个 snapshot
+        // 仍须 fail closed，不能重新暴露一个来源已失效的未决 Candidate。
+        if ((candidate.status === 'candidate' || candidate.status === 'conflict')
+          && currentSourceState === 'source-invalid') continue;
         visibleCandidates.push({
           schemaVersion: 1,
           id: candidate.id,
@@ -87,7 +92,7 @@ export function createMemoryGovernanceService(input: {
           createdAt: candidate.createdAt,
           decidedAt: candidate.decidedAt,
           updatedAt: candidate.updatedAt,
-          sourceState: await candidateSourceState(sources, now),
+          sourceState: currentSourceState,
         });
       }
 
