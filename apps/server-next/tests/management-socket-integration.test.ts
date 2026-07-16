@@ -72,6 +72,21 @@ describe('management worker socket integration', () => {
     expect(full.outbound(AGENT_EVENTS.managementWorker.leaseOffer)).toHaveLength(0);
   });
 
+  test('rejects a Server host capability on the Device-authenticated socket path', async () => {
+    const harness = await createHarness({ devices: [device('device-1', 'profile-1')] });
+    const socket = harness.connect('device-1');
+    await socket.trigger(AGENT_EVENTS.device.hello, { deviceId: 'device-1' });
+
+    await expect(socket.trigger(AGENT_EVENTS.managementWorker.register, workerRegistration({
+      host: { kind: 'server', workerPoolId: 'pool-1' },
+      providerCredentialRef: 'provider-credential-default',
+    }))).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      diagnosticCode: 'MANAGEMENT_WORKER_SERVER_HOST_NOT_ALLOWED',
+    });
+  });
+
   test('acks acquire, heartbeat/renew, tool RPC, release and offer timeout', async () => {
     const harness = await createHarness({ devices: [device('device-1', 'profile-1')] });
     const socket = harness.connect('device-1');

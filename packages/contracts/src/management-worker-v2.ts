@@ -1,5 +1,5 @@
 import type { ID, UnixMs } from './common.js';
-import type { ManagementWorkerCapacityV1, ManagementWorkerSessionContextV1 } from './management-worker.js';
+import type { ManagementWorkerCapacityV1, ManagementWorkerHostV1, ManagementWorkerSessionContextV1 } from './management-worker.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto, SubtaskAcceptanceV1 } from './task-coordination.js';
 import type { AgentHandoffReturnMode, AgentHandoffStatus, SerialAgentHandoffKind } from './collaboration.js';
 import { parseAgentCollaborationProposalV1 } from './collaboration.js';
@@ -54,6 +54,8 @@ export interface ManagementWorkerRegisterV2 {
   readonly credentialStatus: 'production_ready' | 'test_only' | 'unavailable';
   readonly providerId?: string;
   readonly modelId?: string;
+  readonly host?: ManagementWorkerHostV1;
+  readonly providerCredentialRef?: string;
   readonly capacity: ManagementWorkerCapacityV1;
 }
 
@@ -307,7 +309,7 @@ export type Phase3MemoryToolResultV3 = {
   readonly retryable: boolean;
 });
 
-const registerKeys = ['schemaVersion', 'workerInstanceId', 'profileId', 'runtimeVersion', 'supportedProtocolVersions', 'supportedPhases', 'credentialStatus', 'providerId', 'modelId', 'capacity'];
+const registerKeys = ['schemaVersion', 'workerInstanceId', 'profileId', 'runtimeVersion', 'supportedProtocolVersions', 'supportedPhases', 'credentialStatus', 'providerId', 'modelId', 'host', 'providerCredentialRef', 'capacity'];
 const contextKeys = ['schemaVersion', 'managementPhase', 'teamId', 'channelId', 'rootMessageId', 'rootTaskId', 'frozenTarget', 'visibleThread'];
 const taskRequestKeys = ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'leaseToken', 'fencingToken', 'idempotencyKey', 'input'];
 const taskResultKeys = ['schemaVersion', 'managementPhase', 'commandId', 'managementRunId', 'workerId', 'toolCallId', 'toolName', 'ok', 'output', 'errorCode', 'diagnosticCode', 'retryable'];
@@ -766,7 +768,7 @@ export function assertPhase3MemoryToolOutput(
 }
 
 export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorkerRegisterV2 {
-  assertExactKeys(value, registerKeys, registerKeys.filter((key) => !['providerId', 'modelId'].includes(key)));
+  assertExactKeys(value, registerKeys, registerKeys.filter((key) => !['providerId', 'modelId', 'host', 'providerCredentialRef'].includes(key)));
   const supportedPhases = JSON.stringify(value.supportedPhases);
   if (value.schemaVersion !== 2 || !nonEmpty(value.workerInstanceId) || !nonEmpty(value.profileId)
     || !nonEmpty(value.runtimeVersion) || JSON.stringify(value.supportedProtocolVersions) !== '[1,2]'
@@ -782,6 +784,20 @@ export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorke
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
   if (value.credentialStatus === 'unavailable' && (value.providerId !== undefined || value.modelId !== undefined)) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  if (value.host !== undefined) {
+    assertExactKeys(value.host, ['kind', 'workerPoolId'], ['kind']);
+    if (value.host.kind === 'server') {
+      if (!nonEmpty(value.host.workerPoolId) || value.host.workerPoolId.length > 256
+        || !nonEmpty(value.providerCredentialRef) || value.providerCredentialRef.length > 512) {
+        throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      }
+    } else if (value.host.kind !== 'device' || value.host.workerPoolId !== undefined
+      || value.providerCredentialRef !== undefined) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+  } else if (value.providerCredentialRef !== undefined) {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
   return structuredClone(value) as unknown as ManagementWorkerRegisterV2;

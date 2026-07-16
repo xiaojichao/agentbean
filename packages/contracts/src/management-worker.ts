@@ -29,6 +29,10 @@ export interface ManagementWorkerCapacityV1 {
   readonly activeLeaseCount: number;
 }
 
+export type ManagementWorkerHostV1 =
+  | { readonly kind: 'device' }
+  | { readonly kind: 'server'; readonly workerPoolId: ID };
+
 export interface ManagementWorkerRegisterV1 {
   readonly schemaVersion: 1;
   readonly workerInstanceId: ID;
@@ -39,6 +43,8 @@ export interface ManagementWorkerRegisterV1 {
   readonly credentialStatus: ManagementWorkerCredentialStatus;
   readonly providerId?: string;
   readonly modelId?: string;
+  readonly host?: ManagementWorkerHostV1;
+  readonly providerCredentialRef?: string;
   readonly capacity: ManagementWorkerCapacityV1;
 }
 
@@ -528,6 +534,11 @@ const capacitySchema = exactObject({
   activeLeaseCount: required(integer(0)),
 });
 
+const workerHostSchema = union(
+  exactObject({ kind: required(literal('device')) }),
+  exactObject({ kind: required(literal('server')), workerPoolId: required(id) }),
+);
+
 const frozenTargetSchema = exactObject({
   agentId: required(id),
   kind: required(oneOf(['custom', 'agentos-hosted'])),
@@ -801,6 +812,8 @@ const registerObjectSchema = exactObject({
   credentialStatus: required(oneOf(['production_ready', 'test_only', 'unavailable'])),
   providerId: optional(shortText),
   modelId: optional(shortText),
+  host: optional(workerHostSchema),
+  providerCredentialRef: optional(shortText),
   capacity: required(capacitySchema),
 });
 
@@ -814,6 +827,13 @@ const registerSchema: Validator = (value, path) => {
   if (record.credentialStatus === 'unavailable') {
     if (Object.hasOwn(record, 'providerId')) invalid(`${path}.providerId`);
     if (Object.hasOwn(record, 'modelId')) invalid(`${path}.modelId`);
+  }
+  const host = record.host as ManagementWorkerHostV1 | undefined;
+  if (host?.kind === 'server' && !Object.hasOwn(record, 'providerCredentialRef')) {
+    invalid(`${path}.providerCredentialRef`);
+  }
+  if (host?.kind !== 'server' && Object.hasOwn(record, 'providerCredentialRef')) {
+    invalid(`${path}.providerCredentialRef`);
   }
   const capacity = record.capacity as ManagementWorkerCapacityV1;
   if (capacity.activeLeaseCount > capacity.maxConcurrentLeases) {

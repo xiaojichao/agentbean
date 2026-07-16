@@ -58,6 +58,29 @@ describe('Phase 2 management worker contracts', () => {
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
     expect(() => parseManagementWorkerRegisterV2({ ...value, secret: 'forbidden' }))
       .toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(parseManagementWorkerRegisterV2({
+      ...value,
+      host: { kind: 'server', workerPoolId: 'pool-1' },
+      providerCredentialRef: 'provider-credential-default',
+    })).toMatchObject({
+      host: { kind: 'server', workerPoolId: 'pool-1' },
+      providerCredentialRef: 'provider-credential-default',
+    });
+    expect(() => parseManagementWorkerRegisterV2({
+      ...value,
+      host: { kind: 'server', workerPoolId: 'pool-1', shell: true },
+      providerCredentialRef: 'provider-credential-default',
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parseManagementWorkerRegisterV2({
+      ...value,
+      host: { kind: 'server', workerPoolId: 'p'.repeat(257) },
+      providerCredentialRef: 'provider-credential-default',
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    expect(() => parseManagementWorkerRegisterV2({
+      ...value,
+      host: { kind: 'server', workerPoolId: 'pool-1' },
+      providerCredentialRef: 'c'.repeat(513),
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
   test('allows a target-free Phase 2 session context but requires a root Task', () => {

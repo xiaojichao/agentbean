@@ -329,6 +329,26 @@ describe('Phase 1 management Worker contracts', () => {
     });
   });
 
+  test('accepts typed Server hosts while keeping legacy Device registrations compatible', () => {
+    expect(parseManagementWorkerPayload('register', validPayloads.register)).toEqual(validPayloads.register);
+    const serverRegistration = {
+      ...validPayloads.register,
+      host: { kind: 'server', workerPoolId: 'pool-1' },
+      providerCredentialRef: 'provider-credential-default',
+    };
+    expect(parseManagementWorkerPayload('register', serverRegistration)).toEqual(serverRegistration);
+    const forbiddenHost = safeParseManagementWorkerPayload('register', {
+      ...serverRegistration,
+      host: { ...serverRegistration.host, apiKey: 'raw-secret-canary' },
+    });
+    expect(forbiddenHost).toMatchObject({ ok: false, error: { code: 'MANAGEMENT_WORKER_PAYLOAD_INVALID' } });
+    expect(JSON.stringify(forbiddenHost)).not.toContain('raw-secret-canary');
+    expect(safeParseManagementWorkerPayload('register', {
+      ...serverRegistration,
+      providerCredentialSecret: 'raw-secret-canary',
+    })).toMatchObject({ ok: false });
+  });
+
   test('rejects extra or sensitive keys recursively without echoing their values', () => {
     const canary = 'provider-secret-canary-must-not-leak';
     const candidate = structuredClone(validPayloads['shadow-evaluate']) as Record<string, unknown>;
