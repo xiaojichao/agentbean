@@ -229,10 +229,15 @@ const phase3MemoryTools = [
 if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
   || !managementWorkerV2.includes('parsePhase3MemoryToolInputV1')
   || !managementWorkerV2.includes('assertExactMemoryKeys')
+  || !managementWorkerV2.includes('Phase3MemoryToolRequestV3')
+  || !managementWorkerV2.includes('parsePhase3MemoryToolRequestV3')
+  || !managementWorkerV2.includes('Phase3MemoryToolResultV3')
+  || !managementWorkerV2.includes('parsePhase3MemoryToolResultV3')
+  || !managementWorkerV2.includes('assertPhase3MemoryToolOutput')
   || !managementToolCatalog.includes('phase3MemorySchemaFor')
   || !managementToolCatalog.includes('Phase3MemoryToolName')
   || !phase3MemoryTools.every((tool) => phase3Tools.includes(`'${tool}'`))) {
-  violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + exact-key parser + catalog schema + PHASE_3 tool 名单）is required');
+  violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + exact-key input/output parser + 请求/响应合同 + catalog schema + PHASE_3 tool 名单）is required');
 }
 
 const phase1Tools = runtimeTypes.match(

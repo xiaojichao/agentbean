@@ -8,6 +8,8 @@ import {
   parsePhase2TaskToolRequestV2,
   parsePhase2TaskToolResultV2,
   parsePhase3MemoryToolInputV1,
+  parsePhase3MemoryToolRequestV3,
+  parsePhase3MemoryToolResultV3,
 } from '../src/index.js';
 
 describe('Phase 2 management worker contracts', () => {
@@ -317,5 +319,89 @@ describe('Phase 2 management worker contracts', () => {
       } as never),
     ];
     for (const invalid of invalidCases) expect(invalid).toThrow('MEMORY_TOOL_INPUT_INVALID');
+  });
+});
+
+describe('Phase 3 Memory tool request/result contracts', () => {
+  const baseRequest = {
+    schemaVersion: 2,
+    managementPhase: 3,
+    commandId: 'command-1',
+    managementRunId: 'run-1',
+    workerId: 'worker-1',
+    toolCallId: 'call-1',
+    toolName: 'memory.search',
+    leaseToken: 'lease-1',
+    fencingToken: 1,
+    idempotencyKey: 'idempotency-1',
+    input: { query: 'runtime decision', limit: 8 },
+  };
+
+  test('parses a valid Phase 3 memory.search request and rejects phase/tool drift', () => {
+    expect(parsePhase3MemoryToolRequestV3(baseRequest)).toEqual(baseRequest);
+    // managementPhase 必须恰好是 3（不是 2）。
+    expect(() => parsePhase3MemoryToolRequestV3({ ...baseRequest, managementPhase: 2 }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    // 非 Phase 3 工具名拒绝。
+    expect(() => parsePhase3MemoryToolRequestV3({ ...baseRequest, toolName: 'tasks.assign', input: { taskId: 't-1', agentId: 'a-1', expectedTaskRevision: 1 } }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    // 缺必填输入字段拒绝。
+    expect(() => parsePhase3MemoryToolRequestV3({ ...baseRequest, input: { limit: 8 } }))
+      .toThrow(/MEMORY_TOOL_INPUT_INVALID/);
+    // 必填顶层字段空拒绝。
+    expect(() => parsePhase3MemoryToolRequestV3({ ...baseRequest, leaseToken: '' }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+  });
+
+  test('parses Phase 3 result success and failure shapes', () => {
+    const baseResult = {
+      schemaVersion: 2, managementPhase: 3, commandId: 'command-1', managementRunId: 'run-1',
+      workerId: 'worker-1', toolCallId: 'call-1', toolName: 'memory.search',
+    };
+    const ok = { ...baseResult, ok: true, output: { matches: [] } };
+    expect(parsePhase3MemoryToolResultV3(ok)).toMatchObject({ ok: true, managementPhase: 3 });
+    expect(() => parsePhase3MemoryToolResultV3({ ...baseResult, ok: true }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    expect(() => parsePhase3MemoryToolResultV3({ ...ok, output: { memoryId: 'memory-1' } }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    expect(() => parsePhase3MemoryToolResultV3({ ...ok, errorCode: 'INVALID_REQUEST' }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    const failure = { ...baseResult, ok: false, errorCode: 'UNAVAILABLE', diagnosticCode: 'TOOL_NOT_WIRED', retryable: false };
+    expect(parsePhase3MemoryToolResultV3(failure)).toMatchObject({ ok: false, errorCode: 'UNAVAILABLE' });
+    expect(() => parsePhase3MemoryToolResultV3({ ...failure, output: { matches: [] } }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+    expect(() => parsePhase3MemoryToolResultV3({ ...failure, errorCode: 'BOGUS' }))
+      .toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
+  });
+
+  test.each([
+    ['memory.search', { matches: [{ memoryId: 'memory-1', content: '决策', score: 0.9, reasons: ['scope-match'] }] }],
+    ['memory.create_capsule', { capsuleRef: {
+      schemaVersion: 1, id: 'capsule-1', teamId: 'team-1', managementRunId: 'run-1',
+      targetAgentId: 'agent-1', contentHash: 'content-hash',
+      authorizationDecisionId: 'decision-1', expiresAt: 100,
+    } }],
+    ['memory.propose_candidate', { candidateId: 'candidate-1', status: 'candidate' }],
+    ['memory.link_sources', { memoryId: 'memory-1' }],
+  ])('validates the %s result output', (toolName, output) => {
+    expect(parsePhase3MemoryToolResultV3({
+      schemaVersion: 2, managementPhase: 3, commandId: 'command-1', managementRunId: 'run-1',
+      workerId: 'worker-1', toolCallId: 'call-1', toolName, ok: true, output,
+    })).toMatchObject({ toolName, ok: true, output });
+  });
+
+  test.each([
+    ['memory.search', { matches: [{ memoryId: 'memory-1', content: '决策', score: 'high', reasons: [] }] }],
+    ['memory.create_capsule', { capsuleRef: {
+      schemaVersion: 1, id: 'capsule-1', teamId: 'team-1', managementRunId: 'run-1',
+      targetAgentId: 'agent-1', contentHash: 'content-hash', authorizationDecisionId: 'decision-1',
+    } }],
+    ['memory.propose_candidate', { candidateId: 'candidate-1', status: 'accepted' }],
+    ['memory.link_sources', { memoryId: '' }],
+  ])('rejects an invalid %s result output', (toolName, output) => {
+    expect(() => parsePhase3MemoryToolResultV3({
+      schemaVersion: 2, managementPhase: 3, commandId: 'command-1', managementRunId: 'run-1',
+      workerId: 'worker-1', toolCallId: 'call-1', toolName, ok: true, output,
+    })).toThrow(/MANAGEMENT_WORKER_V3_PAYLOAD_INVALID/);
   });
 });
