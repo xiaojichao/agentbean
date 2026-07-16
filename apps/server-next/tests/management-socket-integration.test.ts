@@ -137,12 +137,16 @@ describe('management worker socket integration', () => {
     });
     expect(phase1Checkpoint).toMatchObject({
       managementRunId: harness.runId,
+      checkpoint: { authoritative: { memoryCapsuleIds: ['capsule-current'] } },
       context: {
         frozenTarget: { agentId: 'agent-1', kind: 'custom' },
         visibleThread: { messages: [{ id: 'message-1', body: '执行目标' }] },
       },
     });
     expect((phase1Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
+    expect(harness.memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
+      teamId: 'team-1', managementRunId: harness.runId, now: 20,
+    });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority,
       commandId: 'missing-command',
@@ -419,25 +423,38 @@ describe('management worker socket integration', () => {
     });
 
     const runId = await harness.createPhase3Run();
-    await harness.repositories.memory.capsuleRefs.create({
-      id: 'cap-valid', teamId: 'team-1', managementRunId: runId, taskId: 'root-task',
-      targetAgentId: 'agent-1', contentHash: 'sha256:cap', authorizationDecisionId: 'decision-1',
-      issuedAt: 1, expiresAt: 1_000, createdAt: 1,
-    });
     await expect(harness.realtime.scheduleManagementRun({ managementRunId: runId, profileId: 'profile-1' }))
       .resolves.toMatchObject({ ok: true, deviceId: 'device-v3' });
     const offer = phase3.outbound(AGENT_EVENTS.managementWorker.leaseOffer)[0]?.payload as ManagementLeaseOfferV1;
     const acquired = await phase3.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
       schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v3',
     });
-    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const checkpointRequest = {
       schemaVersion: 1, managementRunId: runId,
       workerId: (await phase3.trigger(AGENT_EVENTS.managementWorker.register, phase3WorkerRegistration()) as { workerId: string }).workerId,
       leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
-    })).resolves.toMatchObject({
+    } as const;
+    const firstCheckpoint = await phase3.trigger(
+      AGENT_EVENTS.managementWorker.checkpointFetch, checkpointRequest,
+    ) as ManagementCheckpointResultV1;
+    expect(firstCheckpoint).toMatchObject({
       managementRunId: runId,
       context: { managementPhase: 3, rootTaskId: 'root-task' },
-      checkpoint: { authoritative: { memoryCapsuleIds: ['cap-valid'] } },
+      checkpoint: { authoritative: { memoryCapsuleIds: ['capsule-current'] } },
+    });
+    expect(harness.memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
+      teamId: 'team-1', managementRunId: runId, now: 10,
+    });
+    if (!firstCheckpoint.checkpoint) throw new Error('checkpoint missing');
+    harness.memoryCapsules.listValidMemoryCapsuleIds.mockResolvedValueOnce([]);
+    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      ...checkpointRequest,
+      knownCheckpointRevision: firstCheckpoint.checkpoint.revision,
+    })).resolves.toMatchObject({
+      checkpoint: {
+        revision: firstCheckpoint.checkpoint.revision,
+        authoritative: { memoryCapsuleIds: [] },
+      },
     });
   });
 });
@@ -526,14 +543,17 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
   });
   let schedulerId = 0;
   let leaseId = 0;
+  const memoryCapsules = {
+    listValidMemoryCapsuleIds: vi.fn(async () => ['capsule-current']),
+  };
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+    memoryCapsules,
     kernel,
     executeTool,
-    memory: repositories.memory,
     clock: { now: () => clock.now },
     ids: { nextId: () => `scheduler-${++schedulerId}` },
     leaseTokens: { nextToken: () => `lease-secret-${++leaseId}` },
@@ -604,6 +624,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     scheduler,
     kernel,
     runId: run.run.id,
+    memoryCapsules,
     toolHandler,
     createRun,
     async createPhase2Run() {

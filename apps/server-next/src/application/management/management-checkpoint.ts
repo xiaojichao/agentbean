@@ -4,7 +4,6 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import { evaluateManagementCheckpoint, type ManagementCheckpointFacts } from '../../../../../packages/domain/src/index.js';
 import type { ManagementRepositories, ManagementRunRecord } from '../management-repositories.js';
-import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskRepository } from '../repositories.js';
 import type { TaskCoordinationRepositories } from '../task-coordination-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
@@ -18,25 +17,48 @@ import {
 export interface ManagementCheckpointDependencies {
   readonly unitOfWork: ManagementUnitOfWork;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
+  readonly memoryCapsules?: ManagementCheckpointMemoryCapsules;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
-  /**
-   * 可选 Memory 仓库（P3-08）：提供后 checkpoint 用权威 capsule_refs 表算 validMemoryCapsuleIds
-   * （存在 + 未过期 + 未 deny），取代 Phase 1 的 fail-closed 空数组占位。不提供则保持空（向后兼容）。
-   */
-  readonly memory?: MemoryRepositories;
+}
+
+export interface ManagementCheckpointMemoryCapsules {
+  listValidMemoryCapsuleIds(input: {
+    readonly teamId: string;
+    readonly managementRunId: string;
+    readonly now: number;
+  }): Promise<readonly string[]>;
 }
 
 export function createManagementCheckpointService(dependencies: ManagementCheckpointDependencies) {
   return {
-    save(input: {
+    async save(input: {
       authority: LeaseAuthorityInput;
       idempotencyKey: string;
       contextHints: ManagementCheckpointContextHintsV1;
     }): Promise<ManagementCheckpointV1> {
+      const now = dependencies.clock.now();
+      const preparation = await dependencies.unitOfWork.run(async (repositories) => {
+        await authorizeManagementWrite(repositories, input.authority, now);
+        const run = await requireRun(repositories, input.authority.managementRunId);
+        const existingCheckpoint = await findIdempotentCheckpoint(repositories, run.id, input.idempotencyKey);
+        return existingCheckpoint
+          ? { kind: 'existing' as const, checkpoint: existingCheckpoint }
+          : { kind: 'new' as const, run };
+      });
+      if (preparation.kind === 'existing') return preparation.checkpoint;
+      // Capsule runtime revalidation owns its own Memory Unit of Work. Keep it outside the
+      // management/task transaction, then persist its snapshot atomically with the checkpoint.
+      const validMemoryCapsuleIds = dependencies.memoryCapsules
+        ? await dependencies.memoryCapsules.listValidMemoryCapsuleIds({
+            teamId: preparation.run.teamId,
+            managementRunId: preparation.run.id,
+            now,
+          })
+        : [];
       const save = (repositories: ManagementRepositories, phase2?: {
         tasks: TaskRepository; coordination: TaskCoordinationRepositories;
-      }) => saveCheckpoint(dependencies, repositories, input, phase2);
+      }) => saveCheckpoint(dependencies, repositories, input, { validMemoryCapsuleIds }, phase2);
       return dependencies.taskCoordinationUnitOfWork
         ? dependencies.taskCoordinationUnitOfWork.run((repositories) => save(repositories.management, {
             tasks: repositories.tasks, coordination: repositories.coordination,
@@ -54,21 +76,15 @@ async function saveCheckpoint(
     idempotencyKey: string;
     contextHints: ManagementCheckpointContextHintsV1;
   },
+  memorySnapshot: { readonly validMemoryCapsuleIds: readonly string[] },
   phase2?: { tasks: TaskRepository; coordination: TaskCoordinationRepositories },
 ): Promise<ManagementCheckpointV1> {
   const now = dependencies.clock.now();
   await authorizeManagementWrite(repositories, input.authority, now);
   const run = await requireRun(repositories, input.authority.managementRunId);
   const latest = await repositories.checkpoints.getLatest(run.id);
-  const existingEvent = (await repositories.events.list(run.id))
-    .find(({ event }) => event.idempotencyKey === input.idempotencyKey);
-  if (existingEvent) {
-    if (existingEvent.event.type !== 'checkpoint-updated') throw new Error('CHECKPOINT_IDEMPOTENCY_CONFLICT');
-    const existingCheckpoint = await repositories.checkpoints.get({ managementRunId: run.id,
-      revision: existingEvent.event.payload.checkpointRevision });
-    if (!existingCheckpoint) throw new Error('CHECKPOINT_IDEMPOTENCY_CONFLICT');
-    return existingCheckpoint;
-  }
+  const existingCheckpoint = await findIdempotentCheckpoint(repositories, run.id, input.idempotencyKey);
+  if (existingCheckpoint) return existingCheckpoint;
   const revision = (latest?.revision ?? 0) + 1;
   const eventsBefore = await repositories.events.list(run.id);
   const nextSequence = (eventsBefore.at(-1)?.event.sequence ?? 0) + 1;
@@ -82,13 +98,31 @@ async function saveCheckpoint(
   if (existingAfterReplay && existingAfterReplay.revision >= checkpointEvent.event.payload.checkpointRevision) {
     return existingAfterReplay;
   }
-  const facts = await collectManagementCheckpointFacts(repositories, run, phase2, dependencies.memory, now);
+  const facts = {
+    ...await collectManagementCheckpointFacts(repositories, run, phase2),
+    validMemoryCapsuleIds: memorySnapshot.validMemoryCapsuleIds,
+  };
   const checkpoint: ManagementCheckpointV1 = { schemaVersion: 1, managementRunId: run.id,
     revision, authoritative: toManagementCheckpointAuthoritative(facts),
     contextHints: input.contextHints, updatedAt: now };
   await repositories.checkpoints.put(checkpoint);
   await repositories.runs.update({ ...run, checkpointRevision: revision, updatedAt: now });
   return checkpoint;
+}
+
+async function findIdempotentCheckpoint(
+  repositories: ManagementRepositories,
+  managementRunId: string,
+  idempotencyKey: string,
+): Promise<ManagementCheckpointV1 | undefined> {
+  const existingEvent = (await repositories.events.list(managementRunId))
+    .find(({ event }) => event.idempotencyKey === idempotencyKey);
+  if (!existingEvent) return undefined;
+  if (existingEvent.event.type !== 'checkpoint-updated') throw new Error('CHECKPOINT_IDEMPOTENCY_CONFLICT');
+  const existingCheckpoint = await repositories.checkpoints.get({ managementRunId,
+    revision: existingEvent.event.payload.checkpointRevision });
+  if (!existingCheckpoint) throw new Error('CHECKPOINT_IDEMPOTENCY_CONFLICT');
+  return existingCheckpoint;
 }
 
 export async function collectManagementCheckpointFacts(
@@ -98,7 +132,7 @@ export async function collectManagementCheckpointFacts(
     readonly tasks: TaskRepository;
     readonly coordination: TaskCoordinationRepositories;
   },
-  memory?: MemoryRepositories,
+  memoryCapsules?: ManagementCheckpointMemoryCapsules,
   now?: number,
 ): Promise<ManagementCheckpointFacts> {
   const events = await repositories.events.list(run.id);
@@ -137,12 +171,10 @@ export async function collectManagementCheckpointFacts(
   const openTaskIds = phase2 && taskSnapshots.length > 0
     ? taskSnapshots.filter((task) => !['done', 'closed'].includes(task.status)).map((task) => task.taskId)
     : !terminalRun && run.rootTaskId ? [run.rootTaskId] : [];
-  // P3-08：查权威 capsule_refs 表（存在 + 未过期 + 未 deny），不扫 invocation intent 引用。
-  // 未注入 memory 仓库时 fail-closed 为空（Phase 1 占位，向后兼容）。
-  const validMemoryCapsuleIds = memory && now !== undefined
-    ? (await memory.capsuleRefs.listByRun({ teamId: run.teamId, managementRunId: run.id }))
-      .filter((ref) => ref.deniedAt === undefined && ref.expiresAt > now)
-      .map((ref) => ref.id)
+  // P3-16：由 Capsule runtime truth provider 重建 manifest，并按当前 Memory/source/grant/policy
+  // 完整复验。未注入 provider 时 fail-closed 为空（Phase 1 占位，向后兼容）。
+  const validMemoryCapsuleIds = memoryCapsules && now !== undefined
+    ? await memoryCapsules.listValidMemoryCapsuleIds({ teamId: run.teamId, managementRunId: run.id, now })
     : [];
   return {
     managementRunId: run.id,

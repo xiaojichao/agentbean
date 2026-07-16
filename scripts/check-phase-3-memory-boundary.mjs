@@ -225,7 +225,7 @@ if (!candidateServiceMarkers.every((marker) => memoryCandidateService.includes(m
   violations.push('P3_CANDIDATE_LIFECYCLE_INVALID: Memory Candidate lifecycle (state machine, projection-hash dedup via shared domain hashing, source conflict, dual-backend assert parity, fail-closed decide boundary) with parity tests is required');
 }
 
-// P3-08 slice 2：Capsule↔Invocation intent 固化 + checkpoint 查权威 capsule_refs 表接线。
+// P3-08/P3-16：Capsule↔Invocation intent 固化 + checkpoint 接 runtime truth provider。
 if (!domainMemoryHashing.includes('hashCapsuleItems')
   || !memoryCapsuleService.includes('toMemoryCapsuleRef')
   || !memoryCapsuleService.includes('capsuleRefs.create')
@@ -236,9 +236,12 @@ if (!domainMemoryHashing.includes('hashCapsuleItems')
   || !invocationGateway.includes('INVOCATION_MEMORY_CAPSULE_REF_INVALID')
   || !capsuleInjectionValidator.includes('capsuleRefs.markDenied')
   || !managementToolCatalog.includes('memoryCapsuleRef: Type.Optional(Type.Object')
-  || !managementCheckpoint.includes('capsuleRefs.listByRun')
-  || !managementCheckpoint.includes('ref.deniedAt === undefined && ref.expiresAt > now')) {
-  violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint 查权威 capsule_refs 表接线 is required');
+  || !managementCheckpoint.includes('ManagementCheckpointMemoryCapsules')
+  || !managementCheckpoint.includes('memoryCapsules.listValidMemoryCapsuleIds')
+  || !deviceWorkerScheduler.includes('dependencies.memoryCapsules.listValidMemoryCapsuleIds')
+  || !serverCapsuleRuntime.includes('capsuleRefs.listByRun')
+  || !serverCapsuleRuntime.includes('listValidMemoryCapsuleIds')) {
+  violations.push('P3_CAPSULE_INVOCATION_BINDING_INVALID: Capsule ref 固化进 intent + checkpoint runtime truth revalidation 接线 is required');
 }
 
 // P3-09 slice 1：Memory 工具定义地基（Phase3 输入 map + parser + catalog schema + PHASE_3 tool 名单）。
@@ -294,7 +297,7 @@ if (!managementToolExecutor.includes('Phase3ToolHandlers')
   || !deviceWorkerScheduler.includes('event.event.payload.requestHash !== input.requestHash')
   || !deviceWorkerScheduler.includes('event.event.payload.output')
   || !deviceWorkerScheduler.includes('return dependencies.managementMemoryUnitOfWork.run')
-  || !deviceWorkerScheduler.includes('dependencies.memory, dependencies.clock.now()')
+  || !deviceWorkerScheduler.includes('dependencies.memoryCapsules.listValidMemoryCapsuleIds')
   || !serverNextUsecases.includes('managementPhase >= 2')
   || !serverNextUsecases.includes('run.managementPhase < 2')
   || !managementToolExecutor.includes('sourceRequesterUserId')
