@@ -1,6 +1,6 @@
 {
   "name": "@agentbean/pi-management-runtime",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "type": "module",
   "engines": {
@@ -25,7 +25,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@agentbean/contracts": "0.2.4",
+    "@agentbean/contracts": "0.2.5",
     "@earendil-works/pi-ai": "0.80.6",
     "@earendil-works/pi-coding-agent": "0.80.6"
   }
