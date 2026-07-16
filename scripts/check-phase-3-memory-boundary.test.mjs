@@ -332,6 +332,39 @@ test('fails closed when rejected Memory outbox entries are discarded', () => {
   assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
 });
 
+test('fails closed when failed Memory writes discard outbox before a receipt verdict', () => {
+  const result = withFixture('agentbean-phase3-memory-outbox-tool-error-', (fixture) => {
+    const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('unresolvedMemoryWrite', 'removedMemoryWriteGate'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when Memory search skips lease proof validation', () => {
+  const result = withFixture('agentbean-phase3-memory-search-lease-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      "isPhase3 && request.toolName === 'memory.search'",
+      'false',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
+test('fails closed when terminal Candidate replays escape the Phase 3 result contract', () => {
+  const result = withFixture('agentbean-phase3-memory-candidate-replay-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/management-tool-executor.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      "result.candidate.status === 'conflict' ? 'conflict' : 'candidate'",
+      'result.candidate.status',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when replay errors no longer block Session recovery for Memory writes', () => {
   const result = withFixture('agentbean-phase3-memory-outbox-replay-error-', (fixture) => {
     const path = join(fixture, 'apps/daemon-next/src/pi-manager-worker-host.ts');

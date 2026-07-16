@@ -93,7 +93,9 @@ export function createManagementToolExecutor(input: {
       toolName: request.toolName,
     };
     try {
-      if (!readTools.has(request.toolName)) {
+      const requiresLeaseProof = !readTools.has(request.toolName)
+        || (isPhase3 && request.toolName === 'memory.search');
+      if (requiresLeaseProof) {
         if (!('leaseToken' in request) || !('fencingToken' in request)) throw new Error('MISSING_WRITE_AUTHORITY');
         await input.kernel.authorizeWrite({
           managementRunId: request.managementRunId,
@@ -569,7 +571,8 @@ export function createPhase3ManagementToolHandlers(input: {
         ...(request.input.proposedSummary ? { proposedSummary: request.input.proposedSummary } : {}),
         sourceRefs,
       });
-      return { candidateId: result.candidate.id, status: result.candidate.status as 'candidate' | 'conflict' };
+      const status = result.candidate.status === 'conflict' ? 'conflict' : 'candidate';
+      return { candidateId: result.candidate.id, status };
     },
 
     'memory.link_sources': async (request) => {

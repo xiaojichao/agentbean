@@ -345,11 +345,12 @@ describe('PiManagerWorkerHost', () => {
       steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(), abort: vi.fn(), waitForIdle: vi.fn(),
       subscribe: vi.fn(() => () => undefined), dispose: vi.fn() };
     const runtimeFactory: ManagementRuntimeFactory = { createSession: vi.fn(async () => session) };
+    const outbox = { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) };
     const host = createPiManagerWorkerHost({ profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
       credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
         providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
       createRuntimeFactory: (input) => { executeTool = input.toolExecutor; return runtimeFactory; },
-      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      outbox,
       now: () => 100 });
     await host.start();
     const offer = { schemaVersion: 1 as const, offerId: 'offer-3', managementRunId: 'run-1',
@@ -371,5 +372,22 @@ describe('PiManagerWorkerHost', () => {
       schemaVersion: 2, managementPhase: 3, toolName: 'memory.search',
       idempotencyKey: 'run-1:search-1',
     }));
+
+    vi.mocked(protocol.executeTool).mockResolvedValueOnce({
+      schemaVersion: 2, managementPhase: 3, commandId: 'run-1:capsule-1',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'capsule-1',
+      toolName: 'memory.create_capsule', ok: false, errorCode: 'CONFLICT',
+      diagnosticCode: 'MANAGEMENT_RUN_TERMINAL', retryable: false,
+    });
+    await expect(executeTool!({ toolCallId: 'capsule-1', name: 'memory.create_capsule',
+      scope: { kind: 'managed', managementRunId: 'run-1', teamId: 'team-1', channelId: 'channel-1',
+        rootMessageId: 'message-1', rootTaskId: 'root-task' },
+      input: { targetAgentId: 'agent-1', prompt: '目标', limit: 3 },
+      metadata: { name: 'memory.create_capsule', effect: 'write', phase: 3, inputSchemaVersion: 1 } }))
+      .resolves.toEqual({ isError: true, text: JSON.stringify({ error: 'MANAGEMENT_RUN_TERMINAL' }) });
+    expect(outbox.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      toolName: 'memory.create_capsule', idempotencyKey: 'run-1:capsule-1',
+    }));
+    expect(outbox.remove).not.toHaveBeenCalled();
   });
 });

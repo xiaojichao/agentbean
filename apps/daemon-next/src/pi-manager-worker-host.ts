@@ -301,7 +301,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
 
     try {
       const result = await input.protocol.executeTool(request);
-      if (outboxItem && (result.ok || !result.retryable)) await input.outbox.remove(outboxItem);
+      const unresolvedMemoryWrite = PHASE_3_MEMORY_WRITE_TOOL_NAMES.has(toolName) && !result.ok;
+      if (outboxItem && (result.ok || (!result.retryable && !unresolvedMemoryWrite))) {
+        await input.outbox.remove(outboxItem);
+      }
       return result.ok
         ? { text: JSON.stringify(result.output) }
         : toolError(result.diagnosticCode ?? result.errorCode);

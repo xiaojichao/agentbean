@@ -82,6 +82,23 @@ describe('management tool executor', () => {
     });
   });
 
+  test('Memory search validates lease proof before calling the read handler', async () => {
+    const search = vi.fn(async () => ({ matches: [] }));
+    const execute = createManagementToolExecutor({
+      kernel: { authorizeWrite: vi.fn(async () => { throw new Error('LEASE_STALE_FENCING_TOKEN'); }) } as never,
+      handlers: {},
+      phase3Handlers: { 'memory.search': search },
+    });
+    await expect(execute({
+      schemaVersion: 2, managementPhase: 3, commandId: 'memory-search-command',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'memory-search-call',
+      toolName: 'memory.search', leaseToken: 'stale-token', fencingToken: 1,
+      idempotencyKey: 'memory-search', input: { query: '目标', limit: 5 },
+    })).resolves.toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED',
+      diagnosticCode: 'LEASE_STALE_FENCING_TOKEN' });
+    expect(search).not.toHaveBeenCalled();
+  });
+
   test('records Phase 3 Memory write receipts and rejects changed idempotent requests before side effects', async () => {
     const persistence = createInMemoryManagementPersistence();
     let id = 0;

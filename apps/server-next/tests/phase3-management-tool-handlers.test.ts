@@ -175,6 +175,36 @@ describe('createPhase3ManagementToolHandlers', () => {
     expect(result).toMatchObject({ candidateId: 'cand-1', status: 'candidate' });
   });
 
+  test('memory.propose_candidate 重放终态 Candidate 时规范化为可解析结果', async () => {
+    const repositories = makeRepositories({
+      channel: { id: 'chan-1', teamId: 'team-1', kind: 'channel', visibility: 'private' },
+      invocations: [{ id: 'inv-source', managementRunId: 'run-1', createdAt: 50,
+        intent: { teamId: 'team-1', targetAgentId: 'agent-source', taskContext: { taskId: 'task-1' } } }],
+    });
+    const handlers = createPhase3ManagementToolHandlers({
+      repositories,
+      searchService: { search: vi.fn() } as never,
+      capsuleService: { createCapsule: vi.fn() } as never,
+      candidateService: { proposeCandidate: vi.fn(async () => ({
+        candidate: { id: 'cand-terminal', status: 'accepted' }, sources: [],
+      })) } as never,
+      collaborativeService: { linkSources: vi.fn() } as never,
+      clock: { now: () => 5_000 },
+      currentPolicyVersion: 1,
+    });
+    await expect(handlers['memory.propose_candidate']!({
+      schemaVersion: 2, managementPhase: 3, commandId: 'c', managementRunId: 'run-1',
+      workerId: 'worker-agent', toolCallId: 'call', toolName: 'memory.propose_candidate',
+      leaseToken: 'tok', fencingToken: 1,
+      input: {
+        targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
+        contentKind: 'fact', proposedContent: 'proposed',
+        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1',
+          snapshotHash: messageSnapshotHash() }],
+      },
+    })).resolves.toEqual({ candidateId: 'cand-terminal', status: 'candidate' });
+  });
+
   test('memory.propose_candidate private channel task 来源保持 private visibility', async () => {
     const task = { ...SOURCE_TASK, channelId: 'chan-1' };
     const repositories = makeRepositories({
