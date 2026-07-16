@@ -187,7 +187,7 @@ export function createManagementWorkerProtocol(
       profileId: input.profileId,
       runtimeVersion: input.runtimeVersion,
       supportedProtocolVersions: [1, 2],
-      supportedPhases: [1, 2, 3],
+      supportedPhases: [1, 2],
       ...capability,
     };
     const ack = parseManagementWorkerPayload(

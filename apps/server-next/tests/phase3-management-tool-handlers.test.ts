@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { createPhase3ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
+import { hashManagementCommandInput } from '../src/application/management/management-event-validator.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import type { MemoryCapsuleDto } from '../../../../../packages/contracts/src/management-memory.js';
 
@@ -21,28 +22,69 @@ const baseCapsule: MemoryCapsuleDto = {
   items: [],
 };
 
+const ROOT_MESSAGE = {
+  id: 'root-message', teamId: 'team-1', channelId: 'chan-1', threadId: 'root-message',
+  senderKind: 'human' as const, senderId: 'user-1', body: '目标', createdAt: 1,
+};
+const SOURCE_MESSAGE = {
+  id: 'msg-1', teamId: 'team-1', channelId: 'chan-1', threadId: 'root-message',
+  senderKind: 'agent' as const, senderId: 'agent-source', body: '证据', createdAt: 2,
+  meta: { dispatchId: 'dispatch-1' },
+};
+const SOURCE_TASK = {
+  id: 'task-1', teamId: 'team-1', title: '任务', description: undefined,
+  assigneeId: 'agent-source', channelId: undefined, revision: 1,
+};
+
+function messageSnapshotHash(message = SOURCE_MESSAGE): string {
+  return hashManagementCommandInput({
+    kind: 'message', id: message.id, teamId: message.teamId, channelId: message.channelId,
+    threadId: message.threadId, senderKind: message.senderKind, senderId: message.senderId,
+    body: message.body, dispatchId: message.meta.dispatchId, createdAt: message.createdAt,
+  });
+}
+
+function taskSnapshotHash(task = SOURCE_TASK): string {
+  return hashManagementCommandInput(Object.fromEntries(Object.entries({
+    kind: 'task', id: task.id, teamId: task.teamId, channelId: task.channelId,
+    title: task.title, description: task.description, assigneeId: task.assigneeId, revision: task.revision,
+  }).filter(([, value]) => value !== undefined)));
+}
+
 function makeRepositories(overrides: {
   readonly run?: { readonly teamId: string };
-  readonly message?: { readonly teamId: string; readonly channelId: string } | null;
+  readonly message?: typeof SOURCE_MESSAGE | null;
   readonly channel?: { readonly teamId: string; readonly kind: 'channel' | 'direct'; readonly visibility: 'public' | 'private' } | null;
-  readonly task?: { readonly teamId: string } | null;
-  readonly invocations?: readonly { readonly id: string; readonly managementRunId: string; readonly createdAt: number }[];
+  readonly task?: typeof SOURCE_TASK | null;
+  readonly invocations?: readonly Record<string, unknown>[];
   readonly runMissing?: boolean;
 } = {}): ServerNextRepositories {
-  const run = overrides.runMissing ? null : { id: 'run-1', teamId: overrides.run?.teamId ?? 'team-1' };
+  const teamId = overrides.run?.teamId ?? 'team-1';
+  const run = overrides.runMissing ? null : {
+    id: 'run-1', teamId, channelId: 'chan-1', rootMessageId: 'root-message',
+  };
+  const invocation = {
+    id: 'inv-source', managementRunId: 'run-1', createdAt: 100,
+    intent: { teamId: 'team-1', targetAgentId: 'agent-source', taskContext: { taskId: 'task-1' } },
+  };
   return {
     management: {
       runs: { getById: vi.fn(async () => run) },
-      invocations: { listByRun: vi.fn(async () => overrides.invocations ?? [{ id: 'inv-1', managementRunId: 'run-1', createdAt: 100 }]) },
+      invocations: { listByRun: vi.fn(async () => overrides.invocations ?? [invocation]) },
+      dispatchAttempts: { list: vi.fn(async (invocationId: string) => invocationId === 'inv-source'
+        ? [{ dispatchId: 'dispatch-1' }] : []) },
     },
-    messages: { getById: vi.fn(async () => overrides.message === undefined ? { id: 'msg-1', teamId: 'team-1', channelId: 'chan-1' } : overrides.message) },
+    messages: { getById: vi.fn(async (id: string) => id === 'root-message'
+      ? { ...ROOT_MESSAGE, teamId }
+      : overrides.message === undefined ? SOURCE_MESSAGE : overrides.message) },
     channels: { getById: vi.fn(async () => overrides.channel === undefined ? { id: 'chan-1', teamId: 'team-1', kind: 'channel' as const, visibility: 'public' as const } : overrides.channel) },
-    tasks: { getById: vi.fn(async () => overrides.task === undefined ? { id: 'task-1', teamId: 'team-1' } : overrides.task) },
+    tasks: { getById: vi.fn(async () => overrides.task === undefined ? SOURCE_TASK : overrides.task) },
+    teams: { isMember: vi.fn(async () => true) },
   } as unknown as ServerNextRepositories;
 }
 
 describe('createPhase3ManagementToolHandlers', () => {
-  test('memory.search 派生 teamId from run + 用 workerId 作 requesterUserId', async () => {
+  test('memory.search 从 root message 派生 requesterUserId，不使用 workerId', async () => {
     const repositories = makeRepositories({ run: { teamId: 'team-99' } });
     const searchService = { search: vi.fn(async () => ({ matches: [], excluded: [] })) };
     const handlers = createPhase3ManagementToolHandlers({
@@ -60,12 +102,12 @@ describe('createPhase3ManagementToolHandlers', () => {
       input: { targetAgentId: 'agent-target', query: 'q', limit: 5 },
     });
     expect(searchService.search).toHaveBeenCalledWith(expect.objectContaining({
-      teamId: 'team-99', requesterUserId: 'worker-agent', targetAgentId: 'agent-target',
+      teamId: 'team-99', requesterUserId: 'user-1', targetAgentId: 'agent-target',
       prompt: 'q', now: 5_000, limit: 5,
     }));
   });
 
-  test('memory.create_capsule 传 workerId + currentPolicyVersion, 返回 toMemoryCapsuleRef 投影', async () => {
+  test('memory.create_capsule 传 root user + currentPolicyVersion, 返回 toMemoryCapsuleRef 投影', async () => {
     const repositories = makeRepositories();
     const capsuleService = { createCapsule: vi.fn(async () => baseCapsule) };
     const handlers = createPhase3ManagementToolHandlers({
@@ -83,18 +125,19 @@ describe('createPhase3ManagementToolHandlers', () => {
       input: { targetAgentId: 'agent-target', prompt: 'summarize', limit: 3 },
     });
     expect(capsuleService.createCapsule).toHaveBeenCalledWith(expect.objectContaining({
-      teamId: 'team-1', requesterUserId: 'worker-agent', currentPolicyVersion: 7, prompt: 'summarize',
+      teamId: 'team-1', requesterUserId: 'user-1', currentPolicyVersion: 7, prompt: 'summarize',
     }));
     expect(result.capsuleRef).toMatchObject({ id: 'capsule-1' });
   });
 
-  test('memory.propose_candidate 解析 message 来源 scope/visibility + sourceInvocationId + sourceAgentId=workerId', async () => {
+  test('memory.propose_candidate 从真实 message dispatch 解析 invocation 与 sourceAgentId', async () => {
     const repositories = makeRepositories({
-      message: { teamId: 'team-1', channelId: 'chan-1' },
       channel: { id: 'chan-1', teamId: 'team-1', kind: 'channel', visibility: 'private' },
       invocations: [
-        { id: 'inv-old', managementRunId: 'run-1', createdAt: 50 },
-        { id: 'inv-new', managementRunId: 'run-1', createdAt: 300 },
+        { id: 'inv-unrelated', managementRunId: 'run-1', createdAt: 300,
+          intent: { teamId: 'team-1', targetAgentId: 'agent-other', taskContext: { taskId: 'task-other' } } },
+        { id: 'inv-source', managementRunId: 'run-1', createdAt: 50,
+          intent: { teamId: 'team-1', targetAgentId: 'agent-source', taskContext: { taskId: 'task-1' } } },
       ],
     });
     const candidateService = { proposeCandidate: vi.fn(async () => ({ candidate: { id: 'cand-1', status: 'candidate' }, sources: [] })) };
@@ -113,12 +156,11 @@ describe('createPhase3ManagementToolHandlers', () => {
       input: {
         targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
         contentKind: 'fact', proposedContent: 'proposed', proposedSummary: 'sum',
-        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1', snapshotHash: 'sha256:snap' }],
+        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1', snapshotHash: messageSnapshotHash() }],
       },
     });
-    // 取最新 invocation（createdAt 300 > 50）
     expect(candidateService.proposeCandidate).toHaveBeenCalledWith(expect.objectContaining({
-      teamId: 'team-1', sourceAgentId: 'worker-agent', sourceInvocationId: 'inv-new',
+      teamId: 'team-1', sourceAgentId: 'agent-source', sourceInvocationId: 'inv-source',
       targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
       sourceRefs: [expect.objectContaining({
         sourceKind: 'message', sourceScopeType: 'channel', sourceScopeRef: 'chan-1',
@@ -128,8 +170,12 @@ describe('createPhase3ManagementToolHandlers', () => {
     expect(result).toMatchObject({ candidateId: 'cand-1', status: 'candidate' });
   });
 
-  test('memory.propose_candidate task 来源 → task scope + team visibility', async () => {
-    const repositories = makeRepositories({ task: { id: 'task-1', teamId: 'team-1' } });
+  test('memory.propose_candidate private channel task 来源保持 private visibility', async () => {
+    const task = { ...SOURCE_TASK, channelId: 'chan-1' };
+    const repositories = makeRepositories({
+      task,
+      channel: { id: 'chan-1', teamId: 'team-1', kind: 'channel', visibility: 'private' },
+    });
     const candidateService = { proposeCandidate: vi.fn(async () => ({ candidate: { id: 'cand-2', status: 'candidate' }, sources: [] })) };
     const handlers = createPhase3ManagementToolHandlers({
       repositories,
@@ -145,12 +191,12 @@ describe('createPhase3ManagementToolHandlers', () => {
       input: {
         targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
         contentKind: 'fact', proposedContent: 'p',
-        sourceRefs: [{ schemaVersion: 1, sourceKind: 'task', sourceId: 'task-1', snapshotHash: 'sha256:snap' }],
+        sourceRefs: [{ schemaVersion: 1, sourceKind: 'task', sourceId: 'task-1', snapshotHash: taskSnapshotHash(task) }],
       },
     });
     expect(candidateService.proposeCandidate).toHaveBeenCalledWith(expect.objectContaining({
       sourceRefs: [expect.objectContaining({
-        sourceKind: 'task', sourceScopeType: 'task', sourceScopeRef: 'task-1', sourceVisibility: 'team',
+        sourceKind: 'task', sourceScopeType: 'task', sourceScopeRef: 'task-1', sourceVisibility: 'private',
       })],
     }));
   });
@@ -179,7 +225,7 @@ describe('createPhase3ManagementToolHandlers', () => {
   test('memory.propose_candidate 跨团队来源（message.teamId 不匹配）→ fail-closed 抛错', async () => {
     const repositories = makeRepositories({
       run: { teamId: 'team-1' },
-      message: { teamId: 'team-other', channelId: 'chan-x' },
+      message: { ...SOURCE_MESSAGE, teamId: 'team-other', channelId: 'chan-x' },
     });
     const handlers = createPhase3ManagementToolHandlers({
       repositories,
@@ -200,7 +246,27 @@ describe('createPhase3ManagementToolHandlers', () => {
     })).rejects.toThrow('MEMORY_SOURCE_UNAVAILABLE');
   });
 
-  test('memory.link_sources 解析来源 + actorId=workerId', async () => {
+  test('memory.propose_candidate 来源 snapshotHash 漂移时 fail-closed', async () => {
+    const handlers = createPhase3ManagementToolHandlers({
+      repositories: makeRepositories(),
+      searchService: { search: vi.fn() } as never,
+      capsuleService: { createCapsule: vi.fn() } as never,
+      candidateService: { proposeCandidate: vi.fn() } as never,
+      collaborativeService: { linkSources: vi.fn() } as never,
+      clock: { now: () => 5_000 }, currentPolicyVersion: 1,
+    });
+    await expect(handlers['memory.propose_candidate']!({
+      schemaVersion: 2, managementPhase: 3, commandId: 'c', managementRunId: 'run-1', workerId: 'worker-agent',
+      toolCallId: 'call', toolName: 'memory.propose_candidate', leaseToken: 'tok', fencingToken: 1,
+      input: {
+        targetAgentId: 'agent-target', scopeType: 'task', scopeRef: 'task-1',
+        contentKind: 'fact', proposedContent: 'p',
+        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1', snapshotHash: 'stale' }],
+      },
+    })).rejects.toThrow('MEMORY_SOURCE_SNAPSHOT_STALE');
+  });
+
+  test('memory.link_sources 解析来源 + actorId=root user', async () => {
     const repositories = makeRepositories();
     const collaborativeService = { linkSources: vi.fn(async () => ({ item: {}, tags: [], sourceRefs: [] })) };
     const handlers = createPhase3ManagementToolHandlers({
@@ -216,11 +282,11 @@ describe('createPhase3ManagementToolHandlers', () => {
       toolCallId: 'call', toolName: 'memory.link_sources', leaseToken: 'tok', fencingToken: 1,
       input: {
         memoryId: 'mem-1',
-        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1', snapshotHash: 'sha256:snap' }],
+        sourceRefs: [{ schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-1', snapshotHash: messageSnapshotHash() }],
       },
     });
     expect(collaborativeService.linkSources).toHaveBeenCalledWith(expect.objectContaining({
-      teamId: 'team-1', actorId: 'worker-agent', memoryId: 'mem-1',
+      teamId: 'team-1', actorId: 'user-1', memoryId: 'mem-1',
       sourceRefs: [expect.objectContaining({ sourceScopeType: 'channel', sourceVisibility: 'team' })],
     }));
     expect(result).toMatchObject({ memoryId: 'mem-1' });

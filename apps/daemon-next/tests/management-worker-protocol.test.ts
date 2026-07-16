@@ -53,7 +53,7 @@ describe('management worker protocol', () => {
       workerInstanceId: 'instance-1',
       profileId: 'profile-1',
       supportedProtocolVersions: [1, 2],
-      supportedPhases: [1, 2, 3],
+      supportedPhases: [1, 2],
       credentialStatus: 'production_ready',
       providerId: 'provider-1',
       modelId: 'model-1',
