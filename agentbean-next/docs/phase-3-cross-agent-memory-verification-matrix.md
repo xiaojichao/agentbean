@@ -1,8 +1,8 @@
 # AgentBean Phase 3：跨 Agent Memory 验收矩阵
 
 > 更新日期：2026-07-16
-> 当前 verdict：**Not ready**
-> 原因：P3-01..P3-17 的实现与自动化/真实双 Agent 证据已收口；尚待本 PR 合并后核对 Node 24 root gates、main CI/CD、三平台 SEA、canonical package、Railway、Vercel 与 production Chrome。Phase 3 默认仍保持关闭。
+> 当前 verdict：**Green / Ready**
+> 原因：P3-01..P3-18 的实现、自动化、真实双 Agent、main 发布与生产证据均已收口。Phase 3 默认仍保持关闭，后续启用必须继续经过显式 capability/preflight 与配置决策。
 
 状态定义：`Green` 已有自动化或真实证据；`Yellow` 已实现但证据未收口；`Red` 尚未实现或缺关键证据。
 
@@ -25,7 +25,7 @@
 | P3-15 | Green | grant 撤销、来源失效、expire/delete 与审计闭环 | revokeGrant 版本链 + expireMemory/deleteMemory 审计（PR#579）；message/task/artifact/workspace-run/invocation 来源失效反应式级联 `memory-source-invalidation-service.ts`（删除 best-effort 触发，本批失效 + 其余事实源可用性复查，无可用来源时主动 expired + system audit；覆盖分次删除、Task 与频道级联删除，双后端 parity）；E2E 闭环已补（`memory-source-invalidation-e2e.test.ts`：真实 message 删除 usecase + production permissions→过期→旧 Capsule inject 拒；单来源全失、多来源分次全失、部分失效逐来源检查，双后端 parity） |
 | P3-16 | Green | checkpoint/recovery 不恢复无效 Capsule/Candidate | Capsule recovery 调用 runtime truth provider，重建 manifest 并按当前 Memory/source/grant/policy 复验；无效 ref 从 authoritative 移除并触发 rebuild。Candidate 来源删除级联会把 `candidate/conflict` 原子转为 system-rejected 并写 body-free audit；治理快照另以当前事实源懒检查兜底，即使进程在删除与级联之间退出，重启后也不会重新暴露来源失效的未决 Candidate。真实 message 删除→Candidate rejected→重建 governance service 的恢复链路及 memory/sqlite parity 已覆盖。 |
 | P3-17 | Green | 两个真实外部 Agent 跨 Task Memory 正负 smoke | `phase-3-cross-agent-memory-smoke.test.ts` 覆盖 Task A→Capsule→Task B inject 与来源失效拒绝代码链；`phase-2-managed-team-smoke.test.ts` 进一步升级为两个独立 agent socket/daemon、两个有依赖 Task 的 Phase 3 真实纵向链：A 交付来源事实，B 经最小 Capsule 注入后只能 propose Candidate，同 idempotency replay 不重复，命中冲突后最终由认证用户在 Web 治理面 merge。不可见 Task 原文不进入 Capsule；DM/private/grant revoke/source invalid/expiry/auth drift/cross-Team/local-only 由 P3-06/07/15 与权限/边界矩阵负例覆盖。 |
-| P3-18 | Red | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | 本地 Node 24 `test:phase3-memory`、`build:phase3-memory`、`test:ci`、`build:packages`、browser smoke 41/41 与 cutover audit 13/13 已通过；待 PR 合并后核对 main CI/CD、Linux/macOS/Windows SEA、canonical package、Railway、Vercel 与 production Chrome。 |
+| P3-18 | Green | Node 24 root gates、main CI/CD、SEA、Railway/Vercel、生产浏览器收口 | PR [#617](https://github.com/xiaojichao/agentbean/pull/617) 已合并为 `245e2bd3`；本地 Node 24 `test:phase3-memory`、`build:phase3-memory`、`test:ci`、`build:packages`、browser smoke 41/41 与 cutover audit 13/13 均通过。包含该提交的最新 main `466adc31` 在 [CI/CD 29503322096](https://github.com/xiaojichao/agentbean/actions/runs/29503322096) 全绿：matching tests/builds、daemon install、preview、CI Chrome、Railway deploy、strict audit、health/public entry/business smoke 均成功；合并 SHA 的 [SEA 29502835561](https://github.com/xiaojichao/agentbean/actions/runs/29502835561) 在 Linux x64、macOS arm64、Windows x64 与聚合 verdict 全绿。npm 生产真相：`@agentbean/daemon@0.3.10` 与 `@agentbean/daemon-next@0.3.10` 的 `latest` 一致，`@agentbean/contracts@0.2.5`、`@agentbean/pi-management-runtime@0.1.2` 均为 `latest`；Vercel 对 `466adc31` 回报 Deployment completed（[部署记录](https://vercel.com/xiaojichaos-projects/web/HG4zqSrf6YLaSFak8R9c2PMdFBcX)）。最后以 Node 24 + 真实 Chrome 直接访问 `https://api.agentbean.dev`，production browser smoke 41/41、0 失败，`/preview` 与 WebUI 控制台均无错误，截图/console artifacts 位于 `/tmp/agentbean-589-production-browser-pty`。 |
 
 ## 当前放行边界
 

@@ -24,9 +24,39 @@ function withFixture(prefix, mutate) {
   }
 }
 
-test('accepts the repository Phase 3 Memory boundary scaffold', () => {
+test('accepts the repository Phase 3 Memory Ready boundary', () => {
   const result = run(root);
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+});
+
+test('fails closed when the Phase 3 verdict is not Ready', () => {
+  const result = withFixture('agentbean-phase3-verdict-', (fixture) => {
+    const path = join(fixture, 'agentbean-next/docs/phase-3-cross-agent-memory-verification-matrix.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('**Green / Ready**', '**Not ready**'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_MATRIX_INVALID/);
+});
+
+test('fails closed when P3-18 loses its Green production verdict', () => {
+  const result = withFixture('agentbean-phase3-production-verdict-', (fixture) => {
+    const path = join(fixture, 'agentbean-next/docs/phase-3-cross-agent-memory-verification-matrix.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replace('| P3-18 | Green |', '| P3-18 | Red |'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_MATRIX_INVALID/);
+});
+
+test('fails closed when the Phase 3 rollout no longer defaults to maxManagementPhase=1', () => {
+  const result = withFixture('agentbean-phase3-default-rollout-', (fixture) => {
+    const path = join(fixture, 'agentbean-next/docs/phase-3-cross-agent-memory-verification-matrix.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(
+      'Team 默认保持 `maxManagementPhase=1`',
+      'Team 默认保持 `maxManagementPhase=3`',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_MATRIX_INVALID/);
 });
 
 for (const localScope of ['local-workspace', 'local-agent', 'local-profile']) {
