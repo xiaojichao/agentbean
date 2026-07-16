@@ -4,7 +4,6 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import { evaluateManagementCheckpoint, type ManagementCheckpointFacts } from '../../../../../packages/domain/src/index.js';
 import type { ManagementRepositories, ManagementRunRecord } from '../management-repositories.js';
-import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskRepository } from '../repositories.js';
 import type { TaskCoordinationRepositories } from '../task-coordination-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
@@ -20,11 +19,14 @@ export interface ManagementCheckpointDependencies {
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
-  /**
-   * 可选 Memory 仓库（P3-08）：提供后 checkpoint 用权威 capsule_refs 表算 validMemoryCapsuleIds
-   * （存在 + 未过期 + 未 deny），取代 Phase 1 的 fail-closed 空数组占位。不提供则保持空（向后兼容）。
-   */
-  readonly memory?: MemoryRepositories;
+}
+
+export interface ManagementCheckpointMemoryCapsules {
+  listValidMemoryCapsuleIds(input: {
+    readonly teamId: string;
+    readonly managementRunId: string;
+    readonly now: number;
+  }): Promise<readonly string[]>;
 }
 
 export function createManagementCheckpointService(dependencies: ManagementCheckpointDependencies) {
@@ -82,7 +84,7 @@ async function saveCheckpoint(
   if (existingAfterReplay && existingAfterReplay.revision >= checkpointEvent.event.payload.checkpointRevision) {
     return existingAfterReplay;
   }
-  const facts = await collectManagementCheckpointFacts(repositories, run, phase2, dependencies.memory, now);
+  const facts = await collectManagementCheckpointFacts(repositories, run, phase2);
   const checkpoint: ManagementCheckpointV1 = { schemaVersion: 1, managementRunId: run.id,
     revision, authoritative: toManagementCheckpointAuthoritative(facts),
     contextHints: input.contextHints, updatedAt: now };
@@ -98,7 +100,7 @@ export async function collectManagementCheckpointFacts(
     readonly tasks: TaskRepository;
     readonly coordination: TaskCoordinationRepositories;
   },
-  memory?: MemoryRepositories,
+  memoryCapsules?: ManagementCheckpointMemoryCapsules,
   now?: number,
 ): Promise<ManagementCheckpointFacts> {
   const events = await repositories.events.list(run.id);
@@ -137,12 +139,10 @@ export async function collectManagementCheckpointFacts(
   const openTaskIds = phase2 && taskSnapshots.length > 0
     ? taskSnapshots.filter((task) => !['done', 'closed'].includes(task.status)).map((task) => task.taskId)
     : !terminalRun && run.rootTaskId ? [run.rootTaskId] : [];
-  // P3-08：查权威 capsule_refs 表（存在 + 未过期 + 未 deny），不扫 invocation intent 引用。
-  // 未注入 memory 仓库时 fail-closed 为空（Phase 1 占位，向后兼容）。
-  const validMemoryCapsuleIds = memory && now !== undefined
-    ? (await memory.capsuleRefs.listByRun({ teamId: run.teamId, managementRunId: run.id }))
-      .filter((ref) => ref.deniedAt === undefined && ref.expiresAt > now)
-      .map((ref) => ref.id)
+  // P3-16：由 Capsule runtime truth provider 重建 manifest，并按当前 Memory/source/grant/policy
+  // 完整复验。未注入 provider 时 fail-closed 为空（Phase 1 占位，向后兼容）。
+  const validMemoryCapsuleIds = memoryCapsules && now !== undefined
+    ? await memoryCapsules.listValidMemoryCapsuleIds({ teamId: run.teamId, managementRunId: run.id, now })
     : [];
   return {
     managementRunId: run.id,

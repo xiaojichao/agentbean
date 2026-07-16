@@ -34,6 +34,14 @@ export interface ServerCapsuleRuntimeContextResolver {
   resolve(input: ResolveServerCapsuleRuntimeContextInput): Promise<readonly DispatchMemoryContextItemDto[]>;
 }
 
+export interface ServerCapsuleRuntimeContextService extends ServerCapsuleRuntimeContextResolver {
+  listValidMemoryCapsuleIds(input: {
+    readonly teamId: ID;
+    readonly managementRunId: ID;
+    readonly now: UnixMs;
+  }): Promise<readonly ID[]>;
+}
+
 export interface CreateServerCapsuleRuntimeContextServiceInput {
   readonly unitOfWork: MemoryUnitOfWork;
   readonly validator: CapsuleInjectionValidator;
@@ -48,45 +56,19 @@ export interface CreateServerCapsuleRuntimeContextServiceInput {
  */
 export function createServerCapsuleRuntimeContextService(
   input: CreateServerCapsuleRuntimeContextServiceInput,
-): ServerCapsuleRuntimeContextResolver {
+): ServerCapsuleRuntimeContextService {
   return {
     async resolve(resolveInput) {
-      const snapshot = await input.unitOfWork.run(async (memory) => loadSnapshot(memory, resolveInput));
-      assertBoundRef(snapshot.ref, resolveInput);
-      if (snapshot.ref.deniedAt !== undefined || snapshot.ref.expiresAt <= resolveInput.now) {
-        throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_NOT_CURRENT');
-      }
-      if (snapshot.manifests.length === 0) {
-        if (snapshot.ref.contentHash !== hashCapsuleItems([])) {
-          await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
-          throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_RECONSTRUCTION_FAILED');
-        }
+      const current = await loadCurrentCapsule(input, resolveInput);
+      if (!current.capsule) {
         await input.unitOfWork.run(async (memory) => {
           await memory.auditEvents.append(capsuleReadAudit(
-            input.ids.nextId(), snapshot.ref, undefined, resolveInput.now,
+            input.ids.nextId(), current.snapshot.ref, undefined, resolveInput.now,
           ));
         });
         return [];
       }
-
-      let capsule: MemoryCapsuleDto;
-      try {
-        capsule = rebuildCapsule(snapshot.ref, snapshot.manifests, snapshot.memories);
-      } catch {
-        await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
-        throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_RECONSTRUCTION_FAILED');
-      }
-      const validation = await input.validator.validateCapsuleForInjection({
-        capsule,
-        requesterUserId: snapshot.manifests[0]?.requesterUserId ?? '',
-        now: resolveInput.now,
-        currentPolicyVersion: input.currentPolicyVersion(),
-      });
-      if (validation.capsuleExpired || validation.decisions.some((decision) => !decision.allowed)
-        || hashCapsuleItems(capsule.items) !== snapshot.ref.contentHash) {
-        await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
-        throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_REVALIDATION_FAILED');
-      }
+      const { capsule, snapshot } = current;
 
       await input.unitOfWork.run(async (memory) => {
         await memory.auditEvents.append(capsuleReadAudit(
@@ -114,7 +96,82 @@ export function createServerCapsuleRuntimeContextService(
         },
       }));
     },
+
+    async listValidMemoryCapsuleIds(recoveryInput) {
+      const refs = await input.unitOfWork.run((memory) => memory.capsuleRefs.listByRun({
+        teamId: recoveryInput.teamId,
+        managementRunId: recoveryInput.managementRunId,
+      }));
+      const validIds: ID[] = [];
+      for (const ref of refs) {
+        try {
+          await loadCurrentCapsule(input, {
+            teamId: ref.teamId,
+            managementRunId: ref.managementRunId,
+            taskId: ref.taskId,
+            targetAgentId: ref.targetAgentId,
+            memoryCapsuleRef: {
+              schemaVersion: 1,
+              id: ref.id,
+              teamId: ref.teamId,
+              managementRunId: ref.managementRunId,
+              taskId: ref.taskId,
+              targetAgentId: ref.targetAgentId,
+              contentHash: ref.contentHash,
+              authorizationDecisionId: ref.authorizationDecisionId,
+              expiresAt: ref.expiresAt,
+            },
+            now: recoveryInput.now,
+          });
+          validIds.push(ref.id);
+        } catch (error) {
+          if (!(error instanceof ServerCapsuleRuntimeContextError)) throw error;
+        }
+      }
+      return validIds;
+    },
   };
+}
+
+async function loadCurrentCapsule(
+  input: CreateServerCapsuleRuntimeContextServiceInput,
+  resolveInput: ResolveServerCapsuleRuntimeContextInput,
+): Promise<{
+  snapshot: Awaited<ReturnType<typeof loadSnapshot>>;
+  capsule?: MemoryCapsuleDto;
+}> {
+  const snapshot = await input.unitOfWork.run(async (memory) => loadSnapshot(memory, resolveInput));
+  assertBoundRef(snapshot.ref, resolveInput);
+  if (snapshot.ref.deniedAt !== undefined || snapshot.ref.expiresAt <= resolveInput.now) {
+    throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_NOT_CURRENT');
+  }
+  if (snapshot.manifests.length === 0) {
+    if (snapshot.ref.contentHash !== hashCapsuleItems([])) {
+      await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
+      throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_RECONSTRUCTION_FAILED');
+    }
+    return { snapshot };
+  }
+
+  let capsule: MemoryCapsuleDto;
+  try {
+    capsule = rebuildCapsule(snapshot.ref, snapshot.manifests, snapshot.memories);
+  } catch {
+    await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
+    throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_RECONSTRUCTION_FAILED');
+  }
+  const validation = await input.validator.validateCapsuleForInjection({
+    capsule,
+    requesterUserId: snapshot.manifests[0]?.requesterUserId ?? '',
+    now: resolveInput.now,
+    currentPolicyVersion: input.currentPolicyVersion(),
+  });
+  if (validation.capsuleExpired || validation.decisions.some((decision) => !decision.allowed)
+    || hashCapsuleItems(capsule.items) !== snapshot.ref.contentHash) {
+    await denyRef(input.unitOfWork, input.ids, snapshot.ref, resolveInput.now);
+    throw new ServerCapsuleRuntimeContextError('SERVER_CAPSULE_REVALIDATION_FAILED');
+  }
+  return { snapshot, capsule };
 }
 
 async function loadSnapshot(

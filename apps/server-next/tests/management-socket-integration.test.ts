@@ -137,12 +137,16 @@ describe('management worker socket integration', () => {
     });
     expect(phase1Checkpoint).toMatchObject({
       managementRunId: harness.runId,
+      checkpoint: { authoritative: { memoryCapsuleIds: ['capsule-current'] } },
       context: {
         frozenTarget: { agentId: 'agent-1', kind: 'custom' },
         visibleThread: { messages: [{ id: 'message-1', body: '执行目标' }] },
       },
     });
     expect((phase1Checkpoint as { context: object }).context).not.toHaveProperty('managementPhase');
+    expect(harness.memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
+      teamId: 'team-1', managementRunId: harness.runId, now: 20,
+    });
     await expect(socket.trigger(AGENT_EVENTS.managementWorker.outboxReplay, {
       ...authority,
       commandId: 'missing-command',
@@ -526,14 +530,17 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
   });
   let schedulerId = 0;
   let leaseId = 0;
+  const memoryCapsules = {
+    listValidMemoryCapsuleIds: vi.fn(async () => ['capsule-current']),
+  };
   const scheduler = createDeviceWorkerScheduler({
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+    memoryCapsules,
     kernel,
     executeTool,
-    memory: repositories.memory,
     clock: { now: () => clock.now },
     ids: { nextId: () => `scheduler-${++schedulerId}` },
     leaseTokens: { nextToken: () => `lease-secret-${++leaseId}` },
@@ -604,6 +611,7 @@ async function createHarness(input: { devices: ReturnType<typeof device>[]; allo
     scheduler,
     kernel,
     runId: run.run.id,
+    memoryCapsules,
     toolHandler,
     createRun,
     async createPhase2Run() {

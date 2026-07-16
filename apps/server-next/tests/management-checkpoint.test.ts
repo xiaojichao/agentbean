@@ -100,49 +100,31 @@ describe('management checkpoint', () => {
     });
   });
 
-  test('reads validMemoryCapsuleIds from authoritative capsule_refs (exists + not expired + not denied)', async () => {
+  test('reads validMemoryCapsuleIds from runtime truth provider and otherwise fails closed', async () => {
     const harness = await createHarness();
-    const memory = createInMemoryRepositories().memory;
     const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
     if (!run) throw new Error('run not found');
     const now = 5_000;
-    // 三条 capsule ref：有效 / 已过期 / 已 deny → 只有有效的进 validMemoryCapsuleIds。
-    await memory.capsuleRefs.create({ id: 'cap-valid', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:a', authorizationDecisionId: 'dec-a',
-      issuedAt: 1_000, expiresAt: 10_000, createdAt: 1_000 });
-    await memory.capsuleRefs.create({ id: 'cap-expired', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:b', authorizationDecisionId: 'dec-b',
-      issuedAt: 1_000, expiresAt: 2_000, createdAt: 1_000 });
-    await memory.capsuleRefs.create({ id: 'cap-denied', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:c', authorizationDecisionId: 'dec-c',
-      issuedAt: 1_000, expiresAt: 10_000, deniedAt: 3_000, createdAt: 1_000 });
-
-    const facts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, memory, now);
+    const memoryCapsules = { async listValidMemoryCapsuleIds() { return ['cap-valid']; } };
+    const facts = await collectManagementCheckpointFacts(
+      harness.repositories, run, undefined, memoryCapsules, now,
+    );
     expect(facts.validMemoryCapsuleIds).toEqual(['cap-valid']);
 
-    // 不注入 memory 仓库 → fail-closed 空数组（Phase 1 占位，向后兼容）。
+    // 不注入 runtime truth provider → fail-closed 空数组（Phase 1 占位，向后兼容）。
     const closedFacts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, undefined, now);
     expect(closedFacts.validMemoryCapsuleIds).toEqual([]);
   });
 
   test('rebuild drops invalid capsules from authoritative (P3-16: recovery 不恢复无效 Capsule)', async () => {
     const harness = await createHarness();
-    const memory = createInMemoryRepositories().memory;
     const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
     if (!run) throw new Error('run not found');
     const now = 5_000;
-    // 三条 capsule ref：有效 / 已过期 / 已 deny。
-    await memory.capsuleRefs.create({ id: 'cap-valid', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:a', authorizationDecisionId: 'dec-a',
-      issuedAt: 1_000, expiresAt: 10_000, createdAt: 1_000 });
-    await memory.capsuleRefs.create({ id: 'cap-expired', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:b', authorizationDecisionId: 'dec-b',
-      issuedAt: 1_000, expiresAt: 2_000, createdAt: 1_000 });
-    await memory.capsuleRefs.create({ id: 'cap-denied', teamId: run.teamId, managementRunId: run.id,
-      targetAgentId: 'agent-1', contentHash: 'sha256:c', authorizationDecisionId: 'dec-c',
-      issuedAt: 1_000, expiresAt: 10_000, deniedAt: 3_000, createdAt: 1_000 });
-
-    const facts = await collectManagementCheckpointFacts(harness.repositories, run, undefined, memory, now);
+    const memoryCapsules = { async listValidMemoryCapsuleIds() { return ['cap-valid']; } };
+    const facts = await collectManagementCheckpointFacts(
+      harness.repositories, run, undefined, memoryCapsules, now,
+    );
     expect(facts.validMemoryCapsuleIds).toEqual(['cap-valid']);
 
     // authoritative 引用了全部三个 capsule（含已失效的 expired/denied）→ 与 facts 不一致 → rebuild。

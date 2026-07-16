@@ -27,11 +27,15 @@ import type { ManagementPreflight } from '../../../../../packages/domain/src/ind
 import type { ManagerPlacementPolicyDto } from '../../../../../packages/contracts/src/index.js';
 import type { DeviceRepository, MessageRepository } from '../repositories.js';
 import type { ManagementRepositories } from '../management-repositories.js';
-import type { MemoryRepositories } from '../memory-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
 import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
-import { collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint, toManagementCheckpointAuthoritative } from './management-checkpoint.js';
+import {
+  collectManagementCheckpointFacts,
+  restoreOrRebuildManagementCheckpoint,
+  toManagementCheckpointAuthoritative,
+  type ManagementCheckpointMemoryCapsules,
+} from './management-checkpoint.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
@@ -47,7 +51,7 @@ export interface DeviceWorkerSchedulerDependencies {
   readonly devices: DeviceRepository;
   readonly messages?: MessageRepository;
   readonly management: ManagementRepositories;
-  readonly memory?: MemoryRepositories;
+  readonly memoryCapsules?: ManagementCheckpointMemoryCapsules;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   readonly kernel: ManagementKernel;
@@ -431,37 +435,46 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
         threadId: run.rootMessageId,
         limit: 200,
       });
-      const snapshot = dependencies.taskCoordinationUnitOfWork
+      const now = dependencies.clock.now();
+      const managementSnapshot = dependencies.taskCoordinationUnitOfWork
         ? await dependencies.taskCoordinationUnitOfWork.run(async (repositories) => ({
             latest: await repositories.management.checkpoints.getLatest(run.id),
             facts: await collectManagementCheckpointFacts(repositories.management, run, {
               tasks: repositories.tasks, coordination: repositories.coordination,
-            }, dependencies.memory, dependencies.clock.now()),
+            }),
           }))
         : {
             latest: await dependencies.management.checkpoints.getLatest(run.id),
-            facts: await collectManagementCheckpointFacts(
-              dependencies.management, run, undefined, dependencies.memory, dependencies.clock.now(),
-            ),
+            facts: await collectManagementCheckpointFacts(dependencies.management, run),
           };
-      const latest = snapshot.latest;
+      // Capsule runtime revalidation owns its own Memory Unit of Work. Run it after the management/task
+      // snapshot transaction to avoid nesting two transactions on the same Team SQLite database.
+      const facts = dependencies.memoryCapsules
+        ? {
+            ...managementSnapshot.facts,
+            validMemoryCapsuleIds: await dependencies.memoryCapsules.listValidMemoryCapsuleIds({
+              teamId: run.teamId, managementRunId: run.id, now,
+            }),
+          }
+        : managementSnapshot.facts;
+      const latest = managementSnapshot.latest;
       const checkpoint = latest
         ? restoreOrRebuildManagementCheckpoint({
             checkpoint: latest,
-            facts: snapshot.facts,
+            facts,
             objective: rootMessage.body,
-            now: dependencies.clock.now(),
+            now,
           }).checkpoint
         : {
             schemaVersion: 1 as const,
             managementRunId: run.id,
             revision: run.checkpointRevision,
-            authoritative: toManagementCheckpointAuthoritative(snapshot.facts),
+            authoritative: toManagementCheckpointAuthoritative(facts),
             contextHints: {
               objective: rootMessage.body,
               planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [],
             },
-            updatedAt: dependencies.clock.now(),
+            updatedAt: now,
           };
       const runPhase = 'managementPhase' in run ? run.managementPhase : 1;
       // V2 workers predate the explicit context phase. Preserve their exact-key protocol while

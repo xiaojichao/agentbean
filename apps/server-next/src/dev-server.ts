@@ -1151,11 +1151,13 @@ function createDefaultApp(
     const repositories = createInMemoryRepositories();
     const clock = { now: () => Date.now() };
     const ids = { nextId: () => randomUUID() };
-    const management = createDefaultManagementRuntime(repositories, clock, ids);
-    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
       repositories, ids,
     );
+    const management = createDefaultManagementRuntime(
+      repositories, clock, ids, serverCapsuleRuntimeContextResolver,
+    );
+    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1189,11 +1191,13 @@ function createDefaultApp(
   const repositories = createSqliteRepositories({ globalDb, teamDb });
   const clock = { now: () => Date.now() };
   const ids = { nextId: () => randomUUID() };
-  const management = createDefaultManagementRuntime(repositories, clock, ids);
-  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
     repositories, ids,
   );
+  const management = createDefaultManagementRuntime(
+    repositories, clock, ids, serverCapsuleRuntimeContextResolver,
+  );
+  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1239,6 +1243,7 @@ function createDefaultManagementRuntime(
   repositories: ServerNextRepositories,
   clock: { now(): number },
   ids: { nextId(): string },
+  memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
@@ -1284,7 +1289,7 @@ function createDefaultManagementRuntime(
     devices: repositories.devices,
     messages: repositories.messages,
     management: repositories.management,
-    memory: repositories.memory,
+    memoryCapsules,
     taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
     kernel,

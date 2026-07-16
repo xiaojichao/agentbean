@@ -102,6 +102,35 @@ describe.each([
     }
   });
 
+  test('checkpoint recovery keeps only Capsules valid against current Memory truth', async () => {
+    const fixture = createFixture();
+    try {
+      const current = harness(fixture.repositories);
+      await seed(fixture.repositories, 'mem-1', 'current');
+      const capsule = await current.capsuleService.createCapsule({
+        teamId: 'team-1', requesterUserId: 'user-1', managementRunId: 'run-1', taskId: 'task-1',
+        targetAgentId: 'agent-1', prompt: 'current', limit: 8, now: 5_000,
+        currentPolicyVersion: POLICY_VERSION,
+      });
+
+      await expect(current.runtime.listValidMemoryCapsuleIds({
+        teamId: 'team-1', managementRunId: 'run-1', now: 6_000,
+      })).resolves.toEqual([capsule.id]);
+
+      await fixture.repositories.memoryUnitOfWork.run(async (memory) => {
+        const item = await memory.items.getById({ teamId: 'team-1', id: 'mem-1' }) as MemoryItemRecord;
+        await memory.items.update({ record: { ...item, status: 'expired', updatedAt: 2 }, expectedUpdatedAt: 1 });
+      });
+      await expect(current.runtime.listValidMemoryCapsuleIds({
+        teamId: 'team-1', managementRunId: 'run-1', now: 6_000,
+      })).resolves.toEqual([]);
+      await expect(fixture.repositories.memory.capsuleRefs.getById({ teamId: 'team-1', id: capsule.id }))
+        .resolves.toMatchObject({ deniedAt: 6_000 });
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('fails closed and denies the authoritative ref after current Memory drifts', async () => {
     const fixture = createFixture();
     try {
