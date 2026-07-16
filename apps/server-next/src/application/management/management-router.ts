@@ -43,6 +43,11 @@ export interface ManagementRoutingGateway {
     target: AgentRecord | null;
     placementPolicy: ManagerPlacementPolicyDto;
   }): Promise<{ preflight: ManagementPreflight; profileId?: string }>;
+  preflightPhase3?(input: {
+    teamId: string;
+    target: AgentRecord | null;
+    placementPolicy: ManagerPlacementPolicyDto;
+  }): Promise<{ preflight: ManagementPreflight; profileId?: string }>;
   schedule(input: { managementRunId: string; profileId: string }): Promise<{
     ok: boolean;
     diagnosticCode?: string;
@@ -57,7 +62,7 @@ export type ManagementRoutingResult =
       managementRunId: string;
       profileId: string;
       disposition: 'created' | 'existing';
-      managementPhase: 1 | 2;
+      managementPhase: 1 | 2 | 3;
       schedulingDiagnostic?: string;
     }
   | { kind: 'unavailable'; mode: 'managed'; diagnostics: readonly string[] };
@@ -96,13 +101,13 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       userId: string;
       teamId: string;
       mode: ManagementMode;
-      maxManagementPhase?: 1 | 2;
+      maxManagementPhase?: 1 | 2 | 3;
       placementPolicy?: ManagerPlacementPolicyDto;
     }) {
       const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
       if (role !== 'owner' && role !== 'admin') return { ok: false as const, error: 'FORBIDDEN' };
       if (!isManagementMode(input.mode)) return { ok: false as const, error: 'VALIDATION_ERROR' };
-      if (input.maxManagementPhase !== undefined && input.maxManagementPhase !== 1 && input.maxManagementPhase !== 2) {
+      if (input.maxManagementPhase !== undefined && input.maxManagementPhase !== 1 && input.maxManagementPhase !== 2 && input.maxManagementPhase !== 3) {
         return { ok: false as const, error: 'VALIDATION_ERROR' };
       }
       const currentPolicy = await policyForTeam(input.teamId);
@@ -149,6 +154,58 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           kind: 'direct',
           mode: 'shadow',
           shadowRequestKey,
+        };
+      }
+
+      if (policy.maxManagementPhase === 3) {
+        const diagnostics: string[] = [];
+        if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
+        if (!input.rootTaskId?.trim()) diagnostics.push('MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED');
+        if (diagnostics.length > 0 || !input.rootTaskId) {
+          return { kind: 'unavailable', mode: 'managed', diagnostics };
+        }
+        const phase3 = await dependencies.gateway?.preflightPhase3?.({
+          teamId: input.teamId,
+          target,
+          placementPolicy: policy.placementPolicy,
+        }) ?? { preflight: unavailablePreflight() };
+        const decision = evaluateManagementRoute({
+          requestId: requestKey(input),
+          mode: 'managed',
+          requestShape: 'multi-agent',
+          allowDirectFallbackBeforeBarrier: false,
+          preflight: phase3.preflight,
+          barrier: { idempotencyReserved: false, persistedEffects: [] },
+        });
+        if (decision.kind !== 'managed-preflight-passed' || !phase3.profileId) {
+          return {
+            kind: 'unavailable',
+            mode: 'managed',
+            diagnostics: decision.kind === 'unavailable'
+              ? decision.missingPreflight.map((item) => `MANAGEMENT_PHASE_2_PREFLIGHT_${item.toUpperCase()}_MISSING`)
+              : ['MANAGEMENT_PHASE_2_WORKER_PROFILE_UNAVAILABLE'],
+          };
+        }
+        const created = await kernel.createOrResumeRun({
+          teamId: input.teamId,
+          channelId: input.channelId,
+          rootTaskId: input.rootTaskId,
+          rootMessageId: input.rootMessageId,
+          ...(target ? { frozenTarget: {
+            agentId: target.id,
+            kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
+          } } : {}),
+          requestKey: requestKey(input),
+          requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
+            channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 3 }),
+          placementPolicy: policy.placementPolicy,
+          budget: PHASE_2_BUDGET,
+          managementPhase: 3,
+        });
+        return {
+          kind: 'managed', mode: 'managed', managementPhase: 3,
+          managementRunId: created.run.id, profileId: phase3.profileId,
+          disposition: created.disposition,
         };
       }
 

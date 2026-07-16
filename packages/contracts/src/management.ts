@@ -45,7 +45,7 @@ export interface GetTeamManagementPolicyInput {
 export interface UpdateTeamManagementPolicyInput {
   readonly teamId: ID;
   readonly mode: ManagementMode;
-  readonly maxManagementPhase?: 1 | 2;
+  readonly maxManagementPhase?: 1 | 2 | 3;
   readonly placementPolicy?: ManagerPlacementPolicyDto;
 }
 
@@ -75,7 +75,7 @@ export interface TeamManagementPolicyV2Dto {
   readonly schemaVersion: 2;
   readonly teamId: ID;
   readonly mode: ManagementMode;
-  readonly maxManagementPhase: 1 | 2;
+  readonly maxManagementPhase: 1 | 2 | 3;
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly updatedBy: ID;
   readonly updatedAt: UnixMs;
@@ -105,6 +105,7 @@ interface ManagementRunV2BaseDto {
 export type ManagementRunV2Dto = ManagementRunV2BaseDto & (
   | { readonly managementPhase: 1; readonly rootTaskId?: ID }
   | { readonly managementPhase: 2; readonly rootTaskId: ID }
+  | { readonly managementPhase: 3; readonly rootTaskId: ID }
 );
 
 export interface ManagementCheckpointAuthoritativeV1 {
