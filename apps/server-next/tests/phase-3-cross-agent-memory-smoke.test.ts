@@ -8,8 +8,9 @@ import { createPhase3ManagementToolHandlers } from '../src/application/managemen
 import { createServerCapsuleRuntimeContextService } from '../src/application/server-capsule-runtime-context-service.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
-// P3-17 跨 Agent Memory smoke（代码链路）：Agent A 经 phase3 create_capsule 工具把记忆打包
-// 授权给目标 Agent B；B 经 capsule inject 复用。负场景：来源失效后 B 注入被拒。
+// P3-17 跨 Agent / Task Memory smoke（代码链路）：Agent A 经 phase3 create_capsule 工具把
+// Task A 来源的记忆打包并绑定 Task B，授权给目标 Agent B；B 经 capsule inject 复用。
+// 负场景：Task A 来源失效后 B 注入被拒。
 // 注：permissions 放宽（mock），聚焦 handler/capsule/inject 链路；真实两个 LLM Agent 需用户环境跑。
 
 const POLICY_VERSION = 7;
@@ -65,7 +66,7 @@ async function seedRun(harness: Harness): Promise<string> {
   } as never);
   await harness.repositories.management.runs.create({
     schemaVersion: 2, id: 'run-p3', managementPhase: 3, teamId: 'team-1', channelId: 'chan-1',
-    rootTaskId: 'task-1', rootMessageId: 'msg-1', mode: 'managed', status: 'running',
+    rootTaskId: 'task-b', rootMessageId: 'msg-1', mode: 'managed', status: 'running',
     placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
     checkpointRevision: 0, budget: { maxSubtasks: 2, maxDepth: 1, maxExternalInvocations: 2 },
     createdAt: 1, updatedAt: 1,
@@ -73,7 +74,7 @@ async function seedRun(harness: Harness): Promise<string> {
   return 'run-p3';
 }
 
-async function seedMemory(harness: Harness, memoryId: string, sourceId: string): Promise<void> {
+async function seedMemory(harness: Harness, memoryId: string, sourceTaskId: string): Promise<void> {
   await harness.repositories.memoryUnitOfWork.run(async (memory) => {
     const item: MemoryItemRecord = {
       schemaVersion: 1, id: memoryId, teamId: 'team-1', kind: 'decision', status: 'active',
@@ -82,8 +83,8 @@ async function seedMemory(harness: Harness, memoryId: string, sourceId: string):
     };
     await memory.items.create(item);
     await memory.sources.create({
-      memoryId, teamId: 'team-1', sourceKind: 'message', sourceId,
-      snapshotHash: `sha256:${sourceId}`, sourceScopeType: 'team', sourceScopeRef: 'team-1',
+      memoryId, teamId: 'team-1', sourceKind: 'task', sourceId: sourceTaskId,
+      snapshotHash: `sha256:${sourceTaskId}`, sourceScopeType: 'task', sourceScopeRef: sourceTaskId,
       sourceVisibility: 'team', createdAt: 1,
     });
   });
@@ -93,15 +94,16 @@ describe('P3-17 跨 Agent Memory smoke', () => {
   test('正场景：A 经 create_capsule 打包授权 → B inject 复用记忆', async () => {
     const harness = makeHarness();
     const runId = await seedRun(harness);
-    await seedMemory(harness, 'mem-a', 'msg-1');
+    await seedMemory(harness, 'mem-a', 'task-a');
 
     // Agent A 经 phase3 create_capsule 工具把记忆打包，授权目标 Agent B。
     const result = await harness.handler['memory.create_capsule']!({
       schemaVersion: 2, managementPhase: 3, commandId: 'c1', managementRunId: runId, workerId: 'agent-a',
       toolCallId: 'call-capsule', toolName: 'memory.create_capsule', leaseToken: 'tok', fencingToken: 1,
       idempotencyKey: 'capsule-a-to-b',
-      input: { targetAgentId: 'agent-b', prompt: '为 B 打包授权', limit: 5 },
+      input: { targetAgentId: 'agent-b', taskId: 'task-b', prompt: '为 B 打包授权', limit: 5 },
     });
+    expect(result.capsuleRef).toMatchObject({ taskId: 'task-b', targetAgentId: 'agent-b' });
     const manifests = await harness.repositories.memory.capsuleItems.listByCapsule({
       teamId: 'team-1', capsuleId: result.capsuleRef.id,
     });
@@ -109,35 +111,40 @@ describe('P3-17 跨 Agent Memory smoke', () => {
 
     // B 经生产 runtime 路径重建并 inject A 创建的同一个 Capsule。
     const context = await harness.runtime.resolve({
-      teamId: 'team-1', managementRunId: runId, targetAgentId: 'agent-b',
+      teamId: 'team-1', managementRunId: runId, taskId: 'task-b', targetAgentId: 'agent-b',
       memoryCapsuleRef: result.capsuleRef, now: 5_000,
     });
     expect(context).toMatchObject([{
       id: 'mem-a',
-      provenance: { origin: 'server', capsuleId: result.capsuleRef.id },
+      provenance: {
+        origin: 'server',
+        capsuleId: result.capsuleRef.id,
+        sourceRefs: [{ sourceKind: 'task', sourceId: 'task-a' }],
+      },
     }]);
   });
 
   test('负场景：来源失效后 B inject 被拒绝', async () => {
     const harness = makeHarness();
     const runId = await seedRun(harness);
-    await seedMemory(harness, 'mem-a', 'msg-1');
+    await seedMemory(harness, 'mem-a', 'task-a');
 
     const result = await harness.handler['memory.create_capsule']!({
       schemaVersion: 2, managementPhase: 3, commandId: 'c1', managementRunId: runId, workerId: 'agent-a',
       toolCallId: 'call-capsule', toolName: 'memory.create_capsule', leaseToken: 'tok', fencingToken: 1,
       idempotencyKey: 'capsule-a-to-b',
-      input: { targetAgentId: 'agent-b', prompt: '为 B 打包授权', limit: 5 },
+      input: { targetAgentId: 'agent-b', taskId: 'task-b', prompt: '为 B 打包授权', limit: 5 },
     });
+    expect(result.capsuleRef).toMatchObject({ taskId: 'task-b', targetAgentId: 'agent-b' });
     const manifests = await harness.repositories.memory.capsuleItems.listByCapsule({
       teamId: 'team-1', capsuleId: result.capsuleRef.id,
     });
     expect(manifests.map((manifest) => manifest.memoryId)).toEqual(['mem-a']);
 
-    // Capsule 创建后来源失效（msg-1 不可用），B 注入同一个 Capsule 时必须被拒。
-    harness.markSourceUnavailable('msg-1');
+    // Capsule 创建后 Task A 来源失效，B 在 Task B 注入同一个 Capsule 时必须被拒。
+    harness.markSourceUnavailable('task-a');
     await expect(harness.runtime.resolve({
-      teamId: 'team-1', managementRunId: runId, targetAgentId: 'agent-b',
+      teamId: 'team-1', managementRunId: runId, taskId: 'task-b', targetAgentId: 'agent-b',
       memoryCapsuleRef: result.capsuleRef, now: 5_000,
     })).rejects.toMatchObject({ code: 'SERVER_CAPSULE_REVALIDATION_FAILED' });
     await expect(harness.repositories.memory.capsuleRefs.getById({
