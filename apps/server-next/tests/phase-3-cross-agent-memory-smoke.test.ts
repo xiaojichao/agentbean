@@ -5,6 +5,7 @@ import { createCollaborativeMemorySearchService } from '../src/application/colla
 import { createMemoryCapsuleService } from '../src/application/memory-capsule-service.js';
 import { createCapsuleInjectionValidator } from '../src/application/capsule-injection-validator.js';
 import { createPhase3ManagementToolHandlers } from '../src/application/management/management-tool-executor.js';
+import { createServerCapsuleRuntimeContextService } from '../src/application/server-capsule-runtime-context-service.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 // P3-17 跨 Agent Memory smoke（代码链路）：Agent A 经 phase3 create_capsule 工具把记忆打包
@@ -16,8 +17,7 @@ const POLICY_VERSION = 7;
 interface Harness {
   readonly repositories: ServerNextRepositories;
   readonly handler: ReturnType<typeof createPhase3ManagementToolHandlers>;
-  readonly capsuleService: ReturnType<typeof createMemoryCapsuleService>;
-  readonly validator: ReturnType<typeof createCapsuleInjectionValidator>;
+  readonly runtime: ReturnType<typeof createServerCapsuleRuntimeContextService>;
   readonly markSourceUnavailable: (sourceId: string) => void;
 }
 
@@ -37,8 +37,7 @@ function makeHarness(): Harness {
   };
   const searchService = createCollaborativeMemorySearchService({ repositories: repositories.memory, permissions });
   const capsuleService = createMemoryCapsuleService({ searchService, unitOfWork: repositories.memoryUnitOfWork, clock, ids });
-  // createPhase3ManagementToolHandlers 需要 4 个 service；smoke 只用到 create_capsule，其余给空实现。
-  const noopService = { async search() { return { matches: [], excluded: [] }; } } as never;
+  const validator = createCapsuleInjectionValidator({ unitOfWork: repositories.memoryUnitOfWork, permissions, ids });
   const handler = createPhase3ManagementToolHandlers({
     repositories, searchService, capsuleService,
     candidateService: { async proposeCandidate() { return { candidate: {} as never, sources: [] }; } } as never,
@@ -48,8 +47,12 @@ function makeHarness(): Harness {
   return {
     repositories,
     handler,
-    capsuleService,
-    validator: createCapsuleInjectionValidator({ unitOfWork: repositories.memoryUnitOfWork, permissions, ids }),
+    runtime: createServerCapsuleRuntimeContextService({
+      unitOfWork: repositories.memoryUnitOfWork,
+      validator,
+      ids,
+      currentPolicyVersion: () => POLICY_VERSION,
+    }),
     markSourceUnavailable: (sourceId) => unavailableSources.add(sourceId),
   };
 }
@@ -96,20 +99,23 @@ describe('P3-17 跨 Agent Memory smoke', () => {
     const result = await harness.handler['memory.create_capsule']!({
       schemaVersion: 2, managementPhase: 3, commandId: 'c1', managementRunId: runId, workerId: 'agent-a',
       toolCallId: 'call-capsule', toolName: 'memory.create_capsule', leaseToken: 'tok', fencingToken: 1,
+      idempotencyKey: 'capsule-a-to-b',
       input: { targetAgentId: 'agent-b', prompt: '为 B 打包授权', limit: 5 },
     });
-    expect(result.capsuleRef.id).toBeTruthy();
+    const manifests = await harness.repositories.memory.capsuleItems.listByCapsule({
+      teamId: 'team-1', capsuleId: result.capsuleRef.id,
+    });
+    expect(manifests.map((manifest) => manifest.memoryId)).toEqual(['mem-a']);
 
-    // B 经 capsule inject 复用 A 的记忆（allowed）。
-    const capsule = await harness.capsuleService.createCapsule({
-      teamId: 'team-1', requesterUserId: 'agent-b', managementRunId: runId, targetAgentId: 'agent-b',
-      prompt: 'B 接手', limit: 5, now: 5_000, currentPolicyVersion: POLICY_VERSION,
+    // B 经生产 runtime 路径重建并 inject A 创建的同一个 Capsule。
+    const context = await harness.runtime.resolve({
+      teamId: 'team-1', managementRunId: runId, targetAgentId: 'agent-b',
+      memoryCapsuleRef: result.capsuleRef, now: 5_000,
     });
-    expect(capsule.items.length).toBeGreaterThan(0);
-    const injection = await harness.validator.validateCapsuleForInjection({
-      capsule, requesterUserId: 'agent-b', now: 6_000, currentPolicyVersion: POLICY_VERSION,
-    });
-    expect(injection.decisions.every((decision) => decision.allowed)).toBe(true);
+    expect(context).toMatchObject([{
+      id: 'mem-a',
+      provenance: { origin: 'server', capsuleId: result.capsuleRef.id },
+    }]);
   });
 
   test('负场景：来源失效后 B inject 被拒绝', async () => {
@@ -117,16 +123,25 @@ describe('P3-17 跨 Agent Memory smoke', () => {
     const runId = await seedRun(harness);
     await seedMemory(harness, 'mem-a', 'msg-1');
 
-    // 来源失效（msg-1 不可用）。
-    harness.markSourceUnavailable('msg-1');
+    const result = await harness.handler['memory.create_capsule']!({
+      schemaVersion: 2, managementPhase: 3, commandId: 'c1', managementRunId: runId, workerId: 'agent-a',
+      toolCallId: 'call-capsule', toolName: 'memory.create_capsule', leaseToken: 'tok', fencingToken: 1,
+      idempotencyKey: 'capsule-a-to-b',
+      input: { targetAgentId: 'agent-b', prompt: '为 B 打包授权', limit: 5 },
+    });
+    const manifests = await harness.repositories.memory.capsuleItems.listByCapsule({
+      teamId: 'team-1', capsuleId: result.capsuleRef.id,
+    });
+    expect(manifests.map((manifest) => manifest.memoryId)).toEqual(['mem-a']);
 
-    const capsule = await harness.capsuleService.createCapsule({
-      teamId: 'team-1', requesterUserId: 'agent-b', managementRunId: runId, targetAgentId: 'agent-b',
-      prompt: 'B 接手', limit: 5, now: 5_000, currentPolicyVersion: POLICY_VERSION,
-    });
-    const injection = await harness.validator.validateCapsuleForInjection({
-      capsule, requesterUserId: 'agent-b', now: 6_000, currentPolicyVersion: POLICY_VERSION,
-    });
-    expect(injection.decisions.every((decision) => !decision.allowed)).toBe(true);
+    // Capsule 创建后来源失效（msg-1 不可用），B 注入同一个 Capsule 时必须被拒。
+    harness.markSourceUnavailable('msg-1');
+    await expect(harness.runtime.resolve({
+      teamId: 'team-1', managementRunId: runId, targetAgentId: 'agent-b',
+      memoryCapsuleRef: result.capsuleRef, now: 5_000,
+    })).rejects.toMatchObject({ code: 'SERVER_CAPSULE_REVALIDATION_FAILED' });
+    await expect(harness.repositories.memory.capsuleRefs.getById({
+      teamId: 'team-1', id: result.capsuleRef.id,
+    })).resolves.toMatchObject({ deniedAt: 5_000 });
   });
 });
