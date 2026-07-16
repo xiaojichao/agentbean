@@ -31,10 +31,16 @@ Phase 3 代码/配置层已就绪（P3-01..16 Green + P3-17 smoke 脚本 + P3-18
   npm run dev
   ```
 
+- [ ] 先拿 **team-id**（daemon 启动要指定团队）:Web 登录进团队后,浏览器 Console（在 `localhost:4101` 页面）跑:
+  ```js
+  document.querySelector('[data-team-id]')?.getAttribute('data-team-id')
+  ```
+  打印出的就是 team-id（或在设置页 F12 → Elements 搜 `data-team-id`）。注意:team-id ≠ URL 里的 teamPath。
+
 - [ ] **daemon-next**（连 server,扫描真实 Agent）:
   ```bash
   cd apps/daemon-next
-  npm start -- --server-url http://localhost:4100 --token dev-secret --profile default
+  npm start -- --server-url http://localhost:4100 --token dev-secret --profile default --team-id <你的team-id>
   ```
   日志看到 `agent connected` / device registered 即可。
 
