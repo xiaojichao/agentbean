@@ -124,8 +124,9 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
 }
 
 /**
- * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId 来自 session
- * context，不由 Agent 传入。这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
+ * Phase 3 Memory 工具输入（P3-09）。teamId / managementRunId / requesterUserId，以及提议来源
+ * sourceAgentId / sourceInvocationId 来自 Server 已校验的 run/invocation context，不由 Agent 传入。
+ * 这四个工具是「外部 Agent 只能 propose、不能直写 active Memory」
  * 不变量的 Agent 侧入口（search 只读；create_capsule 投影；propose_candidate 进 review 队列；
  * link_sources 补来源）。
  */
@@ -147,8 +148,6 @@ export interface Phase3ManagementWorkerToolInputMapV1 {
     readonly userId?: ID;
   };
   readonly 'memory.propose_candidate': {
-    readonly sourceAgentId: ID;
-    readonly sourceInvocationId: ID;
     readonly targetAgentId: ID;
     readonly scopeType: MemoryScopeType;
     readonly scopeRef: ID;
@@ -707,13 +706,12 @@ function assertMemoryToolInput(toolName: keyof Phase3ManagementWorkerToolInputMa
   }
   if (toolName === 'memory.propose_candidate') {
     assertExactMemoryKeys(value,
-      ['sourceAgentId', 'sourceInvocationId', 'targetAgentId', 'scopeType', 'scopeRef',
+      ['targetAgentId', 'scopeType', 'scopeRef',
         'contentKind', 'proposedContent', 'proposedSummary', 'sourceRefs', 'taskId'],
-      ['sourceAgentId', 'sourceInvocationId', 'targetAgentId', 'scopeType', 'scopeRef',
+      ['targetAgentId', 'scopeType', 'scopeRef',
         'contentKind', 'proposedContent', 'sourceRefs']);
     if (!MEMORY_CONTENT_KINDS.includes(value.contentKind as typeof MEMORY_CONTENT_KINDS[number])
       || !MEMORY_SCOPE_TYPES.includes(value.scopeType as typeof MEMORY_SCOPE_TYPES[number])
-      || !nonEmpty(value.sourceAgentId) || !nonEmpty(value.sourceInvocationId)
       || !nonEmpty(value.targetAgentId) || !nonEmpty(value.scopeRef)
       || !nonEmpty(value.proposedContent)
       || (value.taskId !== undefined && !nonEmpty(value.taskId))

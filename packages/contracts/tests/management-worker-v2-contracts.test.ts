@@ -298,10 +298,9 @@ describe('Phase 2 management worker contracts', () => {
       targetAgentId: 'agent-1', prompt: 'continue the task', channelId: 'channel-1', limit: 5,
     })).toMatchObject({ targetAgentId: 'agent-1', limit: 5 });
     expect(parsePhase3MemoryToolInputV1('memory.propose_candidate', {
-      sourceAgentId: 'agent-1', sourceInvocationId: 'invocation-1', targetAgentId: 'agent-2',
-      scopeType: 'team', scopeRef: 'team-1',
+      targetAgentId: 'agent-2', scopeType: 'team', scopeRef: 'team-1',
       contentKind: 'decision', proposedContent: 'Use Node 24', sourceRefs: [sourceRef], taskId: 'task-1',
-    })).toMatchObject({ sourceAgentId: 'agent-1', contentKind: 'decision', sourceRefs: [sourceRef] });
+    })).toMatchObject({ targetAgentId: 'agent-2', contentKind: 'decision', sourceRefs: [sourceRef] });
     expect(parsePhase3MemoryToolInputV1('memory.link_sources', {
       memoryId: 'memory-1', sourceRefs: [sourceRef],
     })).toEqual({ memoryId: 'memory-1', sourceRefs: [sourceRef] });
@@ -320,6 +319,11 @@ describe('Phase 2 management worker contracts', () => {
       () => parsePhase3MemoryToolInputV1('memory.propose_candidate', {
         contentKind: 'fact', proposedContent: 'x', sourceRefs: [],
       }),
+      () => parsePhase3MemoryToolInputV1('memory.propose_candidate', {
+        sourceAgentId: 'spoofed-agent', sourceInvocationId: 'spoofed-invocation',
+        targetAgentId: 'agent-2', scopeType: 'team', scopeRef: 'team-1',
+        contentKind: 'fact', proposedContent: 'x', sourceRefs: [sourceRef],
+      } as never),
       () => parsePhase3MemoryToolInputV1('memory.link_sources', {
         memoryId: 'memory-1', sourceRefs: [{ ...sourceRef, snapshotHash: '' }],
       }),
