@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import type { ManagementEventV1, ManagementRunDto } from '../../../packages/contracts/src/index.js';
+import type { ManagerLeaseRecord } from '../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from '../src/infra/memory/management-repositories.js';
 import { createSqliteManagementPersistence } from '../src/infra/sqlite/management-repositories.js';
 import { applyTeamMigrations, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
@@ -56,6 +57,82 @@ describe.each([
 });
 
 describe('management SQLite constraints', () => {
+  test('persists Device and Server lease hosts while preserving legacy Device rows', async () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      const { repositories } = createSqliteManagementPersistence(db);
+      const columns = db.prepare('PRAGMA table_info(manager_leases)').all().map((item) => (item as { name: string }).name);
+      expect(columns).toEqual(expect.arrayContaining(['host_kind', 'worker_pool_id']));
+
+      const deviceLease: ManagerLeaseRecord = {
+        managementRunId: 'run-device-host', workerId: 'device-worker',
+        host: { kind: 'device', deviceId: 'device-1', profileId: 'profile-1' },
+        leaseTokenHash: 'token-device', leaseFingerprint: 'fingerprint-device', fencingToken: 1,
+        acquiredAt: 1, heartbeatAt: 1, expiresAt: 100,
+      };
+      const serverLease: ManagerLeaseRecord = {
+        managementRunId: 'run-server-host', workerId: 'server-worker',
+        host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+        leaseTokenHash: 'token-server', leaseFingerprint: 'fingerprint-server', fencingToken: 2,
+        acquiredAt: 2, heartbeatAt: 2, expiresAt: 101,
+      };
+      await repositories.runs.create({ ...createRunInput().run, id: deviceLease.managementRunId });
+      await repositories.runs.create({ ...createRunInput().run, id: serverLease.managementRunId });
+      await repositories.leases.put(deviceLease);
+      await repositories.leases.put(serverLease);
+      await expect(repositories.leases.get(deviceLease.managementRunId)).resolves.toEqual(deviceLease);
+      await expect(repositories.leases.get(serverLease.managementRunId)).resolves.toEqual(serverLease);
+      expect(db.prepare('SELECT host_kind, device_id, worker_pool_id FROM manager_leases ORDER BY management_run_id').all())
+        .toEqual([
+          { host_kind: 'device', device_id: 'device-1', worker_pool_id: null },
+          { host_kind: 'server', device_id: null, worker_pool_id: 'pool-1' },
+        ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('upgrades a legacy Device-only lease row to the typed Device host', async () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      const { repositories } = createSqliteManagementPersistence(db);
+      await repositories.runs.create({ ...createRunInput().run, id: 'legacy-run' });
+      db.exec('DROP TABLE manager_leases;');
+      db.exec(`CREATE TABLE manager_leases (
+        management_run_id TEXT PRIMARY KEY REFERENCES management_runs(id) ON DELETE CASCADE,
+        worker_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        profile_id TEXT NOT NULL,
+        lease_token_hash TEXT NOT NULL,
+        lease_fingerprint TEXT NOT NULL,
+        fencing_token INTEGER NOT NULL CHECK (fencing_token > 0),
+        acquired_at INTEGER NOT NULL,
+        heartbeat_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        released_at INTEGER
+      );`);
+      db.prepare(`INSERT INTO manager_leases
+        (management_run_id, worker_id, device_id, profile_id, lease_token_hash, lease_fingerprint,
+         fencing_token, acquired_at, heartbeat_at, expires_at, released_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('legacy-run', 'legacy-worker', 'legacy-device', 'profile-1', 'legacy-token', 'legacy-fingerprint', 1, 1, 1, 100, null);
+      db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0022_management_phase_4_worker_host.sql'").run();
+
+      applyTeamMigrations(db);
+
+      await expect(repositories.leases.get('legacy-run')).resolves.toEqual({
+        managementRunId: 'legacy-run', workerId: 'legacy-worker',
+        host: { kind: 'device', deviceId: 'legacy-device', profileId: 'profile-1' },
+        leaseTokenHash: 'legacy-token', leaseFingerprint: 'legacy-fingerprint', fencingToken: 1,
+        acquiredAt: 1, heartbeatAt: 1, expiresAt: 100, releasedAt: undefined,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test('persists Phase 2 rollout policy and immutable Run phase while existing rows default to Phase 1', async () => {
     const db = new Database(':memory:');
     try {

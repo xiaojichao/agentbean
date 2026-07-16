@@ -1,7 +1,8 @@
-export interface ManagerLeaseHost {
-  readonly deviceId: string;
-  readonly profileId: string;
-}
+export type ManagerLeaseHost =
+  | { readonly kind: 'device'; readonly deviceId: string; readonly profileId: string }
+  | { readonly kind: 'server'; readonly workerPoolId: string; readonly profileId: string }
+  // Legacy Device callers may omit kind; new leases are always normalized to the typed shape.
+  | { readonly deviceId: string; readonly profileId: string };
 
 export interface ManagerLeaseRecord {
   readonly managementRunId: string;
@@ -45,7 +46,7 @@ export type ManagerLeaseAcquireRejection =
 export type ManagerLeaseAcquireDecision =
   | {
       readonly kind: 'granted';
-      readonly reason: 'initial' | 'expired-same-host' | 'released-same-host';
+      readonly reason: 'initial' | 'expired-same-host' | 'expired-cross-host' | 'released-same-host';
       readonly lease: ManagerLeaseRecord;
     }
   | { readonly kind: 'existing'; readonly lease: ManagerLeaseRecord }
@@ -117,8 +118,7 @@ function isValidDuration(now: number, ttlMs: number): boolean {
 function isValidLease(lease: ManagerLeaseRecord): boolean {
   return lease.managementRunId.length > 0
     && lease.workerId.length > 0
-    && lease.host.deviceId.length > 0
-    && lease.host.profileId.length > 0
+    && isValidHost(lease.host)
     && lease.leaseTokenHash.length > 0
     && lease.leaseFingerprint.length > 0
     && Number.isSafeInteger(lease.fencingToken)
@@ -141,8 +141,26 @@ function clockRegressed(lease: ManagerLeaseRecord, now: number): boolean {
     || (lease.releasedAt !== undefined && now < lease.releasedAt);
 }
 
+function isValidHost(host: ManagerLeaseHost): boolean {
+  if (host.profileId.length === 0) return false;
+  if ('workerPoolId' in host) return host.workerPoolId.length > 0;
+  return host.deviceId.length > 0;
+}
+
 function sameHost(left: ManagerLeaseHost, right: ManagerLeaseHost): boolean {
-  return left.deviceId === right.deviceId && left.profileId === right.profileId;
+  if (left.profileId !== right.profileId) return false;
+  if ('workerPoolId' in left || 'workerPoolId' in right) {
+    return 'workerPoolId' in left && 'workerPoolId' in right
+      && left.kind === 'server' && right.kind === 'server'
+      && left.workerPoolId === right.workerPoolId;
+  }
+  return left.deviceId === right.deviceId;
+}
+
+function normalizeHost(host: ManagerLeaseHost): Extract<ManagerLeaseHost, { readonly kind: 'device' }> | Extract<ManagerLeaseHost, { readonly kind: 'server' }> {
+  return 'workerPoolId' in host
+    ? { kind: 'server', workerPoolId: host.workerPoolId, profileId: host.profileId }
+    : { kind: 'device', deviceId: host.deviceId, profileId: host.profileId };
 }
 
 export function inspectManagerLease(
@@ -163,7 +181,7 @@ function grantedLease(
   return {
     managementRunId: input.managementRunId,
     workerId: input.workerId,
-    host: { ...input.host },
+    host: normalizeHost(input.host),
     leaseTokenHash: input.leaseTokenHash,
     leaseFingerprint: input.leaseFingerprint,
     fencingToken,
@@ -176,8 +194,7 @@ function grantedLease(
 function acquireIdentityIsValid(input: ManagerLeaseAcquireInput): boolean {
   return input.managementRunId.length > 0
     && input.workerId.length > 0
-    && input.host.deviceId.length > 0
-    && input.host.profileId.length > 0
+    && isValidHost(input.host)
     && input.leaseTokenHash.length > 0
     && input.leaseFingerprint.length > 0;
 }
@@ -213,7 +230,7 @@ export function evaluateManagerLeaseAcquire(
   if (status.kind !== 'expired' && status.kind !== 'released') {
     return { kind: 'rejected', reason: 'invalid-lease-state' };
   }
-  if (!sameHost(current.host, input.host)) {
+  if (status.kind === 'released' && !sameHost(current.host, input.host)) {
     return { kind: 'rejected', reason: 'cross-host-recovery-not-supported' };
   }
   if (current.fencingToken === Number.MAX_SAFE_INTEGER) {
@@ -221,7 +238,9 @@ export function evaluateManagerLeaseAcquire(
   }
   return {
     kind: 'granted',
-    reason: status.kind === 'expired' ? 'expired-same-host' : 'released-same-host',
+    reason: status.kind === 'expired'
+      ? (sameHost(current.host, input.host) ? 'expired-same-host' : 'expired-cross-host')
+      : 'released-same-host',
     lease: grantedLease(input, current.fencingToken + 1),
   };
 }

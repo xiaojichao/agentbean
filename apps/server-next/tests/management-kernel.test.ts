@@ -42,6 +42,33 @@ describe('Server Collaboration Kernel', () => {
     ]);
   });
 
+  test('records the previous worker as lost during expired cross-host takeover', async () => {
+    const harness = createHarness();
+    const { run } = await harness.kernel.createOrResumeRun(runInput());
+    await harness.kernel.acquireLease({
+      managementRunId: run.id,
+      workerId: 'server-worker-1',
+      host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+      leaseToken: 'server-token',
+      ttlMs: 10,
+    });
+    harness.clock.now = 20;
+
+    await expect(harness.kernel.acquireLease({
+      managementRunId: run.id,
+      workerId: 'device-worker-1',
+      host: { kind: 'device', deviceId: 'device-1', profileId: 'profile-1' },
+      leaseToken: 'device-token',
+      ttlMs: 10,
+    })).resolves.toMatchObject({ lease: { fencingToken: 2 }, disposition: 'granted' });
+    await expect(harness.repositories.events.list(run.id)).resolves.toMatchObject([
+      { event: { type: 'run-started' } },
+      { event: { type: 'worker-leased', payload: { workerId: 'server-worker-1' } } },
+      { event: { type: 'worker-lost', payload: { workerId: 'server-worker-1', reasonCode: 'LEASE_EXPIRED' } } },
+      { event: { type: 'worker-leased', payload: { workerId: 'device-worker-1' } } },
+    ]);
+  });
+
   test('projects terminal Event status and release recovery atomically', async () => {
     const harness = createHarness();
     const { run } = await harness.kernel.createOrResumeRun(runInput());
@@ -82,8 +109,10 @@ function runInput() {
 function createHarness() {
   const persistence = createInMemoryManagementPersistence();
   let id = 0;
+  const clock = { now: 10 };
   return {
     ...persistence,
-    kernel: createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => `id-${++id}` } }),
+    clock,
+    kernel: createManagementKernel({ ...persistence, clock: { now: () => clock.now }, ids: { nextId: () => `id-${++id}` } }),
   };
 }

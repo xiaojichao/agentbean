@@ -111,15 +111,19 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       },
       async put(record) {
         db.prepare(`INSERT INTO manager_leases
-          (management_run_id, worker_id, device_id, profile_id, lease_token_hash, lease_fingerprint,
-           fencing_token, acquired_at, heartbeat_at, expires_at, released_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (management_run_id, worker_id, device_id, profile_id, host_kind, worker_pool_id,
+           lease_token_hash, lease_fingerprint, fencing_token, acquired_at, heartbeat_at, expires_at, released_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(management_run_id) DO UPDATE SET worker_id=excluded.worker_id, device_id=excluded.device_id,
-            profile_id=excluded.profile_id, lease_token_hash=excluded.lease_token_hash,
-            lease_fingerprint=excluded.lease_fingerprint, fencing_token=excluded.fencing_token,
+            profile_id=excluded.profile_id, host_kind=excluded.host_kind, worker_pool_id=excluded.worker_pool_id,
+            lease_token_hash=excluded.lease_token_hash, lease_fingerprint=excluded.lease_fingerprint,
+            fencing_token=excluded.fencing_token,
             acquired_at=excluded.acquired_at, heartbeat_at=excluded.heartbeat_at,
             expires_at=excluded.expires_at, released_at=excluded.released_at`)
-          .run(record.managementRunId, record.workerId, record.host.deviceId, record.host.profileId,
+          .run(record.managementRunId, record.workerId,
+            'deviceId' in record.host ? record.host.deviceId : null,
+            record.host.profileId, 'workerPoolId' in record.host ? 'server' : 'device',
+            'workerPoolId' in record.host ? record.host.workerPoolId : null,
             record.leaseTokenHash, record.leaseFingerprint, record.fencingToken, record.acquiredAt,
             record.heartbeatAt, record.expiresAt, record.releasedAt ?? null);
         return record;
@@ -300,7 +304,21 @@ function phase(value: unknown, key: string): 1 | 2 | 3 {
   if (result !== 1 && result !== 2 && result !== 3) throw new Error(`Invalid ${key}`);
   return result;
 }
-function mapLease(value: unknown): ManagerLeaseRecord | null { return value ? { managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host: { deviceId: text(value, 'device_id'), profileId: text(value, 'profile_id') }, leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }
+function mapLease(value: unknown): ManagerLeaseRecord | null {
+  if (!value) return null;
+  const kind = nullableText(value, 'host_kind') ?? 'device';
+  const profileId = text(value, 'profile_id');
+  const host = kind === 'server'
+    ? { kind: 'server' as const, workerPoolId: text(value, 'worker_pool_id'), profileId }
+    : { kind: 'device' as const, deviceId: text(value, 'device_id'), profileId };
+  return {
+    managementRunId: text(value, 'management_run_id'), workerId: text(value, 'worker_id'), host,
+    leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'),
+    fencingToken: number(value, 'fencing_token'), acquiredAt: number(value, 'acquired_at'),
+    heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'),
+    releasedAt: nullableNumber(value, 'released_at'),
+  };
+}
 function mapEvent(value: unknown): ManagementEventRecord { return { event: { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), sequence: number(value, 'sequence'), type: text(value, 'type'), actorKind: text(value, 'actor_kind'), actorId: nullableText(value, 'actor_id'), idempotencyKey: text(value, 'idempotency_key'), causationEventId: nullableText(value, 'causation_event_id'), payload: parseJson(text(value, 'payload_json')), createdAt: number(value, 'created_at') } as ManagementEventV1, payloadHash: text(value, 'payload_hash') }; }
 function mapInvocation(value: unknown): AgentInvocationRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
 function mapProposal(value: unknown): AgentCollaborationProposalRecordDto | null { return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), proposal: parseJson(text(value, 'proposal_json')), proposalHash: text(value, 'proposal_hash'), idempotencyKey: text(value, 'idempotency_key'), createdAt: number(value, 'created_at') } : null; }
