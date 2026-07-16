@@ -206,6 +206,18 @@ test('fails closed when the Phase 3 build omits pi-management-runtime before dae
   assert.match(result.stderr, /P3_ROOT_CI_GATE_INVALID/);
 });
 
+test('fails closed when the Phase 3 persistence gate omits source invalidation E2E', () => {
+  const result = withFixture('agentbean-phase3-source-invalidation-e2e-', (fixture) => {
+    const path = join(fixture, 'package.json');
+    const packageJson = JSON.parse(readFileSync(path, 'utf8'));
+    packageJson.scripts['test:phase3-memory-persistence'] = packageJson.scripts['test:phase3-memory-persistence']
+      .replace(' tests/memory-source-invalidation-e2e.test.ts', '');
+    writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_ROOT_CI_GATE_INVALID/);
+});
+
 test('fails closed when Phase 2 agents.invoke drops the Capsule ref wire contract', () => {
   const result = withFixture('agentbean-phase3-capsule-wire-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

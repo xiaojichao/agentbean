@@ -319,6 +319,7 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || !String(scripts['test:phase3-memory']).includes('test:domain')
   || !String(scripts['test:phase3-memory']).includes('test:phase3-memory-persistence')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-unit-of-work.test.ts')
+  || !String(scripts['test:phase3-memory-persistence']).includes('memory-source-invalidation-e2e.test.ts')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-repositories.test.ts')
   || !String(scripts['test:phase3-memory-persistence']).includes('memory-candidate-service.test.ts')
   || !String(scripts['test:phase3-memory-persistence']).includes('server-capsule-runtime-context-service.test.ts')
