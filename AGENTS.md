@@ -1,6 +1,6 @@
 # AgentBean Codex Operating Contract
 
-This project inherits the global Codex/OMX operating contract.
+This project inherits the global Codex operating contract.
 
 ## GitHub Language Contract
 
@@ -89,11 +89,37 @@ post-merge production checks.
 5. **Verify and close the loop.** Run targeted tests plus the matching build
    required by the Local Verification Contract, create or update the Chinese
    PR, resolve review findings, merge, and verify the corresponding `main`
-   CI/CD and production-facing truth when applicable.
+   CI/CD and production-facing truth when applicable. Follow the fast closeout
+   rules in `docs/agents/pr-merge-gate.md`; do not repeat unchanged local
+   verification while waiting to commit, push, review, or merge.
 6. **Clean up conservatively.** Remove only worktrees and branches proven clean
    and merged; preserve dirty, unmerged, or uncertain local state.
 
 Do not invoke `to-prd`, `to-issues`, `triage`, `diagnose`, `tdd`,
 `improve-codebase-architecture`, or other workflow skills merely because they
-are installed. Do not require Superpowers or OMX runtime modes for ordinary
-AgentBean development.
+are installed. Do not require Superpowers or heavy orchestration modes for
+ordinary AgentBean development.
+
+## Fast PR closeout contract
+
+For review -> fix -> merge tasks, optimize for one trustworthy local validation
+pass per source state:
+
+- Before the first test, confirm Node 24 and prepare dependencies inside the
+  current worktree. Never symlink or reuse another checkout's whole
+  `node_modules`; never alternate repeatedly between symlink and install fixes.
+- Run tests targeted to the changed behavior plus every matching build required
+  by the Local Verification Contract. Do not add Phase-wide, repository-wide,
+  SEA, browser, or production suites unless the changed surface or an explicit
+  acceptance contract requires them.
+- Record which commands passed for the current working-tree state. If relevant
+  files have not changed, do not rerun those commands. A final diff review is
+  one pass, not a new verification cycle.
+- Once required local verification passes, immediately commit and push. Then
+  resolve review threads, run the merge-readiness gate, and merge. Do not delay
+  a ready merge for speculative cleanup or extra coverage.
+- If a local `gh pr merge` helper fails only because a branch is owned by
+  another worktree, use the GitHub API and continue from remote truth.
+- After merge, monitor the required `main` CI/CD, SEA, deploy, smoke, and live
+  health evidence. Do not rerun local suites unless a new remote failure points
+  to a specific regression.
