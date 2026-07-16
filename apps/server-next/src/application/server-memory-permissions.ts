@@ -148,14 +148,18 @@ export async function canReadMemoryScope(
       if (!task || task.teamId !== input.teamId) return false;
       if (!task.channelId) return true;
       const channel = await repositories.channels.getById(task.channelId);
-      return Boolean(channel?.humanMemberIds.includes(input.requesterUserId));
+      return Boolean(channel && channel.teamId === input.teamId
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(input.requesterUserId)));
     }
     case 'channel':
     case 'dm': {
       const channel = await repositories.channels.getById(input.scopeRef);
-      if (!channel || channel.teamId !== input.teamId
-        || !channel.humanMemberIds.includes(input.requesterUserId)) return false;
-      return input.scopeType === 'dm' ? channel.kind === 'direct' : channel.kind === 'channel';
+      if (!channel || channel.teamId !== input.teamId) return false;
+      if (input.scopeType === 'dm') {
+        return channel.kind === 'direct' && channel.humanMemberIds.includes(input.requesterUserId);
+      }
+      return channel.kind === 'channel'
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(input.requesterUserId));
     }
   }
 }

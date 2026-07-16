@@ -280,7 +280,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const summaries = await listLocalMemoryGovernanceSummaries({
             profileId: device.profileId,
             teamId,
-            cwds: latestSnapshot.agents.flatMap((agent) => agent.cwd ? [agent.cwd] : []),
+            cwds: Array.from(knownRecoveryCwds),
           });
           ack?.({ ok: true, summaries });
         } catch {

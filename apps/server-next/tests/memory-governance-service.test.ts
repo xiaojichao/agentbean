@@ -84,4 +84,17 @@ describe('Memory governance snapshot', () => {
     expect(snapshot.invocations.map((invocation) => invocation.id)).toEqual(['invocation-visible']);
     expect(JSON.stringify(snapshot.invocations)).not.toContain('agent-hidden');
   });
+
+  test('does not expose an empty Capsule without a visible manifest', async () => {
+    await repositories.memory.capsuleRefs.create({
+      id: 'capsule-empty', teamId: 'team-1', managementRunId: 'run-private', targetAgentId: 'agent-private',
+      contentHash: 'sha256:empty', authorizationDecisionId: 'decision-empty',
+      issuedAt: 10, expiresAt: 1_000, createdAt: 10,
+    });
+
+    const snapshot = await createMemoryGovernanceService({ repositories, clock: { now: () => 100 } })
+      .getSnapshot({ teamId: 'team-1', userId: 'user-2' });
+
+    expect(snapshot.capsules).toEqual([]);
+  });
 });

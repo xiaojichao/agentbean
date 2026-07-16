@@ -97,6 +97,7 @@ export function createMemoryGovernanceService(input: {
           teamId: request.teamId,
           capsuleId: capsule.id,
         });
+        if (manifests.length === 0) continue;
         const visible = await Promise.all(manifests.map((manifest) => canReadMemoryScope(repositories, {
           teamId: request.teamId,
           requesterUserId: request.userId,

@@ -18,6 +18,7 @@ interface FakeHarness {
   socket: DaemonProtocolSocket;
   emits: Array<{ event: string; payload: unknown }>;
   deliver: (event: string, payload: unknown) => Promise<void>;
+  deliverWithAck: (event: string, payload: unknown) => Promise<unknown>;
   setConnected: (connected: boolean) => void;
   reconnect: () => Promise<void>;
   setEmitError: (event: string, error: Error) => void;
@@ -26,7 +27,7 @@ interface FakeHarness {
 
 function createFakeSocket(): FakeHarness {
   const emits: Array<{ event: string; payload: unknown }> = [];
-  const handlers = new Map<string, Array<(payload: unknown) => Promise<void>>>();
+  const handlers = new Map<string, Array<(payload: unknown, ack?: (result: unknown) => void) => Promise<void>>>();
   const reconnectHandlers: Array<() => Promise<void>> = [];
   const emitErrors = new Map<string, Error>();
   const emitAcks = new Map<string, unknown>();
@@ -67,6 +68,13 @@ function createFakeSocket(): FakeHarness {
       for (const h of handlers.get(event) ?? []) {
         await h(payload);
       }
+    },
+    async deliverWithAck(event, payload) {
+      let result: unknown;
+      for (const h of handlers.get(event) ?? []) {
+        await h(payload, (value) => { result = value; });
+      }
+      return result;
     },
     setConnected: (c) => { state.connected = c; },
     reconnect: async () => {
@@ -505,6 +513,42 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         ),
       ).toBe(true);
     });
+  });
+
+  test('scanRequested custom agent cwd is included in local Memory governance summaries', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-custom-memory-')));
+    const agentBeanHome = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-custom-memory-home-')));
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    try {
+      const store = await createLocalMemoryStore({ profileId: 'profile-a', cwd, baseDir: agentBeanHome });
+      await store.upsert({
+        teamId: 'team-1', cwd, kind: 'procedural', scopeType: 'local-workspace', sourceKind: 'manual',
+        content: 'custom workspace body', summary: 'Custom workspace summary',
+      });
+      const harness = createFakeSocket();
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', profileId: 'profile-a' },
+        runtimes: [], agents: [], serverUrl: 'http://server.test',
+        fetch: async () => new Response('{}', { status: 200 }),
+        executor: async () => ({ body: 'should not run' }),
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.device.scanRequested, {
+        requestId: 'scan-memory', deviceId: 'dev-1',
+        customAgents: [{ id: 'custom-agent-1', adapterKind: 'codex', cwd }],
+      });
+
+      const ack = await harness.deliverWithAck(AGENT_EVENTS.memory.governanceSummaryRequested, { teamId: 'team-1' });
+      expect(ack).toMatchObject({
+        ok: true,
+        summaries: [expect.objectContaining({ summary: 'Custom workspace summary' })],
+      });
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
   });
 
   test('scanRequested 在 snapshot 上报 emit 失败时不抛', async () => {
