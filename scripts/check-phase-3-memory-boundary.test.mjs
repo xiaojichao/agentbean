@@ -235,6 +235,15 @@ test('fails closed when Phase 3 Memory tool definitions disappear', () => {
   assert.match(result.stderr, /P3_CAPABILITY_DEFINITIONS_INVALID/);
 });
 
+test('fails closed when the V3 capability gate wiring disappears', () => {
+  const result = withFixture('agentbean-phase3-gate-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/src/application/management/device-worker-scheduler.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll('managementPhase3Preflight', 'removedPhase3Preflight'));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_CAPABILITY_GATE_INVALID/);
+});
+
 test('fails closed when the Phase 3 Memory parser stops enforcing exact keys', () => {
   const result = withFixture('agentbean-phase3-exact-parser-', (fixture) => {
     const path = join(fixture, 'packages/contracts/src/management-worker-v2.ts');

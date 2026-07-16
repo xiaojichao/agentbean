@@ -192,6 +192,50 @@ describe('management tool boundary', () => {
     await session.dispose();
   });
 
+  it('exposes Phase 2 plus four Memory tools for an explicit Phase 3 context', async () => {
+    const requests: ManagementModelRequest[] = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'phase-3-tool-surface',
+        async respond(request) {
+          requests.push(request);
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async () => ({ text: 'unused' }),
+    }).createSession({
+      systemPrompt: { id: 'phase-3', version: 1, content: 'Reuse Memory across agents.' },
+      mode: 'managed',
+      context: {
+        schemaVersion: 2,
+        managementPhase: 3,
+        scope: {
+          kind: 'managed',
+          managementRunId: 'run-phase-3',
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          rootMessageId: 'message-1',
+          rootTaskId: 'task-root',
+        },
+        visibleThread: { revision: 1, messages: [] },
+      },
+    });
+
+    await session.prompt({ text: 'remember' });
+    await session.waitForIdle();
+
+    expect(requests[0]?.tools.map((tool) => tool.name)).toEqual([...PHASE_3_MANAGEMENT_TOOL_NAMES]);
+    expect(requests[0]?.tools.map((tool) => tool.name)).toContain('memory.search');
+    expect(requests[0]?.tools.map((tool) => tool.name)).toContain('memory.propose_candidate');
+    expect(requests[0]?.tools.find((tool) => tool.name === 'memory.search')?.inputSchema).toMatchObject({
+      type: 'object',
+      additionalProperties: false,
+      required: ['query', 'limit'],
+    });
+    expect(requests[0]?.sessionContext).toMatchObject({ schemaVersion: 2, managementPhase: 3 });
+    await session.dispose();
+  });
+
   it('rejects Phase 2 context in shadow mode', async () => {
     await expect(createManagementRuntimeFactory({
       model: { id: 'phase-2-shadow', async respond() { return modelResponse([]); } },

@@ -43,6 +43,9 @@ const invocationContract = read('packages/contracts/src/invocation.ts');
 const managementWorkerV2 = read('packages/contracts/src/management-worker-v2.ts');
 const invocationGateway = read('apps/server-next/src/application/management/invocation-gateway.ts');
 const managementCheckpoint = read('apps/server-next/src/application/management/management-checkpoint.ts');
+const managementToolExecutor = read('apps/server-next/src/application/management/management-tool-executor.ts');
+const deviceWorkerScheduler = read('apps/server-next/src/application/management/device-worker-scheduler.ts');
+const piSessionAdapter = read('packages/pi-management-runtime/src/pi-session-adapter.ts');
 const dispatchContract = read('packages/contracts/src/dispatch.ts');
 const serverCapsuleRuntime = read('apps/server-next/src/application/server-capsule-runtime-context-service.ts');
 const serverCapsuleRuntimeTests = read('apps/server-next/tests/server-capsule-runtime-context-service.test.ts');
@@ -249,6 +252,17 @@ if (!managementWorkerV2.includes('Phase3ManagementWorkerToolInputMapV1')
   || !managementToolCatalog.includes('Phase3MemoryToolName')
   || !phase3MemoryTools.every((tool) => phase3Tools.includes(`'${tool}'`))) {
   violations.push('P3_CAPABILITY_DEFINITIONS_INVALID: Phase 3 Memory 工具定义（Phase3 输入 map + exact-key input/output parser + 请求/响应合同 + catalog schema + PHASE_3 tool 名单）is required');
+}
+
+// P3-09 slice 2b：V3 capability 门禁接线（executor 按 phase 值分发 + scheduler preflight + adapter 路由）。
+if (!managementToolExecutor.includes('Phase3ToolHandlers')
+  || !managementToolExecutor.includes('request.managementPhase === 3')
+  || managementToolExecutor.includes('managementPhase: 2 as const')
+  || !deviceWorkerScheduler.includes('managementPhase3Preflight')
+  || !deviceWorkerScheduler.includes('supportsManagementPhase(worker.capability, 3)')
+  || !piSessionAdapter.includes('PHASE_3_MANAGEMENT_TOOL_NAMES')
+  || !managementWorkerV2.includes('managementPhase: 2 | 3')) {
+  violations.push('P3_CAPABILITY_GATE_INVALID: V3 capability 门禁接线（executor phase3 分支 + scheduler phase3Preflight + adapter PHASE_3 路由 + context 2|3）is required');
 }
 
 const runtimeContractMarkers = [

@@ -58,7 +58,7 @@ export interface ManagementWorkerRegisterV2 {
 
 export interface ManagementWorkerSessionContextV2 {
   readonly schemaVersion: 2;
-  readonly managementPhase: 2;
+  readonly managementPhase: 2 | 3;
   readonly teamId: ID;
   readonly channelId: ID;
   readonly rootMessageId: ID;
@@ -774,7 +774,7 @@ export function parseManagementWorkerRegisterV2(value: unknown): ManagementWorke
 
 export function parseManagementWorkerSessionContextV2(value: unknown): ManagementWorkerSessionContextV2 {
   assertExactKeys(value, contextKeys, contextKeys.filter((key) => key !== 'frozenTarget'));
-  if (value.schemaVersion !== 2 || value.managementPhase !== 2 || !nonEmpty(value.teamId)
+  if (value.schemaVersion !== 2 || (value.managementPhase !== 2 && value.managementPhase !== 3) || !nonEmpty(value.teamId)
     || !nonEmpty(value.channelId) || !nonEmpty(value.rootMessageId) || !nonEmpty(value.rootTaskId)) {
     throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
   }
