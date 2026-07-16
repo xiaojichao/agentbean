@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'vitest';
-import { createManagementCheckpointService, collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint } from '../src/application/management/management-checkpoint.js';
+import { describe, expect, test, vi } from 'vitest';
+import { createManagementCheckpointService, collectManagementCheckpointFacts, restoreOrRebuildManagementCheckpoint,
+  type ManagementCheckpointMemoryCapsules } from '../src/application/management/management-checkpoint.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { createInMemoryManagementPersistence } from '../src/infra/memory/management-repositories.js';
@@ -116,6 +117,24 @@ describe('management checkpoint', () => {
     expect(closedFacts.validMemoryCapsuleIds).toEqual([]);
   });
 
+  test('persists runtime-valid Capsule IDs when saving a checkpoint', async () => {
+    const memoryCapsules = {
+      listValidMemoryCapsuleIds: vi.fn(async () => ['cap-valid']),
+    };
+    const harness = await createHarness(memoryCapsules);
+    const checkpoint = await harness.checkpoints.save({
+      authority: harness.authority,
+      idempotencyKey: 'checkpoint-with-capsules',
+      contextHints: { objective: 'resume safely', planSummary: '',
+        completedInvocationSummaries: [], unresolvedQuestions: [] },
+    });
+
+    expect(checkpoint.authoritative.memoryCapsuleIds).toEqual(['cap-valid']);
+    expect(memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
+      teamId: 'team-1', managementRunId: harness.authority.managementRunId, now: 10,
+    });
+  });
+
   test('rebuild drops invalid capsules from authoritative (P3-16: recovery 不恢复无效 Capsule)', async () => {
     const harness = await createHarness();
     const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
@@ -149,10 +168,11 @@ describe('management checkpoint', () => {
   });
 });
 
-async function createHarness() {
+async function createHarness(memoryCapsules?: ManagementCheckpointMemoryCapsules) {
   const persistence = createInMemoryManagementPersistence();
   let id = 0;
-  const dependencies = { ...persistence, clock: { now: () => 10 }, ids: { nextId: () => `id-${++id}` } };
+  const dependencies = { ...persistence, clock: { now: () => 10 }, ids: { nextId: () => `id-${++id}` },
+    ...(memoryCapsules ? { memoryCapsules } : {}) };
   const kernel = createManagementKernel(dependencies);
   const { run } = await kernel.createOrResumeRun({
     teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'task-1', rootMessageId: 'message-1', requestKey: 'request-1', requestHash: 'hash-1',

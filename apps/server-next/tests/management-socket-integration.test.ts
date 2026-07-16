@@ -429,17 +429,32 @@ describe('management worker socket integration', () => {
     const acquired = await phase3.trigger(AGENT_EVENTS.managementWorker.leaseAcquire, {
       schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'worker-instance-v3',
     });
-    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+    const checkpointRequest = {
       schemaVersion: 1, managementRunId: runId,
       workerId: (await phase3.trigger(AGENT_EVENTS.managementWorker.register, phase3WorkerRegistration()) as { workerId: string }).workerId,
       leaseToken: (acquired as { leaseToken: string }).leaseToken, fencingToken: 1,
-    })).resolves.toMatchObject({
+    } as const;
+    const firstCheckpoint = await phase3.trigger(
+      AGENT_EVENTS.managementWorker.checkpointFetch, checkpointRequest,
+    ) as ManagementCheckpointResultV1;
+    expect(firstCheckpoint).toMatchObject({
       managementRunId: runId,
       context: { managementPhase: 3, rootTaskId: 'root-task' },
       checkpoint: { authoritative: { memoryCapsuleIds: ['capsule-current'] } },
     });
     expect(harness.memoryCapsules.listValidMemoryCapsuleIds).toHaveBeenCalledWith({
       teamId: 'team-1', managementRunId: runId, now: 10,
+    });
+    if (!firstCheckpoint.checkpoint) throw new Error('checkpoint missing');
+    harness.memoryCapsules.listValidMemoryCapsuleIds.mockResolvedValueOnce([]);
+    await expect(phase3.trigger(AGENT_EVENTS.managementWorker.checkpointFetch, {
+      ...checkpointRequest,
+      knownCheckpointRevision: firstCheckpoint.checkpoint.revision,
+    })).resolves.toMatchObject({
+      checkpoint: {
+        revision: firstCheckpoint.checkpoint.revision,
+        authoritative: { memoryCapsuleIds: [] },
+      },
     });
   });
 });

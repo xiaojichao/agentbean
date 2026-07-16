@@ -458,14 +458,15 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
           }
         : managementSnapshot.facts;
       const latest = managementSnapshot.latest;
-      const checkpoint = latest
+      const restoredCheckpoint = latest
         ? restoreOrRebuildManagementCheckpoint({
             checkpoint: latest,
             facts,
             objective: rootMessage.body,
             now,
-          }).checkpoint
-        : {
+          })
+        : undefined;
+      const checkpoint = restoredCheckpoint?.checkpoint ?? {
             schemaVersion: 1 as const,
             managementRunId: run.id,
             revision: run.checkpointRevision,
@@ -476,6 +477,9 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             },
             updatedAt: now,
           };
+      const checkpointMustBeReturned = !latest
+        || restoredCheckpoint?.kind === 'rebuilt'
+        || input.knownCheckpointRevision !== checkpoint.revision;
       const runPhase = 'managementPhase' in run ? run.managementPhase : 1;
       // V2 workers predate the explicit context phase. Preserve their exact-key protocol while
       // keeping the established Phase 2 discriminator: rootTaskId present, frozenTarget absent.
@@ -507,7 +511,7 @@ export function createDeviceWorkerScheduler(dependencies: DeviceWorkerSchedulerD
             })),
           },
         },
-        ...(checkpoint && input.knownCheckpointRevision !== checkpoint.revision ? { checkpoint } : {}),
+        ...(checkpointMustBeReturned ? { checkpoint } : {}),
       };
     },
 
