@@ -85,6 +85,51 @@ describe('management SQLite constraints', () => {
     }
   });
 
+  test('persists Phase 3 rollout policy and restores a Phase 3 Run', async () => {
+    const db = new Database(':memory:');
+    try {
+      db.exec('PRAGMA foreign_keys = ON;');
+      applyTeamMigrations(db);
+      const { repositories } = createSqliteManagementPersistence(db);
+      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0021_management_phase_3_rollout.sql'").get())
+        .toEqual({ id: 'team/0021_management_phase_3_rollout.sql' });
+      await repositories.policies.upsert({
+        schemaVersion: 2, teamId: 'team-1', mode: 'managed', maxManagementPhase: 3,
+        placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+        updatedBy: 'owner-1', updatedAt: 1,
+      });
+      await expect(repositories.policies.get('team-1')).resolves.toMatchObject({ maxManagementPhase: 3 });
+      await repositories.runs.create({
+        schemaVersion: 2, managementPhase: 3, id: 'run-phase-3', teamId: 'team-1',
+        channelId: 'channel-1', rootTaskId: 'task-root', rootMessageId: 'message-1',
+        mode: 'managed', status: 'queued',
+        placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
+        checkpointRevision: 0, budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+        createdAt: 1, updatedAt: 1,
+      });
+      await expect(repositories.runs.getById('run-phase-3')).resolves.toMatchObject({
+        schemaVersion: 2, managementPhase: 3, rootTaskId: 'task-root',
+      });
+      await repositories.events.append({
+        event: {
+          schemaVersion: 1, id: 'event-phase-3', managementRunId: 'run-phase-3', sequence: 1,
+          type: 'run-started', actorKind: 'system', idempotencyKey: 'event-phase-3',
+          payload: { rootMessageId: 'message-1', rootTaskId: 'task-root', mode: 'managed' }, createdAt: 1,
+        },
+        payloadHash: 'payload-phase-3',
+      });
+
+      db.prepare("DELETE FROM schema_migrations WHERE id = 'team/0021_management_phase_3_rollout.sql'").run();
+      applyTeamMigrations(db);
+
+      await expect(repositories.events.list('run-phase-3')).resolves.toHaveLength(1);
+      expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+      expect(db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
   test('allows at most one active Dispatch attempt per Invocation', async () => {
     const db = new Database(':memory:');
     try {
