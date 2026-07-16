@@ -31,6 +31,7 @@ export interface InvalidateSourcesInput {
 
 export interface MemorySourceInvalidationResult {
   readonly expiredMemoryIds: readonly ID[];
+  readonly rejectedCandidateIds: readonly ID[];
 }
 
 export interface MemorySourceInvalidationDeps {
@@ -63,6 +64,57 @@ export function createMemorySourceInvalidationService(
             teamId: input.teamId, sourceKind: input.sourceKind, sourceId,
           });
           for (const row of rows) affected.add(row.memoryId);
+        }
+
+        // Candidate 的决策要求每个来源仍可用。任一直接来源进入本批失效后，未决 Candidate
+        // 已不可能安全 accept/merge；立即由 system 拒绝，避免重启后的 review snapshot 或
+        // 幂等恢复重新把它暴露成待处理项。
+        const affectedCandidateIds = new Set<ID>();
+        for (const sourceId of input.sourceIds) {
+          const rows = await memory.candidateSources.listBySource({
+            teamId: input.teamId, sourceKind: input.sourceKind, sourceId,
+          });
+          for (const row of rows) affectedCandidateIds.add(row.candidateId);
+        }
+        const rejectedCandidates: ID[] = [];
+        for (const candidateId of [...affectedCandidateIds].sort()) {
+          const candidate = await memory.candidates.getById({ teamId: input.teamId, id: candidateId });
+          if (!candidate || (candidate.status !== 'candidate' && candidate.status !== 'conflict')) continue;
+          const sources = await memory.candidateSources.listByCandidate({
+            teamId: input.teamId, candidateId,
+          });
+          const updatedAt = Math.max(clock.now(), candidate.updatedAt + 1);
+          const updated = await memory.candidates.update({
+            record: {
+              ...candidate,
+              status: 'rejected',
+              decidedAt: updatedAt,
+              decidedBy: 'system',
+              updatedAt,
+            },
+            expectedUpdatedAt: candidate.updatedAt,
+          });
+          if (!updated) continue;
+          await memory.auditEvents.append({
+            id: ids.nextId(),
+            teamId: input.teamId,
+            subjectKind: 'candidate',
+            subjectId: candidateId,
+            eventType: 'candidate-decided',
+            actorKind: ACTOR_SYSTEM,
+            actorId: input.actorId,
+            targetAgentId: candidate.targetAgentId,
+            scopeType: candidate.scopeType,
+            scopeRef: candidate.scopeRef,
+            sourceRefs: sources.map((source) => ({
+              schemaVersion: 1 as const,
+              sourceKind: source.sourceKind,
+              sourceId: source.sourceId,
+              snapshotHash: source.snapshotHash,
+            })),
+            createdAt: updatedAt,
+          });
+          rejectedCandidates.push(candidateId);
         }
 
         const expired: ID[] = [];
@@ -113,7 +165,7 @@ export function createMemorySourceInvalidationService(
           });
           expired.push(memoryId);
         }
-        return { expiredMemoryIds: expired };
+        return { expiredMemoryIds: expired, rejectedCandidateIds: rejectedCandidates };
       });
     },
   };

@@ -238,5 +238,10 @@ export interface MemoryRepositories {
   readonly candidateSources: {
     create(record: MemoryCandidateSourceRecord): Promise<MemoryCandidateSourceRecord>;
     listByCandidate(input: { teamId: ID; candidateId: ID }): Promise<MemoryCandidateSourceRecord[]>;
+    listBySource(input: {
+      teamId: ID;
+      sourceKind: MemorySourceKind;
+      sourceId: ID;
+    }): Promise<MemoryCandidateSourceRecord[]>;
   };
 }

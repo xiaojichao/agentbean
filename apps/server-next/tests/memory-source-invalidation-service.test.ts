@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 
 import type {
+  MemoryCandidateRecord,
   MemoryItemRecord,
   MemorySourceKind,
   MemorySourceRecord,
@@ -103,6 +104,54 @@ async function seedMemory(repositories: ServerNextRepositories, input: SeedMemor
         sourceKind: source.sourceKind,
         sourceId: source.sourceId,
         snapshotHash: source.snapshotHash ?? `sha256:${source.sourceId}`,
+        sourceScopeType: 'team',
+        sourceScopeRef: teamId,
+        sourceVisibility: 'team',
+        createdAt: 1,
+      });
+    }
+  });
+}
+
+async function seedCandidate(
+  repositories: ServerNextRepositories,
+  input: {
+    readonly candidateId: string;
+    readonly status?: MemoryCandidateRecord['status'];
+    readonly teamId?: string;
+    readonly sources: ReadonlyArray<Pick<MemorySourceRecord, 'sourceKind' | 'sourceId'>>;
+  },
+): Promise<void> {
+  await repositories.memoryUnitOfWork.run(async (memory) => {
+    const teamId = input.teamId ?? 'team-1';
+    const status = input.status ?? 'candidate';
+    const decided = status !== 'candidate' && status !== 'conflict';
+    await memory.candidates.create({
+      schemaVersion: 1,
+      id: input.candidateId,
+      teamId,
+      managementRunId: 'run-1',
+      sourceAgentId: 'agent-source',
+      sourceInvocationId: `invocation-${input.candidateId}`,
+      targetAgentId: 'agent-target',
+      scopeType: 'team',
+      scopeRef: teamId,
+      contentKind: 'fact',
+      proposedContent: `candidate ${input.candidateId}`,
+      projectionHash: `sha256:${input.candidateId}`,
+      status,
+      conflictMemoryIds: status === 'conflict' ? ['memory-conflict'] : [],
+      ...(decided ? { decidedAt: 2, decidedBy: 'user-1' } : {}),
+      createdAt: 1,
+      updatedAt: decided ? 2 : 1,
+    });
+    for (const source of input.sources) {
+      await memory.candidateSources.create({
+        candidateId: input.candidateId,
+        teamId,
+        sourceKind: source.sourceKind,
+        sourceId: source.sourceId,
+        snapshotHash: `sha256:${source.sourceId}`,
         sourceScopeType: 'team',
         sourceScopeRef: teamId,
         sourceVisibility: 'team',
@@ -233,6 +282,53 @@ describe.each([
       expect([...result.expiredMemoryIds].sort()).toEqual(['mem-a', 'mem-b']);
       // mem-c 仍有 task-4，保留。
       expect(await getStatus(harness.repositories, 'team-1', 'mem-c')).toBe('active');
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('system-rejects every pending Candidate that cites an invalidated source', async () => {
+    const harness = createHarness();
+    try {
+      await seedCandidate(harness.repositories, {
+        candidateId: 'candidate-pending',
+        sources: [
+          { sourceKind: 'message', sourceId: 'msg-1' },
+          { sourceKind: 'task', sourceId: 'task-still-valid' },
+        ],
+      });
+      await seedCandidate(harness.repositories, {
+        candidateId: 'candidate-conflict', status: 'conflict',
+        sources: [{ sourceKind: 'message', sourceId: 'msg-1' }],
+      });
+      await seedCandidate(harness.repositories, {
+        candidateId: 'candidate-terminal', status: 'rejected',
+        sources: [{ sourceKind: 'message', sourceId: 'msg-1' }],
+      });
+
+      const result = await harness.service.invalidateSources({
+        teamId: 'team-1', sourceKind: 'message', sourceIds: ['msg-1'], actorId: 'user-1',
+      });
+
+      expect(result.expiredMemoryIds).toEqual([]);
+      expect(result.rejectedCandidateIds).toEqual(['candidate-conflict', 'candidate-pending']);
+      await expect(harness.repositories.memory.candidates.getById({
+        teamId: 'team-1', id: 'candidate-pending',
+      })).resolves.toMatchObject({ status: 'rejected', decidedBy: 'system' });
+      await expect(harness.repositories.memory.candidates.getById({
+        teamId: 'team-1', id: 'candidate-conflict',
+      })).resolves.toMatchObject({ status: 'rejected', decidedBy: 'system' });
+      await expect(harness.repositories.memory.candidates.getById({
+        teamId: 'team-1', id: 'candidate-terminal',
+      })).resolves.toMatchObject({ status: 'rejected', updatedAt: 2 });
+
+      const audit = await harness.repositories.memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'candidate', subjectId: 'candidate-pending',
+      });
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({ eventType: 'candidate-decided', actorKind: 'system' });
+      expect(audit[0]).not.toHaveProperty('content');
+      expect(audit[0]).not.toHaveProperty('body');
     } finally {
       harness.close();
     }

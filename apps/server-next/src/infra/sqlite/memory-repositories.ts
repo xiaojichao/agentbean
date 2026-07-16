@@ -326,6 +326,12 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
           ORDER BY created_at, source_kind, source_id`)
           .all(input.teamId, input.candidateId).map(mapCandidateSourceRequired);
       },
+      async listBySource(input) {
+        return db.prepare(`SELECT * FROM memory_candidate_sources
+          WHERE team_id = ? AND source_kind = ? AND source_id = ?
+          ORDER BY created_at, memory_candidate_id`)
+          .all(input.teamId, input.sourceKind, input.sourceId).map(mapCandidateSourceRequired);
+      },
     },
   };
 }
