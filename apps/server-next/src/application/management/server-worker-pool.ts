@@ -46,6 +46,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
   const workersByIdentity = new Map<string, RegisteredServerWorker>();
   const workerIdByConnection = new Map<string, string>();
   const workerIdByManagementRun = new Map<string, string>();
+  const staleWorkerIdByManagementRun = new Map<string, string>();
   const capacityRequestByManagementRun = new Map<string, Omit<QueuedCapacityRequest, 'enqueuedAt' | 'reasonCode'>>();
   const queueByManagementRun = new Map<string, QueuedCapacityRequest>();
 
@@ -139,7 +140,8 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     const worker = workersById.get(workerId);
     if (!worker || worker.connectionId !== connectionId) return { activeManagementRunIds: [] };
     worker.connected = false;
-    return { workerId, activeManagementRunIds: [...worker.activeManagementRunIds] };
+    const activeManagementRunIds = requeueWorkerReservations(worker, dependencies.clock.now());
+    return { workerId, activeManagementRunIds };
   }
 
   function requestCapacity(input: {
@@ -173,16 +175,25 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       return { kind: 'queued' as const, ...queued };
     }
     queueByManagementRun.delete(input.managementRunId);
+    staleWorkerIdByManagementRun.delete(input.managementRunId);
     worker.activeManagementRunIds.add(input.managementRunId);
     workerIdByManagementRun.set(input.managementRunId, worker.workerId);
     return assignment(input.managementRunId, worker);
   }
 
   function releaseCapacity(input: { readonly workerId: string; readonly managementRunId: string }) {
-    if (workerIdByManagementRun.get(input.managementRunId) !== input.workerId) return { released: false as const };
+    if (workerIdByManagementRun.get(input.managementRunId) !== input.workerId) {
+      if (staleWorkerIdByManagementRun.get(input.managementRunId) !== input.workerId
+        || !queueByManagementRun.has(input.managementRunId)) return { released: false as const };
+      staleWorkerIdByManagementRun.delete(input.managementRunId);
+      queueByManagementRun.delete(input.managementRunId);
+      capacityRequestByManagementRun.delete(input.managementRunId);
+      return { released: true as const };
+    }
     workerIdByManagementRun.delete(input.managementRunId);
     workersById.get(input.workerId)?.activeManagementRunIds.delete(input.managementRunId);
     capacityRequestByManagementRun.delete(input.managementRunId);
+    staleWorkerIdByManagementRun.delete(input.managementRunId);
     return { released: true as const };
   }
 
@@ -220,18 +231,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       if (workerIdByConnection.get(worker.connectionId) === worker.workerId) {
         workerIdByConnection.delete(worker.connectionId);
       }
-      for (const managementRunId of worker.activeManagementRunIds) {
-        workerIdByManagementRun.delete(managementRunId);
-        const capacityRequest = capacityRequestByManagementRun.get(managementRunId);
-        if (capacityRequest) {
-          queueByManagementRun.set(managementRunId, {
-            ...capacityRequest,
-            enqueuedAt: now,
-            reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
-          });
-        }
-      }
-      worker.activeManagementRunIds.clear();
+      requeueWorkerReservations(worker, now);
       expiredWorkerIds.push(worker.workerId);
     }
     return expiredWorkerIds;
@@ -243,8 +243,28 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     return worker;
   }
 
+  function requeueWorkerReservations(worker: RegisteredServerWorker, enqueuedAt: number): readonly string[] {
+    const activeManagementRunIds = [...worker.activeManagementRunIds];
+    for (const managementRunId of activeManagementRunIds) {
+      workerIdByManagementRun.delete(managementRunId);
+      staleWorkerIdByManagementRun.set(managementRunId, worker.workerId);
+      const capacityRequest = capacityRequestByManagementRun.get(managementRunId);
+      if (capacityRequest) {
+        queueByManagementRun.set(managementRunId, {
+          ...capacityRequest,
+          enqueuedAt,
+          reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
+        });
+      }
+    }
+    worker.activeManagementRunIds.clear();
+    return activeManagementRunIds;
+  }
+
   return { registerWorker, heartbeat, disconnect, expireStaleWorkers, requestCapacity, releaseCapacity, snapshot };
 }
+
+export type ServerWorkerPool = ReturnType<typeof createServerWorkerPool>;
 
 function parseCapability(value: ManagementWorkerCapability): ManagementWorkerCapability | undefined {
   try {

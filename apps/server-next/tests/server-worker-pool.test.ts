@@ -87,6 +87,24 @@ describe('Phase 4 Server Worker Pool', () => {
     })).toMatchObject({ kind: 'queued', managementRunId: 'run-expired' });
   });
 
+  test('requeues reservations on disconnect and allows cancellation to remove the stale queue entry', () => {
+    const harness = createHarness();
+    const registered = harness.pool.registerWorker({ connectionId: 'connection-1', capability: capability() });
+    const workerId = (registered as { workerId: string }).workerId;
+    harness.pool.requestCapacity({
+      managementRunId: 'run-disconnected', teamId: 'team-1', profileId: 'profile-1',
+    });
+
+    expect(harness.pool.disconnect('connection-1')).toEqual({
+      workerId,
+      activeManagementRunIds: ['run-disconnected'],
+    });
+    expect(harness.pool.snapshot().queue).toMatchObject([{ managementRunId: 'run-disconnected' }]);
+    expect(harness.pool.releaseCapacity({ workerId, managementRunId: 'run-disconnected' }))
+      .toEqual({ released: true });
+    expect(harness.pool.snapshot().queue).toEqual([]);
+  });
+
   test('adds reported remote load to new local reservations', () => {
     const harness = createHarness();
     harness.pool.registerWorker({

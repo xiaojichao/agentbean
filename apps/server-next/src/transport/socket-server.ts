@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { ServerNextUseCases } from '../application/usecases.js';
 import type {
   DeviceWorkerScheduler,
@@ -5,6 +6,7 @@ import type {
   ScheduleManagementRunResult,
 } from '../application/management/device-worker-scheduler.js';
 import type { TaskClaimBroker } from '../application/management/task-claim-broker.js';
+import type { ServerWorkerPool } from '../application/management/server-worker-pool.js';
 import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS, type TaskClaimExpiredV1 } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
@@ -39,6 +41,8 @@ export interface ServerNextSocketOptions {
   managementWorkerScheduler?: DeviceWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
   taskClaimOfferTimeoutMs?: number;
+  serverWorkerPool?: ServerWorkerPool;
+  serverWorkerAuthToken?: string;
 }
 
 interface ChannelSubscription {
@@ -85,6 +89,43 @@ export function attachServerNextNamespaces(
   const waitingDeviceInviteSocketsByCode = new Map<string, SocketLike>();
   const waitingDeviceInviteCodeBySocket = new Map<SocketLike, string>();
   let managementConnectionSequence = 0;
+  let serverWorkerConnectionSequence = 0;
+
+  if (options.serverWorkerPool && options.serverWorkerAuthToken) {
+    const serverWorkerNamespace = (server as SocketServerLike & {
+      of(namespace: '/server-worker'): NamespaceLike;
+    }).of('/server-worker');
+    serverWorkerNamespace.on('connection', (socket) => {
+      const connectionId = `server-worker:${++serverWorkerConnectionSequence}`;
+      const authorized = serverWorkerTokenMatches(socket, options.serverWorkerAuthToken!);
+      socket.on(AGENT_EVENTS.serverWorker.register, async (payload, ack) => {
+        if (!authorized) {
+          ack?.(serverWorkerUnauthorized());
+          return;
+        }
+        ack?.(options.serverWorkerPool!.registerWorker({
+          connectionId,
+          capability: payload as Parameters<ServerWorkerPool['registerWorker']>[0]['capability'],
+        }));
+      });
+      socket.on(AGENT_EVENTS.serverWorker.heartbeat, async (payload, ack) => {
+        if (!authorized) {
+          ack?.(serverWorkerUnauthorized());
+          return;
+        }
+        const heartbeat = parseServerWorkerHeartbeat(payload);
+        if (!heartbeat) {
+          ack?.({ schemaVersion: 1, ok: false, errorCode: 'INVALID_REQUEST',
+            diagnosticCode: 'SERVER_WORKER_HEARTBEAT_INVALID', retryable: false });
+          return;
+        }
+        ack?.(options.serverWorkerPool!.heartbeat({ connectionId, ...heartbeat }));
+      });
+      socket.on('disconnect', async () => {
+        if (authorized) options.serverWorkerPool!.disconnect(connectionId);
+      });
+    });
+  }
 
   // 将 completeDeviceInvite 的结果（credentials）投递给正在等待该 invite code 的 daemon socket。
   // web 手动 complete 与 agent 端 wait 后自动 complete 共用此路径。
@@ -964,6 +1005,35 @@ function socketDeviceToken(socket: SocketLike): string | null {
   const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
   const value = auth?.deviceToken;
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function socketServerWorkerToken(socket: SocketLike): string | null {
+  const auth = (socket as { handshake?: { auth?: Record<string, unknown> } }).handshake?.auth;
+  const value = auth?.serverWorkerToken;
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function serverWorkerTokenMatches(socket: SocketLike, expected: string): boolean {
+  const actual = socketServerWorkerToken(socket);
+  if (!actual) return false;
+  const actualBytes = Buffer.from(actual);
+  const expectedBytes = Buffer.from(expected);
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function parseServerWorkerHeartbeat(value: unknown): { workerInstanceId: string; activeLeaseCount: number } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !['workerInstanceId', 'activeLeaseCount'].includes(key))
+    || typeof record.workerInstanceId !== 'string' || record.workerInstanceId.length < 1
+    || record.workerInstanceId.length > 256 || !Number.isSafeInteger(record.activeLeaseCount)
+    || (record.activeLeaseCount as number) < 0) return undefined;
+  return { workerInstanceId: record.workerInstanceId, activeLeaseCount: record.activeLeaseCount as number };
+}
+
+function serverWorkerUnauthorized() {
+  return { schemaVersion: 1 as const, ok: false as const, errorCode: 'NOT_AUTHORIZED' as const,
+    diagnosticCode: 'SERVER_WORKER_TRANSPORT_NOT_AUTHORIZED', retryable: false as const };
 }
 
 async function refreshDeviceSubscribers(

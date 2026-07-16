@@ -126,6 +126,25 @@ describe('server-next dev server entry', () => {
     ).toThrow('AGENTBEAN_NEXT_WEB_ENTRY');
   });
 
+  test('configures the trusted Server Worker transport fail-closed', () => {
+    expect(parseServerNextDevConfig({
+      env: {
+        AGENTBEAN_NEXT_SERVER_WORKER_POOL_ID: 'pool-1',
+        AGENTBEAN_NEXT_SERVER_WORKER_PROVIDER_CREDENTIAL_REF: 'credential-ref-1',
+        AGENTBEAN_NEXT_SERVER_WORKER_AUTH_TOKEN: 'server-worker-auth-token-at-least-32-chars',
+      },
+      argv: [],
+    }).serverWorker).toEqual({
+      workerPoolId: 'pool-1',
+      providerCredentialRef: 'credential-ref-1',
+      authToken: 'server-worker-auth-token-at-least-32-chars',
+    });
+    expect(() => parseServerNextDevConfig({
+      env: { AGENTBEAN_NEXT_SERVER_WORKER_POOL_ID: 'pool-1' },
+      argv: [],
+    })).toThrow('SERVER_WORKER');
+  });
+
   test('adds REST CORS headers for browser API requests derived from WEB_URL', async () => {
     const previousCorsOrigin = process.env.CORS_ORIGIN;
     const previousWebUrl = process.env.WEB_URL;

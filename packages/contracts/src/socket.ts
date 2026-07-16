@@ -189,6 +189,10 @@ export const AGENT_EVENTS = {
     shadowEvaluate: 'management-worker:shadow-evaluate',
     shadowResult: 'management-worker:shadow-result',
   },
+  serverWorker: {
+    register: 'server-worker:register',
+    heartbeat: 'server-worker:heartbeat',
+  },
   taskClaim: {
     offer: 'task-claim:offer',
     acquire: 'task-claim:acquire',

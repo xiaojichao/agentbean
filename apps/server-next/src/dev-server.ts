@@ -16,6 +16,7 @@ import {
   CURRENT_MEMORY_POLICY_VERSION,
 } from './application/server-memory-permissions.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
+import { createServerWorkerPool, type ServerWorkerPool } from './application/management/server-worker-pool.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
@@ -50,6 +51,11 @@ export interface ServerNextDevConfig {
   dataDir: string;
   sessionSecret: string;
   webEntry?: 'preview' | 'app';
+  serverWorker?: {
+    workerPoolId: string;
+    providerCredentialRef: string;
+    authToken: string;
+  };
 }
 
 export interface ParseServerNextDevConfigInput {
@@ -61,6 +67,8 @@ export interface StartServerNextDevServerInput {
   app?: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
+  serverWorkerPool?: ServerWorkerPool;
+  serverWorkerAuthToken?: string;
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
@@ -81,6 +89,8 @@ interface AppWithCleanup {
   app: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
+  serverWorkerPool?: ServerWorkerPool;
+  serverWorkerAuthToken?: string;
   bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
   bindTaskClaimEmitter?(emit: (taskId: string) => Promise<void>): void;
   reconcileDisconnectedDevicesOnStart: boolean;
@@ -145,6 +155,12 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const hasExplicitDataDir = configuredDataDir !== undefined && configuredDataDir.length > 0;
   const dataDir = hasExplicitDataDir ? configuredDataDir : join(process.cwd(), '.agentbean-next');
   const sessionSecret = args['session-secret'] ?? env.AGENTBEAN_NEXT_SESSION_SECRET ?? '';
+  const workerPoolId = env.AGENTBEAN_NEXT_SERVER_WORKER_POOL_ID;
+  const providerCredentialRef = env.AGENTBEAN_NEXT_SERVER_WORKER_PROVIDER_CREDENTIAL_REF;
+  const serverWorkerAuthToken = env.AGENTBEAN_NEXT_SERVER_WORKER_AUTH_TOKEN;
+  const serverWorkerValues = [workerPoolId, providerCredentialRef, serverWorkerAuthToken];
+  const hasAnyServerWorkerConfig = serverWorkerValues.some((value) => Boolean(value));
+  const hasCompleteServerWorkerConfig = serverWorkerValues.every((value) => Boolean(value));
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error('AGENTBEAN_NEXT_PORT or --port must be an integer between 0 and 65535');
   }
@@ -160,7 +176,19 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   if (env.PORT && storage === 'sqlite' && !hasExplicitDataDir) {
     throw new Error('AGENTBEAN_NEXT_DATA_DIR or --data-dir is required when PORT uses sqlite storage');
   }
-  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret', webEntry };
+  if (hasAnyServerWorkerConfig && (!hasCompleteServerWorkerConfig || serverWorkerAuthToken!.length < 32)) {
+    throw new Error('AGENTBEAN_NEXT_SERVER_WORKER configuration must be complete and auth token at least 32 characters');
+  }
+  if (hasCompleteServerWorkerConfig && (workerPoolId!.length > 256 || providerCredentialRef!.length > 512)) {
+    throw new Error('AGENTBEAN_NEXT_SERVER_WORKER pool id or credential reference exceeds contract limits');
+  }
+  const serverWorker = hasCompleteServerWorkerConfig ? {
+    workerPoolId: workerPoolId!,
+    providerCredentialRef: providerCredentialRef!,
+    authToken: serverWorkerAuthToken!,
+  } : undefined;
+  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret', webEntry,
+    ...(serverWorker ? { serverWorker } : {}) };
 }
 
 export async function startServerNextDevServer(
@@ -168,7 +196,10 @@ export async function startServerNextDevServer(
 ): Promise<ServerNextDevServerHandle> {
   const config = input.config ?? parseServerNextDevConfig();
   const appWithCleanup = input.app
-    ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler, taskClaimBroker: input.taskClaimBroker, reconcileDisconnectedDevicesOnStart: false, close: async () => undefined }
+    ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
+      taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
+      serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
+      close: async () => undefined }
     : createDefaultApp(config, input.Database);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
@@ -226,6 +257,8 @@ export async function startServerNextDevServer(
   const realtime = attachServerNextNamespaces(ioServer, app, {
     managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
     taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
+    serverWorkerPool: input.serverWorkerPool ?? appWithCleanup.serverWorkerPool,
+    serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
   });
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId) => {
@@ -1158,6 +1191,7 @@ function createDefaultApp(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver,
     );
     const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+    const serverWorker = createDefaultServerWorker(config, clock, ids);
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1172,6 +1206,8 @@ function createDefaultApp(
       }),
       managementWorkerScheduler: management.scheduler,
       taskClaimBroker,
+      serverWorkerPool: serverWorker?.pool,
+      serverWorkerAuthToken: serverWorker?.authToken,
       bindManagementDispatchEmitter: management.bindDispatchEmitter,
       bindTaskClaimEmitter: management.bindTaskClaimEmitter,
       reconcileDisconnectedDevicesOnStart: false,
@@ -1198,6 +1234,7 @@ function createDefaultApp(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver,
   );
   const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+  const serverWorker = createDefaultServerWorker(config, clock, ids);
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1212,6 +1249,8 @@ function createDefaultApp(
     }),
     managementWorkerScheduler: management.scheduler,
     taskClaimBroker,
+    serverWorkerPool: serverWorker?.pool,
+    serverWorkerAuthToken: serverWorker?.authToken,
     bindManagementDispatchEmitter: management.bindDispatchEmitter,
     bindTaskClaimEmitter: management.bindTaskClaimEmitter,
     reconcileDisconnectedDevicesOnStart: true,
@@ -1219,6 +1258,23 @@ function createDefaultApp(
       globalDb.close();
       teamDb.close();
     },
+  };
+}
+
+function createDefaultServerWorker(
+  config: ServerNextDevConfig,
+  clock: { now(): number },
+  ids: { nextId(): string },
+): { pool: ServerWorkerPool; authToken: string } | undefined {
+  if (!config.serverWorker) return undefined;
+  return {
+    pool: createServerWorkerPool({
+      workerPoolId: config.serverWorker.workerPoolId,
+      providerCredentialRef: config.serverWorker.providerCredentialRef,
+      clock,
+      ids,
+    }),
+    authToken: config.serverWorker.authToken,
   };
 }
 
