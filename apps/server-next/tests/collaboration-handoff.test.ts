@@ -351,13 +351,48 @@ describe('serial collaboration handoff', () => {
       actorKind: 'agent', actorId: 'agent-b',
     });
     const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
-      clock: harness.clock, ids: harness.ids, onDispatchCreated() {}, pollIntervalMs: 1 })['handoffs.await_result'];
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {}, pollIntervalMs: 1,
+      resultGraceMs: 20 })['handoffs.await_result'];
 
     await expect(awaitResult({ schemaVersion: 2, managementPhase: 2, commandId: 'await-reconcile',
       managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
       idempotencyKey: 'await-reconcile', toolCallId: 'await-reconcile', toolName: 'handoffs.await_result',
       input: { handoffId: requested.handoff.id, timeoutAt: 1_000 } }))
       .resolves.toMatchObject({ handoffId: requested.handoff.id, status: 'returned' });
+  });
+
+  test('await_result waits for the terminal result write instead of returning an empty response', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-await-result-grace', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const dispatchId = requested.view.activeDispatchId!;
+    // 复现 receiveDispatchResult 的写入顺序：completeAttempt 先置 canonical 终态，
+    // recordTerminal 稍后才把 AgentInvocationResultDto 补写到 handoff。
+    await createInvocationGateway({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids }).completeAttempt({ dispatchId,
+      status: 'succeeded', actorKind: 'agent', actorId: 'agent-b' });
+    const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {}, pollIntervalMs: 1,
+      resultGraceMs: 5_000 })['handoffs.await_result'];
+
+    const pending = awaitResult({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'await-result-grace', managementRunId: harness.runId, workerId: 'worker-1',
+      leaseToken: 'token', fencingToken: 1, idempotencyKey: 'await-result-grace',
+      toolCallId: 'await-result-grace', toolName: 'handoffs.await_result',
+      input: { handoffId: requested.handoff.id } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await harness.service.recordTerminal({ dispatchId, status: 'succeeded',
+      artifactIds: ['artifact-late'], result: { schemaVersion: 1,
+        invocationId: requested.invocation.id, agentId: 'agent-b', status: 'succeeded',
+        body: '迟到的结果', artifactIds: ['artifact-late'], memoryCandidateIds: [],
+        startedAt: 20, completedAt: 20 } });
+
+    await expect(pending).resolves.toMatchObject({ handoffId: requested.handoff.id,
+      status: 'returned', result: { body: '迟到的结果', artifactIds: ['artifact-late'] } });
   });
 
   test('keeps private handoff workspace runs out of public workspace-run reads and lists', async () => {
@@ -463,6 +498,67 @@ describe('serial collaboration handoff', () => {
         payload: expect.objectContaining({ contributingInvocationIds: [requested.invocation.id] }),
       }) }),
     ]));
+  });
+
+  test('leaves runs with coordination subtasks open for the canonical root delivery path', async () => {
+    const harness = await createHarness();
+    await harness.repositories.tasks.create({ id: 'task-sub-1', teamId: 'team-1',
+      channelId: 'channel-1', title: 'Sub', status: 'in_progress', creatorId: 'user-1',
+      tags: [], sortOrder: 1, revision: 1, createdAt: 1, updatedAt: 1 });
+    await harness.repositories.taskCoordination.coordinations.create({ schemaVersion: 1,
+      taskId: 'task-sub-1', teamId: 'team-1', managementRunId: harness.runId,
+      nodeKind: 'subtask', parentTaskId: 'task-root', reviewPolicy: 'manager',
+      claimPolicy: 'targeted', requiredCapabilities: [], attempt: 1, maxAttempts: 2,
+      taskRevision: 1, createdAt: 1, updatedAt: 1 });
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{ schemaVersion: 1, sourceInvocationId: 'invocation-a',
+        sourceAgentId: 'agent-a', sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root',
+          taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a' }, toAgentId: 'agent-b',
+        kind: 'continuation', objective: '由 B 收尾', reason: '能力匹配', contextRefs: [],
+        dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'deliver_to_root' }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-subtask-run', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '能力匹配', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+
+    await expect(app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '最终交付' })).resolves.toMatchObject({
+      ok: true, message: { body: '最终交付' },
+    });
+    // 公开交付照常落库，但根任务/run 不提前进入审核：含 subtask 的 run 必须由
+    // Manager 走带 readiness/验收校验的 canonical submitRootDelivery 闭环。
+    await expect(harness.repositories.tasks.getById('task-root'))
+      .resolves.toMatchObject({ status: 'in_progress' });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'running' });
+    const events = await harness.repositories.management.events.list(harness.runId);
+    expect(events.some(({ event }) => event.type === 'root-delivery-submitted')).toBe(false);
+  });
+
+  test('rejects management-fence proposals after the run enters review', async () => {
+    const harness = await createHarness();
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-review-fence', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '直接交接', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+    await expect(app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '最终交付' })).resolves.toMatchObject({ ok: true });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'in_review' });
+
+    await expect(harness.service.recordProposals({
+      dispatchId: requested.view.activeDispatchId!, agentId: 'agent-b', proposals: [{
+        schemaVersion: 1, sourceInvocationId: requested.invocation.id, sourceAgentId: 'agent-b',
+        sourceTaskContext: requested.invocation.intent.taskContext,
+        toAgentId: 'agent-a', kind: 'consult', objective: '回问 A', reason: '补充信息',
+        contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'return_to_manager' }] })).rejects.toThrow('HANDOFF_PROPOSAL_STALE');
   });
 
   test('times out an active handoff and rolls continuation ownership back', async () => {

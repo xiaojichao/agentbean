@@ -6,6 +6,7 @@ import type {
   AgentHandoffStatus,
   AgentInvocationResultDto,
   ManagementEventPayloadMapV1,
+  ManagementRunStatus,
   Phase2ManagementWorkerToolInputMapV1,
 } from '../../../../../packages/contracts/src/index.js';
 import {
@@ -452,6 +453,11 @@ async function isTaskFenceCurrent(
   now: number,
 ) {
   if (isManagementTaskFence(context, managementRunId)) {
+    // 管理 fence 没有真实 claim 生命周期兜底（claim 失效/过期即拒），
+    // 必须显式排除已收尾的 run：deliver_to_root 闭环把 run 置为 in_review 但不递增
+    // Task revision，仅靠 revision 校验会让审核态 run 继续放行后续 proposal。
+    const run = await repositories.management.runs.getById(managementRunId);
+    if (!run || isRunClosedForCollaboration(run.status)) return false;
     return isTaskRevisionFenceCurrent(repositories, managementRunId, context);
   }
   const [task, coordination, claim, currentClaim] = await Promise.all([
@@ -477,6 +483,11 @@ function isManagementTaskFence(
   managementRunId: string,
 ) {
   return context.claimLeaseId === `management:${managementRunId}`;
+}
+
+function isRunClosedForCollaboration(status: ManagementRunStatus) {
+  return status === 'in_review' || status === 'completed'
+    || status === 'failed' || status === 'cancelled';
 }
 
 async function isTaskRevisionFenceCurrent(

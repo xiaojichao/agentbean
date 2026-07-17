@@ -6492,6 +6492,12 @@ async function submitRootDeliveryFromHandoff(
     if (!run || run.schemaVersion !== 2 || !run.rootTaskId) return;
     if (run.status === 'in_review' || run.status === 'completed'
       || run.status === 'failed' || run.status === 'cancelled') return;
+    // 含 subtask 的 run 不在此闭环：canonical submitRootDelivery 会做依赖完成、
+    // 叶子验收与完整 contributingInvocationIds 校验，handoff 交付不能绕过它们
+    // 把根任务提前推进到 in_review；无 subtask 时 handoff 交付即根交付。
+    const coordinations = await repositories.taskCoordination.coordinations
+      .listByManagementRun(run.id);
+    if (coordinations.some((coordination) => coordination.nodeKind === 'subtask')) return;
     const rootTask = await repositories.tasks.getById(run.rootTaskId);
     if (!rootTask || rootTask.status !== 'in_progress') return;
     const now = clock.now();
