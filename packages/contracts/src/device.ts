@@ -30,6 +30,7 @@ export interface DeviceSystemInfoDto {
 export interface DeviceCapabilitiesDto {
   scanAgents?: boolean;
   runDispatches?: boolean;
+  fsBrowse?: boolean;
 }
 
 export interface DeviceDto {

@@ -763,6 +763,95 @@ describe('device rename and delete (end-to-end)', () => {
     expect(recordC?.canonicalDeviceId).toBe(idA);
   });
 
+  test('deviceHello persists daemon capabilities and projects them through toDeviceDto', async () => {
+    // 切片1：daemon 上报 capabilities.fsBrowse，必须经 deviceHello 存库、再经 listDevices/toDeviceDto 透传给 web。
+    // 否则 web 拿不到 fsBrowse，门控切换（切片5）无法落地。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-cap-1', 'device-cap-2', 'device-cap-3']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+
+    const hello = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      machineId: 'mac-1',
+      profileId: 'default',
+      hostname: 'shaw-mac.local',
+      capabilities: { fsBrowse: true },
+    });
+    expect(hello).toMatchObject({ ok: true });
+
+    // hello 返回的 dto 已含 capabilities（toDeviceDto 透传）
+    const device = (hello as { device: { id: string; capabilities?: { fsBrowse?: boolean } } }).device;
+    expect(device.capabilities?.fsBrowse).toBe(true);
+
+    // 仓库层持久化
+    const record = await repositories.devices.getById(device.id);
+    expect(record?.capabilities?.fsBrowse).toBe(true);
+
+    // listDevices 透传
+    const list = await app.listDevices({ teamId: 'team-1', userId: 'user-1' });
+    expect(list).toMatchObject({ ok: true });
+    const listed = (list as { devices: Array<{ capabilities?: { fsBrowse?: boolean } }> }).devices.find((d) => d === undefined ? false : true);
+    expect(listed?.capabilities?.fsBrowse).toBe(true);
+
+    // 无 capabilities 上报（旧 daemon）→ 透传为 undefined（web fail-closed 视为不支持）
+    const helloLegacy = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', hostname: 'legacy-mac',
+    });
+    const legacyDevice = (helloLegacy as { device: { capabilities?: { fsBrowse?: boolean } } }).device;
+    expect(legacyDevice.capabilities).toBeUndefined();
+  });
+
+  test('assertCanManageDevice gates fs:list to device owner, not any team member', async () => {
+    // fs:list 无屏幕物理隔离，门控必须是拥有者/系统管理员而非团队成员宽门控，
+    // 否则任何团队成员可列他人设备任意路径目录名（含 ~/.ssh 等敏感目录）。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-own-1']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-2', role: 'member' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const deviceId = (hello as { device: { id: string } }).device.id;
+
+    // 拥有者 → 放行
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+
+    // 团队成员但非拥有者 → 拒绝（宽门控下的越权读取被堵死）
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-2', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // 非团队成员 → 拒绝
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-3', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // 设备不存在 → NOT_FOUND
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId: 'missing' }),
+    ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+
   test('deleting a duplicate device removes the whole canonical alias group', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

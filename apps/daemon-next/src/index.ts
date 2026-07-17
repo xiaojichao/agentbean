@@ -15,6 +15,7 @@ import {
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
+import { listDirectory, productionListDirectoryDeps } from './directory-lister.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
 import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 
@@ -101,6 +102,7 @@ export interface DaemonDeviceConfig {
   hostname?: string;
   daemonVersion?: string;
   systemInfo?: import('../../../packages/contracts/src/index.js').DeviceDto['systemInfo'];
+  capabilities?: import('../../../packages/contracts/src/index.js').DeviceCapabilitiesDto;
 }
 
 export interface DaemonRuntimeReport {
@@ -319,6 +321,21 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 前端据此渲染友好提示；只有非结构化错误才退回 message。
           const code = (err as { code?: unknown })?.code;
           ack?.({ ok: false, error: typeof code === 'string' ? code : err instanceof Error ? err.message : 'directory picker failed' });
+        }
+      });
+
+      // fs:list 目录浏览（切片1）：web→server 转发来的列表请求。
+      // 裸 readdir 返回下一层 entries + homePath；安全闸（denylist/遍历/限速）切片3 加。
+      // 远程/headless daemon 不需要桌面会话即可工作（对比 selectDirectory 的 osascript 弹窗）。
+      socket.on(AGENT_EVENTS.device.listDirectoryRequested, async (payload: unknown, ack?: (result: unknown) => void) => {
+        try {
+          const rawPath = typeof (payload as { path?: unknown } | null)?.path === 'string'
+            ? (payload as { path: string }).path
+            : '';
+          const result = await listDirectory(rawPath, productionListDirectoryDeps());
+          ack?.(result);
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory list failed' });
         }
       });
 
