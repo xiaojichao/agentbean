@@ -102,6 +102,15 @@ export interface DeviceScanEmitRequest {
   customAgents?: Array<{ id: string; adapterKind: string; cwd?: string }>;
 }
 
+// server 转发 fs:list 到 daemon 后回传的结果形状（与 daemon directory-lister 返回对齐）。
+// 切片1 暂复用 getDevice 宽门控，授权收紧（canManageDeviceAsUser）留给切片2。
+export interface ListDirectoryForwardResult {
+  ok: boolean;
+  entries?: Array<{ name: string; isDir: boolean }>;
+  homePath?: string;
+  error?: string;
+}
+
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
@@ -113,6 +122,7 @@ export interface WebSocketHandlerOptions {
   dispatchClaimDeviceIds?(): string[];
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
+  deviceListDirectory?(request: { deviceId: string; path: string }): Promise<ListDirectoryForwardResult>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterMessagePin?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
@@ -291,6 +301,36 @@ export function registerWebSocketHandlers(
       ack?.(result);
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.device.selectDirectory));
+    }
+  });
+  socket.on(WEB_EVENTS.device.listDirectory, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
+      const deviceId = (input as { deviceId?: string } | null)?.deviceId;
+      if (!deviceId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'deviceId is required'));
+        return;
+      }
+      const userId = (input as { userId?: string } | null)?.userId;
+      if (!userId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      const path = (input as { path?: string } | null)?.path ?? '';
+      // 切片1：暂复用 getDevice 宽门控（团队成员可见）。切片2 收紧为 canManageDeviceAsUser。
+      const deviceAccess = await app.getDevice({ userId, deviceId });
+      if (!isSuccessResult(deviceAccess)) {
+        ack?.(deviceAccess);
+        return;
+      }
+      if (!options.deviceListDirectory) {
+        ack?.(makeFailure('INTERNAL_ERROR', 'deviceListDirectory not configured'));
+        return;
+      }
+      const result = await options.deviceListDirectory({ deviceId, path });
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.device.listDirectory));
     }
   });
   const afterChannelMutation = (payload: unknown, result: unknown) =>

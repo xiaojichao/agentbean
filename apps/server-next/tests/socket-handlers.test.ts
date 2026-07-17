@@ -130,6 +130,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.device.rename,
       WEB_EVENTS.device.delete,
       WEB_EVENTS.device.selectDirectory,
+      WEB_EVENTS.device.listDirectory,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,
@@ -1026,6 +1027,51 @@ describe('server-next socket handlers', () => {
 
     expect(app.getDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-1' });
     expect(deviceSelectDirectory).toHaveBeenCalledWith({ deviceId: 'device-1' });
+  });
+
+  test('device list-directory checks device access before forwarding to daemon', async () => {
+    // 切片1：暂复用 getDevice 宽门控（与 select-directory 一致）；切片2 收紧为 canManageDeviceAsUser。
+    const socket = new FakeSocket();
+    const deviceListDirectory = vi.fn(async () => makeSuccess({ entries: [], homePath: '/home' }));
+    const app = {
+      getDevice: vi.fn(async () => makeFailure('FORBIDDEN', 'User is not a team member')),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceListDirectory });
+
+    await expect(socket.trigger(WEB_EVENTS.device.listDirectory, {
+      userId: 'user-1',
+      deviceId: 'device-2',
+      path: '/Users',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    expect(app.getDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-2' });
+    expect(deviceListDirectory).not.toHaveBeenCalled();
+  });
+
+  test('device list-directory forwards path to daemon after device access succeeds', async () => {
+    const socket = new FakeSocket();
+    const deviceListDirectory = vi.fn(async () => makeSuccess({
+      entries: [{ name: 'projects', isDir: true }],
+      homePath: '/Users/shaw',
+    }));
+    const app = {
+      getDevice: vi.fn(async () => makeSuccess({ device: { id: 'device-1' } })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceListDirectory });
+
+    await expect(socket.trigger(WEB_EVENTS.device.listDirectory, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      path: '/Users/shaw',
+    })).resolves.toMatchObject({
+      ok: true,
+      entries: [{ name: 'projects', isDir: true }],
+      homePath: '/Users/shaw',
+    });
+
+    expect(deviceListDirectory).toHaveBeenCalledWith({ deviceId: 'device-1', path: '/Users/shaw' });
   });
 
   test('registers first-slice agent events and forwards payloads to use cases', async () => {

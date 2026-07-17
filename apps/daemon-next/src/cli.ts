@@ -547,6 +547,7 @@ export async function runDaemonNextCli(
     hostname: config.hostname,
     daemonVersion,
     systemInfo: { ...collectSystemInfoFn(), daemonVersion },
+    capabilities: { fsBrowse: true },
   };
   const dispatchClient = createProtocolClient({
     serverUrl,

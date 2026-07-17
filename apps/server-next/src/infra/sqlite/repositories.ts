@@ -64,6 +64,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0013_device_name_backfill.sql');
   applyMigration(db, 'global/0014_device_revocations_team_columns.sql');
   applyMigration(db, 'global/0015_agent_name_source.sql');
+  applyMigration(db, 'global/0016_device_capabilities.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -845,8 +846,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO devices (
               id, team_id, owner_id, machine_id, profile_id, hostname, name, name_source, status, daemon_version,
-              system_info, connect_command, canonical_device_id, last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              system_info, capabilities, connect_command, canonical_device_id, last_seen_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               owner_id = excluded.owner_id,
@@ -856,6 +857,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               status = excluded.status,
               daemon_version = excluded.daemon_version,
               system_info = excluded.system_info,
+              capabilities = excluded.capabilities,
               connect_command = excluded.connect_command,
               canonical_device_id = excluded.canonical_device_id,
               last_seen_at = excluded.last_seen_at,
@@ -873,6 +875,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.status,
             device.daemonVersion ?? null,
             device.systemInfo ? JSON.stringify(device.systemInfo) : null,
+            device.capabilities ? JSON.stringify(device.capabilities) : null,
             device.connectCommand ?? null,
             device.canonicalDeviceId ?? null,
             device.lastSeenAt ?? device.updatedAt,
@@ -2232,6 +2235,7 @@ function mapDevice(row: unknown): DeviceRecord | null {
     return null;
   }
   const systemInfoJson = sqliteNullableText(row, 'system_info');
+  const capabilitiesJson = sqliteNullableText(row, 'capabilities');
   return {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
@@ -2246,6 +2250,7 @@ function mapDevice(row: unknown): DeviceRecord | null {
     daemonVersion: sqliteNullableText(row, 'daemon_version'),
     connectCommand: sqliteNullableText(row, 'connect_command'),
     systemInfo: systemInfoJson ? JSON.parse(systemInfoJson) as DeviceRecord['systemInfo'] : undefined,
+    capabilities: capabilitiesJson ? JSON.parse(capabilitiesJson) as DeviceRecord['capabilities'] : undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),

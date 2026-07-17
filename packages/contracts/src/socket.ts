@@ -57,6 +57,7 @@ export const WEB_EVENTS = {
     rename: 'device:rename',
     delete: 'device:delete',
     selectDirectory: 'device:select-directory',
+    listDirectory: 'device:list-directory',
   },
   deviceInvite: {
     create: 'device-invite:create',
@@ -162,6 +163,7 @@ export const AGENT_EVENTS = {
     runtimes: 'device:runtimes',
     scanRequested: 'device:scan-requested',
     selectDirectoryRequested: 'device:select-directory-requested',
+    listDirectoryRequested: 'device:list-directory-requested',
     // 服务端→daemon 单向通知：该设备已被删除，daemon 应回收重连并退出进程。
     removed: 'device:removed',
   },

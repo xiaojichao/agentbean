@@ -69,6 +69,8 @@ interface ChannelSubscription {
 type AgentSubscription = ChannelSubscription;
 const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 const DEVICE_SELECT_DIRECTORY_TIMEOUT_MS = 125_000;
+// fs:list 是单次 readdir，比 selectDirectory 的 GUI 弹窗（等用户操作）短得多。
+const DEVICE_LIST_DIRECTORY_TIMEOUT_MS = 10_000;
 const DEVICE_MEMORY_SUMMARY_TIMEOUT_MS = 10_000;
 
 interface WebSocketSubscription {
@@ -386,6 +388,22 @@ export function attachServerNextNamespaces(
           return result as { ok: boolean; path?: string; error?: string };
         } catch {
           return { ok: false, error: 'DIRECTORY_PICKER_TIMEOUT' };
+        }
+      },
+      async deviceListDirectory(request) {
+        const socket = agentSocketsByDeviceId.get(request.deviceId);
+        if (!socket?.emitWithAck) {
+          return { ok: false, error: 'DEVICE_OFFLINE' };
+        }
+        try {
+          const ackSocket = socket.timeout?.(DEVICE_LIST_DIRECTORY_TIMEOUT_MS) ?? socket;
+          if (!ackSocket.emitWithAck) {
+            return { ok: false, error: 'DEVICE_OFFLINE' };
+          }
+          const result = await ackSocket.emitWithAck(AGENT_EVENTS.device.listDirectoryRequested, { path: request.path });
+          return result as { ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string };
+        } catch {
+          return { ok: false, error: 'DIRECTORY_LIST_TIMEOUT' };
         }
       },
       async afterMessageSend(_payload, result) {

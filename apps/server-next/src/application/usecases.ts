@@ -322,6 +322,7 @@ export interface DeviceHelloFromCredentialsInput {
   hostname?: string;
   daemonVersion?: string;
   systemInfo?: DeviceDto['systemInfo'];
+  capabilities?: DeviceDto['capabilities'];
 }
 
 export interface DeviceHelloInput {
@@ -332,6 +333,7 @@ export interface DeviceHelloInput {
   hostname?: string;
   daemonVersion?: string;
   systemInfo?: DeviceDto['systemInfo'];
+  capabilities?: DeviceDto['capabilities'];
 }
 
 export interface RequestDeviceScanInput {
@@ -1530,6 +1532,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         hostname: deviceInput.hostname ?? credentials.hostname,
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
+        capabilities: deviceInput.capabilities,
       });
     },
 
@@ -1627,6 +1630,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         canonicalDeviceId,
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
+        capabilities: deviceInput.capabilities,
         connectCommand,
         lastSeenAt: now,
         createdAt: existing?.createdAt ?? now,
