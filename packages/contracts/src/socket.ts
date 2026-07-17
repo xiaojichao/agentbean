@@ -192,6 +192,11 @@ export const AGENT_EVENTS = {
   serverWorker: {
     register: 'server-worker:register',
     heartbeat: 'server-worker:heartbeat',
+    leaseOffer: 'server-worker:lease-offer',
+    leaseAcquire: 'server-worker:lease-acquire',
+    leaseRenew: 'server-worker:lease-renew',
+    leaseRelease: 'server-worker:lease-release',
+    abort: 'server-worker:abort',
   },
   taskClaim: {
     offer: 'task-claim:offer',

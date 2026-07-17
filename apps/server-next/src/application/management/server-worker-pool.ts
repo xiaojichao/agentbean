@@ -1,12 +1,17 @@
 import {
   parseManagementWorkerPayload,
   parseManagementWorkerRegisterV2,
+  type ManagementLeaseOfferV1,
   type ManagementWorkerFailureV1,
   type ManagementWorkerRegisterV1,
   type ManagementWorkerRegisterV2,
 } from '../../../../../packages/contracts/src/index.js';
 
 type ManagementWorkerCapability = ManagementWorkerRegisterV1 | ManagementWorkerRegisterV2;
+
+export interface ServerWorkerOfferTransport {
+  emitLeaseOffer(payload: ManagementLeaseOfferV1, timeoutMs: number): Promise<unknown>;
+}
 
 export interface ServerWorkerPoolDependencies {
   readonly workerPoolId: string;
@@ -24,6 +29,7 @@ interface RegisteredServerWorker {
   connectionId: string;
   connected: boolean;
   capability: ManagementWorkerCapability;
+  transport?: ServerWorkerOfferTransport;
   untrackedActiveLeaseCount: number;
   lastHeartbeatAt: number;
   readonly activeManagementRunIds: Set<string>;
@@ -33,6 +39,10 @@ interface QueuedCapacityRequest {
   readonly managementRunId: string;
   readonly teamId: string;
   readonly profileId: string;
+  readonly managementPhase?: 1 | 2 | 3;
+  readonly preferredProvider?: string;
+  readonly preferredModel?: string;
+  readonly requireOfferTransport?: boolean;
   readonly enqueuedAt: number;
   readonly reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED';
 }
@@ -51,7 +61,11 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
   const capacityRequestByManagementRun = new Map<string, Omit<QueuedCapacityRequest, 'enqueuedAt' | 'reasonCode'>>();
   const queueByManagementRun = new Map<string, QueuedCapacityRequest>();
 
-  function registerWorker(input: { readonly connectionId: string; readonly capability: ManagementWorkerCapability }) {
+  function registerWorker(input: {
+    readonly connectionId: string;
+    readonly capability: ManagementWorkerCapability;
+    readonly transport?: ServerWorkerOfferTransport;
+  }) {
     const capability = parseCapability(input.capability);
     if (!capability) return failure('INVALID_REQUEST', 'SERVER_WORKER_CAPABILITY_INVALID', false);
     if (capability.host?.kind !== 'server') {
@@ -98,6 +112,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     worker.connectionId = input.connectionId;
     worker.connected = true;
     worker.capability = capability;
+    worker.transport = input.transport;
     worker.untrackedActiveLeaseCount = Math.max(
       0,
       capability.capacity.activeLeaseCount - worker.activeManagementRunIds.size,
@@ -147,14 +162,37 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     const worker = workersById.get(workerId);
     if (!worker || worker.connectionId !== connectionId) return { activeManagementRunIds: [] };
     worker.connected = false;
+    worker.transport = undefined;
     const activeManagementRunIds = requeueWorkerReservations(worker, dependencies.clock.now());
     return { workerId, activeManagementRunIds };
+  }
+
+  function selectWorker(input: {
+    readonly managementPhase: 1 | 2 | 3;
+    readonly preferredProvider?: string;
+    readonly preferredModel?: string;
+  }) {
+    expireStaleWorkers();
+    const candidates = [...workersById.values()].filter((worker) =>
+      worker.connected
+      && Boolean(worker.transport)
+      && supportsManagementPhase(worker.capability, input.managementPhase)
+      && (!input.preferredProvider || worker.capability.providerId === input.preferredProvider)
+      && (!input.preferredModel || worker.capability.modelId === input.preferredModel),
+    );
+    candidates.sort(compareWorkers);
+    const worker = candidates[0];
+    return worker ? workerEndpoint(worker) : undefined;
   }
 
   function requestCapacity(input: {
     readonly managementRunId: string;
     readonly teamId: string;
     readonly profileId: string;
+    readonly managementPhase?: 1 | 2 | 3;
+    readonly preferredProvider?: string;
+    readonly preferredModel?: string;
+    readonly requireOfferTransport?: boolean;
   }) {
     expireStaleWorkers();
     const assignedWorkerId = workerIdByManagementRun.get(input.managementRunId);
@@ -163,14 +201,14 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     capacityRequestByManagementRun.set(input.managementRunId, capacityRequest);
     const candidates = [...workersById.values()].filter((worker) =>
       worker.connected
+      && (!input.requireOfferTransport || Boolean(worker.transport))
       && worker.profileId === input.profileId
+      && (!input.managementPhase || supportsManagementPhase(worker.capability, input.managementPhase))
+      && (!input.preferredProvider || worker.capability.providerId === input.preferredProvider)
+      && (!input.preferredModel || worker.capability.modelId === input.preferredModel)
       && effectiveActiveLeaseCount(worker) < worker.capability.capacity.maxConcurrentLeases,
     );
-    candidates.sort((left, right) => {
-      const load = effectiveActiveLeaseCount(left) / left.capability.capacity.maxConcurrentLeases
-        - effectiveActiveLeaseCount(right) / right.capability.capacity.maxConcurrentLeases;
-      return load || left.workerId.localeCompare(right.workerId);
-    });
+    candidates.sort(compareWorkers);
     const worker = candidates[0];
     if (!worker) {
       const queued = queueByManagementRun.get(input.managementRunId) ?? {
@@ -228,6 +266,29 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     };
   }
 
+  function workerForConnection(connectionId: string) {
+    const workerId = workerIdByConnection.get(connectionId);
+    const worker = workerId ? workersById.get(workerId) : undefined;
+    return worker?.connected && worker.connectionId === connectionId
+      ? workerEndpoint(worker)
+      : undefined;
+  }
+
+  function getWorker(workerId: string) {
+    const worker = workersById.get(workerId);
+    return worker?.connected ? workerEndpoint(worker) : undefined;
+  }
+
+  async function emitLeaseOffer(input: {
+    readonly workerId: string;
+    readonly payload: ManagementLeaseOfferV1;
+    readonly timeoutMs: number;
+  }): Promise<unknown> {
+    const worker = workersById.get(input.workerId);
+    if (!worker?.connected || !worker.transport) throw new Error('SERVER_WORKER_TRANSPORT_UNAVAILABLE');
+    return worker.transport.emitLeaseOffer(input.payload, input.timeoutMs);
+  }
+
   function expireStaleWorkers(): readonly string[] {
     const now = dependencies.clock.now();
     const expiredWorkerIds: string[] = [];
@@ -235,6 +296,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       if (!worker.connected || now < worker.lastHeartbeatAt
         || now - worker.lastHeartbeatAt < heartbeatTimeoutMs) continue;
       worker.connected = false;
+      worker.transport = undefined;
       if (workerIdByConnection.get(worker.connectionId) === worker.workerId) {
         workerIdByConnection.delete(worker.connectionId);
       }
@@ -268,7 +330,19 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     return activeManagementRunIds;
   }
 
-  return { registerWorker, heartbeat, disconnect, expireStaleWorkers, requestCapacity, releaseCapacity, snapshot };
+  return {
+    registerWorker,
+    heartbeat,
+    disconnect,
+    expireStaleWorkers,
+    selectWorker,
+    requestCapacity,
+    releaseCapacity,
+    getWorker,
+    workerForConnection,
+    emitLeaseOffer,
+    snapshot,
+  };
 }
 
 export type ServerWorkerPool = ReturnType<typeof createServerWorkerPool>;
@@ -285,6 +359,29 @@ function parseCapability(value: ManagementWorkerCapability): ManagementWorkerCap
 
 function effectiveActiveLeaseCount(worker: RegisteredServerWorker): number {
   return worker.untrackedActiveLeaseCount + worker.activeManagementRunIds.size;
+}
+
+function supportsManagementPhase(
+  capability: ManagementWorkerCapability,
+  phase: 1 | 2 | 3,
+): boolean {
+  return capability.supportedPhases.some((candidate) => candidate === phase);
+}
+
+function compareWorkers(left: RegisteredServerWorker, right: RegisteredServerWorker): number {
+  const load = effectiveActiveLeaseCount(left) / left.capability.capacity.maxConcurrentLeases
+    - effectiveActiveLeaseCount(right) / right.capability.capacity.maxConcurrentLeases;
+  return load || left.workerId.localeCompare(right.workerId);
+}
+
+function workerEndpoint(worker: RegisteredServerWorker) {
+  return {
+    workerId: worker.workerId,
+    workerInstanceId: worker.workerInstanceId,
+    workerPoolId: worker.workerPoolId,
+    profileId: worker.profileId,
+    connectionId: worker.connectionId,
+  };
 }
 
 function assignment(managementRunId: string, worker: RegisteredServerWorker) {
