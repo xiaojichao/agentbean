@@ -904,7 +904,7 @@ function ciRunsPhase0Gates(scripts, workflow) {
 
 function hasDeduplicatedPackageCi({ scripts, workflow }) {
   const expectedPackages = 'npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next-ci && npm run test:daemon-next -- --api.host 127.0.0.1 && npm run test:web-next -- --api.host 127.0.0.1';
-  const expectedServerCi = 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts';
+  const expectedServerCi = 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts --exclude tests/phase-4-managed-server-worker-smoke.test.ts';
   const requiredBoundaries = [
     'npm run test:pr-merge-readiness',
     'npm run test:issue-claim',
