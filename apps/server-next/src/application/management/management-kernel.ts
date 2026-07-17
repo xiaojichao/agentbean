@@ -433,6 +433,27 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         return requireRun(transactionRepositories, run.id);
       });
     },
+
+    async failRun(input: {
+      managementRunId: string;
+      errorCode: string;
+      idempotencyKey: string;
+    }): Promise<ManagementRunRecord> {
+      return unitOfWork.run(async (transactionRepositories) => {
+        const run = await requireRun(transactionRepositories, input.managementRunId);
+        if (isTerminalRun(run)) return run;
+        const now = clock.now();
+        const record = await appendManagementEventInTransaction(transactionRepositories, {
+          managementRunId: run.id,
+          type: 'run-failed',
+          actorKind: 'system',
+          idempotencyKey: input.idempotencyKey,
+          payload: { errorCode: input.errorCode, recoverable: false },
+        }, now, ids);
+        await applyRunProjection(transactionRepositories, record, now);
+        return requireRun(transactionRepositories, run.id);
+      });
+    },
   };
 }
 

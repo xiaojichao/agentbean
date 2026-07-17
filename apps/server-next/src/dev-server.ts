@@ -56,6 +56,9 @@ export interface ServerNextDevConfig {
     workerPoolId: string;
     providerCredentialRef: string;
     authToken: string;
+    /** 测试注入口:缩短排队超时/lease TTL 以驱动 e2e;生产 env 路径不传,保持默认 */
+    queueTimeoutMs?: number;
+    leaseTtlMs?: number;
   };
 }
 
@@ -1195,6 +1198,7 @@ function createDefaultApp(
     const serverWorker = createDefaultServerWorker(config, clock, ids);
     const management = createDefaultManagementRuntime(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
+      { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
     );
     const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     return {
@@ -1239,6 +1243,7 @@ function createDefaultApp(
   const serverWorker = createDefaultServerWorker(config, clock, ids);
   const management = createDefaultManagementRuntime(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
+    { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
   );
   const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   return {
@@ -1272,7 +1277,7 @@ function createDefaultServerWorker(
   config: ServerNextDevConfig,
   clock: { now(): number },
   ids: { nextId(): string },
-): { pool: ServerWorkerPool; authToken: string } | undefined {
+): { pool: ServerWorkerPool; authToken: string; queueTimeoutMs?: number; leaseTtlMs?: number } | undefined {
   if (!config.serverWorker) return undefined;
   return {
     pool: createServerWorkerPool({
@@ -1282,6 +1287,8 @@ function createDefaultServerWorker(
       ids,
     }),
     authToken: config.serverWorker.authToken,
+    ...(config.serverWorker.queueTimeoutMs ? { queueTimeoutMs: config.serverWorker.queueTimeoutMs } : {}),
+    ...(config.serverWorker.leaseTtlMs ? { leaseTtlMs: config.serverWorker.leaseTtlMs } : {}),
   };
 }
 
@@ -1308,6 +1315,7 @@ function createDefaultManagementRuntime(
   ids: { nextId(): string },
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
   serverWorkerPool?: ServerWorkerPool,
+  serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
@@ -1426,6 +1434,8 @@ function createDefaultManagementRuntime(
     clock,
     ids,
     leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
+    ...(serverWorkerTuning?.queueTimeoutMs ? { queueTimeoutMs: serverWorkerTuning.queueTimeoutMs } : {}),
+    ...(serverWorkerTuning?.leaseTtlMs ? { leaseTtlMs: serverWorkerTuning.leaseTtlMs } : {}),
   }) : undefined;
   const router = createManagementRouter({
     repositories,

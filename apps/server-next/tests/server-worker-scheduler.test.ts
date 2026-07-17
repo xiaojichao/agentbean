@@ -619,11 +619,188 @@ describe('Phase 4 Server Worker Scheduler', () => {
     expect(firstResult).toEqual(secondResult);
     expect(harness.offers).toHaveLength(1);
   });
+
+  test('fails a queued Run after the queue timeout with a terminal result and never schedules it again', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ queueTimeoutMs: 100 });
+      const busyRun = await harness.createRun('busy');
+      const queuedRun = await harness.createRun('queued');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: busyRun.id, profileId: 'profile-1' });
+      const busy = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!busy.ok) throw new Error('busy Server lease expected');
+      const queued = await harness.scheduler.scheduleManagementRun({
+        managementRunId: queuedRun.id, profileId: 'profile-1',
+      });
+      expect(queued).toMatchObject({ diagnosticCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED', retryable: true });
+      expect(harness.pool.snapshot().queue).toMatchObject([{ managementRunId: queuedRun.id }]);
+
+      harness.clock.now += 100;
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(harness.repositories.management.runs.getById(queuedRun.id))
+        .resolves.toMatchObject({ status: 'failed' });
+      await expect(harness.repositories.management.events.list(queuedRun.id)).resolves.toMatchObject([
+        { event: { type: 'run-started' } },
+        { event: {
+          type: 'run-failed',
+          actorKind: 'system',
+          payload: { errorCode: 'SERVER_WORKER_QUEUE_TIMEOUT', recoverable: false },
+        } },
+      ]);
+      expect(harness.pool.snapshot().queue).toEqual([]);
+
+      await harness.scheduler.releaseLease('connection-1', {
+        schemaVersion: 1,
+        managementRunId: busyRun.id,
+        workerId: busy.workerId,
+        leaseToken: busy.leaseToken,
+        fencingToken: busy.fencingToken,
+        idempotencyKey: 'busy-release',
+        reasonCode: 'COMPLETED',
+      });
+      expect(harness.offers.filter((offer) => offer.managementRunId === queuedRun.id)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('clears the queue deadline once the queued Run reserves capacity', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ queueTimeoutMs: 100 });
+      const busyRun = await harness.createRun('busy-clear');
+      const queuedRun = await harness.createRun('queued-clear');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: busyRun.id, profileId: 'profile-1' });
+      const busy = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!busy.ok) throw new Error('busy Server lease expected');
+      await harness.scheduler.scheduleManagementRun({ managementRunId: queuedRun.id, profileId: 'profile-1' });
+      expect(harness.pool.snapshot().queue).toMatchObject([{ managementRunId: queuedRun.id }]);
+
+      harness.clock.now += 50;
+      await vi.advanceTimersByTimeAsync(50);
+      await harness.scheduler.releaseLease('connection-1', {
+        schemaVersion: 1,
+        managementRunId: busyRun.id,
+        workerId: busy.workerId,
+        leaseToken: busy.leaseToken,
+        fencingToken: busy.fencingToken,
+        idempotencyKey: 'busy-clear-release',
+        reasonCode: 'COMPLETED',
+      });
+      await vi.waitFor(() => expect(
+        harness.offers.filter((offer) => offer.managementRunId === queuedRun.id),
+      ).toHaveLength(1));
+
+      harness.clock.now += 100;
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(harness.repositories.management.runs.getById(queuedRun.id))
+        .resolves.not.toMatchObject({ status: 'failed' });
+
+      const offer = harness.offers.find((candidate) => candidate.managementRunId === queuedRun.id)!;
+      await expect(harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'server-instance-1',
+      })).resolves.toMatchObject({ ok: true, fencingToken: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('defers the queue timeout while a recovered lease is still active and never blocks takeover', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ queueTimeoutMs: 60, leaseTtlMs: 100 });
+      harness.registerWorker('connection-2', 'server-instance-2');
+      const run = await harness.createRun('recover-window');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      const first = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!first.ok) throw new Error('first Server lease expected');
+
+      // disconnect 重排起算新排队窗口(20+60=80),而不是沿用最初 schedule 的时间;
+      // 先 flush 让 armRecovery 以 clock=20 完成 arm(与既有 takeover 测试同因)
+      harness.clock.now = 20;
+      harness.scheduler.disconnect('connection-1');
+      await vi.advanceTimersByTimeAsync(0);
+      harness.clock.now = 80;
+      await vi.advanceTimersByTimeAsync(60);
+      // 排队窗口到点但 lease(至 110)仍有效:超时顺延,不动 recovery 语义
+      await expect(harness.repositories.management.runs.getById(run.id))
+        .resolves.not.toMatchObject({ status: 'failed' });
+      expect(harness.offers).toHaveLength(1);
+
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(31);
+      await vi.waitFor(() => expect(harness.offers).toHaveLength(2));
+      expect(harness.offers[1]).toMatchObject({
+        managementRunId: run.id,
+        workerId: harness.workerIds.get('connection-2'),
+      });
+      await expect(harness.scheduler.acquireLease('connection-2', {
+        schemaVersion: 1, offerId: harness.offers[1]!.offerId, workerInstanceId: 'server-instance-2',
+      })).resolves.toMatchObject({ ok: true, fencingToken: 2 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('times out queued Runs independently and drains the next one after a timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ queueTimeoutMs: 100 });
+      const busyRun = await harness.createRun('busy-multi');
+      const firstQueued = await harness.createRun('first-queued');
+      const secondQueued = await harness.createRun('second-queued');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: busyRun.id, profileId: 'profile-1' });
+      const busy = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!busy.ok) throw new Error('busy Server lease expected');
+      await harness.scheduler.scheduleManagementRun({ managementRunId: firstQueued.id, profileId: 'profile-1' });
+      harness.clock.now += 10;
+      await vi.advanceTimersByTimeAsync(10);
+      await harness.scheduler.scheduleManagementRun({ managementRunId: secondQueued.id, profileId: 'profile-1' });
+
+      harness.clock.now += 90;
+      await vi.advanceTimersByTimeAsync(90);
+      await expect(harness.repositories.management.runs.getById(firstQueued.id))
+        .resolves.toMatchObject({ status: 'failed' });
+      await expect(harness.repositories.management.runs.getById(secondQueued.id))
+        .resolves.not.toMatchObject({ status: 'failed' });
+      expect(harness.pool.snapshot().queue).toMatchObject([{ managementRunId: secondQueued.id }]);
+
+      await harness.scheduler.releaseLease('connection-1', {
+        schemaVersion: 1,
+        managementRunId: busyRun.id,
+        workerId: busy.workerId,
+        leaseToken: busy.leaseToken,
+        fencingToken: busy.fencingToken,
+        idempotencyKey: 'busy-multi-release',
+        reasonCode: 'COMPLETED',
+      });
+      await vi.waitFor(() => expect(
+        harness.offers.filter((offer) => offer.managementRunId === secondQueued.id),
+      ).toHaveLength(1));
+      expect(harness.offers.filter((offer) => offer.managementRunId === firstQueued.id)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 async function createSchedulerHarness(options: {
   offerTimeoutMs?: number;
   leaseTtlMs?: number;
+  queueTimeoutMs?: number;
   heartbeatTimeoutMs?: number;
   emitLeaseOffer?: (offer: ManagementLeaseOfferV1) => Promise<unknown>;
 } = {}) {
@@ -691,6 +868,7 @@ async function createSchedulerHarness(options: {
     leaseTokens: { nextToken: () => `lease-token-${id}` },
     ...(options.leaseTtlMs ? { leaseTtlMs: options.leaseTtlMs } : {}),
     ...(options.offerTimeoutMs ? { defaultOfferTimeoutMs: options.offerTimeoutMs } : {}),
+    ...(options.queueTimeoutMs ? { queueTimeoutMs: options.queueTimeoutMs } : {}),
   });
   async function registerThroughScheduler(connectionId: string, workerInstanceId: string) {
     const registered = await scheduler.registerWorker({
