@@ -876,8 +876,7 @@ describe('device rename and delete (end-to-end)', () => {
     await repositories.users.create({
       id: 'sysadmin', username: 'sysadmin', email: null, role: 'admin',
       passwordHash: 'x', currentTeamId: 'team-1', createdAt: 0, updatedAt: 0,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    });
     await repositories.teams.addMember({ teamId: 'team-1', userId: 'sysadmin', role: 'member' });
 
     await expect(
