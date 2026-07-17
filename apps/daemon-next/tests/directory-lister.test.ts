@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -126,6 +126,23 @@ describe('listDirectory 安全闸（切片3）', () => {
 
     // 词法上 `~/innocent-link` 不命中 denylist，但 realpath 解析到 .ssh → 必须拒
     const res = await listDirectory('~/innocent-link', { home });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe('PATH_NOT_FOUND');
+  });
+
+  test('home 在符号链接之后、入参直接给真实路径时仍命中 denylist', async () => {
+    // realpathSync 消解 tmpdir 自身可能夹带的符号链接（macOS /var→/private/var），
+    // 保证 realHome 是无符号链接的真实路径，入参 realpath 后等于自身——
+    // 这样「real === resolvedPath 就跳过重比」的旧实现在此必漏判（回归锚点）。
+    const realHome = realpathSync(mkdtempSync(join(tmpdir(), 'real-home-')));
+    mkdirSync(join(realHome, '.ssh'));
+    const linkHome = join(tmpdir(), `link-home-${process.pid}`);
+    symlinkSync(realHome, linkHome);
+
+    // deps.home 是符号链接路径（词法锚点），入参却是真实路径下的 .ssh：
+    // 词法比对不命中（前缀是 realHome 而非 linkHome），必须靠双锚点 realpath 重比挡住
+    const res = await listDirectory(join(realHome, '.ssh'), { home: linkHome });
 
     expect(res.ok).toBe(false);
     expect(res.error).toBe('PATH_NOT_FOUND');

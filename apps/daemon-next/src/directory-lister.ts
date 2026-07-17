@@ -84,11 +84,16 @@ function isDenylisted(resolvedPath: string, home: string): boolean {
   // 尽力而为挡符号链接：取 on-disk 真实路径再比对一次（`~/innocent -> ~/.ssh`）。
   // 比对锚点也必须是 realpath(home)——macOS 的 /var 本身是 /private/var 的符号链接，
   // 词法 home 与 realpath(target) 前缀不一致会导致漏判。
+  // 两侧任一路径含符号链接都要用真实路径重比：入参本身无符号链接、但 home 在符号链接
+  // 之后（如 /var/home）时，直接给真实路径的 `realpath(home)/.ssh` 词法不命中、
+  // real === resolvedPath 又跳过重比 → 绕过。real===resolvedPath 且 realHome===resolvedHome
+  // 时重比与词法层等价（已判 false），此时跳过仅为省一次遍历。
   // 路径不存在时 realpathSync 抛错 → 跳过（后续 readdir 会归一 PATH_NOT_FOUND）。
   try {
     const real = realpathSync(resolvedPath);
-    if (real !== resolvedPath) {
-      return matchesDenylist(real, realpathSync(resolvedHome));
+    const realHome = realpathSync(resolvedHome);
+    if (real !== resolvedPath || realHome !== resolvedHome) {
+      return matchesDenylist(real, realHome);
     }
   } catch {
     // 不存在或不可读 → 交给 readdir 的错误归一处理
