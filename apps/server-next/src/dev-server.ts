@@ -17,6 +17,7 @@ import {
 } from './application/server-memory-permissions.js';
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createServerWorkerPool, type ServerWorkerPool } from './application/management/server-worker-pool.js';
+import { createServerWorkerScheduler, type ServerWorkerScheduler } from './application/management/server-worker-scheduler.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
@@ -66,6 +67,7 @@ export interface ParseServerNextDevConfigInput {
 export interface StartServerNextDevServerInput {
   app?: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
   serverWorkerPool?: ServerWorkerPool;
   serverWorkerAuthToken?: string;
@@ -88,6 +90,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   managementWorkerScheduler?: DeviceWorkerScheduler;
+  serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
   serverWorkerPool?: ServerWorkerPool;
   serverWorkerAuthToken?: string;
@@ -197,6 +200,7 @@ export async function startServerNextDevServer(
   const config = input.config ?? parseServerNextDevConfig();
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
+      serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
@@ -256,6 +260,7 @@ export async function startServerNextDevServer(
   const ioServer = new Server(httpServer, { cors: { origin: '*' } });
   const realtime = attachServerNextNamespaces(ioServer, app, {
     managementWorkerScheduler: input.managementWorkerScheduler ?? appWithCleanup.managementWorkerScheduler,
+    serverWorkerScheduler: input.serverWorkerScheduler ?? appWithCleanup.serverWorkerScheduler,
     taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
     serverWorkerPool: input.serverWorkerPool ?? appWithCleanup.serverWorkerPool,
     serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
@@ -1187,11 +1192,11 @@ function createDefaultApp(
     const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
       repositories, ids,
     );
+    const serverWorker = createDefaultServerWorker(config, clock, ids);
     const management = createDefaultManagementRuntime(
-      repositories, clock, ids, serverCapsuleRuntimeContextResolver,
+      repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
     );
     const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
-    const serverWorker = createDefaultServerWorker(config, clock, ids);
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1205,6 +1210,7 @@ function createDefaultApp(
         serverCapsuleRuntimeContextResolver,
       }),
       managementWorkerScheduler: management.scheduler,
+      serverWorkerScheduler: management.serverScheduler,
       taskClaimBroker,
       serverWorkerPool: serverWorker?.pool,
       serverWorkerAuthToken: serverWorker?.authToken,
@@ -1230,11 +1236,11 @@ function createDefaultApp(
   const serverCapsuleRuntimeContextResolver = createDefaultServerCapsuleRuntimeContextResolver(
     repositories, ids,
   );
+  const serverWorker = createDefaultServerWorker(config, clock, ids);
   const management = createDefaultManagementRuntime(
-    repositories, clock, ids, serverCapsuleRuntimeContextResolver,
+    repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
   );
   const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
-  const serverWorker = createDefaultServerWorker(config, clock, ids);
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1248,6 +1254,7 @@ function createDefaultApp(
       serverCapsuleRuntimeContextResolver,
     }),
     managementWorkerScheduler: management.scheduler,
+    serverWorkerScheduler: management.serverScheduler,
     taskClaimBroker,
     serverWorkerPool: serverWorker?.pool,
     serverWorkerAuthToken: serverWorker?.authToken,
@@ -1300,6 +1307,7 @@ function createDefaultManagementRuntime(
   clock: { now(): number },
   ids: { nextId(): string },
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
+  serverWorkerPool?: ServerWorkerPool,
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
@@ -1405,6 +1413,14 @@ function createDefaultManagementRuntime(
     ids,
     leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
   });
+  const serverScheduler = serverWorkerPool ? createServerWorkerScheduler({
+    pool: serverWorkerPool,
+    management: repositories.management,
+    kernel,
+    clock,
+    ids,
+    leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
+  }) : undefined;
   const router = createManagementRouter({
     repositories,
     kernel,
@@ -1425,6 +1441,14 @@ function createDefaultManagementRuntime(
         });
       },
       async preflightPhase2({ teamId, target, placementPolicy }) {
+        if (placementPolicy.placement === 'managed') {
+          return serverScheduler?.managementPreflight({
+            placementPolicy,
+            managementPhase: 2,
+            targetAvailable: target ? target.status !== 'offline' : true,
+          }) ?? { preflight: { workerAvailable: false, credentialAvailable: false,
+            placementAllowed: true, budgetAvailable: true, targetAvailable: target ? target.status !== 'offline' : true } };
+        }
         return scheduler.managementPhase2Preflight({
           teamId,
           placementPolicy,
@@ -1432,19 +1456,40 @@ function createDefaultManagementRuntime(
         });
       },
       async preflightPhase3({ teamId, target, placementPolicy }) {
+        if (placementPolicy.placement === 'managed') {
+          return serverScheduler?.managementPreflight({
+            placementPolicy,
+            managementPhase: 3,
+            targetAvailable: target ? target.status !== 'offline' : true,
+          }) ?? { preflight: { workerAvailable: false, credentialAvailable: false,
+            placementAllowed: true, budgetAvailable: true, targetAvailable: target ? target.status !== 'offline' : true } };
+        }
         return scheduler.managementPhase3Preflight({
           teamId,
           placementPolicy,
           targetAvailable: target ? target.status !== 'offline' : true,
         });
       },
-      schedule: (input) => scheduler.scheduleManagementRun(input),
+      async schedule(input) {
+        const run = await repositories.management.runs.getById(input.managementRunId);
+        if (run?.placementPolicy.placement === 'managed') {
+          return serverScheduler?.scheduleManagementRun(input) ?? {
+            schemaVersion: 1 as const,
+            ok: false as const,
+            errorCode: 'UNAVAILABLE' as const,
+            diagnosticCode: 'SERVER_WORKER_SCHEDULER_NOT_CONFIGURED',
+            retryable: false,
+          };
+        }
+        return scheduler.scheduleManagementRun(input);
+      },
     },
   });
   return {
     kernel,
     taskCoordinationKernel,
     scheduler,
+    serverScheduler,
     router,
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
       dispatchEmitter = emit;

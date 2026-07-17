@@ -15,6 +15,44 @@ describe('Phase 1 management routing', () => {
       .resolves.toMatchObject({ ok: true, policy: { maxManagementPhase: 2 } });
   });
 
+  test('only owner/admin opt the Team into Server managed while unrooted requests stay direct', async () => {
+    const harness = await createHarness();
+    const serverManagedPolicy = {
+      userId: 'member-1',
+      teamId: 'team-1',
+      mode: 'managed' as const,
+      maxManagementPhase: 2 as const,
+      placementPolicy: {
+        placement: 'managed' as const,
+        allowServerContext: true,
+        requireLocalModelCredentials: false,
+      },
+    };
+
+    await expect(harness.router.updatePolicy(serverManagedPolicy))
+      .resolves.toEqual({ ok: false, error: 'FORBIDDEN' });
+    await expect(harness.router.updatePolicy({ ...serverManagedPolicy, userId: 'admin-1' }))
+      .resolves.toMatchObject({ ok: true, policy: { placementPolicy: { placement: 'managed' } } });
+
+    await expect(harness.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+    await expect(harness.router.route({ ...request(), rootTaskId: 'direct-agent-task' }))
+      .resolves.toEqual({ kind: 'direct', mode: 'direct' });
+    await expect(harness.router.route({ ...request(), targetAgentId: undefined, body: '今天进展如何？' }))
+      .resolves.toEqual({ kind: 'direct', mode: 'direct' });
+    await expect(harness.router.route({
+      ...request(), targetAgentId: undefined, rootTaskId: 'root-task-1', body: '请协调团队完成复杂任务',
+    })).resolves.toMatchObject({
+      kind: 'managed', managementPhase: 2, profileId: 'profile-1', managementRunId: expect.any(String),
+    });
+    expect(harness.gateway.preflightPhase2).toHaveBeenCalledWith(expect.objectContaining({
+      placementPolicy: expect.objectContaining({ placement: 'managed', allowServerContext: true }),
+    }));
+
+    await expect(harness.router.updatePolicy({
+      userId: 'admin-1', teamId: 'team-1', mode: 'direct',
+    })).resolves.toMatchObject({ ok: true, policy: { mode: 'direct' } });
+  });
+
   test('defaults to direct without management side effects', async () => {
     const harness = await createHarness();
     const result = await harness.router.route(request());
@@ -193,9 +231,11 @@ async function createHarness(overrides: Partial<{
   let id = 0;
   const ids = { nextId: () => `id-${++id}` };
   await repositories.users.create({ id: 'user-1', username: 'owner', role: 'user', passwordHash: 'hash', primaryTeamId: 'team-1', currentTeamId: 'team-1', createdAt: 1, updatedAt: 1 });
+  await repositories.users.create({ id: 'admin-1', username: 'admin', role: 'user', passwordHash: 'hash', primaryTeamId: 'team-1', currentTeamId: 'team-1', createdAt: 1, updatedAt: 1 });
   await repositories.users.create({ id: 'member-1', username: 'member', role: 'user', passwordHash: 'hash', primaryTeamId: 'team-1', currentTeamId: 'team-1', createdAt: 1, updatedAt: 1 });
   await repositories.teams.create({ id: 'team-1', name: 'Team', path: 'team', visibility: 'private', ownerId: 'user-1', createdAt: 1 });
   await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', username: 'owner', role: 'owner', joinedAt: 1 });
+  await repositories.teams.addMember({ teamId: 'team-1', userId: 'admin-1', username: 'admin', role: 'admin', joinedAt: 1 });
   await repositories.teams.addMember({ teamId: 'team-1', userId: 'member-1', username: 'member', role: 'member', joinedAt: 1 });
   await repositories.devices.upsertHello({ id: 'device-1', teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'profile-1', status: 'online', createdAt: 1, updatedAt: 1 });
   await repositories.agents.upsert({ id: 'agent-1', identityKey: 'agent-1', name: 'agent', category: 'custom', adapterKind: 'custom', ownerId: 'user-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], deviceId: 'device-1', status: 'online', createdAt: 1, updatedAt: 1 });

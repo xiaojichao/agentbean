@@ -7,6 +7,7 @@ import type {
 } from '../application/management/device-worker-scheduler.js';
 import type { TaskClaimBroker } from '../application/management/task-claim-broker.js';
 import type { ServerWorkerPool } from '../application/management/server-worker-pool.js';
+import type { ServerWorkerScheduler } from '../application/management/server-worker-scheduler.js';
 import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS, type TaskClaimExpiredV1 } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
@@ -42,6 +43,7 @@ export interface ServerNextSocketOptions {
   taskClaimBroker?: TaskClaimBroker;
   taskClaimOfferTimeoutMs?: number;
   serverWorkerPool?: ServerWorkerPool;
+  serverWorkerScheduler?: ServerWorkerScheduler;
   serverWorkerAuthToken?: string;
 }
 
@@ -106,6 +108,13 @@ export function attachServerNextNamespaces(
         ack?.(options.serverWorkerPool!.registerWorker({
           connectionId,
           capability: payload as Parameters<ServerWorkerPool['registerWorker']>[0]['capability'],
+          transport: {
+            async emitLeaseOffer(offer, timeoutMs) {
+              const ackSocket = socket.timeout?.(timeoutMs) ?? socket;
+              if (!ackSocket.emitWithAck) throw new Error('SERVER_WORKER_SOCKET_UNAVAILABLE');
+              return ackSocket.emitWithAck(AGENT_EVENTS.serverWorker.leaseOffer, offer);
+            },
+          },
         }));
       });
       socket.on(AGENT_EVENTS.serverWorker.heartbeat, async (payload, ack) => {
@@ -121,8 +130,42 @@ export function attachServerNextNamespaces(
         }
         ack?.(options.serverWorkerPool!.heartbeat({ connectionId, ...heartbeat }));
       });
+      socket.on(AGENT_EVENTS.serverWorker.leaseAcquire, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        ack?.(await options.serverWorkerScheduler.acquireLease(
+          connectionId,
+          payload as Parameters<ServerWorkerScheduler['acquireLease']>[1],
+        ));
+      });
+      socket.on(AGENT_EVENTS.serverWorker.leaseRenew, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        ack?.(await options.serverWorkerScheduler.renewLease(
+          connectionId,
+          payload as Parameters<ServerWorkerScheduler['renewLease']>[1],
+        ));
+      });
+      socket.on(AGENT_EVENTS.serverWorker.leaseRelease, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        ack?.(await options.serverWorkerScheduler.releaseLease(
+          connectionId,
+          payload as Parameters<ServerWorkerScheduler['releaseLease']>[1],
+        ));
+      });
+      socket.on(AGENT_EVENTS.serverWorker.abort, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        ack?.(await options.serverWorkerScheduler.abortLease(
+          connectionId,
+          payload as Parameters<ServerWorkerScheduler['abortLease']>[1],
+        ));
+      });
       socket.on('disconnect', async () => {
-        if (authorized) options.serverWorkerPool!.disconnect(connectionId);
+        if (!authorized) return;
+        if (options.serverWorkerScheduler) options.serverWorkerScheduler.disconnect(connectionId);
+        else options.serverWorkerPool!.disconnect(connectionId);
       });
     });
   }
@@ -718,6 +761,16 @@ export function attachServerNextNamespaces(
       }
       return expired;
     },
+  };
+}
+
+function serverWorkerSchedulerUnavailable() {
+  return {
+    schemaVersion: 1 as const,
+    ok: false as const,
+    errorCode: 'UNAVAILABLE' as const,
+    diagnosticCode: 'SERVER_WORKER_SCHEDULER_NOT_CONFIGURED',
+    retryable: false,
   };
 }
 

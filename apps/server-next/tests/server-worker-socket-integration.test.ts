@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { AGENT_EVENTS, type ManagementWorkerRegisterV2 } from '../../../packages/contracts/src/index.js';
 import { createServerWorkerPool } from '../src/application/management/server-worker-pool.js';
+import type { ServerWorkerScheduler } from '../src/application/management/server-worker-scheduler.js';
 import type { ServerNextUseCases } from '../src/application/usecases.js';
 import { attachServerNextNamespaces, type NamespaceLike, type SocketServerLike } from '../src/transport/socket-server.js';
 import type { SocketHandler, SocketLike } from '../src/transport/socket-handlers.js';
@@ -16,8 +17,16 @@ describe('trusted Server Worker socket transport', () => {
       ids: { nextId: () => 'server-worker-1' },
     });
     const server = new FakeServer();
+    const scheduler = {
+      acquireLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'acquire' })),
+      renewLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'renew' })),
+      releaseLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'release' })),
+      abortLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'abort' })),
+      disconnect: vi.fn(() => ({ activeManagementRunIds: [] })),
+    } as unknown as ServerWorkerScheduler;
     attachServerNextNamespaces(server, {} as ServerNextUseCases, {
       serverWorkerPool: pool,
+      serverWorkerScheduler: scheduler,
       serverWorkerAuthToken: 'trusted-token-at-least-32-characters',
     });
 
@@ -34,8 +43,20 @@ describe('trusted Server Worker socket transport', () => {
     expect(await trusted.trigger(AGENT_EVENTS.serverWorker.heartbeat, {
       workerInstanceId: 'server-instance-1', activeLeaseCount: 0,
     })).toMatchObject({ ok: true, lastHeartbeatAt: 20 });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseAcquire, { offerId: 'offer-1' }))
+      .toMatchObject({ ok: true, operation: 'acquire' });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRenew, { managementRunId: 'run-1' }))
+      .toMatchObject({ ok: true, operation: 'renew' });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRelease, { managementRunId: 'run-1' }))
+      .toMatchObject({ ok: true, operation: 'release' });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.abort, { managementRunId: 'run-1' }))
+      .toMatchObject({ ok: true, operation: 'abort' });
+    expect(scheduler.acquireLease).toHaveBeenCalledWith(expect.stringMatching(/^server-worker:/), { offerId: 'offer-1' });
     await trusted.trigger('disconnect');
-    expect(pool.snapshot().workers).toMatchObject([{ connected: false }]);
+    expect(scheduler.disconnect).toHaveBeenCalledOnce();
+
+    expect(await rejected.trigger(AGENT_EVENTS.serverWorker.leaseAcquire, { offerId: 'offer-2' }))
+      .toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
   });
 });
 

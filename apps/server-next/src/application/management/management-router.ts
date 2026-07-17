@@ -113,7 +113,13 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       const currentPolicy = await policyForTeam(input.teamId);
       const placementPolicy = normalizePlacementPolicy(input.placementPolicy ?? DEFAULT_PLACEMENT_POLICY);
       if (!placementPolicy) return { ok: false as const, error: 'VALIDATION_ERROR' };
-      if (input.mode === 'managed' && !placementPolicy.allowedDeviceIds?.length) {
+      const maxManagementPhase = input.maxManagementPhase ?? currentPolicy.maxManagementPhase;
+      if (placementPolicy.placement === 'managed'
+        && (input.mode !== 'managed' || maxManagementPhase < 2)) {
+        return { ok: false as const, error: 'VALIDATION_ERROR' };
+      }
+      if (input.mode === 'managed' && placementPolicy.placement === 'device'
+        && !placementPolicy.allowedDeviceIds?.length) {
         return { ok: false as const, error: 'VALIDATION_ERROR' };
       }
       for (const deviceId of placementPolicy.allowedDeviceIds ?? []) {
@@ -124,7 +130,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         schemaVersion: 2,
         teamId: input.teamId,
         mode: input.mode,
-        maxManagementPhase: input.maxManagementPhase ?? currentPolicy.maxManagementPhase,
+        maxManagementPhase,
         placementPolicy,
         updatedBy: input.userId,
         updatedAt: clock.now(),
@@ -155,6 +161,11 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           mode: 'shadow',
           shadowRequestKey,
         };
+      }
+
+      if (policy.placementPolicy.placement === 'managed'
+        && (!input.rootTaskId?.trim() || target)) {
+        return { kind: 'direct', mode: 'direct' };
       }
 
       if (policy.maxManagementPhase === 3) {
@@ -370,7 +381,18 @@ function isManagementMode(value: unknown): value is ManagementMode {
 
 function normalizePlacementPolicy(value: ManagerPlacementPolicyDto): ManagerPlacementPolicyDto | null {
   if (value.placement !== 'device' && value.placement !== 'auto' && value.placement !== 'managed') return null;
-  if (value.placement === 'managed') return null;
+  if (value.placement === 'managed') {
+    if (value.allowServerContext !== true
+      || value.requireLocalModelCredentials !== false
+      || value.allowedDeviceIds?.length) return null;
+    return {
+      placement: 'managed',
+      allowServerContext: true,
+      requireLocalModelCredentials: false,
+      ...(value.preferredProvider?.trim() ? { preferredProvider: value.preferredProvider.trim() } : {}),
+      ...(value.preferredModel?.trim() ? { preferredModel: value.preferredModel.trim() } : {}),
+    };
+  }
   const allowedDeviceIds = value.allowedDeviceIds?.filter((item) => typeof item === 'string' && item.length > 0);
   return {
     placement: value.placement,
