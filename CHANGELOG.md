@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [Daily 2026-07-17] - 2026-07-17
+### Changed
+- fs:list 目录浏览切片2：授权收紧验收测试与错误码对齐（#637）
+- fs:list 目录浏览切片1：端到端骨架（#636）
+- Phase 4：Managed Worker 端到端收口 (#628)
+- docs：Phase 4 协作执行上下文术语表
+- Phase 4：实现跨 Host Recovery 与旧 Worker 隔离
+- Phase 4：完成 Managed Placement Server 调度闭环
+- 记录 2026-07-16 每日更新日志
+- Phase 4：实现 Server Worker 注册与固定容量（#630）
+### Fixed
+- 修复 handoff 结果与收尾边界
+### Security
+- Phase 4：Server Worker 用户代理权限与私密 Scope 审计 (#626)
+
 ## [Daily 2026-07-16] - 2026-07-16
 ### Added
 - 发布：补发 V3 Worker 与 Memory tools npm 包
