@@ -207,6 +207,11 @@ export function createPhase2CollaborationToolHandlers(input: {
           return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status,
             ...(handoff.result ? { result: handoff.result } : {}) };
         }
+        const reconciled = await service.reconcileInvocation(handoff.invocationId);
+        if (reconciled && ['returned', 'rejected', 'failed', 'cancelled', 'timed_out'].includes(reconciled.status)) {
+          return { handoffId: handoff.id, invocationId: handoff.invocationId,
+            status: reconciled.status, ...(reconciled.result ? { result: reconciled.result } : {}) };
+        }
         if (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt) {
           const view = await gateway.getView(handoff.invocationId);
           const dispatchId = view.activeDispatchId;
@@ -219,7 +224,6 @@ export function createPhase2CollaborationToolHandlers(input: {
               status: timedOut?.status ?? 'timed_out',
               ...(timedOut?.result ? { result: timedOut.result } : {}) };
           }
-          const reconciled = await service.reconcileInvocation(handoff.invocationId);
           return { handoffId: handoff.id, invocationId: handoff.invocationId,
             status: reconciled?.status ?? handoff.status,
             ...(reconciled?.result ? { result: reconciled.result } : {}) };

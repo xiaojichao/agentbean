@@ -310,6 +310,161 @@ describe('serial collaboration handoff', () => {
       .resolves.toMatchObject({ handoff: { status: 'returned' }, disposition: 'existing' });
   });
 
+  test('patches a terminal handoff result after replay reconcile observed the succeeded dispatch first', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const request = { authority: harness.authority, idempotencyKey: 'handoff-result-patch',
+      sourceProposalId: proposal!.id, sourceInvocationId: 'invocation-a', toAgentId: 'agent-b',
+      kind: 'consult' as const, objective: '咨询 B', reason: '需要信息', contextRefIds: [],
+      dependencyInvocationIds: [], attachmentIds: [], acceptanceCriteria: [],
+      returnMode: 'return_to_manager' as const };
+    const requested = await harness.service.requestHandoff(request);
+    const dispatchId = requested.view.activeDispatchId!;
+    await createInvocationGateway({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids }).completeAttempt({ dispatchId,
+      status: 'succeeded', actorKind: 'agent', actorId: 'agent-b' });
+    await expect(harness.service.requestHandoff(request))
+      .resolves.toMatchObject({ handoff: { status: 'returned' }, disposition: 'existing' });
+
+    await expect(harness.service.recordTerminal({ dispatchId, status: 'succeeded',
+      artifactIds: ['artifact-result'], result: { schemaVersion: 1,
+        invocationId: requested.invocation.id, agentId: 'agent-b', status: 'succeeded',
+        body: '真实结果', artifactIds: ['artifact-result'], memoryCandidateIds: [],
+        startedAt: 20, completedAt: 20 } }))
+      .resolves.toMatchObject({ status: 'returned', result: { body: '真实结果',
+        artifactIds: ['artifact-result'] } });
+    await expect(harness.repositories.management.handoffs.getById(requested.handoff.id))
+      .resolves.toMatchObject({ status: 'returned', result: { body: '真实结果' } });
+  });
+
+  test('await_result reconciles a canonical terminal invocation before timeout expires', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-await-reconcile', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    await createInvocationGateway({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids }).completeAttempt({
+      dispatchId: requested.view.activeDispatchId!, status: 'succeeded',
+      actorKind: 'agent', actorId: 'agent-b',
+    });
+    const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {}, pollIntervalMs: 1 })['handoffs.await_result'];
+
+    await expect(awaitResult({ schemaVersion: 2, managementPhase: 2, commandId: 'await-reconcile',
+      managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'await-reconcile', toolCallId: 'await-reconcile', toolName: 'handoffs.await_result',
+      input: { handoffId: requested.handoff.id, timeoutAt: 1_000 } }))
+      .resolves.toMatchObject({ handoffId: requested.handoff.id, status: 'returned' });
+  });
+
+  test('keeps private handoff workspace runs out of public workspace-run reads and lists', async () => {
+    const harness = await createHarness();
+    const [proposal] = await recordConsultProposal(harness);
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-private-workspace-run', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'consult',
+      objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+    await expect(app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '仅返回 Manager',
+      workspaceRun: { id: 'workspace-private', status: 'succeeded', cwd: '/repo',
+        command: 'npm test', startedAt: 18, completedAt: 20 },
+      artifacts: [{ id: 'artifact-private-log', filename: 'workspace-run.log',
+        mimeType: 'text/plain', sizeBytes: 10, relativePath: 'logs/workspace-run.log',
+        pathKind: 'workspace' }] })).resolves.toMatchObject({ ok: true });
+
+    await expect(app.getWorkspaceRun({ userId: 'user-1', teamId: 'team-1',
+      runId: 'workspace-private' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.getWorkspaceRunDetail({ userId: 'user-1', teamId: 'team-1',
+      runId: 'workspace-private' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.getWorkspaceRunLogFile({ userId: 'user-1', teamId: 'team-1',
+      runId: 'workspace-private' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.getArtifact({ userId: 'user-1', teamId: 'team-1',
+      artifactId: 'artifact-private-log' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.getArtifactFile({ userId: 'user-1', teamId: 'team-1',
+      artifactId: 'artifact-private-log' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(app.listTeamWorkspaceRuns({ userId: 'user-1', teamId: 'team-1',
+      pageSize: 20 })).resolves.toMatchObject({ ok: true, runs: [] });
+    await expect(app.listAgentWorkspaceRuns({ userId: 'user-1', teamId: 'team-1',
+      agentId: 'agent-b' })).resolves.toMatchObject({ ok: true, runs: [] });
+    await harness.repositories.workspaceRuns.create({ id: 'workspace-public',
+      teamId: 'team-1', channelId: 'channel-1', messageId: 'message-root',
+      dispatchId: 'dispatch-a', agentId: 'agent-a', status: 'succeeded',
+      cwd: '/repo', command: 'npm test', startedAt: 10, completedAt: 11,
+      createdAt: 10, updatedAt: 10, artifactIds: [] });
+    await expect(app.listTeamWorkspaceRuns({ userId: 'user-1', teamId: 'team-1',
+      pageSize: 1 })).resolves.toMatchObject({ ok: true,
+      runs: [{ workspaceRun: { id: 'workspace-public' } }] });
+    const awaitResult = createPhase2CollaborationToolHandlers({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, onDispatchCreated() {} })['handoffs.await_result'];
+    await expect(awaitResult({ schemaVersion: 2, managementPhase: 2, commandId: 'await-private-workspace',
+      managementRunId: harness.runId, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'await-private-workspace', toolCallId: 'await-private-workspace',
+      toolName: 'handoffs.await_result', input: { handoffId: requested.handoff.id } }))
+      .resolves.toMatchObject({ status: 'returned',
+        result: { workspaceRunId: 'workspace-private', artifactIds: ['artifact-private-log'] } });
+  });
+
+  test('lets direct continuation proposals reuse the server-owned management task fence', async () => {
+    const harness = await createHarness();
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-direct-next-proposal', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 继续', reason: '直接交接', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
+
+    await expect(harness.service.recordProposals({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', proposals: [{
+        schemaVersion: 1, sourceInvocationId: requested.invocation.id, sourceAgentId: 'agent-b',
+        sourceTaskContext: requested.invocation.intent.taskContext,
+        toAgentId: 'agent-a', kind: 'consult', objective: '回问 A', reason: '补充信息',
+        contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'return_to_manager',
+      }] })).resolves.toMatchObject([
+      expect.objectContaining({ proposal: expect.objectContaining({
+        sourceInvocationId: requested.invocation.id, toAgentId: 'agent-a',
+      }) }),
+    ]);
+  });
+
+  test('moves a deliver_to_root handoff result into root review instead of skipping closeout', async () => {
+    const harness = await createHarness();
+    const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',
+      agentId: 'agent-a', proposals: [{ schemaVersion: 1, sourceInvocationId: 'invocation-a',
+        sourceAgentId: 'agent-a', sourceTaskContext: { taskId: 'task-root', rootTaskId: 'task-root',
+          taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a' }, toAgentId: 'agent-b',
+        kind: 'continuation', objective: '由 B 收尾', reason: '能力匹配', contextRefs: [],
+        dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+        returnMode: 'deliver_to_root' }] });
+    const requested = await harness.service.requestHandoff({ authority: harness.authority,
+      idempotencyKey: 'handoff-root-review', sourceProposalId: proposal!.id,
+      sourceInvocationId: 'invocation-a', toAgentId: 'agent-b', kind: 'continuation',
+      objective: '由 B 收尾', reason: '能力匹配', contextRefIds: [], dependencyInvocationIds: [],
+      attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
+    const app = createServerNextUseCases({ repositories: harness.repositories,
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+
+    await expect(app.receiveDispatchResult({ dispatchId: requested.view.activeDispatchId!,
+      agentId: 'agent-b', body: '最终交付' })).resolves.toMatchObject({
+      ok: true, message: { body: '最终交付' },
+    });
+    await expect(harness.repositories.tasks.getById('task-root'))
+      .resolves.toMatchObject({ status: 'in_review' });
+    await expect(harness.repositories.management.runs.getById(harness.runId))
+      .resolves.toMatchObject({ status: 'in_review' });
+    const events = await harness.repositories.management.events.list(harness.runId);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: expect.objectContaining({
+        type: 'root-delivery-submitted',
+        payload: expect.objectContaining({ contributingInvocationIds: [requested.invocation.id] }),
+      }) }),
+    ]));
+  });
+
   test('times out an active handoff and rolls continuation ownership back', async () => {
     const harness = await createHarness();
     const [proposal] = await harness.service.recordProposals({ dispatchId: 'dispatch-a',

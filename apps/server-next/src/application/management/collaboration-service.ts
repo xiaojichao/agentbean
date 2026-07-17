@@ -365,6 +365,11 @@ async function updateFromDispatch(
     const handoff = await management.handoffs.getById(initialHandoff.id);
     const run = await management.runs.getById(initialRun.id);
     if (!handoff || !run || run.schemaVersion !== 2) return handoff;
+    if (isTerminalHandoffStatus(handoff.status) && result && !handoff.result) {
+      const patched = { ...handoff, result, updatedAt: now };
+      await management.handoffs.update(patched);
+      return patched;
+    }
     if (handoff.status === status || (status === 'accepted' && handoff.status === 'running')
       || isTerminalHandoffStatus(handoff.status)) return handoff;
     const updated: AgentHandoffRecordDto = { ...handoff, status,
@@ -446,6 +451,9 @@ async function isTaskFenceCurrent(
   context: NonNullable<AgentCollaborationProposalV1['sourceTaskContext']>,
   now: number,
 ) {
+  if (isManagementTaskFence(context, managementRunId)) {
+    return isTaskRevisionFenceCurrent(repositories, managementRunId, context);
+  }
   const [task, coordination, claim, currentClaim] = await Promise.all([
     repositories.tasks.getById(context.taskId),
     repositories.taskCoordination.coordinations.getByTaskId(context.taskId),
@@ -462,6 +470,13 @@ async function isTaskFenceCurrent(
     && coordination.attempt === context.taskAttempt && claim.taskId === context.taskId
     && claim.taskRevision === context.taskRevision && claim.taskAttempt === context.taskAttempt
     && claim.status === 'active' && claim.expiresAt > now);
+}
+
+function isManagementTaskFence(
+  context: NonNullable<AgentCollaborationProposalV1['sourceTaskContext']>,
+  managementRunId: string,
+) {
+  return context.claimLeaseId === `management:${managementRunId}`;
 }
 
 async function isTaskRevisionFenceCurrent(
