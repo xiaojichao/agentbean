@@ -4,6 +4,7 @@ import type {
   InvocationDispatchAttemptRecord,
   ManagedRequestReservationRecord,
   ManagementEventRecord,
+  ManagementAccessAuditRecord,
   ManagementPolicyRecord,
   ManagementRepositories,
   ManagementRunRecord,
@@ -17,6 +18,7 @@ interface ManagementMemoryState {
   runs: Map<string, ManagementRunRecord>;
   leases: Map<string, ManagerLeaseRecord>;
   events: Map<string, ManagementEventRecord>;
+  accessAudits: Map<string, ManagementAccessAuditRecord>;
   checkpoints: Map<string, ManagementCheckpointV1>;
   invocations: Map<string, AgentInvocationRecordDto>;
   collaborationProposals: Map<string, AgentCollaborationProposalRecordDto>;
@@ -77,6 +79,14 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
       },
       async list(managementRunId) { return [...state.events.values()].filter(({ event }) => event.managementRunId === managementRunId).sort((a, b) => a.event.sequence - b.event.sequence); },
     },
+    accessAudits: {
+      async append(record) { state.accessAudits.set(record.id, record); return record; },
+      async list(managementRunId) {
+        return [...state.accessAudits.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+      },
+    },
     checkpoints: {
       async put(record) { const key = `${record.managementRunId}:${record.revision}`; if (state.checkpoints.has(key)) throw new Error('management checkpoint already exists'); state.checkpoints.set(key, record); return record; },
       async get(input) { return state.checkpoints.get(`${input.managementRunId}:${input.revision}`) ?? null; },
@@ -135,6 +145,6 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
 function isActive(status: string): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }
-function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), events: new Map(), checkpoints: new Map(), invocations: new Map(), collaborationProposals: new Map(), handoffs: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
-function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), events: new Map(state.events), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), collaborationProposals: new Map(state.collaborationProposals), handoffs: new Map(state.handoffs), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
+function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), events: new Map(), accessAudits: new Map(), checkpoints: new Map(), invocations: new Map(), collaborationProposals: new Map(), handoffs: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
+function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), events: new Map(state.events), accessAudits: new Map(state.accessAudits), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), collaborationProposals: new Map(state.collaborationProposals), handoffs: new Map(state.handoffs), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
 function restoreState(target: ManagementMemoryState, source: ManagementMemoryState): void { for (const key of Object.keys(source) as (keyof ManagementMemoryState)[]) { target[key].clear(); for (const [id, value] of source[key]) target[key].set(id, value as never); } }

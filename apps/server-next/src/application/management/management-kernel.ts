@@ -38,6 +38,7 @@ export interface ManagementKernelDependencies {
 
 export interface CreateOrResumeManagementRunInput {
   readonly teamId: string;
+  readonly initiatedByUserId?: string;
   readonly channelId: string;
   readonly rootTaskId?: string;
   readonly rootMessageId: string;
@@ -150,6 +151,7 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         const common = {
           id: managementRunId,
           teamId: input.teamId,
+          initiatedByUserId: input.initiatedByUserId,
           channelId: input.channelId,
           rootTaskId: input.rootTaskId,
           rootMessageId: input.rootMessageId,

@@ -259,6 +259,85 @@ describe('Phase 4 Server Worker Scheduler', () => {
     }
   });
 
+  test('inherits the initiating user private scope, audits only metadata, and fails closed after revocation', async () => {
+    const harness = await createSchedulerHarness();
+    await seedPrivateRunContext(harness.repositories);
+    const run = await harness.createRun('private');
+    await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+    const acquired = await harness.scheduler.acquireLease('connection-1', {
+      schemaVersion: 1,
+      offerId: harness.offers[0]!.offerId,
+      workerInstanceId: 'server-instance-1',
+    });
+    if (!acquired.ok) throw new Error('Server lease acquisition expected');
+    const request = {
+      schemaVersion: 1 as const,
+      commandId: 'command-private',
+      managementRunId: run.id,
+      workerId: acquired.workerId,
+      toolCallId: 'tool-private',
+      toolName: 'context.get_visible_thread' as const,
+      input: {},
+    };
+
+    await expect(harness.scheduler.executeTool('connection-1', request)).resolves.toMatchObject({
+      ok: true,
+      output: { messages: [{ body: 'private body' }] },
+    });
+    const allowedAudits = await harness.repositories.management.accessAudits.list(run.id);
+    expect(allowedAudits.map((audit) => [audit.action, audit.decision])).toEqual([
+      ['access', 'allowed'],
+      ['transmit', 'allowed'],
+    ]);
+    expect(JSON.stringify(allowedAudits)).not.toContain('private body');
+    expect(JSON.stringify(allowedAudits)).not.toContain('lease-token');
+
+    await harness.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { humanMemberIds: [], updatedAt: 20 },
+    });
+    await expect(harness.scheduler.executeTool('connection-1', request)).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'NOT_AUTHORIZED',
+      diagnosticCode: 'SERVER_WORKER_CHANNEL_FORBIDDEN',
+    });
+    const revokedAudits = await harness.repositories.management.accessAudits.list(run.id);
+    expect(revokedAudits).toContainEqual(expect.objectContaining({
+      userId: 'user-1',
+      action: 'permission-change',
+      decision: 'denied',
+      diagnosticCode: 'SERVER_WORKER_CHANNEL_FORBIDDEN',
+    }));
+    expect(revokedAudits).toContainEqual(expect.objectContaining({
+      userId: 'user-1',
+      action: 'access',
+      decision: 'denied',
+      diagnosticCode: 'SERVER_WORKER_CHANNEL_FORBIDDEN',
+    }));
+  });
+
+  test('rejects a cross-Team channel before any context is transmitted', async () => {
+    const harness = await createSchedulerHarness();
+    await seedPrivateRunContext(harness.repositories, 'team-2');
+    const run = await harness.createRun('private');
+    await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+    const acquired = await harness.scheduler.acquireLease('connection-1', {
+      schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+    });
+    if (!acquired.ok) throw new Error('Server lease acquisition expected');
+    await expect(harness.scheduler.executeTool('connection-1', {
+      schemaVersion: 1, commandId: 'cross-team', managementRunId: run.id,
+      workerId: acquired.workerId, toolCallId: 'cross-team-tool',
+      toolName: 'context.get_root_message', input: {},
+    })).resolves.toMatchObject({
+      ok: false,
+      diagnosticCode: 'SERVER_WORKER_CHANNEL_SCOPE_MISMATCH',
+    });
+    expect(await harness.repositories.management.accessAudits.list(run.id)).toMatchObject([{
+      action: 'access', decision: 'denied', scopeId: 'channel-1',
+    }]);
+  });
+
   test('offers a rooted ManagedRun and completes the Server lease lifecycle', async () => {
     const repositories = createInMemoryRepositories();
     const clock = { now: 10 };
@@ -590,6 +669,22 @@ async function createSchedulerHarness(options: {
     memoryCapsules: {
       async listValidMemoryCapsuleIds() { return ['capsule-current']; },
     },
+    repositories,
+    executeTool: async (request) => ({
+      schemaVersion: request.schemaVersion,
+      ...('managementPhase' in request ? { managementPhase: request.managementPhase } : {}),
+      commandId: request.commandId,
+      managementRunId: request.managementRunId,
+      workerId: request.workerId,
+      toolCallId: request.toolCallId,
+      toolName: request.toolName,
+      ok: true,
+      output: request.toolName === 'context.get_visible_thread'
+        ? { revision: 1, messages: [{ id: 'message-private', senderKind: 'human',
+            senderId: 'user-1', body: 'private body', createdAt: 1 }] }
+        : { message: { id: 'message-private', senderKind: 'human', senderId: 'user-1',
+            body: 'private body', createdAt: 1 } },
+    } as Awaited<ReturnType<import('../src/application/management/management-tool-executor.js').ManagementToolExecutor>>),
     kernel,
     clock: { now: () => clock.now },
     ids,
@@ -619,6 +714,7 @@ async function createSchedulerHarness(options: {
   async function createRun(key: string) {
     const { run } = await kernel.createOrResumeRun({
       teamId: 'team-1',
+      initiatedByUserId: 'user-1',
       channelId: 'channel-1',
       rootTaskId: `task-${key}`,
       rootMessageId: `message-${key}`,
@@ -654,6 +750,30 @@ function invocation(managementRunId: string, id: string, createdAt: number) {
       attachmentIds: [],
     },
   };
+}
+
+async function seedPrivateRunContext(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  channelTeamId = 'team-1',
+) {
+  await repositories.teams.create({
+    id: 'team-1', name: 'Team 1', path: 'team-1', visibility: 'private', ownerId: 'user-1', createdAt: 1,
+  });
+  await repositories.teams.addMember({
+    teamId: 'team-1', userId: 'user-1', username: 'user-1', role: 'owner', joinedAt: 1,
+  });
+  await repositories.channels.create({
+    id: 'channel-1', teamId: channelTeamId, kind: 'channel', name: 'private', visibility: 'private',
+    createdBy: 'user-1', createdAt: 1, humanMemberIds: ['user-1'], agentMemberIds: [],
+  });
+  await repositories.messages.append({
+    id: 'message-private', teamId: channelTeamId, channelId: 'channel-1', threadId: 'message-private',
+    senderKind: 'human', senderId: 'user-1', body: 'private body', createdAt: 1,
+  });
+  await repositories.tasks.create({
+    id: 'task-private', teamId: channelTeamId, channelId: 'channel-1', title: 'Private task',
+    status: 'in_progress', creatorId: 'user-1', tags: [], sortOrder: 1, createdAt: 1, updatedAt: 1,
+  });
 }
 
 function capability(

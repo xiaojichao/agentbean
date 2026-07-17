@@ -105,7 +105,8 @@ describe('Phase 1 management routing', () => {
     expect(harness.gateway.schedule).toHaveBeenCalledOnce();
     const runId = result.managementRunId;
     await expect(harness.repositories.management.runs.getById(runId)).resolves.toMatchObject({
-      mode: 'managed', status: 'queued', rootMessageId: 'message-1', placementPolicy: { placement: 'device' },
+      mode: 'managed', status: 'queued', rootMessageId: 'message-1', initiatedByUserId: 'user-1',
+      placementPolicy: { placement: 'device' },
     });
     await expect(harness.repositories.management.events.list(runId)).resolves.toHaveLength(1);
   });
@@ -170,7 +171,8 @@ describe('Phase 1 management routing', () => {
     });
     if (!result.ok || !result.task || result.management?.kind !== 'managed') throw new Error('Phase 2 result expected');
     await expect(harness.repositories.management.runs.getById(result.management.managementRunId))
-      .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 2, rootTaskId: result.task.id });
+      .resolves.toMatchObject({ schemaVersion: 2, managementPhase: 2, rootTaskId: result.task.id,
+        initiatedByUserId: 'user-1' });
     await expect(harness.repositories.taskCoordination.coordinations.getByTaskId(result.task.id))
       .resolves.toMatchObject({ nodeKind: 'root', taskRevision: 1, reviewPolicy: 'human' });
     await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))

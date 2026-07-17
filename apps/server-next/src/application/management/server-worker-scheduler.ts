@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   ManagementCheckpointFetchV1,
   ManagementCheckpointResultV1,
@@ -13,8 +14,8 @@ import type {
   ManagerPlacementPolicyDto,
 } from '../../../../../packages/contracts/src/index.js';
 import { inspectManagerLease, type ManagementPreflight } from '../../../../../packages/domain/src/index.js';
-import type { ManagementRepositories } from '../management-repositories.js';
-import type { MessageRepository } from '../repositories.js';
+import type { ManagementAccessAuditRecord, ManagementRepositories } from '../management-repositories.js';
+import type { MessageRepository, ServerNextRepositories } from '../repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
 import { ManagementConflictError, type createManagementKernel } from './management-kernel.js';
 import {
@@ -23,6 +24,11 @@ import {
   toManagementCheckpointAuthoritative,
   type ManagementCheckpointMemoryCapsules,
 } from './management-checkpoint.js';
+import type {
+  ManagementToolExecutor,
+  ManagementToolRequest,
+  ManagementToolResult,
+} from './management-tool-executor.js';
 import type { ServerWorkerPool } from './server-worker-pool.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
@@ -33,6 +39,8 @@ export interface ServerWorkerSchedulerDependencies {
   readonly messages?: MessageRepository;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly memoryCapsules?: ManagementCheckpointMemoryCapsules;
+  readonly repositories?: ServerNextRepositories;
+  readonly executeTool?: ManagementToolExecutor;
   readonly kernel: ManagementKernel;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
@@ -327,7 +335,107 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
         ...(includeCheckpoint ? { checkpoint } : {}),
       };
     },
+
+    async executeTool(
+      connectionId: string,
+      input: ManagementToolRequest,
+    ): Promise<ManagementToolResult> {
+      const worker = dependencies.pool.workerForConnection(connectionId);
+      if (!worker || worker.workerId !== input.workerId) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_CONNECTION_MISMATCH');
+      }
+      if (recoveryPendingRunIds.has(input.managementRunId)) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_RECOVERY_PENDING');
+      }
+      const run = await dependencies.management.runs.getById(input.managementRunId);
+      const lease = await dependencies.management.leases.get(input.managementRunId);
+      const leaseStatus = inspectManagerLease(lease ?? undefined, dependencies.clock.now());
+      if (!run || leaseStatus.kind !== 'active' || leaseStatus.lease.workerId !== worker.workerId) {
+        return toolFailure(input, 'MANAGEMENT_WORKER_RUN_MISMATCH');
+      }
+      if (!dependencies.repositories || !dependencies.executeTool) {
+        return toolFailure(input, 'SERVER_WORKER_CONTEXT_NOT_CONFIGURED');
+      }
+
+      const userId = run.initiatedByUserId;
+      const denied = async (diagnosticCode: string) => {
+        const previous = await dependencies.management.accessAudits.list(run.id);
+        if ((diagnosticCode === 'SERVER_WORKER_TEAM_FORBIDDEN'
+          || diagnosticCode === 'SERVER_WORKER_CHANNEL_FORBIDDEN')
+          && previous.some((audit) => audit.decision === 'allowed')) {
+          await appendAccessAudit({
+            managementRunId: run.id,
+            userId: userId ?? 'unknown',
+            teamId: run.teamId,
+            scopeType: 'channel',
+            scopeId: run.channelId,
+            action: 'permission-change',
+            decision: 'denied',
+            diagnosticCode,
+          });
+        }
+        await appendAccessAudit({
+          managementRunId: run.id,
+          userId: userId ?? 'unknown',
+          teamId: run.teamId,
+          scopeType: 'channel',
+          scopeId: run.channelId,
+          action: 'access',
+          decision: 'denied',
+          diagnosticCode,
+        });
+        return toolFailure(input, diagnosticCode);
+      };
+      if (!userId) return denied('SERVER_WORKER_INITIATING_USER_REQUIRED');
+      if (!await dependencies.repositories.teams.isMember(run.teamId, userId)) {
+        return denied('SERVER_WORKER_TEAM_FORBIDDEN');
+      }
+      const channel = await dependencies.repositories.channels.getById(run.channelId);
+      if (!channel || channel.teamId !== run.teamId) {
+        return denied('SERVER_WORKER_CHANNEL_SCOPE_MISMATCH');
+      }
+      if ((channel.kind === 'direct' || channel.visibility === 'private')
+        && !channel.humanMemberIds.includes(userId)) {
+        return denied('SERVER_WORKER_CHANNEL_FORBIDDEN');
+      }
+      const rootMessage = await dependencies.repositories.messages.getById(run.rootMessageId);
+      if (!rootMessage || rootMessage.teamId !== run.teamId || rootMessage.channelId !== run.channelId) {
+        return denied('SERVER_WORKER_ROOT_MESSAGE_SCOPE_MISMATCH');
+      }
+      if (run.rootTaskId) {
+        const task = await dependencies.repositories.tasks.getById(run.rootTaskId);
+        if (!task || task.teamId !== run.teamId || task.channelId !== run.channelId) {
+          return denied('SERVER_WORKER_ROOT_TASK_SCOPE_MISMATCH');
+        }
+      }
+
+      await appendAccessAudit({
+        managementRunId: run.id, userId, teamId: run.teamId,
+        scopeType: 'channel', scopeId: run.channelId,
+        action: 'access', decision: 'allowed',
+      });
+      const result = await dependencies.executeTool(input);
+      if (result.ok) {
+        await appendAccessAudit({
+          managementRunId: run.id, userId, teamId: run.teamId,
+          scopeType: 'channel', scopeId: run.channelId,
+          action: 'transmit', decision: 'allowed',
+          projectionHash: createHash('sha256').update(JSON.stringify(result.output)).digest('hex'),
+        });
+      }
+      return result;
+    },
   };
+
+  async function appendAccessAudit(
+    record: Omit<ManagementAccessAuditRecord, 'id' | 'createdAt'>,
+  ): Promise<void> {
+    await dependencies.management.accessAudits.append({
+      id: dependencies.ids.nextId(),
+      createdAt: dependencies.clock.now(),
+      ...record,
+    });
+  }
 
   function scheduleManagementRun(
     input: ScheduleServerManagementRunInput,
@@ -585,4 +693,23 @@ function failure(
   errorCode: ManagementWorkerFailureV1['errorCode'] = 'UNAVAILABLE',
 ): ManagementWorkerFailureV1 {
   return { schemaVersion: 1, ok: false, errorCode, diagnosticCode, retryable };
+}
+
+function toolFailure(
+  input: ManagementToolRequest,
+  diagnosticCode: string,
+): ManagementToolResult {
+  return {
+    schemaVersion: input.schemaVersion,
+    ...('managementPhase' in input ? { managementPhase: input.managementPhase } : {}),
+    commandId: input.commandId,
+    managementRunId: input.managementRunId,
+    workerId: input.workerId,
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    ok: false,
+    errorCode: 'NOT_AUTHORIZED',
+    diagnosticCode,
+    retryable: false,
+  } as ManagementToolResult;
 }

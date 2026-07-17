@@ -9,10 +9,13 @@ import type { TaskClaimBroker } from '../application/management/task-claim-broke
 import type { ServerWorkerPool } from '../application/management/server-worker-pool.js';
 import type { ServerWorkerScheduler } from '../application/management/server-worker-scheduler.js';
 import { ManagementConflictError } from '../application/management/management-kernel.js';
+import type { ManagementToolRequest } from '../application/management/management-tool-executor.js';
 import {
   AGENT_EVENTS,
   MESSAGE_BATCH_QUIET_WINDOW_MS,
   WEB_EVENTS,
+  parsePhase2TaskToolRequestV2,
+  parsePhase3MemoryToolRequestV3,
   safeParseManagementWorkerPayload,
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
@@ -191,6 +194,17 @@ export function attachServerNextNamespaces(
           ack?.(await options.serverWorkerScheduler.fetchCheckpoint(connectionId, parsed.value));
         } catch (error) {
           ack?.(serverWorkerOperationFailure(error));
+        }
+      });
+      socket.on(AGENT_EVENTS.serverWorker.toolRequest, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerToolPayload(payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
+        try {
+          ack?.(await options.serverWorkerScheduler.executeTool(connectionId, parsed.value));
+        } catch (error) {
+          ack?.(serverWorkerToolFailure(parsed.value, error));
         }
       });
       socket.on('disconnect', async () => {
@@ -795,6 +809,26 @@ export function attachServerNextNamespaces(
   };
 }
 
+function parseServerWorkerToolPayload(payload: unknown):
+  | { readonly ok: true; readonly value: ManagementToolRequest }
+  | { readonly ok: false; readonly failure: ReturnType<typeof serverWorkerInvalidPayload> } {
+  try {
+    if (payload && typeof payload === 'object'
+      && (payload as { schemaVersion?: unknown }).schemaVersion === 2) {
+      const phase = (payload as { managementPhase?: unknown }).managementPhase;
+      return {
+        ok: true,
+        value: phase === 3
+          ? parsePhase3MemoryToolRequestV3(payload)
+          : parsePhase2TaskToolRequestV2(payload),
+      };
+    }
+    return parseServerWorkerPayload('tool-request', payload);
+  } catch {
+    return { ok: false, failure: serverWorkerInvalidPayload('$') };
+  }
+}
+
 function serverWorkerSchedulerUnavailable() {
   return {
     schemaVersion: 1 as const,
@@ -811,6 +845,27 @@ function serverWorkerOperationFailure(error: unknown) {
     : 'MANAGEMENT_WORKER_INTERNAL_ERROR';
   return {
     schemaVersion: 1 as const,
+    ok: false as const,
+    errorCode: 'NOT_AUTHORIZED' as const,
+    diagnosticCode,
+    retryable: false,
+  };
+}
+
+// tool-request 覆盖 V1/V2/V3 三种 schema，兜底 failure 必须保留请求侧的
+// schemaVersion/managementPhase，否则 worker 端按 V2/V3 result 解析 ack 会再次失败。
+function serverWorkerToolFailure(request: ManagementToolRequest, error: unknown) {
+  const diagnosticCode = error instanceof ManagementConflictError
+    ? error.code
+    : 'MANAGEMENT_WORKER_INTERNAL_ERROR';
+  return {
+    schemaVersion: request.schemaVersion,
+    ...('managementPhase' in request ? { managementPhase: request.managementPhase } : {}),
+    commandId: request.commandId,
+    managementRunId: request.managementRunId,
+    workerId: request.workerId,
+    toolCallId: request.toolCallId,
+    toolName: request.toolName,
     ok: false as const,
     errorCode: 'NOT_AUTHORIZED' as const,
     diagnosticCode,

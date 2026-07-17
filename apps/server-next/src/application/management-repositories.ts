@@ -30,6 +30,20 @@ export interface ManagementEventRecord {
   readonly payloadHash: string;
 }
 
+export interface ManagementAccessAuditRecord {
+  readonly id: ID;
+  readonly managementRunId: ID;
+  readonly userId: ID;
+  readonly teamId: ID;
+  readonly scopeType: 'team' | 'channel' | 'task' | 'management';
+  readonly scopeId: ID;
+  readonly action: 'access' | 'transmit' | 'permission-change';
+  readonly decision: 'allowed' | 'denied';
+  readonly diagnosticCode?: string;
+  readonly projectionHash?: string;
+  readonly createdAt: UnixMs;
+}
+
 export interface InvocationDispatchAttemptRecord {
   readonly id: ID;
   readonly invocationId: ID;
@@ -74,6 +88,10 @@ export interface ManagementRepositories {
   events: {
     append(record: ManagementEventRecord): Promise<ManagementEventRecord>;
     list(managementRunId: ID): Promise<ManagementEventRecord[]>;
+  };
+  accessAudits: {
+    append(record: ManagementAccessAuditRecord): Promise<ManagementAccessAuditRecord>;
+    list(managementRunId: ID): Promise<ManagementAccessAuditRecord[]>;
   };
   checkpoints: {
     put(record: ManagementCheckpointV1): Promise<ManagementCheckpointV1>;
