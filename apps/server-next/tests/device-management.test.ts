@@ -810,6 +810,48 @@ describe('device rename and delete (end-to-end)', () => {
     expect(legacyDevice.capabilities).toBeUndefined();
   });
 
+  test('assertCanManageDevice gates fs:list to device owner, not any team member', async () => {
+    // fs:list 无屏幕物理隔离，门控必须是拥有者/系统管理员而非团队成员宽门控，
+    // 否则任何团队成员可列他人设备任意路径目录名（含 ~/.ssh 等敏感目录）。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-own-1']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-2', role: 'member' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const deviceId = (hello as { device: { id: string } }).device.id;
+
+    // 拥有者 → 放行
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+
+    // 团队成员但非拥有者 → 拒绝（宽门控下的越权读取被堵死）
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-2', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // 非团队成员 → 拒绝
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-3', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    // 设备不存在 → NOT_FOUND
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId: 'missing' }),
+    ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
+
   test('deleting a duplicate device removes the whole canonical alias group', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

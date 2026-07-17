@@ -103,7 +103,7 @@ export interface DeviceScanEmitRequest {
 }
 
 // server 转发 fs:list 到 daemon 后回传的结果形状（与 daemon directory-lister 返回对齐）。
-// 切片1 暂复用 getDevice 宽门控，授权收紧（canManageDeviceAsUser）留给切片2。
+// 门控为 assertCanManageDevice（设备拥有者/系统管理员），非 getDevice 宽门控。
 export interface ListDirectoryForwardResult {
   ok: boolean;
   entries?: Array<{ name: string; isDir: boolean }>;
@@ -317,8 +317,9 @@ export function registerWebSocketHandlers(
         return;
       }
       const path = (input as { path?: string } | null)?.path ?? '';
-      // 切片1：暂复用 getDevice 宽门控（团队成员可见）。切片2 收紧为 canManageDeviceAsUser。
-      const deviceAccess = await app.getDevice({ userId, deviceId });
+      // fs:list 无屏幕物理隔离（对比 selectDirectory 弹窗），宽门控即越权读目录，
+      // 故上线即收紧为设备拥有者/系统管理员（PR#642 review 提前自切片2 #637）。
+      const deviceAccess = await app.assertCanManageDevice({ userId, deviceId });
       if (!isSuccessResult(deviceAccess)) {
         ack?.(deviceAccess);
         return;

@@ -1029,12 +1029,12 @@ describe('server-next socket handlers', () => {
     expect(deviceSelectDirectory).toHaveBeenCalledWith({ deviceId: 'device-1' });
   });
 
-  test('device list-directory checks device access before forwarding to daemon', async () => {
-    // 切片1：暂复用 getDevice 宽门控（与 select-directory 一致）；切片2 收紧为 canManageDeviceAsUser。
+  test('device list-directory checks device manage permission before forwarding to daemon', async () => {
+    // fs:list 无屏幕物理隔离，门控为 assertCanManageDevice（拥有者/系统管理员），非 getDevice 宽门控。
     const socket = new FakeSocket();
     const deviceListDirectory = vi.fn(async () => makeSuccess({ entries: [], homePath: '/home' }));
     const app = {
-      getDevice: vi.fn(async () => makeFailure('FORBIDDEN', 'User is not a team member')),
+      assertCanManageDevice: vi.fn(async () => makeFailure('FORBIDDEN', 'User cannot manage device')),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app, { deviceListDirectory });
@@ -1045,18 +1045,18 @@ describe('server-next socket handlers', () => {
       path: '/Users',
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
 
-    expect(app.getDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-2' });
+    expect(app.assertCanManageDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-2' });
     expect(deviceListDirectory).not.toHaveBeenCalled();
   });
 
-  test('device list-directory forwards path to daemon after device access succeeds', async () => {
+  test('device list-directory forwards path to daemon after manage permission succeeds', async () => {
     const socket = new FakeSocket();
     const deviceListDirectory = vi.fn(async () => makeSuccess({
       entries: [{ name: 'projects', isDir: true }],
       homePath: '/Users/shaw',
     }));
     const app = {
-      getDevice: vi.fn(async () => makeSuccess({ device: { id: 'device-1' } })),
+      assertCanManageDevice: vi.fn(async () => makeSuccess({ deviceId: 'device-1' })),
     } as unknown as ServerNextUseCases;
 
     registerWebSocketHandlers(socket, app, { deviceListDirectory });

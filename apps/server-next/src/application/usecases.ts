@@ -81,6 +81,7 @@ export interface ServerNextUseCases {
   listDevices(input: { teamId: string; userId: string; currentDeviceId?: string | null }): Promise<Ack<{ devices: DeviceDto[] }>>;
   listDeviceAgents(input: { teamId: string; userId: string; deviceId: string }): Promise<Ack<{ agents: DeviceAgentListDto[]; runtimes: RuntimeDto[] }>>;
   getDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDetailDto }>>;
+  assertCanManageDevice(input: { userId: string; deviceId: string }): Promise<Ack<{ deviceId: string }>>;
   renameDevice(input: { userId: string; deviceId: string; name: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
   deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[]; deletedDeviceIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
@@ -1773,6 +1774,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           agents: hostedAgents.map((agent) => toDeviceAgentListDto(agent, canonicalDevice)),
         },
       });
+    },
+
+    // fs:list 目录浏览的管理门禁（PR#642 review 提前自切片2 #637）：
+    // fs:list 取消了 selectDirectory 的屏幕物理隔离，宽门控会让任何团队成员
+    // 列任意设备任意路径的目录名（含 ~/.ssh 等敏感目录），故端点上线即收紧为
+    // 设备拥有者 / 系统管理员，与 renameDevice / deleteDevice 同一业务规则。
+    // 每次调用复验（授权不缓存），撤销即时 fail-closed。
+    async assertCanManageDevice(manageInput) {
+      const device = await repositories.devices.getById(manageInput.deviceId);
+      if (!device) {
+        return makeFailure('NOT_FOUND', 'Device not found');
+      }
+      if (!(await repositories.teams.isMember(device.teamId, manageInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const canonicalDevice = resolveCanonicalDeviceRecord(
+        device,
+        await repositories.devices.listByTeam(device.teamId),
+      );
+      if (!(await canManageDeviceAsUser(repositories, { userId: manageInput.userId, device: canonicalDevice }))) {
+        return makeFailure('FORBIDDEN', 'User cannot manage device');
+      }
+      return makeSuccess({ deviceId: canonicalDevice.id });
     },
 
     async renameDevice(renameInput) {
