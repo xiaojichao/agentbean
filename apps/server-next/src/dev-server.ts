@@ -1416,6 +1416,9 @@ function createDefaultManagementRuntime(
   const serverScheduler = serverWorkerPool ? createServerWorkerScheduler({
     pool: serverWorkerPool,
     management: repositories.management,
+    messages: repositories.messages,
+    taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
+    memoryCapsules,
     kernel,
     clock,
     ids,

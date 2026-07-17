@@ -197,6 +197,7 @@ export const AGENT_EVENTS = {
     leaseRenew: 'server-worker:lease-renew',
     leaseRelease: 'server-worker:lease-release',
     abort: 'server-worker:abort',
+    checkpointFetch: 'server-worker:checkpoint-fetch',
   },
   taskClaim: {
     offer: 'task-claim:offer',

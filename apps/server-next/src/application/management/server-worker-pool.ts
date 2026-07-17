@@ -47,6 +47,12 @@ interface QueuedCapacityRequest {
   readonly reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED';
 }
 
+export interface ExpiredServerWorkerReservation {
+  readonly workerId: string;
+  readonly profileId: string;
+  readonly activeManagementRunIds: readonly string[];
+}
+
 export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencies) {
   const heartbeatTimeoutMs = dependencies.heartbeatTimeoutMs ?? 30_000;
   if (!Number.isSafeInteger(heartbeatTimeoutMs) || heartbeatTimeoutMs <= 0) {
@@ -206,6 +212,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       && (!input.managementPhase || supportsManagementPhase(worker.capability, input.managementPhase))
       && (!input.preferredProvider || worker.capability.providerId === input.preferredProvider)
       && (!input.preferredModel || worker.capability.modelId === input.preferredModel)
+      && staleWorkerIdByManagementRun.get(input.managementRunId) !== worker.workerId
       && effectiveActiveLeaseCount(worker) < worker.capability.capacity.maxConcurrentLeases,
     );
     candidates.sort(compareWorkers);
@@ -289,9 +296,9 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     return worker.transport.emitLeaseOffer(input.payload, input.timeoutMs);
   }
 
-  function expireStaleWorkers(): readonly string[] {
+  function expireStaleWorkerReservations(): readonly ExpiredServerWorkerReservation[] {
     const now = dependencies.clock.now();
-    const expiredWorkerIds: string[] = [];
+    const expired: ExpiredServerWorkerReservation[] = [];
     for (const worker of workersById.values()) {
       if (!worker.connected || now < worker.lastHeartbeatAt
         || now - worker.lastHeartbeatAt < heartbeatTimeoutMs) continue;
@@ -300,10 +307,14 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
       if (workerIdByConnection.get(worker.connectionId) === worker.workerId) {
         workerIdByConnection.delete(worker.connectionId);
       }
-      requeueWorkerReservations(worker, now);
-      expiredWorkerIds.push(worker.workerId);
+      const activeManagementRunIds = requeueWorkerReservations(worker, now);
+      expired.push({ workerId: worker.workerId, profileId: worker.profileId, activeManagementRunIds });
     }
-    return expiredWorkerIds;
+    return expired;
+  }
+
+  function expireStaleWorkers(): readonly string[] {
+    return expireStaleWorkerReservations().map((worker) => worker.workerId);
   }
 
   function requireWorker(workerId: string): RegisteredServerWorker {
@@ -335,6 +346,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     heartbeat,
     disconnect,
     expireStaleWorkers,
+    expireStaleWorkerReservations,
     selectWorker,
     requestCapacity,
     releaseCapacity,
