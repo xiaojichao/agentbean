@@ -18,10 +18,12 @@ describe('trusted Server Worker socket transport', () => {
     });
     const server = new FakeServer();
     const scheduler = {
+      registerWorker: vi.fn(async (input) => pool.registerWorker(input)),
       acquireLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'acquire' })),
       renewLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'renew' })),
       releaseLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'release' })),
       abortLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'abort' })),
+      fetchCheckpoint: vi.fn(async () => ({ schemaVersion: 1, operation: 'checkpoint' })),
       disconnect: vi.fn(() => ({ activeManagementRunIds: [] })),
     } as unknown as ServerWorkerScheduler;
     attachServerNextNamespaces(server, {} as ServerNextUseCases, {
@@ -61,6 +63,9 @@ describe('trusted Server Worker socket transport', () => {
       .toMatchObject({ ok: true, operation: 'release' });
     expect(await trusted.trigger(AGENT_EVENTS.serverWorker.abort, { ...authority, reasonCode: 'ABORTED' }))
       .toMatchObject({ ok: true, operation: 'abort' });
+    const { idempotencyKey: _idempotencyKey, ...leaseProof } = authority;
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.checkpointFetch, leaseProof))
+      .toMatchObject({ operation: 'checkpoint' });
     expect(scheduler.acquireLease).toHaveBeenCalledWith(expect.stringMatching(/^server-worker:/), {
       schemaVersion: 1, offerId: 'offer-1', workerInstanceId: 'server-instance-1',
     });
@@ -70,6 +75,7 @@ describe('trusted Server Worker socket transport', () => {
       AGENT_EVENTS.serverWorker.leaseRenew,
       AGENT_EVENTS.serverWorker.leaseRelease,
       AGENT_EVENTS.serverWorker.abort,
+      AGENT_EVENTS.serverWorker.checkpointFetch,
     ]) {
       expect(await trusted.trigger(event, null)).toMatchObject({
         ok: false,
@@ -81,6 +87,7 @@ describe('trusted Server Worker socket transport', () => {
     expect(scheduler.renewLease).toHaveBeenCalledTimes(1);
     expect(scheduler.releaseLease).toHaveBeenCalledTimes(1);
     expect(scheduler.abortLease).toHaveBeenCalledTimes(1);
+    expect(scheduler.fetchCheckpoint).toHaveBeenCalledTimes(1);
     await trusted.trigger('disconnect');
     expect(scheduler.disconnect).toHaveBeenCalledOnce();
 

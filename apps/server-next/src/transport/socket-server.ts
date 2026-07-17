@@ -8,6 +8,7 @@ import type {
 import type { TaskClaimBroker } from '../application/management/task-claim-broker.js';
 import type { ServerWorkerPool } from '../application/management/server-worker-pool.js';
 import type { ServerWorkerScheduler } from '../application/management/server-worker-scheduler.js';
+import { ManagementConflictError } from '../application/management/management-kernel.js';
 import {
   AGENT_EVENTS,
   MESSAGE_BATCH_QUIET_WINDOW_MS,
@@ -113,7 +114,7 @@ export function attachServerNextNamespaces(
           ack?.(serverWorkerUnauthorized());
           return;
         }
-        ack?.(options.serverWorkerPool!.registerWorker({
+        const registration: Parameters<ServerWorkerPool['registerWorker']>[0] = {
           connectionId,
           capability: payload as Parameters<ServerWorkerPool['registerWorker']>[0]['capability'],
           transport: {
@@ -123,7 +124,10 @@ export function attachServerNextNamespaces(
               return ackSocket.emitWithAck(AGENT_EVENTS.serverWorker.leaseOffer, offer);
             },
           },
-        }));
+        };
+        ack?.(options.serverWorkerScheduler
+          ? await options.serverWorkerScheduler.registerWorker(registration)
+          : options.serverWorkerPool!.registerWorker(registration));
       });
       socket.on(AGENT_EVENTS.serverWorker.heartbeat, async (payload, ack) => {
         if (!authorized) {
@@ -177,6 +181,17 @@ export function attachServerNextNamespaces(
           connectionId,
           parsed.value,
         ));
+      });
+      socket.on(AGENT_EVENTS.serverWorker.checkpointFetch, async (payload, ack) => {
+        if (!authorized) return ack?.(serverWorkerUnauthorized());
+        if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerPayload('checkpoint-fetch', payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
+        try {
+          ack?.(await options.serverWorkerScheduler.fetchCheckpoint(connectionId, parsed.value));
+        } catch (error) {
+          ack?.(serverWorkerOperationFailure(error));
+        }
       });
       socket.on('disconnect', async () => {
         if (!authorized) return;
@@ -786,6 +801,19 @@ function serverWorkerSchedulerUnavailable() {
     ok: false as const,
     errorCode: 'UNAVAILABLE' as const,
     diagnosticCode: 'SERVER_WORKER_SCHEDULER_NOT_CONFIGURED',
+    retryable: false,
+  };
+}
+
+function serverWorkerOperationFailure(error: unknown) {
+  const diagnosticCode = error instanceof ManagementConflictError
+    ? error.code
+    : 'MANAGEMENT_WORKER_INTERNAL_ERROR';
+  return {
+    schemaVersion: 1 as const,
+    ok: false as const,
+    errorCode: 'NOT_AUTHORIZED' as const,
+    diagnosticCode,
     retryable: false,
   };
 }

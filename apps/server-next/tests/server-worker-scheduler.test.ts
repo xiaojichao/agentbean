@@ -10,6 +10,255 @@ import { createServerWorkerScheduler } from '../src/application/management/serve
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Phase 4 Server Worker Scheduler', () => {
+  test('waits for lease expiry, takes over on another Server Worker, and fences the stale Worker', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ leaseTtlMs: 100 });
+      harness.registerWorker('connection-2', 'server-instance-2');
+      const run = await harness.createRun('takeover');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      const first = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1,
+        offerId: harness.offers[0]!.offerId,
+        workerInstanceId: 'server-instance-1',
+      });
+      if (!first.ok) throw new Error('first Server lease expected');
+
+      harness.clock.now = 50;
+      harness.scheduler.disconnect('connection-1');
+      const reconnected = await harness.registerThroughScheduler(
+        'connection-1-reconnected',
+        'server-instance-1',
+      );
+      expect(reconnected).toMatchObject({ ok: true, workerId: first.workerId });
+      await expect(harness.scheduler.renewLease('connection-1-reconnected', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+        idempotencyKey: 'stale-early-reconnect-renew',
+      })).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'NOT_AUTHORIZED',
+        diagnosticCode: 'MANAGEMENT_WORKER_RECOVERY_PENDING',
+      });
+      await expect(harness.scheduler.fetchCheckpoint('connection-1-reconnected', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+      })).rejects.toMatchObject({ code: 'MANAGEMENT_WORKER_RECOVERY_PENDING' });
+      await vi.advanceTimersByTimeAsync(59);
+      expect(harness.offers).toHaveLength(1);
+
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(41);
+      await vi.waitFor(() => expect(harness.offers).toHaveLength(2));
+      expect(harness.offers[1]).toMatchObject({
+        managementRunId: run.id,
+        workerId: harness.workerIds.get('connection-2'),
+      });
+      const second = await harness.scheduler.acquireLease('connection-2', {
+        schemaVersion: 1,
+        offerId: harness.offers[1]!.offerId,
+        workerInstanceId: 'server-instance-2',
+      });
+      expect(second).toMatchObject({ ok: true, fencingToken: 2 });
+      if (!second.ok) throw new Error('takeover Server lease expected');
+
+      await expect(harness.scheduler.renewLease('connection-1', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+        idempotencyKey: 'stale-disconnected-renew',
+      })).resolves.toMatchObject({
+        ok: false,
+        diagnosticCode: 'MANAGEMENT_WORKER_CONNECTION_MISMATCH',
+      });
+      await expect(harness.scheduler.fetchCheckpoint('connection-1', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+      })).rejects.toMatchObject({ code: 'MANAGEMENT_WORKER_CONNECTION_MISMATCH' });
+
+      await expect(harness.scheduler.renewLease('connection-1-reconnected', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+        idempotencyKey: 'stale-reconnected-renew',
+      })).resolves.toMatchObject({
+        ok: false,
+        errorCode: 'NOT_AUTHORIZED',
+        diagnosticCode: expect.stringMatching(/^LEASE_/),
+      });
+      await expect(harness.scheduler.fetchCheckpoint('connection-1-reconnected', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: first.workerId,
+        leaseToken: first.leaseToken,
+        fencingToken: first.fencingToken,
+      })).rejects.toMatchObject({ code: expect.stringMatching(/^LEASE_/) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('keeps recovery queued without Device fallback and resumes when a Server Worker reconnects', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ leaseTtlMs: 100 });
+      const run = await harness.createRun('reconnect');
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      const first = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!first.ok) throw new Error('first Server lease expected');
+
+      harness.clock.now = 50;
+      harness.scheduler.disconnect('connection-1');
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(harness.offers).toHaveLength(1);
+      expect(harness.pool.snapshot().queue).toMatchObject([{
+        managementRunId: run.id,
+        reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
+      }]);
+
+      await harness.registerThroughScheduler('connection-2', 'server-instance-2');
+      await vi.waitFor(() => expect(harness.offers).toHaveLength(2));
+      expect(harness.offers[1]).toMatchObject({ managementRunId: run.id });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('rebuilds recovery checkpoint from current facts and never reuses stale model hints', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ leaseTtlMs: 100 });
+      harness.registerWorker('connection-2', 'server-instance-2');
+      const run = await harness.createRun('facts');
+      await harness.repositories.messages.append({
+        id: 'message-facts', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-facts',
+        senderKind: 'human', senderId: 'user-1', body: 'authoritative objective', createdAt: 1,
+      });
+      await harness.repositories.tasks.create({
+        id: 'task-facts', teamId: 'team-1', channelId: 'channel-1', title: 'Root task',
+        status: 'in_progress', creatorId: 'user-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 1,
+      });
+      await harness.repositories.management.invocations.create(invocation(run.id, 'invocation-completed', 2));
+      await harness.repositories.management.dispatchAttempts.create({
+        id: 'attempt-completed', invocationId: 'invocation-completed', dispatchId: 'dispatch-completed',
+        attemptNumber: 1, status: 'succeeded', startedAt: 3, completedAt: 4,
+      });
+      await harness.repositories.management.invocations.create(invocation(run.id, 'invocation-waiting', 5));
+      await harness.repositories.management.checkpoints.put({
+        schemaVersion: 1, managementRunId: run.id, revision: 1,
+        authoritative: {
+          lastEventSequence: 1, taskGraphRevision: 0, openTaskIds: ['ghost-task'],
+          waitingInvocationIds: [], completedInvocationIds: [], memoryCapsuleIds: ['stale-capsule'],
+        },
+        contextHints: {
+          objective: 'stale objective', planSummary: 'repeat everything',
+          completedInvocationSummaries: [{ invocationId: 'invocation-completed', summary: 'untrusted' }],
+          unresolvedQuestions: ['stale question'], nextAction: 'repeat dispatch',
+        },
+        updatedAt: 6,
+      });
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      const first = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!first.ok) throw new Error('first Server lease expected');
+      harness.clock.now = 50;
+      harness.scheduler.disconnect('connection-1');
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(100);
+      const second = await harness.scheduler.acquireLease('connection-2', {
+        schemaVersion: 1, offerId: harness.offers[1]!.offerId, workerInstanceId: 'server-instance-2',
+      });
+      if (!second.ok) throw new Error('takeover Server lease expected');
+
+      const recovery = await harness.scheduler.fetchCheckpoint('connection-2', {
+        schemaVersion: 1,
+        managementRunId: run.id,
+        workerId: second.workerId,
+        leaseToken: second.leaseToken,
+        fencingToken: second.fencingToken,
+        knownCheckpointRevision: 0,
+      });
+      expect(recovery.checkpoint?.authoritative).toMatchObject({
+        openTaskIds: ['task-facts'],
+        waitingInvocationIds: ['invocation-waiting'],
+        completedInvocationIds: ['invocation-completed'],
+        memoryCapsuleIds: ['capsule-current'],
+      });
+      expect(recovery.checkpoint?.contextHints).toEqual({
+        objective: 'authoritative objective',
+        planSummary: '',
+        completedInvocationSummaries: [],
+        unresolvedQuestions: [],
+      });
+      expect(JSON.stringify(recovery)).not.toContain('repeat everything');
+      expect(JSON.stringify(recovery)).not.toContain('repeat dispatch');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('recovers a Run when the old Worker stops heartbeating without a clean disconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ leaseTtlMs: 100, heartbeatTimeoutMs: 30 });
+      const run = await harness.createRun('heartbeat-crash');
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      const first = await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1, offerId: harness.offers[0]!.offerId, workerInstanceId: 'server-instance-1',
+      });
+      if (!first.ok) throw new Error('first Server lease expected');
+
+      harness.clock.now = 41;
+      await expect(harness.scheduler.managementPreflight({
+        placementPolicy: {
+          placement: 'managed',
+          allowServerContext: true,
+          requireLocalModelCredentials: false,
+        },
+        managementPhase: 2,
+        targetAvailable: true,
+      })).resolves.toMatchObject({ preflight: { workerAvailable: false } });
+      expect(harness.pool.snapshot().queue).toMatchObject([{ managementRunId: run.id }]);
+      await harness.registerThroughScheduler('connection-2', 'server-instance-2');
+      expect(harness.offers).toHaveLength(1);
+
+      harness.clock.now = 100;
+      expect(harness.pool.heartbeat({
+        connectionId: 'connection-2', workerInstanceId: 'server-instance-2', activeLeaseCount: 0,
+      })).toMatchObject({ ok: true });
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(harness.repositories.management.runs.getById(run.id))
+        .resolves.toMatchObject({ status: 'recovering' });
+      await vi.waitFor(() => expect(harness.offers).toHaveLength(2));
+      expect(harness.offers[1]).toMatchObject({
+        managementRunId: run.id,
+        workerId: harness.workerIds.get('connection-2'),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('offers a rooted ManagedRun and completes the Server lease lifecycle', async () => {
     const repositories = createInMemoryRepositories();
     const clock = { now: 10 };
@@ -295,6 +544,8 @@ describe('Phase 4 Server Worker Scheduler', () => {
 
 async function createSchedulerHarness(options: {
   offerTimeoutMs?: number;
+  leaseTtlMs?: number;
+  heartbeatTimeoutMs?: number;
   emitLeaseOffer?: (offer: ManagementLeaseOfferV1) => Promise<unknown>;
 } = {}) {
   const repositories = createInMemoryRepositories();
@@ -308,31 +559,58 @@ async function createSchedulerHarness(options: {
     ids,
   });
   const offers: ManagementLeaseOfferV1[] = [];
+  const workerIds = new Map<string, string>();
   const pool = createServerWorkerPool({
     workerPoolId: 'pool-1',
     providerCredentialRef: 'credential-ref-1',
     clock: { now: () => clock.now },
     ids,
+    ...(options.heartbeatTimeoutMs ? { heartbeatTimeoutMs: options.heartbeatTimeoutMs } : {}),
   });
-  pool.registerWorker({
-    connectionId: 'connection-1',
-    capability: capability(),
-    transport: {
-      async emitLeaseOffer(offer) {
-        offers.push(offer);
-        return options.emitLeaseOffer?.(offer) ?? { ok: true };
+  function registerWorker(connectionId: string, workerInstanceId: string) {
+    const registered = pool.registerWorker({
+      connectionId,
+      capability: capability({ workerInstanceId }),
+      transport: {
+        async emitLeaseOffer(offer) {
+          offers.push(offer);
+          return options.emitLeaseOffer?.(offer) ?? { ok: true };
+        },
       },
-    },
-  });
+    });
+    if (registered.ok) workerIds.set(connectionId, registered.workerId);
+    return registered;
+  }
+  registerWorker('connection-1', 'server-instance-1');
   const scheduler = createServerWorkerScheduler({
     pool,
     management: repositories.management,
+    messages: repositories.messages,
+    taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
+    memoryCapsules: {
+      async listValidMemoryCapsuleIds() { return ['capsule-current']; },
+    },
     kernel,
     clock: { now: () => clock.now },
     ids,
     leaseTokens: { nextToken: () => `lease-token-${id}` },
+    ...(options.leaseTtlMs ? { leaseTtlMs: options.leaseTtlMs } : {}),
     ...(options.offerTimeoutMs ? { defaultOfferTimeoutMs: options.offerTimeoutMs } : {}),
   });
+  async function registerThroughScheduler(connectionId: string, workerInstanceId: string) {
+    const registered = await scheduler.registerWorker({
+      connectionId,
+      capability: capability({ workerInstanceId }),
+      transport: {
+        async emitLeaseOffer(offer) {
+          offers.push(offer);
+          return options.emitLeaseOffer?.(offer) ?? { ok: true };
+        },
+      },
+    });
+    if (registered.ok) workerIds.set(connectionId, registered.workerId);
+    return registered;
+  }
   const placementPolicy = {
     placement: 'managed' as const,
     allowServerContext: true,
@@ -352,7 +630,30 @@ async function createSchedulerHarness(options: {
     });
     return run;
   }
-  return { clock, offers, pool, scheduler, createRun };
+  return { clock, offers, pool, repositories, scheduler, workerIds, registerWorker,
+    registerThroughScheduler, createRun };
+}
+
+function invocation(managementRunId: string, id: string, createdAt: number) {
+  return {
+    schemaVersion: 1 as const,
+    id,
+    managementRunId,
+    intentHash: `${id}-hash`,
+    idempotencyKey: `${id}-key`,
+    createdAt,
+    intent: {
+      schemaVersion: 1 as const,
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      targetAgentId: 'agent-1',
+      targetKind: 'custom' as const,
+      objective: id,
+      acceptanceCriteria: [],
+      dependencyResults: [],
+      attachmentIds: [],
+    },
+  };
 }
 
 function capability(
