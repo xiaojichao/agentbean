@@ -1349,18 +1349,28 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
-  const scheduler = createDeviceWorkerScheduler({
-    devices: repositories.devices,
-    messages: repositories.messages,
-    management: repositories.management,
-    memoryCapsules,
-    taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
-    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+  const executeManagementTool = createManagementToolExecutor({
     kernel,
-    executeTool: createManagementToolExecutor({
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+    handlers: createPhase1ManagementToolHandlers({
+      repositories,
       kernel,
-      managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
-      handlers: createPhase1ManagementToolHandlers({
+      taskCoordinationKernel,
+      clock,
+      ids,
+      onDispatchCreated: async (dispatchId) => {
+        if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+        await dispatchEmitter(dispatchId);
+      },
+    }),
+    phase2Handlers: {
+      ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
+        acceptanceService: subtaskAcceptanceService,
+        onTaskPublished: async (taskId) => {
+          if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
+          await taskClaimEmitter(taskId);
+        } }),
+      ...createPhase2InvocationToolHandlers({
         repositories,
         kernel,
         taskCoordinationKernel,
@@ -1371,44 +1381,35 @@ function createDefaultManagementRuntime(
           await dispatchEmitter(dispatchId);
         },
       }),
-      phase2Handlers: {
-        ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
-          acceptanceService: subtaskAcceptanceService,
-          onTaskPublished: async (taskId) => {
-            if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
-            await taskClaimEmitter(taskId);
-          } }),
-        ...createPhase2InvocationToolHandlers({
-          repositories,
-          kernel,
-          taskCoordinationKernel,
-          clock,
-          ids,
-          onDispatchCreated: async (dispatchId) => {
-            if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
-            await dispatchEmitter(dispatchId);
-          },
-        }),
-        ...createPhase2CollaborationToolHandlers({
-          repositories,
-          clock,
-          ids,
-          onDispatchCreated: async (dispatchId) => {
-            if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
-            await dispatchEmitter(dispatchId);
-          },
-        }),
-      },
-      phase3Handlers: createPhase3ManagementToolHandlers({
+      ...createPhase2CollaborationToolHandlers({
         repositories,
-        searchService: memorySearchService,
-        capsuleService: memoryCapsuleService,
-        candidateService: memoryCandidateService,
-        collaborativeService: collaborativeMemoryService,
         clock,
-        currentPolicyVersion: CURRENT_MEMORY_POLICY_VERSION,
+        ids,
+        onDispatchCreated: async (dispatchId) => {
+          if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+          await dispatchEmitter(dispatchId);
+        },
       }),
+    },
+    phase3Handlers: createPhase3ManagementToolHandlers({
+      repositories,
+      searchService: memorySearchService,
+      capsuleService: memoryCapsuleService,
+      candidateService: memoryCandidateService,
+      collaborativeService: collaborativeMemoryService,
+      clock,
+      currentPolicyVersion: CURRENT_MEMORY_POLICY_VERSION,
     }),
+  });
+  const scheduler = createDeviceWorkerScheduler({
+    devices: repositories.devices,
+    messages: repositories.messages,
+    management: repositories.management,
+    memoryCapsules,
+    taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
+    managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
+    kernel,
+    executeTool: executeManagementTool,
     clock,
     ids,
     leaseTokens: { nextToken: () => randomBytes(32).toString('base64url') },
@@ -1419,6 +1420,8 @@ function createDefaultManagementRuntime(
     messages: repositories.messages,
     taskCoordinationUnitOfWork: repositories.taskCoordinationUnitOfWork,
     memoryCapsules,
+    repositories,
+    executeTool: executeManagementTool,
     kernel,
     clock,
     ids,

@@ -74,8 +74,9 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
         db.prepare(`INSERT INTO management_runs
           (id, team_id, channel_id, root_task_id, root_message_id, status, placement_policy_json,
            active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at,
-           target_agent_id, target_kind, management_phase, main_agent_id, active_agent_id, collaboration_mode)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           target_agent_id, target_kind, management_phase, main_agent_id, active_agent_id, collaboration_mode,
+           initiated_by_user_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.channelId, record.rootTaskId ?? null, record.rootMessageId,
             record.status, json(record.placementPolicy), record.activeWorkerId ?? null, record.checkpointRevision,
             json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null,
@@ -83,7 +84,8 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
             'managementPhase' in record ? record.managementPhase : 1,
             'mainAgentId' in record ? record.mainAgentId ?? null : null,
             'activeAgentId' in record ? record.activeAgentId ?? null : null,
-            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent');
+            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent',
+            record.initiatedByUserId ?? null);
         return record;
       },
       async getById(id) {
@@ -142,6 +144,30 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       async list(managementRunId) {
         return db.prepare('SELECT * FROM management_events WHERE management_run_id = ? ORDER BY sequence')
           .all(managementRunId).map(mapEvent);
+      },
+    },
+    accessAudits: {
+      async append(record) {
+        db.prepare(`INSERT INTO management_access_audits
+          (id, management_run_id, user_id, team_id, scope_type, scope_id, action, decision,
+           diagnostic_code, projection_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.managementRunId, record.userId, record.teamId, record.scopeType,
+            record.scopeId, record.action, record.decision, record.diagnosticCode ?? null,
+            record.projectionHash ?? null, record.createdAt);
+        return record;
+      },
+      async list(managementRunId) {
+        return db.prepare(`SELECT * FROM management_access_audits
+          WHERE management_run_id = ? ORDER BY created_at, id`).all(managementRunId).map((value) => ({
+          id: text(value, 'id'), managementRunId: text(value, 'management_run_id'),
+          userId: text(value, 'user_id'), teamId: text(value, 'team_id'),
+          scopeType: text(value, 'scope_type') as 'team' | 'channel' | 'task' | 'management',
+          scopeId: text(value, 'scope_id'),
+          action: text(value, 'action') as 'access' | 'transmit' | 'permission-change',
+          decision: text(value, 'decision') as 'allowed' | 'denied',
+          diagnosticCode: nullableText(value, 'diagnostic_code'),
+          projectionHash: nullableText(value, 'projection_hash'), createdAt: number(value, 'created_at'),
+        }));
       },
     },
     checkpoints: {
@@ -282,6 +308,7 @@ function mapRun(value: unknown): ManagementRunRecord | null {
   const common = {
     id: text(value, 'id'), teamId: text(value, 'team_id'), channelId: text(value, 'channel_id'),
     rootMessageId: text(value, 'root_message_id'),
+    initiatedByUserId: nullableText(value, 'initiated_by_user_id'),
     ...(frozenTarget ? { frozenTarget } : {}),
     mainAgentId: nullableText(value, 'main_agent_id'), activeAgentId: nullableText(value, 'active_agent_id'),
     collaborationMode: text(value, 'collaboration_mode') as 'single-agent' | 'manager-orchestrated' | 'handoff',

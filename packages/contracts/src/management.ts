@@ -56,6 +56,8 @@ export interface ManagementRunDto {
   readonly channelId: ID;
   readonly rootTaskId?: ID;
   readonly rootMessageId: ID;
+  /** 发起本次管理 Run 的用户；Server Worker 只能继承该用户的当前权限。 */
+  readonly initiatedByUserId?: ID;
   readonly frozenTarget?: {
     readonly agentId: ID;
     readonly kind: 'custom' | 'agentos-hosted';
@@ -87,6 +89,8 @@ interface ManagementRunV2BaseDto {
   readonly teamId: ID;
   readonly channelId: ID;
   readonly rootMessageId: ID;
+  /** 发起本次管理 Run 的用户；Server Worker 只能继承该用户的当前权限。 */
+  readonly initiatedByUserId?: ID;
   readonly frozenTarget?: ManagementRunDto['frozenTarget'];
   readonly mainAgentId?: ID;
   readonly activeAgentId?: ID;

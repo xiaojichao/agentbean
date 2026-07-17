@@ -199,6 +199,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         }
         const created = await kernel.createOrResumeRun({
           teamId: input.teamId,
+          initiatedByUserId: input.userId,
           channelId: input.channelId,
           rootTaskId: input.rootTaskId,
           rootMessageId: input.rootMessageId,
@@ -251,6 +252,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         }
         const created = await kernel.createOrResumeRun({
           teamId: input.teamId,
+          initiatedByUserId: input.userId,
           channelId: input.channelId,
           rootTaskId: input.rootTaskId,
           rootMessageId: input.rootMessageId,
@@ -305,6 +307,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
 
       const created = await kernel.createOrResumeRun({
         teamId: input.teamId,
+        initiatedByUserId: input.userId,
         channelId: input.channelId,
         ...(input.rootTaskId ? { rootTaskId: input.rootTaskId } : {}),
         rootMessageId: input.rootMessageId,

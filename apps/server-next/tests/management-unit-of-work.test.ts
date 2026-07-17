@@ -57,6 +57,36 @@ describe.each([
 });
 
 describe('management SQLite constraints', () => {
+  test('persists the initiating user and body-free Server context audits', async () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      const { repositories } = createSqliteManagementPersistence(db);
+      expect(db.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0023_management_user_proxy_audit.sql'").get())
+        .toEqual({ id: 'team/0023_management_user_proxy_audit.sql' });
+      await repositories.runs.create({
+        ...createRunInput().run,
+        initiatedByUserId: 'user-1',
+      });
+      await expect(repositories.runs.getById('run-1')).resolves.toMatchObject({
+        initiatedByUserId: 'user-1',
+      });
+      await repositories.accessAudits.append({
+        id: 'audit-1', managementRunId: 'run-1', userId: 'user-1', teamId: 'team-1',
+        scopeType: 'channel', scopeId: 'channel-1', action: 'transmit', decision: 'allowed',
+        projectionHash: 'projection-hash', createdAt: 2,
+      });
+      const audits = await repositories.accessAudits.list('run-1');
+      expect(audits).toEqual([expect.objectContaining({
+        userId: 'user-1', scopeId: 'channel-1', action: 'transmit', projectionHash: 'projection-hash',
+      })]);
+      expect(JSON.stringify(audits)).not.toContain('message body');
+      expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   test('persists Device and Server lease hosts while preserving legacy Device rows', async () => {
     const db = new Database(':memory:');
     try {

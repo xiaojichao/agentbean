@@ -24,6 +24,7 @@ describe('trusted Server Worker socket transport', () => {
       releaseLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'release' })),
       abortLease: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'abort' })),
       fetchCheckpoint: vi.fn(async () => ({ schemaVersion: 1, operation: 'checkpoint' })),
+      executeTool: vi.fn(async () => ({ schemaVersion: 1, ok: true, operation: 'tool' })),
       disconnect: vi.fn(() => ({ activeManagementRunIds: [] })),
     } as unknown as ServerWorkerScheduler;
     attachServerNextNamespaces(server, {} as ServerNextUseCases, {
@@ -66,6 +67,20 @@ describe('trusted Server Worker socket transport', () => {
     const { idempotencyKey: _idempotencyKey, ...leaseProof } = authority;
     expect(await trusted.trigger(AGENT_EVENTS.serverWorker.checkpointFetch, leaseProof))
       .toMatchObject({ operation: 'checkpoint' });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.toolRequest, {
+      schemaVersion: 1, commandId: 'command-1', managementRunId: 'run-1',
+      workerId: 'server-worker-1', toolCallId: 'tool-1',
+      toolName: 'context.get_root_message', input: {},
+    })).toMatchObject({ ok: true, operation: 'tool' });
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.toolRequest, {
+      schemaVersion: 1, commandId: 'command-local', managementRunId: 'run-1',
+      workerId: 'server-worker-1', toolCallId: 'tool-local',
+      toolName: 'context.get_root_message', input: {}, cwd: '/private/device-workspace',
+    })).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_REQUEST',
+      diagnosticCode: expect.stringContaining('MANAGEMENT_WORKER_PAYLOAD_INVALID'),
+    });
     expect(scheduler.acquireLease).toHaveBeenCalledWith(expect.stringMatching(/^server-worker:/), {
       schemaVersion: 1, offerId: 'offer-1', workerInstanceId: 'server-instance-1',
     });
@@ -76,6 +91,7 @@ describe('trusted Server Worker socket transport', () => {
       AGENT_EVENTS.serverWorker.leaseRelease,
       AGENT_EVENTS.serverWorker.abort,
       AGENT_EVENTS.serverWorker.checkpointFetch,
+      AGENT_EVENTS.serverWorker.toolRequest,
     ]) {
       expect(await trusted.trigger(event, null)).toMatchObject({
         ok: false,
@@ -88,6 +104,7 @@ describe('trusted Server Worker socket transport', () => {
     expect(scheduler.releaseLease).toHaveBeenCalledTimes(1);
     expect(scheduler.abortLease).toHaveBeenCalledTimes(1);
     expect(scheduler.fetchCheckpoint).toHaveBeenCalledTimes(1);
+    expect(scheduler.executeTool).toHaveBeenCalledTimes(1);
     await trusted.trigger('disconnect');
     expect(scheduler.disconnect).toHaveBeenCalledOnce();
 

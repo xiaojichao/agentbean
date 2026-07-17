@@ -39,8 +39,9 @@ import { toMemoryCapsuleRef } from '../memory-capsule-service.js';
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 type TaskCoordinationKernel = ReturnType<typeof createTaskCoordinationKernel>;
 type SubtaskAcceptanceService = ReturnType<typeof createSubtaskAcceptanceService>;
-type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
-type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2 | Phase3MemoryToolResultV3;
+export type ManagementToolRequest = ManagementWorkerToolRequestV1 | Phase2TaskToolRequestV2 | Phase3MemoryToolRequestV3;
+export type ManagementToolResult = ManagementWorkerToolResultV1 | Phase2TaskToolResultV2 | Phase3MemoryToolResultV3;
+export type ManagementToolExecutor = (request: ManagementToolRequest) => Promise<ManagementToolResult>;
 type ToolHandler<K extends Phase1ManagementWorkerToolName> = (
   input: Extract<ManagementWorkerToolRequestV1, { toolName: K }>,
 ) => Promise<Phase1ManagementWorkerToolOutputMapV1[K]>;
