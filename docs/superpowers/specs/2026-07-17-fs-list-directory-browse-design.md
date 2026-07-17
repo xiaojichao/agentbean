@@ -104,7 +104,7 @@ device: {
 },
 ```
 
-> **readiness 门禁注意**（见 [[agentbean-readiness-transport-exemption-gotcha]]）：contracts/socket.ts 加新 transport 事件名含 `directory` 词，须同步 readiness 剥离链加 `.replace(/device:list-directory[a-z-]*/g,'')`，否则撞 `phase-0-management-boundary-regression` CI。本 spec 实施切片必须含此同步。
+> **readiness 门禁注意**（见 [[agentbean-readiness-transport-exemption-gotcha]]）：readiness 剥离链只对**隔离 worker transport**（前缀 `management-worker:` / `server-worker:` / `task-claim:` / `management-policy:`，且事件名含 `management|invocation|checkpoint` 敏感词）触发同步要求。`device:list-directory` 是普通设备 transport（`device:` 前缀、不含敏感词），**无需**同步剥离链——切片1 实测 `node scripts/check-agentbean-next-readiness.mjs` 全 PASS（含 `phase-0-management-boundary-regression`）证实。仅当后续切片给 worker transport 加事件名时才需查那条 gotcha。
 
 ### 4.2 请求 / 响应载荷
 
