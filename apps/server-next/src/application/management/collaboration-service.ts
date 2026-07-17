@@ -6,6 +6,7 @@ import type {
   AgentHandoffStatus,
   AgentInvocationResultDto,
   ManagementEventPayloadMapV1,
+  ManagementRunStatus,
   Phase2ManagementWorkerToolInputMapV1,
 } from '../../../../../packages/contracts/src/index.js';
 import {
@@ -365,6 +366,11 @@ async function updateFromDispatch(
     const handoff = await management.handoffs.getById(initialHandoff.id);
     const run = await management.runs.getById(initialRun.id);
     if (!handoff || !run || run.schemaVersion !== 2) return handoff;
+    if (isTerminalHandoffStatus(handoff.status) && result && !handoff.result) {
+      const patched = { ...handoff, result, updatedAt: now };
+      await management.handoffs.update(patched);
+      return patched;
+    }
     if (handoff.status === status || (status === 'accepted' && handoff.status === 'running')
       || isTerminalHandoffStatus(handoff.status)) return handoff;
     const updated: AgentHandoffRecordDto = { ...handoff, status,
@@ -446,6 +452,14 @@ async function isTaskFenceCurrent(
   context: NonNullable<AgentCollaborationProposalV1['sourceTaskContext']>,
   now: number,
 ) {
+  if (isManagementTaskFence(context, managementRunId)) {
+    // 管理 fence 没有真实 claim 生命周期兜底（claim 失效/过期即拒），
+    // 必须显式排除已收尾的 run：deliver_to_root 闭环把 run 置为 in_review 但不递增
+    // Task revision，仅靠 revision 校验会让审核态 run 继续放行后续 proposal。
+    const run = await repositories.management.runs.getById(managementRunId);
+    if (!run || isRunClosedForCollaboration(run.status)) return false;
+    return isTaskRevisionFenceCurrent(repositories, managementRunId, context);
+  }
   const [task, coordination, claim, currentClaim] = await Promise.all([
     repositories.tasks.getById(context.taskId),
     repositories.taskCoordination.coordinations.getByTaskId(context.taskId),
@@ -462,6 +476,18 @@ async function isTaskFenceCurrent(
     && coordination.attempt === context.taskAttempt && claim.taskId === context.taskId
     && claim.taskRevision === context.taskRevision && claim.taskAttempt === context.taskAttempt
     && claim.status === 'active' && claim.expiresAt > now);
+}
+
+function isManagementTaskFence(
+  context: NonNullable<AgentCollaborationProposalV1['sourceTaskContext']>,
+  managementRunId: string,
+) {
+  return context.claimLeaseId === `management:${managementRunId}`;
+}
+
+function isRunClosedForCollaboration(status: ManagementRunStatus) {
+  return status === 'in_review' || status === 'completed'
+    || status === 'failed' || status === 'cancelled';
 }
 
 async function isTaskRevisionFenceCurrent(

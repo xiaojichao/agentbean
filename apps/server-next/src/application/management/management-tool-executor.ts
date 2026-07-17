@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type {
+  AgentHandoffStatus,
   AgentInvocationStatus,
   ManagementWorkerToolRequestV1,
   ManagementWorkerToolResultV1,
@@ -158,16 +159,27 @@ export function createManagementToolExecutor(input: {
   };
 }
 
+function isTerminalHandoffStatus(status: AgentHandoffStatus) {
+  return status === 'returned' || status === 'rejected' || status === 'failed'
+    || status === 'cancelled' || status === 'timed_out';
+}
+
 export function createPhase2CollaborationToolHandlers(input: {
   readonly repositories: ServerNextRepositories;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly onDispatchCreated: (dispatchId: string) => Promise<void> | void;
   readonly pollIntervalMs?: number;
+  readonly resultGraceMs?: number;
 }): Pick<Phase2ToolHandlers, 'agents.list_available' | 'handoffs.request' | 'handoffs.await_result'> {
   const service = createCollaborationService(input);
   const gateway = createInvocationGateway(input);
   const pollIntervalMs = input.pollIntervalMs ?? 50;
+  // canonical 终态（completeAttempt）先于结果落库（recordTerminal 补写 result）：
+  // 无 result 的 returned 只是该窗口的中间态，继续轮询等待结果写入；
+  // 超过宽限轮次（结果永不到达的崩溃场景）才按无结果返回收敛。
+  const maxResultWaitPolls = Math.max(1,
+    Math.ceil((input.resultGraceMs ?? 5_000) / pollIntervalMs));
   const emittedDispatchIds = new Set<string>();
   return {
     'agents.list_available': async (request) => ({ agents: await service.listAvailableAgents({
@@ -198,17 +210,26 @@ export function createPhase2CollaborationToolHandlers(input: {
         status: requested.handoff.status };
     },
     'handoffs.await_result': async (request) => {
+      let resultWaitPolls = 0;
       for (;;) {
         const handoff = await service.getHandoff(request.input.handoffId);
         if (!handoff || handoff.managementRunId !== request.managementRunId || !handoff.invocationId) {
           throw new Error('HANDOFF_NOT_FOUND');
         }
-        if (['returned', 'rejected', 'failed', 'cancelled', 'timed_out'].includes(handoff.status)
-        ) {
-          return { handoffId: handoff.id, invocationId: handoff.invocationId, status: handoff.status,
-            ...(handoff.result ? { result: handoff.result } : {}) };
+        const current = isTerminalHandoffStatus(handoff.status) ? handoff
+          : (await service.reconcileInvocation(handoff.invocationId)) ?? handoff;
+        const awaitingResult = current.status === 'returned' && !current.result;
+        resultWaitPolls = awaitingResult ? resultWaitPolls + 1 : 0;
+        if (isTerminalHandoffStatus(current.status)
+          && (!awaitingResult || resultWaitPolls > maxResultWaitPolls)) {
+          return { handoffId: handoff.id, invocationId: handoff.invocationId,
+            status: current.status, ...(current.result ? { result: current.result } : {}) };
         }
         if (request.input.timeoutAt !== undefined && input.clock.now() >= request.input.timeoutAt) {
+          if (isTerminalHandoffStatus(current.status)) {
+            return { handoffId: handoff.id, invocationId: handoff.invocationId,
+              status: current.status, ...(current.result ? { result: current.result } : {}) };
+          }
           const view = await gateway.getView(handoff.invocationId);
           const dispatchId = view.activeDispatchId;
           if (dispatchId) {
@@ -220,10 +241,8 @@ export function createPhase2CollaborationToolHandlers(input: {
               status: timedOut?.status ?? 'timed_out',
               ...(timedOut?.result ? { result: timedOut.result } : {}) };
           }
-          const reconciled = await service.reconcileInvocation(handoff.invocationId);
           return { handoffId: handoff.id, invocationId: handoff.invocationId,
-            status: reconciled?.status ?? handoff.status,
-            ...(reconciled?.result ? { result: reconciled.result } : {}) };
+            status: current.status, ...(current.result ? { result: current.result } : {}) };
         }
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
       }

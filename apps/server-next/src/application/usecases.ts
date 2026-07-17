@@ -8,7 +8,7 @@ import { buildDeviceInviteCommand } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
 import { createCollaborationService } from './management/collaboration-service.js';
-import { createManagementKernel } from './management/management-kernel.js';
+import { appendManagementEventInTransaction, createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
@@ -3497,12 +3497,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getArtifact(artifactInput) {
       const result = await getAuthorizedArtifact(repositories, artifactInput);
       if (!result.ok) return result;
+      if (!(await isPublicArtifact(repositories, result.artifact))) {
+        return makeFailure('NOT_FOUND', 'Artifact not found');
+      }
       return makeSuccess({ artifact: toArtifactDto(result.artifact) });
     },
 
     async getArtifactFile(artifactInput) {
       const result = await getAuthorizedArtifact(repositories, artifactInput);
       if (!result.ok) return result;
+      if (!(await isPublicArtifact(repositories, result.artifact))) {
+        return makeFailure('NOT_FOUND', 'Artifact not found');
+      }
       return makeSuccess({
         artifact: toArtifactDto(result.artifact),
         storagePath: result.artifact.storagePath,
@@ -3524,12 +3530,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRun(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
+      if (!(await isPublicWorkspaceRun(repositories, result.workspaceRun))) {
+        return makeFailure('NOT_FOUND', 'Workspace run not found');
+      }
       return makeSuccess({ workspaceRun: await toWorkspaceRunDto(repositories, result.workspaceRun, runInput.userId) });
     },
 
     async getWorkspaceRunDetail(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
+      if (!(await isPublicWorkspaceRun(repositories, result.workspaceRun))) {
+        return makeFailure('NOT_FOUND', 'Workspace run not found');
+      }
       const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
         teamId: result.workspaceRun.teamId,
         channelId: result.workspaceRun.channelId,
@@ -3544,6 +3556,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getWorkspaceRunLogFile(runInput) {
       const result = await getAuthorizedWorkspaceRun(repositories, runInput);
       if (!result.ok) return result;
+      if (!(await isPublicWorkspaceRun(repositories, result.workspaceRun))) {
+        return makeFailure('NOT_FOUND', 'Workspace run not found');
+      }
       const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
         teamId: result.workspaceRun.teamId,
         channelId: result.workspaceRun.channelId,
@@ -3572,36 +3587,46 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
         cursor = decoded;
       }
-      const runs = await repositories.workspaceRuns.listByTeam({
-        teamId: runInput.teamId,
-        limit: pageSize * 10,
-        agentId: runInput.agentId,
-        deviceId: runInput.deviceId,
-        status: runInput.status,
-        cursor,
-      });
       const visibleRuns: TeamWorkspaceRunListItemDto[] = [];
-      for (const run of runs) {
-        if (visibleRuns.length >= pageSize + 1) {
-          break;
+      const fetchLimit = Math.max(pageSize + 1, pageSize * 10);
+      let fetchCursor = cursor;
+      while (visibleRuns.length < pageSize + 1) {
+        const runs = await repositories.workspaceRuns.listByTeam({
+          teamId: runInput.teamId,
+          limit: fetchLimit,
+          agentId: runInput.agentId,
+          deviceId: runInput.deviceId,
+          status: runInput.status,
+          cursor: fetchCursor,
+        });
+        for (const run of runs) {
+          if (visibleRuns.length >= pageSize + 1) {
+            break;
+          }
+          const channelAccess = await ensureUserCanViewChannel(repositories, {
+            userId: runInput.userId,
+            teamId: run.teamId,
+            channelId: run.channelId,
+          });
+          if (!channelAccess.ok) {
+            continue;
+          }
+          if (!(await isPublicWorkspaceRun(repositories, run))) {
+            continue;
+          }
+          const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+            teamId: run.teamId,
+            channelId: run.channelId,
+            runId: run.id,
+          });
+          visibleRuns.push({
+            workspaceRun: run,
+            artifacts: artifacts.map(toArtifactDto),
+          });
         }
-        const channelAccess = await ensureUserCanViewChannel(repositories, {
-          userId: runInput.userId,
-          teamId: run.teamId,
-          channelId: run.channelId,
-        });
-        if (!channelAccess.ok) {
-          continue;
-        }
-        const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
-          teamId: run.teamId,
-          channelId: run.channelId,
-          runId: run.id,
-        });
-        visibleRuns.push({
-          workspaceRun: run,
-          artifacts: artifacts.map(toArtifactDto),
-        });
+        const lastFetchedRun = runs.at(-1);
+        if (visibleRuns.length >= pageSize + 1 || runs.length < fetchLimit || !lastFetchedRun) break;
+        fetchCursor = { updatedAt: lastFetchedRun.updatedAt, id: lastFetchedRun.id };
       }
       const hasMore = visibleRuns.length > pageSize;
       const page = hasMore ? visibleRuns.slice(0, pageSize) : visibleRuns;
@@ -3633,6 +3658,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           channelId: run.channelId,
         });
         if (!channelAccess.ok) {
+          continue;
+        }
+        if (!(await isPublicWorkspaceRun(repositories, run))) {
           continue;
         }
         const artifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
@@ -3670,7 +3698,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? await markLinkedTaskTodoIfInProgress(repositories, originMessage, now)
         : null;
       if (cancelled.changed && managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
+        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: cancelled.dispatch.id,
           status: 'cancelled',
           actorId: cancelInput.userId,
@@ -3729,7 +3757,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const originMessage = await repositories.messages.getById(result.dispatch.messageId);
         const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
         if (managedAttempt) {
-          await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
+          await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
             dispatchId: result.dispatch.id,
             status: 'cancelled',
             actorId: cancelInput.userId,
@@ -3772,7 +3800,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const originMessage = await repositories.messages.getById(timedOut.dispatch.messageId);
           const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
           if (managedAttempt) {
-            await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
+            await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
               dispatchId: timedOut.dispatch.id,
               status: 'timed_out',
               errorCode: 'DISPATCH_TIMEOUT',
@@ -3976,7 +4004,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
+        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
           status: resultSucceeded ? 'succeeded' : 'failed',
           artifactIds: artifacts.map((artifact) => artifact.id),
@@ -4038,7 +4066,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
-        await recordManagedDispatchTerminal(repositories, managementKernel, taskCoordinationKernel, collaborationService, {
+        await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: failed.dispatch.id,
           status: 'failed',
           actorId: errorInput.agentId,
@@ -4692,6 +4720,33 @@ async function getAuthorizedWorkspaceRun(
     return channelAccess;
   }
   return { ok: true, workspaceRun };
+}
+
+async function isPublicWorkspaceRun(
+  repositories: ServerNextRepositories,
+  run: WorkspaceRunRecord,
+): Promise<boolean> {
+  const attempt = await repositories.management.dispatchAttempts.getByDispatchId(run.dispatchId);
+  if (!attempt) return true;
+  const handoff = await repositories.management.handoffs.getByInvocationId(attempt.invocationId);
+  return !handoff || handoff.intent.returnMode === 'deliver_to_root';
+}
+
+async function isPublicArtifact(
+  repositories: ServerNextRepositories,
+  artifact: ArtifactRecord,
+): Promise<boolean> {
+  if (artifact.workspaceRunId) {
+    const run = await repositories.workspaceRuns.getForTeam({ teamId: artifact.teamId, runId: artifact.workspaceRunId });
+    if (run && !(await isPublicWorkspaceRun(repositories, run))) return false;
+  }
+  if (artifact.dispatchId) {
+    const attempt = await repositories.management.dispatchAttempts.getByDispatchId(artifact.dispatchId);
+    if (!attempt) return true;
+    const handoff = await repositories.management.handoffs.getByInvocationId(attempt.invocationId);
+    return !handoff || handoff.intent.returnMode === 'deliver_to_root';
+  }
+  return true;
 }
 
 async function getAttachableUploadedArtifacts(
@@ -6355,6 +6410,8 @@ async function markLinkedTaskTodoIfInProgress(
 
 async function recordManagedDispatchTerminal(
   repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  ids: ServerNextIds,
   kernel: ReturnType<typeof createManagementKernel>,
   taskKernel: ReturnType<typeof createTaskCoordinationKernel>,
   collaborationService: ReturnType<typeof createCollaborationService>,
@@ -6381,6 +6438,16 @@ async function recordManagedDispatchTerminal(
     status: input.status, artifactIds: input.artifactIds ?? [],
     ...(input.result ? { result: input.result } : {}) });
   if (handoff) {
+    if (handoff.intent.returnMode === 'deliver_to_root' && input.status === 'succeeded'
+      && input.deliveryMessageId) {
+      await submitRootDeliveryFromHandoff(repositories, clock, ids, {
+        managementRunId: invocation.managementRunId,
+        invocationId: invocation.id,
+        messageId: input.deliveryMessageId,
+        workerId: input.actorId ?? 'system',
+        idempotencyKey: `handoff-root-delivery:${handoff.id}:${input.dispatchId}`,
+      });
+    }
     return;
   }
   const taskContext = invocation.intent.taskContext;
@@ -6405,6 +6472,47 @@ async function recordManagedDispatchTerminal(
     ...(input.deliveryMessageId ? { deliveryMessageId: input.deliveryMessageId } : {}),
     ...(input.actorId ? { actorId: input.actorId } : {}),
     ...(input.errorCode ? { errorCode: input.errorCode } : {}),
+  });
+}
+
+async function submitRootDeliveryFromHandoff(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  ids: ServerNextIds,
+  input: {
+    managementRunId: string;
+    invocationId: string;
+    messageId: string;
+    workerId: string;
+    idempotencyKey: string;
+  },
+) {
+  await repositories.managementUnitOfWork.run(async (management) => {
+    const run = await management.runs.getById(input.managementRunId);
+    if (!run || run.schemaVersion !== 2 || !run.rootTaskId) return;
+    if (run.status === 'in_review' || run.status === 'completed'
+      || run.status === 'failed' || run.status === 'cancelled') return;
+    // 含 subtask 的 run 不在此闭环：canonical submitRootDelivery 会做依赖完成、
+    // 叶子验收与完整 contributingInvocationIds 校验，handoff 交付不能绕过它们
+    // 把根任务提前推进到 in_review；无 subtask 时 handoff 交付即根交付。
+    const coordinations = await repositories.taskCoordination.coordinations
+      .listByManagementRun(run.id);
+    if (coordinations.some((coordination) => coordination.nodeKind === 'subtask')) return;
+    const rootTask = await repositories.tasks.getById(run.rootTaskId);
+    if (!rootTask || rootTask.status !== 'in_progress') return;
+    const now = clock.now();
+    const updatedTask = await repositories.tasks.update({ taskId: rootTask.id,
+      changes: { status: 'in_review', updatedAt: now } });
+    if (!updatedTask) throw new Error('TASK_NOT_FOUND');
+    await appendManagementEventInTransaction(management, {
+      managementRunId: run.id,
+      type: 'root-delivery-submitted',
+      actorKind: 'system',
+      actorId: input.workerId,
+      idempotencyKey: input.idempotencyKey,
+      payload: { messageId: input.messageId, contributingInvocationIds: [input.invocationId] },
+    }, now, ids);
+    await management.runs.update({ ...run, status: 'in_review', updatedAt: now });
   });
 }
 
