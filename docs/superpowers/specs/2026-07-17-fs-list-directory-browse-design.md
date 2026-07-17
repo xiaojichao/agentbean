@@ -119,8 +119,10 @@ interface ListDirectoryRequest {
 interface ListDirectoryResponse {
   ok: boolean;
   entries?: Array<{ name: string; isDir: boolean }>;
-  error?: string;        // 'PERMISSION_DENIED' | 'PATH_NOT_FOUND' | 'RATE_LIMITED' | 'DEVICE_OFFLINE' | 'DIRECTORY_LIST_TIMEOUT'
-                          // 注：denylist 命中统一返回 PATH_NOT_FOUND，不暴露目录存在性，故无 PATH_FORBIDDEN 枚举（见 §5.2）
+  error?: string;        // 'FORBIDDEN' | 'PATH_NOT_FOUND' | 'RATE_LIMITED' | 'DEVICE_OFFLINE' | 'DIRECTORY_LIST_TIMEOUT'
+                          // 注1：server 授权拒绝（assertCanManageDevice）用全仓惯例码 FORBIDDEN（renameDevice/deleteDevice 同款），
+                          //       而非本节初稿写的 PERMISSION_DENIED；web 映射层两者同义兼容（切片2 修正）。
+                          // 注2：denylist 命中统一返回 PATH_NOT_FOUND，不暴露目录存在性，故无 PATH_FORBIDDEN 枚举（见 §5.2）
   homePath?: string;     // 首次调用附 daemon 的 home 绝对路径，作为树形浏览的合理起点
 }
 ```
@@ -211,7 +213,7 @@ interface ListDirectoryResponse {
 - [ ] 远程设备（`fsBrowse` daemon）：**同上，全功能**（本次痛点 + 远程二等公民体验同时解决）。
 - [ ] 旧 daemon（无 `fsBrowse`）+ 本机：回退 `selectDirectory` 弹窗，行为不变。
 - [ ] 旧 daemon（无 `fsBrowse`）+ 远程：回退手动填路径，行为不变（D1 降级保留为兜底）。
-- [ ] 非拥有者调 `fs:list`：返回 `PERMISSION_DENIED`，不能列目录。
+- [ ] 非拥有者调 `fs:list`：返回 `FORBIDDEN`（server 授权拒绝惯例码，web 映射为权限提示），不能列目录。
 - [ ] denylist 路径：返回 `PATH_NOT_FOUND`，不暴露存在性。
 - [ ] readiness / phase-0-management-boundary-regression CI 全绿。
 

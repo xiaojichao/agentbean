@@ -20,6 +20,12 @@ describe('formatListDirectoryError', () => {
     expect(formatListDirectoryError('PERMISSION_DENIED')).toContain('权限');
   });
 
+  test('FORBIDDEN（server 授权拒绝的实际错误码）→ 权限提示', () => {
+    // server assertCanManageDevice 拒绝时返回全仓惯例码 FORBIDDEN（非 spec 字面 PERMISSION_DENIED），
+    // 映射层必须覆盖真实码，否则用户看到裸 "FORBIDDEN"。
+    expect(formatListDirectoryError('FORBIDDEN')).toContain('权限');
+  });
+
   test('未知错误码原样返回（不误吞，供排查）', () => {
     expect(formatListDirectoryError('SOMETHING_NEW')).toBe('SOMETHING_NEW');
   });
