@@ -12,6 +12,9 @@ export function formatListDirectoryError(error?: string): string {
     case 'PATH_NOT_FOUND':
       return '该路径不存在或不可访问';
     case 'PERMISSION_DENIED':
+    case 'FORBIDDEN':
+      // fs:list 授权拒绝（assertCanManageDevice）实际到达的是全仓惯例码 FORBIDDEN；
+      // PERMISSION_DENIED 为 memory 面在用的旧码，此处保留作防御性兼容。
       return '没有权限浏览该设备目录（需为设备拥有者或系统管理员）';
     case 'RATE_LIMITED':
       return '操作过于频繁，请稍后再试';

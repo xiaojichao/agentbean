@@ -852,6 +852,106 @@ describe('device rename and delete (end-to-end)', () => {
     ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
 
+  test('assertCanManageDevice allows system admin who is a team member (not device owner)', async () => {
+    // admin 放行路径：user.role==='admin' 且为团队成员，即使非设备拥有者也放行，
+    // 与 renameDevice/deleteDevice 的系统管理员越权规则一致（防过度收紧）。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-own-1']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const deviceId = (hello as { device: { id: string } }).device.id;
+
+    // 系统管理员（区别于团队角色 admin）：是团队成员但不是设备拥有者
+    await repositories.users.create({
+      id: 'sysadmin', username: 'sysadmin', email: null, role: 'admin',
+      passwordHash: 'x', currentTeamId: 'team-1', createdAt: 0, updatedAt: 0,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'sysadmin', role: 'member' });
+
+    await expect(
+      app.assertCanManageDevice({ userId: 'sysadmin', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+  });
+
+  test('assertCanManageDevice re-verifies on every call: revocation denies immediately (no cache)', async () => {
+    // 授权从不缓存：拥有者被移出团队后，下一次调用立即 FORBIDDEN，
+    // 不存在「上次放行过所以这次也放行」的会话级残留。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-own-1']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const deviceId = (hello as { device: { id: string } }).device.id;
+
+    // 撤销前放行
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+
+    // 撤销（移出团队）→ 下一次调用立即拒绝
+    await repositories.teams.removeMember({ teamId: 'team-1', userId: 'user-1' });
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  test('assertCanManageDevice denies former owner immediately after ownership transfer (no cache)', async () => {
+    // 撤销拥有权路径：device.ownerId 转移后，原拥有者（仍是团队成员）下一次调用立即 FORBIDDEN，
+    // 新拥有者即时放行 —— 授权判定完全来自当次读取，无任何缓存。
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['device-own-1']) },
+    });
+    await repositories.teams.create({
+      id: 'team-1', name: 'AgentBean', path: 'agentbean',
+      visibility: 'private', ownerId: 'user-1', currentUserRole: 'owner', createdAt: 1000,
+    });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', role: 'owner' });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-2', role: 'member' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1', ownerId: 'user-1', machineId: 'mac-1', profileId: 'default',
+    });
+    expect(hello).toMatchObject({ ok: true });
+    const deviceId = (hello as { device: { id: string } }).device.id;
+
+    // 转移前：原拥有者放行
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+
+    // 拥有权转移给 user-2 → 原拥有者立即拒绝、新拥有者立即放行
+    await repositories.devices.transferOwner({ deviceId, ownerId: 'user-2', updatedAt: 1001 });
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-1', deviceId }),
+    ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(
+      app.assertCanManageDevice({ userId: 'user-2', deviceId }),
+    ).resolves.toMatchObject({ ok: true, deviceId });
+  });
+
   test('deleting a duplicate device removes the whole canonical alias group', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
