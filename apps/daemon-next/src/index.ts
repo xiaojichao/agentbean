@@ -15,7 +15,7 @@ import {
 import { collectArtifacts } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
-import { listDirectory, productionListDirectoryDeps } from './directory-lister.js';
+import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
 import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 
@@ -324,11 +324,22 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         }
       });
 
-      // fs:list 目录浏览（切片1）：web→server 转发来的列表请求。
-      // 裸 readdir 返回下一层 entries + homePath；安全闸（denylist/遍历/限速）切片3 加。
+      // fs:list 目录浏览：web→server 转发来的列表请求。
+      // 安全闸在 directory-lister 内（resolve 规范化 + denylist→PATH_NOT_FOUND + 截断 1000），
+      // 此处再加最后一道限速（单连接 10/s，防全盘枚举扫描；daemon↔server 仅一条 socket，
+      // per-socket 一个 limiter 即 spec §6 的「单连接」语义）。
       // 远程/headless daemon 不需要桌面会话即可工作（对比 selectDirectory 的 osascript 弹窗）。
+      const listDirectoryRateLimiter = createListDirectoryRateLimiter({
+        max: 10,
+        windowMs: 1000,
+        now: () => Date.now(),
+      });
       socket.on(AGENT_EVENTS.device.listDirectoryRequested, async (payload: unknown, ack?: (result: unknown) => void) => {
         try {
+          if (!listDirectoryRateLimiter.allow()) {
+            ack?.({ ok: false, error: 'RATE_LIMITED' });
+            return;
+          }
           const rawPath = typeof (payload as { path?: unknown } | null)?.path === 'string'
             ? (payload as { path: string }).path
             : '';

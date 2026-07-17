@@ -119,11 +119,12 @@ interface ListDirectoryRequest {
 interface ListDirectoryResponse {
   ok: boolean;
   entries?: Array<{ name: string; isDir: boolean }>;
-  error?: string;        // 'FORBIDDEN' | 'PATH_NOT_FOUND' | 'RATE_LIMITED' | 'DEVICE_OFFLINE' | 'DIRECTORY_LIST_TIMEOUT'
-                          // 注1：server 授权拒绝（assertCanManageDevice）用全仓惯例码 FORBIDDEN（renameDevice/deleteDevice 同款），
-                          //       而非本节初稿写的 PERMISSION_DENIED；web 映射层两者同义兼容（切片2 修正）。
+  error?: string;        // 'FORBIDDEN' | 'PERMISSION_DENIED' | 'PATH_NOT_FOUND' | 'RATE_LIMITED' | 'DEVICE_OFFLINE' | 'DIRECTORY_LIST_TIMEOUT'
+                          // 注1：server 授权拒绝（assertCanManageDevice）用全仓惯例码 FORBIDDEN（renameDevice/deleteDevice 同款，
+                          //       切片2 修正；web 映射层两者同义兼容）；daemon 文件系统权限错误（EACCES/EPERM）用 PERMISSION_DENIED（切片3 细分）。
                           // 注2：denylist 命中统一返回 PATH_NOT_FOUND，不暴露目录存在性，故无 PATH_FORBIDDEN 枚举（见 §5.2）
   homePath?: string;     // 首次调用附 daemon 的 home 绝对路径，作为树形浏览的合理起点
+  truncated?: boolean;   // 条目超 1000 被截断时为 true（切片3），前端据此提示「仅显示前 1000 项」
 }
 ```
 
@@ -150,7 +151,7 @@ interface ListDirectoryResponse {
 
 - **首次起点**：web 打开树形选择器时，第一次 `fs:list` 用特殊路径标记（如空串或字面量 `"~"`），daemon 返回其 `$HOME` 内容 + `homePath`。后续以 `homePath` 为根逐层展开。避免从 `/` 开始（信息暴露面大、导航深）。
 - **daemon 侧 denylist**：拒绝列出敏感路径（及其子树）。初始清单：`~/.ssh`、`~/.aws`、`~/.config/gcloud`、`~/.codex/auth.json`、`~/.claude/...`（与认证相关，呼应 [[agentbean-codex-auth-local-oauth]] / [[agentbean-custom-agent-auth-source]]）。denylist 命中 → `PATH_FORBIDDEN`，不暴露该目录存在性（返回 `PATH_NOT_FOUND` 更稳，避免侧信道确认）。
-- **路径规范化**：daemon 用 `path.resolve` 规范化 + 拒绝 `..` 越界遍历（resolve 后再 denylist 比对，挡符号链接绕过的尽力而为）。
+- **路径规范化**：daemon 用 `path.resolve` 规范化 + 拒绝 `..` 越界遍历（resolve 后再 denylist 比对）。切片3 实现时补强：denylist 比对双侧小写归一（堵 macOS APFS 大小写不敏感的 `~/.SSH` 绕过）+ `realpathSync` 真实路径二次比对（挡符号链接指向 denylist 目录，比对锚点同步取 realpath(home) 防 `/var`→`/private/var` 这类根级符号链接漏判）。
 
 ### 5.3 UI：树形浏览器组件
 
