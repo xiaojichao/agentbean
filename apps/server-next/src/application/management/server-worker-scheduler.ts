@@ -47,6 +47,7 @@ export interface ServerWorkerSchedulerDependencies {
   readonly leaseTokens: { nextToken(): string };
   readonly leaseTtlMs?: number;
   readonly defaultOfferTimeoutMs?: number;
+  readonly queueTimeoutMs?: number;
 }
 
 export interface ScheduleServerManagementRunInput {
@@ -78,15 +79,19 @@ interface PendingServerOffer {
 
 const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
 const DEFAULT_OFFER_TIMEOUT_MS = 10_000;
+const DEFAULT_QUEUE_TIMEOUT_MS = 5 * 60_000;
 
 export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerDependencies) {
   const leaseTtlMs = dependencies.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const defaultOfferTimeoutMs = dependencies.defaultOfferTimeoutMs ?? DEFAULT_OFFER_TIMEOUT_MS;
+  const queueTimeoutMs = dependencies.queueTimeoutMs ?? DEFAULT_QUEUE_TIMEOUT_MS;
   const pendingOffers = new Map<string, PendingServerOffer>();
   const pendingOfferTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const recoveryPendingRunIds = new Set<string>();
   const queuedSchedules = new Map<string, ScheduleServerManagementRunInput>();
+  const queueDeadlineByRunId = new Map<string, number>();
+  const queueTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const schedulingByRun = new Map<string, Promise<ScheduleServerManagementRunResult>>();
   let drainingQueue = false;
 
@@ -117,6 +122,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
             managementRunId,
             profileId: endpoint.profileId,
           });
+          resetQueueDeadline(managementRunId);
           void armRecovery(managementRunId);
         }
       }
@@ -183,6 +189,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
         });
         clearPendingOffer(input.offerId);
         queuedSchedules.delete(offer.managementRunId);
+        clearQueueDeadline(offer.managementRunId);
         recoveryPendingRunIds.delete(offer.managementRunId);
         clearRecoveryTimer(offer.managementRunId);
         return {
@@ -471,6 +478,12 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       if (leaseStatus.kind === 'active') return failure('MANAGEMENT_RUN_LEASE_ACTIVE', true);
       if (leaseStatus.kind === 'invalid') return failure('MANAGEMENT_RUN_LEASE_INVALID', false);
       if (leaseStatus.kind === 'expired') await dependencies.kernel.expireLease({ managementRunId: run.id });
+      if (queuedSchedules.has(run.id)) {
+        const queueDeadline = queueDeadlineByRunId.get(run.id);
+        if (queueDeadline !== undefined && queueDeadline <= now && await expireQueuedRun(run.id)) {
+          return failure('SERVER_WORKER_QUEUE_TIMEOUT', false);
+        }
+      }
       for (const [offerId, offer] of pendingOffers) {
         if (offer.offerExpiresAt <= now) {
           clearPendingOffer(offerId);
@@ -494,9 +507,11 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       });
       if (reserved.kind === 'queued') {
         queuedSchedules.set(run.id, input);
+        ensureQueueDeadline(run.id);
         return failure(reserved.reasonCode, true);
       }
       queuedSchedules.delete(run.id);
+      clearQueueDeadline(run.id);
       const worker = dependencies.pool.getWorker(reserved.workerId);
       if (!worker || worker.workerId !== reserved.workerId) {
         dependencies.pool.releaseCapacity({ workerId: reserved.workerId, managementRunId: run.id });
@@ -566,6 +581,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       const lease = await dependencies.kernel.releaseLease(input);
       dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: input.managementRunId });
       queuedSchedules.delete(input.managementRunId);
+      clearQueueDeadline(input.managementRunId);
       clearRecoveryTimer(input.managementRunId);
       await drainQueue();
       return {
@@ -620,6 +636,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
           managementRunId,
           profileId: worker.profileId,
         });
+        resetQueueDeadline(managementRunId);
         await armRecovery(managementRunId);
       }
     }
@@ -631,6 +648,73 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       profileId: offer.profileId,
       offerTimeoutMs: offer.offerTimeoutMs,
     });
+    resetQueueDeadline(offer.managementRunId);
+  }
+
+  function ensureQueueDeadline(managementRunId: string): void {
+    if (queueDeadlineByRunId.has(managementRunId)) return;
+    queueDeadlineByRunId.set(managementRunId, dependencies.clock.now() + queueTimeoutMs);
+    armQueueTimer(managementRunId);
+  }
+
+  function armQueueTimer(managementRunId: string): void {
+    const deadline = queueDeadlineByRunId.get(managementRunId);
+    if (deadline === undefined) return;
+    const timer = setTimeout(() => {
+      queueTimers.delete(managementRunId);
+      const current = queueDeadlineByRunId.get(managementRunId);
+      if (current === undefined) return;
+      if (dependencies.clock.now() < current) {
+        // 时钟与 timer 错位(测试手动拨钟或时钟回拨):按剩余时间重新 arm
+        armQueueTimer(managementRunId);
+        return;
+      }
+      void expireQueuedRun(managementRunId)
+        .then((expired) => { if (expired) void drainQueue(); })
+        .catch(() => undefined);
+    }, Math.max(0, deadline - dependencies.clock.now()));
+    timer.unref?.();
+    queueTimers.set(managementRunId, timer);
+  }
+
+  function resetQueueDeadline(managementRunId: string): void {
+    clearQueueDeadline(managementRunId);
+    ensureQueueDeadline(managementRunId);
+  }
+
+  function clearQueueDeadline(managementRunId: string): void {
+    queueDeadlineByRunId.delete(managementRunId);
+    const timer = queueTimers.get(managementRunId);
+    if (timer !== undefined) clearTimeout(timer);
+    queueTimers.delete(managementRunId);
+  }
+
+  async function expireQueuedRun(managementRunId: string): Promise<boolean> {
+    if (!queuedSchedules.has(managementRunId)) return false;
+    const queueDeadline = queueDeadlineByRunId.get(managementRunId);
+    if (queueDeadline === undefined || dependencies.clock.now() < queueDeadline) return false;
+    const lease = await dependencies.management.leases.get(managementRunId);
+    const leaseStatus = inspectManagerLease(lease ?? undefined, dependencies.clock.now());
+    if (leaseStatus.kind === 'active') {
+      // lease 仍有效:接管窗口由 lease 生命周期决定,排队超时顺延一个窗口
+      resetQueueDeadline(managementRunId);
+      return false;
+    }
+    queuedSchedules.delete(managementRunId);
+    clearQueueDeadline(managementRunId);
+    recoveryPendingRunIds.delete(managementRunId);
+    clearRecoveryTimer(managementRunId);
+    dependencies.pool.dropCapacityRequest(managementRunId);
+    try {
+      await dependencies.kernel.failRun({
+        managementRunId,
+        errorCode: 'SERVER_WORKER_QUEUE_TIMEOUT',
+        idempotencyKey: `run-queue-timeout:${managementRunId}`,
+      });
+    } catch {
+      // run 已被并发路径置为终态或删除:failRun 终态门幂等,无需处理
+    }
+    return true;
   }
 
   function scheduleOfferExpiry(offer: PendingServerOffer): void {
@@ -655,8 +739,10 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
         if (result.diagnosticCode === 'SERVER_WORKER_CAPACITY_EXHAUSTED') break;
         if (!result.retryable) {
           queuedSchedules.delete(managementRunId);
+          clearQueueDeadline(managementRunId);
           recoveryPendingRunIds.delete(managementRunId);
           clearRecoveryTimer(managementRunId);
+          dependencies.pool.dropCapacityRequest(managementRunId);
         }
       }
     } finally {

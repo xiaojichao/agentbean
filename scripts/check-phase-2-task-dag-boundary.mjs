@@ -154,7 +154,7 @@ if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phas
   || !String(scripts['test:phase2-task-dag']).includes('test:server-next')
   || !String(scripts['build:phase2-task-dag']).includes('build:domain')
   || scripts['test:packages'] !== expectedPackageTests
-  || scripts['test:server-next-ci'] !== 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts'
+  || scripts['test:server-next-ci'] !== 'cd apps/server-next && ../../node_modules/.bin/vitest run tests --config vitest.config.ts --api.host 127.0.0.1 --exclude tests/phase-2-managed-team-smoke.test.ts --exclude tests/phase-4-managed-server-worker-smoke.test.ts'
   || scripts['build:packages'] !== expectedPackageBuild
   || scripts['test:ci'] !== 'npm run test:packages && npm run test:retained-boundaries'
   || !String(scripts['test:retained-boundaries']).includes('test:pr-merge-readiness')

@@ -249,6 +249,13 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     return { released: true as const };
   }
 
+  function dropCapacityRequest(managementRunId: string): { readonly dropped: boolean } {
+    const dropped = queueByManagementRun.delete(managementRunId);
+    capacityRequestByManagementRun.delete(managementRunId);
+    staleWorkerIdByManagementRun.delete(managementRunId);
+    return { dropped };
+  }
+
   function snapshot() {
     return {
       workers: [...workersById.values()].map((worker) => ({
@@ -350,6 +357,7 @@ export function createServerWorkerPool(dependencies: ServerWorkerPoolDependencie
     selectWorker,
     requestCapacity,
     releaseCapacity,
+    dropCapacityRequest,
     getWorker,
     workerForConnection,
     emitLeaseOffer,

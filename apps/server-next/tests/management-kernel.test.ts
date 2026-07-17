@@ -80,6 +80,40 @@ describe('Server Collaboration Kernel', () => {
     await expect(harness.repositories.runs.getById(run.id)).resolves.toMatchObject({ status: 'completed', completedAt: 10 });
   });
 
+  test('fails a Run idempotently and projects the terminal status', async () => {
+    const harness = createHarness();
+    const { run } = await harness.kernel.createOrResumeRun(runInput());
+
+    const failed = await harness.kernel.failRun({
+      managementRunId: run.id,
+      errorCode: 'SERVER_WORKER_QUEUE_TIMEOUT',
+      idempotencyKey: `run-queue-timeout:${run.id}`,
+    });
+    expect(failed).toMatchObject({ status: 'failed', completedAt: 10 });
+
+    // 同键重放与不同键重试都被终态门幂等挡住,不重复写事件
+    await expect(harness.kernel.failRun({
+      managementRunId: run.id,
+      errorCode: 'SERVER_WORKER_QUEUE_TIMEOUT',
+      idempotencyKey: `run-queue-timeout:${run.id}`,
+    })).resolves.toMatchObject({ status: 'failed' });
+    await expect(harness.kernel.failRun({
+      managementRunId: run.id,
+      errorCode: 'OTHER',
+      idempotencyKey: 'run-queue-timeout:other',
+    })).resolves.toMatchObject({ status: 'failed' });
+
+    await expect(harness.repositories.events.list(run.id)).resolves.toMatchObject([
+      { event: { type: 'run-started' } },
+      { event: {
+        type: 'run-failed',
+        actorKind: 'system',
+        idempotencyKey: `run-queue-timeout:${run.id}`,
+        payload: { errorCode: 'SERVER_WORKER_QUEUE_TIMEOUT', recoverable: false },
+      } },
+    ]);
+  });
+
   test('preserves the same atomic/idempotent semantics with SQLite repositories', async () => {
     const db = new Database(':memory:');
     try {
