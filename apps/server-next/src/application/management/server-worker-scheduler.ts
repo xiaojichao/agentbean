@@ -43,6 +43,7 @@ interface PendingServerOffer {
   readonly workerPoolId: string;
   readonly profileId: string;
   readonly offerExpiresAt: number;
+  readonly offerTimeoutMs: number;
 }
 
 const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
@@ -52,18 +53,24 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
   const leaseTtlMs = dependencies.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
   const defaultOfferTimeoutMs = dependencies.defaultOfferTimeoutMs ?? DEFAULT_OFFER_TIMEOUT_MS;
   const pendingOffers = new Map<string, PendingServerOffer>();
+  const pendingOfferTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const queuedSchedules = new Map<string, ScheduleServerManagementRunInput>();
+  let drainingQueue = false;
 
   return {
     disconnect(connectionId: string) {
       for (const [offerId, offer] of pendingOffers) {
         if (offer.connectionId !== connectionId) continue;
-        pendingOffers.delete(offerId);
+        clearPendingOffer(offerId);
         dependencies.pool.releaseCapacity({
           workerId: offer.workerId,
           managementRunId: offer.managementRunId,
         });
+        queueSchedule(offer);
       }
-      return dependencies.pool.disconnect(connectionId);
+      const disconnected = dependencies.pool.disconnect(connectionId);
+      void drainQueue();
+      return disconnected;
     },
 
     async managementPreflight(input: {
@@ -95,97 +102,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       };
     },
 
-    async scheduleManagementRun(input: ScheduleServerManagementRunInput) {
-      const run = await dependencies.management.runs.getById(input.managementRunId);
-      if (!run) return failure('MANAGEMENT_RUN_NOT_FOUND', false);
-      const managementPhase = 'managementPhase' in run ? run.managementPhase : 1;
-      if (run.placementPolicy.placement !== 'managed') {
-        return failure('MANAGEMENT_SERVER_PLACEMENT_REQUIRED', false, 'NOT_AUTHORIZED');
-      }
-      if (managementPhase < 2 || !run.rootTaskId) {
-        return failure('MANAGEMENT_SERVER_ROOT_TASK_REQUIRED', false);
-      }
-      if (isTerminal(run.status)) return failure('MANAGEMENT_RUN_TERMINAL', false);
-      const now = dependencies.clock.now();
-      const currentLease = await dependencies.management.leases.get(run.id);
-      const leaseStatus = inspectManagerLease(currentLease ?? undefined, now);
-      if (leaseStatus.kind === 'active') return failure('MANAGEMENT_RUN_LEASE_ACTIVE', false);
-      if (leaseStatus.kind === 'invalid') return failure('MANAGEMENT_RUN_LEASE_INVALID', false);
-      if (leaseStatus.kind === 'expired') await dependencies.kernel.expireLease({ managementRunId: run.id });
-      for (const [offerId, offer] of pendingOffers) {
-        if (offer.offerExpiresAt <= now) {
-          pendingOffers.delete(offerId);
-          dependencies.pool.releaseCapacity({ workerId: offer.workerId, managementRunId: offer.managementRunId });
-          continue;
-        }
-        if (offer.managementRunId === run.id) return failure('MANAGEMENT_RUN_OFFER_PENDING', true);
-      }
-
-      const reserved = dependencies.pool.requestCapacity({
-        managementRunId: run.id,
-        teamId: run.teamId,
-        profileId: input.profileId,
-        managementPhase,
-        requireOfferTransport: true,
-        ...(run.placementPolicy.preferredProvider
-          ? { preferredProvider: run.placementPolicy.preferredProvider } : {}),
-        ...(run.placementPolicy.preferredModel
-          ? { preferredModel: run.placementPolicy.preferredModel } : {}),
-      });
-      if (reserved.kind === 'queued') {
-        return failure(reserved.reasonCode, true);
-      }
-      const worker = dependencies.pool.getWorker(reserved.workerId);
-      if (!worker || worker.workerId !== reserved.workerId) {
-        dependencies.pool.releaseCapacity({ workerId: reserved.workerId, managementRunId: run.id });
-        return failure('SERVER_WORKER_CONNECTION_STALE', true);
-      }
-      const timeoutMs = normalizePositiveDuration(input.offerTimeoutMs ?? defaultOfferTimeoutMs);
-      if (!timeoutMs) {
-        dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
-        return failure('MANAGEMENT_WORKER_OFFER_TIMEOUT_INVALID', false);
-      }
-      const offerId = dependencies.ids.nextId();
-      const offerExpiresAt = now + timeoutMs;
-      const offer: PendingServerOffer = {
-        offerId,
-        managementRunId: run.id,
-        workerId: worker.workerId,
-        workerInstanceId: worker.workerInstanceId,
-        connectionId: worker.connectionId,
-        workerPoolId: worker.workerPoolId,
-        profileId: worker.profileId,
-        offerExpiresAt,
-      };
-      const payload: ManagementLeaseOfferV1 = {
-        schemaVersion: 1,
-        offerId,
-        managementRunId: run.id,
-        workerId: worker.workerId,
-        offerExpiresAt,
-      };
-      pendingOffers.set(offerId, offer);
-      try {
-        const ack = await dependencies.pool.emitLeaseOffer({ workerId: worker.workerId, payload, timeoutMs });
-        if (ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === false) {
-          pendingOffers.delete(offerId);
-          dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
-          return failure('MANAGEMENT_WORKER_OFFER_REJECTED', true);
-        }
-      } catch {
-        pendingOffers.delete(offerId);
-        dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
-        return failure('MANAGEMENT_WORKER_OFFER_TIMEOUT', true);
-      }
-      return {
-        ok: true as const,
-        offerId,
-        workerId: worker.workerId,
-        workerPoolId: worker.workerPoolId,
-        profileId: worker.profileId,
-        offerExpiresAt,
-      };
-    },
+    scheduleManagementRun,
 
     async acquireLease(connectionId: string, input: ManagementLeaseAcquireV1): Promise<ManagementLeaseAcquireAckV1> {
       const offer = pendingOffers.get(input.offerId);
@@ -198,8 +115,10 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       }
       const now = dependencies.clock.now();
       if (now >= offer.offerExpiresAt) {
-        pendingOffers.delete(input.offerId);
+        clearPendingOffer(input.offerId);
         dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: offer.managementRunId });
+        queueSchedule(offer);
+        void drainQueue();
         return failure('MANAGEMENT_WORKER_OFFER_EXPIRED', true);
       }
       const leaseToken = dependencies.leaseTokens.nextToken();
@@ -211,7 +130,8 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
           leaseToken,
           ttlMs: leaseTtlMs,
         });
-        pendingOffers.delete(input.offerId);
+        clearPendingOffer(input.offerId);
+        queuedSchedules.delete(offer.managementRunId);
         return {
           schemaVersion: 1,
           ok: true,
@@ -223,7 +143,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
           expiresAt: acquired.lease.expiresAt,
         };
       } catch (error) {
-        pendingOffers.delete(input.offerId);
+        clearPendingOffer(input.offerId);
         dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: offer.managementRunId });
         return schedulerFailure(error);
       }
@@ -258,6 +178,103 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
     },
   };
 
+  async function scheduleManagementRun(input: ScheduleServerManagementRunInput) {
+      const run = await dependencies.management.runs.getById(input.managementRunId);
+      if (!run) return failure('MANAGEMENT_RUN_NOT_FOUND', false);
+      const managementPhase = 'managementPhase' in run ? run.managementPhase : 1;
+      if (run.placementPolicy.placement !== 'managed') {
+        return failure('MANAGEMENT_SERVER_PLACEMENT_REQUIRED', false, 'NOT_AUTHORIZED');
+      }
+      if (managementPhase < 2 || !run.rootTaskId) {
+        return failure('MANAGEMENT_SERVER_ROOT_TASK_REQUIRED', false);
+      }
+      if (isTerminal(run.status)) return failure('MANAGEMENT_RUN_TERMINAL', false);
+      const now = dependencies.clock.now();
+      const currentLease = await dependencies.management.leases.get(run.id);
+      const leaseStatus = inspectManagerLease(currentLease ?? undefined, now);
+      if (leaseStatus.kind === 'active') return failure('MANAGEMENT_RUN_LEASE_ACTIVE', false);
+      if (leaseStatus.kind === 'invalid') return failure('MANAGEMENT_RUN_LEASE_INVALID', false);
+      if (leaseStatus.kind === 'expired') await dependencies.kernel.expireLease({ managementRunId: run.id });
+      for (const [offerId, offer] of pendingOffers) {
+        if (offer.offerExpiresAt <= now) {
+          clearPendingOffer(offerId);
+          dependencies.pool.releaseCapacity({ workerId: offer.workerId, managementRunId: offer.managementRunId });
+          queueSchedule(offer);
+          continue;
+        }
+        if (offer.managementRunId === run.id) return failure('MANAGEMENT_RUN_OFFER_PENDING', true);
+      }
+
+      const reserved = dependencies.pool.requestCapacity({
+        managementRunId: run.id,
+        teamId: run.teamId,
+        profileId: input.profileId,
+        managementPhase,
+        requireOfferTransport: true,
+        ...(run.placementPolicy.preferredProvider
+          ? { preferredProvider: run.placementPolicy.preferredProvider } : {}),
+        ...(run.placementPolicy.preferredModel
+          ? { preferredModel: run.placementPolicy.preferredModel } : {}),
+      });
+      if (reserved.kind === 'queued') {
+        queuedSchedules.set(run.id, input);
+        return failure(reserved.reasonCode, true);
+      }
+      queuedSchedules.delete(run.id);
+      const worker = dependencies.pool.getWorker(reserved.workerId);
+      if (!worker || worker.workerId !== reserved.workerId) {
+        dependencies.pool.releaseCapacity({ workerId: reserved.workerId, managementRunId: run.id });
+        return failure('SERVER_WORKER_CONNECTION_STALE', true);
+      }
+      const timeoutMs = normalizePositiveDuration(input.offerTimeoutMs ?? defaultOfferTimeoutMs);
+      if (!timeoutMs) {
+        dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
+        return failure('MANAGEMENT_WORKER_OFFER_TIMEOUT_INVALID', false);
+      }
+      const offerId = dependencies.ids.nextId();
+      const offerExpiresAt = now + timeoutMs;
+      const offer: PendingServerOffer = {
+        offerId,
+        managementRunId: run.id,
+        workerId: worker.workerId,
+        workerInstanceId: worker.workerInstanceId,
+        connectionId: worker.connectionId,
+        workerPoolId: worker.workerPoolId,
+        profileId: worker.profileId,
+        offerExpiresAt,
+        offerTimeoutMs: timeoutMs,
+      };
+      const payload: ManagementLeaseOfferV1 = {
+        schemaVersion: 1,
+        offerId,
+        managementRunId: run.id,
+        workerId: worker.workerId,
+        offerExpiresAt,
+      };
+      pendingOffers.set(offerId, offer);
+      scheduleOfferExpiry(offer);
+      try {
+        const ack = await dependencies.pool.emitLeaseOffer({ workerId: worker.workerId, payload, timeoutMs });
+        if (ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === false) {
+          clearPendingOffer(offerId);
+          dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
+          return failure('MANAGEMENT_WORKER_OFFER_REJECTED', true);
+        }
+      } catch {
+        clearPendingOffer(offerId);
+        dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
+        return failure('MANAGEMENT_WORKER_OFFER_TIMEOUT', true);
+      }
+      return {
+        ok: true as const,
+        offerId,
+        workerId: worker.workerId,
+        workerPoolId: worker.workerPoolId,
+        profileId: worker.profileId,
+        offerExpiresAt,
+      };
+  }
+
   async function releaseLease(
     connectionId: string,
     input: ManagementLeaseReleaseV1 | ManagementWorkerAbortV1,
@@ -269,6 +286,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
     try {
       const lease = await dependencies.kernel.releaseLease(input);
       dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: input.managementRunId });
+      await drainQueue();
       return {
         schemaVersion: 1,
         ok: true,
@@ -279,6 +297,48 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       };
     } catch (error) {
       return schedulerFailure(error);
+    }
+  }
+
+  function clearPendingOffer(offerId: string): void {
+    pendingOffers.delete(offerId);
+    const timer = pendingOfferTimers.get(offerId);
+    if (timer !== undefined) clearTimeout(timer);
+    pendingOfferTimers.delete(offerId);
+  }
+
+  function queueSchedule(offer: PendingServerOffer): void {
+    queuedSchedules.set(offer.managementRunId, {
+      managementRunId: offer.managementRunId,
+      profileId: offer.profileId,
+      offerTimeoutMs: offer.offerTimeoutMs,
+    });
+  }
+
+  function scheduleOfferExpiry(offer: PendingServerOffer): void {
+    const timer = setTimeout(() => {
+      if (pendingOffers.get(offer.offerId) !== offer) return;
+      clearPendingOffer(offer.offerId);
+      dependencies.pool.releaseCapacity({ workerId: offer.workerId, managementRunId: offer.managementRunId });
+      queueSchedule(offer);
+      void drainQueue();
+    }, offer.offerTimeoutMs);
+    timer.unref?.();
+    pendingOfferTimers.set(offer.offerId, timer);
+  }
+
+  async function drainQueue(): Promise<void> {
+    if (drainingQueue) return;
+    drainingQueue = true;
+    try {
+      for (const [managementRunId, input] of [...queuedSchedules]) {
+        const result = await scheduleManagementRun(input);
+        if (result.ok) continue;
+        if (result.diagnosticCode === 'SERVER_WORKER_CAPACITY_EXHAUSTED') break;
+        if (!result.retryable) queuedSchedules.delete(managementRunId);
+      }
+    } finally {
+      drainingQueue = false;
     }
   }
 }

@@ -8,7 +8,15 @@ import type {
 import type { TaskClaimBroker } from '../application/management/task-claim-broker.js';
 import type { ServerWorkerPool } from '../application/management/server-worker-pool.js';
 import type { ServerWorkerScheduler } from '../application/management/server-worker-scheduler.js';
-import { AGENT_EVENTS, MESSAGE_BATCH_QUIET_WINDOW_MS, WEB_EVENTS, type TaskClaimExpiredV1 } from '../../../../packages/contracts/src/index.js';
+import {
+  AGENT_EVENTS,
+  MESSAGE_BATCH_QUIET_WINDOW_MS,
+  WEB_EVENTS,
+  safeParseManagementWorkerPayload,
+  type ManagementWorkerPayloadKind,
+  type ManagementWorkerPayloadMapV1,
+  type TaskClaimExpiredV1,
+} from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
   registerAgentSocketHandlers,
@@ -133,33 +141,41 @@ export function attachServerNextNamespaces(
       socket.on(AGENT_EVENTS.serverWorker.leaseAcquire, async (payload, ack) => {
         if (!authorized) return ack?.(serverWorkerUnauthorized());
         if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerPayload('lease-acquire', payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
         ack?.(await options.serverWorkerScheduler.acquireLease(
           connectionId,
-          payload as Parameters<ServerWorkerScheduler['acquireLease']>[1],
+          parsed.value,
         ));
       });
       socket.on(AGENT_EVENTS.serverWorker.leaseRenew, async (payload, ack) => {
         if (!authorized) return ack?.(serverWorkerUnauthorized());
         if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerPayload('lease-renew', payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
         ack?.(await options.serverWorkerScheduler.renewLease(
           connectionId,
-          payload as Parameters<ServerWorkerScheduler['renewLease']>[1],
+          parsed.value,
         ));
       });
       socket.on(AGENT_EVENTS.serverWorker.leaseRelease, async (payload, ack) => {
         if (!authorized) return ack?.(serverWorkerUnauthorized());
         if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerPayload('lease-release', payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
         ack?.(await options.serverWorkerScheduler.releaseLease(
           connectionId,
-          payload as Parameters<ServerWorkerScheduler['releaseLease']>[1],
+          parsed.value,
         ));
       });
       socket.on(AGENT_EVENTS.serverWorker.abort, async (payload, ack) => {
         if (!authorized) return ack?.(serverWorkerUnauthorized());
         if (!options.serverWorkerScheduler) return ack?.(serverWorkerSchedulerUnavailable());
+        const parsed = parseServerWorkerPayload('abort', payload);
+        if (!parsed.ok) return ack?.(parsed.failure);
         ack?.(await options.serverWorkerScheduler.abortLease(
           connectionId,
-          payload as Parameters<ServerWorkerScheduler['abortLease']>[1],
+          parsed.value,
         ));
       });
       socket.on('disconnect', async () => {
@@ -771,6 +787,25 @@ function serverWorkerSchedulerUnavailable() {
     errorCode: 'UNAVAILABLE' as const,
     diagnosticCode: 'SERVER_WORKER_SCHEDULER_NOT_CONFIGURED',
     retryable: false,
+  };
+}
+
+function parseServerWorkerPayload<K extends ManagementWorkerPayloadKind>(kind: K, payload: unknown):
+  | { readonly ok: true; readonly value: ManagementWorkerPayloadMapV1[K] }
+  | { readonly ok: false; readonly failure: ReturnType<typeof serverWorkerInvalidPayload> } {
+  const parsed = safeParseManagementWorkerPayload(kind, payload);
+  return parsed.ok
+    ? { ok: true, value: parsed.value }
+    : { ok: false, failure: serverWorkerInvalidPayload(parsed.error.path) };
+}
+
+function serverWorkerInvalidPayload(path: string) {
+  return {
+    schemaVersion: 1 as const,
+    ok: false as const,
+    errorCode: 'INVALID_REQUEST' as const,
+    diagnosticCode: `MANAGEMENT_WORKER_PAYLOAD_INVALID:${path}`,
+    retryable: false as const,
   };
 }
 

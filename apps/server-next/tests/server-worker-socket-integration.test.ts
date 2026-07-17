@@ -43,15 +43,44 @@ describe('trusted Server Worker socket transport', () => {
     expect(await trusted.trigger(AGENT_EVENTS.serverWorker.heartbeat, {
       workerInstanceId: 'server-instance-1', activeLeaseCount: 0,
     })).toMatchObject({ ok: true, lastHeartbeatAt: 20 });
-    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseAcquire, { offerId: 'offer-1' }))
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseAcquire, {
+      schemaVersion: 1, offerId: 'offer-1', workerInstanceId: 'server-instance-1',
+    }))
       .toMatchObject({ ok: true, operation: 'acquire' });
-    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRenew, { managementRunId: 'run-1' }))
+    const authority = {
+      schemaVersion: 1 as const,
+      managementRunId: 'run-1',
+      workerId: 'server-worker-1',
+      leaseToken: 'lease-token-1',
+      fencingToken: 1,
+      idempotencyKey: 'operation-1',
+    };
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRenew, authority))
       .toMatchObject({ ok: true, operation: 'renew' });
-    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRelease, { managementRunId: 'run-1' }))
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.leaseRelease, { ...authority, reasonCode: 'COMPLETED' }))
       .toMatchObject({ ok: true, operation: 'release' });
-    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.abort, { managementRunId: 'run-1' }))
+    expect(await trusted.trigger(AGENT_EVENTS.serverWorker.abort, { ...authority, reasonCode: 'ABORTED' }))
       .toMatchObject({ ok: true, operation: 'abort' });
-    expect(scheduler.acquireLease).toHaveBeenCalledWith(expect.stringMatching(/^server-worker:/), { offerId: 'offer-1' });
+    expect(scheduler.acquireLease).toHaveBeenCalledWith(expect.stringMatching(/^server-worker:/), {
+      schemaVersion: 1, offerId: 'offer-1', workerInstanceId: 'server-instance-1',
+    });
+
+    for (const event of [
+      AGENT_EVENTS.serverWorker.leaseAcquire,
+      AGENT_EVENTS.serverWorker.leaseRenew,
+      AGENT_EVENTS.serverWorker.leaseRelease,
+      AGENT_EVENTS.serverWorker.abort,
+    ]) {
+      expect(await trusted.trigger(event, null)).toMatchObject({
+        ok: false,
+        errorCode: 'INVALID_REQUEST',
+        retryable: false,
+      });
+    }
+    expect(scheduler.acquireLease).toHaveBeenCalledTimes(1);
+    expect(scheduler.renewLease).toHaveBeenCalledTimes(1);
+    expect(scheduler.releaseLease).toHaveBeenCalledTimes(1);
+    expect(scheduler.abortLease).toHaveBeenCalledTimes(1);
     await trusted.trigger('disconnect');
     expect(scheduler.disconnect).toHaveBeenCalledOnce();
 

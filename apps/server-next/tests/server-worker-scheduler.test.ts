@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import type {
   ManagementLeaseOfferV1,
@@ -188,7 +188,119 @@ describe('Phase 4 Server Worker Scheduler', () => {
       reasonCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED',
     }]);
   });
+
+  test('offers the oldest queued Run when a Server lease releases capacity', async () => {
+    const harness = await createSchedulerHarness();
+    const firstRun = await harness.createRun('first');
+    const secondRun = await harness.createRun('second');
+
+    await harness.scheduler.scheduleManagementRun({ managementRunId: firstRun.id, profileId: 'profile-1' });
+    const acquired = await harness.scheduler.acquireLease('connection-1', {
+      schemaVersion: 1,
+      offerId: harness.offers[0]!.offerId,
+      workerInstanceId: 'server-instance-1',
+    });
+    if (!acquired.ok) throw new Error('Server lease acquisition expected');
+
+    await expect(harness.scheduler.scheduleManagementRun({
+      managementRunId: secondRun.id,
+      profileId: 'profile-1',
+    })).resolves.toMatchObject({ diagnosticCode: 'SERVER_WORKER_CAPACITY_EXHAUSTED' });
+
+    await harness.scheduler.releaseLease('connection-1', {
+      schemaVersion: 1,
+      managementRunId: firstRun.id,
+      workerId: acquired.workerId,
+      leaseToken: acquired.leaseToken,
+      fencingToken: acquired.fencingToken,
+      idempotencyKey: 'release-first',
+      reasonCode: 'COMPLETED',
+    });
+
+    expect(harness.offers).toHaveLength(2);
+    expect(harness.offers[1]).toMatchObject({ managementRunId: secondRun.id });
+    expect(harness.pool.snapshot().queue).toEqual([]);
+  });
+
+  test('actively expires an unacquired offer, releases capacity, and retries the Run', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = await createSchedulerHarness({ offerTimeoutMs: 100 });
+      const run = await harness.createRun('expires');
+
+      await harness.scheduler.scheduleManagementRun({ managementRunId: run.id, profileId: 'profile-1' });
+      expect(harness.offers).toHaveLength(1);
+
+      harness.clock.now = 111;
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(harness.offers).toHaveLength(2);
+      expect(harness.offers[1]).toMatchObject({ managementRunId: run.id });
+      expect(harness.offers[1]!.offerId).not.toBe(harness.offers[0]!.offerId);
+      await harness.scheduler.acquireLease('connection-1', {
+        schemaVersion: 1,
+        offerId: harness.offers[1]!.offerId,
+        workerInstanceId: 'server-instance-1',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+
+async function createSchedulerHarness(options: { offerTimeoutMs?: number } = {}) {
+  const repositories = createInMemoryRepositories();
+  const clock = { now: 10 };
+  let id = 0;
+  const ids = { nextId: () => `harness-id-${++id}` };
+  const kernel = createManagementKernel({
+    repositories: repositories.management,
+    unitOfWork: repositories.managementUnitOfWork,
+    clock: { now: () => clock.now },
+    ids,
+  });
+  const offers: ManagementLeaseOfferV1[] = [];
+  const pool = createServerWorkerPool({
+    workerPoolId: 'pool-1',
+    providerCredentialRef: 'credential-ref-1',
+    clock: { now: () => clock.now },
+    ids,
+  });
+  pool.registerWorker({
+    connectionId: 'connection-1',
+    capability: capability(),
+    transport: { async emitLeaseOffer(offer) { offers.push(offer); return { ok: true }; } },
+  });
+  const scheduler = createServerWorkerScheduler({
+    pool,
+    management: repositories.management,
+    kernel,
+    clock: { now: () => clock.now },
+    ids,
+    leaseTokens: { nextToken: () => `lease-token-${id}` },
+    ...(options.offerTimeoutMs ? { defaultOfferTimeoutMs: options.offerTimeoutMs } : {}),
+  });
+  const placementPolicy = {
+    placement: 'managed' as const,
+    allowServerContext: true,
+    requireLocalModelCredentials: false,
+  };
+  async function createRun(key: string) {
+    const { run } = await kernel.createOrResumeRun({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      rootTaskId: `task-${key}`,
+      rootMessageId: `message-${key}`,
+      requestKey: `request-${key}`,
+      requestHash: `hash-${key}`,
+      placementPolicy,
+      budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 },
+      managementPhase: 2,
+    });
+    return run;
+  }
+  return { clock, offers, pool, scheduler, createRun };
+}
 
 function capability(
   overrides: Partial<ManagementWorkerRegisterV2> = {},
