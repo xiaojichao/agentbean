@@ -246,9 +246,57 @@ describe('Phase 4 Server Worker Scheduler', () => {
       vi.useRealTimers();
     }
   });
+
+  test('does not expire or retry an offer before its transport ACK settles', async () => {
+    vi.useFakeTimers();
+    try {
+      let settleAck: ((value: { ok: false }) => void) | undefined;
+      const harness = await createSchedulerHarness({
+        offerTimeoutMs: 100,
+        emitLeaseOffer: async () => new Promise<{ ok: false }>((resolve) => { settleAck = resolve; }),
+      });
+      const run = await harness.createRun('slow-ack');
+
+      const scheduling = harness.scheduler.scheduleManagementRun({
+        managementRunId: run.id,
+        profileId: 'profile-1',
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(harness.offers).toHaveLength(1);
+      expect(harness.pool.snapshot().workers[0]!.capacity.activeLeaseCount).toBe(1);
+      settleAck?.({ ok: false });
+      await expect(scheduling).resolves.toMatchObject({ diagnosticCode: 'MANAGEMENT_WORKER_OFFER_REJECTED' });
+      expect(harness.pool.snapshot().workers[0]!.capacity.activeLeaseCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('coalesces concurrent scheduling calls for the same Run into one offer', async () => {
+    let settleAck: ((value: { ok: true }) => void) | undefined;
+    const harness = await createSchedulerHarness({
+      emitLeaseOffer: async () => new Promise<{ ok: true }>((resolve) => { settleAck = resolve; }),
+    });
+    const run = await harness.createRun('concurrent');
+    const input = { managementRunId: run.id, profileId: 'profile-1' };
+
+    const first = harness.scheduler.scheduleManagementRun(input);
+    const second = harness.scheduler.scheduleManagementRun(input);
+    await vi.waitFor(() => expect(harness.offers.length).toBeGreaterThan(0));
+
+    expect(harness.offers).toHaveLength(1);
+    settleAck?.({ ok: true });
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toEqual(secondResult);
+    expect(harness.offers).toHaveLength(1);
+  });
 });
 
-async function createSchedulerHarness(options: { offerTimeoutMs?: number } = {}) {
+async function createSchedulerHarness(options: {
+  offerTimeoutMs?: number;
+  emitLeaseOffer?: (offer: ManagementLeaseOfferV1) => Promise<unknown>;
+} = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { now: 10 };
   let id = 0;
@@ -269,7 +317,12 @@ async function createSchedulerHarness(options: { offerTimeoutMs?: number } = {})
   pool.registerWorker({
     connectionId: 'connection-1',
     capability: capability(),
-    transport: { async emitLeaseOffer(offer) { offers.push(offer); return { ok: true }; } },
+    transport: {
+      async emitLeaseOffer(offer) {
+        offers.push(offer);
+        return options.emitLeaseOffer?.(offer) ?? { ok: true };
+      },
+    },
   });
   const scheduler = createServerWorkerScheduler({
     pool,

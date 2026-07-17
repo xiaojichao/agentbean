@@ -34,6 +34,15 @@ export interface ScheduleServerManagementRunInput {
   readonly offerTimeoutMs?: number;
 }
 
+export type ScheduleServerManagementRunResult = ManagementWorkerFailureV1 | {
+  readonly ok: true;
+  readonly offerId: string;
+  readonly workerId: string;
+  readonly workerPoolId: string;
+  readonly profileId: string;
+  readonly offerExpiresAt: number;
+};
+
 interface PendingServerOffer {
   readonly offerId: string;
   readonly managementRunId: string;
@@ -55,6 +64,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
   const pendingOffers = new Map<string, PendingServerOffer>();
   const pendingOfferTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const queuedSchedules = new Map<string, ScheduleServerManagementRunInput>();
+  const schedulingByRun = new Map<string, Promise<ScheduleServerManagementRunResult>>();
   let drainingQueue = false;
 
   return {
@@ -178,7 +188,23 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
     },
   };
 
-  async function scheduleManagementRun(input: ScheduleServerManagementRunInput) {
+  function scheduleManagementRun(
+    input: ScheduleServerManagementRunInput,
+  ): Promise<ScheduleServerManagementRunResult> {
+    const existing = schedulingByRun.get(input.managementRunId);
+    if (existing) return existing;
+    const operation = performScheduleManagementRun(input).finally(() => {
+      if (schedulingByRun.get(input.managementRunId) === operation) {
+        schedulingByRun.delete(input.managementRunId);
+      }
+    });
+    schedulingByRun.set(input.managementRunId, operation);
+    return operation;
+  }
+
+  async function performScheduleManagementRun(
+    input: ScheduleServerManagementRunInput,
+  ): Promise<ScheduleServerManagementRunResult> {
       const run = await dependencies.management.runs.getById(input.managementRunId);
       if (!run) return failure('MANAGEMENT_RUN_NOT_FOUND', false);
       const managementPhase = 'managementPhase' in run ? run.managementPhase : 1;
@@ -252,7 +278,6 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
         offerExpiresAt,
       };
       pendingOffers.set(offerId, offer);
-      scheduleOfferExpiry(offer);
       try {
         const ack = await dependencies.pool.emitLeaseOffer({ workerId: worker.workerId, payload, timeoutMs });
         if (ack && typeof ack === 'object' && (ack as { ok?: unknown }).ok === false) {
@@ -265,6 +290,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
         dependencies.pool.releaseCapacity({ workerId: worker.workerId, managementRunId: run.id });
         return failure('MANAGEMENT_WORKER_OFFER_TIMEOUT', true);
       }
+      if (pendingOffers.get(offerId) === offer) scheduleOfferExpiry(offer);
       return {
         ok: true as const,
         offerId,
@@ -322,7 +348,7 @@ export function createServerWorkerScheduler(dependencies: ServerWorkerSchedulerD
       dependencies.pool.releaseCapacity({ workerId: offer.workerId, managementRunId: offer.managementRunId });
       queueSchedule(offer);
       void drainQueue();
-    }, offer.offerTimeoutMs);
+    }, Math.max(0, offer.offerExpiresAt - dependencies.clock.now()));
     timer.unref?.();
     pendingOfferTimers.set(offer.offerId, timer);
   }
