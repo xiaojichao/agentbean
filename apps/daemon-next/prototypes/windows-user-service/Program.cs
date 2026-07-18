@@ -2,6 +2,7 @@
 using System.IO.Pipes;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
@@ -97,6 +98,7 @@ static class Prototype
                 WorkingDirectory = Path.GetDirectoryName(Environment.ProcessPath)!,
                 UseShellExecute = false,
             }) ?? throw new InvalidOperationException("SUPERVISOR_START_FAILED");
+            using var processTree = WindowsJob.Attach(worker);
             await worker.WaitForExitAsync();
             if (worker.ExitCode == 0) return 0;
             if (!IsDesiredEnabled()) return 0;
@@ -150,6 +152,7 @@ static class Prototype
             await using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 1024, true) { AutoFlush = true };
             using var request = JsonDocument.Parse((await reader.ReadLineAsync()) ?? "{}");
             var command = request.RootElement.GetProperty("command").GetString();
+            var shutdownAfterResponse = false;
             object response;
             if (command == "status")
             {
@@ -192,6 +195,7 @@ static class Prototype
                     PersistState(state);
                 }
                 response = new { ok = true, drained = true, state.OutboxRecords };
+                shutdownAfterResponse = true;
             }
             else if (command == "crash")
             {
@@ -204,6 +208,7 @@ static class Prototype
                 throw new InvalidOperationException("UNKNOWN_COMMAND");
             }
             await writer.WriteLineAsync(JsonSerializer.Serialize(response));
+            if (shutdownAfterResponse) return 0;
         }
     }
 
@@ -258,6 +263,10 @@ static class Prototype
         using var afterCrash = await Send(new { command = "status" });
         var afterCrashPid = afterCrash.RootElement.GetProperty("state").GetProperty("Pid").GetInt32();
         Require(beforeCrashPid != afterCrashPid, "CRASH_PID_DID_NOT_CHANGE");
+        PersistDesiredState(false);
+        task.Enabled = false;
+        task.Stop(0);
+        await WaitNotReady(TimeSpan.FromSeconds(10));
         var principal = new WindowsPrincipal(WindowsIdentity.GetCurrent());
         var isAdministrator = principal.IsInRole(WindowsBuiltInRole.Administrator);
         var result = new
@@ -278,6 +287,7 @@ static class Prototype
                 currentUserOnlyPipe = true,
                 drainBeforeImmediateStop = true,
                 durableOutboxFlush = true,
+                forcedFallbackKillsProcessTree = true,
                 sleepWakeLogoutReboot = "manual-real-session-required",
             },
             verdict = isAdministrator ? "hosted-runner-partial-needs-standard-user-session" : "green-standard-user-session",
@@ -361,4 +371,85 @@ static class Prototype
     static string ShortHash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..12].ToLowerInvariant();
     static void Require(bool condition, string code) { if (!condition) throw new InvalidOperationException(code); }
     record WorkerState(string Phase, int Pid, bool Draining, int ActiveWork, int OutboxRecords);
+
+    static class WindowsJob
+    {
+        const uint KillOnJobClose = 0x00002000;
+        const int ExtendedLimitInformation = 9;
+
+        public static SafeFileHandle Attach(Process process)
+        {
+            var job = CreateJobObject(IntPtr.Zero, null);
+            if (job.IsInvalid) throw new InvalidOperationException("JOB_OBJECT_CREATE_FAILED");
+            var information = new JobObjectExtendedLimitInformation
+            {
+                BasicLimitInformation = new JobObjectBasicLimitInformation { LimitFlags = KillOnJobClose },
+            };
+            var size = Marshal.SizeOf<JobObjectExtendedLimitInformation>();
+            var pointer = Marshal.AllocHGlobal(size);
+            try
+            {
+                Marshal.StructureToPtr(information, pointer, false);
+                if (!SetInformationJobObject(job, ExtendedLimitInformation, pointer, (uint)size))
+                    throw new InvalidOperationException("JOB_OBJECT_LIMIT_FAILED");
+                if (!AssignProcessToJobObject(job, process.Handle))
+                    throw new InvalidOperationException("JOB_OBJECT_ASSIGN_FAILED");
+                return job;
+            }
+            catch
+            {
+                job.Dispose();
+                throw;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern SafeFileHandle CreateJobObject(IntPtr jobAttributes, string? name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool SetInformationJobObject(SafeFileHandle job, int informationClass, IntPtr information, uint length);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct JobObjectBasicLimitInformation
+        {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public UIntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct IoCounters
+        {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct JobObjectExtendedLimitInformation
+        {
+            public JobObjectBasicLimitInformation BasicLimitInformation;
+            public IoCounters IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+    }
 }
