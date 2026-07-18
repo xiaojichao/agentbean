@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, FolderOpen, Loader2, X } from 'lucide-react';
 import { deviceEvents } from '@/lib/socket';
-import { canBrowseDirectory } from '@/lib/device-permissions';
 import {
   applyDirectoryListFailure,
   applyDirectoryListSuccess,
@@ -175,33 +174,23 @@ export function DirectoryTreePicker({
 }
 
 /**
- * 「浏览…」按钮 + 树形弹层的组合，与 DirectoryBrowseButton 同 props 形状，
- * 两个对话框（AgentConfigDialog / AddCustomAgentDialog）直接替换使用。
- * 门控沿用现状 canBrowseDirectory(isLocal)——能力门控切换是切片5 的事。
+ * 「浏览…」按钮 + 树形弹层的组合。三态门控（tree / native-picker / manual）
+ * 由 page.tsx 的 DirectoryBrowseControl 统一判定（切片5），本组件只在
+ * mode === 'tree' 时被渲染，自身不再做门控。
  */
 export function DirectoryTreeBrowseButton({
   onSelect,
   onError,
   deviceId,
   disabled = false,
-  isLocal = true,
 }: {
   onSelect: (path: string) => void;
   onError?: (message: string) => void;
   deviceId?: string;
-  daemonVersion?: string | null;
   disabled?: boolean;
-  isLocal?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
-  if (!canBrowseDirectory(isLocal)) {
-    return (
-      <span className="shrink-0 self-center text-[11px] text-neutral-400">
-        远程设备请手动填写该设备上的项目绝对路径
-      </span>
-    );
-  }
   return (
     <>
       <button

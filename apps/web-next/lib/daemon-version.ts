@@ -24,6 +24,32 @@ function label(version?: string | null): string | null {
   return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
 }
 
+function parseVersionParts(version: string | null | undefined): number[] | null {
+  const trimmed = version?.trim();
+  if (!trimmed) return null;
+  const match = trimmed.replace(/^v/, '').match(/\d+(\.\d+)*/);
+  if (!match) return null;
+  return match[0].split('.').map((part) => Number(part) || 0);
+}
+
+/**
+ * 语义化版本比较：current >= minimum。无法解析时返回 true（permissive）——
+ * 调用方若需 fail-closed（如能力版本门），先用 `version != null` 守卫。
+ */
+export function versionAtLeast(version: string | null | undefined, minimum: string): boolean {
+  const current = parseVersionParts(version);
+  const required = parseVersionParts(minimum);
+  if (!current || !required) return true;
+  const len = Math.max(current.length, required.length);
+  for (let i = 0; i < len; i += 1) {
+    const a = current[i] ?? 0;
+    const b = required[i] ?? 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return true;
+}
+
 export function daemonVersionDisplay(device: DaemonVersionFields): DaemonVersionDisplay {
   const current = label(device.daemonVersionInfo?.current ?? device.systemInfo?.daemonVersion);
   const latest = label(device.daemonVersionInfo?.latest ?? device.latestDaemonVersion);

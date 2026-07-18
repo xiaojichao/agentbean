@@ -3,7 +3,7 @@
 > **设计日期**：2026-07-17
 > **取代**：`2026-07-09-区分当前与远程设备-design.md` 的 **D1 决策**（远程设备目录浏览降级为手动填路径）
 > **仓库**：xiaojichao/agentbean
-> **状态**：待评审
+> **状态**：已落地（切片1-5：PR #642 / #643 / #644 / #652 / 本片 #640）
 
 ---
 
@@ -210,13 +210,13 @@ interface ListDirectoryResponse {
 
 ## 8. 验收标准
 
-- [ ] 本机设备（`fsBrowse` daemon）：目录浏览按钮可见，点开树形选择器，逐层展开，选中路径正确填入。
-- [ ] 远程设备（`fsBrowse` daemon）：**同上，全功能**（本次痛点 + 远程二等公民体验同时解决）。
-- [ ] 旧 daemon（无 `fsBrowse`）+ 本机：回退 `selectDirectory` 弹窗，行为不变。
-- [ ] 旧 daemon（无 `fsBrowse`）+ 远程：回退手动填路径，行为不变（D1 降级保留为兜底）。
-- [ ] 非拥有者调 `fs:list`：返回 `FORBIDDEN`（server 授权拒绝惯例码，web 映射为权限提示），不能列目录。
-- [ ] denylist 路径：返回 `PATH_NOT_FOUND`，不暴露存在性。
-- [ ] readiness / phase-0-management-boundary-regression CI 全绿。
+- [x] 本机设备（`fsBrowse` daemon）：目录浏览按钮可见，点开树形选择器，逐层展开，选中路径正确填入。
+- [x] 远程设备（`fsBrowse` daemon）：**同上，全功能**（本次痛点 + 远程二等公民体验同时解决）。
+- [x] 旧 daemon（无 `fsBrowse`）+ 本机：回退 `selectDirectory` 弹窗，行为不变。
+- [x] 旧 daemon（无 `fsBrowse`）+ 远程：回退手动填路径，行为不变（D1 降级保留为兜底）。
+- [x] 非拥有者调 `fs:list`：返回 `FORBIDDEN`（server 授权拒绝惯例码，web 映射为权限提示），不能列目录。
+- [x] denylist 路径：返回 `PATH_NOT_FOUND`，不暴露存在性。
+- [x] readiness / phase-0-management-boundary-regression CI 全绿（各切片 CI Validate 均绿）。
 
 ---
 
