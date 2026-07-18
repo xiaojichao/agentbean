@@ -305,6 +305,10 @@ describe('Phase 4 auto placement routing（#647）', () => {
     expect(probe).toHaveBeenCalledTimes(1);
     const run = await harness.repositories.management.runs.getById(first.managementRunId);
     expect(run?.placementPolicy.placement).toBe('device');
+    // 重放路径的 preflight 必须消费冻结值（device 形状），而非 auto 原值（review finding：
+    // auto 原值下行会被 gateway 按非 managed 分流，managed 冻结 run 会拿错 profileId）
+    const secondPreflightPolicy = (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]?.placementPolicy;
+    expect(secondPreflightPolicy).toMatchObject({ placement: 'device', allowedDeviceIds: ['device-1'] });
   });
 });
 

@@ -202,12 +202,18 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       let autoPlacement: AutoPlacementResolutionDto | undefined;
       if (placementPolicy.placement === 'auto') {
         // 幂等重放（requestKey 已有 reservation）跳过解析：解析只发生一次，
-        // probe 状态漂移不改变已有 run（kernel resume 会忽略本次传入的 placementPolicy）。
+        // probe 状态漂移不改变已有 run。但下行守卫/preflight/schedule 必须消费
+        // 冻结值而非 auto 原值——用 reservation 取出 run 的 placementPolicy 替换。
         const existingReservation = await repositories.management.reservations.getByRequestKey({
           teamId: input.teamId,
           requestKey: requestKey(input),
         });
-        if (!existingReservation) {
+        if (existingReservation) {
+          const existingRun = await repositories.management.runs.getById(existingReservation.managementRunId);
+          if (existingRun) {
+            placementPolicy = existingRun.placementPolicy;
+          }
+        } else {
           const probe = await dependencies.gateway?.probeAutoPlacement?.({
             teamId: input.teamId,
             placementPolicy,

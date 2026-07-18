@@ -18,6 +18,7 @@ import {
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createServerWorkerPool, type ServerWorkerPool } from './application/management/server-worker-pool.js';
 import { createServerWorkerScheduler, type ServerWorkerScheduler } from './application/management/server-worker-scheduler.js';
+import { createAutoPlacementProbe } from './application/management/auto-placement-probe.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
@@ -1437,6 +1438,10 @@ function createDefaultManagementRuntime(
     ...(serverWorkerTuning?.queueTimeoutMs ? { queueTimeoutMs: serverWorkerTuning.queueTimeoutMs } : {}),
     ...(serverWorkerTuning?.leaseTtlMs ? { leaseTtlMs: serverWorkerTuning.leaseTtlMs } : {}),
   }) : undefined;
+  const autoPlacementProbe = createAutoPlacementProbe({
+    deviceScheduler: scheduler,
+    ...(serverWorkerPool ? { serverWorkerPool } : {}),
+  });
   const router = createManagementRouter({
     repositories,
     kernel,
@@ -1487,21 +1492,7 @@ function createDefaultManagementRuntime(
         });
       },
       async probeAutoPlacement({ teamId, placementPolicy, managementPhase }) {
-        // device 侧：复用既有 preflight 的候选过滤（在线 + allowedDeviceIds 授权 + credential ready）。
-        const devicePreflight = managementPhase === 3
-          ? await scheduler.managementPhase3Preflight({ teamId, placementPolicy, targetAvailable: true })
-          : await scheduler.managementPhase2Preflight({ teamId, placementPolicy, targetAvailable: true });
-        // server 侧：pool.selectWorker（connected + transport + 容量 + phase 支持；
-        // credential production_ready 在注册时 fail-closed）。
-        const serverSelected = serverWorkerPool?.selectWorker({
-          managementPhase,
-          ...(placementPolicy.preferredProvider ? { preferredProvider: placementPolicy.preferredProvider } : {}),
-          ...(placementPolicy.preferredModel ? { preferredModel: placementPolicy.preferredModel } : {}),
-        });
-        return {
-          deviceAvailable: devicePreflight.preflight.workerAvailable,
-          serverAvailable: Boolean(serverSelected),
-        };
+        return autoPlacementProbe({ teamId, placementPolicy, managementPhase });
       },
       async schedule(input) {
         const run = await repositories.management.runs.getById(input.managementRunId);
