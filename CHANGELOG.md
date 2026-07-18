@@ -6,6 +6,8 @@
 
 ## [Daily 2026-07-18] - 2026-07-18
 ### Changed
+- Phase 4 第二阶段：Run 用量可见性（#649）
+- 记录 2026-07-18 每日更新日志
 - Phase 4 第二阶段：Team 预算配置（#648）
 - Phase 4 第二阶段：auto placement 决策（#647）
 - daemon 发版 0.3.11：fs:list 目录浏览能力到达设备
@@ -14,6 +16,9 @@
 - fs:list 目录浏览切片4：浏览器树形目录选择器（#639）
 - docs：Phase 4 第二阶段 placement 策略规格草案（auto + 预算 + Web 配置面）
 - 记录 2026-07-17 每日更新日志
+### Fixed
+- 修复 auto placement 两条 follow-up（#657/#658）
+- 修复 Run 用量计数口径与 enforcement 对齐（#660/#661）
 ### Security
 - fs:list 目录浏览切片3：daemon 安全闸（#638）
 
