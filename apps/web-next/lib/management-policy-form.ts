@@ -40,9 +40,9 @@ export interface ManagementPolicyLike {
 export const MANAGED_PLACEMENT_PRIVACY_NOTICE =
   'managed placement 下，Server Worker 将以你的身份在 Server 端执行任务：完成任务所需的最小授权内容（根消息、根任务、可见讨论串与管理状态）会发送至 Server provider，每次访问均写入审计。Device 本地 Memory、本地文件与凭据不会上传。';
 
-/** auto placement 的决策说明文案（#647）。 */
+/** auto placement 的决策说明文案（#647；Phase ≥ 2 限定与 AUTO_SERVER_FALLBACK_HINT 对齐，#658）。 */
 export const AUTO_PLACEMENT_NOTICE =
-  'auto 按隐私与可用性自动选择执行位置：有在线授权 Device 时本地优先；Device 全离线且授权 Server 时由 Server Worker 兜底。每次决定随 Run 冻结并写入审计。';
+  'auto 按隐私与可用性自动选择执行位置：有在线授权 Device 时本地优先；Device 全离线且授权 Server 时由 Server Worker 兜底（仅 Phase ≥ 2）。每次决定随 Run 冻结并写入审计。';
 
 /**
  * auto 的 Server 兜底勾选说明（#658）。
