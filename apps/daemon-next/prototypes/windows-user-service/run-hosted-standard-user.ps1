@@ -64,8 +64,8 @@ try {
     -WorkingDirectory $workspace `
     -RedirectStandardOutput $stdout `
     -RedirectStandardError $stderr `
-    -Wait `
     -PassThru
+  $process.WaitForExit()
   Get-Content -LiteralPath $stdout
   if (Test-Path $stderr) { Get-Content -LiteralPath $stderr }
   if ($process.ExitCode -ne 0) { throw "STANDARD_USER_PROCESS_FAILED_$($process.ExitCode)" }
