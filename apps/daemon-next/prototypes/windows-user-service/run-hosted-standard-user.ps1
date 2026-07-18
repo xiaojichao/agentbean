@@ -10,7 +10,25 @@ $workspace = Resolve-Path (Join-Path $prototypeRoot '..\..\..\..')
 $evidence = Join-Path $workspace 'phase5-windows-standard-user-evidence'
 
 if ($Inner) {
+  $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[-1]
+  $profileRoot = Join-Path $env:SystemDrive "Users\$currentUser"
+  $localAppData = Join-Path $profileRoot 'AppData\Local'
+  $roamingAppData = Join-Path $profileRoot 'AppData\Roaming'
+  $tempRoot = Join-Path $localAppData 'Temp'
+  New-Item -ItemType Directory -Force -Path $localAppData, $roamingAppData, $tempRoot | Out-Null
+  $env:USERPROFILE = $profileRoot
+  $env:LOCALAPPDATA = $localAppData
+  $env:APPDATA = $roamingAppData
+  $env:TEMP = $tempRoot
+  $env:TMP = $tempRoot
+  $env:DOTNET_CLI_HOME = Join-Path $profileRoot '.dotnet'
   $env:AGENTBEAN_WINDOWS_PROTOTYPE_EVIDENCE_DIR = $evidence
+  [pscustomobject]@{
+    UserProfile = $env:USERPROFILE
+    LocalAppData = $env:LOCALAPPDATA
+    Temp = $env:TEMP
+    DotnetCliHome = $env:DOTNET_CLI_HOME
+  } | Format-List | Out-File -LiteralPath (Join-Path $evidence 'environment.txt') -Encoding utf8
   whoami.exe /all | Out-File -LiteralPath (Join-Path $evidence 'identity.txt') -Encoding utf8
   Set-Location $workspace
   npm run prototype:phase5-windows-service 2>&1 |
