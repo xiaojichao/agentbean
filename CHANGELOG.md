@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [Daily 2026-07-18] - 2026-07-18
+### Changed
+- Phase 4 第二阶段：Team 预算配置（#648）
+- Phase 4 第二阶段：auto placement 决策（#647）
+- daemon 发版 0.3.11：fs:list 目录浏览能力到达设备
+- fs:list 目录浏览切片5：门控从身份切换到能力（#640）
+- Phase 4 第二阶段：Web placement 配置面（#646）
+- fs:list 目录浏览切片4：浏览器树形目录选择器（#639）
+- docs：Phase 4 第二阶段 placement 策略规格草案（auto + 预算 + Web 配置面）
+- 记录 2026-07-17 每日更新日志
+### Security
+- fs:list 目录浏览切片3：daemon 安全闸（#638）
+
 ## [Daily 2026-07-17] - 2026-07-17
 ### Changed
 - fs:list 目录浏览切片2：授权收紧验收测试与错误码对齐（#637）
