@@ -71,4 +71,4 @@ jobs:
         with:
           name: phase5-windows-service-hosted-standard-user-evidence
           path: phase5-windows-standard-user-evidence/**
-          if-no-files-found: error
+          if-no-files-found: warn

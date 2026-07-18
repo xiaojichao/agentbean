@@ -20,12 +20,13 @@ if ($Inner) {
 }
 
 $user = 'AgentBeanProbe'
-$password = 'Ab9!' + [guid]::NewGuid().ToString('N')
+$password = 'Ab9!' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $principal = "$env:COMPUTERNAME\$user"
 try {
+  New-Item -ItemType Directory -Force -Path $evidence | Out-Null
+  "creating $principal" | Out-File -LiteralPath (Join-Path $evidence 'harness-state.txt') -Encoding utf8
   net.exe user $user $password /add /expires:never /passwordchg:no | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "STANDARD_USER_CREATE_FAILED_$LASTEXITCODE" }
-  New-Item -ItemType Directory -Force -Path $evidence | Out-Null
   icacls.exe $workspace /grant "${principal}:(OI)(CI)RX" /C | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "WORKSPACE_READ_ACL_FAILED_$LASTEXITCODE" }
   icacls.exe $prototypeRoot /grant "${principal}:(OI)(CI)M" /T /C | Out-Null
@@ -52,5 +53,10 @@ try {
   if ($process.ExitCode -ne 0) { throw "STANDARD_USER_PROCESS_FAILED_$($process.ExitCode)" }
 }
 finally {
-  try { net.exe user $user /delete | Out-Null } catch { }
+  try {
+    $nativePreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    net.exe user $user /delete 2>&1 | Out-Null
+    $PSNativeCommandUseErrorActionPreference = $nativePreference
+  } catch { }
 }
