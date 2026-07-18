@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  AUTO_PLACEMENT_NOTICE,
   buildPlacementPolicyPayload,
   MANAGED_PLACEMENT_PRIVACY_NOTICE,
   placementFormStateFromPolicy,
@@ -258,5 +259,13 @@ describe('MANAGED_PLACEMENT_PRIVACY_NOTICE', () => {
     expect(MANAGED_PLACEMENT_PRIVACY_NOTICE).toContain('Server');
     expect(MANAGED_PLACEMENT_PRIVACY_NOTICE).toContain('审计');
     expect(MANAGED_PLACEMENT_PRIVACY_NOTICE).toContain('不会上传');
+  });
+});
+
+describe('AUTO_PLACEMENT_NOTICE（#647）', () => {
+  test('auto 说明覆盖决策语义：本地优先 / Server 兜底 / 冻结可审计', () => {
+    expect(AUTO_PLACEMENT_NOTICE).toContain('本地优先');
+    expect(AUTO_PLACEMENT_NOTICE).toContain('Server Worker 兜底');
+    expect(AUTO_PLACEMENT_NOTICE).toContain('审计');
   });
 });

@@ -4,11 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ManagementMode } from '@agentbean/contracts';
 import { managementPolicyEvents } from '@/lib/socket';
 import {
+  AUTO_PLACEMENT_NOTICE,
   buildPlacementPolicyPayload,
   MANAGED_PLACEMENT_PRIVACY_NOTICE,
   placementFormStateFromPolicy,
   placementOnModeChange,
   validatePlacementForm,
+  type PlacementChoice,
   type PlacementFormState,
 } from '@/lib/management-policy-form';
 
@@ -125,27 +127,39 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
       <label className="mb-1 mt-4 block text-xs font-medium text-neutral-500">执行位置（placement）</label>
       <select
         value={form.placement}
-        onChange={(event) => patch({ placement: event.target.value as 'device' | 'managed' })}
+        onChange={(event) => patch({ placement: event.target.value as PlacementChoice })}
         disabled={loading || !canManage || form.mode !== 'managed'}
         className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
         data-smoke="settings-management-placement"
       >
-        {/* auto 属切片 2（#647）不提供选择；但已有 auto policy 必须可见且原样保留，
-            不允许折叠成 device 后静默回写。用户显式改选 device/managed 则是知情操作。 */}
-        {form.placement === 'auto' && (
-          <option value="auto" disabled>
-            auto（当前设置；决策语义落地后开放选择）
-          </option>
-        )}
         <option value="device">device（在你授权的 Device 上执行）</option>
         <option value="managed">managed（Server Worker 在 Server 端执行）</option>
+        <option value="auto">auto（按隐私与可用性自动选择）</option>
       </select>
+      {form.mode === 'managed' && form.placement === 'auto' && (
+        <div className="mt-2 space-y-2" data-smoke="settings-management-auto-notice">
+          <div className="rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600">
+            {AUTO_PLACEMENT_NOTICE}
+          </div>
+          <label className="flex items-start gap-2 text-xs text-neutral-600">
+            <input
+              type="checkbox"
+              checked={form.allowServerContext}
+              onChange={(event) => patch({ allowServerContext: event.target.checked })}
+              disabled={!canManage}
+              className="mt-0.5"
+              data-smoke="settings-management-allow-server-context"
+            />
+            <span>Device 全离线时允许 Server Worker 兜底（完成任务所需的最小授权内容将发送至 Server provider，每次访问写入审计；不勾选则 Device 离线时任务明确失败，绝不上传）</span>
+          </label>
+        </div>
+      )}
       {form.mode === 'managed' && form.placement === 'managed' && (
         <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs text-neutral-600" data-smoke="settings-management-privacy">
           {MANAGED_PLACEMENT_PRIVACY_NOTICE}
         </div>
       )}
-      {form.mode === 'managed' && form.placement === 'device' && (
+      {form.mode === 'managed' && (form.placement === 'device' || form.placement === 'auto') && (
         <div className="mt-4 space-y-2">
           <div className="text-xs font-medium text-neutral-500">允许承载的 Device</div>
           {uniqueDeviceIds.map((deviceId) => (

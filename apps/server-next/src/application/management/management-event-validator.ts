@@ -49,7 +49,7 @@ type MemoryToolEventType = (typeof MEMORY_TOOL_MANAGEMENT_EVENT_TYPES)[number];
 type WritableEventType = Phase1WritableEventType | TaskCoordinationEventType | CollaborationEventType | MemoryToolEventType;
 
 const payloadKeys: Record<WritableEventType, { required: readonly string[]; optional?: readonly string[] }> = {
-  'run-started': { required: ['rootMessageId', 'mode'], optional: ['rootTaskId'] },
+  'run-started': { required: ['rootMessageId', 'mode'], optional: ['rootTaskId', 'autoPlacement'] },
   'worker-leased': { required: ['workerId', 'leaseFingerprint', 'expiresAt'] },
   'worker-lost': { required: ['workerId', 'lastHeartbeatAt', 'reasonCode'] },
   'checkpoint-updated': { required: ['checkpointRevision', 'lastEventSequence'] },

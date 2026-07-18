@@ -244,6 +244,65 @@ describe('Phase 4 Managed Server Worker end-to-end smoke', () => {
     });
     expect(denied).toMatchObject({ ok: false, diagnosticCode: 'SERVER_WORKER_TEAM_FORBIDDEN' });
   });
+
+  test('resolves auto placement to managed when no Device management worker is available, freezing the decision with an audit trail', async () => {
+    const harness = await createPhase4Harness();
+    const owner = await harness.registerOwner();
+    // fake device 只注册普通 agent（子任务执行载体），不注册 management worker——
+    // probe 的 device 信号来自 management worker 注册表，因此 device 侧判定不可用。
+    const device = await harness.registerDeviceAgent({ web: owner.web, teamId: owner.teamId, userId: owner.userId });
+    const worker = await harness.connectServerWorker('server-worker-auto');
+    await worker.register('server-worker-auto');
+    await harness.optIntoAutoPlacement(owner.authenticatedSocket, owner.teamId, owner.userId, [device.deviceId]);
+
+    const sent = await harness.sendRootedMessage(owner.authenticatedSocket, {
+      userId: owner.userId, teamId: owner.teamId, channelId: owner.channelId, key: 'auto-managed',
+    });
+    expect(sent.management?.kind).toBe('managed');
+    const managementRunId = sent.management!.managementRunId!;
+
+    const offer = await harness.waitForOffer(worker);
+    const lease = await worker.acquireLease({
+      schemaVersion: 1, offerId: offer.offerId, workerInstanceId: 'server-worker-auto',
+    });
+    if (!lease.ok) throw new Error('auto lease expected');
+    const checkpoint = await worker.fetchCheckpoint({
+      schemaVersion: 1, managementRunId, workerId: lease.workerId,
+      leaseToken: lease.leaseToken, fencingToken: lease.fencingToken, knownCheckpointRevision: 0,
+    });
+    const rootTaskId = checkpoint.context.rootTaskId;
+    if (!rootTaskId) throw new Error('checkpoint must expose the root task id');
+    const delivery = await driveSingleSubtaskToRootDelivery(worker, {
+      managementRunId, workerId: lease.workerId,
+      leaseToken: lease.leaseToken, fencingToken: lease.fencingToken,
+      rootTaskId, requiredCapability: device.skillName,
+    });
+    expect(delivery).toMatchObject({ status: 'in_review', deliveryMessageId: expect.any(String) });
+
+    const db = harness.openTeamDatabase();
+    try {
+      // resolved placement 随 run 冻结（不再是 auto）
+      const run = db.prepare('SELECT placement_policy_json FROM management_runs WHERE id = ?')
+        .get(managementRunId) as { placement_policy_json: string } | undefined;
+      expect(JSON.parse(run!.placement_policy_json)).toMatchObject({
+        placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false,
+      });
+      // 理由码随 run-started 事件冻结
+      const started = db.prepare('SELECT payload_json FROM management_events WHERE management_run_id = ? AND type = ?')
+        .all(managementRunId, 'run-started') as { payload_json: string }[];
+      expect(started).toHaveLength(1);
+      expect(JSON.parse(started[0]!.payload_json)).toMatchObject({
+        autoPlacement: { resolvedPlacement: 'managed', reasonCode: 'server-fallback-device-unavailable' },
+      });
+      // 理由码同时落审计（含 #626 的 access/transmit 行，至少有一行 auto placement 决定）
+      const audits = db.prepare('SELECT diagnostic_code FROM management_access_audits WHERE management_run_id = ?')
+        .all(managementRunId) as { diagnostic_code: string }[];
+      expect(audits.map((row) => row.diagnostic_code))
+        .toContain('AUTO_PLACEMENT_SERVER_FALLBACK_DEVICE_UNAVAILABLE');
+    } finally {
+      db.close();
+    }
+  });
 });
 
 interface OwnerContext {
@@ -395,6 +454,16 @@ async function createPhase4Harness(tuning: { queueTimeoutMs?: number; leaseTtlMs
         },
       }) as { ok: boolean };
       if (!ack.ok) throw new Error(`managementPolicy.update failed: ${JSON.stringify(ack)}`);
+    },
+    async optIntoAutoPlacement(socket, teamId, userId, allowedDeviceIds) {
+      const ack = await socket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
+        userId, teamId, mode: 'managed', maxManagementPhase: 2,
+        placementPolicy: {
+          placement: 'auto', allowedDeviceIds,
+          allowServerContext: true, requireLocalModelCredentials: true,
+        },
+      }) as { ok: boolean };
+      if (!ack.ok) throw new Error(`managementPolicy.update(auto) failed: ${JSON.stringify(ack)}`);
     },
     async sendRootedMessage(socket, { userId, teamId, channelId, key }) {
       // body 以 @未知名开头,使 routeMessage 落到 unknown-mention(no-dispatch):

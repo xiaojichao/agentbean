@@ -1486,6 +1486,23 @@ function createDefaultManagementRuntime(
           targetAvailable: target ? target.status !== 'offline' : true,
         });
       },
+      async probeAutoPlacement({ teamId, placementPolicy, managementPhase }) {
+        // device 侧：复用既有 preflight 的候选过滤（在线 + allowedDeviceIds 授权 + credential ready）。
+        const devicePreflight = managementPhase === 3
+          ? await scheduler.managementPhase3Preflight({ teamId, placementPolicy, targetAvailable: true })
+          : await scheduler.managementPhase2Preflight({ teamId, placementPolicy, targetAvailable: true });
+        // server 侧：pool.selectWorker（connected + transport + 容量 + phase 支持；
+        // credential production_ready 在注册时 fail-closed）。
+        const serverSelected = serverWorkerPool?.selectWorker({
+          managementPhase,
+          ...(placementPolicy.preferredProvider ? { preferredProvider: placementPolicy.preferredProvider } : {}),
+          ...(placementPolicy.preferredModel ? { preferredModel: placementPolicy.preferredModel } : {}),
+        });
+        return {
+          deviceAvailable: devicePreflight.preflight.workerAvailable,
+          serverAvailable: Boolean(serverSelected),
+        };
+      },
       async schedule(input) {
         const run = await repositories.management.runs.getById(input.managementRunId);
         if (run?.placementPolicy.placement === 'managed') {

@@ -202,6 +202,136 @@ describe('Phase 1 management routing', () => {
   });
 });
 
+describe('Phase 4 auto placement routing（#647）', () => {
+  test('auto + device 可用 → resolve device：preflight 收 device 形状、run 冻结 device、event 与审计留理由码', async () => {
+    const harness = await createHarness({ autoProbe: { deviceAvailable: true, serverAvailable: true } });
+    await harness.router.updatePolicy(autoPolicy());
+    const result = await harness.router.route(rootedRequest());
+    expect(result).toMatchObject({ kind: 'managed', managementPhase: 2 });
+    expect(harness.gateway.probeAutoPlacement).toHaveBeenCalledWith(expect.objectContaining({ teamId: 'team-1' }));
+    expect(harness.gateway.preflightPhase2).toHaveBeenCalledWith(expect.objectContaining({
+      placementPolicy: expect.objectContaining({ placement: 'device', allowedDeviceIds: ['device-1'] }),
+    }));
+    if (result.kind !== 'managed') throw new Error('managed expected');
+    const run = await harness.repositories.management.runs.getById(result.managementRunId);
+    expect(run?.placementPolicy.placement).toBe('device');
+    const events = await harness.repositories.management.events.list(result.managementRunId);
+    expect(events[0]?.event).toMatchObject({
+      type: 'run-started',
+      payload: { autoPlacement: { resolvedPlacement: 'device', reasonCode: 'device-preferred' } },
+    });
+    const audits = await harness.repositories.management.accessAudits.list(result.managementRunId);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      action: 'access', decision: 'allowed', diagnosticCode: 'AUTO_PLACEMENT_DEVICE_PREFERRED',
+    });
+  });
+
+  test('auto + device 不可用 + 已授权 server 可用 → resolve managed：preflight 收 managed 约束形状、run 冻结 managed', async () => {
+    const harness = await createHarness({ autoProbe: { deviceAvailable: false, serverAvailable: true } });
+    await harness.router.updatePolicy(autoPolicy());
+    const result = await harness.router.route(rootedRequest());
+    expect(result).toMatchObject({ kind: 'managed', managementPhase: 2 });
+    expect(harness.gateway.preflightPhase2).toHaveBeenCalledWith(expect.objectContaining({
+      placementPolicy: expect.objectContaining({
+        placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false,
+      }),
+    }));
+    const preflightPolicy = (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.placementPolicy;
+    expect(preflightPolicy?.allowedDeviceIds).toBeUndefined();
+    if (result.kind !== 'managed') throw new Error('managed expected');
+    const run = await harness.repositories.management.runs.getById(result.managementRunId);
+    expect(run?.placementPolicy.placement).toBe('managed');
+    const events = await harness.repositories.management.events.list(result.managementRunId);
+    expect(events[0]?.event).toMatchObject({
+      type: 'run-started',
+      payload: { autoPlacement: { resolvedPlacement: 'managed', reasonCode: 'server-fallback-device-unavailable' } },
+    });
+  });
+
+  test('auto resolve 为 managed 后沿用 managed 守卫：带 target 的请求回退 direct', async () => {
+    const harness = await createHarness({ autoProbe: { deviceAvailable: false, serverAvailable: true } });
+    await harness.router.updatePolicy(autoPolicy());
+    await expect(harness.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+    expect(harness.gateway.preflightPhase2).not.toHaveBeenCalled();
+  });
+
+  test('红线：auto + 未授权 server + device 不可用 → 明确 unavailable，不静默迁移、不建 run', async () => {
+    const harness = await createHarness({ autoProbe: { deviceAvailable: false, serverAvailable: true } });
+    await harness.router.updatePolicy({
+      ...autoPolicy(),
+      placementPolicy: {
+        placement: 'auto', allowedDeviceIds: ['device-1'],
+        allowServerContext: false, requireLocalModelCredentials: true,
+      },
+    });
+    const result = await harness.router.route(rootedRequest());
+    expect(result).toEqual({
+      kind: 'unavailable', mode: 'managed',
+      diagnostics: ['AUTO_PLACEMENT_UNAVAILABLE_DEVICE_OFFLINE_SERVER_DISALLOWED'],
+    });
+    expect(harness.gateway.preflightPhase2).not.toHaveBeenCalled();
+  });
+
+  test('auto + 两侧都不可用 → 明确 unavailable（no-capacity）', async () => {
+    const harness = await createHarness({ autoProbe: { deviceAvailable: false, serverAvailable: false } });
+    await harness.router.updatePolicy(autoPolicy());
+    await expect(harness.router.route(rootedRequest())).resolves.toEqual({
+      kind: 'unavailable', mode: 'managed',
+      diagnostics: ['AUTO_PLACEMENT_UNAVAILABLE_NO_CAPACITY'],
+    });
+  });
+
+  test('auto + probe 未装配 → fail closed 明确 unavailable（无信号不乱猜）', async () => {
+    const harness = await createHarness({ autoProbe: undefined });
+    await harness.router.updatePolicy(autoPolicy());
+    await expect(harness.router.route(rootedRequest())).resolves.toMatchObject({
+      kind: 'unavailable', mode: 'managed',
+    });
+  });
+
+  test('auto 解析随 run 冻结：幂等重放不重新 resolve（probe 状态漂移不改变已有 run）', async () => {
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ deviceAvailable: true, serverAvailable: true })
+      .mockResolvedValueOnce({ deviceAvailable: false, serverAvailable: true });
+    const harness = await createHarness({ autoProbe: probe });
+    await harness.router.updatePolicy(autoPolicy());
+    const first = await harness.router.route(rootedRequest());
+    expect(first).toMatchObject({ kind: 'managed' });
+    if (first.kind !== 'managed') throw new Error('managed expected');
+    const second = await harness.router.route(rootedRequest());
+    expect(second).toMatchObject({ kind: 'managed', managementRunId: first.managementRunId });
+    // 重放走 reservation resume，不再 probe（解析只发生一次）
+    expect(probe).toHaveBeenCalledTimes(1);
+    const run = await harness.repositories.management.runs.getById(first.managementRunId);
+    expect(run?.placementPolicy.placement).toBe('device');
+  });
+});
+
+function rootedRequest() {
+  return {
+    ...request(),
+    targetAgentId: undefined,
+    rootTaskId: 'root-task-1',
+    body: '@unknown-agent 请协调团队完成复杂任务',
+  };
+}
+
+function autoPolicy(userId = 'user-1') {
+  return {
+    userId,
+    teamId: 'team-1',
+    mode: 'managed' as const,
+    maxManagementPhase: 2 as const,
+    placementPolicy: {
+      placement: 'auto' as const,
+      allowedDeviceIds: ['device-1'],
+      allowServerContext: true,
+      requireLocalModelCredentials: true,
+    },
+  };
+}
+
 function request() {
   return {
     userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', rootMessageId: 'message-1',
@@ -227,6 +357,7 @@ async function createHarness(overrides: Partial<{
   workerAvailable: boolean;
   phase2WorkerAvailable: boolean;
   phase3WorkerAvailable: boolean;
+  autoProbe: { deviceAvailable: boolean; serverAvailable: boolean } | undefined | ReturnType<typeof vi.fn>;
 }> = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { now: () => 10 };
@@ -256,6 +387,13 @@ async function createHarness(overrides: Partial<{
       profileId: 'profile-1',
     })),
     schedule: vi.fn(async () => ({ ok: true })),
+    // #647 auto placement probe：undefined 模拟未装配（fail closed 路径）；
+    // 传 vi.fn 可逐次控制返回值（冻结测试）。
+    ...('autoProbe' in overrides && overrides.autoProbe === undefined ? {} : {
+      probeAutoPlacement: typeof overrides.autoProbe === 'function'
+        ? overrides.autoProbe
+        : vi.fn(async () => overrides.autoProbe ?? { deviceAvailable: true, serverAvailable: true }),
+    }),
   };
   const router = createManagementRouter({ repositories, kernel, gateway, clock, ids });
   const app = createServerNextUseCases({ repositories, clock, ids, managementRouter: router });

@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import type {
+  AutoPlacementResolutionDto,
   ManagementBudgetDto,
   ManagementMode,
   ManagerPlacementPolicyDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   evaluateManagementRoute,
+  resolveAutoPlacement,
   type ManagementPreflight,
 } from '../../../../../packages/domain/src/index.js';
 import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
@@ -48,6 +50,15 @@ export interface ManagementRoutingGateway {
     target: AgentRecord | null;
     placementPolicy: ManagerPlacementPolicyDto;
   }): Promise<{ preflight: ManagementPreflight; profileId?: string }>;
+  /**
+   * auto placement 的可用性探测（#647）：返回 device/server 两侧的布尔级可用信号。
+   * 未装配时 router fail closed（按两侧全不可用处理，绝不乱猜）。
+   */
+  probeAutoPlacement?(input: {
+    teamId: string;
+    placementPolicy: ManagerPlacementPolicyDto;
+    managementPhase: 1 | 2 | 3;
+  }): Promise<{ deviceAvailable: boolean; serverAvailable: boolean }>;
   schedule(input: { managementRunId: string; profileId: string }): Promise<{
     ok: boolean;
     diagnosticCode?: string;
@@ -77,6 +88,28 @@ export interface ManagementRouterDependencies {
 
 export function createManagementRouter(dependencies: ManagementRouterDependencies) {
   const { repositories, kernel, clock } = dependencies;
+
+  // #647：auto placement 解析决定随 run 落审计（仅 run 创建时一次；幂等重放不重复写）。
+  // 用 action='access' + diagnosticCode 携带理由码，避开审计表 action CHECK 约束的表重建 migration。
+  async function recordAutoPlacementAudit(
+    input: { userId: string; teamId: string },
+    created: { run: { id: string }; disposition: 'created' | 'existing' },
+    autoPlacement: AutoPlacementResolutionDto | undefined,
+  ): Promise<void> {
+    if (!autoPlacement || created.disposition !== 'created') return;
+    await repositories.management.accessAudits.append({
+      id: dependencies.ids.nextId(),
+      managementRunId: created.run.id,
+      userId: input.userId,
+      teamId: input.teamId,
+      scopeType: 'management',
+      scopeId: created.run.id,
+      action: 'access',
+      decision: 'allowed',
+      diagnosticCode: `AUTO_PLACEMENT_${autoPlacement.reasonCode.toUpperCase().replace(/-/g, '_')}`,
+      createdAt: clock.now(),
+    });
+  }
 
   async function policyForTeam(teamId: string): Promise<ManagementPolicyRecord> {
     return (await repositories.management.policies.get(teamId)) ?? {
@@ -163,7 +196,52 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         };
       }
 
-      if (policy.placementPolicy.placement === 'managed'
+      // #647 auto placement：建 run 前解析一次，resolved placement 替换 policy 值并随 run 冻结；
+      // 之后守卫、preflight、createOrResumeRun、恢复与审计全部消费 resolved 值，不再感知 auto。
+      let placementPolicy = policy.placementPolicy;
+      let autoPlacement: AutoPlacementResolutionDto | undefined;
+      if (placementPolicy.placement === 'auto') {
+        // 幂等重放（requestKey 已有 reservation）跳过解析：解析只发生一次，
+        // probe 状态漂移不改变已有 run（kernel resume 会忽略本次传入的 placementPolicy）。
+        const existingReservation = await repositories.management.reservations.getByRequestKey({
+          teamId: input.teamId,
+          requestKey: requestKey(input),
+        });
+        if (!existingReservation) {
+          const probe = await dependencies.gateway?.probeAutoPlacement?.({
+            teamId: input.teamId,
+            placementPolicy,
+            managementPhase: policy.maxManagementPhase,
+          }) ?? { deviceAvailable: false, serverAvailable: false };
+          const resolution = resolveAutoPlacement({
+            allowServerContext: placementPolicy.allowServerContext,
+            deviceAvailable: probe.deviceAvailable,
+            serverAvailable: probe.serverAvailable,
+          });
+          if (!resolution.ok) {
+            return {
+              kind: 'unavailable',
+              mode: 'managed',
+              diagnostics: [`AUTO_PLACEMENT_${resolution.reasonCode.toUpperCase().replace(/-/g, '_')}`],
+            };
+          }
+          autoPlacement = { resolvedPlacement: resolution.placement, reasonCode: resolution.reasonCode };
+          const preferred = {
+            ...(placementPolicy.preferredProvider ? { preferredProvider: placementPolicy.preferredProvider } : {}),
+            ...(placementPolicy.preferredModel ? { preferredModel: placementPolicy.preferredModel } : {}),
+          };
+          placementPolicy = resolution.placement === 'managed'
+            // 与 normalizePlacementPolicy 的 managed 约束形状一致。
+            ? { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false, ...preferred }
+            : { placement: 'device',
+                ...(placementPolicy.allowedDeviceIds?.length ? { allowedDeviceIds: placementPolicy.allowedDeviceIds } : {}),
+                allowServerContext: placementPolicy.allowServerContext,
+                requireLocalModelCredentials: placementPolicy.requireLocalModelCredentials,
+                ...preferred };
+        }
+      }
+
+      if (placementPolicy.placement === 'managed'
         && (!input.rootTaskId?.trim() || target)) {
         return { kind: 'direct', mode: 'direct' };
       }
@@ -178,7 +256,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         const phase3 = await dependencies.gateway?.preflightPhase3?.({
           teamId: input.teamId,
           target,
-          placementPolicy: policy.placementPolicy,
+          placementPolicy,
         }) ?? { preflight: unavailablePreflight() };
         const decision = evaluateManagementRoute({
           requestId: requestKey(input),
@@ -210,10 +288,12 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           requestKey: requestKey(input),
           requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
             channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 3 }),
-          placementPolicy: policy.placementPolicy,
+          placementPolicy,
           budget: PHASE_2_BUDGET,
           managementPhase: 3,
+          ...(autoPlacement ? { autoPlacement } : {}),
         });
+        await recordAutoPlacementAudit(input, created, autoPlacement);
         return {
           kind: 'managed', mode: 'managed', managementPhase: 3,
           managementRunId: created.run.id, profileId: phase3.profileId,
@@ -231,7 +311,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         const phase2 = await dependencies.gateway?.preflightPhase2?.({
           teamId: input.teamId,
           target,
-          placementPolicy: policy.placementPolicy,
+          placementPolicy,
         }) ?? { preflight: unavailablePreflight() };
         const decision = evaluateManagementRoute({
           requestId: requestKey(input),
@@ -263,10 +343,12 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           requestKey: requestKey(input),
           requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
             channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 2 }),
-          placementPolicy: policy.placementPolicy,
+          placementPolicy,
           budget: PHASE_2_BUDGET,
           managementPhase: 2,
+          ...(autoPlacement ? { autoPlacement } : {}),
         });
+        await recordAutoPlacementAudit(input, created, autoPlacement);
         return {
           kind: 'managed', mode: 'managed', managementPhase: 2,
           managementRunId: created.run.id, profileId: phase2.profileId,
@@ -285,7 +367,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
 
       const gateway = dependencies.gateway;
       const preflight = gateway
-        ? await gateway.preflight({ teamId: input.teamId, target, placementPolicy: policy.placementPolicy })
+        ? await gateway.preflight({ teamId: input.teamId, target, placementPolicy })
         : unavailablePreflight();
       const decision = evaluateManagementRoute({
         requestId: requestKey(input),
@@ -317,9 +399,11 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         },
         requestKey: requestKey(input),
         requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
-        placementPolicy: policy.placementPolicy,
+        placementPolicy,
         budget: PHASE_1_BUDGET,
+        ...(autoPlacement ? { autoPlacement } : {}),
       });
+      await recordAutoPlacementAudit(input, created, autoPlacement);
       return {
         kind: 'managed',
         mode: 'managed',

@@ -4,11 +4,22 @@ import type { SubtaskAcceptanceV1 } from './task-coordination.js';
 import type { AgentHandoffKind } from './collaboration.js';
 import type { Phase3ManagementWorkerToolOutputMapV1 } from './management-worker-v2.js';
 
+/**
+ * auto placement 的解析结果（Phase 4 第二阶段 #647）。
+ * 仅当 Team policy placement='auto' 时随 run-started 携带；解析只发生一次并随 run 冻结。
+ * reasonCode 成功值见 domain auto-placement；失败值不产生 run（无 event）。
+ */
+export interface AutoPlacementResolutionDto {
+  readonly resolvedPlacement: 'device' | 'managed';
+  readonly reasonCode: 'device-preferred' | 'server-fallback-device-unavailable';
+}
+
 export interface ManagementEventPayloadMapV1 {
   readonly 'run-started': {
     readonly rootMessageId: ID;
     readonly rootTaskId?: ID;
     readonly mode: 'managed';
+    readonly autoPlacement?: AutoPlacementResolutionDto;
   };
   readonly 'worker-leased': {
     readonly workerId: ID;

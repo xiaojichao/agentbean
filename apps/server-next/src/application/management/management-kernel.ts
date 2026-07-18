@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type {
+  AutoPlacementResolutionDto,
   ManagementBudgetDto,
   ManagementEventPayloadMapV1,
   ManagementEventTypeV1,
@@ -48,6 +49,8 @@ export interface CreateOrResumeManagementRunInput {
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly budget: ManagementBudgetDto;
   readonly managementPhase?: 1 | 2 | 3;
+  /** placement='auto' 的解析结果（#647）：随 run-started 事件冻结；幂等重放不重复写入。 */
+  readonly autoPlacement?: AutoPlacementResolutionDto;
 }
 
 export interface LeaseAuthorityInput {
@@ -187,7 +190,8 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
           type: 'run-started',
           actorKind: 'system',
           idempotencyKey: `run-started:${input.requestKey}`,
-          payload: { rootMessageId: input.rootMessageId, ...(input.rootTaskId && { rootTaskId: input.rootTaskId }), mode: 'managed' },
+          payload: { rootMessageId: input.rootMessageId, ...(input.rootTaskId && { rootTaskId: input.rootTaskId }), mode: 'managed',
+            ...(input.autoPlacement && { autoPlacement: input.autoPlacement }) },
           createdAt: now,
         });
         await transactionRepositories.reservations.create({ id: ids.nextId(), teamId: input.teamId, requestKey: input.requestKey, requestHash: input.requestHash, managementRunId, createdAt: now });
