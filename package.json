@@ -56,6 +56,7 @@
     "smoke:agentbean-next-webui": "node scripts/smoke-agentbean-next-webui.mjs",
     "smoke:agentbean-next-persistence": "npm run build:server-next && node scripts/smoke-agentbean-next-persistence.mjs",
     "preview:agentbean-next": "cd apps/server-next && ../../node_modules/.bin/vitest run tests/e2e-first-slice.test.ts --config vitest.config.ts --api.host 127.0.0.1 -t \"runtime capability -> custom agent -> message -> daemon reply\"",
+    "prototype:phase5-windows-service": "pwsh -NoProfile -File apps/daemon-next/prototypes/windows-user-service/run.ps1",
     "build": "npm run build:packages",
     "dev:server-next": "npm run build:server-next && node apps/server-next/dist/apps/server-next/src/bin.js",
     "dev:server-next:sqlite": "npm run build:server-next && AGENTBEAN_NEXT_STORAGE=sqlite node apps/server-next/dist/apps/server-next/src/bin.js",

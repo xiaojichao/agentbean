@@ -1,0 +1,35 @@
+name: Phase 5 Windows user service prototype
+
+on:
+  push:
+    branches:
+      - codex/phase5-windows-service-prototype
+    paths:
+      - apps/daemon-next/prototypes/windows-user-service/**
+      - package.json
+      - .github/workflows/phase5-windows-service-prototype.yml
+
+permissions:
+  contents: read
+
+jobs:
+  hosted-runner-partial:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+      - name: Run MSI, Task Scheduler and drain probe
+        shell: pwsh
+        run: |
+          npm run prototype:phase5-windows-service 2>&1 | Tee-Object -FilePath phase5-windows-service-verdict.txt
+          if ($LASTEXITCODE -ne 0) { throw "prototype failed with exit code $LASTEXITCODE" }
+      - name: Upload partial hosted-runner evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-windows-service-hosted-runner-verdict
+          path: phase5-windows-service-verdict.txt
+          if-no-files-found: error

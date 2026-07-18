@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- THROWAWAY PROTOTYPE for #676. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="AgentBean Windows Service Prototype" Manufacturer="AgentBean" Version="1.0.0"
+           UpgradeCode="3D817D0B-E405-45E9-91D4-8019E688F2C8" Scope="perUser">
+    <MajorUpgrade DowngradeErrorMessage="A newer prototype is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="AgentBeanFolder" Name="AgentBean">
+        <Directory Id="INSTALLFOLDER" Name="DeviceServicePrototype">
+          <Component Id="PrototypePayload" Guid="9A02324A-34F4-40B7-B4ED-B71E9D2E733D">
+            <File Id="PrototypeExe" Source="$(PayloadDir)\agentbean-windows-service-prototype.exe" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="AgentBean Device Service Prototype" Level="1">
+      <ComponentRef Id="PrototypePayload" />
+    </Feature>
+    <CustomAction Id="RegisterPrototypeTask" FileRef="PrototypeExe" ExeCommand="install"
+                  Execute="immediate" Impersonate="yes" Return="check" />
+    <CustomAction Id="UnregisterPrototypeTask" FileRef="PrototypeExe" ExeCommand="uninstall"
+                  Execute="immediate" Impersonate="yes" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="RegisterPrototypeTask" After="InstallFiles" Condition="NOT Installed AND NOT REMOVE" />
+      <Custom Action="UnregisterPrototypeTask" Before="RemoveFiles" Condition="REMOVE = &quot;ALL&quot;" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>
