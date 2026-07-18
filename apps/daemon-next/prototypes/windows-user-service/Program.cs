@@ -106,6 +106,7 @@ static class Prototype
     {
         dynamic service = Scheduler();
         dynamic task = service.GetFolder("\\").GetTask(TaskName);
+        task.Enabled = true;
         task.Run(null);
         return 0;
     }
@@ -117,6 +118,7 @@ static class Prototype
             dynamic service = Scheduler();
             dynamic root = service.GetFolder("\\");
             dynamic task = root.GetTask(TaskName);
+            task.Enabled = false;
             if (await IsReady(TimeSpan.FromSeconds(2)))
                 using (await Send(new { command = "begin-drain", deadlineMs = 10_000 })) { }
             task.Stop(0);
@@ -219,11 +221,13 @@ static class Prototype
         var instanceCount = (int)task.GetInstances(0).Count;
         Require(instanceCount == 1, "MULTIPLE_INSTANCE_POLICY_FAILED");
         using (await Send(new { command = "seed-work" })) { }
+        task.Enabled = false;
         using var drained = await Send(new { command = "begin-drain", deadlineMs = 10_000 });
         Require(drained.RootElement.GetProperty("drained").GetBoolean(), "DRAIN_FAILED");
         task.Stop(0);
         await WaitNotReady(TimeSpan.FromSeconds(10));
         Require(File.Exists(OutboxPath) && File.ReadAllText(OutboxPath).Contains("work-completed"), "OUTBOX_NOT_DURABLE");
+        task.Enabled = true;
         task.Run(null);
         Require(await IsReady(TimeSpan.FromSeconds(15)), "TASK_RESTART_AFTER_STOP_FAILED");
         using var beforeCrash = await Send(new { command = "status" });
