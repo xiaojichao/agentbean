@@ -1,19 +1,30 @@
 // Phase 4 第二阶段切片1（#646）：PI 管理面板的 placement 表单纯逻辑。
 // 校验规则与 server 端对齐（management-router.ts）：
 // - updatePolicy：placement='managed' 要求 mode='managed' 且 maxManagementPhase≥2；
-//   mode='managed' + device placement 必须至少一个 allowedDeviceIds。
+//   mode='managed' + placement='device' 必须至少一个 allowedDeviceIds（auto 无此强制）。
 // - normalizePlacementPolicy：managed 强制 allowServerContext=true / requireLocalModelCredentials=false /
-//   不允许 allowedDeviceIds；preferred* 仅 trim 后非空才保留。
+//   不允许 allowedDeviceIds；device/auto 分支**保留客户端的 allowServerContext /
+//   requireLocalModelCredentials**；preferred* 仅 trim 后非空才保留。
 // UI 在保存前用 validatePlacementForm 给出可读提示，避免裸 server VALIDATION_ERROR。
-// `auto` 属于切片2（#647），本文件刻意不出现。
+// `auto` 属于切片2（#647），UI 不提供该选项；但已有 auto policy 必须原样保留往返，
+// 不允许读入时折叠成 device 后在保存时静默回写（隐私相关设置，静默变更不可接受）。
 
 import type { ManagementMode, ManagerPlacementPolicyDto } from '@agentbean/contracts';
+
+/** placement 合同值全集；UI 只开放 device/managed，auto 仅作保留透传。 */
+export type PlacementChoice = ManagerPlacementPolicyDto['placement'];
 
 export interface PlacementFormState {
   mode: ManagementMode;
   maxManagementPhase: 1 | 2 | 3;
-  placement: 'device' | 'managed';
+  placement: PlacementChoice;
   allowedDeviceIds: readonly string[];
+  /**
+   * 透传字段：UI 不暴露编辑，但必须随 policy 原样往返——server device/auto 分支保留
+   * 客户端值，表单若丢弃后在 payload 里硬编码，会把已有授权静默改写。
+   */
+  allowServerContext: boolean;
+  requireLocalModelCredentials: boolean;
   /** 输入框原始字符串；提交时 trim，空白视为未填。 */
   preferredProvider: string;
   preferredModel: string;
@@ -37,6 +48,8 @@ export function placementFormStateFromPolicy(policy: ManagementPolicyLike | null
       maxManagementPhase: 1,
       placement: 'device',
       allowedDeviceIds: [],
+      allowServerContext: false,
+      requireLocalModelCredentials: true,
       preferredProvider: '',
       preferredModel: '',
     };
@@ -45,8 +58,11 @@ export function placementFormStateFromPolicy(policy: ManagementPolicyLike | null
   return {
     mode: policy.mode,
     maxManagementPhase: policy.maxManagementPhase,
-    placement: placementPolicy.placement === 'managed' ? 'managed' : 'device',
+    // placement 原样保留（含 auto）；缺省值与 server normalize 一致（absent → false / true）。
+    placement: placementPolicy.placement,
     allowedDeviceIds: placementPolicy.allowedDeviceIds ? [...placementPolicy.allowedDeviceIds] : [],
+    allowServerContext: placementPolicy.allowServerContext ?? false,
+    requireLocalModelCredentials: placementPolicy.requireLocalModelCredentials ?? true,
     preferredProvider: placementPolicy.preferredProvider ?? '',
     preferredModel: placementPolicy.preferredModel ?? '',
   };
@@ -70,12 +86,14 @@ export function buildPlacementPolicyPayload(state: PlacementFormState): ManagerP
       ...preferred,
     };
   }
+  // device / auto 共用分支：与 server normalize 一致——allowedDeviceIds 空则省略字段，
+  // allowServerContext / requireLocalModelCredentials 保留表单持有的原值（不硬编码）。
   const allowedDeviceIds = [...new Set(state.allowedDeviceIds.filter((id) => id.length > 0))];
   return {
-    placement: 'device',
+    placement: state.placement,
     ...(allowedDeviceIds.length ? { allowedDeviceIds } : {}),
-    allowServerContext: false,
-    requireLocalModelCredentials: true,
+    allowServerContext: state.allowServerContext,
+    requireLocalModelCredentials: state.requireLocalModelCredentials,
     ...preferred,
   };
 }
@@ -84,12 +102,16 @@ export function buildPlacementPolicyPayload(state: PlacementFormState): ManagerP
  * mode 切换时的 placement 联动：切出 managed 时 placement 归位 device（可保存的安全默认）
  * 并记住原选择；切回 managed 时恢复记忆值，避免「mode 往返」静默丢弃用户已选的
  * managed placement（placement 是隐私相关设置，静默变更不可接受）。
+ * auto 不依赖 managed 模式（server 无此约束），mode 切换原样保留、不参与记忆恢复。
  */
 export function placementOnModeChange(
-  currentPlacement: 'device' | 'managed',
+  currentPlacement: PlacementChoice,
   rememberedPlacement: 'device' | 'managed',
   nextMode: ManagementMode,
-): { placement: 'device' | 'managed'; remembered: 'device' | 'managed' } {
+): { placement: PlacementChoice; remembered: 'device' | 'managed' } {
+  if (currentPlacement === 'auto') {
+    return { placement: 'auto', remembered: rememberedPlacement };
+  }
   if (nextMode === 'managed') {
     return { placement: rememberedPlacement, remembered: rememberedPlacement };
   }
@@ -107,7 +129,8 @@ export function validatePlacementForm(state: PlacementFormState): string | null 
     }
     return null;
   }
-  if (state.mode === 'managed' && state.allowedDeviceIds.length === 0) {
+  // server 的 device 列表强制仅针对 placement==='device'；auto 无额外约束（决策语义属切片2）。
+  if (state.placement === 'device' && state.mode === 'managed' && state.allowedDeviceIds.length === 0) {
     return 'managed 模式下使用 device placement 需至少勾选一个允许承载的 Device';
   }
   return null;

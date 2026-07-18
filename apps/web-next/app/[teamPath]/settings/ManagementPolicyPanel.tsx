@@ -18,7 +18,8 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   deviceIds: readonly string[];
 }) {
   const [form, setForm] = useState<PlacementFormState>(() => placementFormStateFromPolicy(null));
-  const rememberedPlacementRef = useRef<'device' | 'managed'>(form.placement);
+  // 初值必为 device（null policy 默认）；后续 policy 载入时同步重置（见下方 effect）。
+  const rememberedPlacementRef = useRef<'device' | 'managed'>(form.placement === 'managed' ? 'managed' : 'device');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -32,7 +33,8 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
       if (!active) return;
       if (result.ok && result.policy) {
         const next = placementFormStateFromPolicy(result.policy);
-        rememberedPlacementRef.current = next.placement;
+        // auto 不参与记忆恢复（placementOnModeChange 对 auto 原样保留），记忆值归位安全默认。
+        rememberedPlacementRef.current = next.placement === 'auto' ? 'device' : next.placement;
         setForm(next);
       } else {
         setMessage({ ok: false, text: result.error ?? '读取管理模式失败' });
@@ -128,6 +130,13 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
         className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
         data-smoke="settings-management-placement"
       >
+        {/* auto 属切片 2（#647）不提供选择；但已有 auto policy 必须可见且原样保留，
+            不允许折叠成 device 后静默回写。用户显式改选 device/managed 则是知情操作。 */}
+        {form.placement === 'auto' && (
+          <option value="auto" disabled>
+            auto（当前设置；决策语义落地后开放选择）
+          </option>
+        )}
         <option value="device">device（在你授权的 Device 上执行）</option>
         <option value="managed">managed（Server Worker 在 Server 端执行）</option>
       </select>
