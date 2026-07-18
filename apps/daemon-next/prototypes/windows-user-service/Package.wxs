@@ -17,13 +17,5 @@
     <Feature Id="Main" Title="AgentBean Device Service Prototype" Level="1">
       <ComponentRef Id="PrototypePayload" />
     </Feature>
-    <CustomAction Id="RegisterPrototypeTask" FileRef="PrototypeExe" ExeCommand="register"
-                  Execute="immediate" Impersonate="yes" Return="check" />
-    <CustomAction Id="UnregisterPrototypeTask" FileRef="PrototypeExe" ExeCommand="uninstall"
-                  Execute="immediate" Impersonate="yes" Return="ignore" />
-    <InstallExecuteSequence>
-      <Custom Action="RegisterPrototypeTask" After="InstallFiles" Condition="NOT Installed AND NOT REMOVE" />
-      <Custom Action="UnregisterPrototypeTask" Before="RemoveFiles" Condition="REMOVE = &quot;ALL&quot;" />
-    </InstallExecuteSequence>
   </Package>
 </Wix>

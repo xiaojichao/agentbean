@@ -31,8 +31,9 @@ try {
     throw "MSI_INSTALL_FAILED_$($install.ExitCode)"
   }
   if (-not (Test-Path $installedExe)) { throw 'PER_USER_PAYLOAD_MISSING' }
-  & $installedExe start
+  & $installedExe install
   & $installedExe verify
+  & $installedExe uninstall
   $uninstall = Start-Process msiexec.exe -ArgumentList @('/x', $msi, '/qn', '/norestart', '/l*v', $uninstallLog) -Wait -PassThru
   if ($uninstall.ExitCode -ne 0) {
     Get-Content -LiteralPath $uninstallLog -Tail 160
