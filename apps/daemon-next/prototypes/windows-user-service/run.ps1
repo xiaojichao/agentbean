@@ -20,6 +20,9 @@ $uninstallLog = Join-Path $evidence 'uninstall.log'
 try {
   New-Item -ItemType Directory -Force -Path $publish, $tool, $evidence | Out-Null
   dotnet publish (Join-Path $prototypeRoot 'AgentBean.WindowsServicePrototype.csproj') -c Release -o $publish
+  $publishedExe = Join-Path $publish 'agentbean-windows-service-prototype.exe'
+  & $publishedExe install
+  & $publishedExe uninstall
   dotnet tool install wix --tool-path $tool --version 4.0.6
   & (Join-Path $tool 'wix.exe') build (Join-Path $prototypeRoot 'Package.wxs') -arch x64 -d "PayloadDir=$publish" -o $msi
   $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart', '/l*v', $installLog) -Wait -PassThru
