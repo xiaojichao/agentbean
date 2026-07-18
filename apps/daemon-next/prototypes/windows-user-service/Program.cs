@@ -310,11 +310,12 @@ static class Prototype
         await WaitNotReady(TimeSpan.FromSeconds(10));
         var principal = new WindowsPrincipal(WindowsIdentity.GetCurrent());
         var isAdministrator = principal.IsInRole(WindowsBuiltInRole.Administrator);
+        var isHostedActions = string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase);
         var result = new
         {
             schemaVersion = 1,
             question = "windows-per-user-interactive-token-and-two-phase-drain",
-            host = new { os = Environment.OSVersion.VersionString, arch = RuntimeInformation.OSArchitecture.ToString(), userSid = UserSid, isAdministrator },
+            host = new { os = Environment.OSVersion.VersionString, arch = RuntimeInformation.OSArchitecture.ToString(), userSid = UserSid, isAdministrator, isHostedActions },
             checks = new
             {
                 msiPayloadUnderLocalAppData = Environment.ProcessPath!.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), StringComparison.OrdinalIgnoreCase),
@@ -331,7 +332,11 @@ static class Prototype
                 forcedFallbackKillsProcessTree = true,
                 sleepWakeLogoutReboot = "manual-real-session-required",
             },
-            verdict = isAdministrator ? "hosted-runner-partial-needs-standard-user-session" : "green-standard-user-session",
+            verdict = isAdministrator
+                ? "hosted-admin-partial-needs-standard-user-session"
+                : isHostedActions
+                    ? "hosted-standard-user-process-partial-needs-real-session-transitions"
+                    : "green-standard-user-session",
         };
         Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return 0;
