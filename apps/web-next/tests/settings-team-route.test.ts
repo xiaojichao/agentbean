@@ -120,6 +120,8 @@ describe('SettingsPage Team route binding', () => {
         allowServerContext: false,
         requireLocalModelCredentials: true,
       },
+      // #648：面板全量表单提交预算区，留空 = 显式回落 Phase 默认（空覆盖对象）。
+      budgetOverrides: {},
     }));
   });
 });

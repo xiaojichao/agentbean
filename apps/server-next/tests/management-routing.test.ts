@@ -312,6 +312,63 @@ describe('Phase 4 auto placement routing（#647）', () => {
   });
 });
 
+describe('Phase 4 Team 预算配置（#648）', () => {
+  test('updatePolicy 保存预算覆盖并钳制到上下限', async () => {
+    const harness = await createHarness();
+    await expect(harness.router.updatePolicy({
+      ...managedPolicy(), maxManagementPhase: 2,
+      budgetOverrides: { maxSubtasks: 9999, maxDepth: 0 },
+    })).resolves.toMatchObject({
+      ok: true,
+      policy: { budgetOverrides: { maxSubtasks: 50, maxDepth: 1 } },
+    });
+    await expect(harness.repositories.management.policies.get('team-1'))
+      .resolves.toMatchObject({ budgetOverrides: { maxSubtasks: 50, maxDepth: 1 } });
+  });
+
+  test('预算覆盖含非法值 → VALIDATION_ERROR 且不留半个覆盖', async () => {
+    const harness = await createHarness();
+    await expect(harness.router.updatePolicy({
+      ...managedPolicy(), maxManagementPhase: 2,
+      budgetOverrides: { maxSubtasks: 10, maxDepth: 2.5 },
+    })).resolves.toEqual({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(harness.repositories.management.policies.get('team-1')).resolves.toBeNull();
+  });
+
+  test('未传 budgetOverrides 的更新保留既有覆盖', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2, budgetOverrides: { maxSubtasks: 30 } });
+    await expect(harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 }))
+      .resolves.toMatchObject({ ok: true, policy: { budgetOverrides: { maxSubtasks: 30 }, maxManagementPhase: 3 } });
+  });
+
+  test('route 创建 Run 消费合并后的预算（覆盖生效）', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({
+      ...managedPolicy(), maxManagementPhase: 2,
+      budgetOverrides: { maxSubtasks: 7, maxExternalInvocations: 9 },
+    });
+    const result = await harness.router.route({
+      ...request(), targetAgentId: undefined, rootTaskId: 'root-task-1', body: '请协调团队完成复杂任务',
+    });
+    expect(result).toMatchObject({ kind: 'managed' });
+    if (result.kind !== 'managed') throw new Error('managed expected');
+    await expect(harness.repositories.management.runs.getById(result.managementRunId))
+      .resolves.toMatchObject({ budget: { maxSubtasks: 7, maxDepth: 3, maxExternalInvocations: 9 } });
+  });
+
+  test('未配置覆盖的 Team 预算与 Phase 默认逐比特一致（回归红线）', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
+    const result = await harness.router.route({
+      ...request(), targetAgentId: undefined, rootTaskId: 'root-task-1', body: '请协调团队完成复杂任务',
+    });
+    if (result.kind !== 'managed') throw new Error('managed expected');
+    await expect(harness.repositories.management.runs.getById(result.managementRunId))
+      .resolves.toMatchObject({ budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 } });
+  });
+});
+
 function rootedRequest() {
   return {
     ...request(),

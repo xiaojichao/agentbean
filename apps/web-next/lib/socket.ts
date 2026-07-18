@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
+import { WEB_EVENTS, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -313,7 +313,7 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
 
 export interface ManagementPolicyEvents {
   get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
-  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2 | 3; placementPolicy: ManagerPlacementPolicyDto }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
+  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2 | 3; placementPolicy: ManagerPlacementPolicyDto; budgetOverrides?: Partial<ManagementBudgetDto> }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
 }
 
 export function managementPolicyEvents(socket: Socket = getWebSocket()): ManagementPolicyEvents {
