@@ -37,6 +37,11 @@ describe('clampManagementBudgetOverrides', () => {
     expect(clampManagementBudgetOverrides({ maxSubtasks: Number.POSITIVE_INFINITY })).toBeNull();
   });
 
+  test('整体输入非法（null/数组/原始值，socket 客户端可控）→ null 而非抛 TypeError', () => {
+    expect(clampManagementBudgetOverrides(null as unknown as object)).toBeNull();
+    expect(clampManagementBudgetOverrides(42 as unknown as object)).toBeNull();
+  });
+
   test('单字段非法整体拒绝（不留半个被信任的覆盖对象）', () => {
     expect(clampManagementBudgetOverrides({ maxSubtasks: 10, maxDepth: 2.5 })).toBeNull();
   });

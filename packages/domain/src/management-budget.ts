@@ -30,8 +30,10 @@ function clampField(field: keyof ManagementBudgetShape, value: unknown): number 
 /**
  * 把用户提交的预算覆盖钳到上下限。任一字段非法（非整数/非有限数/非 number）→ 整体 null
  * （不留半个被信任的覆盖对象，由写路径映射为 VALIDATION_ERROR）。
+ * 整体输入非法（null/非对象，socket 客户端可控）同样返回 null 而非抛 TypeError。
  */
 export function clampManagementBudgetOverrides(input: ManagementBudgetOverridesInput): ManagementBudgetOverrides | null {
+  if (input === null || typeof input !== 'object') return null;
   const result: { -readonly [K in keyof ManagementBudgetShape]?: number } = {};
   for (const field of Object.keys(MANAGEMENT_BUDGET_LIMITS) as Array<keyof ManagementBudgetShape>) {
     const clamped = clampField(field, input[field]);

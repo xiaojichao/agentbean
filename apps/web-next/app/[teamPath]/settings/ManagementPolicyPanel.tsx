@@ -7,6 +7,7 @@ import {
   AUTO_PLACEMENT_NOTICE,
   buildBudgetOverridesPayload,
   buildPlacementPolicyPayload,
+  budgetDefaultsForPhase,
   budgetFormStateFromOverrides,
   MANAGED_PLACEMENT_PRIVACY_NOTICE,
   placementFormStateFromPolicy,
@@ -72,6 +73,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
 
   const formError = validatePlacementForm(form);
   const budgetResult = buildBudgetOverridesPayload(budget);
+  const budgetDefaults = budgetDefaultsForPhase(form.maxManagementPhase);
 
   const save = async () => {
     if (formError) {
@@ -223,7 +225,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
                 value={budget.maxSubtasks}
                 onChange={(event) => setBudget((current) => ({ ...current, maxSubtasks: event.target.value }))}
                 disabled={loading || !canManage}
-                placeholder="默认 20"
+                placeholder={`默认 ${budgetDefaults.maxSubtasks}`}
                 className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
                 data-smoke="settings-management-budget-subtasks"
               />
@@ -236,7 +238,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
                 value={budget.maxDepth}
                 onChange={(event) => setBudget((current) => ({ ...current, maxDepth: event.target.value }))}
                 disabled={loading || !canManage}
-                placeholder="默认 3"
+                placeholder={`默认 ${budgetDefaults.maxDepth}`}
                 className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
                 data-smoke="settings-management-budget-depth"
               />
@@ -249,7 +251,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
                 value={budget.maxExternalInvocations}
                 onChange={(event) => setBudget((current) => ({ ...current, maxExternalInvocations: event.target.value }))}
                 disabled={loading || !canManage}
-                placeholder="默认 20"
+                placeholder={`默认 ${budgetDefaults.maxExternalInvocations}`}
                 className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
                 data-smoke="settings-management-budget-invocations"
               />

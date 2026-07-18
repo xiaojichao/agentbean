@@ -65,6 +65,20 @@ export function budgetFormStateFromOverrides(overrides?: {
 }
 
 /**
+ * 各 phase 的 Phase 默认预算（placeholder 展示用）。
+ * 与 server management-router.ts 的 PHASE_1_BUDGET / PHASE_2_BUDGET 保持一致；phase 3 沿用 phase 2 默认值。
+ */
+export function budgetDefaultsForPhase(maxManagementPhase: 1 | 2 | 3): {
+  maxSubtasks: number;
+  maxDepth: number;
+  maxExternalInvocations: number;
+} {
+  return maxManagementPhase === 1
+    ? { maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 1 }
+    : { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 };
+}
+
+/**
  * 表单 → 提交 payload：全空 → 空对象（清空覆盖回落默认）；
  * 逐字段 parse 正整数，非法 → error（UI 层拦截，server clamp 兜底）。
  */

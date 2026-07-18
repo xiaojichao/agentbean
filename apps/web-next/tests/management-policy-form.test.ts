@@ -3,6 +3,7 @@ import {
   AUTO_PLACEMENT_NOTICE,
   buildBudgetOverridesPayload,
   buildPlacementPolicyPayload,
+  budgetDefaultsForPhase,
   budgetFormStateFromOverrides,
   MANAGED_PLACEMENT_PRIVACY_NOTICE,
   placementFormStateFromPolicy,
@@ -293,5 +294,11 @@ describe('预算表单（#648）', () => {
     expect(buildBudgetOverridesPayload({ maxSubtasks: 'abc', maxDepth: '', maxExternalInvocations: '' }).error).toContain('正整数');
     expect(buildBudgetOverridesPayload({ maxSubtasks: '', maxDepth: '2.5', maxExternalInvocations: '' }).error).toContain('正整数');
     expect(buildBudgetOverridesPayload({ maxSubtasks: '-3', maxDepth: '', maxExternalInvocations: '' }).error).toContain('正整数');
+  });
+
+  test('budgetDefaultsForPhase：phase 1 为 1/1/1，phase 2/3 为 20/3/20（与 server PHASE_*_BUDGET 一致）', () => {
+    expect(budgetDefaultsForPhase(1)).toEqual({ maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 1 });
+    expect(budgetDefaultsForPhase(2)).toEqual({ maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 });
+    expect(budgetDefaultsForPhase(3)).toEqual({ maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 });
   });
 });
