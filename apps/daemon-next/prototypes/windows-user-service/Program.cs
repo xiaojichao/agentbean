@@ -28,6 +28,7 @@ static class Prototype
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "AgentBean", "DeviceServicePrototype");
     static readonly string StatePath = Path.Combine(StateRoot, "state.json");
+    static readonly string DesiredStatePath = Path.Combine(StateRoot, "desired-state.json");
     static readonly string OutboxPath = Path.Combine(StateRoot, "outbox.jsonl");
 
     public static async Task<int> Run(string[] args)
@@ -50,6 +51,7 @@ static class Prototype
     static int Register(bool start)
     {
         Directory.CreateDirectory(StateRoot);
+        PersistDesiredState(true);
         dynamic service = Scheduler();
         dynamic root = service.GetFolder("\\");
         dynamic definition = service.NewTask(0);
@@ -87,6 +89,7 @@ static class Prototype
     {
         for (var attempt = 0; attempt <= SupervisorRestartLimit; attempt++)
         {
+            if (!IsDesiredEnabled()) return 0;
             using var worker = Process.Start(new ProcessStartInfo
             {
                 FileName = Environment.ProcessPath!,
@@ -96,6 +99,7 @@ static class Prototype
             }) ?? throw new InvalidOperationException("SUPERVISOR_START_FAILED");
             await worker.WaitForExitAsync();
             if (worker.ExitCode == 0) return 0;
+            if (!IsDesiredEnabled()) return 0;
             if (attempt == SupervisorRestartLimit) return worker.ExitCode;
             await Task.Delay(TimeSpan.FromMinutes(1));
         }
@@ -106,6 +110,7 @@ static class Prototype
     {
         dynamic service = Scheduler();
         dynamic task = service.GetFolder("\\").GetTask(TaskName);
+        PersistDesiredState(true);
         task.Enabled = true;
         task.Run(null);
         return 0;
@@ -118,9 +123,10 @@ static class Prototype
             dynamic service = Scheduler();
             dynamic root = service.GetFolder("\\");
             dynamic task = root.GetTask(TaskName);
-            task.Enabled = false;
+            PersistDesiredState(false);
             if (await IsReady(TimeSpan.FromSeconds(2)))
                 using (await Send(new { command = "begin-drain", deadlineMs = 10_000 })) { }
+            task.Enabled = false;
             task.Stop(0);
             root.DeleteTask(TaskName, 0);
         }
@@ -221,12 +227,14 @@ static class Prototype
         var instanceCount = (int)task.GetInstances(0).Count;
         Require(instanceCount == 1, "MULTIPLE_INSTANCE_POLICY_FAILED");
         using (await Send(new { command = "seed-work" })) { }
-        task.Enabled = false;
+        PersistDesiredState(false);
         using var drained = await Send(new { command = "begin-drain", deadlineMs = 10_000 });
         Require(drained.RootElement.GetProperty("drained").GetBoolean(), "DRAIN_FAILED");
+        task.Enabled = false;
         task.Stop(0);
         await WaitNotReady(TimeSpan.FromSeconds(10));
         Require(File.Exists(OutboxPath) && File.ReadAllText(OutboxPath).Contains("work-completed"), "OUTBOX_NOT_DURABLE");
+        PersistDesiredState(true);
         task.Enabled = true;
         task.Run(null);
         Require(await IsReady(TimeSpan.FromSeconds(15)), "TASK_RESTART_AFTER_STOP_FAILED");
@@ -319,6 +327,16 @@ static class Prototype
     }
 
     static void PersistState(WorkerState state) => WriteDurable(StatePath, JsonSerializer.Serialize(state));
+
+    static void PersistDesiredState(bool enabled) =>
+        WriteDurable(DesiredStatePath, JsonSerializer.Serialize(new { enabled }));
+
+    static bool IsDesiredEnabled()
+    {
+        if (!File.Exists(DesiredStatePath)) return false;
+        using var document = JsonDocument.Parse(File.ReadAllText(DesiredStatePath));
+        return document.RootElement.GetProperty("enabled").GetBoolean();
+    }
 
     static void AppendDurable(string path, string line)
     {
