@@ -38,6 +38,12 @@ on:
       - package-lock.json
       - .github/workflows/pi-sea-compatibility.yml
   workflow_dispatch:
+    inputs:
+      phase5_credential_probe:
+        description: Run only the throwaway Phase 5 credential-store prototype
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,6 +54,7 @@ concurrency:
 
 jobs:
   platform-verdict:
+    if: inputs.phase5_credential_probe != true
     name: SEA ${{ matrix.verdict_os }} ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -104,7 +111,7 @@ jobs:
     name: Aggregate PI SEA verdict
     needs:
       - platform-verdict
-    if: always()
+    if: always() && inputs.phase5_credential_probe != true
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -135,3 +142,22 @@ jobs:
           name: pi-sea-aggregate-verdict
           path: artifacts/pi-sea-aggregate/verdict.json
           if-no-files-found: error
+
+  phase5-credential-store-prototype:
+    name: Phase 5 Windows Credential Manager prototype
+    if: inputs.phase5_credential_probe == true
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out prototype branch
+        uses: actions/checkout@v6
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Probe current-user Credential Manager
+        shell: pwsh
+        run: ./apps/daemon-next/prototypes/system-credential-store/run-windows.ps1
