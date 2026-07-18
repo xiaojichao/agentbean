@@ -17,6 +17,9 @@ $evidence = if ($env:AGENTBEAN_WINDOWS_PROTOTYPE_EVIDENCE_DIR) {
 }
 $installLog = Join-Path $evidence 'install.log'
 $uninstallLog = Join-Path $evidence 'uninstall.log'
+$taskXml = Join-Path $evidence 'task.xml'
+$taskInfo = Join-Path $evidence 'task-info.txt'
+$taskEvents = Join-Path $evidence 'task-scheduler-operational.txt'
 try {
   New-Item -ItemType Directory -Force -Path $publish, $tool, $evidence | Out-Null
   dotnet publish (Join-Path $prototypeRoot 'AgentBean.WindowsServicePrototype.csproj') -c Release -o $publish
@@ -40,6 +43,17 @@ try {
     throw "MSI_UNINSTALL_FAILED_$($uninstall.ExitCode)"
   }
   if (Test-Path $installedExe) { throw 'PER_USER_PAYLOAD_REMAINED' }
+}
+catch {
+  try {
+    Export-ScheduledTask -TaskName 'AgentBean Device Service Prototype' | Out-File -LiteralPath $taskXml -Encoding utf8
+    Get-ScheduledTaskInfo -TaskName 'AgentBean Device Service Prototype' | Format-List * | Out-File -LiteralPath $taskInfo -Encoding utf8
+  } catch { }
+  try {
+    wevtutil.exe qe Microsoft-Windows-TaskScheduler/Operational /q:"*[System[TimeCreated[timediff(@SystemTime) <= 900000]]]" /rd:true /f:text 2>&1 |
+      Out-File -LiteralPath $taskEvents -Encoding utf8
+  } catch { }
+  throw
 }
 finally {
   if (Test-Path $installedExe) { try { & $installedExe uninstall } catch { } }

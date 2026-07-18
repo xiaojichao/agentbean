@@ -208,7 +208,19 @@ static class Prototype
         var beforeCrashPid = beforeCrash.RootElement.GetProperty("state").GetProperty("Pid").GetInt32();
         using (await Send(new { command = "crash" })) { }
         await WaitNotReady(TimeSpan.FromSeconds(10));
-        Require(await IsReady(TimeSpan.FromSeconds(80)), "BOUNDED_RESTART_FAILED");
+        if (!await IsReady(TimeSpan.FromSeconds(90)))
+        {
+            var restartDiagnostic = new
+            {
+                code = "BOUNDED_RESTART_FAILED",
+                lastTaskResult = unchecked((uint)(int)task.LastTaskResult),
+                taskState = (int)task.State,
+                runningInstances = (int)task.GetInstances(0).Count,
+                taskXml = xml,
+            };
+            Console.Error.WriteLine(JsonSerializer.Serialize(restartDiagnostic, new JsonSerializerOptions { WriteIndented = true }));
+            throw new InvalidOperationException("BOUNDED_RESTART_FAILED");
+        }
         using var afterCrash = await Send(new { command = "status" });
         var afterCrashPid = afterCrash.RootElement.GetProperty("state").GetProperty("Pid").GetInt32();
         Require(beforeCrashPid != afterCrashPid, "CRASH_PID_DID_NOT_CHANGE");
