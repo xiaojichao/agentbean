@@ -18,6 +18,7 @@ import {
 import { createDeviceWorkerScheduler, type DeviceWorkerScheduler } from './application/management/device-worker-scheduler.js';
 import { createServerWorkerPool, type ServerWorkerPool } from './application/management/server-worker-pool.js';
 import { createServerWorkerScheduler, type ServerWorkerScheduler } from './application/management/server-worker-scheduler.js';
+import { createAutoPlacementProbe } from './application/management/auto-placement-probe.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
@@ -1437,6 +1438,10 @@ function createDefaultManagementRuntime(
     ...(serverWorkerTuning?.queueTimeoutMs ? { queueTimeoutMs: serverWorkerTuning.queueTimeoutMs } : {}),
     ...(serverWorkerTuning?.leaseTtlMs ? { leaseTtlMs: serverWorkerTuning.leaseTtlMs } : {}),
   }) : undefined;
+  const autoPlacementProbe = createAutoPlacementProbe({
+    deviceScheduler: scheduler,
+    ...(serverWorkerPool ? { serverWorkerPool } : {}),
+  });
   const router = createManagementRouter({
     repositories,
     kernel,
@@ -1485,6 +1490,9 @@ function createDefaultManagementRuntime(
           placementPolicy,
           targetAvailable: target ? target.status !== 'offline' : true,
         });
+      },
+      async probeAutoPlacement({ teamId, placementPolicy, managementPhase }) {
+        return autoPlacementProbe({ teamId, placementPolicy, managementPhase });
       },
       async schedule(input) {
         const run = await repositories.management.runs.getById(input.managementRunId);

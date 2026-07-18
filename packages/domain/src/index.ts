@@ -3,6 +3,7 @@ export * from './identity.js';
 export * from './channel.js';
 export * from './search.js';
 export * from './management-policy.js';
+export * from './auto-placement.js';
 export * from './invocation-policy.js';
 export * from './collaboration-policy.js';
 export * from './checkpoint-policy.js';
