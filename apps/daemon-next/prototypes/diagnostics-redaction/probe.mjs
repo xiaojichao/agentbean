@@ -197,12 +197,26 @@ async function assertPrivatePermissions(paths) {
   if (process.platform === "win32") {
     const user = process.env.USERNAME;
     assert.ok(user, "Windows username is required only to apply the current-user ACL");
-    const applyAcl = spawnSync(
+    const applyExistingAcl = spawnSync(
       "icacls.exe",
-      [evidenceRoot, "/inheritance:r", "/grant:r", user + ":(OI)(CI)F", "/T", "/C"],
+      [evidenceRoot, "/inheritance:r", "/grant:r", user + ":F", "/T", "/C"],
       { encoding: "utf8", windowsHide: true },
     );
-    assert.equal(applyAcl.status, 0, "failed to apply current-user-only prototype ACL");
+    assert.equal(
+      applyExistingAcl.status,
+      0,
+      "failed to apply current-user ACL to existing prototype files",
+    );
+    const applyInheritedAcl = spawnSync(
+      "icacls.exe",
+      [evidenceRoot, "/grant", user + ":(OI)(CI)F"],
+      { encoding: "utf8", windowsHide: true },
+    );
+    assert.equal(
+      applyInheritedAcl.status,
+      0,
+      "failed to apply inheritable current-user prototype ACL",
+    );
     return "current-user-acl-applied";
   }
   for (const target of paths) {
