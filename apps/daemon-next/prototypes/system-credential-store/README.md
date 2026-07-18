@@ -7,9 +7,12 @@ Current executable evidence covers macOS arm64 Keychain Services. It uses `SecIt
 Run:
 
     npm run prototype:phase5-system-credential-macos
+    npm run prototype:phase5-system-credential-linux
     npm run prototype:phase5-system-credential-windows
 
 The Windows x64 probe calls Credential Manager `CredWriteW` / `CredReadW` / `CredDeleteW` with generic credentials and `CRED_PERSIST_LOCAL_MACHINE`. It verifies a binary envelope and scope, byte-exact immutable-generation read-back, crash-before-marker recovery through a non-secret current-user Registry marker, current-generation switching, old-generation cleanup, opaque profile isolation, rename-stable references, copy-without-reference and delete/not-found. GitHub-hosted Windows evidence is intentionally partial because `runneradmin` is an administrator and sleep/wake, logout/login and reboot cannot be driven as a normal desktop user in one job.
+
+The Linux x64 probe compiles directly against native `libsecret`, starts an isolated Secret Service inside an ephemeral session D-Bus, and uses the default collection. It verifies the same envelope, immutable-generation, non-secret marker, cleanup and Profile-reference invariants without putting secrets in argv, environment variables or files. Hosted evidence remains partial because the temporary D-Bus/keyring is not the user's real GNOME/KDE systemd user session and cannot prove lock, sleep, logout or reboot recovery.
 
 This does not yet prove LaunchAgent behavior across lock/sleep/logout/reboot, macOS authorization denial, Linux Secret Service or Windows Credential Manager. Those require their real user-service sessions; unavailable backends must remain explicit partial evidence rather than simulated Green.
 
