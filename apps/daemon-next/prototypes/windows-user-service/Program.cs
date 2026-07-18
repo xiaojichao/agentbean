@@ -311,6 +311,10 @@ static class Prototype
         var principal = new WindowsPrincipal(WindowsIdentity.GetCurrent());
         var isAdministrator = principal.IsInRole(WindowsBuiltInRole.Administrator);
         var isHostedActions = string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase);
+        var installMode = Environment.GetEnvironmentVariable("AGENTBEAN_WINDOWS_PROTOTYPE_INSTALL_MODE") ?? "unknown";
+        var payloadUnderLocalAppData = Environment.ProcessPath!.StartsWith(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            StringComparison.OrdinalIgnoreCase);
         var result = new
         {
             schemaVersion = 1,
@@ -318,7 +322,9 @@ static class Prototype
             host = new { os = Environment.OSVersion.VersionString, arch = RuntimeInformation.OSArchitecture.ToString(), userSid = UserSid, isAdministrator, isHostedActions },
             checks = new
             {
-                msiPayloadUnderLocalAppData = Environment.ProcessPath!.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), StringComparison.OrdinalIgnoreCase),
+                installMode,
+                payloadUnderLocalAppData,
+                perUserMsiPayloadUnderLocalAppData = installMode == "per-user-msi" && payloadUnderLocalAppData,
                 interactiveToken = true,
                 currentSidPrincipal = xml.Contains(UserSid),
                 ignoreNewSingleInstance = instanceCount == 1,

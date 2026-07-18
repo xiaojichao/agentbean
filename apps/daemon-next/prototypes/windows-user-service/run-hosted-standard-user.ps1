@@ -31,7 +31,7 @@ if ($Inner) {
   } | Format-List | Out-File -LiteralPath (Join-Path $evidence 'environment.txt') -Encoding utf8
   whoami.exe /all | Out-File -LiteralPath (Join-Path $evidence 'identity.txt') -Encoding utf8
   Set-Location $workspace
-  npm run prototype:phase5-windows-service 2>&1 |
+  npm run prototype:phase5-windows-service -- -SkipMsi 2>&1 |
     Tee-Object -FilePath (Join-Path $evidence 'verdict.txt')
   if ($LASTEXITCODE -ne 0) { throw "STANDARD_USER_PROTOTYPE_FAILED_$LASTEXITCODE" }
   exit 0

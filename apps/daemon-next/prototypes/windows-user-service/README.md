@@ -10,7 +10,7 @@ The command builds a self-contained throwaway worker and a WiX 4.0.6 per-user MS
 
 The JSON verdict is Green only when the host is a non-administrator interactive session. A GitHub-hosted `windows-latest` run is useful for MSI/COM/schema smoke but remains partial because its `runneradmin` identity is not the ordinary-user acceptance environment. Sleep/wake, logout/login and reboot require follow-up checks on a disposable Windows 11 x64 machine.
 
-CI also creates an ephemeral local account with no administrator-group membership and launches the full probe through PowerShell alternate credentials. This is stronger evidence for no-UAC/current-user permissions, but its verdict remains `hosted-standard-user-process-partial-needs-real-session-transitions`: an alternate-credential process on an ephemeral hosted runner is not accepted as proof of a human desktop logout/login, sleep/wake or reboot/login sequence.
+CI also creates an ephemeral local account with no administrator-group membership and launches the lifecycle probe through PowerShell alternate credentials. GitHub-hosted Windows sets machine policy `DisableMsi=1`, which rejects non-admin MSI with 1625 even when Windows Installer reports this package as LUA-capable with no elevation required. The standard-user CI job therefore preserves that policy evidence and uses `-SkipMsi` to validate the payload/Task Scheduler/pipe/drain/restart/Job Object chain independently. Its verdict remains `hosted-standard-user-process-partial-needs-real-session-transitions`: it cannot prove per-user MSI behavior on default Windows or a human desktop logout/login, sleep/wake or reboot/login sequence.
 
 For that real-session gate, keep the prototype installed across session transitions:
 
