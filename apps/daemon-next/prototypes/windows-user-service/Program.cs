@@ -34,15 +34,17 @@ static class Prototype
             throw new InvalidOperationException("WINDOWS_X64_REQUIRED");
         return args.FirstOrDefault() switch
         {
-            "install" => Install(),
+            "install" => Register(start: true),
+            "register" => Register(start: false),
+            "start" => Start(),
             "uninstall" => await Uninstall(),
             "worker" => await Worker(),
             "verify" => await Verify(),
-            _ => throw new InvalidOperationException("USAGE install|uninstall|worker|verify"),
+            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|worker|verify"),
         };
     }
 
-    static int Install()
+    static int Register(bool start)
     {
         Directory.CreateDirectory(StateRoot);
         dynamic service = Scheduler();
@@ -74,6 +76,14 @@ static class Prototype
         dynamic task = root.RegisterTaskDefinition(
             TaskName, definition, TaskCreateOrUpdate, UserSid, null,
             TaskLogonInteractiveToken, null);
+        if (start) task.Run(null);
+        return 0;
+    }
+
+    static int Start()
+    {
+        dynamic service = Scheduler();
+        dynamic task = service.GetFolder("\\").GetTask(TaskName);
         task.Run(null);
         return 0;
     }
