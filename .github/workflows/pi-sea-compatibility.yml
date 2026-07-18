@@ -38,6 +38,12 @@ on:
       - package-lock.json
       - .github/workflows/pi-sea-compatibility.yml
   workflow_dispatch:
+    inputs:
+      phase5_diagnostics_probe:
+        description: Run only the Phase 5 diagnostics redaction prototype
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -48,6 +54,7 @@ concurrency:
 
 jobs:
   platform-verdict:
+    if: ${{ !inputs.phase5_diagnostics_probe }}
     name: SEA ${{ matrix.verdict_os }} ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -104,7 +111,7 @@ jobs:
     name: Aggregate PI SEA verdict
     needs:
       - platform-verdict
-    if: always()
+    if: ${{ always() && !inputs.phase5_diagnostics_probe }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -134,4 +141,40 @@ jobs:
         with:
           name: pi-sea-aggregate-verdict
           path: artifacts/pi-sea-aggregate/verdict.json
+          if-no-files-found: error
+
+  phase5-diagnostics-probe:
+    if: ${{ inputs.phase5_diagnostics_probe }}
+    name: Phase 5 diagnostics ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform: macos-arm64
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: windows-2025
+            platform: windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out prototype branch
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.18.0
+
+      - name: Run diagnostics redaction probe
+        run: npm run prototype:phase5-diagnostics
+
+      - name: Upload non-secret evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-diagnostics-${{ matrix.platform }}
+          path: phase5-diagnostics-evidence/evidence.json
           if-no-files-found: error
