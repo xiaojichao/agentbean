@@ -528,7 +528,7 @@ export interface DeviceEvents {
   agentsList(deviceId: string, teamId?: string | null): Promise<{ ok: boolean; agents?: DeviceAgent[]; runtimes?: DeviceRuntime[]; error?: string }>;
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
-  listDirectory(deviceId: string, path: string): Promise<{ ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string }>;
+  listDirectory(deviceId: string, path: string): Promise<{ ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string; truncated?: boolean }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   rename(id: string, name: string): Promise<{ ok: boolean; device?: DeviceInfo; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;

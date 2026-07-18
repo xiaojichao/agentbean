@@ -11,6 +11,7 @@ import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, 
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
+import { DirectoryTreeBrowseButton } from './DirectoryTreePicker';
 import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -1412,7 +1413,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <div className="flex gap-2">
                 <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEditRuntimeFields} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
                 {canEditRuntimeFields && (
-                  <DirectoryBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
+                  <DirectoryTreeBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
                 )}
               </div>
               {canEditRuntimeFields && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
@@ -1540,7 +1541,7 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, runtimes, isLoc
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录 <span className="text-red-500">*</span></label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
-              <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
+              <DirectoryTreeBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
           </div>
