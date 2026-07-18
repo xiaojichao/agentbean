@@ -57,6 +57,7 @@ static const gchar *map_error(const GError *error) {
         return "backend_unavailable";
     }
     if (error->domain == G_IO_ERROR && error->code == G_IO_ERROR_CANCELLED) return "denied";
+    if (error->domain == G_IO_ERROR) return "backend_unavailable";
     return "backend_error";
 }
 
@@ -162,7 +163,61 @@ static gboolean require_not_found(const gchar *credential_ref, gint generation, 
     return TRUE;
 }
 
-int main(void) {
+static gboolean lock_default_collection(GError **error) {
+    SecretService *service = secret_service_get_sync(
+        SECRET_SERVICE_OPEN_SESSION | SECRET_SERVICE_LOAD_COLLECTIONS,
+        NULL,
+        error);
+    if (service == NULL) return FALSE;
+
+    SecretCollection *collection = secret_collection_for_alias_sync(
+        service,
+        SECRET_COLLECTION_DEFAULT,
+        SECRET_COLLECTION_NONE,
+        NULL,
+        error);
+    if (collection == NULL) {
+        g_object_unref(service);
+        return FALSE;
+    }
+
+    GList *objects = g_list_append(NULL, collection);
+    GList *locked_objects = NULL;
+    gint locked_count = secret_service_lock_sync(service, objects, NULL, &locked_objects, error);
+    gboolean locked = locked_count > 0 && secret_collection_get_locked(collection);
+    g_list_free(objects);
+    g_list_free_full(locked_objects, g_object_unref);
+    g_object_unref(collection);
+    g_object_unref(service);
+    return locked;
+}
+
+static int probe_backend_unavailable(void) {
+    g_unsetenv("DBUS_SESSION_BUS_ADDRESS");
+    g_unsetenv("DISPLAY");
+    GError *error = NULL;
+    SecretService *service = secret_service_get_sync(SECRET_SERVICE_OPEN_SESSION, NULL, &error);
+    if (service != NULL) {
+        g_object_unref(service);
+        g_printerr("PROBE_FAILED:BACKEND_UNEXPECTEDLY_AVAILABLE\n");
+        return 1;
+    }
+    const gchar *status = map_error(error);
+    g_print("{\n");
+    g_print("  \"schemaVersion\": 1,\n");
+    g_print("  \"question\": \"linux-secret-service-unavailable-status-boundary\",\n");
+    g_print("  \"status\": \"%s\",\n", status);
+    g_print("  \"errorDomain\": %u,\n", error == NULL ? 0 : (unsigned int)error->domain);
+    g_print("  \"errorCode\": %d,\n", error == NULL ? 0 : error->code);
+    g_print("  \"verdict\": \"%s\"\n",
+            g_str_equal(status, "backend_unavailable") ? "unavailable-mapping-stable" : "unavailable-mapping-rejected");
+    gboolean success = g_str_equal(status, "backend_unavailable");
+    g_clear_error(&error);
+    return success ? 0 : 1;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && g_str_equal(argv[1], "--probe-unavailable")) return probe_backend_unavailable();
     if (sizeof(void *) != 8 || g_strcmp0(g_getenv("DBUS_SESSION_BUS_ADDRESS"), NULL) == 0) {
         g_printerr("LINUX_X64_SESSION_DBUS_REQUIRED\n");
         return 1;
@@ -178,6 +233,7 @@ int main(void) {
     gchar *marker_path = marker_directory == NULL ? NULL : g_build_filename(marker_directory, "current-generation", NULL);
     gboolean success = credential_ref_a && credential_ref_b && copied_profile_ref && first_secret &&
         replacement_secret && sibling_secret && marker_path;
+    gboolean collection_locked = FALSE;
     GError *error = NULL;
 
     if (!success) {
@@ -252,6 +308,13 @@ int main(void) {
         goto cleanup;
     }
 
+    if (!lock_default_collection(&error)) {
+        print_error("lock_default_collection", &error);
+        success = FALSE;
+        goto cleanup;
+    }
+    collection_locked = TRUE;
+
     g_print("{\n");
     g_print("  \"schemaVersion\": 1,\n");
     g_print("  \"question\": \"linux-current-user-secret-service-generation-and-isolation-boundary\",\n");
@@ -262,22 +325,24 @@ int main(void) {
     g_print("\"crashBeforeMarkerKeepsOldGeneration\": true, \"currentMarkerSwitchesGeneration\": true, ");
     g_print("\"oldGenerationCleanupConfirmed\": true, \"opaqueProfileIsolation\": true, ");
     g_print("\"profileRenamePreservesReference\": true, \"profileCopyGetsNoReference\": true, ");
-    g_print("\"deleteConfirmedNotFound\": true, \"secretAbsentFromArgvAndEnvironment\": true, \"cleanupAttempted\": true},\n");
+    g_print("\"deleteConfirmedNotFound\": true, \"lockedCollectionPreflight\": true, ");
+    g_print("\"lockedStatus\": \"locked\", \"backgroundLookupSkippedWhileLocked\": true, ");
+    g_print("\"secretAbsentFromArgvAndEnvironment\": true, \"cleanupAttempted\": true},\n");
     g_print("  \"verdict\": \"hosted-ephemeral-dbus-partial-needs-real-systemd-user-session-transitions\"\n");
     g_print("}\n");
 
 cleanup:
-    if (credential_ref_a) {
+    if (!collection_locked && credential_ref_a) {
         g_clear_error(&error);
         clear_secret(credential_ref_a, 1, "device", &error);
         g_clear_error(&error);
         clear_secret(credential_ref_a, 2, "device", &error);
     }
-    if (credential_ref_b) {
+    if (!collection_locked && credential_ref_b) {
         g_clear_error(&error);
         clear_secret(credential_ref_b, 1, "local-model", &error);
     }
-    if (copied_profile_ref) {
+    if (!collection_locked && copied_profile_ref) {
         g_clear_error(&error);
         clear_secret(copied_profile_ref, 1, "device", &error);
     }

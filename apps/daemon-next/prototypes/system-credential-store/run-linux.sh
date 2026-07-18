@@ -31,3 +31,4 @@ eval "$daemon_environment"
 unset keyring_password daemon_environment
 
 "$scratch/linux-secret-service-probe"
+env -u DBUS_SESSION_BUS_ADDRESS -u DISPLAY "$scratch/linux-secret-service-probe" --probe-unavailable
