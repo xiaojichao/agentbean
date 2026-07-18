@@ -40,6 +40,7 @@
     "check:phase2-task-dag-boundary": "node scripts/check-phase-2-task-dag-boundary.mjs",
     "check:phase3-memory-boundary": "node scripts/check-phase-3-memory-boundary.mjs",
     "check:pi-sea-compatibility": "node scripts/check-pi-management-sea.mjs validate",
+    "prototype:phase5-service-operations": "node apps/daemon-next/prototypes/service-operations/prototype.mjs",
     "check:team-terminology": "node scripts/check-team-terminology.mjs",
     "check:agentbean-next-readiness": "node scripts/check-agentbean-next-readiness.mjs",
     "issue:claim": "node scripts/claim-github-issue.mjs claim",

@@ -42,5 +42,6 @@ apps/daemon/*.yaml
 
 # Packaged artifacts
 *.tgz
+phase5-service-operations-evidence/
 
 Library/
