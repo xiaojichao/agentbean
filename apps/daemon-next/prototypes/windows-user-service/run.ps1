@@ -27,7 +27,7 @@ try {
   New-Item -ItemType Directory -Force -Path $publish, $tool, $evidence | Out-Null
   dotnet publish (Join-Path $prototypeRoot 'AgentBean.WindowsServicePrototype.csproj') -c Release -o $publish
   $publishedExe = Join-Path $publish 'agentbean-windows-service-prototype.exe'
-  & $publishedExe install
+  if ($SkipMsi) { & $publishedExe register } else { & $publishedExe install }
   & $publishedExe uninstall
   if ($SkipMsi) {
     New-Item -ItemType Directory -Force -Path (Split-Path $installedExe) | Out-Null
@@ -42,8 +42,13 @@ try {
     }
   }
   if (-not (Test-Path $installedExe)) { throw 'PER_USER_PAYLOAD_MISSING' }
-  & $installedExe install
-  & $installedExe verify
+  if ($SkipMsi) {
+    & $installedExe register
+    & $installedExe verify-direct
+  } else {
+    & $installedExe install
+    & $installedExe verify
+  }
   & $installedExe uninstall
   if ($SkipMsi) {
     Remove-Item -LiteralPath $installedExe -Force

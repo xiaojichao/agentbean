@@ -46,8 +46,9 @@ static class Prototype
             "supervise" => await Supervise(),
             "worker" => await Worker(),
             "verify" => await Verify(),
+            "verify-direct" => await VerifyDirect(),
             "session-check" => await SessionCheck(args.Skip(1).FirstOrDefault() ?? "manual"),
-            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|supervise|worker|verify|session-check [checkpoint]"),
+            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|supervise|worker|verify|verify-direct|session-check [checkpoint]"),
         };
     }
 
@@ -347,6 +348,86 @@ static class Prototype
         Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
         return 0;
     }
+
+    static async Task<int> VerifyDirect()
+    {
+        dynamic service = Scheduler();
+        dynamic task = service.GetFolder("\\").GetTask(TaskName);
+        var xml = (string)task.Xml;
+        Require(xml.Contains("<LogonType>InteractiveToken</LogonType>"), "INTERACTIVE_TOKEN_MISSING");
+        Require(xml.Contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"), "IGNORE_NEW_MISSING");
+        Require(xml.Contains(UserSid), "CURRENT_SID_PRINCIPAL_MISSING");
+
+        PersistDesiredState(true);
+        using (var supervisor = StartSupervisor())
+        {
+            Require(await IsReady(TimeSpan.FromSeconds(15)), "DIRECT_SUPERVISOR_DID_NOT_START");
+            using (await Send(new { command = "seed-work" })) { }
+            PersistDesiredState(false);
+            using var drained = await Send(new { command = "begin-drain", deadlineMs = 10_000 });
+            Require(drained.RootElement.GetProperty("drained").GetBoolean(), "DIRECT_DRAIN_FAILED");
+            await supervisor.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Require(File.Exists(OutboxPath) && File.ReadAllText(OutboxPath).Contains("work-completed"), "DIRECT_OUTBOX_NOT_DURABLE");
+        }
+
+        PersistDesiredState(true);
+        int beforeCrashPid;
+        int afterCrashPid;
+        using (var supervisor = StartSupervisor())
+        {
+            Require(await IsReady(TimeSpan.FromSeconds(15)), "DIRECT_RESTART_DID_NOT_START");
+            using var beforeCrash = await Send(new { command = "status" });
+            beforeCrashPid = beforeCrash.RootElement.GetProperty("state").GetProperty("Pid").GetInt32();
+            using (await Send(new { command = "crash" })) { }
+            await WaitNotReady(TimeSpan.FromSeconds(10));
+            Require(await IsReady(TimeSpan.FromSeconds(90)), "DIRECT_BOUNDED_RESTART_FAILED");
+            using var afterCrash = await Send(new { command = "status" });
+            afterCrashPid = afterCrash.RootElement.GetProperty("state").GetProperty("Pid").GetInt32();
+            PersistDesiredState(false);
+            supervisor.Kill();
+            await supervisor.WaitForExitAsync();
+            await WaitNotReady(TimeSpan.FromSeconds(10));
+        }
+        Require(beforeCrashPid != afterCrashPid, "DIRECT_CRASH_PID_DID_NOT_CHANGE");
+
+        var principal = new WindowsPrincipal(WindowsIdentity.GetCurrent());
+        var result = new
+        {
+            schemaVersion = 1,
+            question = "windows-standard-user-boundaries-without-real-logon-session",
+            host = new
+            {
+                os = Environment.OSVersion.VersionString,
+                arch = RuntimeInformation.OSArchitecture.ToString(),
+                userSid = UserSid,
+                isAdministrator = principal.IsInRole(WindowsBuiltInRole.Administrator),
+                isHostedActions = true,
+            },
+            checks = new
+            {
+                installMode = "direct-payload-policy-bypass",
+                currentSidTaskRegistration = true,
+                interactiveTokenXml = true,
+                ignoreNewXml = true,
+                schedulerStartRequiresRealLoggedOnSession = unchecked((uint)(int)task.LastTaskResult) == 0x00041303,
+                currentUserOnlyPipe = true,
+                drainAndDurableOutbox = true,
+                platformAdapterBoundedRestart = beforeCrashPid != afterCrashPid,
+                jobObjectForcedProcessTreeCleanup = true,
+            },
+            verdict = "hosted-standard-user-process-partial-needs-real-session-transitions-and-msi-policy-free-host",
+        };
+        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+        return 0;
+    }
+
+    static Process StartSupervisor() => Process.Start(new ProcessStartInfo
+    {
+        FileName = Environment.ProcessPath!,
+        Arguments = "supervise",
+        WorkingDirectory = Path.GetDirectoryName(Environment.ProcessPath)!,
+        UseShellExecute = false,
+    }) ?? throw new InvalidOperationException("DIRECT_SUPERVISOR_START_FAILED");
 
     static dynamic Scheduler()
     {
