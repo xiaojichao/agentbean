@@ -6,8 +6,8 @@ import Link from 'next/link';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
-import { daemonVersionDisplay } from '@/lib/daemon-version';
-import { canAddCustomAgentToDevice, canBrowseDirectory, canManageDeviceForUser, requiresDeleteNameConfirm } from '@/lib/device-permissions';
+import { daemonVersionDisplay, versionAtLeast } from '@/lib/daemon-version';
+import { canAddCustomAgentToDevice, canManageDeviceForUser, directoryBrowseMode, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
@@ -64,26 +64,6 @@ const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 type EnvRow = { key: string; value: string };
 type WorkspaceAgent = { id: string; name: string; adapterKind?: string; cwd?: string | null; runs: AgentWorkspaceRun[] };
 
-function parseVersionParts(version?: string | null): number[] | null {
-  const match = version?.match(/\d+(?:\.\d+)*/);
-  if (!match) return null;
-  return match[0].split('.').map((part) => Number(part) || 0);
-}
-
-function versionAtLeast(version: string | null | undefined, minimum: string): boolean {
-  const current = parseVersionParts(version);
-  const required = parseVersionParts(minimum);
-  if (!current || !required) return true;
-  const len = Math.max(current.length, required.length);
-  for (let i = 0; i < len; i += 1) {
-    const a = current[i] ?? 0;
-    const b = required[i] ?? 0;
-    if (a > b) return true;
-    if (a < b) return false;
-  }
-  return true;
-}
-
 function directoryFallbackPath(name: string): string {
   return `~/projects/${name}`;
 }
@@ -94,14 +74,12 @@ function DirectoryBrowseButton({
   deviceId,
   daemonVersion,
   disabled = false,
-  isLocal = true,
 }: {
   onSelect: (path: string) => void;
   onError?: (message: string) => void;
   deviceId?: string;
   daemonVersion?: string | null;
   disabled?: boolean;
-  isLocal?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [browsing, setBrowsing] = useState(false);
@@ -147,13 +125,8 @@ function DirectoryBrowseButton({
     setBrowsing(false);
   };
 
-  if (!canBrowseDirectory(isLocal)) {
-    return (
-      <span className="shrink-0 self-center text-[11px] text-neutral-400">
-        远程设备请手动填写该设备上的项目绝对路径
-      </span>
-    );
-  }
+  // 门控已上移到 DirectoryBrowseControl（切片5 三态矩阵统一判定）；
+  // 本组件只在 mode === 'native-picker'（旧 daemon + 本机）时被渲染。
   return (
     <>
       <button type="button" disabled={disabled || browsing} onClick={browse} className="shrink-0 flex items-center gap-1 rounded-md border border-neutral-200 px-3 py-1.5 text-xs text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50">
@@ -179,6 +152,44 @@ function DirectoryBrowseButton({
         }}
       />
     </>
+  );
+}
+
+/**
+ * 目录浏览入口的三态分发（切片5，#640——能力门控取代身份门控）：
+ * - tree：fsBrowse 设备（任意 isLocal）→ DirectoryTreePicker 树形选择器
+ * - native-picker：旧 daemon + 本机 → selectDirectory 原生弹窗（行为不变）
+ * - manual：旧 daemon + 远程 → 手动填路径文案（D1 降级兜底）
+ * 门控唯一判定源是 lib 的 directoryBrowseMode，两处对话框共用本组件。
+ */
+function DirectoryBrowseControl({
+  onSelect,
+  onError,
+  deviceId,
+  fsBrowse,
+  daemonVersion,
+  isLocal,
+  disabled = false,
+}: {
+  onSelect: (path: string) => void;
+  onError?: (message: string) => void;
+  deviceId?: string;
+  fsBrowse?: boolean | null;
+  daemonVersion?: string | null;
+  isLocal?: boolean;
+  disabled?: boolean;
+}) {
+  const mode = directoryBrowseMode({ fsBrowse, daemonVersion, isLocal });
+  if (mode === 'tree') {
+    return <DirectoryTreeBrowseButton deviceId={deviceId} onSelect={onSelect} onError={onError} disabled={disabled} />;
+  }
+  if (mode === 'native-picker') {
+    return <DirectoryBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={onSelect} onError={onError} disabled={disabled} />;
+  }
+  return (
+    <span className="shrink-0 self-center text-[11px] text-neutral-400">
+      远程设备请手动填写该设备上的项目绝对路径
+    </span>
   );
 }
 
@@ -368,7 +379,7 @@ function EmptyState({ loading = false, error = '' }: { loading?: boolean; error?
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId, onDeleted }: {
-  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; capabilities?: { fsBrowse?: boolean }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -827,6 +838,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           deviceId={device.id}
           teamId={currentTeamId}
           daemonVersion={device.systemInfo?.daemonVersion ?? device.daemonVersionInfo?.current ?? null}
+          fsBrowse={device.capabilities?.fsBrowse ?? null}
           runtimes={runtimeList}
           isLocal={isLocalDevice}
           onClose={() => setShowAddCustom(false)}
@@ -1332,7 +1344,7 @@ function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChang
   );
 }
 
-function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null }; isLocal?: boolean }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
+function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null }; capabilities?: { fsBrowse?: boolean }; isLocal?: boolean }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
   const editable = isCustom || isAgentOS;
@@ -1413,7 +1425,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <div className="flex gap-2">
                 <input value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={!canEditRuntimeFields} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 disabled:bg-neutral-50" placeholder="/path/to/project（可选）" />
                 {canEditRuntimeFields && (
-                  <DirectoryTreeBrowseButton deviceId={agent.deviceId} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
+                  <DirectoryBrowseControl deviceId={agent.deviceId} fsBrowse={device?.capabilities?.fsBrowse ?? null} daemonVersion={device?.systemInfo?.daemonVersion ?? device?.daemonVersionInfo?.current ?? null} onSelect={setCwd} onError={setError} isLocal={device?.isLocal === true} />
                 )}
               </div>
               {canEditRuntimeFields && <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录，留空则使用默认路径</p>}
@@ -1441,7 +1453,7 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
-function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; teamId?: string | null; daemonVersion?: string | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
+function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; teamId?: string | null; daemonVersion?: string | null; fsBrowse?: boolean | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
   const [runtimeIndex, setRuntimeIndex] = useState('0');
@@ -1541,7 +1553,7 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, runtimes, isLoc
             <label className="mb-1 block text-xs font-medium text-neutral-600">项目目录 <span className="text-red-500">*</span></label>
             <div className="flex gap-2">
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
-              <DirectoryTreeBrowseButton deviceId={deviceId} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
+              <DirectoryBrowseControl deviceId={deviceId} fsBrowse={fsBrowse} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
           </div>

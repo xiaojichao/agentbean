@@ -204,6 +204,10 @@ export interface DeviceInfo {
   agentIds: string[];
   canManage?: boolean;
   isLocal?: boolean;
+  /** daemon hello 自报的能力（切片1 起 server 透传）；旧 daemon 为 undefined → fail-closed 视为不支持。 */
+  capabilities?: {
+    fsBrowse?: boolean;
+  };
   runtimes?: RuntimeInfo[];
   connectCommand?: string | null;
   latestDaemonVersion?: string | null;
