@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   AUTO_PLACEMENT_NOTICE,
+  AUTO_SERVER_FALLBACK_HINT,
   buildBudgetOverridesPayload,
   buildPlacementPolicyPayload,
   budgetDefaultsForPhase,
@@ -270,6 +271,13 @@ describe('AUTO_PLACEMENT_NOTICE（#647）', () => {
     expect(AUTO_PLACEMENT_NOTICE).toContain('本地优先');
     expect(AUTO_PLACEMENT_NOTICE).toContain('Server Worker 兜底');
     expect(AUTO_PLACEMENT_NOTICE).toContain('审计');
+  });
+});
+
+describe('AUTO_SERVER_FALLBACK_HINT（#658）', () => {
+  test('兜底说明必须告知仅 Phase ≥ 2 生效（Phase 1 下 auto→managed 永不发生）', () => {
+    expect(AUTO_SERVER_FALLBACK_HINT).toContain('Phase ≥ 2');
+    expect(AUTO_SERVER_FALLBACK_HINT).toContain('审计');
   });
 });
 
