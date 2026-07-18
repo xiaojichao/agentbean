@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text.Json;
@@ -140,6 +141,20 @@ internal static class WindowsCredentialProbe
         return Marshal.GetLastWin32Error() == ErrorNotFound;
     }
 
+    private static bool ReadIsCorrupt(string target, Guid credentialRef, int generation, byte scope)
+    {
+        try
+        {
+            var secret = ReadSecret(target, credentialRef, generation, scope);
+            CryptographicOperations.ZeroMemory(secret);
+            return false;
+        }
+        catch (InvalidOperationException error) when (error.Message.StartsWith("ENVELOPE_", StringComparison.Ordinal))
+        {
+            return true;
+        }
+    }
+
     private static void Delete(string target, bool requirePresent)
     {
         if (CredDelete(target, CredTypeGeneric, 0)) return;
@@ -168,11 +183,60 @@ internal static class WindowsCredentialProbe
         if (!condition) throw new InvalidOperationException(code);
     }
 
-    public static int Main()
+    [SupportedOSPlatform("windows")]
+    private static int RunIsolationCommand(string action, string target)
+    {
+        if (!target.StartsWith("AgentBean/prototype/", StringComparison.Ordinal) || target.Length > 512)
+        {
+            Console.Error.WriteLine("INVALID_ISOLATION_TARGET");
+            return 1;
+        }
+
+        if (action == "--seed-isolation")
+        {
+            var secret = RandomNumberGenerator.GetBytes(32);
+            try { Write(target, secret); }
+            finally { CryptographicOperations.ZeroMemory(secret); }
+            Console.WriteLine("{\"schemaVersion\":1,\"isolationSeeded\":true}");
+            return 0;
+        }
+        if (action == "--assert-isolation")
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var principal = new WindowsPrincipal(identity);
+            var isolated = ReadIsNotFound(target);
+            Console.WriteLine(JsonSerializer.Serialize(new
+            {
+                schemaVersion = 1,
+                question = "windows-current-token-credential-set-isolation-boundary",
+                identity = identity.Name,
+                sid = identity.User?.Value,
+                administrator = principal.IsInRole(WindowsBuiltInRole.Administrator),
+                credentialFromOtherUserIsNotFound = isolated,
+                verdict = isolated ? "cross-user-isolation-confirmed" : "cross-user-isolation-failed",
+            }, new JsonSerializerOptions { WriteIndented = true }));
+            return isolated ? 0 : 1;
+        }
+        if (action == "--delete-isolation")
+        {
+            Delete(target, requirePresent: false);
+            return 0;
+        }
+        Console.Error.WriteLine("UNKNOWN_ISOLATION_ACTION");
+        return 1;
+    }
+
+    public static int Main(string[] args)
     {
         if (!OperatingSystem.IsWindows() || RuntimeInformation.OSArchitecture != Architecture.X64)
         {
             Console.Error.WriteLine("WINDOWS_X64_REQUIRED");
+            return 1;
+        }
+        if (args.Length == 2) return RunIsolationCommand(args[0], args[1]);
+        if (args.Length != 0)
+        {
+            Console.Error.WriteLine("INVALID_ARGUMENTS");
             return 1;
         }
 
@@ -184,10 +248,13 @@ internal static class WindowsCredentialProbe
         var targetA2 = Target(credentialRefA, 2);
         var targetB1 = Target(credentialRefB, 1);
         var copiedProfileTarget = Target(copiedProfileRef, 1);
+        var corruptCredentialRef = Guid.NewGuid();
+        var corruptTarget = Target(corruptCredentialRef, 1);
         var markerPath = $@"Software\AgentBean\Prototype\CredentialStore\{runId}";
         var firstSecret = RandomNumberGenerator.GetBytes(32);
         var replacementSecret = RandomNumberGenerator.GetBytes(32);
         var siblingSecret = RandomNumberGenerator.GetBytes(32);
+        var malformedEnvelope = RandomNumberGenerator.GetBytes(12);
 
         try
         {
@@ -230,6 +297,9 @@ internal static class WindowsCredentialProbe
             CryptographicOperations.ZeroMemory(renamedReadBack);
             Require(ReadIsNotFound(copiedProfileTarget), "PROFILE_COPY_INHERITED_REFERENCE");
 
+            Write(corruptTarget, malformedEnvelope);
+            Require(ReadIsCorrupt(corruptTarget, corruptCredentialRef, 1, scope: 1), "MALFORMED_ENVELOPE_NOT_REJECTED");
+
             Delete(targetA2, requirePresent: true);
             Require(ReadIsNotFound(targetA2), "DELETE_NOT_CONFIRMED");
 
@@ -262,6 +332,7 @@ internal static class WindowsCredentialProbe
                     opaqueProfileIsolation = true,
                     profileRenamePreservesReference = true,
                     profileCopyGetsNoReference = true,
+                    malformedEnvelopeStatus = "corrupt",
                     deleteConfirmedNotFound = true,
                     secretAbsentFromArgvAndEnvironment = true,
                     cleanupAttempted = true,
@@ -284,10 +355,12 @@ internal static class WindowsCredentialProbe
             Delete(targetA2, requirePresent: false);
             Delete(targetB1, requirePresent: false);
             Delete(copiedProfileTarget, requirePresent: false);
+            Delete(corruptTarget, requirePresent: false);
             Registry.CurrentUser.DeleteSubKeyTree(markerPath, throwOnMissingSubKey: false);
             CryptographicOperations.ZeroMemory(firstSecret);
             CryptographicOperations.ZeroMemory(replacementSecret);
             CryptographicOperations.ZeroMemory(siblingSecret);
+            CryptographicOperations.ZeroMemory(malformedEnvelope);
         }
     }
 }

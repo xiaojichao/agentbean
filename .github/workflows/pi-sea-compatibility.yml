@@ -170,6 +170,10 @@ jobs:
         shell: pwsh
         run: ./apps/daemon-next/prototypes/system-credential-store/run-windows.ps1
 
+      - name: Probe standard-user Credential Manager isolation
+        shell: pwsh
+        run: ./apps/daemon-next/prototypes/system-credential-store/run-windows-standard-user.ps1
+
   phase5-linux-secret-service-prototype:
     name: Phase 5 Linux Secret Service prototype
     if: inputs.phase5_credential_probe == true && inputs.phase5_credential_platform == 'linux'
