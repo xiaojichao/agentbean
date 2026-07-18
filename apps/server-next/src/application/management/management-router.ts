@@ -312,9 +312,25 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           ...(autoPlacement ? { autoPlacement } : {}),
         });
         await recordAutoPlacementAudit(input, created, autoPlacement);
+        // #657 并发首建：本地新 resolve 但拿到 existing run（对方先建）且冻结值不同向时，
+        // 必须按冻结值重做 preflight——否则 schedule 按冻结值分流会拿错 profileId。
+        let profileId3 = phase3.profileId;
+        if (autoPlacement && created.disposition === 'existing'
+          && created.run.placementPolicy.placement !== placementPolicy.placement) {
+          const frozen = await dependencies.gateway?.preflightPhase3?.({
+            teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
+          });
+          // 拿不到冻结侧 profileId 时 fail closed（不拿本地解析的错配值）；
+          // run 由先建方的 schedule 或后续 resume 推进。
+          if (!frozen?.profileId) {
+            return { kind: 'unavailable', mode: 'managed',
+              diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
+          }
+          profileId3 = frozen.profileId;
+        }
         return {
           kind: 'managed', mode: 'managed', managementPhase: 3,
-          managementRunId: created.run.id, profileId: phase3.profileId,
+          managementRunId: created.run.id, profileId: profileId3,
           disposition: created.disposition,
         };
       }
@@ -367,9 +383,22 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           ...(autoPlacement ? { autoPlacement } : {}),
         });
         await recordAutoPlacementAudit(input, created, autoPlacement);
+        // #657 并发首建：同 phase 3 分支的冻结值重算。
+        let profileId2 = phase2.profileId;
+        if (autoPlacement && created.disposition === 'existing'
+          && created.run.placementPolicy.placement !== placementPolicy.placement) {
+          const frozen = await dependencies.gateway?.preflightPhase2?.({
+            teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
+          });
+          if (!frozen?.profileId) {
+            return { kind: 'unavailable', mode: 'managed',
+              diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
+          }
+          profileId2 = frozen.profileId;
+        }
         return {
           kind: 'managed', mode: 'managed', managementPhase: 2,
-          managementRunId: created.run.id, profileId: phase2.profileId,
+          managementRunId: created.run.id, profileId: profileId2,
           disposition: created.disposition,
         };
       }

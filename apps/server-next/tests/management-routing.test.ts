@@ -335,6 +335,68 @@ describe('Phase 4 auto placement routing（#647）', () => {
     const secondPreflightPolicy = (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]?.placementPolicy;
     expect(secondPreflightPolicy).toMatchObject({ placement: 'device', allowedDeviceIds: ['device-1'] });
   });
+
+  test('auto 并发首建：existing 且冻结值与本地解析不一致时，按冻结值重做 preflight（#657）', async () => {
+    // 时序窗口：B 查 reservation 时 A 未提交（mock 返回 null → B 走新 resolve）；
+    // B resolve 后 createOrResumeRun 拿到 A 已建的 run（disposition:'existing'）。
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ deviceAvailable: true, serverAvailable: true })   // A：resolve device
+      .mockResolvedValueOnce({ deviceAvailable: false, serverAvailable: true }); // B：resolve managed
+    const harness = await createHarness({ autoProbe: probe });
+    await harness.router.updatePolicy(autoPolicy());
+    // preflight 按 placement 返回可区分的 profileId
+    (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ placementPolicy }) => ({
+        preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true },
+        profileId: placementPolicy.placement === 'managed' ? 'profile-server' : 'profile-device',
+      }));
+
+    // A 建 run（probe 第一次 → device 冻结）
+    const first = await harness.router.route(rootedRequest());
+    if (first.kind !== 'managed') throw new Error('managed expected');
+    const runA = (await harness.repositories.management.runs.getById(first.managementRunId))!;
+    expect(runA.placementPolicy.placement).toBe('device');
+
+    // 并发窗口：B 查 reservation "看不到" A 的（mock null → 新 resolve，probe 第二次漂移为 managed）；
+    // B 的 createOrResumeRun 拿到 A 已建的 run（existing）。
+    vi.spyOn(harness.repositories.management.reservations, 'getByRequestKey').mockResolvedValueOnce(null);
+    vi.spyOn(harness.kernel, 'createOrResumeRun').mockResolvedValue({ run: runA, disposition: 'existing' });
+
+    const second = await harness.router.route(rootedRequest());
+    expect(second).toMatchObject({ kind: 'managed', managementRunId: first.managementRunId });
+    // B 先按自己的解析（managed）做过 preflight，发现 existing 后按冻结值（device）重做
+    const calls = (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.at(-1)?.[0]?.placementPolicy).toMatchObject({ placement: 'device', allowedDeviceIds: ['device-1'] });
+    // 最终 profileId 与冻结值一致，不是 B 自己解析的 managed profileId
+    if (second.kind !== 'managed') throw new Error('managed expected');
+    expect(second.profileId).toBe('profile-device');
+  });
+
+  test('auto 并发首建：冻结侧重 preflight 拿不到 profileId 时 fail closed，不用错配值（#657）', async () => {
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ deviceAvailable: true, serverAvailable: true })
+      .mockResolvedValueOnce({ deviceAvailable: false, serverAvailable: true });
+    const harness = await createHarness({ autoProbe: probe });
+    await harness.router.updatePolicy(autoPolicy());
+
+    const first = await harness.router.route(rootedRequest());
+    if (first.kind !== 'managed') throw new Error('managed expected');
+    const runA = (await harness.repositories.management.runs.getById(first.managementRunId))!;
+
+    vi.spyOn(harness.repositories.management.reservations, 'getByRequestKey').mockResolvedValueOnce(null);
+    vi.spyOn(harness.kernel, 'createOrResumeRun').mockResolvedValue({ run: runA, disposition: 'existing' });
+    // B 的 preflight 一律无 profileId（冻结侧此刻无可用 worker）
+    (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ placementPolicy }) => ({
+        preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true },
+        ...(placementPolicy.placement === 'managed' ? { profileId: 'profile-server' } : {}),
+      }));
+
+    await expect(harness.router.route(rootedRequest())).resolves.toEqual({
+      kind: 'unavailable', mode: 'managed',
+      diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'],
+    });
+  });
 });
 
 describe('Phase 4 Team 预算配置（#648）', () => {
@@ -483,5 +545,5 @@ async function createHarness(overrides: Partial<{
   };
   const router = createManagementRouter({ repositories, kernel, gateway, clock, ids });
   const app = createServerNextUseCases({ repositories, clock, ids, managementRouter: router });
-  return { repositories, gateway, router, app };
+  return { repositories, kernel, gateway, router, app };
 }

@@ -5,6 +5,7 @@ import type { ManagementMode } from '@agentbean/contracts';
 import { managementPolicyEvents } from '@/lib/socket';
 import {
   AUTO_PLACEMENT_NOTICE,
+  AUTO_SERVER_FALLBACK_HINT,
   buildBudgetOverridesPayload,
   buildPlacementPolicyPayload,
   budgetDefaultsForPhase,
@@ -163,7 +164,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
               className="mt-0.5"
               data-smoke="settings-management-allow-server-context"
             />
-            <span>Device 全离线时允许 Server Worker 兜底（完成任务所需的最小授权内容将发送至 Server provider，每次访问写入审计；不勾选则 Device 离线时任务明确失败，绝不上传）</span>
+            <span>{AUTO_SERVER_FALLBACK_HINT}</span>
           </label>
         </div>
       )}
