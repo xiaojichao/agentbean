@@ -218,8 +218,8 @@ describe('Phase 1 management routing', () => {
     expect(dag).toMatchObject({
       ok: true,
       dag: {
-        // root task-created 已写入：深度 1、尚无子任务与外部调用
-        usage: { subtaskCount: 0, externalInvocationCount: 0, maxDepthReached: 1 },
+        // root task-created 已写入：0-based 边深 0（#660）、尚无扇出与外部调用（#661）
+        usage: { maxFanOut: 0, externalInvocationCount: 0, maxDepthReached: 0 },
         // 冻结预算 = #648 覆盖合并结果（maxSubtasks 30，其余 Phase 2 默认）
         budget: { maxSubtasks: 30, maxDepth: 3, maxExternalInvocations: 20 },
       },

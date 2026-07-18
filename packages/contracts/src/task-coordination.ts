@@ -114,9 +114,12 @@ export interface TaskDagViewDto {
     readonly type: string;
     readonly createdAt: UnixMs;
   }[];
-  /** Phase 4 第二阶段 #649：从既有 management events 派生的用量计数（不建表）。 */
+  /** Phase 4 第二阶段 #649：从既有 management events 派生的用量计数（不建表）。
+   *  #660/#661：计数口径与 budget enforcement 逐维对齐——maxFanOut 为单父扇出峰值
+   * （budget.maxSubtasks 的实际 enforcement 维度），maxDepthReached 为 0-based 边深
+   * （root=0，同 evaluateTaskDag depthOf）。 */
   readonly usage?: {
-    readonly subtaskCount: number;
+    readonly maxFanOut: number;
     readonly externalInvocationCount: number;
     readonly maxDepthReached: number;
   };

@@ -57,13 +57,13 @@ function snapshot(graphRevision: number, taskRevision: number, updatedAt: number
   };
 }
 
-describe('formatTaskDagUsage（#649）', () => {
-  const usage = { subtaskCount: 7, externalInvocationCount: 3, maxDepthReached: 2 };
+describe('formatTaskDagUsage（#649，#660/#661 口径修复）', () => {
+  const usage = { maxFanOut: 7, externalInvocationCount: 3, maxDepthReached: 2 };
   const budget = { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 };
 
   test('格式化用量/上限对照文案', () => {
     expect(formatTaskDagUsage(usage, budget)).toEqual({
-      text: '子任务 7/20 · 外部调用 3/20 · 深度 2/3',
+      text: '子任务峰值 7/20 · 外部调用 3/20 · 深度 2/3',
       exceeded: false,
     });
   });
@@ -74,8 +74,16 @@ describe('formatTaskDagUsage（#649）', () => {
   });
 
   test('任一维度超上限 → exceeded=true（UI 标红）', () => {
-    expect(formatTaskDagUsage({ ...usage, subtaskCount: 21 }, budget)?.exceeded).toBe(true);
+    expect(formatTaskDagUsage({ ...usage, maxFanOut: 21 }, budget)?.exceeded).toBe(true);
     expect(formatTaskDagUsage({ ...usage, maxDepthReached: 4 }, budget)?.exceeded).toBe(true);
     expect(formatTaskDagUsage(usage, budget)?.exceeded).toBe(false);
+  });
+
+  test('等于上限是合法满负载不标红（enforcement 拒绝条件为严格大于；#660/#661 回归）', () => {
+    // maxFanOut == maxSubtasks / maxDepthReached == maxDepth 均为 enforcement 允许的边界，
+    // 修复前深度按 1-based 计数会把合法满链报成 maxDepth+1 而误标红。
+    expect(formatTaskDagUsage(
+      { maxFanOut: 20, externalInvocationCount: 20, maxDepthReached: 3 }, budget,
+    )?.exceeded).toBe(false);
   });
 });

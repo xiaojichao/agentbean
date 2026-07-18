@@ -1,16 +1,18 @@
 import type { TaskDagNodeViewDto, TaskDagViewDto } from '@agentbean/contracts';
 
-/** #649：Run 用量/预算对照的展示格式化；任一维度超限（>上限）时 exceeded=true 供 UI 标红。 */
+/** #649：Run 用量/预算对照的展示格式化；任一维度超限（>上限）时 exceeded=true 供 UI 标红。
+ *  #660/#661：usage 各维度与 budget enforcement 同口径（扇出峰值↔maxSubtasks、0-based 边深↔maxDepth），
+ *  等于上限是合法满负载（enforcement 拒绝条件为严格大于），不得标红。 */
 export function formatTaskDagUsage(
   usage: TaskDagViewDto['usage'],
   budget: TaskDagViewDto['budget'],
 ): { text: string; exceeded: boolean } | null {
   if (!usage || !budget) return null;
-  const exceeded = usage.subtaskCount > budget.maxSubtasks
+  const exceeded = usage.maxFanOut > budget.maxSubtasks
     || usage.externalInvocationCount > budget.maxExternalInvocations
     || usage.maxDepthReached > budget.maxDepth;
   return {
-    text: `子任务 ${usage.subtaskCount}/${budget.maxSubtasks} · 外部调用 ${usage.externalInvocationCount}/${budget.maxExternalInvocations} · 深度 ${usage.maxDepthReached}/${budget.maxDepth}`,
+    text: `子任务峰值 ${usage.maxFanOut}/${budget.maxSubtasks} · 外部调用 ${usage.externalInvocationCount}/${budget.maxExternalInvocations} · 深度 ${usage.maxDepthReached}/${budget.maxDepth}`,
     exceeded,
   };
 }
