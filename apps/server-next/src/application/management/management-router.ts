@@ -6,8 +6,11 @@ import type {
   ManagerPlacementPolicyDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
+  clampManagementBudgetOverrides,
   evaluateManagementRoute,
+  mergeManagementBudget,
   resolveAutoPlacement,
+  type ManagementBudgetOverridesInput,
   type ManagementPreflight,
 } from '../../../../../packages/domain/src/index.js';
 import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
@@ -136,6 +139,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       mode: ManagementMode;
       maxManagementPhase?: 1 | 2 | 3;
       placementPolicy?: ManagerPlacementPolicyDto;
+      budgetOverrides?: ManagementBudgetOverridesInput;
     }) {
       const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
       if (role !== 'owner' && role !== 'admin') return { ok: false as const, error: 'FORBIDDEN' };
@@ -146,6 +150,13 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       const currentPolicy = await policyForTeam(input.teamId);
       const placementPolicy = normalizePlacementPolicy(input.placementPolicy ?? DEFAULT_PLACEMENT_POLICY);
       if (!placementPolicy) return { ok: false as const, error: 'VALIDATION_ERROR' };
+      // #648 预算覆盖：传入即整体钳制（非法 → VALIDATION_ERROR 不留半个覆盖）；未传保留既有。
+      let budgetOverrides = currentPolicy.budgetOverrides;
+      if (input.budgetOverrides !== undefined) {
+        const clamped = clampManagementBudgetOverrides(input.budgetOverrides);
+        if (clamped === null) return { ok: false as const, error: 'VALIDATION_ERROR' };
+        budgetOverrides = clamped;
+      }
       const maxManagementPhase = input.maxManagementPhase ?? currentPolicy.maxManagementPhase;
       if (placementPolicy.placement === 'managed'
         && (input.mode !== 'managed' || maxManagementPhase < 2)) {
@@ -165,6 +176,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         mode: input.mode,
         maxManagementPhase,
         placementPolicy,
+        ...(budgetOverrides ? { budgetOverrides } : {}),
         updatedBy: input.userId,
         updatedAt: clock.now(),
       });
@@ -295,7 +307,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
             channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 3 }),
           placementPolicy,
-          budget: PHASE_2_BUDGET,
+          budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
           managementPhase: 3,
           ...(autoPlacement ? { autoPlacement } : {}),
         });
@@ -350,7 +362,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
             channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 2 }),
           placementPolicy,
-          budget: PHASE_2_BUDGET,
+          budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
           managementPhase: 2,
           ...(autoPlacement ? { autoPlacement } : {}),
         });
@@ -406,7 +418,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         requestKey: requestKey(input),
         requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
         placementPolicy,
-        budget: PHASE_1_BUDGET,
+        budget: mergeManagementBudget(PHASE_1_BUDGET, policy.budgetOverrides),
         ...(autoPlacement ? { autoPlacement } : {}),
       });
       await recordAutoPlacementAudit(input, created, autoPlacement);

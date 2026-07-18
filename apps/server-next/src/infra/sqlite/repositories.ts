@@ -92,6 +92,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'manager_leases')) {
     applyMigration(db, 'team/0022_management_phase_4_worker_host.sql', { disableForeignKeys: true });
     applyMigration(db, 'team/0023_management_user_proxy_audit.sql');
+    applyMigration(db, 'team/0024_management_budget_overrides.sql');
   }
 }
 

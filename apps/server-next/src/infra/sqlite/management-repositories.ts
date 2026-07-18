@@ -49,10 +49,12 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       },
       async upsert(record) {
         db.prepare(`INSERT INTO team_management_policies
-          (team_id, mode, max_management_phase, placement_policy_json, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+          (team_id, mode, max_management_phase, placement_policy_json, budget_overrides_json, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(team_id) DO UPDATE SET mode=excluded.mode, placement_policy_json=excluded.placement_policy_json,
-            max_management_phase=excluded.max_management_phase, updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
-          .run(record.teamId, record.mode, record.maxManagementPhase, json(record.placementPolicy), record.updatedBy, record.updatedAt);
+            max_management_phase=excluded.max_management_phase, budget_overrides_json=excluded.budget_overrides_json,
+            updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+          .run(record.teamId, record.mode, record.maxManagementPhase, json(record.placementPolicy),
+            record.budgetOverrides ? json(record.budgetOverrides) : null, record.updatedBy, record.updatedAt);
         return record;
       },
     },
@@ -295,7 +297,7 @@ function nullableNumber(value: unknown, key: string): number | undefined { const
 function json(value: unknown): string { return JSON.stringify(value); }
 function parseJson<T>(value: string): T { return JSON.parse(value) as T; }
 
-function mapPolicy(value: unknown): ManagementPolicyRecord | null { return value ? { schemaVersion: 2, teamId: text(value, 'team_id'), mode: text(value, 'mode') as ManagementPolicyRecord['mode'], maxManagementPhase: phase(value, 'max_management_phase'), placementPolicy: parseJson(text(value, 'placement_policy_json')), updatedBy: text(value, 'updated_by'), updatedAt: number(value, 'updated_at') } : null; }
+function mapPolicy(value: unknown): ManagementPolicyRecord | null { if (!value) return null; const budgetOverridesJson = nullableText(value, 'budget_overrides_json'); return { schemaVersion: 2, teamId: text(value, 'team_id'), mode: text(value, 'mode') as ManagementPolicyRecord['mode'], maxManagementPhase: phase(value, 'max_management_phase'), placementPolicy: parseJson(text(value, 'placement_policy_json')), ...(budgetOverridesJson ? { budgetOverrides: parseJson(budgetOverridesJson) } : {}), updatedBy: text(value, 'updated_by'), updatedAt: number(value, 'updated_at') }; }
 function mapReservation(value: unknown): ManagedRequestReservationRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), requestKey: text(value, 'request_key'), requestHash: text(value, 'request_hash'), managementRunId: text(value, 'management_run_id'), createdAt: number(value, 'created_at') } : null; }
 function mapRun(value: unknown): ManagementRunRecord | null {
   if (!value) return null;

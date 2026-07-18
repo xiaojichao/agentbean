@@ -79,6 +79,8 @@ export interface TeamManagementPolicyV2Dto {
   readonly mode: ManagementMode;
   readonly maxManagementPhase: 1 | 2 | 3;
   readonly placementPolicy: ManagerPlacementPolicyDto;
+  /** Phase 4 第二阶段 #648：Team 预算覆盖（已钳制）；缺省字段回落 Phase 默认值。 */
+  readonly budgetOverrides?: Partial<ManagementBudgetDto>;
   readonly updatedBy: ID;
   readonly updatedAt: UnixMs;
 }

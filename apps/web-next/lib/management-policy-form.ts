@@ -44,6 +44,52 @@ export const MANAGED_PLACEMENT_PRIVACY_NOTICE =
 export const AUTO_PLACEMENT_NOTICE =
   'auto 按隐私与可用性自动选择执行位置：有在线授权 Device 时本地优先；Device 全离线且授权 Server 时由 Server Worker 兜底。每次决定随 Run 冻结并写入审计。';
 
+/** #648 预算表单状态：输入框原始字符串，空串 = 回落 Phase 默认。 */
+export interface BudgetFormState {
+  readonly maxSubtasks: string;
+  readonly maxDepth: string;
+  readonly maxExternalInvocations: string;
+}
+
+/** 从 policy 的预算覆盖回填表单（无覆盖 → 全空串）。 */
+export function budgetFormStateFromOverrides(overrides?: {
+  maxSubtasks?: number;
+  maxDepth?: number;
+  maxExternalInvocations?: number;
+}): BudgetFormState {
+  return {
+    maxSubtasks: overrides?.maxSubtasks?.toString() ?? '',
+    maxDepth: overrides?.maxDepth?.toString() ?? '',
+    maxExternalInvocations: overrides?.maxExternalInvocations?.toString() ?? '',
+  };
+}
+
+/**
+ * 表单 → 提交 payload：全空 → 空对象（清空覆盖回落默认）；
+ * 逐字段 parse 正整数，非法 → error（UI 层拦截，server clamp 兜底）。
+ */
+export function buildBudgetOverridesPayload(state: BudgetFormState): {
+  payload?: { maxSubtasks?: number; maxDepth?: number; maxExternalInvocations?: number };
+  error?: string;
+} {
+  const fields = [
+    ['maxSubtasks', '子任务数上限'],
+    ['maxDepth', '任务深度上限'],
+    ['maxExternalInvocations', '外部调用上限'],
+  ] as const;
+  const payload: { maxSubtasks?: number; maxDepth?: number; maxExternalInvocations?: number } = {};
+  for (const [field, label] of fields) {
+    const raw = state[field].trim();
+    if (!raw) continue;
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value <= 0) {
+      return { error: `${label}需为正整数（当前输入：${raw}）` };
+    }
+    payload[field] = value;
+  }
+  return { payload };
+}
+
 /** 从 server policy 推导表单状态；无 policy 时给安全默认（direct + Phase 1 + device）。 */
 export function placementFormStateFromPolicy(policy: ManagementPolicyLike | null): PlacementFormState {
   if (!policy) {

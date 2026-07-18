@@ -5,11 +5,14 @@ import type { ManagementMode } from '@agentbean/contracts';
 import { managementPolicyEvents } from '@/lib/socket';
 import {
   AUTO_PLACEMENT_NOTICE,
+  buildBudgetOverridesPayload,
   buildPlacementPolicyPayload,
+  budgetFormStateFromOverrides,
   MANAGED_PLACEMENT_PRIVACY_NOTICE,
   placementFormStateFromPolicy,
   placementOnModeChange,
   validatePlacementForm,
+  type BudgetFormState,
   type PlacementChoice,
   type PlacementFormState,
 } from '@/lib/management-policy-form';
@@ -20,6 +23,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   deviceIds: readonly string[];
 }) {
   const [form, setForm] = useState<PlacementFormState>(() => placementFormStateFromPolicy(null));
+  const [budget, setBudget] = useState<BudgetFormState>(() => budgetFormStateFromOverrides(undefined));
   // 初值必为 device（null policy 默认）；后续 policy 载入时同步重置（见下方 effect）。
   const rememberedPlacementRef = useRef<'device' | 'managed'>(form.placement === 'managed' ? 'managed' : 'device');
   const [loading, setLoading] = useState(true);
@@ -38,6 +42,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
         // auto 不参与记忆恢复（placementOnModeChange 对 auto 原样保留），记忆值归位安全默认。
         rememberedPlacementRef.current = next.placement === 'auto' ? 'device' : next.placement;
         setForm(next);
+        setBudget(budgetFormStateFromOverrides(result.policy.budgetOverrides));
       } else {
         setMessage({ ok: false, text: result.error ?? '读取管理模式失败' });
       }
@@ -66,10 +71,15 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
   };
 
   const formError = validatePlacementForm(form);
+  const budgetResult = buildBudgetOverridesPayload(budget);
 
   const save = async () => {
     if (formError) {
       setMessage({ ok: false, text: formError });
+      return;
+    }
+    if (budgetResult.error) {
+      setMessage({ ok: false, text: budgetResult.error });
       return;
     }
     setSaving(true);
@@ -79,6 +89,7 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
       mode: form.mode,
       maxManagementPhase: form.maxManagementPhase,
       placementPolicy: buildPlacementPolicyPayload(form),
+      budgetOverrides: budgetResult.payload,
     });
     setSaving(false);
     setMessage(result.ok
@@ -199,11 +210,59 @@ export function ManagementPolicyPanel({ teamId, canManage, deviceIds }: {
           </div>
         </div>
       )}
+      {form.mode === 'managed' && (
+        <div className="mt-4" data-smoke="settings-management-budget">
+          <div className="text-xs font-medium text-neutral-500">预算覆盖（可选，留空回落 Phase 默认值）</div>
+          <p className="mb-2 mt-1 text-xs text-neutral-400">超界自动钳制：子任务 1–50、深度 1–5、外部调用 1–100。</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">子任务数上限</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={budget.maxSubtasks}
+                onChange={(event) => setBudget((current) => ({ ...current, maxSubtasks: event.target.value }))}
+                disabled={loading || !canManage}
+                placeholder="默认 20"
+                className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
+                data-smoke="settings-management-budget-subtasks"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">任务深度上限</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={budget.maxDepth}
+                onChange={(event) => setBudget((current) => ({ ...current, maxDepth: event.target.value }))}
+                disabled={loading || !canManage}
+                placeholder="默认 3"
+                className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
+                data-smoke="settings-management-budget-depth"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-500">外部调用上限</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={budget.maxExternalInvocations}
+                onChange={(event) => setBudget((current) => ({ ...current, maxExternalInvocations: event.target.value }))}
+                disabled={loading || !canManage}
+                placeholder="默认 20"
+                className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm disabled:bg-neutral-50"
+                data-smoke="settings-management-budget-invocations"
+              />
+            </div>
+          </div>
+          {budgetResult.error && <div className="mt-2 text-xs text-amber-700" data-smoke="settings-management-budget-error">{budgetResult.error}</div>}
+        </div>
+      )}
       {form.mode === 'managed' && formError && (
         <div className="mt-3 text-xs text-amber-700" data-smoke="settings-management-preflight">{formError}</div>
       )}
       {!canManage && <div className="mt-3 text-xs text-neutral-400">仅 Team owner/admin 可修改。</div>}
-      <button onClick={save} disabled={loading || saving || !canManage || formError !== null} className="mt-4 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40" data-smoke="settings-management-save">
+      <button onClick={save} disabled={loading || saving || !canManage || formError !== null || Boolean(budgetResult.error)} className="mt-4 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-40" data-smoke="settings-management-save">
         {saving ? '保存中...' : '保存管理模式'}
       </button>
       {message && <div className={`mt-3 text-sm ${message.ok ? 'text-emerald-600' : 'text-red-600'}`}>{message.text}</div>}
