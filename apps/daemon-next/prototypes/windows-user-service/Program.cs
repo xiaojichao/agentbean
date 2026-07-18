@@ -31,6 +31,7 @@ static class Prototype
     static readonly string StatePath = Path.Combine(StateRoot, "state.json");
     static readonly string DesiredStatePath = Path.Combine(StateRoot, "desired-state.json");
     static readonly string OutboxPath = Path.Combine(StateRoot, "outbox.jsonl");
+    static readonly string SessionEvidencePath = Path.Combine(StateRoot, "session-evidence.jsonl");
 
     public static async Task<int> Run(string[] args)
     {
@@ -45,7 +46,8 @@ static class Prototype
             "supervise" => await Supervise(),
             "worker" => await Worker(),
             "verify" => await Verify(),
-            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|supervise|worker|verify"),
+            "session-check" => await SessionCheck(args.Skip(1).FirstOrDefault() ?? "manual"),
+            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|supervise|worker|verify|session-check [checkpoint]"),
         };
     }
 
@@ -83,6 +85,45 @@ static class Prototype
             TaskName, definition, TaskCreateOrUpdate, UserSid, null,
             TaskLogonInteractiveToken, null);
         if (start) task.Run(null);
+        return 0;
+    }
+
+    static async Task<int> SessionCheck(string checkpoint)
+    {
+        dynamic service = Scheduler();
+        dynamic task = service.GetFolder("\\").GetTask(TaskName);
+        var xml = (string)task.Xml;
+        Require((bool)task.Enabled, "SESSION_TASK_DISABLED");
+        Require(xml.Contains("<LogonType>InteractiveToken</LogonType>"), "INTERACTIVE_TOKEN_MISSING");
+        Require(xml.Contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"), "IGNORE_NEW_MISSING");
+        Require(await IsReady(TimeSpan.FromSeconds(20)), "SESSION_WORKER_NOT_READY");
+        using var status = await Send(new { command = "status" });
+        var principal = new WindowsPrincipal(WindowsIdentity.GetCurrent());
+        var evidence = new
+        {
+            schemaVersion = 1,
+            checkpoint,
+            observedAtUtc = DateTime.UtcNow,
+            approximateBootAtUtc = DateTime.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64),
+            host = new
+            {
+                os = Environment.OSVersion.VersionString,
+                arch = RuntimeInformation.OSArchitecture.ToString(),
+                userSid = UserSid,
+                isAdministrator = principal.IsInRole(WindowsBuiltInRole.Administrator),
+            },
+            task = new
+            {
+                enabled = (bool)task.Enabled,
+                state = (int)task.State,
+                lastTaskResult = unchecked((uint)(int)task.LastTaskResult),
+                runningInstances = (int)task.GetInstances(0).Count,
+            },
+            worker = status.RootElement.GetProperty("state"),
+        };
+        var json = JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true });
+        Console.WriteLine(json);
+        AppendDurable(SessionEvidencePath, JsonSerializer.Serialize(evidence));
         return 0;
     }
 
