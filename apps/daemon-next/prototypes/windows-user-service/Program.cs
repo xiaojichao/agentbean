@@ -1,5 +1,6 @@
 // THROWAWAY PROTOTYPE for #676. Not production Device Service code.
 using System.IO.Pipes;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -17,6 +18,7 @@ static class Prototype
     const int TaskLogonInteractiveToken = 3;
     const int TaskActionExec = 0;
     const int TaskTriggerLogon = 9;
+    const int SupervisorRestartLimit = 5;
     const string TaskName = "AgentBean Device Service Prototype";
 
     static readonly string UserSid = WindowsIdentity.GetCurrent().User?.Value
@@ -38,9 +40,10 @@ static class Prototype
             "register" => Register(start: false),
             "start" => Start(),
             "uninstall" => await Uninstall(),
+            "supervise" => await Supervise(),
             "worker" => await Worker(),
             "verify" => await Verify(),
-            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|worker|verify"),
+            _ => throw new InvalidOperationException("USAGE install|register|start|uninstall|supervise|worker|verify"),
         };
     }
 
@@ -71,13 +74,32 @@ static class Prototype
         definition.Settings.WakeToRun = false;
         dynamic action = definition.Actions.Create(TaskActionExec);
         action.Path = Environment.ProcessPath!;
-        action.Arguments = "worker";
+        action.Arguments = "supervise";
         action.WorkingDirectory = Path.GetDirectoryName(Environment.ProcessPath)!;
         dynamic task = root.RegisterTaskDefinition(
             TaskName, definition, TaskCreateOrUpdate, UserSid, null,
             TaskLogonInteractiveToken, null);
         if (start) task.Run(null);
         return 0;
+    }
+
+    static async Task<int> Supervise()
+    {
+        for (var attempt = 0; attempt <= SupervisorRestartLimit; attempt++)
+        {
+            using var worker = Process.Start(new ProcessStartInfo
+            {
+                FileName = Environment.ProcessPath!,
+                Arguments = "worker",
+                WorkingDirectory = Path.GetDirectoryName(Environment.ProcessPath)!,
+                UseShellExecute = false,
+            }) ?? throw new InvalidOperationException("SUPERVISOR_START_FAILED");
+            await worker.WaitForExitAsync();
+            if (worker.ExitCode == 0) return 0;
+            if (attempt == SupervisorRestartLimit) return worker.ExitCode;
+            await Task.Delay(TimeSpan.FromMinutes(1));
+        }
+        return 1;
     }
 
     static int Start()
@@ -239,6 +261,8 @@ static class Prototype
                 ignoreNewSingleInstance = instanceCount == 1,
                 manualStart = firstPid > 0,
                 boundedRestart = beforeCrashPid != afterCrashPid,
+                boundedRestartOwner = "windows-platform-adapter",
+                taskSchedulerNonZeroExitRestart = false,
                 currentUserOnlyPipe = true,
                 drainBeforeImmediateStop = true,
                 durableOutboxFlush = true,
