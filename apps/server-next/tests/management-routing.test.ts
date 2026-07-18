@@ -200,6 +200,31 @@ describe('Phase 1 management routing', () => {
     await expect(harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id }))
       .resolves.toMatchObject({ ok: true, dag: { rootTaskId: result.task.id } });
   });
+
+  test('getTaskDag 暴露从 events 派生的用量与 run 冻结预算（#649）', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({
+      ...managedPolicy(), maxManagementPhase: 2,
+      budgetOverrides: { maxSubtasks: 30 },
+    });
+    const result = await harness.app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      body: '请协调团队完成复杂任务', asTask: true, clientMessageId: 'usage-usecase-1',
+      connectedAgentDeviceIds: ['device-1'], dispatchClaimDeviceIds: ['device-1'],
+    });
+    expect(result).toMatchObject({ ok: true, management: { kind: 'managed' } });
+    if (!result.ok || !result.task) throw new Error('managed result expected');
+    const dag = await harness.app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: result.task.id });
+    expect(dag).toMatchObject({
+      ok: true,
+      dag: {
+        // root task-created 已写入：深度 1、尚无子任务与外部调用
+        usage: { subtaskCount: 0, externalInvocationCount: 0, maxDepthReached: 1 },
+        // 冻结预算 = #648 覆盖合并结果（maxSubtasks 30，其余 Phase 2 默认）
+        budget: { maxSubtasks: 30, maxDepth: 3, maxExternalInvocations: 20 },
+      },
+    });
+  });
 });
 
 describe('Phase 4 auto placement routing（#647）', () => {

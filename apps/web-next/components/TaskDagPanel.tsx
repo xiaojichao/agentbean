@@ -2,7 +2,7 @@
 
 import type { TaskDagNodeViewDto, TaskDagResultRefDto, TaskDagViewDto } from '@agentbean/contracts';
 import { CheckCircle2, CircleDashed, GitBranch, UserRound } from 'lucide-react';
-import { orderedTaskDagNodes } from '@/lib/task-dag';
+import { formatTaskDagUsage, orderedTaskDagNodes } from '@/lib/task-dag';
 
 const STATUS_LABELS: Record<TaskDagNodeViewDto['task']['status'], string> = {
   todo: '待处理',
@@ -14,6 +14,7 @@ const STATUS_LABELS: Record<TaskDagNodeViewDto['task']['status'], string> = {
 
 export function TaskDagPanel({ dag, teamPath }: { dag: TaskDagViewDto; teamPath: string }) {
   const ordered = orderedTaskDagNodes(dag);
+  const usage = formatTaskDagUsage(dag.usage, dag.budget);
   return (
     <section className="rounded-md border border-violet-200 bg-violet-50/40 p-3" data-smoke="task-dag-panel" data-graph-revision={dag.graphRevision}>
       <div className="flex items-center justify-between gap-2">
@@ -23,6 +24,14 @@ export function TaskDagPanel({ dag, teamPath }: { dag: TaskDagViewDto; teamPath:
         </div>
         <span className="text-[10px] text-violet-500">rev {dag.graphRevision}</span>
       </div>
+      {usage && (
+        <div
+          className={`mt-1 text-[11px] ${usage.exceeded ? 'font-medium text-red-600' : 'text-violet-600'}`}
+          data-smoke="task-dag-usage"
+        >
+          {usage.text}
+        </div>
+      )}
       <div className="mt-3 space-y-2">
         {ordered.map((node) => (
           <TaskDagNode key={node.task.id} node={node} teamPath={teamPath} />

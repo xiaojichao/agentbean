@@ -5,7 +5,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test } from 'vitest';
 import type { TaskDagViewDto } from '@agentbean/contracts';
 import { TaskDagPanel } from '../components/TaskDagPanel';
-import { acceptTaskDagSnapshot } from '../lib/task-dag';
+import { acceptTaskDagSnapshot, formatTaskDagUsage } from '../lib/task-dag';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -56,3 +56,26 @@ function snapshot(graphRevision: number, taskRevision: number, updatedAt: number
     events: [{ sequence: graphRevision, type: 'task-acceptance-decided', createdAt: 4 }],
   };
 }
+
+describe('formatTaskDagUsage（#649）', () => {
+  const usage = { subtaskCount: 7, externalInvocationCount: 3, maxDepthReached: 2 };
+  const budget = { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 };
+
+  test('格式化用量/上限对照文案', () => {
+    expect(formatTaskDagUsage(usage, budget)).toEqual({
+      text: '子任务 7/20 · 外部调用 3/20 · 深度 2/3',
+      exceeded: false,
+    });
+  });
+
+  test('缺 usage 或 budget（旧 run/旧 server）→ null 不展示', () => {
+    expect(formatTaskDagUsage(undefined, budget)).toBeNull();
+    expect(formatTaskDagUsage(usage, undefined)).toBeNull();
+  });
+
+  test('任一维度超上限 → exceeded=true（UI 标红）', () => {
+    expect(formatTaskDagUsage({ ...usage, subtaskCount: 21 }, budget)?.exceeded).toBe(true);
+    expect(formatTaskDagUsage({ ...usage, maxDepthReached: 4 }, budget)?.exceeded).toBe(true);
+    expect(formatTaskDagUsage(usage, budget)?.exceeded).toBe(false);
+  });
+});
