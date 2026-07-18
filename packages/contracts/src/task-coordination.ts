@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { TaskDto } from './task.js';
 import type { AgentHandoffTraceDto } from './collaboration.js';
+import type { ManagementBudgetDto } from './management.js';
 
 export type EvidenceKind = 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
 
@@ -113,4 +114,12 @@ export interface TaskDagViewDto {
     readonly type: string;
     readonly createdAt: UnixMs;
   }[];
+  /** Phase 4 第二阶段 #649：从既有 management events 派生的用量计数（不建表）。 */
+  readonly usage?: {
+    readonly subtaskCount: number;
+    readonly externalInvocationCount: number;
+    readonly maxDepthReached: number;
+  };
+  /** run 创建时冻结的预算上限（与 usage 对照展示）。 */
+  readonly budget?: ManagementBudgetDto;
 }

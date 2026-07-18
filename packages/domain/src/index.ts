@@ -5,6 +5,7 @@ export * from './search.js';
 export * from './management-policy.js';
 export * from './auto-placement.js';
 export * from './management-budget.js';
+export * from './management-run-usage.js';
 export * from './invocation-policy.js';
 export * from './collaboration-policy.js';
 export * from './checkpoint-policy.js';
