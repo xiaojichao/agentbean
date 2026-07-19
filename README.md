@@ -37,6 +37,16 @@ agentbean device start
 agentbean device uninstall
 ```
 
+升级 AgentBean 时只需运行：
+
+```bash
+agentbean update
+```
+
+该命令检查 canonical npm stable 版本，安装精确版本并在 LaunchAgent 已安装时安全重启 Device Service；若新版本未能就绪，会回装原版本并尝试恢复服务。它不会使用 `sudo`。未安装 Device Service 时只更新 CLI。
+
+`agentbean update` 从 `0.3.13` 开始提供；仍在 `0.3.12` 或更早版本的用户需要最后一次执行 `npm install -g @agentbean/daemon@latest` 完成引导，之后即可使用内置更新命令。
+
 `uninstall` 只删除 LaunchAgent 和服务 payload；Profile 凭据、Workspace、Memory、machine-id 与待发送 outbox 会保留。Linux 与 Windows 系统服务不属于当前 MVP。
 
 ## 仓库结构
