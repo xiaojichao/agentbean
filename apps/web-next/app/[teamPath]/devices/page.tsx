@@ -423,7 +423,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const upgradeGuidance = daemonUpgradeGuidance(currentDaemonVersion);
   const devicePlatform = device.systemInfo?.platform?.toLowerCase();
   const showMacOSUpgradeGuidance = daemonVersion.updateAvailable
-    && (!devicePlatform || devicePlatform === 'darwin' || devicePlatform === 'macos');
+    && (devicePlatform === 'darwin' || devicePlatform === 'macos');
   const deviceOwnerId = device.ownerId ?? device.userId;
   const canManageDevice = canManageDeviceForUser({
     deviceCanManage: device.canManage,

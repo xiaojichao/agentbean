@@ -1223,6 +1223,7 @@ describe('web-next preview page interactions', () => {
         device: {
           ...device,
           systemInfo: {
+            platform: 'darwin',
             hostname: 'mbp.local',
             osVersion: 'macOS 15.5',
             arch: 'arm64',
@@ -1260,7 +1261,7 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('Apple M3 Max');
     expect(detailHtml).toContain('v0.3.12（有更新版本）');
     expect(detailHtml).toContain('AgentBean 可升级到 v0.3.13');
-    expect(detailHtml).toContain('npm install -g @agentbean/daemon@latest');
+    expect(detailHtml).toContain('npm install -g @agentbean/daemon@latest &amp;&amp; agentbean device install &amp;&amp; agentbean device restart');
     expect(detailHtml).toContain('仅执行这一次');
     expect(detailHtml).toContain('npx @agentbean/daemon@latest');
     expect(detailHtml).toContain('Codex CLI');

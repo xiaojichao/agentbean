@@ -20,7 +20,7 @@ export interface DaemonVersionDisplay {
 
 export type DaemonUpgradeGuidance =
   | { mode: 'self-update'; command: 'agentbean update'; description: string }
-  | { mode: 'bootstrap'; command: 'npm install -g @agentbean/daemon@latest'; description: string }
+  | { mode: 'bootstrap'; command: 'npm install -g @agentbean/daemon@latest && agentbean device install && agentbean device restart'; description: string }
   | { mode: 'legacy'; command: null; description: string };
 
 const SELF_UPDATE_MIN_VERSION = '0.3.13';
@@ -59,7 +59,8 @@ export function versionAtLeast(version: string | null | undefined, minimum: stri
 }
 
 export function daemonUpgradeGuidance(version: string | null | undefined): DaemonUpgradeGuidance {
-  if (!parseVersionParts(version)) {
+  const stableVersion = version?.trim().replace(/^v/, '');
+  if (!stableVersion || !/^\d+\.\d+\.\d+$/.test(stableVersion)) {
     return {
       mode: 'legacy',
       command: null,
@@ -76,8 +77,8 @@ export function daemonUpgradeGuidance(version: string | null | undefined): Daemo
   if (versionAtLeast(version, DEVICE_SERVICE_MVP_MIN_VERSION)) {
     return {
       mode: 'bootstrap',
-      command: 'npm install -g @agentbean/daemon@latest',
-      description: '当前版本尚无内置更新命令。请在这台 Mac 的终端仅执行这一次；以后升级运行 agentbean update。',
+      command: 'npm install -g @agentbean/daemon@latest && agentbean device install && agentbean device restart',
+      description: '当前版本尚无内置更新命令。请在这台 Mac 的终端仅执行这一次，完成安装、刷新服务入口并重启；以后升级运行 agentbean update。',
     };
   }
   return {

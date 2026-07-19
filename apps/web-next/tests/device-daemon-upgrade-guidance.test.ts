@@ -6,7 +6,7 @@ describe('device daemon upgrade guidance', () => {
   test('routes macOS upgrade instructions by installed version', () => {
     expect(daemonUpgradeGuidance('0.3.12')).toEqual({
       mode: 'bootstrap',
-      command: 'npm install -g @agentbean/daemon@latest',
+      command: 'npm install -g @agentbean/daemon@latest && agentbean device install && agentbean device restart',
       description: expect.stringContaining('仅执行这一次'),
     });
     expect(daemonUpgradeGuidance('0.3.13')).toEqual({
@@ -16,6 +16,7 @@ describe('device daemon upgrade guidance', () => {
     });
     expect(daemonUpgradeGuidance('0.4.0').mode).toBe('self-update');
     expect(daemonUpgradeGuidance('0.3.11').mode).toBe('legacy');
+    expect(daemonUpgradeGuidance('0.3.13-beta.1').mode).toBe('legacy');
     expect(daemonUpgradeGuidance('unknown').mode).toBe('legacy');
   });
 
@@ -34,5 +35,7 @@ describe('device daemon upgrade guidance', () => {
     expect(guidanceAndConnection).toContain('复制命令');
     expect(guidanceAndConnection).toContain("upgradeGuidance.mode === 'legacy'");
     expect(guidanceAndConnection).toContain('生成新连接命令进行升级');
+    expect(source).toContain("devicePlatform === 'darwin' || devicePlatform === 'macos'");
+    expect(source).not.toContain('!devicePlatform ||');
   });
 });

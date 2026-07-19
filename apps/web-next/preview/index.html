@@ -3157,6 +3157,12 @@
       }
 
       function previewDaemonUpgradeGuidance(version) {
+        if (!/^v?\d+\.\d+\.\d+$/.test(String(version || "").trim())) {
+          return {
+            command: null,
+            description: "当前版本无法使用内置更新，请停止旧 Daemon，再生成并运行新的连接命令完成迁移。",
+          };
+        }
         if (previewVersionAtLeast(version, "0.3.13")) {
           return {
             command: "agentbean update",
@@ -3165,8 +3171,8 @@
         }
         if (previewVersionAtLeast(version, "0.3.12")) {
           return {
-            command: "npm install -g @agentbean/daemon@latest",
-            description: "当前版本尚无内置更新命令。请在这台 Mac 的终端仅执行这一次；以后升级运行 agentbean update。",
+            command: "npm install -g @agentbean/daemon@latest && agentbean device install && agentbean device restart",
+            description: "当前版本尚无内置更新命令。请在这台 Mac 的终端仅执行这一次，完成安装、刷新服务入口并重启；以后升级运行 agentbean update。",
           };
         }
         return {
@@ -3178,7 +3184,7 @@
       function renderDaemonUpgradeGuidance(device, daemon) {
         if (!daemon.updateAvailable) return "";
         const platform = String(device?.systemInfo?.platform || "").toLowerCase();
-        if (platform && platform !== "darwin" && platform !== "macos") return "";
+        if (platform !== "darwin" && platform !== "macos") return "";
         const current = device?.daemonVersionInfo?.current || device?.systemInfo?.daemonVersion || device?.daemonVersion;
         const guidance = previewDaemonUpgradeGuidance(current);
         const title = `AgentBean 可升级到 ${daemon.latestLabel || "最新版本"}`;
