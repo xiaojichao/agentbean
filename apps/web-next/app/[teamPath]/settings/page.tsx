@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database, Bot } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -20,25 +20,25 @@ import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/chang
 import { RunsPanel } from './RunsPanel';
 import { ManagementPolicyPanel } from './ManagementPolicyPanel';
 import { MemoryGovernancePanel } from './MemoryGovernancePanel';
+import { PiManagementPanel } from './PiManagementPanel';
+import {
+  resolveSettingsTab,
+  settingsTabsForRole,
+  type SettingsTab,
+} from '@/lib/settings-tabs';
 
-type Tab = 'account' | 'browser' | 'server' | 'memory' | 'runs' | 'releases';
+type Tab = SettingsTab;
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+const TAB_META: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account', label: '账号', icon: <User size={16} /> },
   { id: 'browser', label: '浏览器', icon: <Globe size={16} /> },
   { id: 'server', label: '团队', icon: <Server size={16} /> },
+  { id: 'pi', label: 'PI Agent', icon: <Bot size={16} /> },
   { id: 'memory', label: 'Memory 治理', icon: <Database size={16} /> },
   { id: 'runs', label: '执行记录诊断', icon: <Terminal size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
 const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
-
-function normalizeSettingsTab(value: string | null): Tab | null {
-  if (value === 'account' || value === 'browser' || value === 'server' || value === 'memory' || value === 'runs' || value === 'releases') {
-    return value;
-  }
-  return null;
-}
 
 function joinFailureMessage(result: { error?: string; message?: string }): string {
   if (result.error === 'INTERNAL_ERROR') {
@@ -49,12 +49,15 @@ function joinFailureMessage(result: { error?: string; message?: string }): strin
 
 export default function SettingsPage() {
   const searchParams = useSearchParams();
-  const [tab, setTab] = useState<Tab>('account');
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const isSystemAdmin = currentUser?.role === 'admin';
+  const requestedTab = searchParams.get('tab');
+  const visibleTabs = TAB_META.filter((t) => settingsTabsForRole(Boolean(isSystemAdmin)).includes(t.id));
+  const [tab, setTab] = useState<Tab>(() => resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
 
   useEffect(() => {
-    const requestedTab = normalizeSettingsTab(searchParams.get('tab'));
-    if (requestedTab) setTab(requestedTab);
-  }, [searchParams]);
+    setTab(resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
+  }, [requestedTab, isSystemAdmin]);
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -62,7 +65,7 @@ export default function SettingsPage() {
       <div className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-[#FFF8E7]">
         <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">设置</div>
         <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)} className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm ${tab === t.id ? 'bg-pink-100 font-medium text-pink-800' : 'text-neutral-600 hover:bg-white/50'}`} data-smoke={`settings-tab-${t.id}`}>
               {t.icon}
               {t.label}
@@ -73,12 +76,13 @@ export default function SettingsPage() {
 
       {/* Right content */}
       <div className="flex flex-1 flex-col">
-        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{TABS.find((t) => t.id === tab)?.label ?? '设置'}</div>
+        <div className="flex h-14 items-center border-b border-neutral-200 px-4 text-sm font-semibold">{visibleTabs.find((t) => t.id === tab)?.label ?? '设置'}</div>
         <div className="flex-1 overflow-y-auto p-6">
         <ConnectionBanner />
         {tab === 'account' && <AccountPanel />}
         {tab === 'browser' && <BrowserPanel />}
         {tab === 'server' && <ServerPanel />}
+        {tab === 'pi' && isSystemAdmin && <PiManagementPanel isSystemAdmin />}
         {tab === 'memory' && <MemoryGovernancePanel />}
         {tab === 'runs' && <RunsPanel />}
         {tab === 'releases' && <ReleasesPanel />}

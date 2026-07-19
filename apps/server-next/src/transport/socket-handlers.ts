@@ -238,6 +238,19 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.managementPolicy.get, app, 'getManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.managementPolicy.update, app, 'updateManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
+  {
+    // PI Provider Supply is system-admin only; never accept client-spoofed userId on unauthenticated sockets.
+    const piProviderBindOptions = {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    };
+    bind(socket, WEB_EVENTS.piProvider.listPresets, app, 'listPiProviderPresets', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.listCards, app, 'listPiProviderCards', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.getCard, app, 'getPiProviderCard', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.createCard, app, 'createPiProviderCard', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.updateCard, app, 'updatePiProviderCard', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.copyCard, app, 'copyPiProviderCard', undefined, piProviderBindOptions);
+  }
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
     await afterTeamMutation(payload, result);

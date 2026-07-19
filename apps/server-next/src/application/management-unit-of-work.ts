@@ -5,6 +5,7 @@ import type {
   ManagementRepositories,
   ManagementRunRecord,
 } from './management-repositories.js';
+import { serializeTransactions } from './transaction-serialization.js';
 
 export interface CreateManagementRunInput {
   readonly reservation: ManagedRequestReservationRecord;
@@ -44,13 +45,5 @@ export function createManagementUnitOfWork(
 export function serializeManagementTransactions(
   transact: <T>(operation: (repositories: ManagementRepositories) => Promise<T>) => Promise<T>,
 ): <T>(operation: (repositories: ManagementRepositories) => Promise<T>) => Promise<T> {
-  let tail: Promise<void> = Promise.resolve();
-  return <T>(operation: (repositories: ManagementRepositories) => Promise<T>) => {
-    const result = tail.then(
-      () => transact(operation),
-      () => transact(operation),
-    );
-    tail = result.then(() => undefined, () => undefined);
-    return result;
-  };
+  return serializeTransactions(transact);
 }

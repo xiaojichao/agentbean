@@ -17,3 +17,4 @@ export * from './management-memory.js';
 export * from './management-worker.js';
 export * from './management-worker-v2.js';
 export * from './socket.js';
+export * from './pi-provider.js';
