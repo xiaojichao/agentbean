@@ -45,8 +45,10 @@ export interface CreatePiManagerRuntimeFactoryInput {
 
 export interface PiManagerWorkerHost {
   start(): Promise<void>;
+  beginDrain(deadlineMs: number): Promise<void>;
   stop(): Promise<void>;
   activeLeaseCount(): number;
+  outboxPendingCount(): number;
 }
 
 export interface CreatePiManagerWorkerHostInput {
@@ -122,12 +124,14 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
   let runtimeFactory: ManagementRuntimeFactory | undefined;
   let currentWorkerId: string | undefined;
   let started = false;
+  let acceptingOffers = false;
 
   const toolExecutor: ManagementToolExecutor = (call) => executeManagementTool(call);
 
   const handlers: PiManagerWorkerProtocolHandlers = {
     reserveLeaseOffer(offer) {
       const accepted = started
+        && acceptingOffers
         && credential?.credentialStatus !== 'unavailable'
         && Boolean(runtimeFactory)
         && offer.offerExpiresAt > now()
@@ -165,6 +169,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       }
       const capability = managementCredentialCapability(credential);
       started = true;
+      acceptingOffers = true;
       try {
         const registered = await input.protocol.start({
           ...capability,
@@ -173,14 +178,25 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         currentWorkerId = registered.workerId;
       } catch (error) {
         started = false;
+        acceptingOffers = false;
         runtimeFactory = undefined;
         credential = undefined;
         throw error;
       }
     },
+    async beginDrain(deadlineMs) {
+      acceptingOffers = false;
+      pendingOfferIds.clear();
+      const deadlineAt = Date.now() + deadlineMs;
+      while (activeLeases.size > 0 || input.outbox.size() > 0) {
+        if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
+        await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
+      }
+    },
     async stop() {
       if (!started) return;
       started = false;
+      acceptingOffers = false;
       await Promise.all([...activeLeases.values()].map((lease) => abortLease(lease, 'worker-stopped')));
       await input.protocol.stop();
       currentWorkerId = undefined;
@@ -189,7 +205,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       credential = undefined;
     },
     activeLeaseCount() {
-      return activeLeases.size;
+      return activeLeases.size + pendingOfferIds.size;
+    },
+    outboxPendingCount() {
+      return input.outbox.size();
     },
   };
 

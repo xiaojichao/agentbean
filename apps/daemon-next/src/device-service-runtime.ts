@@ -35,9 +35,14 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
   const configs = expandAllProfiles({ ...baseConfig, allProfiles: false }, profiles);
   const runners = await Promise.all(configs.map(async (config): Promise<DeviceServiceProfileRunner> => {
     let core: DeviceServiceCore | undefined;
+    let profileRemoved = false;
     try {
       await (input.runDaemon ?? runDaemonNextCli)(config, {
         ...input.daemonDeps,
+        exit: () => {
+          profileRemoved = true;
+          void Promise.resolve(core?.stop?.()).catch(() => undefined);
+        },
         startDeviceServiceCore: async (created) => {
           core = created.core;
         },
@@ -50,10 +55,19 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
     return createDeviceServiceProfileRunner({
       profileId: config.profileId,
       core: serviceCore,
-      beginDrain: async () => {
-        await serviceCore.stop?.();
-        return { ok: true };
+      beginDrain: async (deadlineMs) => {
+        try {
+          await serviceCore.beginDrain(deadlineMs);
+          return { ok: true };
+        } catch {
+          return { ok: false, reasonCode: 'PROFILE_DRAIN_FAILED' };
+        }
       },
+      readCounts: () => ({
+        activeWorkCount: serviceCore.activeWorkCount(),
+        outboxPendingCount: serviceCore.outboxPendingCount(),
+      }),
+      readPhase: () => profileRemoved ? 'failed' : undefined,
     });
   }));
   const host = (input.createHost ?? createDeviceServiceHost)({

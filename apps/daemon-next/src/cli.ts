@@ -484,6 +484,7 @@ export async function runDaemonNextCli(
   }
 
   const socket = await connectSocket(serverUrl);
+  try {
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const cached = loadScanCacheFn(config.profileId);
   if (cached) {
@@ -594,10 +595,27 @@ export async function runDaemonNextCli(
     socket: protocolSocket,
     getDeviceId: () => dispatchClient.deviceId,
   });
-  const core = createDeviceServiceCore({ dispatchClient, taskClaimClient, managementWorkerHost });
+  const serviceDispatchClient: DeviceServiceComponent = {
+    start: () => dispatchClient.start(),
+    beginDrain: (deadlineMs) => dispatchClient.beginDrain(deadlineMs),
+    activeWorkCount: () => dispatchClient.activeWorkCount(),
+    outboxPendingCount: () => dispatchClient.outboxPendingCount(),
+    async stop() {
+      try {
+        await dispatchClient.stop?.();
+      } finally {
+        socket.disconnect();
+      }
+    },
+  };
+  const core = createDeviceServiceCore({ dispatchClient: serviceDispatchClient, taskClaimClient, managementWorkerHost });
   await startDeviceServiceCore({ core, profileId: config.profileId });
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
+  }
+  } catch (error) {
+    socket.disconnect();
+    throw error;
   }
 }
 

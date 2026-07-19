@@ -76,7 +76,7 @@ export function createMacOSLaunchAgentAdapter(
     async status() {
       const installed = await fileExists(paths.plistFile);
       const result = await run('/bin/launchctl', ['print', target]);
-      return { installed, running: result.exitCode === 0 };
+      return { installed, running: result.exitCode === 0 && launchctlPrintHasLivePid(result.stdout) };
     },
   };
 }
@@ -184,6 +184,11 @@ function escapeXml(value: string): string {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
+}
+
+function launchctlPrintHasLivePid(stdout: string): boolean {
+  const match = stdout.match(/^\s*pid\s*=\s*(\d+)\s*$/m);
+  return Boolean(match?.[1] && Number(match[1]) > 0);
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {

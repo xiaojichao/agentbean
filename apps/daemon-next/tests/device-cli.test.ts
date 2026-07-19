@@ -120,6 +120,22 @@ describe('MacOSLaunchAgentAdapter', () => {
       'com.agentbean.device-service.plist',
     ]);
   });
+
+  test('treats a loaded LaunchAgent without a live pid as stopped', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-launch-status-'));
+    const baseDir = join(home, '.agentbean');
+    await writeMacOSLaunchAgentPlist({ executablePath: '/opt/AgentBean/bin/agentbean', home, baseDir });
+    let stdout = 'state = exited\n';
+    const adapter = createMacOSLaunchAgentAdapter({
+      uid: 501,
+      home,
+      baseDir,
+      run: vi.fn(async () => ({ exitCode: 0, stdout, stderr: '' })),
+    });
+    await expect(adapter.status()).resolves.toEqual({ installed: true, running: false });
+    stdout = 'state = running\n\tpid = 123\n';
+    await expect(adapter.status()).resolves.toEqual({ installed: true, running: true });
+  });
 });
 
 describe('agentbean device CLI', () => {
@@ -228,9 +244,13 @@ describe('Device Service production wiring', () => {
     const core = {
       started: false,
       start: vi.fn(async () => undefined),
+      beginDrain: vi.fn(async () => undefined),
       stop: vi.fn(async () => undefined),
+      activeWorkCount: vi.fn(() => 2),
+      outboxPendingCount: vi.fn(() => 3),
     };
     let hostInput: CreateDeviceServiceHostInput | undefined;
+    let profileExit: ((code: number) => void) | undefined;
     const hostStart = vi.fn(async () => undefined);
     const bindSignals = vi.fn(() => () => undefined);
 
@@ -243,6 +263,7 @@ describe('Device Service production wiring', () => {
         ownerId: 'owner-a',
       }],
       runDaemon: vi.fn(async (_config, deps) => {
+        profileExit = deps.exit;
         await deps.startDeviceServiceCore?.({ core, profileId: 'profile-a' });
       }),
       createHost: (input) => {
@@ -265,6 +286,11 @@ describe('Device Service production wiring', () => {
     await runner?.start();
     await runner?.beginDrain(1000);
     expect(core.start).toHaveBeenCalledTimes(1);
-    expect(core.stop).toHaveBeenCalledTimes(1);
+    expect(core.beginDrain).toHaveBeenCalledWith(1000);
+    expect(core.stop).not.toHaveBeenCalled();
+    expect(runner?.snapshot()).toMatchObject({ activeWorkCount: 2, outboxPendingCount: 3 });
+    profileExit?.(0);
+    await vi.waitFor(() => expect(core.stop).toHaveBeenCalledTimes(1));
+    expect(runner?.snapshot().phase).toBe('failed');
   });
 });
