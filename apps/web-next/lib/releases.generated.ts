@@ -2,6 +2,40 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-19",
+    "date": "2026-07-19",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "新增 macOS AgentBean 自更新命令（#698）"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "【PI MVP 01】共享 OpenAI-compatible Management Model Adapter",
+          "让 macOS 设备连接自动交接给 Device Service",
+          "在设备页提供 macOS Daemon 升级命令提示（#726）",
+          "收敛 macOS Device Service 最小可用版本",
+          "实现 Linux systemd 用户级 Device Service",
+          "实现 Legacy Daemon 显式迁移与运行时 fencing",
+          "实现 macOS Device Service 幂等安装、卸载与数据保留",
+          "实现统一 Device CLI 与 macOS LaunchAgent 适配器",
+          "实现 Device Service Host 与两阶段排空",
+          "冻结 Phase 5A Device Service 实现规格",
+          "记录 2026-07-18 每日更新日志"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "完成 Phase 5A macOS 生命周期与恢复验收"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-18",
     "date": "2026-07-18",
     "sections": [

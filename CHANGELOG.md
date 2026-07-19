@@ -11,6 +11,24 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-19] - 2026-07-19
+### Added
+- 新增 macOS AgentBean 自更新命令（#698）
+### Changed
+- 【PI MVP 01】共享 OpenAI-compatible Management Model Adapter
+- 让 macOS 设备连接自动交接给 Device Service
+- 在设备页提供 macOS Daemon 升级命令提示（#726）
+- 收敛 macOS Device Service 最小可用版本
+- 实现 Linux systemd 用户级 Device Service
+- 实现 Legacy Daemon 显式迁移与运行时 fencing
+- 实现 macOS Device Service 幂等安装、卸载与数据保留
+- 实现统一 Device CLI 与 macOS LaunchAgent 适配器
+- 实现 Device Service Host 与两阶段排空
+- 冻结 Phase 5A Device Service 实现规格
+- 记录 2026-07-18 每日更新日志
+### Fixed
+- 完成 Phase 5A macOS 生命周期与恢复验收
+
 ## [Daily 2026-07-18] - 2026-07-18
 ### Changed
 - Phase 4 第二阶段：Run 用量可见性（#649）
