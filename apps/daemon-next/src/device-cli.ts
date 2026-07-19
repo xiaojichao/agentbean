@@ -136,6 +136,15 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   if (parsed.command === 'stop') return stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
   const stopped = await stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
   if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
+  const platformStopped = await waitForPlatformStopped(adapter, parsed.deadlineMs);
+  if (platformStopped === 'error') {
+    stderr('无法确认旧 Device Service 已退出。');
+    return DEVICE_CLI_EXIT.platform;
+  }
+  if (platformStopped === 'timeout') {
+    stderr('旧 Device Service 未在截止时间内退出，未启动第二个实例。');
+    return DEVICE_CLI_EXIT.drain;
+  }
   return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
 }
 
@@ -366,6 +375,22 @@ async function waitForReady(client: DeviceControlClient, timeoutMs: number): Pro
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return null;
+}
+
+async function waitForPlatformStopped(
+  adapter: MacOSLaunchAgentAdapter,
+  timeoutMs: number,
+): Promise<'stopped' | 'timeout' | 'error'> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    try {
+      if (!(await adapter.status()).running) return 'stopped';
+    } catch {
+      return 'error';
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return 'timeout';
 }
 
 async function readPlatformStatus(deps: DeviceCliDeps): Promise<{ installed: boolean; running: boolean }> {

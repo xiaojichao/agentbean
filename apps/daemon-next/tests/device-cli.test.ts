@@ -408,6 +408,52 @@ describe('agentbean device CLI', () => {
     expect(adapter.bootout).not.toHaveBeenCalled();
   });
 
+  test('restart waits for the old launchd process to exit before kickstart', async () => {
+    let statusCalls = 0;
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({
+        installed: true,
+        loaded: true,
+        running: statusCalls++ === 0,
+      })),
+    });
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => ({
+        schemaVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        state: runningState(request.command === 'shutdown' ? 'stopped' : 'draining'),
+      })),
+    };
+
+    await expect(runDeviceCli(['restart', '--deadline-ms', '1000'], {
+      platform: 'darwin',
+      createAdapter: () => adapter,
+      controlClient,
+      waitForReady: vi.fn(async () => runningState()),
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(adapter.status).toHaveBeenCalledTimes(3);
+    expect(adapter.start).toHaveBeenCalledTimes(1);
+  });
+
+  test('restart fails closed when the old launchd process misses the deadline', async () => {
+    const adapter = fakeAdapter();
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => ({
+        schemaVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        state: runningState(request.command === 'shutdown' ? 'stopped' : 'draining'),
+      })),
+    };
+
+    await expect(runDeviceCli(['restart', '--deadline-ms', '1'], {
+      platform: 'darwin', createAdapter: () => adapter, controlClient,
+    })).resolves.toBe(DEVICE_CLI_EXIT.drain);
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
   test('stop falls back to launchctl kill and returns exit 6 on drain timeout', async () => {
     const adapter = fakeAdapter();
     const controlClient: DeviceControlClient = {

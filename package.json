@@ -50,6 +50,7 @@
     "check:agentbean-next-railway-preflight": "node scripts/check-agentbean-next-railway-preflight.mjs",
     "audit:agentbean-next-cutover": "node scripts/audit-agentbean-next-cutover.mjs",
     "smoke:agentbean-next-daemon-install": "node scripts/smoke-agentbean-next-daemon-install.mjs",
+    "smoke:phase5a-device-service": "node scripts/smoke-phase5a-device-service.mjs",
     "smoke:agentbean-next-entry": "node scripts/smoke-agentbean-next-entry.mjs",
     "smoke:agentbean-next-business": "node scripts/smoke-agentbean-next-business.mjs",
     "smoke:agentbean-next-browser": "node scripts/smoke-agentbean-next-browser.mjs",
