@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { deviceServicePaths } from './device-service-paths.js';
@@ -107,31 +107,6 @@ export async function listRegisteredLegacyRuntimes(
   return runtimes;
 }
 
-export async function stopRegisteredLegacyRuntimes(
-  baseDir?: string,
-  options: {
-    timeoutMs?: number;
-    signal?: (pid: number) => void;
-    isProcessAlive?: (pid: number) => boolean;
-    now?: () => number;
-    wait?: (ms: number) => Promise<void>;
-  } = {},
-): Promise<void> {
-  const isProcessAlive = options.isProcessAlive ?? processIsAlive;
-  const runtimes = await listRegisteredLegacyRuntimes(baseDir, { isProcessAlive, ...(options.now ? { now: options.now } : {}) });
-  const uncertain = runtimes.filter((runtime) => runtime.alive && !runtime.fresh);
-  if (uncertain.length > 0) throw new Error('LEGACY_RUNTIME_REGISTRATION_STALE');
-  const active = runtimes.filter((runtime) => runtime.alive);
-  const signal = options.signal ?? ((pid: number) => process.kill(pid, 'SIGTERM'));
-  for (const runtime of active) signal(runtime.pid);
-  const deadlineAt = (options.now ?? Date.now)() + (options.timeoutMs ?? 30_000);
-  const wait = options.wait ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
-  while (active.some((runtime) => isProcessAlive(runtime.pid))) {
-    if ((options.now ?? Date.now)() >= deadlineAt) throw new Error('LEGACY_RUNTIME_STOP_TIMEOUT');
-    await wait(100);
-  }
-}
-
 export async function discoverUnregisteredLegacyRuntimePids(
   registeredPids: ReadonlySet<number>,
   options: { pid?: number; runPs?: () => Promise<string> } = {},
@@ -161,13 +136,31 @@ export async function discoverUnregisteredLegacyRuntimePids(
   return pids.sort((left, right) => left - right);
 }
 
+export async function discoverInstalledLegacyExecutables(
+  pathValue = process.env.PATH ?? '',
+): Promise<string[]> {
+  const found = new Set<string>();
+  for (const directory of pathValue.split(':').filter(Boolean)) {
+    for (const name of ['agentbean', 'agentbean-daemon', 'daemon']) {
+      try {
+        const resolved = await realpath(join(directory, name));
+        if (resolved.includes('/node_modules/@agentbean/daemon/')
+          && !resolved.includes('/node_modules/@agentbean/daemon-next/')) found.add(resolved);
+      } catch (error) {
+        if (!isNodeError(error, 'ENOENT') && !isNodeError(error, 'ENOTDIR')) throw error;
+      }
+    }
+  }
+  return [...found].sort();
+}
+
 function isLegacyDaemonCommand(command: string): boolean {
   if (/\s(?:device)(?:\s|$)/.test(command) || /\sservice\s+run(?:\s|$)/.test(command)) return false;
   const launchTokens = command.trim().split(/\s+/).slice(0, 2);
   const launchPath = launchTokens.join(' ');
   return launchTokens.some((token) => /(?:^|\/)(?:agentbean|agentbean-next-daemon)$/.test(token))
     || /(?:@agentbean\/daemon-next|apps\/daemon-next).*\/bin\.js(?:\s|$)/.test(launchPath)
-    || /@agentbean\/daemon(?:@|\s)/.test(command)
+    || /@agentbean\/daemon(?:@|\/|\s)/.test(command)
     || (launchTokens.some((token) => /(?:^|\/)daemon$/.test(token))
       && /\s--server-url\s/.test(command)
       && /\s--(?:profile-id|invite-code|all-profiles)(?:\s|$)/.test(command));

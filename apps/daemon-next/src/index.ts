@@ -93,10 +93,12 @@ export {
   cancelDeviceMigration,
   inspectDeviceMigration,
   planDeviceMigration,
+  readDeviceMigrationJournal,
   resumeDeviceMigration,
   startDeviceMigration,
 } from './device-migration.js';
 export type { DeviceMigrationJournal, DeviceMigrationPhase, DeviceMigrationStatus } from './device-migration.js';
+export { bindLegacyRuntimeFence } from './device-service-runtime.js';
 export { createDeviceServiceStateStore } from './device-service-state.js';
 export type {
   DeviceServicePhase,

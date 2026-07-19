@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -15,8 +15,8 @@ import { acquireDeviceServiceLock } from '../src/device-service-lock';
 import {
   listRegisteredLegacyRuntimes,
   discoverUnregisteredLegacyRuntimePids,
+  discoverInstalledLegacyExecutables,
   registerLegacyRuntime,
-  stopRegisteredLegacyRuntimes,
 } from '../src/legacy-runtime-registration';
 
 describe('Device Service migration', () => {
@@ -131,6 +131,16 @@ describe('Device Service migration', () => {
     expect(await readDeviceRuntimeOwner(baseDir)).toBe('legacy-daemon');
   });
 
+  test('rejects commit while a historical global npm executable can bypass the new shim', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-old-package-'));
+    await expect(startDeviceMigration({
+      baseDir,
+      listLegacy: async () => [],
+      listInstalledLegacyExecutables: async () => ['/opt/lib/node_modules/@agentbean/daemon/dist/bin.js'],
+    })).rejects.toThrow('LEGACY_EXECUTABLE_STILL_INSTALLED');
+    expect(await readDeviceRuntimeOwner(baseDir)).toBe('legacy-daemon');
+  });
+
   test('fences the Legacy compatibility entry after commit with a new CLI instruction', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-fence-'));
     await startDeviceMigration({ baseDir, stopLegacy: async () => undefined, listLegacy: async () => [] });
@@ -152,6 +162,60 @@ describe('Device Service migration', () => {
     const next = await acquireDeviceServiceLock(lockPath);
     await next.release();
   });
+
+  test('verifies a migration-only Service Host before commit and activates runners after commit', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-host-'));
+    let owner: 'legacy-daemon' | 'device-service' = 'legacy-daemon';
+    let migrationHealthy = false;
+    const lifecycle: string[] = [];
+    const result = await startDeviceMigration({
+      baseDir,
+      readOwner: async () => owner,
+      stopLegacy: async () => { lifecycle.push('stop-legacy'); },
+      listLegacy: async () => [],
+      isProcessAlive: () => false,
+      prepareMigrationService: async () => {
+        lifecycle.push('prepare-migration-host');
+        migrationHealthy = true;
+      },
+      verifyMigrationService: async () => migrationHealthy,
+      commitOwner: async () => {
+        lifecycle.push('commit-owner');
+        owner = 'device-service';
+      },
+      activateDeviceService: async () => { lifecycle.push('activate-runners'); },
+    });
+
+    expect(lifecycle).toEqual(['stop-legacy', 'prepare-migration-host', 'commit-owner', 'activate-runners']);
+    expect(result).toMatchObject({ owner: 'device-service', phase: 'committed' });
+  });
+
+  test('keeps a post-commit activation failure resumable without restoring Legacy', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-activation-'));
+    let owner: 'legacy-daemon' | 'device-service' = 'legacy-daemon';
+    await expect(startDeviceMigration({
+      baseDir,
+      readOwner: async () => owner,
+      stopLegacy: async () => undefined,
+      listLegacy: async () => [],
+      prepareMigrationService: async () => undefined,
+      verifyMigrationService: async () => true,
+      commitOwner: async () => { owner = 'device-service'; },
+      activateDeviceService: async () => { throw new Error('DEVICE_SERVICE_ACTIVATION_FAILED'); },
+    })).rejects.toThrow('DEVICE_SERVICE_ACTIVATION_FAILED');
+    expect(owner).toBe('device-service');
+    expect(await inspectDeviceMigration({
+      baseDir,
+      readOwner: async () => owner,
+      listLegacy: async () => [],
+    })).toMatchObject({ phase: 'committed', journal: { phase: 'ready-to-commit' } });
+    await expect(resumeDeviceMigration({
+      baseDir,
+      readOwner: async () => owner,
+      listLegacy: async () => [],
+      activateDeviceService: async () => undefined,
+    })).resolves.toMatchObject({ owner: 'device-service', phase: 'committed', journal: { phase: 'committed' } });
+  });
 });
 
 describe('Legacy runtime registration', () => {
@@ -171,25 +235,18 @@ describe('Legacy runtime registration', () => {
     expect(await listRegisteredLegacyRuntimes(baseDir)).toEqual([]);
   });
 
-  test('signals every fresh registered runtime and fails closed on stale live metadata', async () => {
+  test('reports fresh and stale live registrations without signaling either process', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-legacy-stop-'));
-    const first = await registerLegacyRuntime(baseDir, { pid: 101 });
-    const second = await registerLegacyRuntime(baseDir, { pid: 202 });
-    const alive = new Set([101, 202]);
-    const signals: number[] = [];
-    await stopRegisteredLegacyRuntimes(baseDir, {
-      isProcessAlive: (pid) => alive.has(pid),
-      signal: (pid) => { signals.push(pid); alive.delete(pid); },
-    });
-    expect(signals.sort()).toEqual([101, 202]);
-    await first.release();
-    await second.release();
-
+    const fresh = await registerLegacyRuntime(baseDir, { pid: 101 });
     const stale = await registerLegacyRuntime(baseDir, { pid: 303, now: () => 0 });
-    await expect(stopRegisteredLegacyRuntimes(baseDir, {
+    await expect(listRegisteredLegacyRuntimes(baseDir, {
       now: () => 20_000,
-      isProcessAlive: (pid) => pid === 303,
-    })).rejects.toThrow('LEGACY_RUNTIME_REGISTRATION_STALE');
+      isProcessAlive: (pid) => pid === 101 || pid === 303,
+    })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ pid: 101, alive: true }),
+      expect.objectContaining({ pid: 303, alive: true, fresh: false }),
+    ]));
+    await fresh.release();
     await stale.release();
   });
 
@@ -202,10 +259,29 @@ describe('Legacy runtime registration', () => {
       '  505 /opt/bin/claude --resume /Users/shaw/AgentBean/session.json --add-dir /Users/shaw/agentbean',
       '  606 npm exec @agentbean/daemon@latest --profile-id main --server-url https://api.agentbean.dev',
       '  707 node /Users/shaw/.npm/_npx/hash/node_modules/.bin/daemon --invite-code code --server-url https://api.agentbean.dev',
+      '  808 node /opt/lib/node_modules/@agentbean/daemon/dist/bin.js --profile-id main --server-url https://api.agentbean.dev',
     ].join('\n');
     await expect(discoverUnregisteredLegacyRuntimePids(new Set([202]), {
       pid: 999,
       runPs: async () => output,
-    })).resolves.toEqual([101, 606, 707]);
+    })).resolves.toEqual([101, 606, 707, 808]);
+  });
+
+  test('requires the historical global npm executable to be uninstalled before commit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-legacy-executable-'));
+    const bin = join(root, 'bin');
+    const historical = join(root, 'node_modules', '@agentbean', 'daemon', 'dist', 'bin.js');
+    const current = join(root, 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
+    await mkdir(bin, { recursive: true });
+    await mkdir(dirname(historical), { recursive: true });
+    await mkdir(dirname(current), { recursive: true });
+    await writeFile(historical, 'historical');
+    await writeFile(current, 'current');
+    await symlink(historical, join(bin, 'daemon'));
+    await symlink(current, join(bin, 'agentbean'));
+
+    const discovered = await discoverInstalledLegacyExecutables(bin);
+    expect(discovered).toHaveLength(1);
+    expect(discovered[0]).toMatch(/node_modules\/@agentbean\/daemon\/dist\/bin\.js$/);
   });
 });

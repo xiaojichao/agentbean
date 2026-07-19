@@ -6,8 +6,8 @@ import { acquireDeviceServiceLock, type DeviceServiceLock } from './device-servi
 import { commitDeviceRuntimeOwner, readDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 import {
   discoverUnregisteredLegacyRuntimePids,
+  discoverInstalledLegacyExecutables,
   listRegisteredLegacyRuntimes,
-  stopRegisteredLegacyRuntimes,
 } from './legacy-runtime-registration.js';
 
 export type DeviceMigrationPhase =
@@ -39,7 +39,9 @@ export interface DeviceMigrationStatus {
     readonly legacyRuntimeCount: number;
     readonly staleLiveRegistrationCount: number;
     readonly unregisteredLegacyRuntimeCount: number;
+    readonly installedLegacyExecutableCount: number;
     readonly deviceServiceRunning: boolean;
+    readonly migrationServiceHealthy: boolean;
     readonly dataPolicy: 'in-place';
   };
   readonly journal: DeviceMigrationJournal | null;
@@ -53,8 +55,13 @@ export interface DeviceMigrationDeps {
   readonly stopLegacy?: () => Promise<void>;
   readonly listLegacy?: () => Promise<Awaited<ReturnType<typeof listRegisteredLegacyRuntimes>>>;
   readonly listUnregisteredLegacyPids?: (registeredPids: ReadonlySet<number>) => Promise<number[]>;
+  readonly listInstalledLegacyExecutables?: () => Promise<string[]>;
   readonly isProcessAlive?: (pid: number) => boolean;
   readonly acquireTransitionLock?: () => Promise<DeviceServiceLock>;
+  readonly prepareMigrationService?: () => Promise<void>;
+  readonly verifyMigrationService?: () => Promise<boolean>;
+  readonly activateDeviceService?: () => Promise<void>;
+  readonly stopMigrationService?: () => Promise<void>;
 }
 
 export async function planDeviceMigration(deps: DeviceMigrationDeps = {}): Promise<DeviceMigrationStatus> {
@@ -72,9 +79,23 @@ export async function startDeviceMigration(deps: DeviceMigrationDeps = {}): Prom
 
 async function startDeviceMigrationWhileLocked(deps: DeviceMigrationDeps): Promise<DeviceMigrationStatus> {
   const owner = await readOwner(deps);
-  const existing = await readJournal(deps.baseDir);
+  const existing = await readDeviceMigrationJournal(deps.baseDir);
   if (owner === 'device-service') {
-    if (existing?.phase !== 'committed') await writeCommittedJournal(existing, deps);
+    if (existing?.phase !== 'committed') {
+      try {
+        await deps.activateDeviceService?.();
+        await writeCommittedJournal(existing, deps);
+      } catch (error) {
+        if (existing) await writeJournal({
+          ...existing,
+          phase: 'ready-to-commit',
+          checkpoint: 'ready-to-commit',
+          updatedAt: isoNow(deps),
+          reasonCode: stableReason(error),
+        }, deps.baseDir);
+        throw error;
+      }
+    }
     return inspectDeviceMigration(deps);
   }
   if (existing?.phase === 'committed') throw new Error('MIGRATION_OWNER_JOURNAL_MISMATCH');
@@ -92,14 +113,25 @@ async function startDeviceMigrationWhileLocked(deps: DeviceMigrationDeps): Promi
       };
   await writeJournal(initial, deps.baseDir);
   try {
-    await (deps.stopLegacy ?? (() => stopRegisteredLegacyRuntimes(deps.baseDir)))();
+    await (deps.stopLegacy ?? (async () => undefined))();
+    const preflight = await inspectHealth(deps);
+    if (preflight.legacyRuntimeCount > 0 || preflight.staleLiveRegistrationCount > 0
+      || preflight.unregisteredLegacyRuntimeCount > 0) {
+      throw new Error('LEGACY_RUNTIME_STILL_ACTIVE');
+    }
+    if (preflight.installedLegacyExecutableCount > 0) throw new Error('LEGACY_EXECUTABLE_STILL_INSTALLED');
+    if (preflight.deviceServiceRunning) throw new Error('DEVICE_SERVICE_ALREADY_ACTIVE');
     await writeJournal({ ...initial, phase: 'checking-health', checkpoint: 'checking-health', updatedAt: isoNow(deps) }, deps.baseDir);
+    await deps.prepareMigrationService?.();
     const health = await inspectHealth(deps);
     if (health.legacyRuntimeCount > 0 || health.staleLiveRegistrationCount > 0
       || health.unregisteredLegacyRuntimeCount > 0) {
       throw new Error('LEGACY_RUNTIME_STILL_ACTIVE');
     }
-    if (health.deviceServiceRunning) throw new Error('DEVICE_SERVICE_ALREADY_ACTIVE');
+    if (health.installedLegacyExecutableCount > 0) throw new Error('LEGACY_EXECUTABLE_STILL_INSTALLED');
+    if (deps.prepareMigrationService && !health.migrationServiceHealthy) {
+      throw new Error('MIGRATION_SERVICE_NOT_HEALTHY');
+    }
     const ready: DeviceMigrationJournal = {
       ...initial,
       phase: 'ready-to-commit',
@@ -108,14 +140,23 @@ async function startDeviceMigrationWhileLocked(deps: DeviceMigrationDeps): Promi
     };
     await writeJournal(ready, deps.baseDir);
     await (deps.commitOwner ?? (() => commitDeviceRuntimeOwner(deps.baseDir)))();
+    await deps.activateDeviceService?.();
     await writeCommittedJournal(ready, deps);
     return inspectDeviceMigration(deps);
   } catch (error) {
     if (await readOwner(deps) === 'device-service') {
-      await writeCommittedJournal(await readJournal(deps.baseDir), deps);
-      return inspectDeviceMigration(deps);
+      const current = await readDeviceMigrationJournal(deps.baseDir) ?? initial;
+      await writeJournal({
+        ...current,
+        phase: 'ready-to-commit',
+        checkpoint: 'ready-to-commit',
+        updatedAt: isoNow(deps),
+        reasonCode: stableReason(error),
+      }, deps.baseDir);
+      throw error;
     }
-    const current = await readJournal(deps.baseDir) ?? initial;
+    const current = await readDeviceMigrationJournal(deps.baseDir) ?? initial;
+    await deps.stopMigrationService?.().catch(() => undefined);
     await writeJournal({
       ...current,
       phase: 'failed',
@@ -127,7 +168,7 @@ async function startDeviceMigrationWhileLocked(deps: DeviceMigrationDeps): Promi
 }
 
 export async function resumeDeviceMigration(deps: DeviceMigrationDeps = {}): Promise<DeviceMigrationStatus> {
-  const journal = await readJournal(deps.baseDir);
+  const journal = await readDeviceMigrationJournal(deps.baseDir);
   const owner = await readOwner(deps);
   if (owner === 'device-service') return startDeviceMigration(deps);
   if (!journal || journal.phase === 'cancelled') throw new Error('MIGRATION_NOT_RESUMABLE');
@@ -138,8 +179,9 @@ export async function cancelDeviceMigration(deps: DeviceMigrationDeps = {}): Pro
   const lock = await acquireTransitionLock(deps);
   try {
     if (await readOwner(deps) === 'device-service') throw new Error('MIGRATION_ALREADY_COMMITTED');
-    const journal = await readJournal(deps.baseDir);
+    const journal = await readDeviceMigrationJournal(deps.baseDir);
     if (!journal) throw new Error('MIGRATION_NOT_STARTED');
+    await deps.stopMigrationService?.();
     await writeJournal({
       ...journal,
       phase: 'cancelled',
@@ -155,7 +197,7 @@ export async function cancelDeviceMigration(deps: DeviceMigrationDeps = {}): Pro
 export async function inspectDeviceMigration(deps: DeviceMigrationDeps = {}): Promise<DeviceMigrationStatus> {
   const [owner, journal, health] = await Promise.all([
     readOwner(deps),
-    readJournal(deps.baseDir),
+    readDeviceMigrationJournal(deps.baseDir),
     inspectHealth(deps),
   ]);
   const phase = owner === 'device-service' ? 'committed' : journal?.phase ?? 'idle';
@@ -164,9 +206,11 @@ export async function inspectDeviceMigration(deps: DeviceMigrationDeps = {}): Pr
     owner,
     phase,
     canStart: owner === 'legacy-daemon'
-      && !health.deviceServiceRunning
+      && (!health.deviceServiceRunning || health.migrationServiceHealthy)
+      && health.legacyRuntimeCount === 0
       && health.staleLiveRegistrationCount === 0
-      && health.unregisteredLegacyRuntimeCount === 0,
+      && health.unregisteredLegacyRuntimeCount === 0
+      && health.installedLegacyExecutableCount === 0,
     health,
     journal,
   };
@@ -179,11 +223,15 @@ async function inspectHealth(deps: DeviceMigrationDeps): Promise<DeviceMigration
     ?? (deps.listLegacy
       ? async () => []
       : (registeredPids) => discoverUnregisteredLegacyRuntimePids(registeredPids)))(liveRegisteredPids);
+  const installedExecutables = await (deps.listInstalledLegacyExecutables
+    ?? (deps.listLegacy ? async () => [] : discoverInstalledLegacyExecutables))();
   return {
     legacyRuntimeCount: runtimes.filter((runtime) => runtime.alive && runtime.fresh).length,
     staleLiveRegistrationCount: runtimes.filter((runtime) => runtime.alive && !runtime.fresh).length,
     unregisteredLegacyRuntimeCount: unregisteredPids.length,
+    installedLegacyExecutableCount: installedExecutables.length,
     deviceServiceRunning: await isDeviceServiceRunning(deps),
+    migrationServiceHealthy: await (deps.verifyMigrationService?.() ?? Promise.resolve(false)),
     dataPolicy: 'in-place',
   };
 }
@@ -201,7 +249,7 @@ async function isDeviceServiceRunning(deps: DeviceMigrationDeps): Promise<boolea
   }
 }
 
-async function readJournal(baseDir?: string): Promise<DeviceMigrationJournal | null> {
+export async function readDeviceMigrationJournal(baseDir?: string): Promise<DeviceMigrationJournal | null> {
   try {
     const parsed = JSON.parse(await readFile(deviceServicePaths(baseDir).migrationJournalFile, 'utf8')) as Partial<DeviceMigrationJournal>;
     if (parsed.schemaVersion !== 1 || typeof parsed.migrationId !== 'string' || parsed.dataPolicy !== 'in-place'
