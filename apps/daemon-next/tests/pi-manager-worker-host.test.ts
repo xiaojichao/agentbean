@@ -184,7 +184,7 @@ describe('PiManagerWorkerHost', () => {
     expect(host.activeLeaseCount()).toBe(0);
   });
 
-  test('stop cancels a drain loop that is waiting on a durable outbox', async () => {
+  test('beginDrain preserves an orphaned durable outbox for the next reacquire without timing out stop', async () => {
     const { protocol } = createProtocolHarness();
     const host = createPiManagerWorkerHost({
       profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
@@ -193,6 +193,27 @@ describe('PiManagerWorkerHost', () => {
       outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 1) },
     });
     await host.start();
+    await expect(host.beginDrain(60_000)).resolves.toBeUndefined();
+    expect(host.outboxPendingCount()).toBe(1);
+    await host.stop();
+  });
+
+  test('stop cancels a drain loop waiting for an accepted offer ACK', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    vi.mocked(protocol.acquireLease).mockImplementation(() => new Promise(() => undefined));
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => ({ createSession: vi.fn() }),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    void handlers()!.onLeaseOffer(offer);
     const draining = host.beginDrain(60_000);
     await host.stop();
     await expect(draining).resolves.toBeUndefined();

@@ -189,7 +189,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     async beginDrain(deadlineMs) {
       acceptingOffers = false;
       const deadlineAt = Date.now() + deadlineMs;
-      while (!drainCancelled && (pendingOfferIds.size > 0 || activeLeases.size > 0 || input.outbox.size() > 0)) {
+      // Entries left after their lease ends are durable but cannot be replayed without
+      // fresh authority. Preserve them for the next legal reacquire instead of turning
+      // every normal service stop into a drain timeout.
+      while (!drainCancelled && (pendingOfferIds.size > 0 || activeLeases.size > 0)) {
         if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
         await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
       }
