@@ -42,4 +42,13 @@ describe('PI Management settings scope', () => {
     expect(panelSource).toContain('custom_openai_compatible');
   });
 
+  test('successful save and copy refresh the list without resetting editor state or success feedback', () => {
+    expect(panelSource).toContain('preserveEditor?: boolean');
+    expect(panelSource).toContain('preserveMessage?: boolean');
+    expect(panelSource.match(/load\(\{ preserveEditor: true, preserveMessage: true \}\)/g)).toHaveLength(2);
+    expect(panelSource.indexOf('startEdit(result.card)')).toBeLessThan(
+      panelSource.indexOf("setMessage({ ok: true, text: '已复制为新 Draft' })"),
+    );
+  });
+
 });

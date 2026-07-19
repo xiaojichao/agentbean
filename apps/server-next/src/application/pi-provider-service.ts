@@ -72,7 +72,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
   async function toCardDto(
     cardId: string,
-    repositories: PiProviderRepositories = deps.repositories,
+    repositories: PiProviderRepositories,
   ): Promise<PiProviderCardDto | null> {
     const card = await repositories.cards.getById(cardId);
     if (!card) return null;
@@ -167,12 +167,15 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
       const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
-      const cards = await deps.repositories.cards.list();
-      const dtos: PiProviderCardDto[] = [];
-      for (const card of cards) {
-        const dto = await toCardDto(card.id);
-        if (dto) dtos.push(dto);
-      }
+      const dtos = await deps.unitOfWork.run(async (repositories) => {
+        const cards = await repositories.cards.list();
+        const result: PiProviderCardDto[] = [];
+        for (const card of cards) {
+          const dto = await toCardDto(card.id, repositories);
+          if (dto) result.push(dto);
+        }
+        return result;
+      });
       const result = makeSuccess({ cards: dtos });
       assertSafeAckPayload(result);
       return result;
@@ -183,7 +186,8 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
       const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
-      const card = await toCardDto(parsed.value.cardId);
+      const card = await deps.unitOfWork.run((repositories) =>
+        toCardDto(parsed.value.cardId, repositories));
       if (!card) return makeFailure('NOT_FOUND', 'Provider card not found');
       const result = makeSuccess({ card });
       assertSafeAckPayload(result);
@@ -205,8 +209,9 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const revisionId = deps.ids.nextId();
       const encrypted = encryptPiProviderApiKey(parsed.value.apiKey, key.key);
 
+      let card: PiProviderCardDto | null;
       try {
-        await deps.unitOfWork.run(async (repositories) => {
+        card = await deps.unitOfWork.run(async (repositories) => {
           await repositories.credentials.create({
             id: credentialId,
             keyVersion: encrypted.keyVersion,
@@ -236,12 +241,12 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
             createdBy: parsed.value.userId,
             createdAt: now,
           });
+          return toCardDto(cardId, repositories);
         });
       } catch {
         return makeFailure('INTERNAL_ERROR', 'Failed to create provider card');
       }
 
-      const card = await toCardDto(cardId);
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load created card');
       const result = makeSuccess({ card });
       assertSafeAckPayload(result);
@@ -254,9 +259,6 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
 
-      const existing = await deps.repositories.cards.getById(parsed.value.cardId);
-      if (!existing) return makeFailure('NOT_FOUND', 'Provider card not found');
-
       let encrypted: ReturnType<typeof encryptPiProviderApiKey> | null = null;
       if (parsed.value.apiKey) {
         const key = requireEncryptionKey();
@@ -267,8 +269,13 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const now = deps.clock.now();
       const revisionId = deps.ids.nextId();
 
+      let outcome:
+        | { readonly kind: 'not_found' }
+        | { readonly kind: 'ok'; readonly card: PiProviderCardDto | null };
       try {
-        await deps.unitOfWork.run(async (repositories) => {
+        outcome = await deps.unitOfWork.run(async (repositories) => {
+          const existing = await repositories.cards.getById(parsed.value.cardId);
+          if (!existing) return { kind: 'not_found' } as const;
           if (encrypted) {
             const credential = await repositories.credentials.getById(existing.credentialRef);
             if (!credential) throw new Error('Credential reference missing');
@@ -301,12 +308,17 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
             draftRevisionId: revisionId,
             updatedAt: now,
           });
+          return {
+            kind: 'ok',
+            card: await toCardDto(existing.id, repositories),
+          } as const;
         });
       } catch {
         return makeFailure('INTERNAL_ERROR', 'Failed to update provider card');
       }
 
-      const card = await toCardDto(existing.id);
+      if (outcome.kind === 'not_found') return makeFailure('NOT_FOUND', 'Provider card not found');
+      const card = outcome.card;
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load updated card');
       const result = makeSuccess({ card });
       assertSafeAckPayload(result);
@@ -319,31 +331,27 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
 
-      const source = await deps.repositories.cards.getById(parsed.value.sourceCardId);
-      if (!source) return makeFailure('NOT_FOUND', 'Source provider card not found');
-
-      const sourceRevisionId = source.draftRevisionId ?? source.publishedRevisionId;
-      if (!sourceRevisionId) {
-        return makeFailure('VALIDATION_ERROR', 'Source card has no configuration revision');
-      }
-      const sourceRevision = await deps.repositories.revisions.getById(sourceRevisionId);
-      if (!sourceRevision) {
-        return makeFailure('INTERNAL_ERROR', 'Source revision missing');
-      }
-      const sourceCredential = await deps.repositories.credentials.getById(source.credentialRef);
-      if (!sourceCredential) {
-        return makeFailure('INTERNAL_ERROR', 'Source credential missing');
-      }
-
-      const displayName = parsed.value.displayName ?? `${sourceRevision.displayName} (copy)`;
-
       const now = deps.clock.now();
       const cardId = deps.ids.nextId();
       const credentialId = deps.ids.nextId();
       const revisionId = deps.ids.nextId();
 
+      let outcome:
+        | { readonly kind: 'not_found' }
+        | { readonly kind: 'no_revision' }
+        | { readonly kind: 'missing_source_data' }
+        | { readonly kind: 'ok'; readonly card: PiProviderCardDto | null };
       try {
-        await deps.unitOfWork.run(async (repositories) => {
+        outcome = await deps.unitOfWork.run(async (repositories) => {
+          const source = await repositories.cards.getById(parsed.value.sourceCardId);
+          if (!source) return { kind: 'not_found' } as const;
+          const sourceRevisionId = source.draftRevisionId ?? source.publishedRevisionId;
+          if (!sourceRevisionId) return { kind: 'no_revision' } as const;
+          const sourceRevision = await repositories.revisions.getById(sourceRevisionId);
+          const sourceCredential = await repositories.credentials.getById(source.credentialRef);
+          if (!sourceRevision || !sourceCredential) return { kind: 'missing_source_data' } as const;
+          const displayName = parsed.value.displayName ?? `${sourceRevision.displayName} (copy)`;
+
           await repositories.credentials.create({
             id: credentialId,
             keyVersion: sourceCredential.keyVersion,
@@ -373,12 +381,23 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
             createdBy: parsed.value.userId,
             createdAt: now,
           });
+          return {
+            kind: 'ok',
+            card: await toCardDto(cardId, repositories),
+          } as const;
         });
       } catch {
         return makeFailure('INTERNAL_ERROR', 'Failed to copy provider card');
       }
 
-      const card = await toCardDto(cardId);
+      if (outcome.kind === 'not_found') return makeFailure('NOT_FOUND', 'Source provider card not found');
+      if (outcome.kind === 'no_revision') {
+        return makeFailure('VALIDATION_ERROR', 'Source card has no configuration revision');
+      }
+      if (outcome.kind === 'missing_source_data') {
+        return makeFailure('INTERNAL_ERROR', 'Source revision or credential missing');
+      }
+      const card = outcome.card;
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load copied card');
       const result = makeSuccess({ card });
       assertSafeAckPayload(result);
@@ -387,13 +406,13 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
     /** 测试辅助：将当前 draft 快照为 published（#703 拥有真实发布）。 */
     async __testMarkDraftPublished(input: { cardId: string }): Promise<void> {
-      const card = await deps.repositories.cards.getById(input.cardId);
-      if (!card?.draftRevisionId) return;
-      const draft = await deps.repositories.revisions.getById(card.draftRevisionId);
-      if (!draft) return;
-      const publishedId = deps.ids.nextId();
-      const now = deps.clock.now();
       await deps.unitOfWork.run(async (repositories) => {
+        const card = await repositories.cards.getById(input.cardId);
+        if (!card?.draftRevisionId) return;
+        const draft = await repositories.revisions.getById(card.draftRevisionId);
+        if (!draft) return;
+        const publishedId = deps.ids.nextId();
+        const now = deps.clock.now();
         await repositories.revisions.create({
           id: publishedId,
           cardId: card.id,

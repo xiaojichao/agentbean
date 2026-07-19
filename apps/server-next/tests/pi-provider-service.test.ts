@@ -500,6 +500,140 @@ describe('pi provider service', () => {
     });
   });
 
+  test('management reads wait for an in-flight rollback and return the committed snapshot', async () => {
+    const persistence = createInMemoryPiProviderPersistence();
+    const repos = createInMemoryRepositories();
+    await seedUsers(repos);
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users: repos.users,
+      clock: { now: () => 1 + seq },
+      ids: { nextId: () => `read-isolation-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const created = await service.createCard(validCreate({
+      displayName: 'Committed card',
+      apiKey: 'sk-committed',
+    }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const failedWriteVisible = createDeferred();
+    const releaseFailedWrite = createDeferred();
+    const originalUpdate = persistence.repositories.cards.update.bind(persistence.repositories.cards);
+    persistence.repositories.cards.update = async (input) => {
+      const result = await originalUpdate(input);
+      failedWriteVisible.resolve();
+      await releaseFailedWrite.promise;
+      throw new Error('rollback-after-card-update');
+    };
+
+    const failedUpdate = service.updateCard({
+      userId: 'admin-1',
+      cardId: created.card.id,
+      displayName: 'Uncommitted card',
+      baseUrl: 'https://api.openai.com/v1',
+      endpointMode: 'chat_completions',
+      modelId: 'uncommitted-model',
+      timeoutMs: 60_000,
+      maxOutputTokens: 4096,
+      apiKey: 'sk-uncommitted',
+    });
+    await failedWriteVisible.promise;
+
+    let readsSettled = false;
+    const reads = Promise.all([
+      service.listCards({ userId: 'admin-1' }),
+      service.getCard({ userId: 'admin-1', cardId: created.card.id }),
+    ]).then((result) => {
+      readsSettled = true;
+      return result;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(readsSettled).toBe(false);
+
+    releaseFailedWrite.resolve();
+    const [updateResult, [listed, fetched]] = await Promise.all([failedUpdate, reads]);
+    expect(updateResult).toMatchObject({ ok: false, error: 'INTERNAL_ERROR' });
+    expect(listed).toMatchObject({ ok: true, cards: [{ displayName: 'Committed card' }] });
+    expect(fetched).toMatchObject({ ok: true, card: { displayName: 'Committed card' } });
+  });
+
+  test('copy waits for a concurrent update and copies one committed revision and credential snapshot', async () => {
+    const persistence = createInMemoryPiProviderPersistence();
+    const repos = createInMemoryRepositories();
+    await seedUsers(repos);
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users: repos.users,
+      clock: { now: () => 1 + seq },
+      ids: { nextId: () => `copy-isolation-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const created = await service.createCard(validCreate({
+      displayName: 'Old revision',
+      modelId: 'old-model',
+      apiKey: 'sk-old-snapshot',
+    }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const credentialRotated = createDeferred();
+    const releaseUpdate = createDeferred();
+    const originalRevisionCreate = persistence.repositories.revisions.create.bind(
+      persistence.repositories.revisions,
+    );
+    let revisionWrites = 0;
+    persistence.repositories.revisions.create = async (input) => {
+      revisionWrites += 1;
+      if (revisionWrites === 1) {
+        credentialRotated.resolve();
+        await releaseUpdate.promise;
+      }
+      return originalRevisionCreate(input);
+    };
+
+    const update = service.updateCard({
+      userId: 'admin-1',
+      cardId: created.card.id,
+      displayName: 'New revision',
+      baseUrl: 'https://api.openai.com/v1',
+      endpointMode: 'chat_completions',
+      modelId: 'new-model',
+      timeoutMs: 60_000,
+      maxOutputTokens: 4096,
+      apiKey: 'sk-new-snapshot',
+    });
+    await credentialRotated.promise;
+    const copy = service.copyCard({ userId: 'admin-1', sourceCardId: created.card.id });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseUpdate.resolve();
+
+    const [updated, copied] = await Promise.all([update, copy]);
+    expect(updated).toMatchObject({ ok: true, card: { displayName: 'New revision' } });
+    expect(copied).toMatchObject({
+      ok: true,
+      card: {
+        displayName: 'New revision (copy)',
+        draftRevision: { config: { modelId: 'new-model' } },
+      },
+    });
+    if (!copied.ok) return;
+    const copiedCredential = await persistence.repositories.credentials.getById(
+      copied.card.credential.credentialRef,
+    );
+    expect(decryptPiProviderApiKey(
+      parseEncryptedSecret(copiedCredential!.encryptedPayload)!,
+      secretKey(),
+    )).toBe('sk-new-snapshot');
+  });
+
   test('sqlite unit of work serializes concurrent creates on one connection', async () => {
     const db = new Database(':memory:');
     applyGlobalMigrations(db);

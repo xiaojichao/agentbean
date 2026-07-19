@@ -121,10 +121,13 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [form, setForm] = useState<CardFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options: {
+    preserveEditor?: boolean;
+    preserveMessage?: boolean;
+  } = {}) => {
     if (!isSystemAdmin) return;
     setLoading(true);
-    setMessage(null);
+    if (!options.preserveMessage) setMessage(null);
     const [presetResult, cardResult] = await Promise.all([
       piProviderEvents().listPresets(),
       piProviderEvents().listCards(),
@@ -140,7 +143,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     }
     setPresets(presetResult.presets ?? []);
     setCards(cardResult.cards ?? []);
-    if ((presetResult.presets?.length ?? 0) > 0 && !editingCardId) {
+    if (!options.preserveEditor && (presetResult.presets?.length ?? 0) > 0 && !editingCardId) {
       const first = presetResult.presets![0]!;
       setSelectedPreset(first.preset);
       setForm(formFromPreset(first));
@@ -239,7 +242,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     setMessage({ ok: true, text: editingCardId ? 'Draft 已更新' : 'Draft 已创建' });
     setEditingCardId(result.card.id);
     setForm(formFromCard(result.card));
-    await load();
+    await load({ preserveEditor: true, preserveMessage: true });
   };
 
   const copyCard = async (cardId: string) => {
@@ -251,9 +254,9 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       setMessage({ ok: false, text: result.message ?? result.error ?? '复制失败' });
       return;
     }
-    setMessage({ ok: true, text: '已复制为新 Draft' });
     startEdit(result.card);
-    await load();
+    setMessage({ ok: true, text: '已复制为新 Draft' });
+    await load({ preserveEditor: true, preserveMessage: true });
   };
 
   return (
