@@ -85,6 +85,8 @@ export { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from './de
 export type { DeviceServiceLock } from './device-service-lock.js';
 export { deviceServicePaths } from './device-service-paths.js';
 export type { DeviceServicePaths } from './device-service-paths.js';
+export { assertDeviceRuntimeOwner, readDeviceRuntimeOwner } from './device-runtime-owner.js';
+export type { DeviceRuntimeOwner } from './device-runtime-owner.js';
 export { createDeviceServiceStateStore } from './device-service-state.js';
 export type {
   DeviceServicePhase,
@@ -262,6 +264,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let acceptingDispatches = false;
+  let drainCancelled = false;
   let activeDispatchCount = 0;
   let dispatchOutbox: DispatchOutbox | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
@@ -325,6 +328,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
       dispatchOutbox = outbox;
       acceptingDispatches = true;
+      drainCancelled = false;
       const knownRecoveryCwds = new Set<string>();
       const rememberRecoveryCwds = (cwds: Array<string | undefined>) => {
         for (const cwd of cwds) {
@@ -628,7 +632,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       acceptingDispatches = false;
       rescan?.stop();
       const deadlineAt = Date.now() + deadlineMs;
-      while (activeDispatchCount > 0 || (dispatchOutbox?.pendingCount() ?? 0) > 0 || localMemoryObservationTails.size > 0) {
+      while (!drainCancelled && (activeDispatchCount > 0
+        || (dispatchOutbox?.pendingCount() ?? 0) > 0
+        || localMemoryObservationTails.size > 0)) {
         await dispatchOutbox?.flush();
         if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
         await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
@@ -643,6 +649,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
     stop: () => {
       acceptingDispatches = false;
+      drainCancelled = true;
       rescan?.stop();
     },
   };

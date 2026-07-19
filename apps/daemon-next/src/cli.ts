@@ -19,6 +19,7 @@ import { createManagementDurableOutbox } from './management-durable-outbox.js';
 import { createManagementModelAdapter } from './management-model-adapter.js';
 import { createManagementWorkerProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 import { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
+import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 
 let globalErrorGuardsInstalled = false;
 function installGlobalErrorGuards(): void {
@@ -106,6 +107,8 @@ export interface DaemonNextCliDeps {
   startDeviceServiceCore?: (input: { core: DeviceServiceCore; profileId: string }) => Promise<void>;
   /** 进程退出钩子（测试可注入）；默认 process.exit。用于 daemon 被告知设备删除后退出。 */
   exit?: (code: number) => void;
+  runtimeOwner?: DeviceRuntimeOwner;
+  assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
 }
 
 /**
@@ -420,6 +423,8 @@ export async function runDaemonNextCli(
     console.log(`Renamed AgentBean profile "${config.renameProfileFrom}" to "${result.profileId}".`);
     return;
   }
+
+  await (deps.assertRuntimeOwner ?? assertDeviceRuntimeOwner)(deps.runtimeOwner ?? 'legacy-daemon');
 
   // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
   // socket itself, it just fans out one runDaemonNextCli recursion per saved

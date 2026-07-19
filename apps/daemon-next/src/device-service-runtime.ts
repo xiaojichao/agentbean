@@ -15,6 +15,7 @@ import {
 } from './device-service-host.js';
 import { createDeviceServiceProfileRunner } from './device-service-profile-runner.js';
 import { readDaemonVersion } from './system-info.js';
+import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 
 export interface RunDeviceServiceInput {
   readonly baseDir?: string;
@@ -24,24 +25,32 @@ export interface RunDeviceServiceInput {
   readonly createHost?: (input: CreateDeviceServiceHostInput) => DeviceServiceHost;
   readonly bindSignals?: typeof bindDeviceServiceSignals;
   readonly readVersion?: () => string;
+  readonly assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
 }
 
 export async function runDeviceService(input: RunDeviceServiceInput = {}): Promise<void> {
+  const assertRuntimeOwner = input.assertRuntimeOwner
+    ?? ((owner: DeviceRuntimeOwner) => assertDeviceRuntimeOwner(owner, input.baseDir));
+  await assertRuntimeOwner('device-service');
   const profiles = (input.listProfiles ?? (() => listAuthProfiles({
     ...(input.baseDir ? { baseDir: input.baseDir } : {}),
   })))();
   if (profiles.length === 0) throw new Error('SERVICE_NO_PROFILES');
   const baseConfig = parseDaemonNextCliConfig({ argv: [] });
   const configs = expandAllProfiles({ ...baseConfig, allProfiles: false }, profiles);
+  let host: DeviceServiceHost | undefined;
   const runners = await Promise.all(configs.map(async (config): Promise<DeviceServiceProfileRunner> => {
     let core: DeviceServiceCore | undefined;
     let profileRemoved = false;
     try {
       await (input.runDaemon ?? runDaemonNextCli)(config, {
         ...input.daemonDeps,
+        runtimeOwner: 'device-service',
+        assertRuntimeOwner,
         exit: () => {
           profileRemoved = true;
           void Promise.resolve(core?.stop?.()).catch(() => undefined);
+          void host?.refreshStatus().catch(() => undefined);
         },
         startDeviceServiceCore: async (created) => {
           core = created.core;
@@ -70,7 +79,7 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
       readPhase: () => profileRemoved ? 'failed' : undefined,
     });
   }));
-  const host = (input.createHost ?? createDeviceServiceHost)({
+  host = (input.createHost ?? createDeviceServiceHost)({
     runners,
     version: (input.readVersion ?? readDaemonVersion)(),
     ...(input.baseDir ? { baseDir: input.baseDir } : {}),

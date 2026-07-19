@@ -125,6 +125,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
   let currentWorkerId: string | undefined;
   let started = false;
   let acceptingOffers = false;
+  let drainCancelled = false;
 
   const toolExecutor: ManagementToolExecutor = (call) => executeManagementTool(call);
 
@@ -170,6 +171,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       const capability = managementCredentialCapability(credential);
       started = true;
       acceptingOffers = true;
+      drainCancelled = false;
       try {
         const registered = await input.protocol.start({
           ...capability,
@@ -186,9 +188,8 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     },
     async beginDrain(deadlineMs) {
       acceptingOffers = false;
-      pendingOfferIds.clear();
       const deadlineAt = Date.now() + deadlineMs;
-      while (activeLeases.size > 0 || input.outbox.size() > 0) {
+      while (!drainCancelled && (pendingOfferIds.size > 0 || activeLeases.size > 0 || input.outbox.size() > 0)) {
         if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
         await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
       }
@@ -197,6 +198,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       if (!started) return;
       started = false;
       acceptingOffers = false;
+      drainCancelled = true;
       await Promise.all([...activeLeases.values()].map((lease) => abortLease(lease, 'worker-stopped')));
       await input.protocol.stop();
       currentWorkerId = undefined;
@@ -220,6 +222,18 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       return;
     }
     if (!acquired.ok || acquired.managementRunId !== offer.managementRunId || acquired.workerId !== currentWorkerId) return;
+    if (!started || !acceptingOffers) {
+      await input.protocol.abortLease({
+        schemaVersion: 1,
+        managementRunId: acquired.managementRunId,
+        workerId: acquired.workerId,
+        leaseToken: acquired.leaseToken,
+        fencingToken: acquired.fencingToken,
+        idempotencyKey: `abort:${acquired.managementRunId}:${acquired.fencingToken}:worker-draining`,
+        reasonCode: 'worker-draining',
+      }).catch(() => undefined);
+      return;
+    }
     const lease: ActiveLease = {
       managementRunId: acquired.managementRunId,
       workerId: acquired.workerId,

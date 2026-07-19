@@ -37,6 +37,7 @@ export interface DeviceServiceHost {
   start(): Promise<void>;
   beginDrain(deadlineMs: number): Promise<DeviceServiceDrainResult>;
   stop(deadlineMs?: number): Promise<DeviceServiceDrainResult>;
+  refreshStatus(): Promise<void>;
 }
 
 export interface DeviceServiceDrainResult {
@@ -159,6 +160,18 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       })();
       return stopPromise;
     },
+    async refreshStatus() {
+      if (state.phase !== 'running' && state.phase !== 'degraded' && state.phase !== 'failed') return;
+      const snapshots = input.runners.map((runner) => runner.snapshot());
+      const failed = snapshots.filter((snapshot) => snapshot.phase === 'failed').length;
+      if (failed === 0) {
+        await persist('running', 'SERVICE_READY');
+      } else if (failed === snapshots.length && snapshots.length > 0) {
+        await persist('failed', 'PROFILE_RUNTIME_FAILED');
+      } else {
+        await persist('degraded', 'PROFILE_RUNTIME_FAILED');
+      }
+    },
   };
 
   async function startHost(): Promise<void> {
@@ -173,7 +186,8 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       results.forEach((result, index) => {
         if (result.status === 'rejected') failedProfileIndexes.add(index);
       });
-      const failed = results.filter((result) => result.status === 'rejected').length;
+      const failed = input.runners.filter((runner, index) => failedProfileIndexes.has(index)
+        || runner.snapshot().phase === 'failed').length;
       if (forcedStop) throw new ServiceDrainTimeoutError();
       if (failed === input.runners.length && input.runners.length > 0) {
         await persist('failed', 'PROFILE_START_FAILED');
@@ -277,6 +291,7 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
 
   async function handleControlRequest(request: DeviceControlRequest): Promise<DeviceControlResponse> {
     if (request.command === 'status') {
+      await host.refreshStatus();
       state = buildState(state.phase, state.reasonCode);
       return { schemaVersion: 1, requestId: request.requestId, ok: true, state };
     }

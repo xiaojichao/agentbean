@@ -49,6 +49,7 @@ function createRunDaemonHarness(overrides: Partial<DaemonNextCliDeps> = {}) {
     readPiManagementRuntimeVersion: vi.fn(() => '0.1.0-test'),
     createManagementWorkerHost: vi.fn(async () => ({ start: vi.fn(async () => undefined) })),
     createEnvResolver: vi.fn(() => vi.fn(async () => ({}))),
+    assertRuntimeOwner: vi.fn(async () => undefined),
     ...overrides,
   };
   return { deps, protocolInputs, runtimeSocket, start };

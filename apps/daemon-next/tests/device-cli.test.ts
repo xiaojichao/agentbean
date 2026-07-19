@@ -1,11 +1,13 @@
 import { describe, expect, test, vi } from 'vitest';
-import { mkdtemp, readdir, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEVICE_CLI_EXIT, runDeviceCli } from '../src/device-cli';
 import type { DeviceControlClient } from '../src/device-control-client';
 import type { DeviceServiceState } from '../src/device-service-state';
 import { runDeviceService } from '../src/device-service-runtime';
+import { assertDeviceRuntimeOwner, readDeviceRuntimeOwner } from '../src/device-runtime-owner';
+import { deviceServicePaths } from '../src/device-service-paths';
 import type { CreateDeviceServiceHostInput } from '../src/device-service-host';
 import {
   createMacOSLaunchAgentAdapter,
@@ -240,6 +242,18 @@ describe('agentbean device CLI', () => {
 });
 
 describe('Device Service production wiring', () => {
+  test('runtime owner fence defaults to legacy and blocks the opposite runtime', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-runtime-owner-'));
+    await expect(readDeviceRuntimeOwner(baseDir)).resolves.toBe('legacy-daemon');
+    await expect(assertDeviceRuntimeOwner('device-service', baseDir)).rejects.toThrow('SERVICE_MIGRATION_REQUIRED');
+
+    const ownerFile = deviceServicePaths(baseDir).runtimeOwnerFile;
+    await mkdir(join(baseDir, 'service'), { recursive: true });
+    await writeFile(ownerFile, '{"owner":"device-service"}\n', { mode: 0o600 });
+    await expect(assertDeviceRuntimeOwner('device-service', baseDir)).resolves.toBeUndefined();
+    await expect(assertDeviceRuntimeOwner('legacy-daemon', baseDir)).rejects.toThrow('DEVICE_SERVICE_OWNS_RUNTIME');
+  });
+
   test('wraps each saved profile core in the Service Host runner boundary', async () => {
     const core = {
       started: false,
@@ -252,6 +266,8 @@ describe('Device Service production wiring', () => {
     let hostInput: CreateDeviceServiceHostInput | undefined;
     let profileExit: ((code: number) => void) | undefined;
     const hostStart = vi.fn(async () => undefined);
+    const refreshStatus = vi.fn(async () => undefined);
+    const assertRuntimeOwner = vi.fn(async () => undefined);
     const bindSignals = vi.fn(() => () => undefined);
 
     await runDeviceService({
@@ -273,13 +289,16 @@ describe('Device Service production wiring', () => {
           start: hostStart,
           beginDrain: vi.fn(async () => ({ ok: true, reasonCode: 'SERVICE_READY' })),
           stop: vi.fn(async () => ({ ok: true, reasonCode: 'SERVICE_READY' })),
+          refreshStatus,
         };
       },
       bindSignals,
       readVersion: () => '0.3.11',
+      assertRuntimeOwner,
     });
 
     expect(hostStart).toHaveBeenCalledTimes(1);
+    expect(assertRuntimeOwner).toHaveBeenCalledWith('device-service');
     expect(bindSignals).toHaveBeenCalledTimes(1);
     expect(hostInput?.runners).toHaveLength(1);
     const runner = hostInput?.runners[0];
@@ -291,6 +310,7 @@ describe('Device Service production wiring', () => {
     expect(runner?.snapshot()).toMatchObject({ activeWorkCount: 2, outboxPendingCount: 3 });
     profileExit?.(0);
     await vi.waitFor(() => expect(core.stop).toHaveBeenCalledTimes(1));
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
     expect(runner?.snapshot().phase).toBe('failed');
   });
 });
