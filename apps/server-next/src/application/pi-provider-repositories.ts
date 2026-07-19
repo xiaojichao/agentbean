@@ -2,6 +2,7 @@ import type {
   PiProviderConfigDto,
   PiProviderPreset,
   PiProviderRevisionStatus,
+  PiProviderTestStatus,
 } from '../../../../packages/contracts/src/index.js';
 
 export interface PiProviderCredentialRecord {
@@ -32,9 +33,30 @@ export interface PiProviderCardRecord {
   readonly credentialRef: string;
   readonly draftRevisionId: string | null;
   readonly publishedRevisionId: string | null;
+  readonly modelCandidates: readonly string[];
+  readonly modelCandidatesUpdatedAt: number | null;
   readonly createdBy: string;
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+export interface PiProviderRevisionTestRecord {
+  readonly id: string;
+  readonly cardId: string;
+  readonly draftRevisionId: string;
+  readonly configSummary: string;
+  readonly status: PiProviderTestStatus;
+  readonly textOk: boolean;
+  readonly toolCallOk: boolean;
+  readonly responseModel: string | null;
+  readonly finishReasonText: string | null;
+  readonly finishReasonTool: string | null;
+  readonly usageInputTokens: number | null;
+  readonly usageOutputTokens: number | null;
+  readonly durationMs: number;
+  readonly diagnosticCode: string | null;
+  readonly testedBy: string;
+  readonly testedAt: number;
 }
 
 export interface PiProviderRepositories {
@@ -53,6 +75,14 @@ export interface PiProviderRepositories {
     getById(id: string): Promise<PiProviderCardRecord | null>;
     list(): Promise<PiProviderCardRecord[]>;
     update(input: PiProviderCardRecord): Promise<PiProviderCardRecord>;
+  };
+  readonly tests: {
+    create(input: PiProviderRevisionTestRecord): Promise<PiProviderRevisionTestRecord>;
+    getLatestByCard(cardId: string): Promise<PiProviderRevisionTestRecord | null>;
+    getLatestPassingForSummary(
+      cardId: string,
+      configSummary: string,
+    ): Promise<PiProviderRevisionTestRecord | null>;
   };
 }
 

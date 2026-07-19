@@ -64,25 +64,6 @@ export interface PiProviderCardRevisionDto {
   readonly createdAt: UnixMs;
 }
 
-/**
- * 系统管理员可见的 PI Provider Card。
- * displayName/notes/consoleUrl 是当前工作 revision（draft 优先，否则 published）的投影，
- * 不是可原地改写的 published 元数据。
- */
-export interface PiProviderCardDto {
-  readonly id: ID;
-  readonly displayName: string;
-  readonly preset: PiProviderPreset;
-  readonly notes: string | null;
-  readonly consoleUrl: string | null;
-  readonly credential: PiProviderCredentialRefDto;
-  readonly draftRevision: PiProviderCardRevisionDto | null;
-  readonly publishedRevision: PiProviderCardRevisionDto | null;
-  readonly createdBy: ID;
-  readonly createdAt: UnixMs;
-  readonly updatedAt: UnixMs;
-}
-
 export interface ListPiProviderPresetsResult {
   readonly presets: readonly PiProviderPresetDescriptorDto[];
 }
@@ -146,4 +127,74 @@ export interface GetPiProviderCardInput {
 
 export interface ListPiProviderCardsResult {
   readonly cards: readonly PiProviderCardDto[];
+}
+
+/** 模型发现结果；不自动发布、不改变生产绑定。 */
+export interface PiProviderModelCandidateDto {
+  readonly modelId: string;
+}
+
+export interface DiscoverPiProviderModelsResult {
+  readonly cardId: ID;
+  /** Provider 是否提供可用的 /models 发现接口。 */
+  readonly discoverySupported: boolean;
+  readonly models: readonly PiProviderModelCandidateDto[];
+  readonly updatedAt: UnixMs;
+}
+
+export type PiProviderTestStatus = 'passed' | 'failed';
+
+/**
+ * 生产同路径测试结果。
+ * 不含业务消息、完整 prompt 或 Credential；绑定 configSummary。
+ */
+export interface PiProviderTestResultDto {
+  readonly id: ID;
+  readonly cardId: ID;
+  readonly draftRevisionId: ID;
+  readonly configSummary: string;
+  readonly status: PiProviderTestStatus;
+  readonly textOk: boolean;
+  readonly toolCallOk: boolean;
+  readonly responseModel: string | null;
+  readonly finishReasonText: string | null;
+  readonly finishReasonTool: string | null;
+  readonly usageInputTokens: number | null;
+  readonly usageOutputTokens: number | null;
+  readonly durationMs: number;
+  /** 公开诊断码，永不含秘密。 */
+  readonly diagnosticCode: string | null;
+  readonly testedBy: ID;
+  readonly testedAt: UnixMs;
+}
+
+export interface RunPiProviderTestResult {
+  readonly test: PiProviderTestResultDto;
+  readonly card: PiProviderCardDto;
+}
+
+export interface PublishPiProviderCardResult {
+  readonly card: PiProviderCardDto;
+}
+
+/**
+ * 系统管理员可见的 PI Provider Card。
+ * displayName/notes/consoleUrl 是当前工作 revision（draft 优先，否则 published）的投影。
+ */
+export interface PiProviderCardDto {
+  readonly id: ID;
+  readonly displayName: string;
+  readonly preset: PiProviderPreset;
+  readonly notes: string | null;
+  readonly consoleUrl: string | null;
+  readonly credential: PiProviderCredentialRefDto;
+  readonly draftRevision: PiProviderCardRevisionDto | null;
+  readonly publishedRevision: PiProviderCardRevisionDto | null;
+  readonly modelCandidates: readonly PiProviderModelCandidateDto[];
+  readonly modelCandidatesUpdatedAt: UnixMs | null;
+  readonly latestTest: PiProviderTestResultDto | null;
+  readonly canPublish: boolean;
+  readonly createdBy: ID;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
 }

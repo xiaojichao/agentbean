@@ -62,6 +62,11 @@ const GET_KEYS = new Set([
 
 const LIST_KEYS = new Set([...SOCKET_ENRICHED_KEYS]);
 
+const CARD_ACTION_KEYS = new Set([
+  ...SOCKET_ENRICHED_KEYS,
+  'cardId',
+]);
+
 /** 顶层敏感/未支持字段：即使出现在 allowlist 外也给出更明确错误码。 */
 const SENSITIVE_TOP_LEVEL = new Set([
   'headers',
@@ -158,9 +163,37 @@ export function parseListPiProviderCardsRequest(
 export function parseGetPiProviderCardRequest(
   payload: unknown,
 ): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
+  return parseCardActionRequest(payload, GET_KEYS);
+}
+
+/** 模型发现：仅 cardId + 认证注入字段。 */
+export function parseDiscoverPiProviderModelsRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
+  return parseCardActionRequest(payload, CARD_ACTION_KEYS);
+}
+
+/** 生产同路径测试：仅 cardId + 认证注入字段。 */
+export function parseRunPiProviderTestRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
+  return parseCardActionRequest(payload, CARD_ACTION_KEYS);
+}
+
+/** 发布 Draft：仅 cardId + 认证注入字段。 */
+export function parsePublishPiProviderCardRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
+  return parseCardActionRequest(payload, CARD_ACTION_KEYS);
+}
+
+function parseCardActionRequest(
+  payload: unknown,
+  allowed: Set<string>,
+): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
   const base = requireObject(payload);
   if (!base.ok) return base;
-  const keys = rejectUnknownKeys(base.value, GET_KEYS);
+  const keys = rejectUnknownKeys(base.value, allowed);
   if (!keys.ok) return keys;
   const userId = requireUserId(base.value);
   if (!userId.ok) return userId;

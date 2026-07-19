@@ -250,6 +250,9 @@ export function registerWebSocketHandlers(
     bind(socket, WEB_EVENTS.piProvider.createCard, app, 'createPiProviderCard', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.updateCard, app, 'updatePiProviderCard', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.copyCard, app, 'copyPiProviderCard', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.discoverModels, app, 'discoverPiProviderModels', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.runTest, app, 'runPiProviderTest', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.publishCard, app, 'publishPiProviderCard', undefined, piProviderBindOptions);
   }
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
