@@ -27,6 +27,7 @@ export interface PlatformServiceStatus {
   readonly installed: boolean;
   readonly loaded: boolean;
   readonly running: boolean;
+  readonly queryFailed: boolean;
 }
 
 export interface MacOSLaunchAgentAdapter {
@@ -80,7 +81,12 @@ export function createMacOSLaunchAgentAdapter(
       const installed = await fileExists(paths.plistFile);
       const result = await run('/bin/launchctl', ['print', target]);
       const loaded = result.exitCode === 0;
-      return { installed, loaded, running: loaded && launchctlPrintHasLivePid(result.stdout) };
+      return {
+        installed,
+        loaded,
+        running: loaded && launchctlPrintHasLivePid(result.stdout),
+        queryFailed: result.exitCode !== 0,
+      };
     },
   };
 }

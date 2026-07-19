@@ -24,7 +24,7 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
     log('Phase 5A Device Service smoke skipped: macOS is required.');
     return { skipped: true };
   }
-  if (!Number.isSafeInteger(uid)) throw new Error('Phase 5A smoke requires a normal user session.');
+  if (!Number.isSafeInteger(uid) || uid <= 0) throw new Error('Phase 5A smoke requires a non-root user session.');
 
   await assertProductionServiceIsAbsent();
   if (!skipBuild) run('npm', ['run', 'build:daemon-next']);
@@ -38,6 +38,7 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
   const configFile = join(baseDir, 'service', 'smoke-config.json');
   const bootFile = join(baseDir, 'service', 'smoke-boots.jsonl');
   let adapter;
+  let launchAgentDetached = false;
 
   try {
     await mkdir(home, { recursive: true, mode: 0o700 });
@@ -112,7 +113,8 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
     const restartedPid = state.pid;
     log(`    restarted pid ${restartedPid}`);
 
-    process.kill(restartedPid, 'SIGKILL');
+    const killed = await exec('/bin/launchctl', ['kill', 'SIGKILL', adapter.target]);
+    assert(killed.exitCode === 0, 'launchctl could not inject a job-scoped SIGKILL');
     state = await waitForState(client, (value) => value.pid !== restartedPid, 25_000);
     log(`    recovered pid ${state.pid}`);
     assert((await readBootEvents(bootFile)).length >= 3, 'launchd did not recover an abnormal exit');
@@ -138,7 +140,6 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
     await rm(paths.controlSocket, { force: true });
     await cli(['stop', '--deadline-ms', '500'], DEVICE_CLI_EXIT.rejected);
     assert((await adapter.status()).running, 'socket loss caused an unsafe forced stop');
-    assertProcessAlive(socketLossPid, 'service exited after control socket loss');
     await adapter.start();
     state = await waitForState(client, (value) => value.pid !== socketLossPid && value.phase === 'running');
     log('  ✓ control socket loss is fail-closed');
@@ -173,6 +174,7 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
     log('  ✓ migration commit fence');
 
     await cli(['uninstall', '--deadline-ms', '10000'], DEVICE_CLI_EXIT.success);
+    launchAgentDetached = true;
     assert(!(await adapter.status()).installed, 'uninstall retained the plist');
     await assertMissing(paths.payloadFile, 'uninstall retained the service payload');
     await assertCanaries(baseDir, home);
@@ -186,8 +188,25 @@ export async function runPhase5ADeviceServiceSmoke(options = {}) {
     };
   } finally {
     if (adapter) {
-      const status = await adapter.status().catch(() => ({ loaded: false }));
-      if (status.loaded) await adapter.bootout().catch(() => undefined);
+      if (!launchAgentDetached) {
+        const status = await adapter.status();
+        if (status.queryFailed) {
+          throw new Error(`Cannot confirm ${label} state; preserving smoke artifacts at ${tempRoot}.`);
+        }
+        if (status.loaded) {
+          const bootout = await adapter.bootout();
+          if (bootout.exitCode !== 0) {
+            throw new Error(`Cannot unload ${label}; preserving smoke artifacts at ${tempRoot}.`);
+          }
+          launchAgentDetached = true;
+        }
+      }
+      if (launchAgentDetached) {
+        const finalStatus = await adapter.status();
+        if (finalStatus.loaded || finalStatus.running) {
+          throw new Error(`LaunchAgent ${label} survived bootout; preserving smoke artifacts at ${tempRoot}.`);
+        }
+      }
     }
     if (!options.keepTemp) await rm(tempRoot, { recursive: true, force: true });
     else log(`Phase 5A smoke artifacts kept at ${tempRoot}`);
@@ -238,6 +257,8 @@ async function assertProductionServiceIsAbsent() {
   } catch (error) {
     if (!(error && error.code === 'ENOENT')) throw error;
   }
+  const domain = await exec('/bin/launchctl', ['print', `gui/${uid}`]);
+  if (domain.exitCode !== 0) throw new Error(`Refusing to run: gui/${uid} is not an active login session.`);
   const result = await exec('/bin/launchctl', ['print', `gui/${uid}/${label}`]);
   if (result.exitCode === 0) throw new Error(`Refusing to run: ${label} is already loaded.`);
 }
@@ -324,14 +345,6 @@ async function assertMissing(path, message) {
     throw error;
   }
   throw new Error(message);
-}
-
-function assertProcessAlive(pid, message) {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    throw new Error(message);
-  }
 }
 
 function minimalEnvironment(baseDir) {

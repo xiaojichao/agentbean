@@ -384,7 +384,9 @@ async function waitForPlatformStopped(
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
     try {
-      if (!(await adapter.status()).running) return 'stopped';
+      const status = await adapter.status();
+      if (status.queryFailed) return 'error';
+      if (!status.running) return 'stopped';
     } catch {
       return 'error';
     }

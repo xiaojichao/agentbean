@@ -54,7 +54,7 @@ function fakeAdapter(overrides: Partial<MacOSLaunchAgentAdapter> = {}): MacOSLau
     start: vi.fn(async () => success()),
     kill: vi.fn(async () => success()),
     bootout: vi.fn(async () => success()),
-    status: vi.fn(async () => ({ installed: true, loaded: true, running: true })),
+    status: vi.fn(async () => ({ installed: true, loaded: true, running: true, queryFailed: false })),
     ...overrides,
   };
 }
@@ -152,15 +152,19 @@ describe('MacOSLaunchAgentAdapter', () => {
     const baseDir = join(home, '.agentbean');
     await writeMacOSLaunchAgentPlist({ executablePath: '/opt/AgentBean/bin/agentbean', home, baseDir });
     let stdout = 'state = exited\n';
+    let exitCode = 0;
     const adapter = createMacOSLaunchAgentAdapter({
       uid: 501,
       home,
       baseDir,
-      run: vi.fn(async () => ({ exitCode: 0, stdout, stderr: '' })),
+      run: vi.fn(async () => ({ exitCode, stdout, stderr: '' })),
     });
-    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: false });
+    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: false, queryFailed: false });
     stdout = 'state = running\n\tpid = 123\n';
-    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: true });
+    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: true, queryFailed: false });
+    exitCode = 3;
+    stdout = '';
+    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: false, running: false, queryFailed: true });
   });
 });
 
@@ -225,7 +229,7 @@ describe('agentbean device CLI', () => {
     let stage: 'idle' | 'migration' | 'stopped' | 'active' = 'idle';
     const lifecycle: string[] = [];
     const adapter = fakeAdapter({
-      status: vi.fn(async () => ({ installed: stage !== 'idle', loaded: stage !== 'idle', running: stage === 'migration' || stage === 'active' })),
+      status: vi.fn(async () => ({ installed: stage !== 'idle', loaded: stage !== 'idle', running: stage === 'migration' || stage === 'active', queryFailed: false })),
       bootstrap: vi.fn(async () => {
         lifecycle.push('bootstrap-migration');
         stage = 'migration';
@@ -331,7 +335,7 @@ describe('agentbean device CLI', () => {
       nodeExecutablePath: '/opt/homebrew/bin/node', baseDir });
     const plistFile = await writeMacOSLaunchAgentPlist({ executablePath: servicePaths.payloadFile, home, baseDir });
     const adapter = fakeAdapter({
-      status: vi.fn(async () => ({ installed: true, loaded: true, running: false })),
+      status: vi.fn(async () => ({ installed: true, loaded: true, running: false, queryFailed: false })),
       bootout: vi.fn(async () => ({ exitCode: 5, stdout: '', stderr: 'private failure' })),
     });
 
@@ -345,7 +349,7 @@ describe('agentbean device CLI', () => {
 
   test('uninstall is idempotent when no service files or launchd job exist', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentbean-device-uninstall-empty-'));
-    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: false, loaded: false, running: false })) });
+    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: false, loaded: false, running: false, queryFailed: true })) });
     await expect(runDeviceCli(['uninstall'], {
       platform: 'darwin', home, baseDir: join(home, '.agentbean'), createAdapter: () => adapter,
       controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
@@ -369,7 +373,7 @@ describe('agentbean device CLI', () => {
   });
 
   test('start uses kickstart and waits for a ready control state', async () => {
-    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: true, loaded: true, running: false })) });
+    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: true, loaded: true, running: false, queryFailed: false })) });
     const controlClient = { request: vi.fn() } as unknown as DeviceControlClient;
     await expect(runDeviceCli(['start', '--deadline-ms', '1000'], {
       platform: 'darwin',
@@ -415,6 +419,7 @@ describe('agentbean device CLI', () => {
         installed: true,
         loaded: true,
         running: statusCalls++ === 0,
+        queryFailed: false,
       })),
     });
     const controlClient: DeviceControlClient = {
@@ -451,6 +456,25 @@ describe('agentbean device CLI', () => {
     await expect(runDeviceCli(['restart', '--deadline-ms', '1'], {
       platform: 'darwin', createAdapter: () => adapter, controlClient,
     })).resolves.toBe(DEVICE_CLI_EXIT.drain);
+    expect(adapter.start).not.toHaveBeenCalled();
+  });
+
+  test('restart fails closed when launchctl cannot confirm the old process state', async () => {
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({ installed: true, loaded: false, running: false, queryFailed: true })),
+    });
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => ({
+        schemaVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        state: runningState(request.command === 'shutdown' ? 'stopped' : 'draining'),
+      })),
+    };
+
+    await expect(runDeviceCli(['restart'], {
+      platform: 'darwin', createAdapter: () => adapter, controlClient,
+    })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     expect(adapter.start).not.toHaveBeenCalled();
   });
 
