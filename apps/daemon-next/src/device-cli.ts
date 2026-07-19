@@ -10,14 +10,7 @@ import {
   writeMacOSLaunchAgentPlist,
   writeMacOSServicePayload,
 } from './macos-launch-agent.js';
-import {
-  createLinuxSystemdUserAdapter,
-  followLinuxSystemdUserLogs,
-  readLinuxSystemdUserLogs,
-  removeLinuxSystemdUserInstallation,
-  writeLinuxSystemdUserUnit,
-} from './linux-systemd-user.js';
-import type { PlatformCommandResult, PlatformServiceAdapter, PlatformServiceStatus } from './device-platform-service.js';
+import type { PlatformServiceAdapter, PlatformServiceStatus } from './device-platform-service.js';
 import { runDeviceService } from './device-service-runtime.js';
 import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 import {
@@ -30,6 +23,10 @@ import {
   type DeviceMigrationStatus,
 } from './device-migration.js';
 import { listAuthProfiles } from './auth-store.js';
+import {
+  cleanupLegacyLinuxDeviceService,
+  type LegacyLinuxCleanupResult,
+} from './legacy-linux-device-service.js';
 
 export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs' | 'migrate';
 export type DeviceMigrationCommand = 'plan' | 'start' | 'status' | 'resume' | 'cancel';
@@ -45,7 +42,6 @@ export const DEVICE_CLI_EXIT = {
 
 export interface DeviceCliDeps {
   readonly platform?: NodeJS.Platform;
-  readonly arch?: NodeJS.Architecture;
   readonly baseDir?: string;
   readonly home?: string;
   readonly xdgConfigHome?: string;
@@ -56,15 +52,13 @@ export interface DeviceCliDeps {
   readonly runService?: () => Promise<void>;
   readonly waitForReady?: (client: DeviceControlClient, timeoutMs: number) => Promise<DeviceServiceState | null>;
   readonly followLog?: (path: string) => Promise<number>;
-  readonly readLinuxLogs?: () => Promise<PlatformCommandResult>;
-  readonly followLinuxLogs?: () => Promise<number>;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
   readonly assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
   readonly writePayload?: typeof writeMacOSServicePayload;
   readonly writePlist?: typeof writeMacOSLaunchAgentPlist;
-  readonly writeUnit?: typeof writeLinuxSystemdUserUnit;
   readonly removeInstallation?: typeof removeMacOSLaunchAgentInstallation;
+  readonly cleanupLegacyLinuxInstallation?: () => Promise<LegacyLinuxCleanupResult>;
   readonly migrate?: (command: DeviceMigrationCommand) => Promise<DeviceMigrationStatus>;
   readonly migrationDeps?: Pick<DeviceMigrationDeps, 'listLegacy' | 'listUnregisteredLegacyPids' | 'listInstalledLegacyExecutables' | 'isProcessAlive'>;
 }
@@ -93,6 +87,26 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
       return DEVICE_CLI_EXIT.rejected;
     }
   }
+  if (!isPlatformSupported(deps)) {
+    if ((deps.platform ?? process.platform) === 'linux' && parsed.command === 'uninstall') {
+      try {
+        const result = await (deps.cleanupLegacyLinuxInstallation ?? (() => cleanupLegacyLinuxDeviceService({
+          ...(deps.home ? { home: deps.home } : {}),
+          ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+          ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
+        })))();
+        stdout(result === 'removed'
+          ? '已停止并移除遗留 Linux Device Service；用户数据已保留。'
+          : '未检测到遗留 Linux Device Service。');
+        return DEVICE_CLI_EXIT.success;
+      } catch {
+        stderr('无法安全移除遗留 Linux Device Service。');
+        return DEVICE_CLI_EXIT.platform;
+      }
+    }
+    stderr('当前平台尚未支持 Device Service 系统注册。');
+    return DEVICE_CLI_EXIT.platform;
+  }
   if (parsed.command === 'run') {
     try {
       await (deps.runService ?? (() => runDeviceService({ ...(deps.baseDir ? { baseDir: deps.baseDir } : {}) })))();
@@ -103,17 +117,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     }
   }
   if (parsed.command === 'logs') {
-    if ((deps.platform ?? process.platform) === 'linux') {
-      if (!isPlatformSupported(deps)) return DEVICE_CLI_EXIT.platform;
-      if (parsed.follow) return (deps.followLinuxLogs ?? followLinuxSystemdUserLogs)();
-      const result = await (deps.readLinuxLogs ?? readLinuxSystemdUserLogs)();
-      if (result.exitCode !== 0) {
-        stderr('无法读取 Device Service journal。');
-        return DEVICE_CLI_EXIT.platform;
-      }
-      stdout(result.stdout.trimEnd());
-      return DEVICE_CLI_EXIT.success;
-    }
+    if (!isPlatformSupported(deps)) return DEVICE_CLI_EXIT.platform;
     if (!parsed.follow) {
       stdout(paths.logFile);
       return DEVICE_CLI_EXIT.success;
@@ -151,10 +155,6 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
       ? DEVICE_CLI_EXIT.rejected
       : DEVICE_CLI_EXIT.success;
   }
-  if (!isPlatformSupported(deps)) {
-    stderr('当前平台尚未支持 Device Service 系统注册。');
-    return DEVICE_CLI_EXIT.platform;
-  }
   const adapter = createPlatformAdapter(deps);
   if (parsed.command === 'install') return installService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'uninstall') return uninstallService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
@@ -185,8 +185,13 @@ async function installService(
   try {
     await (deps.assertRuntimeOwner ?? ((owner) => assertDeviceRuntimeOwner(owner, deps.baseDir)))('device-service');
   } catch {
-    stderr('Device Service 尚未完成 Legacy Daemon 所有权迁移。');
-    return DEVICE_CLI_EXIT.rejected;
+    try {
+      await (deps.migrate ?? ((command) => runMigrationCommand(command, deps, client, deadlineMs)))('start');
+      await (deps.assertRuntimeOwner ?? ((owner) => assertDeviceRuntimeOwner(owner, deps.baseDir)))('device-service');
+    } catch (error) {
+      stderr(`Device Service 无法安全接管 Legacy Daemon（${stableReason(error instanceof Error ? error.message : String(error))}）。`);
+      return DEVICE_CLI_EXIT.rejected;
+    }
   }
   const sourceExecutablePath = deps.executablePath ?? process.argv[1];
   if (!sourceExecutablePath) return DEVICE_CLI_EXIT.platform;
@@ -233,7 +238,7 @@ async function uninstallService(
       const stopped = await stopService(adapter, client, deadlineMs, stdout, stderr);
       if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
     }
-    if (status.loaded || ((deps.platform ?? process.platform) === 'linux' && status.installed)) {
+    if (status.loaded) {
       const removed = await adapter.bootout();
       if (removed.exitCode !== 0) throw new Error('PLATFORM_SERVICE_UNINSTALL_FAILED');
     }
@@ -433,8 +438,7 @@ async function readPlatformStatus(deps: DeviceCliDeps): Promise<PlatformServiceS
 }
 
 function isPlatformSupported(deps: DeviceCliDeps): boolean {
-  const platform = deps.platform ?? process.platform;
-  return platform === 'darwin' || (platform === 'linux' && (deps.arch ?? process.arch) === 'x64');
+  return (deps.platform ?? process.platform) === 'darwin';
 }
 
 function createPlatformAdapter(deps: DeviceCliDeps): PlatformServiceAdapter {
@@ -443,12 +447,6 @@ function createPlatformAdapter(deps: DeviceCliDeps): PlatformServiceAdapter {
     ...(deps.home ? { home: deps.home } : {}),
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
   };
-  if ((deps.platform ?? process.platform) === 'linux') {
-    return createLinuxSystemdUserAdapter({
-      ...common,
-      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
-    });
-  }
   return createMacOSLaunchAgentAdapter(common);
 }
 
@@ -458,12 +456,6 @@ async function writePlatformDefinition(deps: DeviceCliDeps, executablePath: stri
     ...(deps.home ? { home: deps.home } : {}),
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
   };
-  if ((deps.platform ?? process.platform) === 'linux') {
-    return (deps.writeUnit ?? writeLinuxSystemdUserUnit)({
-      ...common,
-      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
-    });
-  }
   return (deps.writePlist ?? writeMacOSLaunchAgentPlist)(common);
 }
 
@@ -473,12 +465,6 @@ async function removePlatformInstallation(deps: DeviceCliDeps): Promise<void> {
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
   };
   if (deps.removeInstallation) return deps.removeInstallation(common);
-  if ((deps.platform ?? process.platform) === 'linux') {
-    return removeLinuxSystemdUserInstallation({
-      ...common,
-      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
-    });
-  }
   return removeMacOSLaunchAgentInstallation(common);
 }
 

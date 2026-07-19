@@ -2,7 +2,6 @@
 
 import { runDaemonNextCli } from './cli.js';
 import { runDeviceCli } from './device-cli.js';
-import { runDeviceService } from './device-service-runtime.js';
 import { assertDeviceRuntimeOwner } from './device-runtime-owner.js';
 import { registerLegacyRuntime } from './legacy-runtime-registration.js';
 import { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from './device-service-lock.js';
@@ -13,7 +12,7 @@ const command = argv[0];
 const execution = command === 'device'
   ? runDeviceCli(argv.slice(1)).then((code) => { process.exitCode = code; })
   : command === 'service' && argv[1] === 'run' && argv.length === 2
-    ? runDeviceService()
+    ? runDeviceCli(['run']).then((code) => { process.exitCode = code; })
     : runLegacyDaemonEntry();
 
 execution.catch((error) => {
