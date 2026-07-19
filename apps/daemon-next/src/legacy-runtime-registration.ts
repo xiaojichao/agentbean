@@ -146,9 +146,8 @@ export async function discoverInstalledLegacyExecutables(
     for (const name of ['agentbean', 'agentbean-daemon', 'agentbean-next-daemon', 'daemon']) {
       try {
         const resolved = await realpath(join(directory, name));
-        if (resolved.includes('/node_modules/@agentbean/daemon/')) {
-          found.add(resolved);
-        } else if (resolved.includes('/node_modules/@agentbean/daemon-next/')) {
+        if (resolved.includes('/node_modules/@agentbean/daemon/')
+          || resolved.includes('/node_modules/@agentbean/daemon-next/')) {
           let safe = ownerFenceResults.get(resolved);
           if (safe === undefined) {
             safe = await executableHonorsOwnerFence(resolved);

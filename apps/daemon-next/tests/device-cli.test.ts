@@ -549,12 +549,17 @@ describe('agentbean device CLI', () => {
   });
 
   test('rejects unsupported platforms and malformed arguments with stable exits', async () => {
+    const cleanupLegacyLinuxInstallation = vi.fn(async () => 'removed' as const);
     await expect(runDeviceCli(['start'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['run'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['logs'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['uninstall'], {
+      platform: 'linux', cleanupLegacyLinuxInstallation,
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
     await expect(runDeviceCli(['status'], { platform: 'win32' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['stop', '--deadline-ms', '0'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
     await expect(runDeviceCli(['unknown'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
+    expect(cleanupLegacyLinuxInstallation).toHaveBeenCalledTimes(1);
   });
 
   test('run delegates to the internal service host entrypoint', async () => {

@@ -23,6 +23,10 @@ import {
   type DeviceMigrationStatus,
 } from './device-migration.js';
 import { listAuthProfiles } from './auth-store.js';
+import {
+  cleanupLegacyLinuxDeviceService,
+  type LegacyLinuxCleanupResult,
+} from './legacy-linux-device-service.js';
 
 export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs' | 'migrate';
 export type DeviceMigrationCommand = 'plan' | 'start' | 'status' | 'resume' | 'cancel';
@@ -40,6 +44,7 @@ export interface DeviceCliDeps {
   readonly platform?: NodeJS.Platform;
   readonly baseDir?: string;
   readonly home?: string;
+  readonly xdgConfigHome?: string;
   readonly executablePath?: string;
   readonly nodeExecutablePath?: string;
   readonly createAdapter?: () => PlatformServiceAdapter;
@@ -53,6 +58,7 @@ export interface DeviceCliDeps {
   readonly writePayload?: typeof writeMacOSServicePayload;
   readonly writePlist?: typeof writeMacOSLaunchAgentPlist;
   readonly removeInstallation?: typeof removeMacOSLaunchAgentInstallation;
+  readonly cleanupLegacyLinuxInstallation?: () => Promise<LegacyLinuxCleanupResult>;
   readonly migrate?: (command: DeviceMigrationCommand) => Promise<DeviceMigrationStatus>;
   readonly migrationDeps?: Pick<DeviceMigrationDeps, 'listLegacy' | 'listUnregisteredLegacyPids' | 'listInstalledLegacyExecutables' | 'isProcessAlive'>;
 }
@@ -82,6 +88,22 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     }
   }
   if (!isPlatformSupported(deps)) {
+    if ((deps.platform ?? process.platform) === 'linux' && parsed.command === 'uninstall') {
+      try {
+        const result = await (deps.cleanupLegacyLinuxInstallation ?? (() => cleanupLegacyLinuxDeviceService({
+          ...(deps.home ? { home: deps.home } : {}),
+          ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+          ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
+        })))();
+        stdout(result === 'removed'
+          ? '已停止并移除遗留 Linux Device Service；用户数据已保留。'
+          : '未检测到遗留 Linux Device Service。');
+        return DEVICE_CLI_EXIT.success;
+      } catch {
+        stderr('无法安全移除遗留 Linux Device Service。');
+        return DEVICE_CLI_EXIT.platform;
+      }
+    }
     stderr('当前平台尚未支持 Device Service 系统注册。');
     return DEVICE_CLI_EXIT.platform;
   }

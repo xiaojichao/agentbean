@@ -308,24 +308,31 @@ describe('Legacy runtime registration', () => {
     })).resolves.toEqual([101, 606, 707, 808, 909]);
   });
 
-  test('requires the historical global npm executable to be uninstalled before commit', async () => {
+  test('rejects only global npm executables that do not honor the owner fence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentbean-legacy-executable-'));
     const bin = join(root, 'bin');
-    const historical = join(root, 'node_modules', '@agentbean', 'daemon', 'dist', 'bin.js');
-    const current = join(root, 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
+    const oldBin = join(root, 'old-bin');
+    const historical = join(root, 'old', 'node_modules', '@agentbean', 'daemon', 'dist', 'bin.js');
+    const currentCanonical = join(root, 'node_modules', '@agentbean', 'daemon', 'dist', 'bin.js');
+    const currentNext = join(root, 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
     const oldNext = join(root, 'old', 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
     await mkdir(bin, { recursive: true });
+    await mkdir(oldBin, { recursive: true });
     await mkdir(dirname(historical), { recursive: true });
-    await mkdir(dirname(current), { recursive: true });
+    await mkdir(dirname(currentCanonical), { recursive: true });
+    await mkdir(dirname(currentNext), { recursive: true });
     await mkdir(dirname(oldNext), { recursive: true });
     await writeFile(historical, 'historical');
-    await writeFile(current, '#!/usr/bin/env node\nconsole.error("DEVICE_SERVICE_OWNS_RUNTIME：Legacy Daemon 已停用"); process.exit(1);\n', { mode: 0o700 });
+    const fenced = '#!/usr/bin/env node\nconsole.error("DEVICE_SERVICE_OWNS_RUNTIME：Legacy Daemon 已停用"); process.exit(1);\n';
+    await writeFile(currentCanonical, fenced, { mode: 0o700 });
+    await writeFile(currentNext, fenced, { mode: 0o700 });
     await writeFile(oldNext, '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o700 });
-    await symlink(historical, join(bin, 'daemon'));
-    await symlink(current, join(bin, 'agentbean'));
-    await symlink(oldNext, join(bin, 'agentbean-next-daemon'));
+    await symlink(currentCanonical, join(bin, 'agentbean'));
+    await symlink(currentNext, join(bin, 'agentbean-next-daemon'));
+    await symlink(historical, join(oldBin, 'daemon'));
+    await symlink(oldNext, join(oldBin, 'agentbean-daemon'));
 
-    const discovered = await discoverInstalledLegacyExecutables(bin);
+    const discovered = await discoverInstalledLegacyExecutables(`${bin}:${oldBin}`);
     expect(discovered).toHaveLength(2);
     expect(discovered).toEqual(expect.arrayContaining([
       expect.stringMatching(/node_modules\/@agentbean\/daemon\/dist\/bin\.js$/),
