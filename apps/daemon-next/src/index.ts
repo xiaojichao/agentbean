@@ -76,6 +76,23 @@ export {
   macOSLaunchAgentPaths,
   DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
 } from './macos-launch-agent.js';
+export {
+  createLinuxSystemdUserAdapter,
+  generateLinuxSystemdUserUnit,
+  writeLinuxSystemdUserUnit,
+  removeLinuxSystemdUserInstallation,
+  readLinuxSystemdUserLogs,
+  followLinuxSystemdUserLogs,
+  linuxSystemdUserPaths,
+  DEVICE_SERVICE_SYSTEMD_UNIT,
+} from './linux-systemd-user.js';
+export type {
+  LinuxSystemdUserAdapter,
+  LinuxSystemdUserPaths,
+  SystemctlRunner,
+  JournalctlRunner,
+} from './linux-systemd-user.js';
+export type { PlatformCommandResult, PlatformServiceAdapter } from './device-platform-service.js';
 export type {
   MacOSLaunchAgentAdapter,
   MacOSLaunchAgentPaths,

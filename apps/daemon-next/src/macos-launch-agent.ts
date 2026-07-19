@@ -6,14 +6,11 @@ import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { deviceServicePaths } from './device-service-paths.js';
 import { ensurePrivateDeviceServiceDirectory } from './device-service-filesystem.js';
+import type { PlatformCommandResult, PlatformServiceAdapter, PlatformServiceStatus } from './device-platform-service.js';
 
 export const DEVICE_SERVICE_LAUNCH_AGENT_LABEL = 'com.agentbean.device-service';
 
-export interface LaunchctlResult {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
+export type LaunchctlResult = PlatformCommandResult;
 
 export type LaunchctlRunner = (executable: string, argv: readonly string[]) => Promise<LaunchctlResult>;
 
@@ -23,14 +20,7 @@ export interface MacOSLaunchAgentPaths {
   readonly errorLogFile: string;
 }
 
-export interface PlatformServiceStatus {
-  readonly installed: boolean;
-  readonly loaded: boolean;
-  readonly running: boolean;
-  readonly queryFailed: boolean;
-}
-
-export interface MacOSLaunchAgentAdapter {
+export interface MacOSLaunchAgentAdapter extends PlatformServiceAdapter {
   readonly label: typeof DEVICE_SERVICE_LAUNCH_AGENT_LABEL;
   readonly domain: string;
   readonly target: string;
@@ -41,6 +31,8 @@ export interface MacOSLaunchAgentAdapter {
   bootout(): Promise<LaunchctlResult>;
   status(): Promise<PlatformServiceStatus>;
 }
+
+export type { PlatformServiceStatus } from './device-platform-service.js';
 
 export interface CreateMacOSLaunchAgentAdapterInput {
   readonly uid?: number;

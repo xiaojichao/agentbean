@@ -511,7 +511,7 @@ describe('agentbean device CLI', () => {
   });
 
   test('rejects unsupported platforms and malformed arguments with stable exits', async () => {
-    await expect(runDeviceCli(['start'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['start'], { platform: 'linux', arch: 'arm64' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['stop', '--deadline-ms', '0'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
     await expect(runDeviceCli(['unknown'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
   });
