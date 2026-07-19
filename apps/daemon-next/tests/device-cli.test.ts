@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
-import { mkdir, mkdtemp, readdir, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DEVICE_CLI_EXIT, runDeviceCli } from '../src/device-cli';
 import type { DeviceControlClient } from '../src/device-control-client';
 import type { DeviceServiceState } from '../src/device-service-state';
@@ -13,6 +13,8 @@ import {
   createMacOSLaunchAgentAdapter,
   DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
   generateMacOSLaunchAgentPlist,
+  removeMacOSLaunchAgentInstallation,
+  writeMacOSServicePayload,
   writeMacOSLaunchAgentPlist,
   type LaunchctlResult,
   type MacOSLaunchAgentAdapter,
@@ -51,7 +53,7 @@ function fakeAdapter(overrides: Partial<MacOSLaunchAgentAdapter> = {}): MacOSLau
     start: vi.fn(async () => success()),
     kill: vi.fn(async () => success()),
     bootout: vi.fn(async () => success()),
-    status: vi.fn(async () => ({ installed: true, running: true })),
+    status: vi.fn(async () => ({ installed: true, loaded: true, running: true })),
     ...overrides,
   };
 }
@@ -123,6 +125,27 @@ describe('MacOSLaunchAgentAdapter', () => {
     ]);
   });
 
+  test('writes an atomic owner-only executable service payload and preserves its inode when unchanged', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-service-payload-'));
+    const input = {
+      sourceExecutablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      baseDir,
+    };
+    const payloadFile = await writeMacOSServicePayload(input);
+    const first = await stat(payloadFile);
+    await writeMacOSServicePayload(input);
+    const second = await stat(payloadFile);
+
+    expect(first.mode & 0o777).toBe(0o700);
+    expect(second.ino).toBe(first.ino);
+    expect(await readFile(payloadFile, 'utf8')).toBe(
+      `#!/opt/homebrew/bin/node\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(baseDir)};\n`
+        + 'await import("file:///opt/AgentBean/dist/bin.js");\n',
+    );
+    expect((await stat(deviceServicePaths(baseDir).logDirectory)).mode & 0o777).toBe(0o700);
+  });
+
   test('treats a loaded LaunchAgent without a live pid as stopped', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentbean-launch-status-'));
     const baseDir = join(home, '.agentbean');
@@ -134,13 +157,139 @@ describe('MacOSLaunchAgentAdapter', () => {
       baseDir,
       run: vi.fn(async () => ({ exitCode: 0, stdout, stderr: '' })),
     });
-    await expect(adapter.status()).resolves.toEqual({ installed: true, running: false });
+    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: false });
     stdout = 'state = running\n\tpid = 123\n';
-    await expect(adapter.status()).resolves.toEqual({ installed: true, running: true });
+    await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: true, running: true });
   });
 });
 
 describe('agentbean device CLI', () => {
+  test('install writes payload and plist, bootstraps once, waits ready, and is idempotent', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-install-home-'));
+    const baseDir = join(home, '.agentbean');
+    let loaded = false;
+    let running = false;
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({ installed: loaded, loaded, running })),
+      bootstrap: vi.fn(async () => {
+        loaded = true;
+        running = true;
+        return success();
+      }),
+    });
+    const deps = {
+      platform: 'darwin' as const,
+      home,
+      baseDir,
+      executablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      createAdapter: () => adapter,
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+      waitForReady: vi.fn(async () => runningState()),
+      assertRuntimeOwner: vi.fn(async () => undefined),
+    };
+
+    await expect(runDeviceCli(['install'], deps)).resolves.toBe(DEVICE_CLI_EXIT.success);
+    const paths = deviceServicePaths(baseDir);
+    const plistFile = join(home, 'Library', 'LaunchAgents', 'com.agentbean.device-service.plist');
+    const firstPayload = await stat(paths.payloadFile);
+    const firstPlist = await stat(plistFile);
+    await expect(runDeviceCli(['install'], deps)).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(adapter.bootstrap).toHaveBeenCalledTimes(1);
+    expect(adapter.start).not.toHaveBeenCalled();
+    expect((await stat(paths.payloadFile)).ino).toBe(firstPayload.ino);
+    expect((await stat(plistFile)).ino).toBe(firstPlist.ino);
+    expect(await readFile(plistFile, 'utf8')).toContain(`<string>${paths.payloadFile}</string>`);
+  });
+
+  test('install is fail-closed before migration and does not write installation files', async () => {
+    const writePayload = vi.fn();
+    await expect(runDeviceCli(['install'], {
+      platform: 'darwin', createAdapter: () => fakeAdapter(),
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+      assertRuntimeOwner: vi.fn(async () => { throw new Error('SERVICE_MIGRATION_REQUIRED'); }),
+      writePayload,
+    })).resolves.toBe(DEVICE_CLI_EXIT.rejected);
+    expect(writePayload).not.toHaveBeenCalled();
+  });
+
+  test('uninstall drains, boots out, removes only plist and payload, and preserves data byte-for-byte', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-uninstall-home-'));
+    const baseDir = join(home, '.agentbean');
+    const servicePaths = deviceServicePaths(baseDir);
+    await writeMacOSServicePayload({
+      sourceExecutablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      baseDir,
+    });
+    await writeMacOSLaunchAgentPlist({ executablePath: servicePaths.payloadFile, home, baseDir });
+    const canaries = new Map<string, Buffer>([
+      [join(baseDir, 'teams', 'private-profile', 'auth.json'), Buffer.from([0, 1, 2, 255])],
+      [join(baseDir, 'teams', 'private-profile', 'management', 'outbox.json'), Buffer.from('outbox-canary')],
+      [join(baseDir, 'teams', 'private-profile', 'memory', 'capsule.bin'), Buffer.from([9, 8, 7, 6])],
+      [join(baseDir, 'machine-id'), Buffer.from('machine-canary')],
+      [servicePaths.runtimeOwnerFile, Buffer.from('{"owner":"device-service"}\n')],
+      [join(home, 'Workspace', '.agentbean-canary'), Buffer.from('workspace-canary')],
+    ]);
+    for (const [path, bytes] of canaries) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, bytes);
+    }
+    const lifecycle: string[] = [];
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => {
+        lifecycle.push(request.command);
+        return { schemaVersion: 1, requestId: request.requestId, ok: true, state: runningState('stopped') };
+      }),
+    };
+    const adapter = fakeAdapter({ bootout: vi.fn(async () => { lifecycle.push('bootout'); return success(); }) });
+
+    await expect(runDeviceCli(['uninstall'], {
+      platform: 'darwin', home, baseDir, createAdapter: () => adapter, controlClient,
+      removeInstallation: async (input) => {
+        lifecycle.push('remove');
+        await removeMacOSLaunchAgentInstallation(input);
+      },
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(lifecycle).toEqual(['begin-drain', 'shutdown', 'bootout', 'remove']);
+    expect(adapter.bootout).toHaveBeenCalledTimes(1);
+    await expect(access(servicePaths.payloadFile)).rejects.toBeDefined();
+    await expect(access(join(home, 'Library', 'LaunchAgents', 'com.agentbean.device-service.plist'))).rejects.toBeDefined();
+    for (const [path, bytes] of canaries) expect(await readFile(path)).toEqual(bytes);
+  });
+
+  test('uninstall keeps plist and payload when bootout fails', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-uninstall-failure-'));
+    const baseDir = join(home, '.agentbean');
+    const servicePaths = deviceServicePaths(baseDir);
+    await writeMacOSServicePayload({ sourceExecutablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node', baseDir });
+    const plistFile = await writeMacOSLaunchAgentPlist({ executablePath: servicePaths.payloadFile, home, baseDir });
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({ installed: true, loaded: true, running: false })),
+      bootout: vi.fn(async () => ({ exitCode: 5, stdout: '', stderr: 'private failure' })),
+    });
+
+    await expect(runDeviceCli(['uninstall'], {
+      platform: 'darwin', home, baseDir, createAdapter: () => adapter,
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+    })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(access(servicePaths.payloadFile)).resolves.toBeUndefined();
+    await expect(access(plistFile)).resolves.toBeUndefined();
+  });
+
+  test('uninstall is idempotent when no service files or launchd job exist', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-uninstall-empty-'));
+    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: false, loaded: false, running: false })) });
+    await expect(runDeviceCli(['uninstall'], {
+      platform: 'darwin', home, baseDir: join(home, '.agentbean'), createAdapter: () => adapter,
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+    expect(adapter.bootout).not.toHaveBeenCalled();
+  });
+
   test('status --json returns the stable public state and exit 0', async () => {
     const output: string[] = [];
     const state = runningState();
@@ -157,7 +306,7 @@ describe('agentbean device CLI', () => {
   });
 
   test('start uses kickstart and waits for a ready control state', async () => {
-    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: true, running: false })) });
+    const adapter = fakeAdapter({ status: vi.fn(async () => ({ installed: true, loaded: true, running: false })) });
     const controlClient = { request: vi.fn() } as unknown as DeviceControlClient;
     await expect(runDeviceCli(['start', '--deadline-ms', '1000'], {
       platform: 'darwin',

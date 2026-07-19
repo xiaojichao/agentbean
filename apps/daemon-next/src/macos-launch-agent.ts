@@ -2,8 +2,10 @@ import { execFile } from 'node:child_process';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { deviceServicePaths } from './device-service-paths.js';
+import { ensurePrivateDeviceServiceDirectory } from './device-service-filesystem.js';
 
 export const DEVICE_SERVICE_LAUNCH_AGENT_LABEL = 'com.agentbean.device-service';
 
@@ -23,6 +25,7 @@ export interface MacOSLaunchAgentPaths {
 
 export interface PlatformServiceStatus {
   readonly installed: boolean;
+  readonly loaded: boolean;
   readonly running: boolean;
 }
 
@@ -76,7 +79,8 @@ export function createMacOSLaunchAgentAdapter(
     async status() {
       const installed = await fileExists(paths.plistFile);
       const result = await run('/bin/launchctl', ['print', target]);
-      return { installed, running: result.exitCode === 0 && launchctlPrintHasLivePid(result.stdout) };
+      const loaded = result.exitCode === 0;
+      return { installed, loaded, running: loaded && launchctlPrintHasLivePid(result.stdout) };
     },
   };
 }
@@ -157,6 +161,59 @@ export async function writeMacOSLaunchAgentPlist(input: {
     throw error;
   }
   return paths.plistFile;
+}
+
+export async function writeMacOSServicePayload(input: {
+  readonly sourceExecutablePath: string;
+  readonly nodeExecutablePath: string;
+  readonly baseDir?: string;
+}): Promise<string> {
+  if (!isAbsolute(input.sourceExecutablePath) || !isAbsolute(input.nodeExecutablePath)
+    || input.nodeExecutablePath.includes('\n')) throw new Error('LAUNCH_AGENT_INSTALL_FAILED');
+  const paths = deviceServicePaths(input.baseDir);
+  await ensurePrivateDeviceServiceDirectory(paths.root);
+  await ensurePrivateDeviceServiceDirectory(paths.payloadDirectory);
+  await ensurePrivateDeviceServiceDirectory(paths.logDirectory);
+  const resolvedBaseDir = dirname(paths.root);
+  const content = `#!${input.nodeExecutablePath}\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(resolvedBaseDir)};\nawait import(${JSON.stringify(pathToFileURL(input.sourceExecutablePath).href)});\n`;
+  await writeAtomicFile(paths.payloadFile, content, 0o700);
+  return paths.payloadFile;
+}
+
+export async function removeMacOSLaunchAgentInstallation(input: {
+  readonly home?: string;
+  readonly baseDir?: string;
+} = {}): Promise<void> {
+  const launchAgentPaths = macOSLaunchAgentPaths(input);
+  const servicePaths = deviceServicePaths(input.baseDir);
+  await rm(launchAgentPaths.plistFile, { force: true });
+  await rm(servicePaths.payloadDirectory, { recursive: true, force: true });
+}
+
+async function writeAtomicFile(path: string, content: string, mode: number): Promise<void> {
+  try {
+    if (await readFile(path, 'utf8') === content) {
+      await chmod(path, mode);
+      return;
+    }
+  } catch (error) {
+    if (!isNodeError(error, 'ENOENT')) throw error;
+  }
+  const temporaryFile = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  const handle = await open(temporaryFile, 'wx', mode);
+  try {
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporaryFile, path);
+    await chmod(path, mode);
+  } catch (error) {
+    await rm(temporaryFile, { force: true });
+    throw error;
+  }
 }
 
 async function runLaunchctl(executable: string, argv: readonly string[]): Promise<LaunchctlResult> {

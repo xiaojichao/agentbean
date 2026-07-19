@@ -71,6 +71,8 @@ export {
   createMacOSLaunchAgentAdapter,
   generateMacOSLaunchAgentPlist,
   writeMacOSLaunchAgentPlist,
+  writeMacOSServicePayload,
+  removeMacOSLaunchAgentInstallation,
   macOSLaunchAgentPaths,
   DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
 } from './macos-launch-agent.js';
