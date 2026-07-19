@@ -282,7 +282,7 @@ describe('DeviceServiceHost', () => {
     });
     await host.start();
 
-    await host.stop();
+    await expect(host.stop()).resolves.toEqual({ ok: false, reasonCode: 'SERVICE_STATE_WRITE_FAILED' });
     expect(runner.stop).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
     expect(host.state).toMatchObject({ phase: 'stopped', reasonCode: 'SERVICE_STATE_WRITE_FAILED' });
@@ -340,6 +340,23 @@ describe('DeviceServiceHost', () => {
     expect(JSON.stringify(host.state)).not.toContain('secret');
   });
 
+  test('stop deadline bounds a runner that never finishes stopping', async () => {
+    const runner = fakeRunner('profile', { stop: vi.fn(() => new Promise(() => undefined)) });
+    const release = vi.fn(async () => undefined);
+    const { store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    await host.start();
+
+    await expect(host.stop(5)).resolves.toEqual({ ok: false, reasonCode: 'SERVICE_DRAIN_TIMEOUT' });
+    expect(runner.stop).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(host.state).toMatchObject({ phase: 'stopped', reasonCode: 'SERVICE_DRAIN_TIMEOUT' });
+  });
+
   test('stop waits for an in-flight start before draining', async () => {
     let finishStart: (() => void) | undefined;
     const runner = fakeRunner('profile', {
@@ -359,6 +376,31 @@ describe('DeviceServiceHost', () => {
     await Promise.all([starting, stopping]);
     expect(runner.beginDrain).toHaveBeenCalledTimes(1);
     expect(runner.stop).toHaveBeenCalledTimes(1);
+    expect(host.state.phase).toBe('stopped');
+  });
+
+  test('stop deadline bounds an in-flight start and cleans up a late completion', async () => {
+    let finishStart: (() => void) | undefined;
+    const runner = fakeRunner('profile', {
+      start: vi.fn(() => new Promise<void>((resolve) => { finishStart = resolve; })),
+    });
+    const release = vi.fn(async () => undefined);
+    const { store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    const starting = host.start();
+    await vi.waitFor(() => expect(finishStart).toBeTypeOf('function'));
+
+    await expect(host.stop(5)).resolves.toEqual({ ok: false, reasonCode: 'SERVICE_DRAIN_TIMEOUT' });
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(host.state).toMatchObject({ phase: 'stopped', reasonCode: 'SERVICE_DRAIN_TIMEOUT' });
+
+    finishStart?.();
+    await expect(starting).rejects.toBeInstanceOf(Error);
+    expect(runner.stop).toHaveBeenCalledTimes(2);
     expect(host.state.phase).toBe('stopped');
   });
 
