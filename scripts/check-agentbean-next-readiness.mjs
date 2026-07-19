@@ -850,7 +850,9 @@ export function hasPhase0ManagementBoundary(input) {
       (/safeParseManagementWorkerPayload/.test(agentSocketHandlers) &&
         !/app,\s*'(?:registerManagementWorker|scheduleManagementRun)'/.test(agentSocketHandlers))) &&
     !/app,\s*'(?:createTask|updateTask|deleteTask|reorderTask)'/.test(agentSocketHandlers) &&
-    !/pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b/.test(input.serverSource) &&
+    // 允许 Server 使用共享 OpenAI-compatible Adapter（#701/#703 生产同路径测试）；
+    // 仍禁止完整 PI Session / Worker Host / Outbox 接线。
+    !/createManagementRuntimeFactory|ManagementRuntimeFactory|\bManagementSession\b|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b|pi-session-adapter/.test(input.serverSource) &&
     !/\b(?:invocationId|managementRunId)\b/.test(input.contractsArtifact) &&
     input.serverRepositories.includes('management: ManagementRepositories') &&
     input.serverRepositories.includes('managementUnitOfWork: ManagementUnitOfWork') &&
