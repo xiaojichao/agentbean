@@ -591,23 +591,12 @@ describe('server-next SQLite repositories', () => {
           teamId: 'team-1',
           ownerId: 'user-1',
           name: 'shaw-mbp',
-          connectCommand: expect.stringContaining('device-code-1'),
         },
       });
-      expect(hello).toMatchObject({
-        ok: true,
-        device: {
-          connectCommand: expect.stringContaining('--profile-id agentbean-next'),
-        },
-      });
-      expect(hello).toMatchObject({
-        ok: true,
-        device: {
-          connectCommand: expect.stringContaining('--server-url https://agentbean.example'),
-        },
-      });
+      if (!hello.ok) throw new Error('device hello failed');
+      expect(hello.device).not.toHaveProperty('connectCommand');
       expect(globalDb.prepare('SELECT connect_command AS connectCommand FROM devices WHERE id = ?').get('device-1')).toEqual({
-        connectCommand: hello.ok ? hello.device.connectCommand : undefined,
+        connectCommand: null,
       });
     } finally {
       close();

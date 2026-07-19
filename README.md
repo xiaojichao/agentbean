@@ -13,14 +13,15 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 
 ## macOS Device Service MVP
 
-当前 MVP 只支持 macOS 当前用户的 LaunchAgent，不需要 `sudo`。先在 AgentBean Web 完成一次设备邀请并保存 Profile；可用下面的命令确认本机已有 Profile：
+当前 MVP 只支持 macOS 当前用户的 LaunchAgent，不需要 `sudo`。在 AgentBean Web 的「添加设备」对话框中复制并运行为当前 Team 生成的连接命令：
 
 ```bash
-npm install -g @agentbean/daemon@latest
-agentbean --list-profiles
+npm install -g @agentbean/daemon@latest && agentbean device connect --invite-code '<code>' --server-url '<url>' --profile-id '<profile>'
 ```
 
-首次安装会自动检查并安全停止旧 npm Daemon，通过迁移健康检查后再切换运行所有已保存 Profile。若仍有旧进程、没有 Profile 或健康检查失败，安装会拒绝切换，不会启动第二个实例：
+`device connect` 会完成设备邀请、保存 Team 对应的 Device Profile、安装或刷新 Device Service 并等待服务就绪。命令成功退出后可关闭终端；同一个 macOS 用户的所有 Team Profile 共用一个 Device Service。
+
+首次安装会自动检查并安全停止旧 npm Daemon，通过迁移健康检查后再切换运行所有已保存 Profile。若仍有旧进程、没有 Profile 或健康检查失败，安装会拒绝切换，不会启动第二个实例。可用下面的命令检查：
 
 ```bash
 agentbean device install

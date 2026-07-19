@@ -23,13 +23,21 @@ import {
   type DeviceMigrationStatus,
 } from './device-migration.js';
 import { listAuthProfiles } from './auth-store.js';
+import { sanitizeProfileId } from './profile-paths.js';
 import {
   cleanupLegacyLinuxDeviceService,
   type LegacyLinuxCleanupResult,
 } from './legacy-linux-device-service.js';
 
-export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs' | 'migrate';
+export type DeviceCliCommand = 'run' | 'connect' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs' | 'migrate';
 export type DeviceMigrationCommand = 'plan' | 'start' | 'status' | 'resume' | 'cancel';
+
+export interface DeviceConnectInput {
+  readonly inviteCode: string;
+  readonly serverUrl: string;
+  readonly profileId: string;
+  readonly baseDir?: string;
+}
 
 export const DEVICE_CLI_EXIT = {
   success: 0,
@@ -61,6 +69,7 @@ export interface DeviceCliDeps {
   readonly cleanupLegacyLinuxInstallation?: () => Promise<LegacyLinuxCleanupResult>;
   readonly migrate?: (command: DeviceMigrationCommand) => Promise<DeviceMigrationStatus>;
   readonly migrationDeps?: Pick<DeviceMigrationDeps, 'listLegacy' | 'listUnregisteredLegacyPids' | 'listInstalledLegacyExecutables' | 'isProcessAlive'>;
+  readonly connectProfile?: (input: DeviceConnectInput) => Promise<{ profileId: string; teamId: string }>;
 }
 
 export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps = {}): Promise<number> {
@@ -68,7 +77,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   const stdout = deps.stdout ?? console.log;
   const stderr = deps.stderr ?? console.error;
   if (!parsed) {
-    stderr('用法：agentbean device <run|install|uninstall|status|start|stop|restart|logs|migrate> [plan|start|status|resume|cancel] [--json] [--follow] [--deadline-ms N]');
+    stderr('用法：agentbean device <connect|run|install|uninstall|status|start|stop|restart|logs|migrate> [选项]');
     return DEVICE_CLI_EXIT.usage;
   }
   const paths = deviceServicePaths(deps.baseDir);
@@ -106,6 +115,41 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     }
     stderr('当前平台尚未支持 Device Service 系统注册。');
     return DEVICE_CLI_EXIT.platform;
+  }
+  if (parsed.command === 'connect') {
+    const connection = parsed.connection;
+    if (!connection) return DEVICE_CLI_EXIT.usage;
+    const platformBeforeConnect = await readPlatformStatus(deps);
+    if (platformBeforeConnect.queryFailed) {
+      stderr('无法读取系统服务管理器中的 Device Service 状态，未消耗设备邀请。');
+      return DEVICE_CLI_EXIT.platform;
+    }
+    try {
+      const connectProfile = deps.connectProfile ?? connectProfileWithInvite;
+      await connectProfile({
+        ...connection,
+        ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+      });
+      stdout(`Device Profile "${connection.profileId}" 已连接。`);
+    } catch (error) {
+      stderr(`设备连接失败（${stableReason(error instanceof Error ? error.message : String(error))}）。`);
+      return DEVICE_CLI_EXIT.rejected;
+    }
+    const adapter = createPlatformAdapter(deps);
+    const installed = await installService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+    if (installed !== DEVICE_CLI_EXIT.success) {
+      stderr('Device Profile 已保存；请修复服务问题后运行 `agentbean device install`。');
+      return installed;
+    }
+    if (platformBeforeConnect.running) {
+      const restarted = await restartService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+      if (restarted !== DEVICE_CLI_EXIT.success) {
+        stderr('Device Profile 已保存；请运行 `agentbean device restart` 重试加载。');
+        return restarted;
+      }
+    }
+    stdout('设备已交接给 Device Service，终端可以关闭。');
+    return DEVICE_CLI_EXIT.success;
   }
   if (parsed.command === 'run') {
     try {
@@ -160,9 +204,20 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   if (parsed.command === 'uninstall') return uninstallService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'start') return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'stop') return stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
-  const stopped = await stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
+  return restartService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+}
+
+async function restartService(
+  adapter: PlatformServiceAdapter,
+  client: DeviceControlClient,
+  deadlineMs: number,
+  deps: DeviceCliDeps,
+  stdout: (message: string) => void,
+  stderr: (message: string) => void,
+): Promise<number> {
+  const stopped = await stopService(adapter, client, deadlineMs, stdout, stderr);
   if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
-  const platformStopped = await waitForPlatformStopped(adapter, parsed.deadlineMs);
+  const platformStopped = await waitForPlatformStopped(adapter, deadlineMs);
   if (platformStopped === 'error') {
     stderr('无法确认旧 Device Service 已退出。');
     return DEVICE_CLI_EXIT.platform;
@@ -171,7 +226,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     stderr('旧 Device Service 未在截止时间内退出，未启动第二个实例。');
     return DEVICE_CLI_EXIT.drain;
   }
-  return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+  return startService(adapter, client, deadlineMs, deps, stdout, stderr);
 }
 
 async function installService(
@@ -484,17 +539,21 @@ async function followLog(path: string): Promise<number> {
 function parseDeviceCliArgs(argv: readonly string[]): {
   command: DeviceCliCommand;
   migrationCommand?: DeviceMigrationCommand;
+  connection?: { inviteCode: string; serverUrl: string; profileId: string };
   json: boolean;
   follow: boolean;
   deadlineMs: number;
 } | null {
   const command = argv[0];
-  if (command !== 'run' && command !== 'install' && command !== 'uninstall' && command !== 'status' && command !== 'start'
+  if (command !== 'connect' && command !== 'run' && command !== 'install' && command !== 'uninstall' && command !== 'status' && command !== 'start'
     && command !== 'stop' && command !== 'restart' && command !== 'logs' && command !== 'migrate') return null;
   let deadlineMs = 30_000;
   let json = false;
   let follow = false;
   let migrationCommand: DeviceMigrationCommand | undefined;
+  let inviteCode: string | undefined;
+  let serverUrl: string | undefined;
+  let profileId: string | undefined;
   let startIndex = 1;
   if (command === 'migrate') {
     const action = argv[1];
@@ -506,13 +565,31 @@ function parseDeviceCliArgs(argv: readonly string[]): {
     const value = argv[index];
     if (value === '--json' && (command === 'status' || command === 'migrate')) json = true;
     else if (value === '--follow' && command === 'logs') follow = true;
+    else if (value === '--invite-code' && command === 'connect') inviteCode = argv[++index];
+    else if (value === '--server-url' && command === 'connect') serverUrl = argv[++index];
+    else if (value === '--profile-id' && command === 'connect') profileId = argv[++index];
     else if (value === '--deadline-ms') {
       const parsed = Number(argv[++index]);
       if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 300_000) return null;
       deadlineMs = parsed;
     } else return null;
   }
+  if (command === 'connect') {
+    if (!inviteCode || !serverUrl || !profileId) return null;
+    return {
+      command,
+      connection: { inviteCode, serverUrl: serverUrl.replace(/\/+$/, ''), profileId: sanitizeProfileId(profileId) },
+      json,
+      follow,
+      deadlineMs,
+    };
+  }
   return { command, ...(migrationCommand ? { migrationCommand } : {}), json, follow, deadlineMs };
+}
+
+async function connectProfileWithInvite(input: DeviceConnectInput): Promise<{ profileId: string; teamId: string }> {
+  const { connectDeviceProfile } = await import('./cli.js');
+  return connectDeviceProfile(input);
 }
 
 function stableReason(reasonCode: string): string {

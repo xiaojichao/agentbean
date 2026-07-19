@@ -397,7 +397,7 @@ export interface AuthEvents {
   register(payload: { username: string; password: string; email?: string; joinCode?: string; sessionId?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; defaultChannel?: { id: string; name: string }; error?: string }>;
   login(payload: { username: string; password: string; joinCode?: string }): Promise<{ ok: boolean; token?: string; user?: UserInfo; currentTeam?: { id: string; name: string; path: string }; error?: string }>;
   whoami(): Promise<{ ok: boolean; user?: UserInfo; currentTeam?: TeamSummary; error?: string }>;
-  inviteCreate(payload?: { teamId?: string; purpose?: 'user' | 'device' }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
+  inviteCreate(payload?: { teamId?: string; purpose?: 'user' | 'device'; profileId?: string }): Promise<{ ok: boolean; invite?: InviteInfo; error?: string }>;
   deviceLogin(payload: { inviteCode: string; username: string; password: string }): Promise<{ ok: boolean; token?: string; deviceToken?: string; teamId?: string; teamPath?: string; userId?: string; username?: string; role?: 'admin' | 'user'; deviceId?: string; error?: string }>;
   changePassword(payload: { currentPassword: string; newPassword: string }): Promise<{ ok: boolean; error?: string }>;
   // 已登录用户直接用现有 token 完成 device invite（不需再输密码），用于让 web 关联本机设备。

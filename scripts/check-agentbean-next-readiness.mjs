@@ -24,6 +24,14 @@ export function collectAgentBeanNextReadinessChecks({
   const piSeaBuilder = readFileSync(join(root, 'scripts/build-pi-management-sea.mjs'), 'utf8');
   const publishJobCondition =
     "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
+  const publishJob = workflow.slice(
+    workflow.indexOf('\n  publish:'),
+    workflow.indexOf('\n  promote-agentbean-daemon-latest:'),
+  );
+  const deployJob = workflow.slice(
+    workflow.indexOf('\n  deploy:'),
+    workflow.indexOf('\n  railway-next-preflight:'),
+  );
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
@@ -388,6 +396,19 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('NPM_TOKEN') &&
         cutoverRunbook.includes('推送 `main` 触发生产部署'),
       'CI publish job must start automatically after a successful main push validation',
+    ),
+    check(
+      'ci-promotes-canonical-daemon-latest-before-production-deploy',
+      publishJob.includes('canonical_daemon_version=$CANONICAL_DAEMON_VERSION') &&
+        publishJob.includes('Promote canonical daemon latest before production deploy') &&
+        publishJob.includes('Verify canonical daemon latest before production deploy') &&
+        publishJob.includes('npm dist-tag add') &&
+        publishJob.indexOf('Publish AgentBean Next canonical daemon package') <
+          publishJob.indexOf('Promote canonical daemon latest before production deploy') &&
+        publishJob.indexOf('Promote canonical daemon latest before production deploy') <
+          publishJob.indexOf('Verify canonical daemon latest before production deploy') &&
+        deployJob.includes('- publish'),
+      'CI publish must promote and verify canonical @agentbean/daemon latest before the dependent production deploy can expose matching Web commands',
     ),
     check(
       'ci-runs-next-production-smoke-after-main-push',

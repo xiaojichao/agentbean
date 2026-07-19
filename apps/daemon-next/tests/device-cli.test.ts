@@ -169,6 +169,95 @@ describe('MacOSLaunchAgentAdapter', () => {
 });
 
 describe('agentbean device CLI', () => {
+  test('connect persists the invited profile, installs the service, and returns after health is ready', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-connect-home-'));
+    const baseDir = join(home, '.agentbean');
+    let loaded = false;
+    let running = false;
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({ installed: loaded, loaded, running, queryFailed: false })),
+      bootstrap: vi.fn(async () => {
+        loaded = true;
+        running = true;
+        return success();
+      }),
+    });
+    const connectProfile = vi.fn(async () => ({ profileId: 'team-a', teamId: 'team-a' }));
+    const stdout = vi.fn();
+
+    await expect(runDeviceCli([
+      'connect',
+      '--invite-code', 'invite-secret',
+      '--server-url', 'https://api.agentbean.dev/',
+      '--profile-id', 'Team A',
+    ], {
+      platform: 'darwin',
+      home,
+      baseDir,
+      executablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      createAdapter: () => adapter,
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+      waitForReady: vi.fn(async () => runningState()),
+      assertRuntimeOwner: vi.fn(async () => undefined),
+      connectProfile,
+      stdout,
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(connectProfile).toHaveBeenCalledWith({
+      inviteCode: 'invite-secret',
+      serverUrl: 'https://api.agentbean.dev',
+      profileId: 'team-a',
+      baseDir,
+    });
+    expect(adapter.bootstrap).toHaveBeenCalledOnce();
+    expect(adapter.start).not.toHaveBeenCalled();
+    expect(stdout).toHaveBeenCalledWith('设备已交接给 Device Service，终端可以关闭。');
+  });
+
+  test('connect does not install the service when invitation registration fails', async () => {
+    const writePayload = vi.fn();
+    const stderr = vi.fn();
+
+    await expect(runDeviceCli([
+      'connect',
+      '--invite-code', 'expired',
+      '--server-url', 'https://api.agentbean.dev',
+      '--profile-id', 'team-a',
+    ], {
+      platform: 'darwin',
+      createAdapter: () => fakeAdapter(),
+      connectProfile: vi.fn(async () => { throw new Error('INVITE_EXPIRED'); }),
+      writePayload,
+      stderr,
+    })).resolves.toBe(DEVICE_CLI_EXIT.rejected);
+
+    expect(writePayload).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith('设备连接失败（INVITE_EXPIRED）。');
+  });
+
+  test('connect does not consume the invitation when launchd status cannot be read', async () => {
+    const connectProfile = vi.fn();
+    const stderr = vi.fn();
+
+    await expect(runDeviceCli([
+      'connect',
+      '--invite-code', 'still-valid',
+      '--server-url', 'https://api.agentbean.dev',
+      '--profile-id', 'team-a',
+    ], {
+      platform: 'darwin',
+      createAdapter: () => fakeAdapter({
+        status: vi.fn(async () => ({ installed: true, loaded: false, running: false, queryFailed: true })),
+      }),
+      connectProfile,
+      stderr,
+    })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+
+    expect(connectProfile).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith('无法读取系统服务管理器中的 Device Service 状态，未消耗设备邀请。');
+  });
+
   test('install writes payload and plist, bootstraps once, waits ready, and is idempotent', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentbean-device-install-home-'));
     const baseDir = join(home, '.agentbean');

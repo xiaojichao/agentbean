@@ -111,6 +111,22 @@ export interface DaemonNextCliDeps {
   assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
 }
 
+export interface ConnectDeviceProfileInput {
+  inviteCode: string;
+  serverUrl: string;
+  profileId: string;
+  baseDir?: string;
+  machineId?: string;
+  hostname?: string;
+}
+
+export interface ConnectDeviceProfileDeps {
+  connectSocket?: (serverUrl: string) => Promise<SocketIoClientLike>;
+  loadAuth?: typeof loadAuth;
+  saveAuth?: typeof saveAuth;
+  loadOrCreateMachineId?: typeof loadOrCreateMachineId;
+}
+
 /**
  * Boolean (value-less) CLI flags. parseArgs treats every other `--flag` as
  * `--flag value`, so these must be recognised and not consume the next arg.
@@ -362,6 +378,58 @@ export function resolveDeviceCredentials(
     error:
       'Daemon requires --invite-code, or (--team-id and --owner-id), or a previously saved auth profile (initialize with --invite-code first).',
   };
+}
+
+/**
+ * Exchanges one device invite for a persisted Device Profile and then exits.
+ * It deliberately does not start the long-running daemon runtime: the caller
+ * hands the saved profile to the user-level Device Service afterwards.
+ */
+export async function connectDeviceProfile(
+  input: ConnectDeviceProfileInput,
+  deps: ConnectDeviceProfileDeps = {},
+): Promise<{ profileId: string; teamId: string }> {
+  const profileId = sanitizeProfileId(input.profileId);
+  const serverUrl = trimTrailingSlash(input.serverUrl);
+  const loadAuthFn = deps.loadAuth ?? loadAuth;
+  const saveAuthFn = deps.saveAuth ?? saveAuth;
+  const existing = loadAuthFn({ profileId, ...(input.baseDir ? { baseDir: input.baseDir } : {}) });
+  if (existing && trimTrailingSlash(existing.serverUrl) !== serverUrl) {
+    throw new Error('DEVICE_PROFILE_CONFLICT');
+  }
+
+  const machineId = input.machineId
+    ?? (deps.loadOrCreateMachineId ?? loadOrCreateMachineId)({ ...(input.baseDir ? { baseDir: input.baseDir } : {}) });
+  const hostname = input.hostname ?? readHostname();
+  const socket = await (deps.connectSocket ?? connectSocketIoClient)(serverUrl);
+  try {
+    const credentials = await waitForDeviceInviteCredentials(createSocketIoDaemonSocket(socket), {
+      code: input.inviteCode,
+      machineId,
+      profileId,
+      hostname,
+      serverUrl,
+    }, { onStatus: (message) => console.log(message) });
+    if (existing && existing.teamId !== credentials.teamId) {
+      throw new Error('DEVICE_PROFILE_CONFLICT');
+    }
+    const auth: AuthData = {
+      token: credentials.token,
+      serverUrl,
+      teamId: credentials.teamId,
+      ownerId: credentials.ownerId,
+    };
+    const authOptions = { profileId, ...(input.baseDir ? { baseDir: input.baseDir } : {}) };
+    saveAuthFn(auth, authOptions);
+    const persisted = loadAuthFn(authOptions);
+    if (!persisted || persisted.token !== auth.token || persisted.teamId !== auth.teamId
+      || persisted.ownerId !== auth.ownerId || trimTrailingSlash(persisted.serverUrl) !== serverUrl) {
+      throw new Error('DEVICE_PROFILE_PERSIST_FAILED');
+    }
+    return { profileId, teamId: credentials.teamId };
+  } finally {
+    socket.disconnect();
+  }
 }
 
 export async function runDaemonNextCli(

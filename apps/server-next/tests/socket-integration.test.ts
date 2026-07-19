@@ -641,11 +641,11 @@ describe('server-next Socket.IO namespaces', () => {
         code: 'device-code-1',
         teamId: 'team-1',
         profileId: 'agentbean-next',
-        command: expect.stringContaining('--invite-code device-code-1'),
+        command: expect.stringContaining("--invite-code 'device-code-1'"),
       },
     });
     expect(created.invite.command).toContain('--server-url');
-    expect(created.invite.command).toContain('--profile-id agentbean-next');
+    expect(created.invite.command).toContain("--profile-id 'agentbean-next'");
     const deliveredCredentials: unknown[] = [];
     daemon.on(AGENT_EVENTS.deviceInvite.credentials, (payload) => {
       deliveredCredentials.push(payload);

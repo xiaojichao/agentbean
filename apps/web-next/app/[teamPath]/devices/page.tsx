@@ -12,7 +12,7 @@ import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
 import { DirectoryTreeBrowseButton } from './DirectoryTreePicker';
-import type { AgentWorkspaceFile, AgentWorkspaceRun } from '@/lib/schema';
+import type { AgentWorkspaceFile, AgentWorkspaceRun, DeviceServiceOperationCommand } from '@/lib/schema';
 
 const STATUS_COLORS: Record<string, string> = {
   online: 'text-emerald-500',
@@ -63,6 +63,18 @@ const DIRECTORY_PICKER_MIN_DAEMON_VERSION = '0.1.27';
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 type EnvRow = { key: string; value: string };
 type WorkspaceAgent = { id: string; name: string; adapterKind?: string; cwd?: string | null; runs: AgentWorkspaceRun[] };
+
+const DEVICE_SERVICE_RECOVERY_COMMAND = 'agentbean device install && agentbean device restart';
+const DEVICE_SERVICE_DIAGNOSTIC_COMMANDS: DeviceServiceOperationCommand[] = [
+  { id: 'status', label: '查看状态', command: 'agentbean device status' },
+  { id: 'logs', label: '查看实时日志', command: 'agentbean device logs --follow' },
+];
+
+function resolveInviteCommandServerUrl(command: string): string {
+  const resolved = getResolvedServerUrl();
+  const quoted = `'${resolved.replaceAll("'", "'\\''")}'`;
+  return command.replace(/--server-url\s+(?:'[^']*'|"[^"]*"|\S+)/, `--server-url ${quoted}`);
+}
 
 function directoryFallbackPath(name: string): string {
   return `~/projects/${name}`;
@@ -379,7 +391,7 @@ function EmptyState({ loading = false, error = '' }: { loading?: boolean; error?
 }
 
 function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName, showDeleteConfirm, setShowDeleteConfirm, currentTeamId, onDeleted }: {
-  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; name?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; connectCommand?: string | null; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; capabilities?: { fsBrowse?: boolean }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
+  device: { id: string; ownerId?: string | null; userId?: string | null; ownerName?: string | null; userName?: string | null; canManage?: boolean; isLocal?: boolean; profileId?: string; name?: string; status: string; lastSeenAt: number; agentIds: string[]; runtimes?: any[]; latestDaemonVersion?: string | null; daemonUpdateAvailable?: boolean; daemonVersionInfo?: { current: string | null; latest: string | null; updateAvailable: boolean; status: 'current' | 'update-available' | 'unknown' }; capabilities?: { fsBrowse?: boolean }; systemInfo?: { platform?: string; arch?: string; osVersion?: string; hostname?: string; cpuModel?: string; cpuCores?: number; totalMemoryGB?: number; freeMemoryGB?: number; nodeVersion?: string; daemonVersion?: string } | null };
   editName: boolean;
   setEditName: (v: boolean) => void;
   deviceName: string;
@@ -568,11 +580,9 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const generateConnect = async () => {
     setGenError('');
     setInviteCommand('');
-    const res = await authEvents().inviteCreate({ teamId: currentTeamId ?? undefined, purpose: 'device' });
+    const res = await authEvents().inviteCreate({ teamId: currentTeamId ?? undefined, purpose: 'device', profileId: device.profileId });
     if (res.ok && res.invite?.command) {
-      const resolved = getResolvedServerUrl();
-      const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
-      setInviteCommand(command);
+      setInviteCommand(resolveInviteCommandServerUrl(res.invite.command));
     } else {
       setGenError(res.error ?? '生成失败');
     }
@@ -709,33 +719,33 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           </section>
         )}
 
-        {/* CONNECTION */}
+        {/* DEVICE SERVICE RECOVERY */}
         {isOwnedByCurrentUser && device.status === 'offline' && (
           <section className="rounded-lg border border-neutral-200 p-4">
-            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-neutral-500">连接命令</h3>
-            {device.connectCommand && (
-              <div className="space-y-2">
-                <p className="text-xs text-neutral-500">首次接入命令（历史参考，invite code 可能已失效）：</p>
-                {daemonVersion.updateAvailable && upgradeGuidance.mode === 'legacy' && (
-                  <p className="text-xs font-medium text-amber-700">旧版本需要生成并运行新的连接命令完成迁移。</p>
-                )}
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{device.connectCommand}</code>
-                  <button onClick={() => { navigator.clipboard.writeText(device.connectCommand ?? ''); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
-                    <Copy size={10} /> {copied ? '已复制' : '复制'}
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className={device.connectCommand ? 'mt-3' : ''}>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Device Service</h3>
+            <p className="mt-1 text-xs leading-5 text-neutral-500">设备离线时，先在这台 Mac 上恢复用户级系统服务；终端无需保持运行。</p>
+            <div className="mt-3 flex items-center gap-2">
+              <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{DEVICE_SERVICE_RECOVERY_COMMAND}</code>
+              <button onClick={() => { navigator.clipboard.writeText(DEVICE_SERVICE_RECOVERY_COMMAND); setCopied(true); setTimeout(() => setCopied(false), 2000); }} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
+                <Copy size={10} /> {copied ? '已复制' : '复制'}
+              </button>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {DEVICE_SERVICE_DIAGNOSTIC_COMMANDS.map((item) => (
+                <button key={item.id} onClick={() => navigator.clipboard.writeText(item.command)} className="flex items-center justify-between rounded-md border border-neutral-200 px-3 py-2 text-left hover:bg-neutral-50">
+                  <span><span className="block text-xs font-medium text-neutral-700">{item.label}</span><code className="text-[11px] text-neutral-500">{item.command}</code></span>
+                  <Copy size={12} className="text-neutral-400" />
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 border-t border-neutral-100 pt-3">
+              <p className="mb-2 text-xs text-neutral-500">如果本机 Profile 已丢失或凭据已失效，再生成一次新的重新连接命令。</p>
               <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
-                {daemonVersion.updateAvailable && upgradeGuidance.mode === 'legacy'
-                  ? device.connectCommand ? '生成新连接命令进行升级' : '生成连接命令进行升级'
-                  : device.connectCommand ? '生成新连接命令' : '生成连接命令'}
+                生成重新连接命令
               </button>
               {inviteCommand && (
                 <div className="mt-3 space-y-1">
-                  <p className="text-xs text-neutral-500">新连接命令（可用）：</p>
+                  <p className="text-xs text-neutral-500">新的短期连接命令：</p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{inviteCommand}</code>
                     <button onClick={copy} className="shrink-0 rounded-md border border-neutral-300 px-3 py-2 text-xs hover:bg-neutral-50 flex items-center gap-1">
@@ -923,54 +933,86 @@ function InfoCard({ label, value, hint, tone }: { label: string; value: string; 
 
 function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; currentTeamId: string | null }) {
   const [inviteCommand, setInviteCommand] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [operationCommands, setOperationCommands] = useState<DeviceServiceOperationCommand[]>([]);
+  const [expiresAt, setExpiresAt] = useState<number | null>(null);
+  const [copiedCommand, setCopiedCommand] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const generateCommand = async () => {
     setLoading(true);
     setError('');
+    setInviteCommand('');
     const res = await authEvents().inviteCreate({ teamId: currentTeamId ?? undefined, purpose: 'device' });
     setLoading(false);
     if (res.ok && res.invite?.command) {
-      const resolved = getResolvedServerUrl();
-      const command = res.invite.command.replace(/--server-url\s+\S+/, `--server-url ${resolved}`);
-      setInviteCommand(command);
-      setInviteCode(res.invite.code ?? '');
+      setInviteCommand(resolveInviteCommandServerUrl(res.invite.command));
+      setOperationCommands(res.invite.operationCommands ?? []);
+      setExpiresAt(res.invite.expiresAt ?? null);
     } else {
       setError(res.error ?? '生成失败');
     }
   };
 
-  const copy = () => {
-    navigator.clipboard.writeText(inviteCommand);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  useEffect(() => {
+    void generateCommand();
+  }, []);
+
+  const copy = (command: string) => {
+    navigator.clipboard.writeText(command);
+    setCopiedCommand(command);
+    setTimeout(() => setCopiedCommand(''), 2000);
   };
+
+  const commonCommands = operationCommands.filter((item) => !item.advanced);
+  const advancedCommands = operationCommands.filter((item) => item.advanced);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="mx-4 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold">添加设备</h2>
-        <p className="mt-2 text-sm text-neutral-500">在新设备上运行以下命令，将其连接到当前团队。</p>
+        <p className="mt-2 text-sm text-neutral-500">当前支持 macOS。在新 Mac 的终端运行一次以下命令，即可连接当前团队并安装用户级 Device Service。</p>
 
-        {!inviteCommand && (
-          <button onClick={generateCommand} disabled={loading} className="mt-4 rounded-md bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800 disabled:opacity-50">
-            {loading ? '生成中...' : '生成连接命令'}
-          </button>
-        )}
+        {loading && <p className="mt-4 text-sm text-neutral-500">正在生成连接命令...</p>}
 
         {inviteCommand && (
-          <div className="mt-4 space-y-2">
+          <div className="mt-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-neutral-800">连接这台 Mac</h3>
+              {expiresAt && <span className="text-xs text-neutral-400">{new Date(expiresAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 前有效</span>}
+            </div>
             <code className="block overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-3 text-xs text-emerald-400">{inviteCommand}</code>
-            <button onClick={copy} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 py-2 text-sm hover:bg-neutral-50">
-              <Copy size={14} /> {copied ? '已复制到剪贴板' : '复制命令'}
+            <button onClick={() => copy(inviteCommand)} className="flex w-full items-center justify-center gap-1.5 rounded-md border border-neutral-300 py-2 text-sm hover:bg-neutral-50">
+              <Copy size={14} /> {copiedCommand === inviteCommand ? '已复制到剪贴板' : '复制连接命令'}
             </button>
-            {inviteCode && (
-              <p className="text-xs text-neutral-500">
-                命令运行后，<a href={`/device-login/${inviteCode}`} className="text-blue-600 underline">点击此处完成本机设备关联</a>（否则该设备配置将只读）。
-              </p>
+            <p className="rounded-md bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-800">命令显示连接成功后即可关闭终端；AgentBean 会由系统服务持续运行，登录 Mac 后自动启动。</p>
+
+            {commonCommands.length > 0 && (
+              <div className="border-t border-neutral-100 pt-4">
+                <h3 className="mb-2 text-sm font-semibold text-neutral-800">后续管理</h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {commonCommands.map((item) => (
+                    <button key={item.id} onClick={() => copy(item.command)} className="flex items-center justify-between rounded-md border border-neutral-200 px-3 py-2 text-left hover:bg-neutral-50">
+                      <span><span className="block text-xs font-medium text-neutral-700">{item.label}</span><code className="text-[11px] text-neutral-500">{item.command}</code></span>
+                      <span className="flex items-center gap-1 text-[11px] text-neutral-400"><Copy size={12} />{copiedCommand === item.command ? '已复制' : ''}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {advancedCommands.length > 0 && (
+              <details className="rounded-md border border-neutral-200 px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-neutral-600">高级操作</summary>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {advancedCommands.map((item) => (
+                    <button key={item.id} onClick={() => copy(item.command)} className="flex items-center justify-between rounded-md bg-neutral-50 px-3 py-2 text-left hover:bg-neutral-100">
+                      <span><span className="block text-xs font-medium text-neutral-700">{item.label}</span><code className="text-[11px] text-neutral-500">{item.command}</code></span>
+                      <Copy size={12} className="text-neutral-400" />
+                    </button>
+                  ))}
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -978,6 +1020,7 @@ function AddDeviceDialog({ onClose, currentTeamId }: { onClose: () => void; curr
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
         <div className="mt-6 flex justify-end">
+          <button onClick={generateCommand} disabled={loading} className="mr-2 rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50 disabled:opacity-50">重新生成</button>
           <button onClick={onClose} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">关闭</button>
         </div>
       </div>

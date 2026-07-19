@@ -2457,6 +2457,13 @@
         await selectDevice(row.dataset.deviceId || null);
       });
       el("device-detail").addEventListener("click", async (event) => {
+        const commandCopyButton = event.target.closest("button[data-copy-command]");
+        if (commandCopyButton) {
+          await navigator.clipboard?.writeText(commandCopyButton.dataset.copyCommand || "");
+          commandCopyButton.textContent = "已复制";
+          setTimeout(() => { commandCopyButton.textContent = "复制"; }, 2000);
+          return;
+        }
         const upgradeCopyButton = event.target.closest("button[data-daemon-upgrade-command]");
         if (upgradeCopyButton) {
           await navigator.clipboard?.writeText(upgradeCopyButton.dataset.daemonUpgradeCommand || "");
@@ -2966,7 +2973,12 @@
 
       async function generateDeviceInvite() {
         if (!state.user || !state.team) return;
-        const ack = await emit("device-invite:create", { userId: state.user.id, teamId: state.team.id, purpose: "device" });
+        const ack = await emit("device-invite:create", {
+          userId: state.user.id,
+          teamId: state.team.id,
+          purpose: "device",
+          ...(state.deviceDetail?.profileId ? { profileId: state.deviceDetail.profileId } : {}),
+        });
         if (ack.ok && ack.invite?.command) {
           state.generatedDeviceInviteCommand = ack.invite.command;
         }
@@ -3027,7 +3039,7 @@
           </section>
           ${renderSystemInfo(sys, daemon)}
           ${renderDaemonUpgradeGuidance(device, daemon)}
-          ${renderConnectCommand(device, isOwner)}
+          ${renderDeviceService(device, isOwner)}
           <section class="device-section">
             <div class="rail-heading"><h3>运行时</h3>${canManage ? `<button type="button" class="secondary" data-device-scan="${escapeHtml(device.id)}">扫描</button>` : ""}</div>
             ${renderRuntimeList(runtimes)}
@@ -3220,12 +3232,20 @@
         return `<section class="device-section"><h3>硬件信息</h3><dl class="device-detail-grid">${rows.map(([label, value]) => renderDeviceFact(label, value)).join("")}</dl></section>`;
       }
 
-      function renderConnectCommand(device, isOwner) {
+      function renderDeviceService(device, isOwner) {
         if (!isOwner || device.status !== "offline") return "";
-        const command = device.connectCommand || state.generatedDeviceInviteCommand;
+        const recoveryCommand = "agentbean device install && agentbean device restart";
+        const reconnectCommand = state.generatedDeviceInviteCommand;
         return `<section class="device-section">
-          <div class="rail-heading"><h3>连接命令</h3>${!command ? `<button type="button" class="secondary" data-device-invite="true">生成</button>` : ""}</div>
-          ${command ? `<p class="meta">使用以下命令重新启动此设备上的 Daemon：</p><code class="device-command">${escapeHtml(command)}</code>` : `<div class="rail-muted">该离线设备暂无持久化连接命令，可生成新的设备邀请命令。</div>`}
+          <div class="rail-heading"><h3>Device Service</h3><button type="button" class="secondary" data-device-invite="true">生成重新连接命令</button></div>
+          <p class="meta">先在这台 Mac 上恢复用户级系统服务；终端无需保持运行。</p>
+          <code class="device-command">${escapeHtml(recoveryCommand)}</code>
+          <div class="device-actions">
+            <button type="button" class="secondary" data-copy-command="${escapeHtml(recoveryCommand)}">复制恢复命令</button>
+            <button type="button" class="secondary" data-copy-command="agentbean device status">复制状态命令</button>
+            <button type="button" class="secondary" data-copy-command="agentbean device logs --follow">复制日志命令</button>
+          </div>
+          ${reconnectCommand ? `<p class="meta">新的短期连接命令：</p><code class="device-command">${escapeHtml(reconnectCommand)}</code><button type="button" class="secondary" data-copy-command="${escapeHtml(reconnectCommand)}">复制</button>` : ""}
         </section>`;
       }
 

@@ -46,7 +46,8 @@ export interface DeviceDto {
   daemonVersionInfo?: DaemonVersionInfo;
   latestDaemonVersion?: string | null;
   daemonUpdateAvailable?: boolean;
-  connectCommand?: string;
+  /** Device Service 内用于恢复同一 Team 连接的本地 Profile 标识。 */
+  profileId?: string;
   lastSeenAt?: UnixMs;
   /** 是否为当前 web 连接所在的本地设备（相对值：序列化时按 currentDeviceId 计算，daemon/admin 路径不下发）。 */
   isLocal?: boolean;
@@ -66,8 +67,17 @@ export interface DeviceInviteDto {
   expiresAt?: UnixMs;
   completedAt?: UnixMs;
   profileId?: string;
-  /** 可直接运行的 daemon 连接命令，仅 createDeviceInvite 返回；daemon 侧等待/完成流程不返回。 */
+  /** 可直接运行的一次性 Device Service 连接命令，仅 createDeviceInvite 返回。 */
   command?: string;
+  /** 连接完成后可复制使用的 Device Service 生命周期命令。 */
+  operationCommands?: DeviceServiceOperationCommandDto[];
+}
+
+export interface DeviceServiceOperationCommandDto {
+  id: 'status' | 'logs' | 'restart' | 'update' | 'stop' | 'start' | 'uninstall';
+  label: string;
+  command: string;
+  advanced?: boolean;
 }
 
 export interface CreateDeviceInviteCommandDto {

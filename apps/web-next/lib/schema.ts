@@ -166,6 +166,14 @@ export interface InviteInfo {
   code: string;
   expiresAt: number;
   command?: string;
+  operationCommands?: DeviceServiceOperationCommand[];
+}
+
+export interface DeviceServiceOperationCommand {
+  id: 'status' | 'logs' | 'restart' | 'update' | 'stop' | 'start' | 'uninstall';
+  label: string;
+  command: string;
+  advanced?: boolean;
 }
 
 export interface JoinLinkInfo {
@@ -204,12 +212,12 @@ export interface DeviceInfo {
   agentIds: string[];
   canManage?: boolean;
   isLocal?: boolean;
+  profileId?: string;
   /** daemon hello 自报的能力（切片1 起 server 透传）；旧 daemon 为 undefined → fail-closed 视为不支持。 */
   capabilities?: {
     fsBrowse?: boolean;
   };
   runtimes?: RuntimeInfo[];
-  connectCommand?: string | null;
   latestDaemonVersion?: string | null;
   daemonUpdateAvailable?: boolean;
   daemonVersionInfo?: {

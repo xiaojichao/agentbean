@@ -1203,7 +1203,7 @@ describe('web-next preview page interactions', () => {
       name: 'MacBook Pro',
       lastSeenAt: 1_718_888_000_000,
       daemonVersionInfo: { current: '0.3.12', latest: '0.3.13', updateAvailable: true, status: 'update-available' },
-      connectCommand: 'npx @agentbean/daemon@latest --invite ABCD --server-url https://api.agentbean.dev',
+      profileId: 'agentbean',
     };
     const harness = createPreviewHarness({
       'auth:register': () => ({
@@ -1263,7 +1263,11 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('AgentBean 可升级到 v0.3.13');
     expect(detailHtml).toContain('npm install -g @agentbean/daemon@latest &amp;&amp; agentbean device install &amp;&amp; agentbean device restart');
     expect(detailHtml).toContain('仅执行这一次');
-    expect(detailHtml).toContain('npx @agentbean/daemon@latest');
+    expect(detailHtml).toContain('Device Service');
+    expect(detailHtml).toContain('agentbean device install &amp;&amp; agentbean device restart');
+    expect(detailHtml).toContain('agentbean device status');
+    expect(detailHtml).toContain('生成重新连接命令');
+    expect(detailHtml).not.toContain('npx @agentbean/daemon@latest');
     expect(detailHtml).toContain('Codex CLI');
     expect(detailHtml).toContain('Hermes-Agent');
     expect(detailHtml).toContain('Codex Local');
