@@ -899,6 +899,16 @@
         color: #525252;
         text-transform: uppercase;
       }
+      .device-upgrade-card {
+        background: #fffbeb;
+        border: 1px solid #fde68a;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      .device-upgrade-card h3,
+      .device-upgrade-card .meta {
+        color: #92400e;
+      }
       .device-detail-grid {
         display: grid;
         gap: 6px;
@@ -2447,6 +2457,13 @@
         await selectDevice(row.dataset.deviceId || null);
       });
       el("device-detail").addEventListener("click", async (event) => {
+        const upgradeCopyButton = event.target.closest("button[data-daemon-upgrade-command]");
+        if (upgradeCopyButton) {
+          await navigator.clipboard?.writeText(upgradeCopyButton.dataset.daemonUpgradeCommand || "");
+          upgradeCopyButton.textContent = "已复制";
+          setTimeout(() => { upgradeCopyButton.textContent = "复制命令"; }, 2000);
+          return;
+        }
         const scanButton = event.target.closest("button[data-device-scan]");
         if (scanButton) {
           await scanDevice(scanButton.dataset.deviceScan);
@@ -3009,6 +3026,7 @@
             </dl>
           </section>
           ${renderSystemInfo(sys, daemon)}
+          ${renderDaemonUpgradeGuidance(device, daemon)}
           ${renderConnectCommand(device, isOwner)}
           <section class="device-section">
             <div class="rail-heading"><h3>运行时</h3>${canManage ? `<button type="button" class="secondary" data-device-scan="${escapeHtml(device.id)}">扫描</button>` : ""}</div>
@@ -3120,6 +3138,64 @@
           latestLabel: latest ? `v${String(latest).replace(/^v/, "")}` : "",
           updateAvailable,
         };
+      }
+
+      function previewVersionAtLeast(version, minimum) {
+        const parse = (value) => {
+          const match = String(value || "").replace(/^v/, "").match(/^\d+(?:\.\d+)*/);
+          return match ? match[0].split(".").map((part) => Number(part) || 0) : null;
+        };
+        const current = parse(version);
+        const required = parse(minimum);
+        if (!current || !required) return false;
+        const length = Math.max(current.length, required.length);
+        for (let index = 0; index < length; index += 1) {
+          if ((current[index] || 0) > (required[index] || 0)) return true;
+          if ((current[index] || 0) < (required[index] || 0)) return false;
+        }
+        return true;
+      }
+
+      function previewDaemonUpgradeGuidance(version) {
+        if (!/^v?\d+\.\d+\.\d+$/.test(String(version || "").trim())) {
+          return {
+            command: null,
+            description: "当前版本无法使用内置更新，请停止旧 Daemon，再生成并运行新的连接命令完成迁移。",
+          };
+        }
+        if (previewVersionAtLeast(version, "0.3.13")) {
+          return {
+            command: "agentbean update",
+            description: "请在这台 Mac 的终端运行；AgentBean 会自动更新并安全重启 Device Service。",
+          };
+        }
+        if (previewVersionAtLeast(version, "0.3.12")) {
+          return {
+            command: "npm install -g @agentbean/daemon@latest && agentbean device install && agentbean device restart",
+            description: "当前版本尚无内置更新命令。请在这台 Mac 的终端仅执行这一次，完成安装、刷新服务入口并重启；以后升级运行 agentbean update。",
+          };
+        }
+        return {
+          command: null,
+          description: "当前版本无法使用内置更新，请停止旧 Daemon，再生成并运行新的连接命令完成迁移。",
+        };
+      }
+
+      function renderDaemonUpgradeGuidance(device, daemon) {
+        if (!daemon.updateAvailable) return "";
+        const platform = String(device?.systemInfo?.platform || "").toLowerCase();
+        if (platform !== "darwin" && platform !== "macos") return "";
+        const current = device?.daemonVersionInfo?.current || device?.systemInfo?.daemonVersion || device?.daemonVersion;
+        const guidance = previewDaemonUpgradeGuidance(current);
+        const title = `AgentBean 可升级到 ${daemon.latestLabel || "最新版本"}`;
+        const command = guidance.command
+          ? `<div class="rail-heading"><code class="device-command">${escapeHtml(guidance.command)}</code><button type="button" class="secondary" data-daemon-upgrade-command="${escapeHtml(guidance.command)}">复制命令</button></div>`
+          : "";
+        return `<section class="device-section device-upgrade-card" data-smoke="daemon-upgrade-guidance">
+          <h3>${escapeHtml(title)}</h3>
+          <p class="meta">${escapeHtml(guidance.description)}</p>
+          ${command}
+        </section>`;
       }
 
       function renderDeviceFact(label, value, tone = "") {
