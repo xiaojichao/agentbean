@@ -111,7 +111,6 @@ function applyAdvancedToForm(form: CardFormState, advancedJson: string): CardFor
 }
 
 export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean }) {
-  const [scope, setScope] = useState<'system' | 'team'>('system');
   const [presets, setPresets] = useState<PiProviderPresetDescriptorDto[]>([]);
   const [cards, setCards] = useState<PiProviderCardDto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -123,7 +122,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
-    if (!isSystemAdmin || scope !== 'system') return;
+    if (!isSystemAdmin) return;
     setLoading(true);
     setMessage(null);
     const [presetResult, cardResult] = await Promise.all([
@@ -146,7 +145,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       setSelectedPreset(first.preset);
       setForm(formFromPreset(first));
     }
-  }, [editingCardId, isSystemAdmin, scope]);
+  }, [editingCardId, isSystemAdmin]);
 
   useEffect(() => {
     void load();
@@ -258,44 +257,15 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6" data-smoke="settings-pi-panel" data-pi-scope={scope}>
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-semibold">PI Agent</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            系统作用域管理 Provider Supply；与团队设置分离，不共享表单。
-          </p>
-        </div>
-        <div className="flex rounded-lg border border-neutral-200 bg-neutral-50 p-1" data-smoke="settings-pi-scope-switch">
-          <button
-            type="button"
-            onClick={() => setScope('system')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium ${scope === 'system' ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500'}`}
-            data-smoke="settings-pi-scope-system"
-          >
-            系统
-          </button>
-          <button
-            type="button"
-            onClick={() => setScope('team')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium ${scope === 'team' ? 'bg-white shadow-sm text-neutral-900' : 'text-neutral-500'}`}
-            data-smoke="settings-pi-scope-team"
-          >
-            团队
-          </button>
-        </div>
+    <div className="mx-auto max-w-4xl space-y-6" data-smoke="settings-pi-panel" data-pi-scope="system">
+      <div>
+        <h2 className="text-xl font-semibold">PI Agent</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          系统作用域管理 Provider Supply；与团队设置分离，不共享表单。
+        </p>
       </div>
 
-      {scope === 'team' ? (
-        <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-team-scope">
-          <h3 className="text-sm font-semibold text-neutral-700">Team 作用域</h3>
-          <p className="mt-2 text-sm text-neutral-500">
-            Team 自动化开关、Memory 与 Agent coverage 将在后续切片接入。此处不提供 Provider、Model、Endpoint、Credential 或 revision 信息。
-          </p>
-        </section>
-      ) : (
-        <>
-          <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-provider-supply">
+      <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-provider-supply">
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-neutral-700">Provider Supply</h3>
@@ -458,9 +428,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                 </button>
               )}
             </div>
-          </section>
-        </>
-      )}
+      </section>
     </div>
   );
 }

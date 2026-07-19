@@ -10,6 +10,7 @@ import type {
   PiProviderRepositories,
   PiProviderUnitOfWork,
 } from '../../application/pi-provider-repositories.js';
+import { serializeTransactions } from '../../application/transaction-serialization.js';
 import type { SqliteDatabase } from './repositories.js';
 
 function sqliteText(row: Record<string, unknown>, key: string): string {
@@ -191,20 +192,19 @@ export function createSqlitePiProviderPersistence(db: SqliteDatabase): {
   unitOfWork: PiProviderUnitOfWork;
 } {
   const repositories = createSqlitePiProviderRepositories(db);
+  const runTransaction = serializeTransactions<PiProviderRepositories>(async (operation) => {
+    db.exec('BEGIN IMMEDIATE;');
+    try {
+      const result = await operation(repositories);
+      db.exec('COMMIT;');
+      return result;
+    } catch (error) {
+      try { db.exec('ROLLBACK;'); } catch { /* preserve original */ }
+      throw error;
+    }
+  });
   return {
     repositories,
-    unitOfWork: {
-      async run(operation) {
-        db.exec('BEGIN IMMEDIATE;');
-        try {
-          const result = await operation(repositories);
-          db.exec('COMMIT;');
-          return result;
-        } catch (error) {
-          try { db.exec('ROLLBACK;'); } catch { /* preserve original */ }
-          throw error;
-        }
-      },
-    },
+    unitOfWork: { run: runTransaction },
   };
 }

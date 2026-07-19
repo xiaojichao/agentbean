@@ -51,12 +51,13 @@ export default function SettingsPage() {
   const searchParams = useSearchParams();
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const isSystemAdmin = currentUser?.role === 'admin';
+  const requestedTab = searchParams.get('tab');
   const visibleTabs = TAB_META.filter((t) => settingsTabsForRole(Boolean(isSystemAdmin)).includes(t.id));
-  const [tab, setTab] = useState<Tab>(() => resolveSettingsTab(null, Boolean(isSystemAdmin)));
+  const [tab, setTab] = useState<Tab>(() => resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
 
   useEffect(() => {
-    setTab(resolveSettingsTab(searchParams.get('tab'), Boolean(isSystemAdmin)));
-  }, [searchParams, isSystemAdmin]);
+    setTab(resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
+  }, [requestedTab, isSystemAdmin]);
 
   return (
     <div className="flex flex-1 overflow-hidden">

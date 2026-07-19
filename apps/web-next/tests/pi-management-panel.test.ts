@@ -27,8 +27,9 @@ describe('PI Management settings scope', () => {
   });
 
   test('system admin panel supports four presets, form/advanced editors, and credential-safe UX', () => {
-    expect(panelSource).toContain('settings-pi-scope-system');
-    expect(panelSource).toContain('settings-pi-scope-team');
+    expect(panelSource).toContain('data-pi-scope="system"');
+    expect(panelSource).not.toContain('settings-pi-scope-switch');
+    expect(panelSource).not.toContain('settings-pi-team-scope');
     expect(panelSource).toContain('settings-pi-presets');
     expect(panelSource).toContain('settings-pi-editor-form');
     expect(panelSource).toContain('settings-pi-editor-advanced');
@@ -41,8 +42,4 @@ describe('PI Management settings scope', () => {
     expect(panelSource).toContain('custom_openai_compatible');
   });
 
-  test('team scope copy never claims to show provider identity fields', () => {
-    expect(panelSource).toContain('settings-pi-team-scope');
-    expect(panelSource).toContain('不提供 Provider、Model、Endpoint、Credential 或 revision');
-  });
 });

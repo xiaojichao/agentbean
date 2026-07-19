@@ -77,6 +77,14 @@ function validCreate(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('pi provider secret crypto', () => {
   test('encrypts with AES-256-GCM and round-trips', () => {
     const key = secretKey();
@@ -439,6 +447,113 @@ describe('pi provider service', () => {
     expect(decryptPiProviderApiKey(parseEncryptedSecret(after!.encryptedPayload)!, secretKey())).toBe('sk-old');
     // 恢复以关闭
     persistence.repositories.revisions.create = original;
+    db.close();
+  });
+
+  test('memory unit of work isolates a failed transaction from a queued successful create', async () => {
+    const persistence = createInMemoryPiProviderPersistence();
+    const repos = createInMemoryRepositories();
+    await seedUsers(repos);
+
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users: repos.users,
+      clock: { now: () => 1 },
+      ids: { nextId: () => `concurrent-memory-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const firstCardWriteStarted = createDeferred();
+    const releaseFirstCardWrite = createDeferred();
+    const originalCreate = persistence.repositories.cards.create.bind(persistence.repositories.cards);
+    let cardCreateCalls = 0;
+    persistence.repositories.cards.create = async (input) => {
+      cardCreateCalls += 1;
+      if (cardCreateCalls === 1) {
+        firstCardWriteStarted.resolve();
+        await releaseFirstCardWrite.promise;
+        throw new Error('fail-first-transaction');
+      }
+      return originalCreate(input);
+    };
+
+    const failedCreate = service.createCard(validCreate({ displayName: 'Failed create' }));
+    await firstCardWriteStarted.promise;
+    const successfulCreate = service.createCard(validCreate({
+      displayName: 'Successful create',
+      apiKey: 'sk-successful-create',
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseFirstCardWrite.resolve();
+
+    const [failed, succeeded] = await Promise.all([failedCreate, successfulCreate]);
+    expect(failed).toMatchObject({ ok: false, error: 'INTERNAL_ERROR' });
+    expect(succeeded).toMatchObject({ ok: true });
+    const cards = await persistence.repositories.cards.list();
+    expect(cards).toHaveLength(1);
+    const stored = await service.listCards({ userId: 'admin-1' });
+    expect(stored).toMatchObject({
+      ok: true,
+      cards: [{ displayName: 'Successful create' }],
+    });
+  });
+
+  test('sqlite unit of work serializes concurrent creates on one connection', async () => {
+    const db = new Database(':memory:');
+    applyGlobalMigrations(db);
+    db.prepare(`
+      INSERT INTO users (id, username, email, display_name, password_hash, role, current_team_id, created_at, updated_at)
+      VALUES ('admin-1', 'sysadmin', null, null, 'x', 'admin', null, 1, 1)
+    `).run();
+    const persistence = createSqlitePiProviderPersistence(db);
+    const users = {
+      async getById(id: string) {
+        if (id !== 'admin-1') return null;
+        return {
+          id: 'admin-1', username: 'sysadmin', role: 'admin' as const, passwordHash: 'x', createdAt: 1, updatedAt: 1,
+        };
+      },
+    };
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users,
+      clock: { now: () => 1 },
+      ids: { nextId: () => `concurrent-sqlite-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const firstCredentialWriteStarted = createDeferred();
+    const releaseFirstCredentialWrite = createDeferred();
+    const originalCreate = persistence.repositories.credentials.create.bind(persistence.repositories.credentials);
+    let credentialCreateCalls = 0;
+    persistence.repositories.credentials.create = async (input) => {
+      const result = await originalCreate(input);
+      credentialCreateCalls += 1;
+      if (credentialCreateCalls === 1) {
+        firstCredentialWriteStarted.resolve();
+        await releaseFirstCredentialWrite.promise;
+      }
+      return result;
+    };
+
+    const firstCreate = service.createCard(validCreate({ displayName: 'First concurrent create' }));
+    await firstCredentialWriteStarted.promise;
+    const secondCreate = service.createCard(validCreate({
+      displayName: 'Second concurrent create',
+      apiKey: 'sk-second-concurrent-create',
+    }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseFirstCredentialWrite.resolve();
+
+    const results = await Promise.all([firstCreate, secondCreate]);
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_credentials').get()).toEqual({ c: 2 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_cards').get()).toEqual({ c: 2 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_card_revisions').get()).toEqual({ c: 2 });
     db.close();
   });
 

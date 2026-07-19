@@ -5,6 +5,7 @@ import type {
   PiProviderRepositories,
   PiProviderUnitOfWork,
 } from '../../application/pi-provider-repositories.js';
+import { serializeTransactions } from '../../application/transaction-serialization.js';
 
 export interface InMemoryPiProviderPersistence {
   readonly repositories: PiProviderRepositories;
@@ -78,8 +79,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
     },
   };
 
-  const unitOfWork: PiProviderUnitOfWork = {
-    async run(operation) {
+  const runTransaction = serializeTransactions<PiProviderRepositories>(
+    async (operation) => {
       const credSnap = new Map(credentials);
       const revSnap = new Map(revisions);
       const cardSnap = new Map(cards);
@@ -95,7 +96,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         throw error;
       }
     },
-  };
+  );
+  const unitOfWork: PiProviderUnitOfWork = { run: runTransaction };
 
   return {
     repositories,
