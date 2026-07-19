@@ -5,10 +5,11 @@ import { dirname, join } from 'node:path';
 import { DEVICE_CLI_EXIT, runDeviceCli } from '../src/device-cli';
 import type { DeviceControlClient } from '../src/device-control-client';
 import type { DeviceServiceState } from '../src/device-service-state';
-import { runDeviceService } from '../src/device-service-runtime';
+import { bindLegacyRuntimeFence, runDeviceService } from '../src/device-service-runtime';
 import { assertDeviceRuntimeOwner, readDeviceRuntimeOwner } from '../src/device-runtime-owner';
 import { deviceServicePaths } from '../src/device-service-paths';
 import type { CreateDeviceServiceHostInput } from '../src/device-service-host';
+import { saveAuth } from '../src/auth-store';
 import {
   createMacOSLaunchAgentAdapter,
   DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
@@ -214,6 +215,68 @@ describe('agentbean device CLI', () => {
     expect(writePayload).not.toHaveBeenCalled();
   });
 
+  test('migrate start boots a zero-Runner host, commits owner, then activates saved profiles', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-device-migrate-cli-'));
+    saveAuth({ token: 'private', serverUrl: 'https://agentbean.test', teamId: 'team-a', ownerId: 'owner-a' }, {
+      profileId: 'profile-a',
+      baseDir,
+    });
+    const paths = deviceServicePaths(baseDir);
+    let stage: 'idle' | 'migration' | 'stopped' | 'active' = 'idle';
+    const lifecycle: string[] = [];
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => ({ installed: stage !== 'idle', loaded: stage !== 'idle', running: stage === 'migration' || stage === 'active' })),
+      bootstrap: vi.fn(async () => {
+        lifecycle.push('bootstrap-migration');
+        stage = 'migration';
+        await mkdir(paths.lockDirectory, { recursive: true });
+        await writeFile(join(paths.lockDirectory, 'owner.json'), '{"schemaVersion":1,"pid":42,"nonce":"migration"}\n');
+        return success();
+      }),
+      start: vi.fn(async () => {
+        lifecycle.push('start-runners');
+        stage = 'active';
+        return success();
+      }),
+    });
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => {
+        if (request.command === 'shutdown') {
+          lifecycle.push('shutdown-migration');
+          stage = 'stopped';
+          return { schemaVersion: 1, requestId: request.requestId, ok: true, state: runningState('stopped') };
+        }
+        if (stage === 'idle' || stage === 'stopped') throw new Error('SERVICE_CONTROL_UNAVAILABLE');
+        const state = {
+          ...runningState(),
+          profiles: stage === 'migration'
+            ? { total: 0, healthy: 0, failed: 0, draining: 0, stopped: 0 }
+            : { total: 1, healthy: 1, failed: 0, draining: 0, stopped: 0 },
+        };
+        return { schemaVersion: 1, requestId: request.requestId, ok: true, state };
+      }),
+    };
+
+    await expect(runDeviceCli(['migrate', 'start', '--json'], {
+      platform: 'darwin',
+      baseDir,
+      executablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      createAdapter: () => adapter,
+      controlClient,
+      writePayload: vi.fn(async () => paths.payloadFile),
+      writePlist: vi.fn(async () => '/Users/test/Library/LaunchAgents/com.agentbean.device-service.plist'),
+      migrationDeps: {
+        listLegacy: async () => [],
+        listUnregisteredLegacyPids: async () => [],
+        isProcessAlive: (pid) => pid === 42,
+      },
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(lifecycle).toEqual(['bootstrap-migration', 'shutdown-migration', 'start-runners']);
+    expect(await readDeviceRuntimeOwner(baseDir)).toBe('device-service');
+  });
+
   test('uninstall drains, boots out, removes only plist and payload, and preserves data byte-for-byte', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentbean-device-uninstall-home-'));
     const baseDir = join(home, '.agentbean');
@@ -391,6 +454,70 @@ describe('agentbean device CLI', () => {
 });
 
 describe('Device Service production wiring', () => {
+  test('starts a zero-Runner migration-only host before ownership commit', async () => {
+    const hostStart = vi.fn(async () => undefined);
+    const assertRuntimeOwner = vi.fn(async () => undefined);
+    let hostInput: CreateDeviceServiceHostInput | undefined;
+    await runDeviceService({
+      readRuntimeOwner: async () => 'legacy-daemon',
+      readMigrationJournal: async () => ({
+        schemaVersion: 1,
+        migrationId: 'migration-1',
+        phase: 'checking-health',
+        checkpoint: 'checking-health',
+        dataPolicy: 'in-place',
+        startedAt: '2026-07-19T00:00:00.000Z',
+        updatedAt: '2026-07-19T00:00:01.000Z',
+      }),
+      listProfiles: () => { throw new Error('migration-only must not load profiles'); },
+      assertRuntimeOwner,
+      createHost: (input) => {
+        hostInput = input;
+        return {
+          state: runningState('stopped'),
+          start: hostStart,
+          beginDrain: vi.fn(async () => ({ ok: true, reasonCode: 'SERVICE_READY' })),
+          stop: vi.fn(async () => ({ ok: true, reasonCode: 'SERVICE_READY' })),
+          refreshStatus: vi.fn(async () => undefined),
+        };
+      },
+      bindSignals: vi.fn(() => () => undefined),
+      readVersion: () => '0.3.11',
+    });
+
+    expect(hostInput?.runners).toEqual([]);
+    expect(hostStart).toHaveBeenCalledTimes(1);
+    expect(assertRuntimeOwner).not.toHaveBeenCalled();
+  });
+
+  test('refuses startup when a historical npm Daemon bypasses the owner file', async () => {
+    await expect(runDeviceService({
+      readRuntimeOwner: async () => 'device-service',
+      readMigrationJournal: async () => null,
+      assertRuntimeOwner: async () => undefined,
+      discoverLegacyRuntimePids: async () => [4242],
+      listProfiles: () => { throw new Error('must fence before loading profiles'); },
+    })).rejects.toThrow('LEGACY_RUNTIME_FENCE_ACTIVE');
+  });
+
+  test('drains the Device Service if a historical npm Daemon appears after startup', async () => {
+    vi.useFakeTimers();
+    try {
+      const exitCodeTarget: { exitCode?: number } = {};
+      const stop = vi.fn(async () => ({ ok: true, reasonCode: 'SERVICE_READY' as const }));
+      const cancel = bindLegacyRuntimeFence({ stop }, async () => [4242], {
+        intervalMs: 10,
+        exitCodeTarget,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(stop).toHaveBeenCalledWith(30_000);
+      expect(exitCodeTarget.exitCode).toBe(1);
+      cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('runtime owner fence defaults to legacy and blocks the opposite runtime', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-runtime-owner-'));
     await expect(readDeviceRuntimeOwner(baseDir)).resolves.toBe('legacy-daemon');

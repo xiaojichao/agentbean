@@ -1,4 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { deviceServicePaths } from './device-service-paths.js';
 
 export type DeviceRuntimeOwner = 'legacy-daemon' | 'device-service';
@@ -24,8 +26,21 @@ export async function assertDeviceRuntimeOwner(
   if (actual !== expected) {
     throw new Error(expected === 'device-service'
       ? 'SERVICE_MIGRATION_REQUIRED'
-      : 'DEVICE_SERVICE_OWNS_RUNTIME');
+      : 'DEVICE_SERVICE_OWNS_RUNTIME：Legacy Daemon 已停用，请改用 `agentbean device status`。');
   }
+}
+
+export async function commitDeviceRuntimeOwner(baseDir?: string): Promise<void> {
+  const path = deviceServicePaths(baseDir).runtimeOwnerFile;
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await chmod(dirname(path), 0o700);
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  await writeFile(temporary, `${JSON.stringify({ schemaVersion: 1, owner: 'device-service' })}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+    flag: 'wx',
+  });
+  await rename(temporary, path);
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {

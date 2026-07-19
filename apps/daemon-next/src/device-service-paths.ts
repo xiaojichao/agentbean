@@ -7,6 +7,9 @@ export interface DeviceServicePaths {
   readonly stateFile: string;
   readonly lockDirectory: string;
   readonly runtimeOwnerFile: string;
+  readonly migrationJournalFile: string;
+  readonly migrationLockDirectory: string;
+  readonly legacyRuntimeDirectory: string;
   readonly payloadDirectory: string;
   readonly payloadFile: string;
   readonly logDirectory: string;
@@ -23,6 +26,9 @@ export function deviceServicePaths(baseDir?: string): DeviceServicePaths {
     stateFile: join(root, 'state.json'),
     lockDirectory: join(root, 'service.lock'),
     runtimeOwnerFile: join(root, 'runtime-owner.json'),
+    migrationJournalFile: join(root, 'migration.json'),
+    migrationLockDirectory: join(root, 'migration.lock'),
+    legacyRuntimeDirectory: join(root, 'legacy-runtimes'),
     payloadDirectory,
     payloadFile: join(payloadDirectory, 'agentbean-service.mjs'),
     logDirectory,

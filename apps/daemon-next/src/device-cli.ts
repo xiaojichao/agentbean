@@ -13,8 +13,19 @@ import {
 } from './macos-launch-agent.js';
 import { runDeviceService } from './device-service-runtime.js';
 import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
+import {
+  cancelDeviceMigration,
+  inspectDeviceMigration,
+  planDeviceMigration,
+  resumeDeviceMigration,
+  startDeviceMigration,
+  type DeviceMigrationDeps,
+  type DeviceMigrationStatus,
+} from './device-migration.js';
+import { listAuthProfiles } from './auth-store.js';
 
-export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs';
+export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs' | 'migrate';
+export type DeviceMigrationCommand = 'plan' | 'start' | 'status' | 'resume' | 'cancel';
 
 export const DEVICE_CLI_EXIT = {
   success: 0,
@@ -42,6 +53,8 @@ export interface DeviceCliDeps {
   readonly writePayload?: typeof writeMacOSServicePayload;
   readonly writePlist?: typeof writeMacOSLaunchAgentPlist;
   readonly removeInstallation?: typeof removeMacOSLaunchAgentInstallation;
+  readonly migrate?: (command: DeviceMigrationCommand) => Promise<DeviceMigrationStatus>;
+  readonly migrationDeps?: Pick<DeviceMigrationDeps, 'listLegacy' | 'listUnregisteredLegacyPids' | 'listInstalledLegacyExecutables' | 'isProcessAlive'>;
 }
 
 export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps = {}): Promise<number> {
@@ -49,11 +62,25 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   const stdout = deps.stdout ?? console.log;
   const stderr = deps.stderr ?? console.error;
   if (!parsed) {
-    stderr('用法：agentbean device <run|install|uninstall|status|start|stop|restart|logs> [--json] [--follow] [--deadline-ms N]');
+    stderr('用法：agentbean device <run|install|uninstall|status|start|stop|restart|logs|migrate> [plan|start|status|resume|cancel] [--json] [--follow] [--deadline-ms N]');
     return DEVICE_CLI_EXIT.usage;
   }
   const paths = deviceServicePaths(deps.baseDir);
   const client = deps.controlClient ?? createDeviceControlClient(paths.controlSocket);
+  if (parsed.command === 'migrate') {
+    const migrationCommand = parsed.migrationCommand;
+    if (!migrationCommand) return DEVICE_CLI_EXIT.usage;
+    try {
+      const status = await (deps.migrate
+        ?? ((command) => runMigrationCommand(command, deps, client, parsed.deadlineMs)))(migrationCommand);
+      if (parsed.json) stdout(JSON.stringify(status));
+      else stdout(formatDeviceMigrationStatus(status));
+      return DEVICE_CLI_EXIT.success;
+    } catch (error) {
+      stderr(`Device Service 迁移失败（${stableReason(error instanceof Error ? error.message : String(error))}）。`);
+      return DEVICE_CLI_EXIT.rejected;
+    }
+  }
   if (parsed.command === 'run') {
     try {
       await (deps.runService ?? (() => runDeviceService({ ...(deps.baseDir ? { baseDir: deps.baseDir } : {}) })))();
@@ -368,19 +395,28 @@ async function followLog(path: string): Promise<number> {
 
 function parseDeviceCliArgs(argv: readonly string[]): {
   command: DeviceCliCommand;
+  migrationCommand?: DeviceMigrationCommand;
   json: boolean;
   follow: boolean;
   deadlineMs: number;
 } | null {
   const command = argv[0];
   if (command !== 'run' && command !== 'install' && command !== 'uninstall' && command !== 'status' && command !== 'start'
-    && command !== 'stop' && command !== 'restart' && command !== 'logs') return null;
+    && command !== 'stop' && command !== 'restart' && command !== 'logs' && command !== 'migrate') return null;
   let deadlineMs = 30_000;
   let json = false;
   let follow = false;
-  for (let index = 1; index < argv.length; index += 1) {
+  let migrationCommand: DeviceMigrationCommand | undefined;
+  let startIndex = 1;
+  if (command === 'migrate') {
+    const action = argv[1];
+    if (action !== 'plan' && action !== 'start' && action !== 'status' && action !== 'resume' && action !== 'cancel') return null;
+    migrationCommand = action;
+    startIndex = 2;
+  }
+  for (let index = startIndex; index < argv.length; index += 1) {
     const value = argv[index];
-    if (value === '--json' && command === 'status') json = true;
+    if (value === '--json' && (command === 'status' || command === 'migrate')) json = true;
     else if (value === '--follow' && command === 'logs') follow = true;
     else if (value === '--deadline-ms') {
       const parsed = Number(argv[++index]);
@@ -388,9 +424,131 @@ function parseDeviceCliArgs(argv: readonly string[]): {
       deadlineMs = parsed;
     } else return null;
   }
-  return { command, json, follow, deadlineMs };
+  return { command, ...(migrationCommand ? { migrationCommand } : {}), json, follow, deadlineMs };
 }
 
 function stableReason(reasonCode: string): string {
   return /^[A-Z0-9_]{1,80}$/.test(reasonCode) ? reasonCode : 'SERVICE_CONTROL_UNAVAILABLE';
+}
+
+async function runMigrationCommand(
+  command: DeviceMigrationCommand,
+  cliDeps: DeviceCliDeps,
+  client: DeviceControlClient,
+  deadlineMs: number,
+): Promise<DeviceMigrationStatus> {
+  const migrationDeps = createMigrationDeps(cliDeps, client, deadlineMs);
+  if (command === 'plan') return planDeviceMigration(migrationDeps);
+  if (command === 'start') return startDeviceMigration(migrationDeps);
+  if (command === 'status') return inspectDeviceMigration(migrationDeps);
+  if (command === 'resume') return resumeDeviceMigration(migrationDeps);
+  return cancelDeviceMigration(migrationDeps);
+}
+
+function createMigrationDeps(
+  deps: DeviceCliDeps,
+  client: DeviceControlClient,
+  deadlineMs: number,
+): DeviceMigrationDeps {
+  const base = deps.baseDir ? { baseDir: deps.baseDir } : {};
+  const adapter = () => deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
+    ...(deps.home ? { home: deps.home } : {}),
+    ...base,
+  });
+  const stopMigrationService = async () => {
+    try {
+      const response = await client.request({
+        schemaVersion: 1,
+        requestId: randomUUID(),
+        command: 'shutdown',
+        deadlineMs,
+      }, deadlineMs);
+      if (response.ok) return;
+    } catch {
+      // Fall through to the trusted platform adapter when the control endpoint is unavailable.
+    }
+    if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+    const platformAdapter = adapter();
+    const status = await platformAdapter.status();
+    if (!status.running) return;
+    const killed = await platformAdapter.kill();
+    if (killed.exitCode !== 0) throw new Error('MIGRATION_SERVICE_STOP_FAILED');
+  };
+  return {
+    ...base,
+    ...deps.migrationDeps,
+    readPlatformSupported: () => (deps.platform ?? process.platform) === 'darwin',
+    readSavedProfileCount: () => listAuthProfiles(base).length,
+    verifyMigrationService: async () => {
+      const state = await readReachableState(client);
+      return Boolean(state && (state.phase === 'running' || state.phase === 'degraded') && state.profiles.total === 0);
+    },
+    prepareMigrationService: async () => {
+      if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+      if (listAuthProfiles(base).length === 0) throw new Error('SERVICE_NO_PROFILES');
+      const sourceExecutablePath = deps.executablePath ?? process.argv[1];
+      if (!sourceExecutablePath) throw new Error('MIGRATION_EXECUTABLE_UNAVAILABLE');
+      const payloadFile = await (deps.writePayload ?? writeMacOSServicePayload)({
+        sourceExecutablePath,
+        nodeExecutablePath: deps.nodeExecutablePath ?? process.execPath,
+        ...base,
+      });
+      await (deps.writePlist ?? writeMacOSLaunchAgentPlist)({
+        executablePath: payloadFile,
+        ...(deps.home ? { home: deps.home } : {}),
+        ...base,
+      });
+      const platformAdapter = adapter();
+      const status = await platformAdapter.status();
+      const result = !status.loaded ? await platformAdapter.bootstrap() : await platformAdapter.start();
+      if (result.exitCode !== 0) throw new Error('MIGRATION_SERVICE_START_FAILED');
+      const state = await waitForState(client, deadlineMs, (candidate) => candidate.profiles.total === 0);
+      if (!state) throw new Error('MIGRATION_SERVICE_NOT_HEALTHY');
+    },
+    stopMigrationService,
+    activateDeviceService: async () => {
+      if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+      await stopMigrationService();
+      const started = await adapter().start();
+      if (started.exitCode !== 0) throw new Error('DEVICE_SERVICE_ACTIVATION_FAILED');
+      const state = await waitForState(client, deadlineMs, (candidate) => candidate.profiles.total > 0);
+      if (!state) throw new Error('DEVICE_SERVICE_ACTIVATION_FAILED');
+    },
+  };
+}
+
+async function readReachableState(client: DeviceControlClient): Promise<DeviceServiceState | null> {
+  try {
+    const response = await client.request({ schemaVersion: 1, requestId: randomUUID(), command: 'status' });
+    return response.ok ? response.state : null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForState(
+  client: DeviceControlClient,
+  timeoutMs: number,
+  predicate: (state: DeviceServiceState) => boolean,
+): Promise<DeviceServiceState | null> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    const state = await readReachableState(client);
+    if (state && (state.phase === 'running' || state.phase === 'degraded') && predicate(state)) return state;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
+function formatDeviceMigrationStatus(status: DeviceMigrationStatus): string {
+  return [
+    `Migration: ${status.phase}`,
+    `Runtime owner: ${status.owner}`,
+    `Legacy runtimes: ${status.health.legacyRuntimeCount}`,
+    `Unregistered legacy runtimes: ${status.health.unregisteredLegacyRuntimeCount}`,
+    `Installed legacy executables: ${status.health.installedLegacyExecutableCount}`,
+    `Platform supported: ${status.health.platformSupported}`,
+    `Saved profiles: ${status.health.savedProfileCount}`,
+    `Data policy: ${status.health.dataPolicy}`,
+  ].join('\n');
 }
