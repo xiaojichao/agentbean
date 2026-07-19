@@ -13,12 +13,13 @@ import { loadYamlConfig } from './config.js';
 import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
-import { createDeviceServiceCore, type DeviceServiceComponent } from './device-service-core.js';
+import { createDeviceServiceCore, type DeviceServiceComponent, type DeviceServiceCore } from './device-service-core.js';
 import { createEnvironmentManagementCredentialProvider } from './management-credential-provider.js';
 import { createManagementDurableOutbox } from './management-durable-outbox.js';
 import { createManagementModelAdapter } from './management-model-adapter.js';
 import { createManagementWorkerProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 import { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
+import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 
 let globalErrorGuardsInstalled = false;
 function installGlobalErrorGuards(): void {
@@ -103,8 +104,11 @@ export interface DaemonNextCliDeps {
     profileId: string;
     runtimeVersion: string;
   }) => Promise<DeviceServiceComponent>;
+  startDeviceServiceCore?: (input: { core: DeviceServiceCore; profileId: string }) => Promise<void>;
   /** 进程退出钩子（测试可注入）；默认 process.exit。用于 daemon 被告知设备删除后退出。 */
   exit?: (code: number) => void;
+  runtimeOwner?: DeviceRuntimeOwner;
+  assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
 }
 
 /**
@@ -383,6 +387,8 @@ export async function runDaemonNextCli(
   const runDaemon = deps.runDaemon ?? runDaemonNextCli;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const createManagementWorkerHost = deps.createManagementWorkerHost ?? createDefaultManagementWorkerHost;
+  const startDeviceServiceCore = deps.startDeviceServiceCore
+    ?? (async ({ core }: { core: DeviceServiceCore }) => core.start());
 
   if (config.listProfiles) {
     const profiles = listAuthProfilesFn();
@@ -417,6 +423,8 @@ export async function runDaemonNextCli(
     console.log(`Renamed AgentBean profile "${config.renameProfileFrom}" to "${result.profileId}".`);
     return;
   }
+
+  await (deps.assertRuntimeOwner ?? assertDeviceRuntimeOwner)(deps.runtimeOwner ?? 'legacy-daemon');
 
   // --all-profiles branch runs BEFORE connectSocketIoClient: it never opens a
   // socket itself, it just fans out one runDaemonNextCli recursion per saved
@@ -481,6 +489,7 @@ export async function runDaemonNextCli(
   }
 
   const socket = await connectSocket(serverUrl);
+  try {
   const protocolSocket = createSocketIoDaemonSocket(socket);
   const cached = loadScanCacheFn(config.profileId);
   if (cached) {
@@ -591,9 +600,27 @@ export async function runDaemonNextCli(
     socket: protocolSocket,
     getDeviceId: () => dispatchClient.deviceId,
   });
-  await createDeviceServiceCore({ dispatchClient, taskClaimClient, managementWorkerHost }).start();
+  const serviceDispatchClient: DeviceServiceComponent = {
+    start: () => dispatchClient.start(),
+    beginDrain: (deadlineMs) => dispatchClient.beginDrain(deadlineMs),
+    activeWorkCount: () => dispatchClient.activeWorkCount(),
+    outboxPendingCount: () => dispatchClient.outboxPendingCount(),
+    async stop() {
+      try {
+        await dispatchClient.stop?.();
+      } finally {
+        socket.disconnect();
+      }
+    },
+  };
+  const core = createDeviceServiceCore({ dispatchClient: serviceDispatchClient, taskClaimClient, managementWorkerHost });
+  await startDeviceServiceCore({ core, profileId: config.profileId });
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
+  }
+  } catch (error) {
+    socket.disconnect();
+    throw error;
   }
 }
 

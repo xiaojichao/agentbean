@@ -11,6 +11,7 @@ export interface CreateDeviceServiceProfileRunnerInput {
   readonly core: DeviceServiceCore;
   readonly beginDrain: (deadlineMs: number) => Promise<ProfileDrainResult>;
   readonly readCounts?: () => Pick<ProfileRuntimeStatus, 'activeWorkCount' | 'outboxPendingCount'>;
+  readonly readPhase?: () => ProfileRuntimePhase | undefined;
 }
 
 export function createDeviceServiceProfileRunner(
@@ -49,7 +50,7 @@ export function createDeviceServiceProfileRunner(
       }
     },
     snapshot() {
-      return { phase, ...counts() };
+      return { phase: input.readPhase?.() ?? phase, ...counts() };
     },
   };
 }

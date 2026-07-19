@@ -45,8 +45,10 @@ export interface CreatePiManagerRuntimeFactoryInput {
 
 export interface PiManagerWorkerHost {
   start(): Promise<void>;
+  beginDrain(deadlineMs: number): Promise<void>;
   stop(): Promise<void>;
   activeLeaseCount(): number;
+  outboxPendingCount(): number;
 }
 
 export interface CreatePiManagerWorkerHostInput {
@@ -122,12 +124,15 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
   let runtimeFactory: ManagementRuntimeFactory | undefined;
   let currentWorkerId: string | undefined;
   let started = false;
+  let acceptingOffers = false;
+  let drainCancelled = false;
 
   const toolExecutor: ManagementToolExecutor = (call) => executeManagementTool(call);
 
   const handlers: PiManagerWorkerProtocolHandlers = {
     reserveLeaseOffer(offer) {
       const accepted = started
+        && acceptingOffers
         && credential?.credentialStatus !== 'unavailable'
         && Boolean(runtimeFactory)
         && offer.offerExpiresAt > now()
@@ -165,6 +170,8 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       }
       const capability = managementCredentialCapability(credential);
       started = true;
+      acceptingOffers = true;
+      drainCancelled = false;
       try {
         const registered = await input.protocol.start({
           ...capability,
@@ -173,14 +180,28 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         currentWorkerId = registered.workerId;
       } catch (error) {
         started = false;
+        acceptingOffers = false;
         runtimeFactory = undefined;
         credential = undefined;
         throw error;
       }
     },
+    async beginDrain(deadlineMs) {
+      acceptingOffers = false;
+      const deadlineAt = Date.now() + deadlineMs;
+      // Entries left after their lease ends are durable but cannot be replayed without
+      // fresh authority. Preserve them for the next legal reacquire instead of turning
+      // every normal service stop into a drain timeout.
+      while (!drainCancelled && (pendingOfferIds.size > 0 || activeLeases.size > 0)) {
+        if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
+        await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
+      }
+    },
     async stop() {
       if (!started) return;
       started = false;
+      acceptingOffers = false;
+      drainCancelled = true;
       await Promise.all([...activeLeases.values()].map((lease) => abortLease(lease, 'worker-stopped')));
       await input.protocol.stop();
       currentWorkerId = undefined;
@@ -189,7 +210,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       credential = undefined;
     },
     activeLeaseCount() {
-      return activeLeases.size;
+      return activeLeases.size + pendingOfferIds.size;
+    },
+    outboxPendingCount() {
+      return input.outbox.size();
     },
   };
 
@@ -201,6 +225,18 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       return;
     }
     if (!acquired.ok || acquired.managementRunId !== offer.managementRunId || acquired.workerId !== currentWorkerId) return;
+    if (!started || !acceptingOffers) {
+      await input.protocol.abortLease({
+        schemaVersion: 1,
+        managementRunId: acquired.managementRunId,
+        workerId: acquired.workerId,
+        leaseToken: acquired.leaseToken,
+        fencingToken: acquired.fencingToken,
+        idempotencyKey: `abort:${acquired.managementRunId}:${acquired.fencingToken}:worker-draining`,
+        reasonCode: 'worker-draining',
+      }).catch(() => undefined);
+      return;
+    }
     const lease: ActiveLease = {
       managementRunId: acquired.managementRunId,
       workerId: acquired.workerId,
@@ -216,6 +252,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       const replay = await replayManagementOutboxForLease({
         authority: lease, protocol: input.protocol, outbox: input.outbox,
       });
+      if (!canStartLeaseSession(lease)) return;
       if (replay.unresolvedMemoryWriteCount > 0) {
         throw new Error('MANAGEMENT_MEMORY_OUTBOX_UNRESOLVED');
       }
@@ -226,15 +263,22 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         leaseToken: lease.leaseToken,
         fencingToken: lease.fencingToken,
       });
+      if (!canStartLeaseSession(lease)) return;
       if (restored.managementRunId !== lease.managementRunId || restored.workerId !== lease.workerId) {
         throw new Error('MANAGEMENT_CHECKPOINT_AUTHORITY_MISMATCH');
       }
       lease.managementPhase = checkpointManagementPhase(restored);
-      const session = await runtimeFactory!.createSession({
+      const factory = runtimeFactory;
+      if (!factory) return;
+      const session = await factory.createSession({
         systemPrompt: input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         mode: 'managed',
         context: runtimeContext(restored),
       });
+      if (!canStartLeaseSession(lease)) {
+        await session.dispose().catch(() => undefined);
+        return;
+      }
       lease.session = session;
       scheduleRenew(lease);
       void session.prompt({ text: restoreObjective(restored) })
@@ -243,6 +287,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     } catch {
       await abortLease(lease, 'session-start-failed');
     }
+  }
+
+  function canStartLeaseSession(lease: ActiveLease): boolean {
+    return started && !lease.disposing && activeLeases.get(lease.managementRunId) === lease;
   }
 
   async function executeManagementTool(call: ManagementToolCall): Promise<ManagementToolResult> {

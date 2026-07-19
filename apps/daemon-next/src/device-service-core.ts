@@ -1,10 +1,16 @@
 export interface DeviceServiceComponent {
   start(): Promise<void>;
+  beginDrain?(deadlineMs: number): Promise<void> | void;
   stop?(): Promise<void> | void;
+  activeWorkCount?(): number;
+  outboxPendingCount?(): number;
 }
 
 export interface DeviceServiceCore extends DeviceServiceComponent {
   readonly started: boolean;
+  beginDrain(deadlineMs: number): Promise<void>;
+  activeWorkCount(): number;
+  outboxPendingCount(): number;
 }
 
 export interface CreateDeviceServiceCoreInput {
@@ -38,6 +44,13 @@ export function createDeviceServiceCore(input: CreateDeviceServiceCoreInput): De
         throw error;
       }
     },
+    async beginDrain(deadlineMs) {
+      await Promise.all([
+        input.dispatchClient.beginDrain?.(deadlineMs),
+        input.taskClaimClient?.beginDrain?.(deadlineMs),
+        input.managementWorkerHost.beginDrain?.(deadlineMs),
+      ]);
+    },
     async stop() {
       if (!started) return;
       started = false;
@@ -50,6 +63,14 @@ export function createDeviceServiceCore(input: CreateDeviceServiceCoreInput): De
           await input.dispatchClient.stop?.();
         }
       }
+    },
+    activeWorkCount() {
+      return [input.dispatchClient, input.taskClaimClient, input.managementWorkerHost]
+        .reduce((sum, component) => sum + (component?.activeWorkCount?.() ?? 0), 0);
+    },
+    outboxPendingCount() {
+      return [input.dispatchClient, input.taskClaimClient, input.managementWorkerHost]
+        .reduce((sum, component) => sum + (component?.outboxPendingCount?.() ?? 0), 0);
     },
   };
 }

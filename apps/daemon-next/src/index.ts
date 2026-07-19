@@ -61,10 +61,32 @@ export type {
   DeviceControlRequest,
   DeviceControlResponse,
 } from './device-control-protocol.js';
+export { createDeviceControlClient } from './device-control-client.js';
+export type { DeviceControlClient } from './device-control-client.js';
+export { runDeviceCli, formatDeviceServiceState, DEVICE_CLI_EXIT } from './device-cli.js';
+export type { DeviceCliCommand, DeviceCliDeps } from './device-cli.js';
+export { runDeviceService } from './device-service-runtime.js';
+export type { RunDeviceServiceInput } from './device-service-runtime.js';
+export {
+  createMacOSLaunchAgentAdapter,
+  generateMacOSLaunchAgentPlist,
+  writeMacOSLaunchAgentPlist,
+  macOSLaunchAgentPaths,
+  DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
+} from './macos-launch-agent.js';
+export type {
+  MacOSLaunchAgentAdapter,
+  MacOSLaunchAgentPaths,
+  PlatformServiceStatus,
+  LaunchctlResult,
+  LaunchctlRunner,
+} from './macos-launch-agent.js';
 export { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from './device-service-lock.js';
 export type { DeviceServiceLock } from './device-service-lock.js';
 export { deviceServicePaths } from './device-service-paths.js';
 export type { DeviceServicePaths } from './device-service-paths.js';
+export { assertDeviceRuntimeOwner, readDeviceRuntimeOwner } from './device-runtime-owner.js';
+export type { DeviceRuntimeOwner } from './device-runtime-owner.js';
 export { createDeviceServiceStateStore } from './device-service-state.js';
 export type {
   DeviceServicePhase,
@@ -226,6 +248,9 @@ export interface CreateDaemonProtocolClientInput {
 export interface DaemonProtocolClient {
   readonly deviceId?: string;
   start(): Promise<void>;
+  beginDrain(deadlineMs: number): Promise<void>;
+  activeWorkCount(): number;
+  outboxPendingCount(): number;
   rescanNow?(): Promise<void>;
   stop?(): void;
 }
@@ -238,6 +263,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
+  let acceptingDispatches = false;
+  let drainCancelled = false;
+  let activeDispatchCount = 0;
+  let dispatchOutbox: DispatchOutbox | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
   const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
   const localMemoryObservationTails = new Map<string, Promise<void>>();
@@ -297,6 +326,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       const outbox: DispatchOutbox = createDispatchOutbox(socket, {
         onWarn: (message) => console.warn(message),
       });
+      dispatchOutbox = outbox;
+      acceptingDispatches = true;
+      drainCancelled = false;
       const knownRecoveryCwds = new Set<string>();
       const rememberRecoveryCwds = (cwds: Array<string | undefined>) => {
         for (const cwd of cwds) {
@@ -410,6 +442,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
+        if (!acceptingDispatches) return;
+        activeDispatchCount += 1;
         const incomingRequest = payload as DispatchRequestPayload;
         const previousExecution = dispatchExecutionTails.get(incomingRequest.agentId) ?? Promise.resolve();
         let releaseExecution: (() => void) | undefined;
@@ -569,6 +603,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             error: readErrorMessage(error),
           });
         } finally {
+          activeDispatchCount -= 1;
           // cancel suppresses a late result, but only the executor actually returning makes
           // it safe to start another request for the same Agent.
           releaseExecution?.();
@@ -593,8 +628,30 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       }
       scheduleRecoverPersistedWorkspaceRuns([]);
     },
+    async beginDrain(deadlineMs) {
+      acceptingDispatches = false;
+      rescan?.stop();
+      const deadlineAt = Date.now() + deadlineMs;
+      while (!drainCancelled && (activeDispatchCount > 0
+        || (dispatchOutbox?.pendingCount() ?? 0) > 0
+        || localMemoryObservationTails.size > 0)) {
+        await dispatchOutbox?.flush();
+        if (Date.now() >= deadlineAt) throw new Error('PROFILE_DRAIN_FAILED');
+        await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadlineAt - Date.now()))));
+      }
+    },
+    activeWorkCount() {
+      return activeDispatchCount + localMemoryObservationTails.size;
+    },
+    outboxPendingCount() {
+      return dispatchOutbox?.pendingCount() ?? 0;
+    },
     rescanNow: () => rescan?.tickNow() ?? Promise.resolve(),
-    stop: () => rescan?.stop(),
+    stop: () => {
+      acceptingDispatches = false;
+      drainCancelled = true;
+      rescan?.stop();
+    },
   };
 
   async function recoverPersistedWorkspaceRuns(
@@ -656,6 +713,7 @@ export function createTaskClaimProtocolClient(input: {
         },
       });
     },
+    beginDrain() { protocol.stop(); },
     stop() { protocol.stop(); },
   };
 }

@@ -55,6 +55,63 @@ describe('daemon-next protocol client', () => {
     });
   });
 
+  test('beginDrain rejects new dispatch and waits for active execution plus outbox delivery', async () => {
+    const socket = new FakeAgentSocket();
+    let finishExecution: (() => void) | undefined;
+    const executor = vi.fn<StubExecutor>(async () => {
+      await new Promise<void>((resolve) => { finishExecution = resolve; });
+      return 'done';
+    });
+    const client = createDaemonProtocolClient({
+      socket,
+      executor,
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [],
+      agents: [],
+    });
+    await client.start();
+    const first = socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      agentId: 'agent-1', requestId: 'request-1', prompt: 'first',
+    });
+    await vi.waitFor(() => expect(client.activeWorkCount()).toBe(1));
+
+    const draining = client.beginDrain(1000);
+    await socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-2',
+      agentId: 'agent-2', requestId: 'request-2', prompt: 'second',
+    });
+    expect(executor).toHaveBeenCalledTimes(1);
+    finishExecution?.();
+    await first;
+    await draining;
+
+    expect(client.activeWorkCount()).toBe(0);
+    expect(client.outboxPendingCount()).toBe(0);
+  });
+
+  test('stop cancels an in-flight dispatch drain loop', async () => {
+    const socket = new FakeAgentSocket();
+    let finishExecution: (() => void) | undefined;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: vi.fn(async () => new Promise<string>((resolve) => { finishExecution = () => resolve('done'); })),
+      device: { teamId: 'team-1', ownerId: 'user-1' },
+      runtimes: [], agents: [],
+    });
+    await client.start();
+    const executing = socket.trigger(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      agentId: 'agent-1', requestId: 'request-1', prompt: 'first',
+    });
+    await vi.waitFor(() => expect(client.activeWorkCount()).toBe(1));
+    const draining = client.beginDrain(60_000);
+    client.stop();
+    await expect(draining).resolves.toBeUndefined();
+    finishExecution?.();
+    await executing;
+  });
+
   test('retries a claim-required wake and executes only the accepted request snapshot', async () => {
     const socket = new FakeAgentSocket();
     socket.dispatchAcceptedAcks.push(

@@ -117,6 +117,140 @@ describe('PiManagerWorkerHost', () => {
     keepPromptActive?.();
   });
 
+  test('beginDrain 拒绝新 offer 并等待活动 lease 自然完成，不 abort session', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    let finishPrompt: (() => void) | undefined;
+    const session: ManagementSession = {
+      prompt: vi.fn(() => new Promise<void>((resolve) => { finishPrompt = resolve; })),
+      steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(), abort: vi.fn(), waitForIdle: vi.fn(),
+      subscribe: vi.fn(() => () => undefined), dispose: vi.fn(),
+    };
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({
+        credentialStatus: 'production_ready', providerId: 'provider-1', modelId: 'model-1',
+        apiKey: 'secret', baseUrl: 'https://model.invalid',
+      }) },
+      createRuntimeFactory: () => ({ createSession: vi.fn(async () => session) }),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = {
+      schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000,
+    };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    await handlers()!.onLeaseOffer(offer);
+    expect(host.activeLeaseCount()).toBe(1);
+
+    const draining = host.beginDrain(1000);
+    expect(handlers()!.reserveLeaseOffer({ ...offer, offerId: 'offer-2', managementRunId: 'run-2' })).toBe(false);
+    expect(session.abort).not.toHaveBeenCalled();
+    finishPrompt?.();
+    await draining;
+
+    expect(session.abort).not.toHaveBeenCalled();
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
+  test('beginDrain waits for an accepted offer ACK and aborts the acquired lease instead of starting it', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    let resolveAcquire: ((value: Awaited<ReturnType<PiManagerWorkerProtocol['acquireLease']>>) => void) | undefined;
+    vi.mocked(protocol.acquireLease).mockImplementation(() => new Promise((resolve) => { resolveAcquire = resolve; }));
+    const createSession = vi.fn();
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => ({ createSession }),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    const accepting = handlers()!.onLeaseOffer(offer);
+    const draining = host.beginDrain(1_000);
+    expect(host.activeLeaseCount()).toBe(1);
+
+    resolveAcquire?.({ schemaVersion: 1, ok: true, managementRunId: 'run-1', workerId: 'worker-1',
+      leaseToken: 'lease-token', fencingToken: 1, acquiredAt: 100, expiresAt: 10_000 });
+    await Promise.all([accepting, draining]);
+
+    expect(createSession).not.toHaveBeenCalled();
+    expect(protocol.abortLease).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'worker-draining' }));
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
+  test('beginDrain preserves an orphaned durable outbox for the next reacquire without timing out stop', async () => {
+    const { protocol } = createProtocolHarness();
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'unavailable' }) },
+      createRuntimeFactory: vi.fn(),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 1) },
+    });
+    await host.start();
+    await expect(host.beginDrain(60_000)).resolves.toBeUndefined();
+    expect(host.outboxPendingCount()).toBe(1);
+    await host.stop();
+  });
+
+  test('stop cancels a drain loop waiting for an accepted offer ACK', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    vi.mocked(protocol.acquireLease).mockImplementation(() => new Promise(() => undefined));
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => ({ createSession: vi.fn() }),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    void handlers()!.onLeaseOffer(offer);
+    const draining = host.beginDrain(60_000);
+    await host.stop();
+    await expect(draining).resolves.toBeUndefined();
+  });
+
+  test('stop during async session restoration disposes a late session without prompting it', async () => {
+    const { protocol, handlers } = createProtocolHarness();
+    let resolveSession: ((session: ManagementSession) => void) | undefined;
+    const session: ManagementSession = {
+      prompt: vi.fn(), steer: vi.fn(), followUp: vi.fn(), compact: vi.fn(), abort: vi.fn(), waitForIdle: vi.fn(),
+      subscribe: vi.fn(() => () => undefined), dispose: vi.fn(async () => undefined),
+    };
+    const createSession = vi.fn(() => new Promise<ManagementSession>((resolve) => { resolveSession = resolve; }));
+    const host = createPiManagerWorkerHost({
+      profileId: 'profile-1', runtimeVersion: '0.1.0', protocol,
+      credentialProvider: { resolve: async () => ({ credentialStatus: 'production_ready',
+        providerId: 'provider-1', modelId: 'model-1', apiKey: 'secret', baseUrl: 'https://model.invalid' }) },
+      createRuntimeFactory: () => ({ createSession }),
+      outbox: { enqueue: vi.fn(), remove: vi.fn(), list: vi.fn(() => []), size: vi.fn(() => 0) },
+      now: () => 100,
+    });
+    await host.start();
+    const offer = { schemaVersion: 1 as const, offerId: 'offer-1', managementRunId: 'run-1',
+      workerId: 'worker-1', offerExpiresAt: 1_000 };
+    expect(handlers()!.reserveLeaseOffer(offer)).toBe(true);
+    const accepting = handlers()!.onLeaseOffer(offer);
+    await vi.waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+    await host.stop();
+    resolveSession?.(session);
+    await accepting;
+
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(host.activeLeaseCount()).toBe(0);
+  });
+
   test('credential unavailable 时仍注册 fail-closed capability，但拒绝 lease offer', async () => {
     const { protocol, handlers } = createProtocolHarness();
     const host = createPiManagerWorkerHost({

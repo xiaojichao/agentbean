@@ -50,6 +50,7 @@ describe('Device Service paths and state', () => {
       controlSocket: '/tmp/agentbean-home/service/control.sock',
       stateFile: '/tmp/agentbean-home/service/state.json',
       lockDirectory: '/tmp/agentbean-home/service/service.lock',
+      runtimeOwnerFile: '/tmp/agentbean-home/service/runtime-owner.json',
       logDirectory: '/tmp/agentbean-home/service/logs',
       logFile: '/tmp/agentbean-home/service/logs/device-service.log',
     });
@@ -252,6 +253,29 @@ describe('Device control protocol', () => {
 });
 
 describe('DeviceServiceHost', () => {
+  test('persists degraded and failed when healthy runners fail after startup', async () => {
+    let firstPhase: ProfileRuntimeStatus['phase'] = 'healthy';
+    let secondPhase: ProfileRuntimeStatus['phase'] = 'healthy';
+    const first = fakeRunner('first', { snapshot: () => ({ phase: firstPhase, activeWorkCount: 0, outboxPendingCount: 0 }) });
+    const second = fakeRunner('second', { snapshot: () => ({ phase: secondPhase, activeWorkCount: 0, outboxPendingCount: 0 }) });
+    const { states, store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [first, second], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release: vi.fn(async () => undefined) }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    await host.start();
+
+    firstPhase = 'failed';
+    await host.refreshStatus();
+    expect(host.state).toMatchObject({ phase: 'degraded', reasonCode: 'PROFILE_RUNTIME_FAILED' });
+
+    secondPhase = 'failed';
+    await host.refreshStatus();
+    expect(host.state).toMatchObject({ phase: 'failed', reasonCode: 'PROFILE_RUNTIME_FAILED' });
+    expect(states.at(-1)).toMatchObject({ phase: 'failed', profiles: { failed: 2 } });
+  });
+
   test('isolates one failed profile and drains/stops healthy siblings in reverse order', async () => {
     const calls: string[] = [];
     const healthy = fakeRunner('private-profile-name', {

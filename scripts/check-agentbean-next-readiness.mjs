@@ -303,6 +303,7 @@ export function collectAgentBeanNextReadinessChecks({
         daemonNextPackageJson.version !== '0.0.0' &&
         Array.isArray(daemonNextPackageJson.files) &&
         daemonNextPackageJson.files.includes('dist/**/*') &&
+        daemonNextPackageJson.bin?.agentbean === './dist/apps/daemon-next/src/bin.js' &&
         daemonNextPackageJson.bin?.['agentbean-next-daemon'] === './dist/apps/daemon-next/src/bin.js' &&
         daemonNextPackageJson.scripts?.prepublishOnly === 'npm run build',
       '@agentbean/daemon-next must expose a public npm package with a CLI bin',

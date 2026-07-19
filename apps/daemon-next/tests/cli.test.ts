@@ -49,6 +49,7 @@ function createRunDaemonHarness(overrides: Partial<DaemonNextCliDeps> = {}) {
     readPiManagementRuntimeVersion: vi.fn(() => '0.1.0-test'),
     createManagementWorkerHost: vi.fn(async () => ({ start: vi.fn(async () => undefined) })),
     createEnvResolver: vi.fn(() => vi.fn(async () => ({}))),
+    assertRuntimeOwner: vi.fn(async () => undefined),
     ...overrides,
   };
   return { deps, protocolInputs, runtimeSocket, start };
@@ -456,6 +457,21 @@ describe('daemon-next CLI wiring', () => {
 });
 
 describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
+  test('disconnects an initialized transport when profile setup fails before Core handoff', async () => {
+    const saved: AuthData = {
+      token: 'saved-token', serverUrl: 'http://saved.example', teamId: 'team', ownerId: 'owner',
+    };
+    const { deps, runtimeSocket } = createRunDaemonHarness({
+      loadAuth: vi.fn(() => saved),
+      loadScanCache: vi.fn(() => null),
+      createScanProvider: vi.fn(() => vi.fn(async () => { throw new Error('scan failed'); })),
+    });
+    const disconnect = vi.spyOn(runtimeSocket, 'disconnect');
+
+    await expect(runDaemonNextCli(baseRunConfig(), deps)).rejects.toThrow('scan failed');
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
   test('list-profiles reports saved profiles without opening a socket', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {

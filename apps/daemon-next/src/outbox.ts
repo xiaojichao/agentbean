@@ -19,6 +19,7 @@ export interface DispatchOutbox {
   sendOrEnqueue(event: string, payload: unknown, options?: DispatchOutboxSendOptions): void;
   flush(): Promise<void>;
   size(): number;
+  pendingCount(): number;
 }
 
 export interface CreateDispatchOutboxOptions {
@@ -39,6 +40,7 @@ export function createDispatchOutbox(
   const onWarn = options.onWarn ?? (() => {});
   const queue = new Map<string, OutboxItem>();
   let flushing = false;
+  let pendingSends = 0;
 
   function readDispatchId(payload: unknown): string | undefined {
     if (payload && typeof payload === 'object' && 'dispatchId' in payload) {
@@ -85,9 +87,12 @@ export function createDispatchOutbox(
       if (!dispatchId) {
         // 无 dispatchId 无法去重，直接尝试发送；失败即放弃（不阻塞 dispatch 流程）。
         void (async () => {
-          const ok = await trySend(item);
-          if (ok) {
-            notifyDelivered(item);
+          pendingSends += 1;
+          try {
+            const ok = await trySend(item);
+            if (ok) notifyDelivered(item);
+          } finally {
+            pendingSends -= 1;
           }
         })();
         return;
@@ -97,12 +102,17 @@ export function createDispatchOutbox(
         return;
       }
       void (async () => {
-        const ok = await trySend(item);
-        if (!ok) {
-          queue.set(dispatchId, item);
-          return;
+        pendingSends += 1;
+        try {
+          const ok = await trySend(item);
+          if (!ok) {
+            queue.set(dispatchId, item);
+            return;
+          }
+          notifyDelivered(item);
+        } finally {
+          pendingSends -= 1;
         }
-        notifyDelivered(item);
       })();
     },
     async flush() {
@@ -124,6 +134,9 @@ export function createDispatchOutbox(
     },
     size() {
       return queue.size;
+    },
+    pendingCount() {
+      return queue.size + pendingSends;
     },
   };
 }

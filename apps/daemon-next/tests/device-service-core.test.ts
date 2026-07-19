@@ -49,6 +49,26 @@ describe('DeviceServiceCore', () => {
     await expect(core.start()).rejects.toThrow('register failed');
     expect(stop).toHaveBeenCalledTimes(1);
   });
+
+  test('排空并发通知组件并聚合活动工作与 outbox 计数', async () => {
+    const dispatchDrain = vi.fn(async () => undefined);
+    const managementDrain = vi.fn(async () => undefined);
+    const core = createDeviceServiceCore({
+      dispatchClient: {
+        start: vi.fn(async () => undefined), beginDrain: dispatchDrain,
+        activeWorkCount: () => 2, outboxPendingCount: () => 3,
+      },
+      managementWorkerHost: {
+        start: vi.fn(async () => undefined), beginDrain: managementDrain,
+        activeWorkCount: () => 1, outboxPendingCount: () => 4,
+      },
+    });
+    await core.beginDrain(1000);
+    expect(dispatchDrain).toHaveBeenCalledWith(1000);
+    expect(managementDrain).toHaveBeenCalledWith(1000);
+    expect(core.activeWorkCount()).toBe(3);
+    expect(core.outboxPendingCount()).toBe(7);
+  });
 });
 
 describe('ManagementCredentialProvider', () => {

@@ -20,6 +20,7 @@ export type DeviceServiceReasonCode =
   | 'SERVICE_DRAIN_TIMEOUT'
   | 'SERVICE_STATE_WRITE_FAILED'
   | 'PROFILE_START_FAILED'
+  | 'PROFILE_RUNTIME_FAILED'
   | 'PROFILE_DRAIN_FAILED';
 
 export interface DeviceServiceProfileCounts {
