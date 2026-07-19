@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Added
+- macOS 设备首次连接使用 `agentbean device connect`，自动保存 Team Profile、安装 Device Service 并在健康后退出终端
+
+### Changed
+- 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
+
 ## [Daily 2026-07-18] - 2026-07-18
 ### Changed
 - Phase 4 第二阶段：Run 用量可见性（#649）

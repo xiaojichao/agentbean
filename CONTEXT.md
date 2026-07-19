@@ -2,6 +2,16 @@
 
 本上下文描述 AgentBean 中 PI Manager 与外部 Agent 协作执行的核心语言，避免 Phase 4 设计混用 Device、Server 与用户可见执行概念。
 
+## Device Service
+
+macOS 当前用户唯一的 AgentBean 后台系统服务，承载该用户全部已授权 Device Profile，并在终端退出或用户重新登录后继续提供设备能力。
+_Avoid_: 每 Team Daemon、前台连接进程、系统级 root 服务。
+
+## Device Profile
+
+Device Service 中一份 Team 范围的本地连接身份与凭据；同一用户可以保存多个 Profile，由同一个 Device Service 统一运行。
+_Avoid_: 独立系统服务、Team Daemon、历史邀请命令。
+
 ## Manager Worker
 
 负责驱动一次 ManagementRun 的 PI Manager 执行单元，可以运行在用户授权的 Device 上，也可以运行在 AgentBean Server 的受控环境中。

@@ -498,9 +498,9 @@ describe('device rename and delete (end-to-end)', () => {
     });
   });
 
-  test('device connectCommand surfaces after invite-based onboarding', async () => {
-    // 完整接入流程：web create invite → daemon wait（agent，自动触发 owner approve complete）→
-    // daemon hello（agent，反查 completed invite 生成 connectCommand）→ web getDevice 断言命令。
+  test('device invite returns the Device Service command without persisting it on the device', async () => {
+    // 完整接入流程：web create invite 返回一次性系统服务连接指南 → daemon wait 自动 approve →
+    // daemon hello → web getDevice 不再返回已经使用过的历史邀请命令。
     // 说明：device-invite:wait 的后置钩子会以 invite.createdBy（owner）自动 complete，
     // 因此本流程不手动 emit device-invite:complete（手动 complete 会返回 INVITE_ALREADY_USED）。
     const app = createInMemoryServerNext({
@@ -539,8 +539,18 @@ describe('device rename and delete (end-to-end)', () => {
       profileId: 'default',
     });
     expect(inviteAck).toMatchObject({ ok: true });
-    const invite = (inviteAck as { invite?: { code?: string; command?: string } }).invite;
+    const invite = (inviteAck as {
+      invite?: { code?: string; command?: string; expiresAt?: number; operationCommands?: Array<{ id: string; command: string }> };
+    }).invite;
     expect(invite?.code).toBeTruthy();
+    expect(invite?.expiresAt).toBe(1000 + 30 * 60_000);
+    expect(invite?.command).toContain('npm install -g @agentbean/daemon@latest');
+    expect(invite?.command).toContain('agentbean device connect');
+    expect(invite?.command).toContain("--profile-id 'default'");
+    expect(invite?.operationCommands).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'status', command: 'agentbean device status' }),
+      expect.objectContaining({ id: 'update', command: 'agentbean update' }),
+    ]));
     const code = invite!.code!;
 
     // 先挂 credentials 监听（wait ack 在 owner approve 自动 complete 之前返回，避免竞态漏接推送）
@@ -567,7 +577,18 @@ describe('device rename and delete (end-to-end)', () => {
       serverUrl: 'https://agentbean.example',
     });
 
-    // daemon hello（agent）：machineId/profileId 匹配 invite → 反查 completed invite 生成 connectCommand
+    // 相同 Mac/Profile 在短期邀请有效期内可以重试同一条命令，便于注册成功但服务安装失败后恢复。
+    await expect(
+      agent.emitWithAck(AGENT_EVENTS.deviceInvite.wait, {
+        code,
+        machineId: 'mac-1',
+        profileId: 'default',
+        hostname: 'mac',
+        serverUrl: 'https://agentbean.example',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    // daemon hello（agent）：注册在线设备，但不保存一次性邀请命令。
     await expect(
       agent.emitWithAck(AGENT_EVENTS.device.hello, {
         teamId: 'team-1',
@@ -580,13 +601,10 @@ describe('device rename and delete (end-to-end)', () => {
       }),
     ).resolves.toMatchObject({ ok: true, device: { id: 'device-1', status: 'online' } });
 
-    // getDevice 断言 connectCommand：含 npx @agentbean/daemon + invite code
+    // getDevice 不得暴露已经完成的一次性邀请码或命令。
     const got = await web.emitWithAck(WEB_EVENTS.device.get, { deviceId: 'device-1' });
     expect(got).toMatchObject({ ok: true });
-    const connectCommand = (got as { device?: { connectCommand?: string } }).device?.connectCommand;
-    expect(connectCommand).toEqual(expect.stringContaining('npx @agentbean/daemon'));
-    expect(connectCommand).toContain(code);
-    expect(connectCommand).toContain('--server-url https://agentbean.example');
+    expect((got as { device?: Record<string, unknown> }).device).not.toHaveProperty('connectCommand');
   });
 
   test('device getDevice surfaces daemonVersionInfo with update-available', async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index';
-import { createSocketIoDaemonSocket, formatScanSnapshot, parseDaemonNextCliConfig, resolveDaemonServerUrl, runDaemonNextCli, waitForDeviceInviteCredentials, type DaemonNextCliConfig, type DaemonNextCliDeps } from '../src/cli';
+import { connectDeviceProfile, createSocketIoDaemonSocket, formatScanSnapshot, parseDaemonNextCliConfig, resolveDaemonServerUrl, runDaemonNextCli, waitForDeviceInviteCredentials, type DaemonNextCliConfig, type DaemonNextCliDeps } from '../src/cli';
 import type { AuthData } from '../src/auth-store';
 import type { CreateDaemonProtocolClientInput, DaemonScanSnapshot } from '../src/index';
 
@@ -453,6 +453,60 @@ describe('daemon-next CLI wiring', () => {
     await runtimeSocket.trigger('device:scan-requested', { deviceId: 'device-1' }, ack);
     expect(scans).toEqual([{ deviceId: 'device-1' }]);
     expect(ack).toHaveBeenCalledWith({ ok: true });
+  });
+});
+
+describe('connectDeviceProfile', () => {
+  test('persists invited credentials and disconnects without starting a daemon core', async () => {
+    const runtimeSocket = new FakeRuntimeSocket();
+    let saved: AuthData | null = null;
+    const saveAuth = vi.fn((auth: AuthData) => { saved = auth; });
+    const disconnect = vi.spyOn(runtimeSocket, 'disconnect');
+    const connecting = connectDeviceProfile({
+      inviteCode: 'device-code-connect',
+      serverUrl: 'https://api.agentbean.dev/',
+      profileId: 'Team A',
+      machineId: 'machine-a',
+      hostname: 'xiao-mbp',
+    }, {
+      connectSocket: vi.fn(async () => runtimeSocket),
+      loadAuth: vi.fn(() => saved),
+      saveAuth,
+    });
+
+    await waitForCondition(() => runtimeSocket.emitted.length === 1);
+    await runtimeSocket.trigger(AGENT_EVENTS.deviceInvite.credentials, {
+      token: 'device-token-connect',
+      teamId: 'team-a',
+      ownerId: 'owner-a',
+    });
+
+    await expect(connecting).resolves.toEqual({ profileId: 'team-a', teamId: 'team-a' });
+    expect(saveAuth).toHaveBeenCalledWith({
+      token: 'device-token-connect',
+      serverUrl: 'https://api.agentbean.dev',
+      teamId: 'team-a',
+      ownerId: 'owner-a',
+    }, { profileId: 'team-a' });
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  test('rejects a profile id already bound to another server before consuming the invite', async () => {
+    const connectSocket = vi.fn();
+    await expect(connectDeviceProfile({
+      inviteCode: 'device-code-conflict',
+      serverUrl: 'https://new.example',
+      profileId: 'team-a',
+    }, {
+      connectSocket,
+      loadAuth: vi.fn(() => ({
+        token: 'old-token',
+        serverUrl: 'https://old.example',
+        teamId: 'team-a',
+        ownerId: 'owner-a',
+      })),
+    })).rejects.toThrow('DEVICE_PROFILE_CONFLICT');
+    expect(connectSocket).not.toHaveBeenCalled();
   });
 });
 

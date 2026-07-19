@@ -4,7 +4,7 @@ import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, 
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
-import { buildDeviceInviteCommand } from './device-invite-command.js';
+import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
 import { createCollaborationService } from './management/collaboration-service.js';
@@ -1417,7 +1417,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: team.id,
         createdBy: inviteInput.userId,
         createdAt: clock.now(),
-        expiresAt: inviteInput.expiresAt,
+        expiresAt: inviteInput.expiresAt ?? clock.now() + 30 * 60_000,
         profileId: inviteInput.profileId,
       });
 
@@ -1428,7 +1428,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async waitForDeviceInvite(inviteInput) {
-      const usable = await getUsableDeviceInvite(repositories, clock, inviteInput.code);
+      const usable = await getUsableDeviceInviteForWait(repositories, clock, inviteInput);
       if (!usable.ok) {
         return usable;
       }
@@ -1436,13 +1436,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!team) {
         return makeFailure('INVITE_INVALID', 'Device invite team no longer exists');
       }
-      const updated = await repositories.deviceInvites.updateWaiter({
-        code: usable.invite.code,
-        machineId: inviteInput.machineId,
-        profileId: inviteInput.profileId,
-        hostname: inviteInput.hostname,
-        serverUrl: inviteInput.serverUrl,
-      });
+      // 已完成的邀请仅允许原 Mac/Profile 在有效期内重试；不再覆写首次完成时的 waiter 元数据。
+      const updated = usable.invite.completedAt !== undefined
+        ? usable.invite
+        : await repositories.deviceInvites.updateWaiter({
+          code: usable.invite.code,
+          machineId: inviteInput.machineId,
+          profileId: inviteInput.profileId,
+          hostname: inviteInput.hostname,
+          serverUrl: inviteInput.serverUrl,
+        });
       if (!updated) {
         return makeFailure('INVITE_INVALID', 'Device invite is invalid');
       }
@@ -1604,19 +1607,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (alias) canonicalDeviceId = alias.id;
       }
 
-      let connectCommand = existing?.connectCommand;
-      if (!existing && connectCommand === undefined && deviceInput.machineId && deviceInput.profileId) {
-        const invite = await repositories.deviceInvites.findCompletedByMachineProfile({
-          teamId: deviceInput.teamId,
-          machineId: deviceInput.machineId,
-          profileId: deviceInput.profileId,
-        });
-        if (invite) {
-          const team = await repositories.teams.getById(deviceInput.teamId);
-          connectCommand = buildDeviceInviteCommand(invite.code, invite.profileId ?? team?.path, invite.serverUrl);
-        }
-      }
-
       const device = await repositories.devices.upsertHello({
         id: existing?.id ?? ids.nextId(),
         teamId: deviceInput.teamId,
@@ -1632,7 +1622,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         daemonVersion: deviceInput.daemonVersion,
         systemInfo: deviceInput.systemInfo,
         capabilities: deviceInput.capabilities,
-        connectCommand,
         lastSeenAt: now,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -4997,6 +4986,7 @@ function toDeviceInviteDto(invite: DeviceInviteRecord, command?: string): Device
     completedAt: invite.completedAt,
     profileId: invite.profileId,
     command,
+    operationCommands: command ? DEVICE_SERVICE_OPERATION_COMMANDS.map((item) => ({ ...item })) : undefined,
   };
 }
 
@@ -5054,7 +5044,7 @@ function toDeviceDto(device: DeviceDto, currentDeviceId?: string | null): Device
     daemonVersionInfo,
     latestDaemonVersion: daemonVersionInfo.latest,
     daemonUpdateAvailable: daemonVersionInfo.updateAvailable,
-    connectCommand: device.connectCommand,
+    profileId: device.profileId,
     lastSeenAt: device.lastSeenAt,
   };
   if (currentDeviceId !== undefined) {
@@ -6160,6 +6150,24 @@ async function getUsableDeviceInvite(
     return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
   }
   return { ok: true, invite };
+}
+
+async function getUsableDeviceInviteForWait(
+  repositories: ServerNextRepositories,
+  clock: ServerNextClock,
+  input: { code: string; machineId?: string; profileId?: string },
+): Promise<{ ok: true; invite: DeviceInviteRecord } | Ack<Record<string, never>>> {
+  const invite = await repositories.deviceInvites.getByCode(input.code);
+  if (!invite) return makeFailure('INVITE_INVALID', 'Device invite is invalid');
+  if (invite.expiresAt !== undefined && invite.expiresAt <= clock.now()) {
+    return makeFailure('INVITE_EXPIRED', 'Device invite has expired');
+  }
+  if (invite.completedAt === undefined) return { ok: true, invite };
+  if (invite.machineId === input.machineId && invite.profileId === input.profileId
+    && input.machineId !== undefined && input.profileId !== undefined) {
+    return { ok: true, invite };
+  }
+  return makeFailure('INVITE_ALREADY_USED', 'Device invite has already been used');
 }
 
 async function findDeviceByCredentials(

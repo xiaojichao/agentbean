@@ -1,9 +1,6 @@
 // 生成"添加设备"对话框使用的 daemon 连接命令。
-// Device invite 命令由 server-next 直接维护，并适配当前编译运行环境：
-// - 优先使用 AGENT_BEAN_INVITE_COMMAND_TEMPLATE 模板（支持 {code}/{serverUrl}/{profile} 占位符）
-// - 否则返回 production 默认命令 `npx @agentbean/daemon@latest ...`
-//   （去掉旧版基于 process.cwd() 的本地 tsx 分支：server-next 从 dist 运行，相对路径判断不可靠，
-//    本地调试可用 AGENT_BEAN_INVITE_COMMAND_TEMPLATE 覆盖）
+// Device invite 命令由 server-next 直接维护，固定安装最新 CLI 后一次性连接并交接给
+// Device Service。不再接受可把产品退回前台常驻模式的命令模板环境变量。
 // profile slug 优先使用 explicit profileId，未提供时由 team.path 派生，保留多设备 profile 隔离能力。
 
 const DEFAULT_PUBLIC_SERVER_URL = 'http://localhost:4000';
@@ -22,14 +19,20 @@ export function resolveDeviceInviteServerUrl(): string {
 
 export function buildDeviceInviteCommand(code: string, profileSource?: string | null, serverUrlOverride?: string | null): string {
   const serverUrl = serverUrlOverride ?? resolveDeviceInviteServerUrl();
-  const template = process.env.AGENT_BEAN_INVITE_COMMAND_TEMPLATE;
   const profile = slugifyProfile(profileSource);
-  if (template) {
-    return template
-      .replaceAll('{code}', code)
-      .replaceAll('{serverUrl}', serverUrl)
-      .replaceAll('{profile}', profile);
-  }
-  const profileArg = profileSource ? ` --profile-id ${profile}` : '';
-  return `npx @agentbean/daemon@latest --invite-code ${code} --server-url ${serverUrl}${profileArg}`;
+  return `npm install -g @agentbean/daemon@latest && agentbean device connect --invite-code ${shellArgument(code)} --server-url ${shellArgument(serverUrl)} --profile-id ${shellArgument(profile)}`;
+}
+
+export const DEVICE_SERVICE_OPERATION_COMMANDS = [
+  { id: 'status', label: '查看状态', command: 'agentbean device status' },
+  { id: 'logs', label: '查看实时日志', command: 'agentbean device logs --follow' },
+  { id: 'restart', label: '重启服务', command: 'agentbean device restart' },
+  { id: 'update', label: '升级 AgentBean', command: 'agentbean update' },
+  { id: 'stop', label: '停止服务', command: 'agentbean device stop', advanced: true },
+  { id: 'start', label: '启动服务', command: 'agentbean device start', advanced: true },
+  { id: 'uninstall', label: '卸载服务', command: 'agentbean device uninstall', advanced: true },
+] as const;
+
+function shellArgument(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }

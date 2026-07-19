@@ -588,23 +588,6 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
         return mapDeviceInvite(globalDb.prepare('SELECT * FROM device_invites WHERE code = ?').get(input.code));
       },
-      async findCompletedByMachineProfile(input) {
-        const row = globalDb
-          .prepare(
-            `SELECT * FROM device_invites
-             WHERE team_id = ?
-             AND completed_at IS NOT NULL
-             AND machine_id = ?
-             AND profile_id = ?
-             ORDER BY completed_at DESC LIMIT 1`,
-          )
-          .get(
-            input.teamId,
-            input.machineId,
-            input.profileId,
-          );
-        return row ? mapDeviceInvite(row) : null;
-      },
     },
     channels: {
       async create(channel) {
@@ -847,8 +830,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO devices (
               id, team_id, owner_id, machine_id, profile_id, hostname, name, name_source, status, daemon_version,
-              system_info, capabilities, connect_command, canonical_device_id, last_seen_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              system_info, capabilities, canonical_device_id, last_seen_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               team_id = excluded.team_id,
               owner_id = excluded.owner_id,
@@ -859,7 +842,6 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               daemon_version = excluded.daemon_version,
               system_info = excluded.system_info,
               capabilities = excluded.capabilities,
-              connect_command = excluded.connect_command,
               canonical_device_id = excluded.canonical_device_id,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
@@ -877,7 +859,6 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             device.daemonVersion ?? null,
             device.systemInfo ? JSON.stringify(device.systemInfo) : null,
             device.capabilities ? JSON.stringify(device.capabilities) : null,
-            device.connectCommand ?? null,
             device.canonicalDeviceId ?? null,
             device.lastSeenAt ?? device.updatedAt,
             device.createdAt,
@@ -2249,7 +2230,6 @@ function mapDevice(row: unknown): DeviceRecord | null {
     profileId: sqliteNullableText(row, 'profile_id'),
     canonicalDeviceId: sqliteNullableText(row, 'canonical_device_id') ?? null,
     daemonVersion: sqliteNullableText(row, 'daemon_version'),
-    connectCommand: sqliteNullableText(row, 'connect_command'),
     systemInfo: systemInfoJson ? JSON.parse(systemInfoJson) as DeviceRecord['systemInfo'] : undefined,
     capabilities: capabilitiesJson ? JSON.parse(capabilitiesJson) as DeviceRecord['capabilities'] : undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),

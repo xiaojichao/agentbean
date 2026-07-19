@@ -108,7 +108,6 @@ export interface DeviceRecord extends DeviceDto {
   profileId?: string;
   canonicalDeviceId?: string | null;
   daemonVersion?: string;
-  connectCommand?: string;
   nameSource?: 'user' | 'hostname';
   createdAt: UnixMs;
   updatedAt: UnixMs;
@@ -170,7 +169,6 @@ export interface DeviceInviteRepository {
     serverUrl?: string;
   }): Promise<DeviceInviteRecord | null>;
   complete(input: { code: string; completedAt: UnixMs; serverUrl?: string }): Promise<DeviceInviteRecord | null>;
-  findCompletedByMachineProfile(input: { teamId: ID; machineId: string; profileId: string }): Promise<DeviceInviteRecord | null>;
 }
 
 export interface ChannelRepository {
