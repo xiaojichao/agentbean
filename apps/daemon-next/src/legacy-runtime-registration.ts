@@ -141,11 +141,15 @@ export async function discoverInstalledLegacyExecutables(
 ): Promise<string[]> {
   const found = new Set<string>();
   for (const directory of pathValue.split(':').filter(Boolean)) {
-    for (const name of ['agentbean', 'agentbean-daemon', 'daemon']) {
+    for (const name of ['agentbean', 'agentbean-daemon', 'agentbean-next-daemon', 'daemon']) {
       try {
         const resolved = await realpath(join(directory, name));
-        if (resolved.includes('/node_modules/@agentbean/daemon/')
-          && !resolved.includes('/node_modules/@agentbean/daemon-next/')) found.add(resolved);
+        if (resolved.includes('/node_modules/@agentbean/daemon/')) {
+          found.add(resolved);
+        } else if (resolved.includes('/node_modules/@agentbean/daemon-next/')) {
+          const source = await readFile(resolved, 'utf8');
+          if (!source.includes('assertDeviceRuntimeOwner') || !source.includes('migrationLockDirectory')) found.add(resolved);
+        }
       } catch (error) {
         if (!isNodeError(error, 'ENOENT') && !isNodeError(error, 'ENOTDIR')) throw error;
       }
@@ -158,7 +162,7 @@ function isLegacyDaemonCommand(command: string): boolean {
   if (/\s(?:device)(?:\s|$)/.test(command) || /\sservice\s+run(?:\s|$)/.test(command)) return false;
   const launchTokens = command.trim().split(/\s+/).slice(0, 2);
   const launchPath = launchTokens.join(' ');
-  return launchTokens.some((token) => /(?:^|\/)(?:agentbean|agentbean-next-daemon)$/.test(token))
+  return launchTokens.some((token) => /(?:^|\/)(?:agentbean|agentbean-daemon|agentbean-next-daemon)$/.test(token))
     || /(?:@agentbean\/daemon-next|apps\/daemon-next).*\/bin\.js(?:\s|$)/.test(launchPath)
     || /@agentbean\/daemon(?:@|\/|\s)/.test(command)
     || (launchTokens.some((token) => /(?:^|\/)daemon$/.test(token))

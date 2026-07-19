@@ -260,11 +260,12 @@ describe('Legacy runtime registration', () => {
       '  606 npm exec @agentbean/daemon@latest --profile-id main --server-url https://api.agentbean.dev',
       '  707 node /Users/shaw/.npm/_npx/hash/node_modules/.bin/daemon --invite-code code --server-url https://api.agentbean.dev',
       '  808 node /opt/lib/node_modules/@agentbean/daemon/dist/bin.js --profile-id main --server-url https://api.agentbean.dev',
+      '  909 /opt/homebrew/bin/agentbean-daemon --profile-id main --server-url https://api.agentbean.dev',
     ].join('\n');
     await expect(discoverUnregisteredLegacyRuntimePids(new Set([202]), {
       pid: 999,
       runPs: async () => output,
-    })).resolves.toEqual([101, 606, 707, 808]);
+    })).resolves.toEqual([101, 606, 707, 808, 909]);
   });
 
   test('requires the historical global npm executable to be uninstalled before commit', async () => {
@@ -272,16 +273,23 @@ describe('Legacy runtime registration', () => {
     const bin = join(root, 'bin');
     const historical = join(root, 'node_modules', '@agentbean', 'daemon', 'dist', 'bin.js');
     const current = join(root, 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
+    const oldNext = join(root, 'old', 'node_modules', '@agentbean', 'daemon-next', 'dist', 'bin.js');
     await mkdir(bin, { recursive: true });
     await mkdir(dirname(historical), { recursive: true });
     await mkdir(dirname(current), { recursive: true });
+    await mkdir(dirname(oldNext), { recursive: true });
     await writeFile(historical, 'historical');
-    await writeFile(current, 'current');
+    await writeFile(current, 'assertDeviceRuntimeOwner migrationLockDirectory');
+    await writeFile(oldNext, 'legacy daemon-next without fencing');
     await symlink(historical, join(bin, 'daemon'));
     await symlink(current, join(bin, 'agentbean'));
+    await symlink(oldNext, join(bin, 'agentbean-next-daemon'));
 
     const discovered = await discoverInstalledLegacyExecutables(bin);
-    expect(discovered).toHaveLength(1);
-    expect(discovered[0]).toMatch(/node_modules\/@agentbean\/daemon\/dist\/bin\.js$/);
+    expect(discovered).toHaveLength(2);
+    expect(discovered).toEqual(expect.arrayContaining([
+      expect.stringMatching(/node_modules\/@agentbean\/daemon\/dist\/bin\.js$/),
+      expect.stringMatching(/old\/node_modules\/@agentbean\/daemon-next\/dist\/bin\.js$/),
+    ]));
   });
 });
