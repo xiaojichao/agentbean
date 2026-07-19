@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   PiProviderCardDto,
   PiProviderEndpointMode,
@@ -120,6 +120,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [editorMode, setEditorMode] = useState<EditorMode>('form');
   const [form, setForm] = useState<CardFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const editorInitializedRef = useRef(false);
 
   const load = useCallback(async (options: {
     preserveEditor?: boolean;
@@ -143,12 +144,13 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     }
     setPresets(presetResult.presets ?? []);
     setCards(cardResult.cards ?? []);
-    if (!options.preserveEditor && (presetResult.presets?.length ?? 0) > 0 && !editingCardId) {
+    if (!options.preserveEditor && !editorInitializedRef.current && (presetResult.presets?.length ?? 0) > 0) {
       const first = presetResult.presets![0]!;
+      editorInitializedRef.current = true;
       setSelectedPreset(first.preset);
       setForm(formFromPreset(first));
     }
-  }, [editingCardId, isSystemAdmin]);
+  }, [isSystemAdmin]);
 
   useEffect(() => {
     void load();
@@ -172,6 +174,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
 
   const startCreate = (preset: PiProviderPreset) => {
     const descriptor = presets.find((item) => item.preset === preset);
+    editorInitializedRef.current = true;
     setEditingCardId(null);
     setSelectedPreset(preset);
     setEditorMode('form');
@@ -180,6 +183,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   };
 
   const startEdit = (card: PiProviderCardDto) => {
+    editorInitializedRef.current = true;
     setEditingCardId(card.id);
     setSelectedPreset(card.preset);
     setEditorMode('form');
