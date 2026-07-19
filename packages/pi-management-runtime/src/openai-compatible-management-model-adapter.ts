@@ -160,8 +160,6 @@ function parseOpenAiResponse(value: unknown, fallbackModel: string): ManagementM
       content.push(parseToolCall(call));
     }
   }
-  if (content.length === 0) throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
-
   const finishReason = parseFinishReason(choice.finish_reason);
   const hasToolCall = content.some((item) => item.type === 'toolCall');
   if ((hasToolCall && finishReason !== 'tool_use') || (!hasToolCall && finishReason === 'tool_use')) {
@@ -180,7 +178,7 @@ function parseOpenAiResponse(value: unknown, fallbackModel: string): ManagementM
 
 function parseToolCall(value: unknown): Extract<ManagementModelContent, { type: 'toolCall' }> {
   if (!isRecord(value)
-    || value.type !== 'function'
+    || (value.type !== undefined && value.type !== 'function')
     || typeof value.id !== 'string'
     || !value.id.trim()
     || !isRecord(value.function)
@@ -232,8 +230,7 @@ function parseFinishReason(value: unknown): ManagementModelResponse['finishReaso
   if (value === 'tool_calls') return 'tool_use';
   if (value === 'length') return 'length';
   if (value === 'content_filter') return 'content_filter';
-  if (value === null || value === undefined) return 'unknown';
-  throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
+  return 'unknown';
 }
 
 function responseError(status: number): ManagementModelAdapterError {
