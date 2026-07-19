@@ -550,6 +550,7 @@ describe('agentbean device CLI', () => {
 
   test('rejects unsupported platforms and malformed arguments with stable exits', async () => {
     await expect(runDeviceCli(['start'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['run'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['logs'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['status'], { platform: 'win32' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['stop', '--deadline-ms', '0'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
@@ -558,7 +559,7 @@ describe('agentbean device CLI', () => {
 
   test('run delegates to the internal service host entrypoint', async () => {
     const runService = vi.fn(async () => undefined);
-    await expect(runDeviceCli(['run'], { runService })).resolves.toBe(DEVICE_CLI_EXIT.success);
+    await expect(runDeviceCli(['run'], { platform: 'darwin', runService })).resolves.toBe(DEVICE_CLI_EXIT.success);
     expect(runService).toHaveBeenCalledTimes(1);
   });
 });
