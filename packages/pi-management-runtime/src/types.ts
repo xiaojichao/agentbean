@@ -225,11 +225,11 @@ export interface ManagementModelResponse {
 }
 
 export interface ManagementModelUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-  readonly cacheReadTokens: number;
-  readonly cacheWriteTokens: number;
-  readonly totalTokens: number;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly totalTokens: number | null;
 }
 
 export type ManagementFinishReason =

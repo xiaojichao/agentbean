@@ -254,11 +254,11 @@ describe('PI management session adapter', () => {
       role: 'assistant',
       telemetry: {
         usage: {
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          totalTokens: 0,
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
         },
         finishReason: 'error',
         responseModel: 'malformed-provider',
