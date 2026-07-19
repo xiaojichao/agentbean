@@ -208,18 +208,24 @@ describe('agentbean device CLI', () => {
     expect(await readFile(plistFile, 'utf8')).toContain(`<string>${paths.payloadFile}</string>`);
   });
 
-  test('install is fail-closed before migration and does not write installation files', async () => {
+  test('install fails closed without a saved profile and does not write installation files', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-device-install-no-profile-'));
     const writePayload = vi.fn();
     await expect(runDeviceCli(['install'], {
-      platform: 'darwin', createAdapter: () => fakeAdapter(),
+      platform: 'darwin', baseDir, createAdapter: () => fakeAdapter(),
       controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
-      assertRuntimeOwner: vi.fn(async () => { throw new Error('SERVICE_MIGRATION_REQUIRED'); }),
       writePayload,
+      migrationDeps: {
+        listLegacy: async () => [],
+        listUnregisteredLegacyPids: async () => [],
+        listInstalledLegacyExecutables: async () => [],
+      },
     })).resolves.toBe(DEVICE_CLI_EXIT.rejected);
     expect(writePayload).not.toHaveBeenCalled();
+    expect(await readDeviceRuntimeOwner(baseDir)).toBe('legacy-daemon');
   });
 
-  test('migrate start boots a zero-Runner host, commits owner, then activates saved profiles', async () => {
+  test('install automatically boots a zero-Runner host, commits owner, then activates saved profiles', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-device-migrate-cli-'));
     saveAuth({ token: 'private', serverUrl: 'https://agentbean.test', teamId: 'team-a', ownerId: 'owner-a' }, {
       profileId: 'profile-a',
@@ -261,7 +267,7 @@ describe('agentbean device CLI', () => {
       }),
     };
 
-    await expect(runDeviceCli(['migrate', 'start', '--json'], {
+    await expect(runDeviceCli(['install'], {
       platform: 'darwin',
       baseDir,
       executablePath: '/opt/AgentBean/dist/bin.js',
@@ -273,12 +279,44 @@ describe('agentbean device CLI', () => {
       migrationDeps: {
         listLegacy: async () => [],
         listUnregisteredLegacyPids: async () => [],
+        listInstalledLegacyExecutables: async () => [],
         isProcessAlive: (pid) => pid === 42,
       },
     })).resolves.toBe(DEVICE_CLI_EXIT.success);
 
     expect(lifecycle).toEqual(['bootstrap-migration', 'shutdown-migration', 'start-runners']);
     expect(await readDeviceRuntimeOwner(baseDir)).toBe('device-service');
+  });
+
+  test('install refuses automatic migration while a Legacy runtime is active', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-device-install-live-legacy-'));
+    saveAuth({ token: 'private', serverUrl: 'https://agentbean.test', teamId: 'team-a', ownerId: 'owner-a' }, {
+      profileId: 'profile-a',
+      baseDir,
+    });
+    const writePayload = vi.fn();
+    await expect(runDeviceCli(['install'], {
+      platform: 'darwin',
+      baseDir,
+      createAdapter: () => fakeAdapter(),
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+      writePayload,
+      migrationDeps: {
+        listLegacy: async () => [{
+          schemaVersion: 1,
+          pid: 42,
+          nonce: 'live',
+          startedAt: '2026-07-19T00:00:00.000Z',
+          file: '/tmp/live',
+          fresh: true,
+          alive: true,
+        }],
+        listUnregisteredLegacyPids: async () => [],
+        listInstalledLegacyExecutables: async () => [],
+      },
+    })).resolves.toBe(DEVICE_CLI_EXIT.rejected);
+    expect(writePayload).not.toHaveBeenCalled();
+    expect(await readDeviceRuntimeOwner(baseDir)).toBe('legacy-daemon');
   });
 
   test('uninstall drains, boots out, removes only plist and payload, and preserves data byte-for-byte', async () => {
@@ -511,7 +549,9 @@ describe('agentbean device CLI', () => {
   });
 
   test('rejects unsupported platforms and malformed arguments with stable exits', async () => {
-    await expect(runDeviceCli(['start'], { platform: 'linux', arch: 'arm64' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['start'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['logs'], { platform: 'linux' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    await expect(runDeviceCli(['status'], { platform: 'win32' })).resolves.toBe(DEVICE_CLI_EXIT.platform);
     await expect(runDeviceCli(['stop', '--deadline-ms', '0'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
     await expect(runDeviceCli(['unknown'])).resolves.toBe(DEVICE_CLI_EXIT.usage);
   });

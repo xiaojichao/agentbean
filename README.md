@@ -9,7 +9,35 @@ AgentBean 是一个面向人类与 Agent 协作的本地优先团队平台。它
 - **AgentOS 托管型 Agent**：由 OpenClaw、Hermes 等 AgentOS / Gateway 托管，可以作为团队成员响应频道或私聊消息。
 - **自定义 Agent**：用户创建的专属 Agent，连接某台设备上的项目目录和本地工具，把个人工作流转化为团队可协作的能力。
 
-> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 指向基于 `daemon-next` 的 `0.3.9`。Release B 已随 PR #485 发布，`main` 已退役旧源码；对应 main CI、Railway deploy、production smoke 与 production-host browser gate 均已通过。
+> **当前唯一产品入口是 AgentBean Next**（`apps/*-next` + `packages/*`）。生产 `https://api.agentbean.dev/` 由 `server-next` 提供服务；canonical `@agentbean/daemon@latest` 与 `@agentbean/daemon-next` 使用同一 Device runtime。Release B 已随 PR #485 发布，`main` 已退役旧源码；对应 main CI、Railway deploy、production smoke 与 production-host browser gate 均已通过。
+
+## macOS Device Service MVP
+
+当前 MVP 只支持 macOS 当前用户的 LaunchAgent，不需要 `sudo`。先在 AgentBean Web 完成一次设备邀请并保存 Profile；可用下面的命令确认本机已有 Profile：
+
+```bash
+npm install -g @agentbean/daemon@latest
+agentbean --list-profiles
+```
+
+首次安装会自动检查并安全停止旧 npm Daemon，通过迁移健康检查后再切换运行所有已保存 Profile。若仍有旧进程、没有 Profile 或健康检查失败，安装会拒绝切换，不会启动第二个实例：
+
+```bash
+agentbean device install
+agentbean device status
+agentbean device logs --follow
+```
+
+常用生命周期命令：
+
+```bash
+agentbean device restart
+agentbean device stop
+agentbean device start
+agentbean device uninstall
+```
+
+`uninstall` 只删除 LaunchAgent 和服务 payload；Profile 凭据、Workspace、Memory、machine-id 与待发送 outbox 会保留。Linux 与 Windows 系统服务不属于当前 MVP。
 
 ## 仓库结构
 
