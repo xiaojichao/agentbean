@@ -13,7 +13,7 @@ import { loadYamlConfig } from './config.js';
 import { clearAuth, listAuthProfiles, loadAuth, renameAuthProfile, saveAuth, type AuthData, type AuthProfile } from './auth-store.js';
 import { sanitizeProfileId } from './profile-paths.js';
 import { loadOrCreateMachineId } from './machine-id.js';
-import { createDeviceServiceCore, type DeviceServiceComponent } from './device-service-core.js';
+import { createDeviceServiceCore, type DeviceServiceComponent, type DeviceServiceCore } from './device-service-core.js';
 import { createEnvironmentManagementCredentialProvider } from './management-credential-provider.js';
 import { createManagementDurableOutbox } from './management-durable-outbox.js';
 import { createManagementModelAdapter } from './management-model-adapter.js';
@@ -103,6 +103,7 @@ export interface DaemonNextCliDeps {
     profileId: string;
     runtimeVersion: string;
   }) => Promise<DeviceServiceComponent>;
+  startDeviceServiceCore?: (input: { core: DeviceServiceCore; profileId: string }) => Promise<void>;
   /** 进程退出钩子（测试可注入）；默认 process.exit。用于 daemon 被告知设备删除后退出。 */
   exit?: (code: number) => void;
 }
@@ -383,6 +384,8 @@ export async function runDaemonNextCli(
   const runDaemon = deps.runDaemon ?? runDaemonNextCli;
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const createManagementWorkerHost = deps.createManagementWorkerHost ?? createDefaultManagementWorkerHost;
+  const startDeviceServiceCore = deps.startDeviceServiceCore
+    ?? (async ({ core }: { core: DeviceServiceCore }) => core.start());
 
   if (config.listProfiles) {
     const profiles = listAuthProfilesFn();
@@ -591,7 +594,8 @@ export async function runDaemonNextCli(
     socket: protocolSocket,
     getDeviceId: () => dispatchClient.deviceId,
   });
-  await createDeviceServiceCore({ dispatchClient, taskClaimClient, managementWorkerHost }).start();
+  const core = createDeviceServiceCore({ dispatchClient, taskClaimClient, managementWorkerHost });
+  await startDeviceServiceCore({ core, profileId: config.profileId });
   if (config.inviteCode) {
     console.log(`AgentBean daemon connected for profile "${config.profileId}".`);
   }

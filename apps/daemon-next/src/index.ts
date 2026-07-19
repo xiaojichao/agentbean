@@ -61,6 +61,26 @@ export type {
   DeviceControlRequest,
   DeviceControlResponse,
 } from './device-control-protocol.js';
+export { createDeviceControlClient } from './device-control-client.js';
+export type { DeviceControlClient } from './device-control-client.js';
+export { runDeviceCli, formatDeviceServiceState, DEVICE_CLI_EXIT } from './device-cli.js';
+export type { DeviceCliCommand, DeviceCliDeps } from './device-cli.js';
+export { runDeviceService } from './device-service-runtime.js';
+export type { RunDeviceServiceInput } from './device-service-runtime.js';
+export {
+  createMacOSLaunchAgentAdapter,
+  generateMacOSLaunchAgentPlist,
+  writeMacOSLaunchAgentPlist,
+  macOSLaunchAgentPaths,
+  DEVICE_SERVICE_LAUNCH_AGENT_LABEL,
+} from './macos-launch-agent.js';
+export type {
+  MacOSLaunchAgentAdapter,
+  MacOSLaunchAgentPaths,
+  PlatformServiceStatus,
+  LaunchctlResult,
+  LaunchctlRunner,
+} from './macos-launch-agent.js';
 export { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from './device-service-lock.js';
 export type { DeviceServiceLock } from './device-service-lock.js';
 export { deviceServicePaths } from './device-service-paths.js';

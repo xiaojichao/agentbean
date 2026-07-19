@@ -36,6 +36,7 @@ export function createAgentBeanNextDaemonReleasePackage({
     main: daemonNextPackage.main,
     types: daemonNextPackage.types,
     bin: {
+      agentbean: daemonNextPackage.bin.agentbean,
       daemon: daemonNextPackage.bin['agentbean-next-daemon'],
       'agentbean-daemon': daemonNextPackage.bin['agentbean-next-daemon'],
       'agentbean-next-daemon': daemonNextPackage.bin['agentbean-next-daemon'],

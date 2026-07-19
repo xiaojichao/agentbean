@@ -17,6 +17,7 @@ describe('AgentBean Next daemon release package', () => {
         main: './dist/apps/daemon-next/src/index.js',
         types: './dist/apps/daemon-next/src/index.d.ts',
         bin: {
+          agentbean: './dist/apps/daemon-next/src/bin.js',
           'agentbean-next-daemon': './dist/apps/daemon-next/src/bin.js',
         },
         exports: {
@@ -50,6 +51,7 @@ describe('AgentBean Next daemon release package', () => {
       expect(packageJson.version).toBe('0.2.0');
       expect(packageJson.private).toBe(false);
       expect(packageJson.bin).toMatchObject({
+        agentbean: './dist/apps/daemon-next/src/bin.js',
         daemon: './dist/apps/daemon-next/src/bin.js',
         'agentbean-daemon': './dist/apps/daemon-next/src/bin.js',
         'agentbean-next-daemon': './dist/apps/daemon-next/src/bin.js',
@@ -86,6 +88,7 @@ describe('AgentBean Next daemon release package', () => {
         main: './dist/apps/daemon-next/src/index.js',
         types: './dist/apps/daemon-next/src/index.d.ts',
         bin: {
+          agentbean: './dist/apps/daemon-next/src/bin.js',
           'agentbean-next-daemon': './dist/apps/daemon-next/src/bin.js',
         },
         exports: {

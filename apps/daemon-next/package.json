@@ -6,6 +6,7 @@
   "main": "./dist/apps/daemon-next/src/index.js",
   "types": "./dist/apps/daemon-next/src/index.d.ts",
   "bin": {
+    "agentbean": "./dist/apps/daemon-next/src/bin.js",
     "agentbean-next-daemon": "./dist/apps/daemon-next/src/bin.js"
   },
   "exports": {

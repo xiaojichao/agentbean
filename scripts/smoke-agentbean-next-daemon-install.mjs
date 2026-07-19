@@ -80,10 +80,11 @@ export function runAgentBeanNextDaemonInstallSmoke({
       "const daemon = await import('@agentbean/daemon'); if (typeof daemon.createDeviceServiceCore !== 'function' || typeof daemon.createPiManagerWorkerHost !== 'function' || typeof daemon.createTaskClaimProtocol !== 'function') process.exit(1);",
     ], { cwd: installDir });
 
-    const expectedBins = ['daemon', 'agentbean-daemon', 'agentbean-next-daemon'];
+    const expectedBins = ['agentbean', 'daemon', 'agentbean-daemon', 'agentbean-next-daemon'];
     for (const binName of expectedBins) {
       assertBinRequiresTeamId(join(installDir, 'node_modules/.bin', binName), binName);
     }
+    assertAgentBeanDeviceCli(join(installDir, 'node_modules/.bin', 'agentbean'));
 
     log(`AgentBean Next daemon install smoke passed in ${installDir}`);
     return {
@@ -133,6 +134,14 @@ function assertBinRequiresTeamId(binPath, binName) {
     throw new Error(
       `Expected ${binName} to reach daemon-next CLI config validation, got status ${result.status}: ${output}`,
     );
+  }
+}
+
+function assertAgentBeanDeviceCli(binPath) {
+  const result = spawnSync(binPath, ['device', 'unknown'], { encoding: 'utf8' });
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  if (result.status !== 2 || !output.includes('agentbean device')) {
+    throw new Error(`Expected packaged agentbean device CLI usage exit, got status ${result.status}: ${output}`);
   }
 }
 
