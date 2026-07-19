@@ -32,7 +32,7 @@ export interface LinuxSystemdUserInput {
 
 export function linuxSystemdUserPaths(input: Omit<LinuxSystemdUserInput, 'run' | 'systemctlPath'> = {}): LinuxSystemdUserPaths {
   const home = input.home ?? homedir();
-  const configuredHome = input.xdgConfigHome ?? process.env.XDG_CONFIG_HOME;
+  const configuredHome = input.xdgConfigHome ?? (input.home === undefined ? process.env.XDG_CONFIG_HOME : undefined);
   const configHome = configuredHome && isAbsolute(configuredHome) ? configuredHome : join(home, '.config');
   const servicePaths = deviceServicePaths(input.baseDir);
   return {
