@@ -42,6 +42,35 @@ export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 export { createDeviceServiceCore } from './device-service-core.js';
 export type { DeviceServiceComponent, DeviceServiceCore } from './device-service-core.js';
+export { createDeviceServiceHost, bindDeviceServiceSignals } from './device-service-host.js';
+export type {
+  DeviceServiceHost,
+  DeviceServiceProfileRunner,
+  DeviceServiceDrainResult,
+  ProfileDrainResult,
+  ProfileRuntimePhase,
+  ProfileRuntimeStatus,
+} from './device-service-host.js';
+export { createDeviceControlServer } from './device-control-server.js';
+export type { DeviceControlHandler, DeviceControlServer } from './device-control-server.js';
+export { parseDeviceControlRequest } from './device-control-protocol.js';
+export type {
+  DeviceControlCommand,
+  DeviceControlRequest,
+  DeviceControlResponse,
+} from './device-control-protocol.js';
+export { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from './device-service-lock.js';
+export type { DeviceServiceLock } from './device-service-lock.js';
+export { deviceServicePaths } from './device-service-paths.js';
+export type { DeviceServicePaths } from './device-service-paths.js';
+export { createDeviceServiceStateStore } from './device-service-state.js';
+export type {
+  DeviceServicePhase,
+  DeviceServiceProfileCounts,
+  DeviceServiceReasonCode,
+  DeviceServiceState,
+  DeviceServiceStateStore,
+} from './device-service-state.js';
 export { createManagementDurableOutbox } from './management-durable-outbox.js';
 export type { ManagementDurableOutbox, ManagementDurableOutboxItem } from './management-durable-outbox.js';
 export { createPiManagerWorkerHost } from './pi-manager-worker-host.js';
