@@ -249,6 +249,7 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       const replay = await replayManagementOutboxForLease({
         authority: lease, protocol: input.protocol, outbox: input.outbox,
       });
+      if (!canStartLeaseSession(lease)) return;
       if (replay.unresolvedMemoryWriteCount > 0) {
         throw new Error('MANAGEMENT_MEMORY_OUTBOX_UNRESOLVED');
       }
@@ -259,15 +260,22 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
         leaseToken: lease.leaseToken,
         fencingToken: lease.fencingToken,
       });
+      if (!canStartLeaseSession(lease)) return;
       if (restored.managementRunId !== lease.managementRunId || restored.workerId !== lease.workerId) {
         throw new Error('MANAGEMENT_CHECKPOINT_AUTHORITY_MISMATCH');
       }
       lease.managementPhase = checkpointManagementPhase(restored);
-      const session = await runtimeFactory!.createSession({
+      const factory = runtimeFactory;
+      if (!factory) return;
+      const session = await factory.createSession({
         systemPrompt: input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
         mode: 'managed',
         context: runtimeContext(restored),
       });
+      if (!canStartLeaseSession(lease)) {
+        await session.dispose().catch(() => undefined);
+        return;
+      }
       lease.session = session;
       scheduleRenew(lease);
       void session.prompt({ text: restoreObjective(restored) })
@@ -276,6 +284,10 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
     } catch {
       await abortLease(lease, 'session-start-failed');
     }
+  }
+
+  function canStartLeaseSession(lease: ActiveLease): boolean {
+    return started && !lease.disposing && activeLeases.get(lease.managementRunId) === lease;
   }
 
   async function executeManagementTool(call: ManagementToolCall): Promise<ManagementToolResult> {
