@@ -429,6 +429,7 @@ jobs:
           PI_RUNTIME_VERSION="$(node -p "require('./packages/pi-management-runtime/package.json').version")"
           DAEMON_NEXT_VERSION="$(node -p "require('./apps/daemon-next/package.json').version")"
           CANONICAL_DAEMON_VERSION="$(node -p "require('./.agentbean-next-release/daemon/package.json').version")"
+          echo "canonical_daemon_version=$CANONICAL_DAEMON_VERSION" >> "$GITHUB_OUTPUT"
 
           if npm view "@agentbean/contracts@$CONTRACTS_VERSION" version >/dev/null 2>&1; then
             echo "::notice::@agentbean/contracts@$CONTRACTS_VERSION is already published; skipping npm publish."
@@ -485,6 +486,33 @@ jobs:
         if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
         working-directory: .agentbean-next-release/daemon
         run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Promote canonical daemon latest before production deploy
+        if: env.NPM_TOKEN != ''
+        run: npm dist-tag add "@agentbean/daemon@${{ steps.agentbean-next-packages.outputs.canonical_daemon_version }}" latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify canonical daemon latest before production deploy
+        if: env.NPM_TOKEN != ''
+        run: |
+          EXPECTED="${{ steps.agentbean-next-packages.outputs.canonical_daemon_version }}"
+          LATEST=""
+          for attempt in $(seq 1 12); do
+            LATEST="$(npm view "@agentbean/daemon" dist-tags --json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest || ''")"
+            if [ "$LATEST" = "$EXPECTED" ]; then
+              break
+            fi
+            echo "::notice::Waiting for npm latest dist-tag propagation (${attempt}/12); observed '$LATEST'."
+            sleep 5
+          done
+          echo "npm @agentbean/daemon dist-tags.latest=$LATEST"
+          if [ "$LATEST" != "$EXPECTED" ]; then
+            echo "::error::npm latest ($LATEST) does not match published canonical daemon ($EXPECTED)."
+            exit 1
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

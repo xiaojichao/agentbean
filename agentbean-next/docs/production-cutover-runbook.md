@@ -20,7 +20,7 @@ Release B 已通过 PR #485 合并到 `main`，merge commit 为 `b9238c5b8c14b7d
 推送 `main` 触发生产部署，流水线顺序固定为：
 
 1. `Validate AgentBean Next`
-2. `Publish agent to npm`
+2. `Publish agent to npm`（发布 canonical daemon、晋级 `@agentbean/daemon@latest` 并等待 dist-tag 传播）
 3. `Deploy production`
 4. `AgentBean Next production smoke`
 
@@ -28,7 +28,8 @@ Release B 已通过 PR #485 合并到 `main`，merge commit 为 `b9238c5b8c14b7d
 
 - main publish 缺少 `NPM_TOKEN` 时必须失败，不能静默跳过。
 - production deploy 缺少 `RAILWAY_TOKEN` 时必须失败，不能静默跳过。
-- deploy 必须等待 publish 成功，防止新 Server 先于对应 contracts/daemon artifact 对外生效。
+- publish 必须在 canonical daemon 发布后将 `@agentbean/daemon@latest` 晋级到当前 daemon-next 版本，并验证 dist-tag 传播完成后才能成功。
+- deploy 必须等待 publish 成功，防止新 Server/Web 先于对应 contracts/daemon artifact 和 canonical `latest` 对外生效。
 - push run 的 deploy 成功后自动运行 `AgentBean Next production smoke`。
 - production smoke 先运行 strict cutover audit，再运行 public entry smoke 与 business smoke。
 - strict audit 必须确认 npm `@latest` dist-tag 已指向 daemon-next，并确认历史归档 `legacy` 仍固定为 `0.1.35`；该检查不代表 `legacy` 可用于回滚。
