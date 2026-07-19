@@ -1202,7 +1202,7 @@ describe('web-next preview page interactions', () => {
       status: 'offline',
       name: 'MacBook Pro',
       lastSeenAt: 1_718_888_000_000,
-      daemonVersionInfo: { current: '0.2.0', latest: '0.2.1', updateAvailable: true, status: 'update-available' },
+      daemonVersionInfo: { current: '0.3.12', latest: '0.3.13', updateAvailable: true, status: 'update-available' },
       connectCommand: 'npx @agentbean/daemon@latest --invite ABCD --server-url https://api.agentbean.dev',
     };
     const harness = createPreviewHarness({
@@ -1258,7 +1258,10 @@ describe('web-next preview page interactions', () => {
     expect(detailHtml).toContain('Shaw');
     expect(detailHtml).toContain('macOS 15.5');
     expect(detailHtml).toContain('Apple M3 Max');
-    expect(detailHtml).toContain('v0.2.0（有更新版本）');
+    expect(detailHtml).toContain('v0.3.12（有更新版本）');
+    expect(detailHtml).toContain('AgentBean 可升级到 v0.3.13');
+    expect(detailHtml).toContain('npm install -g @agentbean/daemon@latest');
+    expect(detailHtml).toContain('仅执行这一次');
     expect(detailHtml).toContain('npx @agentbean/daemon@latest');
     expect(detailHtml).toContain('Codex CLI');
     expect(detailHtml).toContain('Hermes-Agent');

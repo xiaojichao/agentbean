@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
 import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
-import { daemonVersionDisplay, versionAtLeast } from '@/lib/daemon-version';
+import { daemonUpgradeGuidance, daemonVersionDisplay, versionAtLeast } from '@/lib/daemon-version';
 import { canAddCustomAgentToDevice, canManageDeviceForUser, directoryBrowseMode, requiresDeleteNameConfirm } from '@/lib/device-permissions';
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
@@ -391,6 +391,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
 }) {
   const [inviteCommand, setInviteCommand] = useState('');
   const [copied, setCopied] = useState(false);
+  const [upgradeCommandCopied, setUpgradeCommandCopied] = useState(false);
   const [genError, setGenError] = useState('');
   const [deviceAgents, setDeviceAgents] = useState<any[]>([]);
   const [deviceRuntimes, setDeviceRuntimes] = useState<any[]>(device.runtimes ?? []);
@@ -418,6 +419,11 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
   const displayName = deviceDisplayName(device) === device.id ? '未命名设备' : deviceDisplayName(device);
   const ownerName = deviceOwnerName(device);
   const daemonVersion = daemonVersionDisplay(device);
+  const currentDaemonVersion = device.daemonVersionInfo?.current ?? device.systemInfo?.daemonVersion;
+  const upgradeGuidance = daemonUpgradeGuidance(currentDaemonVersion);
+  const devicePlatform = device.systemInfo?.platform?.toLowerCase();
+  const showMacOSUpgradeGuidance = daemonVersion.updateAvailable
+    && (!devicePlatform || devicePlatform === 'darwin' || devicePlatform === 'macos');
   const deviceOwnerId = device.ownerId ?? device.userId;
   const canManageDevice = canManageDeviceForUser({
     deviceCanManage: device.canManage,
@@ -672,6 +678,37 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
           </div>
         </section>
 
+        {showMacOSUpgradeGuidance && (
+          <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-4" data-smoke="daemon-upgrade-guidance">
+            <div className="flex items-start gap-3">
+              <RefreshCw size={16} className="mt-0.5 shrink-0 text-amber-700" />
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-amber-950">
+                  AgentBean 可升级{daemonVersion.latestLabel ? `到 ${daemonVersion.latestLabel}` : ''}
+                </h3>
+                <p className="mt-1 text-xs leading-5 text-amber-800">{upgradeGuidance.description}</p>
+                {upgradeGuidance.command && (
+                  <div className="mt-3 flex items-center gap-2">
+                    <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">
+                      {upgradeGuidance.command}
+                    </code>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(upgradeGuidance.command ?? '');
+                        setUpgradeCommandCopied(true);
+                        setTimeout(() => setUpgradeCommandCopied(false), 2000);
+                      }}
+                      className="flex shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-3 py-2 text-xs text-amber-900 hover:bg-amber-50"
+                    >
+                      <Copy size={10} /> {upgradeCommandCopied ? '已复制' : '复制命令'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* CONNECTION */}
         {isOwnedByCurrentUser && device.status === 'offline' && (
           <section className="rounded-lg border border-neutral-200 p-4">
@@ -679,8 +716,8 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             {device.connectCommand && (
               <div className="space-y-2">
                 <p className="text-xs text-neutral-500">首次接入命令（历史参考，invite code 可能已失效）：</p>
-                {daemonVersion.updateAvailable && (
-                  <p className="text-xs font-medium text-amber-700">旧命令无法升级 Daemon，请生成并运行新的连接命令。</p>
+                {daemonVersion.updateAvailable && upgradeGuidance.mode === 'legacy' && (
+                  <p className="text-xs font-medium text-amber-700">旧版本需要生成并运行新的连接命令完成迁移。</p>
                 )}
                 <div className="flex items-center gap-2">
                   <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-neutral-900 px-3 py-2 text-xs text-emerald-400">{device.connectCommand}</code>
@@ -692,7 +729,7 @@ function DeviceDetail({ device, editName, setEditName, deviceName, setDeviceName
             )}
             <div className={device.connectCommand ? 'mt-3' : ''}>
               <button onClick={generateConnect} className="rounded-md border border-neutral-300 px-4 py-2 text-sm hover:bg-neutral-50">
-                {daemonVersion.updateAvailable
+                {daemonVersion.updateAvailable && upgradeGuidance.mode === 'legacy'
                   ? device.connectCommand ? '生成新连接命令进行升级' : '生成连接命令进行升级'
                   : device.connectCommand ? '生成新连接命令' : '生成连接命令'}
               </button>
