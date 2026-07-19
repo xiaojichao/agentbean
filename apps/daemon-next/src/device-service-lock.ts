@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { ensurePrivateDeviceServiceDirectory } from './device-service-filesystem.js';
 
 interface LockOwner {
   readonly schemaVersion: 1;
@@ -42,7 +43,7 @@ export async function acquireDeviceServiceLock(
     acquiredAt: now().toISOString(),
   };
 
-  await mkdir(dirname(lockDirectory), { recursive: true, mode: 0o700 });
+  await ensurePrivateDeviceServiceDirectory(dirname(lockDirectory));
   const candidateDirectory = `${lockDirectory}.candidate-${owner.nonce}`;
   await mkdir(candidateDirectory, { mode: 0o700 });
   await writeFile(`${candidateDirectory}/owner.json`, `${JSON.stringify(owner)}\n`, { mode: 0o600, flag: 'wx' });

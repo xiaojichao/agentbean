@@ -66,6 +66,7 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
   let drainPromise: Promise<DeviceServiceDrainResult> | undefined;
   let stopPromise: Promise<DeviceServiceDrainResult> | undefined;
   const failedProfileIndexes = new Set<number>();
+  let runnersMayNeedDrain = false;
   const startedAt = now().toISOString();
   let state = buildState('stopped', 'SERVICE_NOT_RUNNING');
 
@@ -105,18 +106,25 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       return state;
     },
     async start() {
+      if (stopPromise) throw new Error('SERVICE_NOT_RUNNING');
       startPromise ??= startHost();
       await startPromise;
     },
     async beginDrain(deadlineMs) {
-      drainPromise ??= drainRunners(deadlineMs);
+      drainPromise ??= (async () => {
+        await startPromise?.catch(() => undefined);
+        return drainRunners(deadlineMs);
+      })();
       return drainPromise;
     },
     async stop(deadlineMs = 30_000) {
       stopPromise ??= (async () => {
+        await startPromise?.catch(() => undefined);
         const drainResult = await host.beginDrain(deadlineMs);
-        await stopRunners(drainResult.reasonCode);
-        return drainResult;
+        const stopReason = await stopRunners(drainResult.reasonCode);
+        return stopReason === 'SERVICE_READY'
+          ? drainResult
+          : { ok: false, reasonCode: stopReason };
       })();
       return stopPromise;
     },
@@ -129,6 +137,7 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       controlServer ??= createDeviceControlServer(paths.controlSocket, { handle: handleControlRequest });
       await controlServer.start();
       const results = await Promise.allSettled(input.runners.map((runner) => runner.start()));
+      runnersMayNeedDrain = true;
       results.forEach((result, index) => {
         if (result.status === 'rejected') failedProfileIndexes.add(index);
       });
@@ -142,6 +151,12 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       if (state.phase !== 'failed') {
         await persist('failed', 'SERVICE_CONTROL_UNAVAILABLE').catch(() => undefined);
       }
+      if (runnersMayNeedDrain) {
+        await drainRunners(30_000).catch(() => undefined);
+      }
+      for (const runner of [...input.runners].reverse()) {
+        await runner.stop().catch(() => undefined);
+      }
       await controlServer?.stop().catch(() => undefined);
       await lock.release().catch(() => undefined);
       lock = undefined;
@@ -153,10 +168,7 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
     if (state.phase === 'stopped') return { ok: true, reasonCode: 'SERVICE_READY' };
     await persistForShutdown('draining', 'SERVICE_READY');
     const deadlineAt = Date.now() + deadlineMs;
-    const drainResults = await Promise.all(input.runners.map(async (runner, index) => {
-      if (failedProfileIndexes.has(index)) {
-        return { result: { ok: true } as const, timedOut: false };
-      }
+    const drainResults = await Promise.all(input.runners.map(async (runner) => {
       const remaining = Math.max(1, deadlineAt - Date.now());
       try {
         return { result: await withTimeout(runner.beginDrain(remaining), remaining), timedOut: false };
@@ -176,16 +188,21 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
     return { ok: reasonCode === 'SERVICE_READY', reasonCode };
   }
 
-  async function stopRunners(reasonCode: DeviceServiceDrainResult['reasonCode']): Promise<void> {
-    if (state.phase === 'stopped') return;
+  async function stopRunners(
+    reasonCode: DeviceServiceDrainResult['reasonCode'],
+  ): Promise<DeviceServiceDrainResult['reasonCode']> {
+    if (state.phase === 'stopped') return reasonCode;
     await persistForShutdown('stopping', reasonCode);
+    let stopFailed = false;
     for (const runner of [...input.runners].reverse()) {
-      await runner.stop().catch(() => undefined);
+      await runner.stop().catch(() => { stopFailed = true; });
     }
     await controlServer?.stop().catch(() => undefined);
-    await persistForShutdown('stopped', reasonCode);
+    const finalReason = stopFailed && reasonCode === 'SERVICE_READY' ? 'PROFILE_DRAIN_FAILED' : reasonCode;
+    await persistForShutdown('stopped', finalReason);
     await lock?.release().catch(() => undefined);
     lock = undefined;
+    return finalReason;
   }
 
   async function handleControlRequest(request: DeviceControlRequest): Promise<DeviceControlResponse> {
@@ -208,8 +225,15 @@ export function bindDeviceServiceSignals(
   host: Pick<DeviceServiceHost, 'stop'>,
   signalSource: Pick<NodeJS.Process, 'once' | 'off'> = process,
   deadlineMs = 30_000,
+  exitCodeTarget: Pick<NodeJS.Process, 'exitCode'> = process,
 ): () => void {
-  const handle = () => { void host.stop(deadlineMs); };
+  const handle = () => {
+    void host.stop(deadlineMs).then((result) => {
+      if (!result.ok) exitCodeTarget.exitCode = 1;
+    }).catch(() => {
+      exitCodeTarget.exitCode = 1;
+    });
+  };
   signalSource.once('SIGTERM', handle);
   signalSource.once('SIGINT', handle);
   return () => {

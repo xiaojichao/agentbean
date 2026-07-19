@@ -1,6 +1,7 @@
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { ensurePrivateDeviceServiceDirectory } from './device-service-filesystem.js';
 
 export type DeviceServicePhase =
   | 'starting'
@@ -51,8 +52,7 @@ export function createDeviceServiceStateStore(stateFile: string): DeviceServiceS
   return {
     async write(state) {
       const parent = dirname(stateFile);
-      await mkdir(parent, { recursive: true, mode: 0o700 });
-      await chmod(parent, 0o700);
+      await ensurePrivateDeviceServiceDirectory(parent);
       const temporaryFile = `${stateFile}.tmp-${process.pid}-${randomUUID()}`;
       const handle = await open(temporaryFile, 'wx', 0o600);
       try {

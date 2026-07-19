@@ -1,4 +1,5 @@
-import { chmodSync, mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync } from 'node:fs';
+import { EventEmitter, once } from 'node:events';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,8 +7,9 @@ import { describe, expect, test, vi } from 'vitest';
 import { createDeviceControlServer } from '../src/device-control-server';
 import { parseDeviceControlRequest } from '../src/device-control-protocol';
 import { acquireDeviceServiceLock, DeviceServiceAlreadyRunningError } from '../src/device-service-lock';
-import { createDeviceServiceHost, type DeviceServiceProfileRunner, type ProfileRuntimeStatus } from '../src/device-service-host';
+import { bindDeviceServiceSignals, createDeviceServiceHost, type DeviceServiceProfileRunner, type ProfileRuntimeStatus } from '../src/device-service-host';
 import { deviceServicePaths } from '../src/device-service-paths';
+import { createDeviceServiceProfileRunner } from '../src/device-service-profile-runner';
 import { createDeviceServiceStateStore, type DeviceServiceState } from '../src/device-service-state';
 
 function temporaryRoot(): string {
@@ -75,6 +77,15 @@ describe('Device Service paths and state', () => {
     expect(statSync(dirname(path)).mode & 0o777).toBe(0o700);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readFileSync(path, 'utf8')).not.toContain('/Users/');
+  });
+
+  test('rejects a symlinked service directory', async () => {
+    const root = temporaryRoot();
+    const target = join(root, 'target');
+    mkdirSync(target);
+    symlinkSync(target, join(root, 'service'));
+    const store = createDeviceServiceStateStore(join(root, 'service', 'state.json'));
+    await expect(store.write({} as DeviceServiceState)).rejects.toThrow('SERVICE_DIRECTORY_UNSAFE');
   });
 });
 
@@ -183,6 +194,17 @@ describe('Device control protocol', () => {
     expect(handle).not.toHaveBeenCalled();
     await server.stop();
   });
+
+  test('shutdown destroys clients that never finish a request', async () => {
+    const socketPath = join(temporaryRoot(), 'control.sock');
+    const server = createDeviceControlServer(socketPath, { handle: vi.fn() });
+    await server.start();
+    const socket = createConnection(socketPath);
+    await once(socket, 'connect');
+    const closed = once(socket, 'close');
+    await server.stop();
+    await closed;
+  });
 });
 
 describe('DeviceServiceHost', () => {
@@ -215,6 +237,7 @@ describe('DeviceServiceHost', () => {
 
     await host.beginDrain(1000);
     expect(calls).toEqual(['healthy:drain']);
+    expect(failed.beginDrain).toHaveBeenCalledTimes(1);
     expect(host.state.phase).toBe('draining');
     await Promise.all([host.stop(), host.stop()]);
     expect(calls).toEqual(['healthy:drain', 'failed:stop', 'healthy:stop']);
@@ -279,6 +302,98 @@ describe('DeviceServiceHost', () => {
     });
     await expect(host.start()).rejects.toThrow('write failed');
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test('running-state write failure stops a runner that already started', async () => {
+    const runner = fakeRunner('profile');
+    const release = vi.fn(async () => undefined);
+    let writes = 0;
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5',
+      stateStore: {
+        write: vi.fn(async () => {
+          writes += 1;
+          if (writes === 2) throw new Error('state write failed');
+        }),
+        read: vi.fn(async () => null),
+      },
+      acquireLock: async () => ({ release }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    await expect(host.start()).rejects.toThrow('state write failed');
+    expect(runner.start).toHaveBeenCalledTimes(1);
+    expect(runner.beginDrain).toHaveBeenCalledTimes(1);
+    expect(runner.stop).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test('runner stop failure is returned as a stable failure', async () => {
+    const runner = fakeRunner('profile', { stop: vi.fn(async () => { throw new Error('secret failure'); }) });
+    const { store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release: vi.fn(async () => undefined) }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    await host.start();
+    await expect(host.stop()).resolves.toEqual({ ok: false, reasonCode: 'PROFILE_DRAIN_FAILED' });
+    expect(JSON.stringify(host.state)).not.toContain('secret');
+  });
+
+  test('stop waits for an in-flight start before draining', async () => {
+    let finishStart: (() => void) | undefined;
+    const runner = fakeRunner('profile', {
+      start: vi.fn(() => new Promise<void>((resolve) => { finishStart = resolve; })),
+    });
+    const { store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release: vi.fn(async () => undefined) }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+    const starting = host.start();
+    await vi.waitFor(() => expect(finishStart).toBeTypeOf('function'));
+    const stopping = host.stop();
+    expect(runner.beginDrain).not.toHaveBeenCalled();
+    finishStart?.();
+    await Promise.all([starting, stopping]);
+    expect(runner.beginDrain).toHaveBeenCalledTimes(1);
+    expect(runner.stop).toHaveBeenCalledTimes(1);
+    expect(host.state.phase).toBe('stopped');
+  });
+
+  test('signal drain failure sets a non-zero process exit code', async () => {
+    const signals = new EventEmitter();
+    const exitTarget: { exitCode?: string | number } = {};
+    const cleanup = bindDeviceServiceSignals(
+      { stop: vi.fn(async () => ({ ok: false, reasonCode: 'SERVICE_DRAIN_TIMEOUT' })) },
+      signals as unknown as Pick<NodeJS.Process, 'once' | 'off'>,
+      5,
+      exitTarget,
+    );
+    signals.emit('SIGTERM');
+    await vi.waitFor(() => expect(exitTarget.exitCode).toBe(1));
+    cleanup();
+  });
+});
+
+describe('DeviceServiceProfileRunner', () => {
+  test('wraps the existing DeviceServiceCore with drain state and runtime counts', async () => {
+    const core = { started: false, start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) };
+    const runner = createDeviceServiceProfileRunner({
+      profileId: 'private-profile',
+      core,
+      beginDrain: vi.fn(async () => ({ ok: true })),
+      readCounts: () => ({ activeWorkCount: 2, outboxPendingCount: 3 }),
+    });
+    await runner.start();
+    expect(runner.snapshot()).toEqual({ phase: 'healthy', activeWorkCount: 2, outboxPendingCount: 3 });
+    await runner.beginDrain(1000);
+    expect(runner.snapshot().phase).toBe('draining');
+    await runner.stop();
+    expect(core.start).toHaveBeenCalledTimes(1);
+    expect(core.stop).toHaveBeenCalledTimes(1);
+    expect(runner.snapshot().phase).toBe('stopped');
   });
 });
 

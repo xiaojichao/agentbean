@@ -51,6 +51,8 @@ export type {
   ProfileRuntimePhase,
   ProfileRuntimeStatus,
 } from './device-service-host.js';
+export { createDeviceServiceProfileRunner } from './device-service-profile-runner.js';
+export type { CreateDeviceServiceProfileRunnerInput } from './device-service-profile-runner.js';
 export { createDeviceControlServer } from './device-control-server.js';
 export type { DeviceControlHandler, DeviceControlServer } from './device-control-server.js';
 export { parseDeviceControlRequest } from './device-control-protocol.js';

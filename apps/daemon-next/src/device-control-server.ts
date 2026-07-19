@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, rm } from 'node:fs/promises';
+import { chmod, lstat, rm } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import {
@@ -6,6 +6,7 @@ import {
   type DeviceControlRequest,
   type DeviceControlResponse,
 } from './device-control-protocol.js';
+import { ensurePrivateDeviceServiceDirectory } from './device-service-filesystem.js';
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 
@@ -23,14 +24,22 @@ export function createDeviceControlServer(
   handler: DeviceControlHandler,
 ): DeviceControlServer {
   let server: Server | undefined;
+  const connections = new Set<Socket>();
 
   return {
     async start() {
       if (server) return;
-      await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
-      await chmod(dirname(socketPath), 0o700);
+      await ensurePrivateDeviceServiceDirectory(dirname(socketPath));
       await removeStaleSocket(socketPath);
-      const nextServer = createServer((socket) => handleConnection(socket, handler));
+      const nextServer = createServer((socket) => {
+        connections.add(socket);
+        socket.setTimeout(5_000, () => socket.destroy());
+        socket.once('close', () => connections.delete(socket));
+        handleConnection(socket, handler, () => {
+          socket.setTimeout(0);
+          connections.delete(socket);
+        });
+      });
       try {
         await new Promise<void>((resolve, reject) => {
           const onError = (error: Error) => {
@@ -60,11 +69,12 @@ export function createDeviceControlServer(
       // requested by the connection that still needs to receive our response.
       current.close(() => undefined);
       await rm(socketPath, { force: true });
+      for (const connection of connections) connection.destroy();
     },
   };
 }
 
-function handleConnection(socket: Socket, handler: DeviceControlHandler): void {
+function handleConnection(socket: Socket, handler: DeviceControlHandler, onRequestReceived: () => void): void {
   socket.setEncoding('utf8');
   let buffer = '';
   let handled = false;
@@ -89,6 +99,7 @@ function handleConnection(socket: Socket, handler: DeviceControlHandler): void {
     const newline = buffer.indexOf('\n');
     if (newline < 0) return;
     handled = true;
+    onRequestReceived();
     if (buffer.slice(newline + 1).trim().length > 0) {
       reject();
       return;
