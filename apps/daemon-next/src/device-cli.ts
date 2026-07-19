@@ -9,8 +9,15 @@ import {
   removeMacOSLaunchAgentInstallation,
   writeMacOSLaunchAgentPlist,
   writeMacOSServicePayload,
-  type MacOSLaunchAgentAdapter,
 } from './macos-launch-agent.js';
+import {
+  createLinuxSystemdUserAdapter,
+  followLinuxSystemdUserLogs,
+  readLinuxSystemdUserLogs,
+  removeLinuxSystemdUserInstallation,
+  writeLinuxSystemdUserUnit,
+} from './linux-systemd-user.js';
+import type { PlatformCommandResult, PlatformServiceAdapter, PlatformServiceStatus } from './device-platform-service.js';
 import { runDeviceService } from './device-service-runtime.js';
 import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 import {
@@ -38,20 +45,25 @@ export const DEVICE_CLI_EXIT = {
 
 export interface DeviceCliDeps {
   readonly platform?: NodeJS.Platform;
+  readonly arch?: NodeJS.Architecture;
   readonly baseDir?: string;
   readonly home?: string;
+  readonly xdgConfigHome?: string;
   readonly executablePath?: string;
   readonly nodeExecutablePath?: string;
-  readonly createAdapter?: () => MacOSLaunchAgentAdapter;
+  readonly createAdapter?: () => PlatformServiceAdapter;
   readonly controlClient?: DeviceControlClient;
   readonly runService?: () => Promise<void>;
   readonly waitForReady?: (client: DeviceControlClient, timeoutMs: number) => Promise<DeviceServiceState | null>;
   readonly followLog?: (path: string) => Promise<number>;
+  readonly readLinuxLogs?: () => Promise<PlatformCommandResult>;
+  readonly followLinuxLogs?: () => Promise<number>;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
   readonly assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
   readonly writePayload?: typeof writeMacOSServicePayload;
   readonly writePlist?: typeof writeMacOSLaunchAgentPlist;
+  readonly writeUnit?: typeof writeLinuxSystemdUserUnit;
   readonly removeInstallation?: typeof removeMacOSLaunchAgentInstallation;
   readonly migrate?: (command: DeviceMigrationCommand) => Promise<DeviceMigrationStatus>;
   readonly migrationDeps?: Pick<DeviceMigrationDeps, 'listLegacy' | 'listUnregisteredLegacyPids' | 'listInstalledLegacyExecutables' | 'isProcessAlive'>;
@@ -91,6 +103,17 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     }
   }
   if (parsed.command === 'logs') {
+    if ((deps.platform ?? process.platform) === 'linux') {
+      if (!isPlatformSupported(deps)) return DEVICE_CLI_EXIT.platform;
+      if (parsed.follow) return (deps.followLinuxLogs ?? followLinuxSystemdUserLogs)();
+      const result = await (deps.readLinuxLogs ?? readLinuxSystemdUserLogs)();
+      if (result.exitCode !== 0) {
+        stderr('无法读取 Device Service journal。');
+        return DEVICE_CLI_EXIT.platform;
+      }
+      stdout(result.stdout.trimEnd());
+      return DEVICE_CLI_EXIT.success;
+    }
     if (!parsed.follow) {
       stdout(paths.logFile);
       return DEVICE_CLI_EXIT.success;
@@ -100,12 +123,17 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   if (parsed.command === 'status') {
     const current = await readCurrentState(client, paths.stateFile);
     const platformStatus = await readPlatformStatus(deps);
+    if (platformStatus.queryFailed && !current.reachable) {
+      stderr('无法读取系统服务管理器中的 Device Service 状态。');
+      return DEVICE_CLI_EXIT.platform;
+    }
     const running = current.reachable || platformStatus.running;
     if (!current.state || current.state.phase === 'stopped' || !running) {
       if (parsed.json) stdout(JSON.stringify({
         schemaVersion: 1,
         installed: platformStatus.installed,
         running: false,
+        platformQueryFailed: platformStatus.queryFailed,
         state: current.state,
       }));
       else stdout('Device Service 未运行。');
@@ -115,6 +143,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
       schemaVersion: 1,
       installed: platformStatus.installed,
       running: true,
+      platformQueryFailed: platformStatus.queryFailed,
       state: current.state,
     }));
     else stdout(formatDeviceServiceState(current.state));
@@ -122,14 +151,11 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
       ? DEVICE_CLI_EXIT.rejected
       : DEVICE_CLI_EXIT.success;
   }
-  if ((deps.platform ?? process.platform) !== 'darwin') {
+  if (!isPlatformSupported(deps)) {
     stderr('当前平台尚未支持 Device Service 系统注册。');
     return DEVICE_CLI_EXIT.platform;
   }
-  const adapter = deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
-    ...(deps.home ? { home: deps.home } : {}),
-    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
-  });
+  const adapter = createPlatformAdapter(deps);
   if (parsed.command === 'install') return installService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'uninstall') return uninstallService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'start') return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
@@ -149,7 +175,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
 }
 
 async function installService(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   client: DeviceControlClient,
   deadlineMs: number,
   deps: DeviceCliDeps,
@@ -170,18 +196,14 @@ async function installService(
       nodeExecutablePath: deps.nodeExecutablePath ?? process.execPath,
       ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
     });
-    await (deps.writePlist ?? writeMacOSLaunchAgentPlist)({
-      executablePath: payloadFile,
-      ...(deps.home ? { home: deps.home } : {}),
-      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
-    });
+    await writePlatformDefinition(deps, payloadFile);
     const status = await adapter.status();
     if (!status.loaded) {
       const bootstrapped = await adapter.bootstrap();
-      if (bootstrapped.exitCode !== 0) throw new Error('LAUNCH_AGENT_INSTALL_FAILED');
+      if (bootstrapped.exitCode !== 0) throw new Error('PLATFORM_SERVICE_INSTALL_FAILED');
     } else if (!status.running) {
       const started = await adapter.start();
-      if (started.exitCode !== 0) throw new Error('LAUNCH_AGENT_INSTALL_FAILED');
+      if (started.exitCode !== 0) throw new Error('PLATFORM_SERVICE_INSTALL_FAILED');
     }
     const state = await (deps.waitForReady ?? waitForReady)(client, deadlineMs);
     if (!state || (state.phase !== 'running' && state.phase !== 'degraded')) {
@@ -197,7 +219,7 @@ async function installService(
 }
 
 async function uninstallService(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   client: DeviceControlClient,
   deadlineMs: number,
   deps: DeviceCliDeps,
@@ -206,18 +228,16 @@ async function uninstallService(
 ): Promise<number> {
   try {
     const status = await adapter.status();
+    if (status.queryFailed && status.installed) throw new Error('PLATFORM_SERVICE_QUERY_FAILED');
     if (status.loaded || status.running) {
       const stopped = await stopService(adapter, client, deadlineMs, stdout, stderr);
       if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
     }
-    if (status.loaded) {
+    if (status.loaded || ((deps.platform ?? process.platform) === 'linux' && status.installed)) {
       const removed = await adapter.bootout();
-      if (removed.exitCode !== 0) throw new Error('LAUNCH_AGENT_UNINSTALL_FAILED');
+      if (removed.exitCode !== 0) throw new Error('PLATFORM_SERVICE_UNINSTALL_FAILED');
     }
-    await (deps.removeInstallation ?? removeMacOSLaunchAgentInstallation)({
-      ...(deps.home ? { home: deps.home } : {}),
-      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
-    });
+    await removePlatformInstallation(deps);
     stdout('Device Service 已卸载；用户数据已保留。');
     return DEVICE_CLI_EXIT.success;
   } catch {
@@ -237,23 +257,27 @@ export function formatDeviceServiceState(state: DeviceServiceState): string {
 }
 
 async function startService(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   client: DeviceControlClient,
   deadlineMs: number,
   deps: DeviceCliDeps,
   stdout: (message: string) => void,
   stderr: (message: string) => void,
 ): Promise<number> {
-  let status: Awaited<ReturnType<MacOSLaunchAgentAdapter['status']>>;
+  let status: Awaited<ReturnType<PlatformServiceAdapter['status']>>;
   try {
     status = await adapter.status();
   } catch {
-    stderr('无法读取 launchd Device Service 状态。');
+    stderr('无法读取系统服务管理器中的 Device Service 状态。');
     return DEVICE_CLI_EXIT.platform;
   }
   if (!status.installed) {
     stderr('Device Service 尚未安装。');
     return DEVICE_CLI_EXIT.unavailable;
+  }
+  if (status.queryFailed) {
+    stderr('无法读取系统服务管理器中的 Device Service 状态。');
+    return DEVICE_CLI_EXIT.platform;
   }
   if (status.running) {
     stdout('Device Service 已在运行。');
@@ -263,11 +287,11 @@ async function startService(
   try {
     started = await adapter.start();
   } catch {
-    stderr('launchd 无法启动 Device Service。');
+    stderr('系统服务管理器无法启动 Device Service。');
     return DEVICE_CLI_EXIT.platform;
   }
   if (started.exitCode !== 0) {
-    stderr('launchd 无法启动 Device Service。');
+    stderr('系统服务管理器无法启动 Device Service。');
     return DEVICE_CLI_EXIT.platform;
   }
   const state = await (deps.waitForReady ?? waitForReady)(client, deadlineMs);
@@ -280,7 +304,7 @@ async function startService(
 }
 
 async function stopService(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   client: DeviceControlClient,
   deadlineMs: number,
   stdout: (message: string) => void,
@@ -302,7 +326,11 @@ async function stopService(
     try {
       platformStatus = await adapter.status();
     } catch {
-      stderr('无法读取 launchd Device Service 状态。');
+      stderr('无法读取系统服务管理器中的 Device Service 状态。');
+      return DEVICE_CLI_EXIT.platform;
+    }
+    if (platformStatus.queryFailed) {
+      stderr('无法读取系统服务管理器中的 Device Service 状态。');
       return DEVICE_CLI_EXIT.platform;
     }
     if (!platformStatus.running) {
@@ -315,7 +343,7 @@ async function stopService(
 }
 
 function handleStopFailure(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   reasonCode: string,
   stderr: (message: string) => void,
 ): Promise<number> | number {
@@ -325,7 +353,7 @@ function handleStopFailure(
 }
 
 async function forceStop(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   reasonCode: string,
   stderr: (message: string) => void,
 ): Promise<number> {
@@ -333,14 +361,14 @@ async function forceStop(
   try {
     killed = await adapter.kill();
   } catch {
-    stderr('Device Service 排空失败，launchd 强制停止也失败。');
+    stderr('Device Service 排空失败，系统服务管理器强制停止也失败。');
     return DEVICE_CLI_EXIT.platform;
   }
   if (killed.exitCode !== 0) {
-    stderr('Device Service 排空失败，launchd 强制停止也失败。');
+    stderr('Device Service 排空失败，系统服务管理器强制停止也失败。');
     return DEVICE_CLI_EXIT.platform;
   }
-  stderr(`Device Service 未能正常排空（${stableReason(reasonCode)}），已请求 launchd 强制停止。`);
+  stderr(`Device Service 未能正常排空（${stableReason(reasonCode)}），已请求系统服务管理器强制停止。`);
   return DEVICE_CLI_EXIT.drain;
 }
 
@@ -378,7 +406,7 @@ async function waitForReady(client: DeviceControlClient, timeoutMs: number): Pro
 }
 
 async function waitForPlatformStopped(
-  adapter: MacOSLaunchAgentAdapter,
+  adapter: PlatformServiceAdapter,
   timeoutMs: number,
 ): Promise<'stopped' | 'timeout' | 'error'> {
   const deadlineAt = Date.now() + timeoutMs;
@@ -395,16 +423,63 @@ async function waitForPlatformStopped(
   return 'timeout';
 }
 
-async function readPlatformStatus(deps: DeviceCliDeps): Promise<{ installed: boolean; running: boolean }> {
-  if ((deps.platform ?? process.platform) !== 'darwin') return { installed: false, running: false };
+async function readPlatformStatus(deps: DeviceCliDeps): Promise<PlatformServiceStatus> {
+  if (!isPlatformSupported(deps)) return { installed: false, loaded: false, running: false, queryFailed: false };
   try {
-    return await (deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
-      ...(deps.home ? { home: deps.home } : {}),
-      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
-    })).status();
+    return await createPlatformAdapter(deps).status();
   } catch {
-    return { installed: false, running: false };
+    return { installed: false, loaded: false, running: false, queryFailed: true };
   }
+}
+
+function isPlatformSupported(deps: DeviceCliDeps): boolean {
+  const platform = deps.platform ?? process.platform;
+  return platform === 'darwin' || (platform === 'linux' && (deps.arch ?? process.arch) === 'x64');
+}
+
+function createPlatformAdapter(deps: DeviceCliDeps): PlatformServiceAdapter {
+  if (deps.createAdapter) return deps.createAdapter();
+  const common = {
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+  };
+  if ((deps.platform ?? process.platform) === 'linux') {
+    return createLinuxSystemdUserAdapter({
+      ...common,
+      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
+    });
+  }
+  return createMacOSLaunchAgentAdapter(common);
+}
+
+async function writePlatformDefinition(deps: DeviceCliDeps, executablePath: string): Promise<string> {
+  const common = {
+    executablePath,
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+  };
+  if ((deps.platform ?? process.platform) === 'linux') {
+    return (deps.writeUnit ?? writeLinuxSystemdUserUnit)({
+      ...common,
+      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
+    });
+  }
+  return (deps.writePlist ?? writeMacOSLaunchAgentPlist)(common);
+}
+
+async function removePlatformInstallation(deps: DeviceCliDeps): Promise<void> {
+  const common = {
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+  };
+  if (deps.removeInstallation) return deps.removeInstallation(common);
+  if ((deps.platform ?? process.platform) === 'linux') {
+    return removeLinuxSystemdUserInstallation({
+      ...common,
+      ...(deps.xdgConfigHome ? { xdgConfigHome: deps.xdgConfigHome } : {}),
+    });
+  }
+  return removeMacOSLaunchAgentInstallation(common);
 }
 
 async function followLog(path: string): Promise<number> {
@@ -478,10 +553,7 @@ function createMigrationDeps(
   deadlineMs: number,
 ): DeviceMigrationDeps {
   const base = deps.baseDir ? { baseDir: deps.baseDir } : {};
-  const adapter = () => deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
-    ...(deps.home ? { home: deps.home } : {}),
-    ...base,
-  });
+  const adapter = () => createPlatformAdapter(deps);
   const stopMigrationService = async () => {
     try {
       const response = await client.request({
@@ -494,9 +566,10 @@ function createMigrationDeps(
     } catch {
       // Fall through to the trusted platform adapter when the control endpoint is unavailable.
     }
-    if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+    if (!isPlatformSupported(deps)) throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
     const platformAdapter = adapter();
     const status = await platformAdapter.status();
+    if (status.queryFailed) throw new Error('MIGRATION_SERVICE_STATUS_FAILED');
     if (!status.running) return;
     const killed = await platformAdapter.kill();
     if (killed.exitCode !== 0) throw new Error('MIGRATION_SERVICE_STOP_FAILED');
@@ -504,14 +577,14 @@ function createMigrationDeps(
   return {
     ...base,
     ...deps.migrationDeps,
-    readPlatformSupported: () => (deps.platform ?? process.platform) === 'darwin',
+    readPlatformSupported: () => isPlatformSupported(deps),
     readSavedProfileCount: () => listAuthProfiles(base).length,
     verifyMigrationService: async () => {
       const state = await readReachableState(client);
       return Boolean(state && (state.phase === 'running' || state.phase === 'degraded') && state.profiles.total === 0);
     },
     prepareMigrationService: async () => {
-      if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+      if (!isPlatformSupported(deps)) throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
       if (listAuthProfiles(base).length === 0) throw new Error('SERVICE_NO_PROFILES');
       const sourceExecutablePath = deps.executablePath ?? process.argv[1];
       if (!sourceExecutablePath) throw new Error('MIGRATION_EXECUTABLE_UNAVAILABLE');
@@ -520,11 +593,7 @@ function createMigrationDeps(
         nodeExecutablePath: deps.nodeExecutablePath ?? process.execPath,
         ...base,
       });
-      await (deps.writePlist ?? writeMacOSLaunchAgentPlist)({
-        executablePath: payloadFile,
-        ...(deps.home ? { home: deps.home } : {}),
-        ...base,
-      });
+      await writePlatformDefinition(deps, payloadFile);
       const platformAdapter = adapter();
       const status = await platformAdapter.status();
       const result = !status.loaded ? await platformAdapter.bootstrap() : await platformAdapter.start();
@@ -534,7 +603,7 @@ function createMigrationDeps(
     },
     stopMigrationService,
     activateDeviceService: async () => {
-      if ((deps.platform ?? process.platform) !== 'darwin') throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+      if (!isPlatformSupported(deps)) throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
       await stopMigrationService();
       const started = await adapter().start();
       if (started.exitCode !== 0) throw new Error('DEVICE_SERVICE_ACTIVATION_FAILED');
