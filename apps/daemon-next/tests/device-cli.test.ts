@@ -140,8 +140,10 @@ describe('MacOSLaunchAgentAdapter', () => {
     expect(first.mode & 0o777).toBe(0o700);
     expect(second.ino).toBe(first.ino);
     expect(await readFile(payloadFile, 'utf8')).toBe(
-      '#!/opt/homebrew/bin/node\nimport "file:///opt/AgentBean/dist/bin.js";\n',
+      `#!/opt/homebrew/bin/node\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(baseDir)};\n`
+        + 'await import("file:///opt/AgentBean/dist/bin.js");\n',
     );
+    expect((await stat(deviceServicePaths(baseDir).logDirectory)).mode & 0o777).toBe(0o700);
   });
 
   test('treats a loaded LaunchAgent without a live pid as stopped', async () => {

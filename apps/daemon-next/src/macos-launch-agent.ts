@@ -173,7 +173,9 @@ export async function writeMacOSServicePayload(input: {
   const paths = deviceServicePaths(input.baseDir);
   await ensurePrivateDeviceServiceDirectory(paths.root);
   await ensurePrivateDeviceServiceDirectory(paths.payloadDirectory);
-  const content = `#!${input.nodeExecutablePath}\nimport ${JSON.stringify(pathToFileURL(input.sourceExecutablePath).href)};\n`;
+  await ensurePrivateDeviceServiceDirectory(paths.logDirectory);
+  const resolvedBaseDir = dirname(paths.root);
+  const content = `#!${input.nodeExecutablePath}\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(resolvedBaseDir)};\nawait import(${JSON.stringify(pathToFileURL(input.sourceExecutablePath).href)});\n`;
   await writeAtomicFile(paths.payloadFile, content, 0o700);
   return paths.payloadFile;
 }
