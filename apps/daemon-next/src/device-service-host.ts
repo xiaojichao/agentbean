@@ -181,14 +181,22 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
       }
       await persist(failed > 0 ? 'degraded' : 'running', failed > 0 ? 'PROFILE_START_FAILED' : 'SERVICE_READY');
     } catch (error) {
+      const failureReason: DeviceServiceReasonCode = state.reasonCode === 'PROFILE_START_FAILED'
+        ? 'PROFILE_START_FAILED'
+        : 'SERVICE_CONTROL_UNAVAILABLE';
       if (!forcedStop && state.phase !== 'failed') {
-        await persist('failed', 'SERVICE_CONTROL_UNAVAILABLE').catch(() => undefined);
+        await persist('failed', failureReason).catch(() => undefined);
       }
       if (!forcedStop && runnersMayNeedDrain) await drainRunners(30_000).catch(() => undefined);
       for (const runner of [...input.runners].reverse()) {
         await withTimeout(Promise.resolve(runner.stop()), 30_000).catch(() => undefined);
       }
       await controlServer?.stop().catch(() => undefined);
+      if (!forcedStop) {
+        await persist('failed', failureReason).catch(() => {
+          state = buildState('failed', 'SERVICE_STATE_WRITE_FAILED');
+        });
+      }
       await lock?.release().catch(() => undefined);
       lock = undefined;
       throw error;

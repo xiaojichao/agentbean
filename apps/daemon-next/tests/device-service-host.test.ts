@@ -205,6 +205,50 @@ describe('Device control protocol', () => {
     await server.stop();
     await closed;
   });
+
+  test('shutdown destroys a non-shutdown request that is still being handled', async () => {
+    const socketPath = join(temporaryRoot(), 'control.sock');
+    const handle = vi.fn(() => new Promise<never>(() => undefined));
+    const server = createDeviceControlServer(socketPath, { handle });
+    await server.start();
+    const socket = createConnection(socketPath);
+    await once(socket, 'connect');
+    socket.write(`${JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'long-drain',
+      command: 'begin-drain',
+      deadlineMs: 300_000,
+    })}\n`);
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(1));
+
+    const closed = once(socket, 'close');
+    await server.stop();
+    await closed;
+  });
+
+  test('shutdown request connection remains open long enough to receive its response', async () => {
+    const socketPath = join(temporaryRoot(), 'control.sock');
+    let server: ReturnType<typeof createDeviceControlServer>;
+    server = createDeviceControlServer(socketPath, {
+      handle: vi.fn(async (request) => {
+        await server.stop();
+        return {
+          schemaVersion: 1,
+          requestId: request.requestId,
+          ok: false,
+          reasonCode: 'SERVICE_NOT_RUNNING',
+        };
+      }),
+    });
+    await server.start();
+
+    await expect(requestSocket(socketPath, {
+      schemaVersion: 1,
+      requestId: 'shutdown-1',
+      command: 'shutdown',
+      deadlineMs: 1000,
+    })).resolves.toMatchObject({ requestId: 'shutdown-1', reasonCode: 'SERVICE_NOT_RUNNING' });
+  });
 });
 
 describe('DeviceServiceHost', () => {
@@ -302,6 +346,23 @@ describe('DeviceServiceHost', () => {
     });
     await expect(host.start()).rejects.toThrow('write failed');
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test('all-profile startup failure remains failed after cleanup', async () => {
+    const runner = fakeRunner('profile', {
+      start: vi.fn(async () => { throw new Error('start failed'); }),
+    });
+    const { states, store } = memoryStateStore();
+    const host = createDeviceServiceHost({
+      runners: [runner], version: '0.2.5', stateStore: store,
+      acquireLock: async () => ({ release: vi.fn(async () => undefined) }),
+      controlServer: { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) },
+    });
+
+    await expect(host.start()).rejects.toThrow('PROFILE_START_FAILED');
+    expect(host.state).toMatchObject({ phase: 'failed', reasonCode: 'PROFILE_START_FAILED' });
+    expect(states.at(-1)).toMatchObject({ phase: 'failed', reasonCode: 'PROFILE_START_FAILED' });
+    expect(runner.stop).toHaveBeenCalledTimes(1);
   });
 
   test('running-state write failure stops a runner that already started', async () => {

@@ -25,6 +25,7 @@ export function createDeviceControlServer(
 ): DeviceControlServer {
   let server: Server | undefined;
   const connections = new Set<Socket>();
+  const shutdownResponses = new Set<Socket>();
 
   return {
     async start() {
@@ -34,10 +35,13 @@ export function createDeviceControlServer(
       const nextServer = createServer((socket) => {
         connections.add(socket);
         socket.setTimeout(5_000, () => socket.destroy());
-        socket.once('close', () => connections.delete(socket));
-        handleConnection(socket, handler, () => {
-          socket.setTimeout(0);
+        socket.once('close', () => {
           connections.delete(socket);
+          shutdownResponses.delete(socket);
+        });
+        handleConnection(socket, handler, (request) => {
+          socket.setTimeout(0);
+          if (request.command === 'shutdown') shutdownResponses.add(socket);
         });
       });
       try {
@@ -69,12 +73,18 @@ export function createDeviceControlServer(
       // requested by the connection that still needs to receive our response.
       current.close(() => undefined);
       await rm(socketPath, { force: true });
-      for (const connection of connections) connection.destroy();
+      for (const connection of connections) {
+        if (!shutdownResponses.has(connection)) connection.destroy();
+      }
     },
   };
 }
 
-function handleConnection(socket: Socket, handler: DeviceControlHandler, onRequestReceived: () => void): void {
+function handleConnection(
+  socket: Socket,
+  handler: DeviceControlHandler,
+  onRequest: (request: DeviceControlRequest) => void,
+): void {
   socket.setEncoding('utf8');
   let buffer = '';
   let handled = false;
@@ -99,13 +109,12 @@ function handleConnection(socket: Socket, handler: DeviceControlHandler, onReque
     const newline = buffer.indexOf('\n');
     if (newline < 0) return;
     handled = true;
-    onRequestReceived();
     if (buffer.slice(newline + 1).trim().length > 0) {
       reject();
       return;
     }
     const line = buffer.slice(0, newline);
-    void parseAndHandle(line, socket, handler, reject);
+    void parseAndHandle(line, socket, handler, reject, onRequest);
   });
   socket.on('end', () => {
     if (!handled) reject();
@@ -120,6 +129,7 @@ async function parseAndHandle(
   socket: Socket,
   handler: DeviceControlHandler,
   reject: (requestId?: string) => void,
+  onRequest: (request: DeviceControlRequest) => void,
 ): Promise<void> {
   let parsed: unknown;
   try {
@@ -133,6 +143,7 @@ async function parseAndHandle(
     reject();
     return;
   }
+  onRequest(request);
   try {
     sendResponse(socket, await handler.handle(request));
   } catch {
