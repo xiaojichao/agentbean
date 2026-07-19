@@ -6,6 +6,23 @@ import {
 } from '../src/management-credential-provider';
 import { createManagementModelAdapter } from '../src/management-model-adapter';
 
+const managementModelRequest = {
+  systemPrompt: 'system',
+  sessionContext: {} as never,
+  messages: [],
+  tools: [],
+};
+
+function createTestManagementModelAdapter(fetchFn: typeof fetch) {
+  return createManagementModelAdapter({
+    credential: {
+      credentialStatus: 'test_only', providerId: 'provider-1', modelId: 'model-1',
+      apiKey: 'sk-never-log-this', baseUrl: 'https://model.invalid/v1',
+    },
+    fetch: fetchFn,
+  });
+}
+
 describe('DeviceServiceCore', () => {
   test('按 Dispatch、Task Claim、PI Manager 顺序启动，并按反序停止', async () => {
     const calls: string[] = [];
@@ -101,19 +118,75 @@ describe('ManagementCredentialProvider', () => {
   });
 
   test('model adapter 的失败只暴露稳定诊断码，不拼接 API key 或响应正文', async () => {
-    const adapter = createManagementModelAdapter({
-      credential: {
-        credentialStatus: 'test_only', providerId: 'provider-1', modelId: 'model-1',
-        apiKey: 'sk-never-log-this', baseUrl: 'https://model.invalid/v1',
-      },
-      fetch: vi.fn(async () => new Response('upstream says sk-never-log-this', { status: 500 })),
-    });
+    const adapter = createTestManagementModelAdapter(
+      vi.fn(async () => new Response('upstream says sk-never-log-this', { status: 500 })),
+    );
 
-    await expect(adapter.respond({
-      systemPrompt: 'system',
-      sessionContext: {} as never,
-      messages: [],
-      tools: [],
-    }, { callCount: 1 })).rejects.toThrow('MANAGEMENT_MODEL_RESPONSE_REJECTED');
+    await expect(adapter.respond(managementModelRequest, { callCount: 1 }))
+      .rejects.toThrow('MANAGEMENT_MODEL_RESPONSE_REJECTED');
+  });
+
+  test('Device 兼容包装继续接受 content 为空的成功响应', async () => {
+    const adapter = createTestManagementModelAdapter(
+      vi.fn(async () => new Response(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }],
+      }), { status: 200 })),
+    );
+
+    await expect(adapter.respond(managementModelRequest, { callCount: 1 })).resolves.toEqual({
+      content: [],
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        totalTokens: null,
+      },
+      finishReason: 'stop',
+      responseModel: 'model-1',
+    });
+  });
+
+  test('Device 兼容包装继续将未知 finish reason 映射为 unknown', async () => {
+    const adapter = createTestManagementModelAdapter(
+      vi.fn(async () => new Response(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'ack' }, finish_reason: 'provider_specific' }],
+      }), { status: 200 })),
+    );
+
+    await expect(adapter.respond(managementModelRequest, { callCount: 1 })).resolves.toMatchObject({
+      content: [{ type: 'text', text: 'ack' }],
+      finishReason: 'unknown',
+      responseModel: 'model-1',
+    });
+  });
+
+  test('Device 兼容包装继续接受省略 type 的有效 tool call', async () => {
+    const adapter = createTestManagementModelAdapter(
+      vi.fn(async () => new Response(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call-1',
+              function: { name: 'context.get_root_message', arguments: '{}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }), { status: 200 })),
+    );
+
+    await expect(adapter.respond(managementModelRequest, { callCount: 1 })).resolves.toMatchObject({
+      content: [{
+        type: 'toolCall',
+        id: 'call-1',
+        name: 'context.get_root_message',
+        arguments: {},
+      }],
+      finishReason: 'tool_use',
+      responseModel: 'model-1',
+    });
   });
 });

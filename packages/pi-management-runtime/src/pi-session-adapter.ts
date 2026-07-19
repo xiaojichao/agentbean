@@ -135,11 +135,11 @@ function messagesFromContext(context: Context): ManagementModelMessage[] {
 
 function piUsage(telemetry: ManagementModelTelemetry) {
   return {
-    input: telemetry.usage.inputTokens,
-    output: telemetry.usage.outputTokens,
-    cacheRead: telemetry.usage.cacheReadTokens,
-    cacheWrite: telemetry.usage.cacheWriteTokens,
-    totalTokens: telemetry.usage.totalTokens,
+    input: telemetry.usage.inputTokens ?? 0,
+    output: telemetry.usage.outputTokens ?? 0,
+    cacheRead: telemetry.usage.cacheReadTokens ?? 0,
+    cacheWrite: telemetry.usage.cacheWriteTokens ?? 0,
+    totalTokens: telemetry.usage.totalTokens ?? 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }

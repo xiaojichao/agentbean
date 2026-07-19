@@ -34,6 +34,15 @@ function normalizeUsage(value: unknown): ManagementModelUsage {
     usage.cacheWriteTokens,
     usage.totalTokens,
   ];
+  if (fields.every((field) => field === null)) {
+    return {
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      totalTokens: null,
+    };
+  }
   if (!fields.every(isNonNegativeInteger)) throw new Error('P1_MODEL_RESPONSE_INVALID');
   const expectedTotal = Number(usage.inputTokens) + Number(usage.outputTokens)
     + Number(usage.cacheReadTokens) + Number(usage.cacheWriteTokens);
@@ -98,11 +107,11 @@ export function safeProviderFailureTelemetry(input: {
 }): ManagementModelTelemetry {
   return {
     usage: {
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-      totalTokens: 0,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheWriteTokens: null,
+      totalTokens: null,
     },
     finishReason: input.aborted ? 'aborted' : 'error',
     responseModel: input.responseModel,

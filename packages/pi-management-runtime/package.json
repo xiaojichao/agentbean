@@ -17,6 +17,7 @@
   "files": [
     "dist/**/*.js",
     "dist/index.d.ts",
+    "dist/openai-compatible-management-model-adapter.d.ts",
     "dist/types.d.ts"
   ],
   "scripts": {
