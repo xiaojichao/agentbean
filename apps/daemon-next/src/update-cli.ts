@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { macOSLaunchAgentPaths } from './macos-launch-agent.js';
-import type { PlatformCommandResult } from './device-platform-service.js';
+import { createMacOSLaunchAgentAdapter } from './macos-launch-agent.js';
+import type { PlatformCommandResult, PlatformServiceStatus } from './device-platform-service.js';
 
 const CANONICAL_PACKAGE = '@agentbean/daemon';
+const CANONICAL_REGISTRY = 'https://registry.npmjs.org/';
+const SERVICE_DEADLINE_MS = 30_000;
 
 export const UPDATE_CLI_EXIT = {
   success: 0,
@@ -25,8 +27,9 @@ export interface UpdateCliDeps {
   readonly baseDir?: string;
   readonly currentPackage?: InstalledAgentBeanPackage;
   readonly runNpm?: (argv: readonly string[]) => Promise<PlatformCommandResult>;
-  readonly runAgentBean?: (argv: readonly string[]) => Promise<PlatformCommandResult>;
-  readonly isDeviceServiceInstalled?: () => Promise<boolean>;
+  readonly runAgentBean?: (executable: string, argv: readonly string[]) => Promise<PlatformCommandResult>;
+  readonly getDeviceServiceStatus?: () => Promise<PlatformServiceStatus>;
+  readonly quiesceDeviceService?: () => Promise<boolean>;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
 }
@@ -55,7 +58,16 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.rejected;
   }
   const runNpm = deps.runNpm ?? runNpmCommand;
-  const latestResult = await safeRun(runNpm, ['view', `${CANONICAL_PACKAGE}@latest`, 'version', '--json']);
+  const prefixResult = await safeRun(runNpm, ['prefix', '--global']);
+  const globalPrefix = prefixResult.exitCode === 0 ? prefixResult.stdout.trim() : '';
+  if (!isAbsolute(globalPrefix)) {
+    stderr('无法定位 npm global prefix（UPDATE_INSTALL_SOURCE_UNAVAILABLE）。');
+    return UPDATE_CLI_EXIT.rejected;
+  }
+  const agentBeanExecutable = join(globalPrefix, 'bin', 'agentbean');
+  const latestResult = await safeRun(runNpm, [
+    'view', `${CANONICAL_PACKAGE}@latest`, 'version', '--json', `--registry=${CANONICAL_REGISTRY}`,
+  ]);
   const latest = latestResult.exitCode === 0 ? parseNpmVersion(latestResult.stdout) : undefined;
   if (!latest) {
     stderr('AgentBean 更新检查失败（UPDATE_CHECK_FAILED）。');
@@ -68,12 +80,12 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.success;
   }
 
-  let serviceInstalled: boolean;
+  let serviceStatus: PlatformServiceStatus;
   try {
-    serviceInstalled = await (deps.isDeviceServiceInstalled ?? (() => fileExists(macOSLaunchAgentPaths({
+    serviceStatus = await (deps.getDeviceServiceStatus ?? (() => createMacOSLaunchAgentAdapter({
       ...(deps.home ? { home: deps.home } : {}),
       ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
-    }).plistFile)))();
+    }).status()))();
   } catch {
     stderr('无法确认 Device Service 安装状态（UPDATE_PREFLIGHT_FAILED）。');
     return UPDATE_CLI_EXIT.rejected;
@@ -81,26 +93,44 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
 
   const installed = await installExactVersion(runNpm, latest);
   if (!installed) {
-    stderr('AgentBean 更新安装失败（UPDATE_INSTALL_FAILED）；未使用 sudo。');
+    const rolledBack = await installExactVersion(runNpm, current.version);
+    stderr(rolledBack
+      ? `AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）；未使用 sudo。`
+      : 'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。');
     return UPDATE_CLI_EXIT.rejected;
   }
-  if (!serviceInstalled) {
+  if (!serviceStatus.installed) {
     stdout(`AgentBean 已更新到 ${latest}；Device Service 尚未安装，无需重启。`);
     return UPDATE_CLI_EXIT.success;
   }
 
   const runAgentBean = deps.runAgentBean ?? runAgentBeanCommand;
-  const restarted = await safeRun(runAgentBean, ['device', 'restart', '--deadline-ms', '30000']);
-  if (restarted.exitCode === 0) {
-    stdout(`AgentBean 已更新到 ${latest}，Device Service 已安全重启。`);
+  const prepared = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+    'device', 'install', '--deadline-ms', String(SERVICE_DEADLINE_MS),
+  ]);
+  const restarted = prepared.exitCode === 0 && serviceStatus.loaded
+    ? await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+      'device', 'restart', '--deadline-ms', String(SERVICE_DEADLINE_MS),
+    ])
+    : prepared;
+  if (prepared.exitCode === 0 && restarted.exitCode === 0) {
+    stdout(`AgentBean 已更新到 ${latest}，Device Service 已安全${serviceStatus.loaded ? '重启' : '启动'}。`);
     return UPDATE_CLI_EXIT.success;
   }
 
+  const quiesced = await safeBoolean(deps.quiesceDeviceService ?? (() => quiesceDeviceService({
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+  })));
   const rolledBack = await installExactVersion(runNpm, current.version);
-  const restored = rolledBack
-    ? await safeRun(runAgentBean, ['device', 'restart', '--deadline-ms', '30000'])
-    : undefined;
-  if (rolledBack && restored?.exitCode === 0) {
+  if (!quiesced || !rolledBack) {
+    stderr(`新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`);
+    return UPDATE_CLI_EXIT.rejected;
+  }
+  const restored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+    'device', 'install', '--deadline-ms', String(SERVICE_DEADLINE_MS),
+  ]);
+  if (restored.exitCode === 0) {
     stderr(`新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`);
     return UPDATE_CLI_EXIT.rejected;
   }
@@ -137,7 +167,8 @@ async function installExactVersion(
   version: string,
 ): Promise<boolean> {
   const install = await safeRun(runNpm, [
-    'install', '--global', '--no-audit', '--no-fund', `${CANONICAL_PACKAGE}@${version}`,
+    'install', '--global', '--no-audit', '--no-fund', '--ignore-scripts',
+    `--registry=${CANONICAL_REGISTRY}`, `${CANONICAL_PACKAGE}@${version}`,
   ]);
   if (install.exitCode !== 0) return false;
   const listed = await safeRun(runNpm, ['list', '--global', CANONICAL_PACKAGE, '--depth=0', '--json']);
@@ -178,8 +209,11 @@ async function runNpmCommand(argv: readonly string[]): Promise<PlatformCommandRe
   return runCommand('npm', argv);
 }
 
-async function runAgentBeanCommand(argv: readonly string[]): Promise<PlatformCommandResult> {
-  return runCommand('agentbean', argv);
+async function runAgentBeanCommand(
+  executable: string,
+  argv: readonly string[],
+): Promise<PlatformCommandResult> {
+  return runCommand(executable, argv);
 }
 
 async function runCommand(executable: string, argv: readonly string[]): Promise<PlatformCommandResult> {
@@ -202,13 +236,40 @@ async function safeRun(
   }
 }
 
-async function fileExists(path: string): Promise<boolean> {
+async function safeRunAgentBean(
+  run: (executable: string, argv: readonly string[]) => Promise<PlatformCommandResult>,
+  executable: string,
+  argv: readonly string[],
+): Promise<PlatformCommandResult> {
   try {
-    await access(path);
-    return true;
+    return await run(executable, argv);
+  } catch (error) {
+    return { exitCode: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function safeBoolean(run: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return await run();
   } catch {
     return false;
   }
+}
+
+async function quiesceDeviceService(input: { home?: string; baseDir?: string }): Promise<boolean> {
+  const adapter = createMacOSLaunchAgentAdapter(input);
+  const initial = await adapter.status();
+  if (initial.loaded) {
+    const removed = await adapter.bootout();
+    if (removed.exitCode !== 0) return false;
+  }
+  const deadlineAt = Date.now() + SERVICE_DEADLINE_MS;
+  while (Date.now() < deadlineAt) {
+    const status = await adapter.status();
+    if (!status.loaded && !status.running) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
