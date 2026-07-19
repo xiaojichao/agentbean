@@ -6,11 +6,15 @@ import { deviceServicePaths } from './device-service-paths.js';
 import { createDeviceServiceStateStore, type DeviceServiceState } from './device-service-state.js';
 import {
   createMacOSLaunchAgentAdapter,
+  removeMacOSLaunchAgentInstallation,
+  writeMacOSLaunchAgentPlist,
+  writeMacOSServicePayload,
   type MacOSLaunchAgentAdapter,
 } from './macos-launch-agent.js';
 import { runDeviceService } from './device-service-runtime.js';
+import { assertDeviceRuntimeOwner, type DeviceRuntimeOwner } from './device-runtime-owner.js';
 
-export type DeviceCliCommand = 'run' | 'status' | 'start' | 'stop' | 'restart' | 'logs';
+export type DeviceCliCommand = 'run' | 'install' | 'uninstall' | 'status' | 'start' | 'stop' | 'restart' | 'logs';
 
 export const DEVICE_CLI_EXIT = {
   success: 0,
@@ -24,6 +28,9 @@ export const DEVICE_CLI_EXIT = {
 export interface DeviceCliDeps {
   readonly platform?: NodeJS.Platform;
   readonly baseDir?: string;
+  readonly home?: string;
+  readonly executablePath?: string;
+  readonly nodeExecutablePath?: string;
   readonly createAdapter?: () => MacOSLaunchAgentAdapter;
   readonly controlClient?: DeviceControlClient;
   readonly runService?: () => Promise<void>;
@@ -31,6 +38,10 @@ export interface DeviceCliDeps {
   readonly followLog?: (path: string) => Promise<number>;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
+  readonly assertRuntimeOwner?: (owner: DeviceRuntimeOwner) => Promise<void>;
+  readonly writePayload?: typeof writeMacOSServicePayload;
+  readonly writePlist?: typeof writeMacOSLaunchAgentPlist;
+  readonly removeInstallation?: typeof removeMacOSLaunchAgentInstallation;
 }
 
 export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps = {}): Promise<number> {
@@ -38,7 +49,7 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
   const stdout = deps.stdout ?? console.log;
   const stderr = deps.stderr ?? console.error;
   if (!parsed) {
-    stderr('用法：agentbean device <run|status|start|stop|restart|logs> [--json] [--follow] [--deadline-ms N]');
+    stderr('用法：agentbean device <run|install|uninstall|status|start|stop|restart|logs> [--json] [--follow] [--deadline-ms N]');
     return DEVICE_CLI_EXIT.usage;
   }
   const paths = deviceServicePaths(deps.baseDir);
@@ -88,12 +99,95 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     stderr('当前平台尚未支持 Device Service 系统注册。');
     return DEVICE_CLI_EXIT.platform;
   }
-  const adapter = deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({ ...(deps.baseDir ? { baseDir: deps.baseDir } : {}) });
+  const adapter = deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
+    ...(deps.home ? { home: deps.home } : {}),
+    ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+  });
+  if (parsed.command === 'install') return installService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+  if (parsed.command === 'uninstall') return uninstallService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'start') return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
   if (parsed.command === 'stop') return stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
   const stopped = await stopService(adapter, client, parsed.deadlineMs, stdout, stderr);
   if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
   return startService(adapter, client, parsed.deadlineMs, deps, stdout, stderr);
+}
+
+async function installService(
+  adapter: MacOSLaunchAgentAdapter,
+  client: DeviceControlClient,
+  deadlineMs: number,
+  deps: DeviceCliDeps,
+  stdout: (message: string) => void,
+  stderr: (message: string) => void,
+): Promise<number> {
+  try {
+    await (deps.assertRuntimeOwner ?? ((owner) => assertDeviceRuntimeOwner(owner, deps.baseDir)))('device-service');
+  } catch {
+    stderr('Device Service 尚未完成 Legacy Daemon 所有权迁移。');
+    return DEVICE_CLI_EXIT.rejected;
+  }
+  const sourceExecutablePath = deps.executablePath ?? process.argv[1];
+  if (!sourceExecutablePath) return DEVICE_CLI_EXIT.platform;
+  try {
+    const payloadFile = await (deps.writePayload ?? writeMacOSServicePayload)({
+      sourceExecutablePath,
+      nodeExecutablePath: deps.nodeExecutablePath ?? process.execPath,
+      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+    });
+    await (deps.writePlist ?? writeMacOSLaunchAgentPlist)({
+      executablePath: payloadFile,
+      ...(deps.home ? { home: deps.home } : {}),
+      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+    });
+    const status = await adapter.status();
+    if (!status.loaded) {
+      const bootstrapped = await adapter.bootstrap();
+      if (bootstrapped.exitCode !== 0) throw new Error('LAUNCH_AGENT_INSTALL_FAILED');
+    } else if (!status.running) {
+      const started = await adapter.start();
+      if (started.exitCode !== 0) throw new Error('LAUNCH_AGENT_INSTALL_FAILED');
+    }
+    const state = await (deps.waitForReady ?? waitForReady)(client, deadlineMs);
+    if (!state || (state.phase !== 'running' && state.phase !== 'degraded')) {
+      stderr('Device Service 安装后未在截止时间内就绪。');
+      return DEVICE_CLI_EXIT.drain;
+    }
+    stdout('Device Service 已安装并启动。');
+    return DEVICE_CLI_EXIT.success;
+  } catch {
+    stderr('Device Service 安装失败。');
+    return DEVICE_CLI_EXIT.platform;
+  }
+}
+
+async function uninstallService(
+  adapter: MacOSLaunchAgentAdapter,
+  client: DeviceControlClient,
+  deadlineMs: number,
+  deps: DeviceCliDeps,
+  stdout: (message: string) => void,
+  stderr: (message: string) => void,
+): Promise<number> {
+  try {
+    const status = await adapter.status();
+    if (status.loaded || status.running) {
+      const stopped = await stopService(adapter, client, deadlineMs, stdout, stderr);
+      if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
+    }
+    if (status.loaded) {
+      const removed = await adapter.bootout();
+      if (removed.exitCode !== 0) throw new Error('LAUNCH_AGENT_UNINSTALL_FAILED');
+    }
+    await (deps.removeInstallation ?? removeMacOSLaunchAgentInstallation)({
+      ...(deps.home ? { home: deps.home } : {}),
+      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+    });
+    stdout('Device Service 已卸载；用户数据已保留。');
+    return DEVICE_CLI_EXIT.success;
+  } catch {
+    stderr('Device Service 卸载失败。');
+    return DEVICE_CLI_EXIT.platform;
+  }
 }
 
 export function formatDeviceServiceState(state: DeviceServiceState): string {
@@ -251,6 +345,7 @@ async function readPlatformStatus(deps: DeviceCliDeps): Promise<{ installed: boo
   if ((deps.platform ?? process.platform) !== 'darwin') return { installed: false, running: false };
   try {
     return await (deps.createAdapter?.() ?? createMacOSLaunchAgentAdapter({
+      ...(deps.home ? { home: deps.home } : {}),
       ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
     })).status();
   } catch {
@@ -278,7 +373,7 @@ function parseDeviceCliArgs(argv: readonly string[]): {
   deadlineMs: number;
 } | null {
   const command = argv[0];
-  if (command !== 'run' && command !== 'status' && command !== 'start'
+  if (command !== 'run' && command !== 'install' && command !== 'uninstall' && command !== 'status' && command !== 'start'
     && command !== 'stop' && command !== 'restart' && command !== 'logs') return null;
   let deadlineMs = 30_000;
   let json = false;

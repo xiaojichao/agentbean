@@ -51,6 +51,8 @@ describe('Device Service paths and state', () => {
       stateFile: '/tmp/agentbean-home/service/state.json',
       lockDirectory: '/tmp/agentbean-home/service/service.lock',
       runtimeOwnerFile: '/tmp/agentbean-home/service/runtime-owner.json',
+      payloadDirectory: '/tmp/agentbean-home/service/payload',
+      payloadFile: '/tmp/agentbean-home/service/payload/agentbean-service.mjs',
       logDirectory: '/tmp/agentbean-home/service/logs',
       logFile: '/tmp/agentbean-home/service/logs/device-service.log',
     });
