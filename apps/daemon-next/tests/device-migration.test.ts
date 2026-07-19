@@ -40,6 +40,18 @@ describe('Device Service migration', () => {
     });
   });
 
+  test('plan reports unsupported platform and missing saved Profiles before start', async () => {
+    await expect(inspectDeviceMigration({
+      readOwner: async () => 'legacy-daemon',
+      listLegacy: async () => [],
+      readPlatformSupported: () => false,
+      readSavedProfileCount: () => 0,
+    })).resolves.toMatchObject({
+      canStart: false,
+      health: { platformSupported: false, savedProfileCount: 0 },
+    });
+  });
+
   test('commits owner atomically without copying or deleting user data', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agentbean-migration-data-'));
     const baseDir = join(home, '.agentbean');
@@ -101,6 +113,34 @@ describe('Device Service migration', () => {
 
     const result = await resumeDeviceMigration({ baseDir, listLegacy: async () => [] });
     expect(result).toMatchObject({ owner: 'device-service', phase: 'committed', journal: { checkpoint: 'committed' } });
+  });
+
+  test('resume reuses a healthy migration-only host after a pre-commit crash', async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-reuse-host-'));
+    const paths = deviceServicePaths(baseDir);
+    await mkdir(paths.root, { recursive: true });
+    await mkdir(paths.lockDirectory, { recursive: true });
+    await writeFile(join(paths.lockDirectory, 'owner.json'), '{"schemaVersion":1,"pid":42,"nonce":"migration"}\n');
+    await writeFile(paths.migrationJournalFile, JSON.stringify({
+      schemaVersion: 1,
+      migrationId: 'migration-reuse',
+      phase: 'ready-to-commit',
+      checkpoint: 'ready-to-commit',
+      dataPolicy: 'in-place',
+      startedAt: '2026-07-19T00:00:00.000Z',
+      updatedAt: '2026-07-19T00:00:01.000Z',
+    }), { mode: 0o600 });
+    const prepareMigrationService = vi.fn(async () => undefined);
+
+    await expect(resumeDeviceMigration({
+      baseDir,
+      listLegacy: async () => [],
+      isProcessAlive: (pid) => pid === 42,
+      verifyMigrationService: async () => true,
+      prepareMigrationService,
+      activateDeviceService: async () => undefined,
+    })).resolves.toMatchObject({ owner: 'device-service', phase: 'committed' });
+    expect(prepareMigrationService).not.toHaveBeenCalled();
   });
 
   test('cancel is pre-commit only and an active runtime blocks commit', async () => {
@@ -279,8 +319,8 @@ describe('Legacy runtime registration', () => {
     await mkdir(dirname(current), { recursive: true });
     await mkdir(dirname(oldNext), { recursive: true });
     await writeFile(historical, 'historical');
-    await writeFile(current, 'assertDeviceRuntimeOwner migrationLockDirectory');
-    await writeFile(oldNext, 'legacy daemon-next without fencing');
+    await writeFile(current, '#!/usr/bin/env node\nconsole.error("DEVICE_SERVICE_OWNS_RUNTIME：Legacy Daemon 已停用"); process.exit(1);\n', { mode: 0o700 });
+    await writeFile(oldNext, '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o700 });
     await symlink(historical, join(bin, 'daemon'));
     await symlink(current, join(bin, 'agentbean'));
     await symlink(oldNext, join(bin, 'agentbean-next-daemon'));

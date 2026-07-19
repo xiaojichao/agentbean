@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, readFile, readdir, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { deviceServicePaths } from './device-service-paths.js';
@@ -140,6 +141,7 @@ export async function discoverInstalledLegacyExecutables(
   pathValue = process.env.PATH ?? '',
 ): Promise<string[]> {
   const found = new Set<string>();
+  const ownerFenceResults = new Map<string, boolean>();
   for (const directory of pathValue.split(':').filter(Boolean)) {
     for (const name of ['agentbean', 'agentbean-daemon', 'agentbean-next-daemon', 'daemon']) {
       try {
@@ -147,8 +149,12 @@ export async function discoverInstalledLegacyExecutables(
         if (resolved.includes('/node_modules/@agentbean/daemon/')) {
           found.add(resolved);
         } else if (resolved.includes('/node_modules/@agentbean/daemon-next/')) {
-          const source = await readFile(resolved, 'utf8');
-          if (!source.includes('assertDeviceRuntimeOwner') || !source.includes('migrationLockDirectory')) found.add(resolved);
+          let safe = ownerFenceResults.get(resolved);
+          if (safe === undefined) {
+            safe = await executableHonorsOwnerFence(resolved);
+            ownerFenceResults.set(resolved, safe);
+          }
+          if (!safe) found.add(resolved);
         }
       } catch (error) {
         if (!isNodeError(error, 'ENOENT') && !isNodeError(error, 'ENOTDIR')) throw error;
@@ -156,6 +162,41 @@ export async function discoverInstalledLegacyExecutables(
     }
   }
   return [...found].sort();
+}
+
+async function executableHonorsOwnerFence(executable: string): Promise<boolean> {
+  const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-owner-fence-probe-'));
+  try {
+    const serviceDirectory = join(baseDir, 'service');
+    await mkdir(serviceDirectory, { mode: 0o700 });
+    await writeFile(join(serviceDirectory, 'runtime-owner.json'), '{"schemaVersion":1,"owner":"device-service"}\n', {
+      mode: 0o600,
+    });
+    try {
+      await execFileAsync(executable, ['--list-profiles'], {
+        encoding: 'utf8',
+        env: {
+          PATH: process.env.PATH ?? '/usr/bin:/bin',
+          HOME: baseDir,
+          AGENTBEAN_HOME: baseDir,
+        },
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+      });
+      return false;
+    } catch (error) {
+      const output = `${readProcessOutput(error, 'stdout')}\n${readProcessOutput(error, 'stderr')}`;
+      return output.includes('DEVICE_SERVICE_OWNS_RUNTIME：Legacy Daemon 已停用');
+    }
+  } finally {
+    await rm(baseDir, { recursive: true, force: true });
+  }
+}
+
+function readProcessOutput(error: unknown, key: 'stdout' | 'stderr'): string {
+  if (!error || typeof error !== 'object' || !(key in error)) return '';
+  const value = (error as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString('utf8') : '';
 }
 
 function isLegacyDaemonCommand(command: string): boolean {

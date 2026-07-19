@@ -42,6 +42,8 @@ export interface DeviceMigrationStatus {
     readonly installedLegacyExecutableCount: number;
     readonly deviceServiceRunning: boolean;
     readonly migrationServiceHealthy: boolean;
+    readonly platformSupported: boolean;
+    readonly savedProfileCount: number;
     readonly dataPolicy: 'in-place';
   };
   readonly journal: DeviceMigrationJournal | null;
@@ -62,6 +64,8 @@ export interface DeviceMigrationDeps {
   readonly verifyMigrationService?: () => Promise<boolean>;
   readonly activateDeviceService?: () => Promise<void>;
   readonly stopMigrationService?: () => Promise<void>;
+  readonly readPlatformSupported?: () => boolean;
+  readonly readSavedProfileCount?: () => number;
 }
 
 export async function planDeviceMigration(deps: DeviceMigrationDeps = {}): Promise<DeviceMigrationStatus> {
@@ -120,9 +124,12 @@ async function startDeviceMigrationWhileLocked(deps: DeviceMigrationDeps): Promi
       throw new Error('LEGACY_RUNTIME_STILL_ACTIVE');
     }
     if (preflight.installedLegacyExecutableCount > 0) throw new Error('LEGACY_EXECUTABLE_STILL_INSTALLED');
-    if (preflight.deviceServiceRunning) throw new Error('DEVICE_SERVICE_ALREADY_ACTIVE');
+    if (!preflight.platformSupported) throw new Error('MIGRATION_PLATFORM_UNSUPPORTED');
+    if (preflight.savedProfileCount === 0) throw new Error('SERVICE_NO_PROFILES');
+    const reuseMigrationService = preflight.deviceServiceRunning && preflight.migrationServiceHealthy;
+    if (preflight.deviceServiceRunning && !reuseMigrationService) throw new Error('DEVICE_SERVICE_ALREADY_ACTIVE');
     await writeJournal({ ...initial, phase: 'checking-health', checkpoint: 'checking-health', updatedAt: isoNow(deps) }, deps.baseDir);
-    await deps.prepareMigrationService?.();
+    if (!reuseMigrationService) await deps.prepareMigrationService?.();
     const health = await inspectHealth(deps);
     if (health.legacyRuntimeCount > 0 || health.staleLiveRegistrationCount > 0
       || health.unregisteredLegacyRuntimeCount > 0) {
@@ -210,7 +217,9 @@ export async function inspectDeviceMigration(deps: DeviceMigrationDeps = {}): Pr
       && health.legacyRuntimeCount === 0
       && health.staleLiveRegistrationCount === 0
       && health.unregisteredLegacyRuntimeCount === 0
-      && health.installedLegacyExecutableCount === 0,
+      && health.installedLegacyExecutableCount === 0
+      && health.platformSupported
+      && health.savedProfileCount > 0,
     health,
     journal,
   };
@@ -232,6 +241,8 @@ async function inspectHealth(deps: DeviceMigrationDeps): Promise<DeviceMigration
     installedLegacyExecutableCount: installedExecutables.length,
     deviceServiceRunning: await isDeviceServiceRunning(deps),
     migrationServiceHealthy: await (deps.verifyMigrationService?.() ?? Promise.resolve(false)),
+    platformSupported: deps.readPlatformSupported?.() ?? true,
+    savedProfileCount: deps.readSavedProfileCount?.() ?? 1,
     dataPolicy: 'in-place',
   };
 }

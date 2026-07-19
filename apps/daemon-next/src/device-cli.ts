@@ -477,6 +477,8 @@ function createMigrationDeps(
   return {
     ...base,
     ...deps.migrationDeps,
+    readPlatformSupported: () => (deps.platform ?? process.platform) === 'darwin',
+    readSavedProfileCount: () => listAuthProfiles(base).length,
     verifyMigrationService: async () => {
       const state = await readReachableState(client);
       return Boolean(state && (state.phase === 'running' || state.phase === 'degraded') && state.profiles.total === 0);
@@ -545,6 +547,8 @@ function formatDeviceMigrationStatus(status: DeviceMigrationStatus): string {
     `Legacy runtimes: ${status.health.legacyRuntimeCount}`,
     `Unregistered legacy runtimes: ${status.health.unregisteredLegacyRuntimeCount}`,
     `Installed legacy executables: ${status.health.installedLegacyExecutableCount}`,
+    `Platform supported: ${status.health.platformSupported}`,
+    `Saved profiles: ${status.health.savedProfileCount}`,
     `Data policy: ${status.health.dataPolicy}`,
   ].join('\n');
 }
