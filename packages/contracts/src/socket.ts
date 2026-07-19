@@ -33,6 +33,15 @@ export const WEB_EVENTS = {
     get: 'management-policy:get',
     update: 'management-policy:update',
   },
+  /** 系统作用域 PI Provider Supply；仅系统管理员可访问。 */
+  piProvider: {
+    listPresets: 'pi-provider:list-presets',
+    listCards: 'pi-provider:list-cards',
+    getCard: 'pi-provider:get-card',
+    createCard: 'pi-provider:create-card',
+    updateCard: 'pi-provider:update-card',
+    copyCard: 'pi-provider:copy-card',
+  },
   join: {
     create: 'join:create',
     validate: 'join:validate',

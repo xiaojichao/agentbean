@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto } from '@agentbean/contracts';
+import { WEB_EVENTS, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -320,6 +320,26 @@ export function managementPolicyEvents(socket: Socket = getWebSocket()): Managem
   return {
     get(teamId) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.get, { teamId }); },
     update(payload) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.update, payload); },
+  };
+}
+
+export interface PiProviderEvents {
+  listPresets(): Promise<{ ok: boolean; presets?: PiProviderPresetDescriptorDto[]; error?: string; message?: string }>;
+  listCards(): Promise<{ ok: boolean; cards?: PiProviderCardDto[]; error?: string; message?: string }>;
+  getCard(cardId: string): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+  createCard(payload: Omit<CreatePiProviderCardInput, never>): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+  updateCard(payload: UpdatePiProviderCardInput): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+  copyCard(payload: CopyPiProviderCardInput): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+}
+
+export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEvents {
+  return {
+    listPresets() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.listPresets, {}); },
+    listCards() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.listCards, {}); },
+    getCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getCard, { cardId }); },
+    createCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.createCard, payload); },
+    updateCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.updateCard, payload); },
+    copyCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.copyCard, payload); },
   };
 }
 

@@ -18,6 +18,15 @@ import { createMemoryGovernanceService } from './memory-governance-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
+import { createPiProviderService } from './pi-provider-service.js';
+import type {
+  CopyPiProviderCardInput,
+  CreatePiProviderCardInput,
+  ListPiProviderCardsResult,
+  ListPiProviderPresetsResult,
+  PiProviderCardDto,
+  UpdatePiProviderCardInput,
+} from '../../../../packages/contracts/src/index.js';
 
 export interface ServerNextClock {
   now(): number;
@@ -159,6 +168,12 @@ export interface ServerNextUseCases {
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
+  listPiProviderPresets(input: { userId: string }): Promise<Ack<ListPiProviderPresetsResult>>;
+  listPiProviderCards(input: { userId: string }): Promise<Ack<ListPiProviderCardsResult>>;
+  getPiProviderCard(input: { userId: string; cardId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
+  createPiProviderCard(input: CreatePiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
+  updatePiProviderCard(input: UpdatePiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
+  copyPiProviderCard(input: CopyPiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
@@ -918,6 +933,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
   });
   const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
+  const piProvider = createPiProviderService({
+    repositories: repositories.piProvider,
+    users: repositories.users,
+    clock,
+    ids,
+  });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
   const invalidateSourcesAfterDeletion = async (input: {
@@ -4585,6 +4606,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return result.ok
         ? makeSuccess({ policy: result.policy, canManage: result.canManage })
         : makeFailure(result.error === 'FORBIDDEN' ? 'FORBIDDEN' : 'VALIDATION_ERROR', 'Management policy update rejected');
+    },
+
+    async listPiProviderPresets(input) {
+      return piProvider.listPresets(input);
+    },
+
+    async listPiProviderCards(input) {
+      return piProvider.listCards(input);
+    },
+
+    async getPiProviderCard(input) {
+      return piProvider.getCard(input);
+    },
+
+    async createPiProviderCard(input) {
+      return piProvider.createCard(input);
+    },
+
+    async updatePiProviderCard(input) {
+      return piProvider.updateCard(input);
+    },
+
+    async copyPiProviderCard(input) {
+      return piProvider.copyCard(input);
     },
 
     async getMemoryGovernanceSnapshot(memoryInput) {

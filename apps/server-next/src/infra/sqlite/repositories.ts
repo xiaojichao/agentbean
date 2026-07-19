@@ -31,6 +31,7 @@ import {
   type ManagementMemoryTransactionRepositories,
 } from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
+import { createSqlitePiProviderRepositories } from './pi-provider-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -65,6 +66,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0014_device_revocations_team_columns.sql');
   applyMigration(db, 'global/0015_agent_name_source.sql');
   applyMigration(db, 'global/0016_device_capabilities.sql');
+  applyMigration(db, 'global/0017_pi_provider_supply.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -164,6 +166,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const management = createSqliteManagementPersistence(teamDb);
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
   const memory = createSqliteMemoryRepositories(teamDb);
+  const piProvider = createSqlitePiProviderRepositories(globalDb);
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
 
   let repositories!: ServerNextRepositories;
@@ -186,6 +189,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             tasks: repositories.tasks, coordination: taskCoordination }));
       },
     },
+    piProvider,
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run((managementRepositories) =>

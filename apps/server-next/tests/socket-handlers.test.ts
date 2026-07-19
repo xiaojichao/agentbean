@@ -88,6 +88,12 @@ describe('server-next socket handlers', () => {
       updateTeam: vi.fn(async (payload) => makeSuccess({ payload })),
       getManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
       updateManagementPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
+      listPiProviderPresets: vi.fn(async (payload) => makeSuccess({ payload })),
+      listPiProviderCards: vi.fn(async (payload) => makeSuccess({ payload })),
+      getPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      createPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      updatePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      copyPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       getMemoryGovernanceSnapshot: vi.fn(async (payload) => makeSuccess({ payload })),
       createCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
       updateCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -116,6 +122,12 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.update,
       WEB_EVENTS.managementPolicy.get,
       WEB_EVENTS.managementPolicy.update,
+      WEB_EVENTS.piProvider.listPresets,
+      WEB_EVENTS.piProvider.listCards,
+      WEB_EVENTS.piProvider.getCard,
+      WEB_EVENTS.piProvider.createCard,
+      WEB_EVENTS.piProvider.updateCard,
+      WEB_EVENTS.piProvider.copyCard,
       WEB_EVENTS.team.delete,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,
@@ -897,6 +909,51 @@ describe('server-next socket handlers', () => {
       currentPassword: 'old-password',
       newPassword: 'new-password',
       currentDeviceId: null,
+    });
+  });
+
+  test('PI Provider Supply events require authentication and ignore a spoofed payload userId', async () => {
+    const unauthenticatedSocket = new FakeSocket();
+    const listPiProviderCards = vi.fn(async (payload) => makeSuccess({ payload }));
+    const createPiProviderCard = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = {
+      listPiProviderCards,
+      createPiProviderCard,
+      listPiProviderPresets: vi.fn(async (payload) => makeSuccess({ payload })),
+      getPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      updatePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      copyPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+    } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(unauthenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
+      }),
+    });
+
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.piProvider.listCards, {
+      userId: 'admin-spoofed',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.piProvider.createCard, {
+      userId: 'admin-spoofed',
+      displayName: 'Nope',
+      apiKey: 'sk-x',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(listPiProviderCards).not.toHaveBeenCalled();
+    expect(createPiProviderCard).not.toHaveBeenCalled();
+
+    const authenticatedSocket = new FakeSocket();
+    registerWebSocketHandlers(authenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: 'device-local',
+      }),
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.piProvider.listCards, {
+      userId: 'admin-spoofed',
+    });
+    expect(listPiProviderCards).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: 'device-local',
     });
   });
 
