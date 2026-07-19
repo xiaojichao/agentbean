@@ -2,27 +2,27 @@ import {
   makeFailure,
   makeSuccess,
   type Ack,
-  type CopyPiProviderCardInput,
-  type CreatePiProviderCardInput,
   type ListPiProviderCardsResult,
   type ListPiProviderPresetsResult,
   type PiProviderCardDto,
   type PiProviderCardRevisionDto,
   type PiProviderConfigDto,
-  type UpdatePiProviderCardInput,
 } from '../../../../packages/contracts/src/index.js';
 import {
   getPiProviderPreset,
-  isPiProviderPreset,
   listPiProviderPresets,
-  normalizePiProviderConfig,
-  shouldCreateDraftRevisionForEdit,
-  validatePiProviderApiKey,
-  validatePiProviderConsoleUrl,
-  validatePiProviderDisplayName,
-  validatePiProviderNotes,
+  parseCopyPiProviderCardRequest,
+  parseCreatePiProviderCardRequest,
+  parseGetPiProviderCardRequest,
+  parseListPiProviderCardsRequest,
+  parseListPiProviderPresetsRequest,
+  parseUpdatePiProviderCardRequest,
 } from '../../../../packages/domain/src/index.js';
-import type { PiProviderRepositories } from './pi-provider-repositories.js';
+import type {
+  PiProviderCardRevisionRecord,
+  PiProviderRepositories,
+  PiProviderUnitOfWork,
+} from './pi-provider-repositories.js';
 import type { UserRecord } from './repositories.js';
 import {
   encryptPiProviderApiKey,
@@ -33,6 +33,7 @@ import {
 
 export interface PiProviderServiceDependencies {
   readonly repositories: PiProviderRepositories;
+  readonly unitOfWork: PiProviderUnitOfWork;
   readonly users: {
     getById(id: string): Promise<UserRecord | null>;
   };
@@ -69,22 +70,26 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     return { ok: true, key: resolved.key };
   }
 
-  async function toCardDto(cardId: string): Promise<PiProviderCardDto | null> {
-    const card = await deps.repositories.cards.getById(cardId);
+  async function toCardDto(
+    cardId: string,
+    repositories: PiProviderRepositories = deps.repositories,
+  ): Promise<PiProviderCardDto | null> {
+    const card = await repositories.cards.getById(cardId);
     if (!card) return null;
-    const credential = await deps.repositories.credentials.getById(card.credentialRef);
+    const credential = await repositories.credentials.getById(card.credentialRef);
     const draft = card.draftRevisionId
-      ? await deps.repositories.revisions.getById(card.draftRevisionId)
+      ? await repositories.revisions.getById(card.draftRevisionId)
       : null;
     const published = card.publishedRevisionId
-      ? await deps.repositories.revisions.getById(card.publishedRevisionId)
+      ? await repositories.revisions.getById(card.publishedRevisionId)
       : null;
+    const preferred = draft ?? published;
     return {
       id: card.id,
-      displayName: card.displayName,
+      displayName: preferred?.displayName ?? '',
       preset: card.preset,
-      notes: card.notes,
-      consoleUrl: card.consoleUrl,
+      notes: preferred?.notes ?? null,
+      consoleUrl: preferred?.consoleUrl ?? null,
       credential: {
         credentialRef: card.credentialRef,
         configured: Boolean(credential),
@@ -98,18 +103,14 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     };
   }
 
-  function toRevisionDto(revision: {
-    id: string;
-    cardId: string;
-    status: 'draft' | 'published';
-    config: PiProviderConfigDto;
-    createdBy: string;
-    createdAt: number;
-  }): PiProviderCardRevisionDto {
+  function toRevisionDto(revision: PiProviderCardRevisionRecord): PiProviderCardRevisionDto {
     return {
       id: revision.id,
       cardId: revision.cardId,
       status: revision.status,
+      displayName: revision.displayName,
+      notes: revision.notes,
+      consoleUrl: revision.consoleUrl,
       config: revision.config,
       createdBy: revision.createdBy,
       createdAt: revision.createdAt,
@@ -118,15 +119,35 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
   function assertSafeAckPayload(payload: unknown): void {
     const text = JSON.stringify(payload);
-    // Fail closed if any response accidentally includes ciphertext or raw key material markers.
     if (/encrypted_payload|ciphertext|apiKeyCiphertext|"apiKey"\s*:/i.test(text)) {
       throw new Error('PI provider response leaked secret material');
     }
   }
 
+  function toConfigDto(config: {
+    protocol: PiProviderConfigDto['protocol'];
+    baseUrl: string;
+    endpointMode: PiProviderConfigDto['endpointMode'];
+    modelId: string;
+    timeoutMs: number;
+    maxOutputTokens: number;
+  }): PiProviderConfigDto {
+    return {
+      protocol: config.protocol,
+      baseUrl: config.baseUrl,
+      endpointMode: config.endpointMode,
+      modelId: config.modelId,
+      timeoutMs: config.timeoutMs,
+      maxOutputTokens: config.maxOutputTokens,
+      compatibilityParams: {},
+    };
+  }
+
   return {
-    async listPresets(input: { userId: string }): Promise<Ack<ListPiProviderPresetsResult>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async listPresets(raw: unknown): Promise<Ack<ListPiProviderPresetsResult>> {
+      const parsed = parseListPiProviderPresetsRequest(raw ?? {});
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
       const presets = listPiProviderPresets().map((preset) => ({
         preset: preset.preset,
@@ -141,8 +162,10 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    async listCards(input: { userId: string }): Promise<Ack<ListPiProviderCardsResult>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async listCards(raw: unknown): Promise<Ack<ListPiProviderCardsResult>> {
+      const parsed = parseListPiProviderCardsRequest(raw ?? {});
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
       const cards = await deps.repositories.cards.list();
       const dtos: PiProviderCardDto[] = [];
@@ -155,43 +178,23 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    async getCard(input: { userId: string; cardId: string }): Promise<Ack<{ card: PiProviderCardDto }>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async getCard(raw: unknown): Promise<Ack<{ card: PiProviderCardDto }>> {
+      const parsed = parseGetPiProviderCardRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
-      const card = await toCardDto(input.cardId);
+      const card = await toCardDto(parsed.value.cardId);
       if (!card) return makeFailure('NOT_FOUND', 'Provider card not found');
       const result = makeSuccess({ card });
       assertSafeAckPayload(result);
       return result;
     },
 
-    async createCard(
-      input: CreatePiProviderCardInput & { userId: string },
-    ): Promise<Ack<{ card: PiProviderCardDto }>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async createCard(raw: unknown): Promise<Ack<{ card: PiProviderCardDto }>> {
+      const parsed = parseCreatePiProviderCardRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
-      if (!isPiProviderPreset(input.preset)) {
-        return makeFailure('VALIDATION_ERROR', 'Invalid provider preset');
-      }
-      const displayName = validatePiProviderDisplayName(input.displayName);
-      if (!displayName.ok) return makeFailure('VALIDATION_ERROR', displayName.message);
-      const notes = validatePiProviderNotes(input.notes);
-      if (!notes.ok) return makeFailure('VALIDATION_ERROR', notes.message);
-      const consoleUrl = validatePiProviderConsoleUrl(input.consoleUrl);
-      if (!consoleUrl.ok) return makeFailure('VALIDATION_ERROR', consoleUrl.message);
-      const apiKey = validatePiProviderApiKey(input.apiKey, { required: true });
-      if (!apiKey.ok) return makeFailure('VALIDATION_ERROR', apiKey.message);
-
-      const configResult = normalizePiProviderConfig({
-        baseUrl: input.baseUrl,
-        endpointMode: input.endpointMode,
-        modelId: input.modelId,
-        timeoutMs: input.timeoutMs,
-        maxOutputTokens: input.maxOutputTokens,
-        compatibilityParams: input.compatibilityParams ?? {},
-        advancedConfig: input.advancedConfig,
-      });
-      if (!configResult.ok) return makeFailure('VALIDATION_ERROR', configResult.message);
 
       const key = requireEncryptionKey();
       if (!key.ok) return key.failure as Ack<{ card: PiProviderCardDto }>;
@@ -200,39 +203,43 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const cardId = deps.ids.nextId();
       const credentialId = deps.ids.nextId();
       const revisionId = deps.ids.nextId();
-      const encrypted = encryptPiProviderApiKey(apiKey.value!, key.key);
+      const encrypted = encryptPiProviderApiKey(parsed.value.apiKey, key.key);
 
-      await deps.repositories.credentials.create({
-        id: credentialId,
-        keyVersion: encrypted.keyVersion,
-        encryptedPayload: serializeEncryptedSecret(encrypted),
-        fingerprint: encrypted.fingerprint,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      await deps.repositories.cards.create({
-        id: cardId,
-        displayName: displayName.value,
-        preset: input.preset,
-        notes: notes.value,
-        consoleUrl: consoleUrl.value,
-        credentialRef: credentialId,
-        draftRevisionId: revisionId,
-        publishedRevisionId: null,
-        createdBy: input.userId,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      await deps.repositories.revisions.create({
-        id: revisionId,
-        cardId,
-        status: 'draft',
-        config: toConfigDto(configResult.config),
-        createdBy: input.userId,
-        createdAt: now,
-      });
+      try {
+        await deps.unitOfWork.run(async (repositories) => {
+          await repositories.credentials.create({
+            id: credentialId,
+            keyVersion: encrypted.keyVersion,
+            encryptedPayload: serializeEncryptedSecret(encrypted),
+            fingerprint: encrypted.fingerprint,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await repositories.cards.create({
+            id: cardId,
+            preset: parsed.value.preset,
+            credentialRef: credentialId,
+            draftRevisionId: revisionId,
+            publishedRevisionId: null,
+            createdBy: parsed.value.userId,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await repositories.revisions.create({
+            id: revisionId,
+            cardId,
+            status: 'draft',
+            displayName: parsed.value.displayName,
+            notes: parsed.value.notes,
+            consoleUrl: parsed.value.consoleUrl,
+            config: toConfigDto(parsed.value.config),
+            createdBy: parsed.value.userId,
+            createdAt: now,
+          });
+        });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Failed to create provider card');
+      }
 
       const card = await toCardDto(cardId);
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load created card');
@@ -241,78 +248,63 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    async updateCard(
-      input: UpdatePiProviderCardInput & { userId: string },
-    ): Promise<Ack<{ card: PiProviderCardDto }>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async updateCard(raw: unknown): Promise<Ack<{ card: PiProviderCardDto }>> {
+      const parsed = parseUpdatePiProviderCardRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
 
-      const existing = await deps.repositories.cards.getById(input.cardId);
+      const existing = await deps.repositories.cards.getById(parsed.value.cardId);
       if (!existing) return makeFailure('NOT_FOUND', 'Provider card not found');
 
-      const displayName = validatePiProviderDisplayName(input.displayName);
-      if (!displayName.ok) return makeFailure('VALIDATION_ERROR', displayName.message);
-      const notes = validatePiProviderNotes(input.notes);
-      if (!notes.ok) return makeFailure('VALIDATION_ERROR', notes.message);
-      const consoleUrl = validatePiProviderConsoleUrl(input.consoleUrl);
-      if (!consoleUrl.ok) return makeFailure('VALIDATION_ERROR', consoleUrl.message);
-      const apiKey = validatePiProviderApiKey(input.apiKey, { required: false });
-      if (!apiKey.ok) return makeFailure('VALIDATION_ERROR', apiKey.message);
-
-      const configResult = normalizePiProviderConfig({
-        baseUrl: input.baseUrl,
-        endpointMode: input.endpointMode,
-        modelId: input.modelId,
-        timeoutMs: input.timeoutMs,
-        maxOutputTokens: input.maxOutputTokens,
-        compatibilityParams: input.compatibilityParams ?? {},
-        advancedConfig: input.advancedConfig,
-      });
-      if (!configResult.ok) return makeFailure('VALIDATION_ERROR', configResult.message);
-
-      if (apiKey.value) {
+      let encrypted: ReturnType<typeof encryptPiProviderApiKey> | null = null;
+      if (parsed.value.apiKey) {
         const key = requireEncryptionKey();
         if (!key.ok) return key.failure as Ack<{ card: PiProviderCardDto }>;
-        const credential = await deps.repositories.credentials.getById(existing.credentialRef);
-        if (!credential) return makeFailure('INTERNAL_ERROR', 'Credential reference missing');
-        const encrypted = encryptPiProviderApiKey(apiKey.value, key.key);
-        const nowForCred = deps.clock.now();
-        await deps.repositories.credentials.update({
-          id: credential.id,
-          keyVersion: encrypted.keyVersion,
-          encryptedPayload: serializeEncryptedSecret(encrypted),
-          fingerprint: encrypted.fingerprint,
-          createdAt: credential.createdAt,
-          updatedAt: nowForCred,
-        });
+        encrypted = encryptPiProviderApiKey(parsed.value.apiKey, key.key);
       }
-
-      // Published revisions are immutable: every edit creates a new draft revision.
-      void shouldCreateDraftRevisionForEdit({
-        hasPublishedRevision: Boolean(existing.publishedRevisionId),
-        hasDraftRevision: Boolean(existing.draftRevisionId),
-      });
 
       const now = deps.clock.now();
       const revisionId = deps.ids.nextId();
-      await deps.repositories.revisions.create({
-        id: revisionId,
-        cardId: existing.id,
-        status: 'draft',
-        config: toConfigDto(configResult.config),
-        createdBy: input.userId,
-        createdAt: now,
-      });
 
-      await deps.repositories.cards.update({
-        ...existing,
-        displayName: displayName.value,
-        notes: notes.value,
-        consoleUrl: consoleUrl.value,
-        draftRevisionId: revisionId,
-        // publishedRevisionId unchanged
-        updatedAt: now,
-      });
+      try {
+        await deps.unitOfWork.run(async (repositories) => {
+          if (encrypted) {
+            const credential = await repositories.credentials.getById(existing.credentialRef);
+            if (!credential) throw new Error('Credential reference missing');
+            await repositories.credentials.update({
+              id: credential.id,
+              keyVersion: encrypted.keyVersion,
+              encryptedPayload: serializeEncryptedSecret(encrypted),
+              fingerprint: encrypted.fingerprint,
+              createdAt: credential.createdAt,
+              updatedAt: now,
+            });
+          }
+
+          // 全部可编辑内容（含 displayName/notes/consoleUrl）写入新 Draft revision；
+          // published revision 与其元数据保持不变。
+          await repositories.revisions.create({
+            id: revisionId,
+            cardId: existing.id,
+            status: 'draft',
+            displayName: parsed.value.displayName,
+            notes: parsed.value.notes,
+            consoleUrl: parsed.value.consoleUrl,
+            config: toConfigDto(parsed.value.config),
+            createdBy: parsed.value.userId,
+            createdAt: now,
+          });
+
+          await repositories.cards.update({
+            ...existing,
+            draftRevisionId: revisionId,
+            updatedAt: now,
+          });
+        });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Failed to update provider card');
+      }
 
       const card = await toCardDto(existing.id);
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load updated card');
@@ -321,13 +313,13 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    async copyCard(
-      input: CopyPiProviderCardInput & { userId: string },
-    ): Promise<Ack<{ card: PiProviderCardDto }>> {
-      const admin = await requireSystemAdmin(input.userId);
+    async copyCard(raw: unknown): Promise<Ack<{ card: PiProviderCardDto }>> {
+      const parsed = parseCopyPiProviderCardRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
       if (!admin.ok) return admin;
 
-      const source = await deps.repositories.cards.getById(input.sourceCardId);
+      const source = await deps.repositories.cards.getById(parsed.value.sourceCardId);
       if (!source) return makeFailure('NOT_FOUND', 'Source provider card not found');
 
       const sourceRevisionId = source.draftRevisionId ?? source.publishedRevisionId;
@@ -343,48 +335,48 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         return makeFailure('INTERNAL_ERROR', 'Source credential missing');
       }
 
-      const displayName = validatePiProviderDisplayName(
-        input.displayName ?? `${source.displayName} (copy)`,
-      );
-      if (!displayName.ok) return makeFailure('VALIDATION_ERROR', displayName.message);
+      const displayName = parsed.value.displayName ?? `${sourceRevision.displayName} (copy)`;
 
       const now = deps.clock.now();
       const cardId = deps.ids.nextId();
       const credentialId = deps.ids.nextId();
       const revisionId = deps.ids.nextId();
 
-      // Copy ciphertext under a new credentialRef; never re-expose plaintext.
-      await deps.repositories.credentials.create({
-        id: credentialId,
-        keyVersion: sourceCredential.keyVersion,
-        encryptedPayload: sourceCredential.encryptedPayload,
-        fingerprint: sourceCredential.fingerprint,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      await deps.repositories.cards.create({
-        id: cardId,
-        displayName: displayName.value,
-        preset: source.preset,
-        notes: source.notes,
-        consoleUrl: source.consoleUrl,
-        credentialRef: credentialId,
-        draftRevisionId: revisionId,
-        publishedRevisionId: null,
-        createdBy: input.userId,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      await deps.repositories.revisions.create({
-        id: revisionId,
-        cardId,
-        status: 'draft',
-        config: sourceRevision.config,
-        createdBy: input.userId,
-        createdAt: now,
-      });
+      try {
+        await deps.unitOfWork.run(async (repositories) => {
+          await repositories.credentials.create({
+            id: credentialId,
+            keyVersion: sourceCredential.keyVersion,
+            encryptedPayload: sourceCredential.encryptedPayload,
+            fingerprint: sourceCredential.fingerprint,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await repositories.cards.create({
+            id: cardId,
+            preset: source.preset,
+            credentialRef: credentialId,
+            draftRevisionId: revisionId,
+            publishedRevisionId: null,
+            createdBy: parsed.value.userId,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await repositories.revisions.create({
+            id: revisionId,
+            cardId,
+            status: 'draft',
+            displayName,
+            notes: sourceRevision.notes,
+            consoleUrl: sourceRevision.consoleUrl,
+            config: sourceRevision.config,
+            createdBy: parsed.value.userId,
+            createdAt: now,
+          });
+        });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Failed to copy provider card');
+      }
 
       const card = await toCardDto(cardId);
       if (!card) return makeFailure('INTERNAL_ERROR', 'Failed to load copied card');
@@ -393,28 +385,32 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
-    /** Test helper: mark current draft as published without model tests (#703 owns real publish). */
+    /** 测试辅助：将当前 draft 快照为 published（#703 拥有真实发布）。 */
     async __testMarkDraftPublished(input: { cardId: string }): Promise<void> {
       const card = await deps.repositories.cards.getById(input.cardId);
       if (!card?.draftRevisionId) return;
       const draft = await deps.repositories.revisions.getById(card.draftRevisionId);
       if (!draft) return;
-      // Revisions are immutable rows; create a published revision snapshot with same config.
       const publishedId = deps.ids.nextId();
       const now = deps.clock.now();
-      await deps.repositories.revisions.create({
-        id: publishedId,
-        cardId: card.id,
-        status: 'published',
-        config: draft.config,
-        createdBy: draft.createdBy,
-        createdAt: now,
-      });
-      await deps.repositories.cards.update({
-        ...card,
-        publishedRevisionId: publishedId,
-        draftRevisionId: null,
-        updatedAt: now,
+      await deps.unitOfWork.run(async (repositories) => {
+        await repositories.revisions.create({
+          id: publishedId,
+          cardId: card.id,
+          status: 'published',
+          displayName: draft.displayName,
+          notes: draft.notes,
+          consoleUrl: draft.consoleUrl,
+          config: draft.config,
+          createdBy: draft.createdBy,
+          createdAt: now,
+        });
+        await repositories.cards.update({
+          ...card,
+          publishedRevisionId: publishedId,
+          draftRevisionId: null,
+          updatedAt: now,
+        });
       });
     },
   };
@@ -422,27 +418,6 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
 export type PiProviderService = ReturnType<typeof createPiProviderService>;
 
-function toConfigDto(config: {
-  protocol: PiProviderConfigDto['protocol'];
-  baseUrl: string;
-  endpointMode: PiProviderConfigDto['endpointMode'];
-  modelId: string;
-  timeoutMs: number;
-  maxOutputTokens: number;
-  compatibilityParams: object;
-}): PiProviderConfigDto {
-  return {
-    protocol: config.protocol,
-    baseUrl: config.baseUrl,
-    endpointMode: config.endpointMode,
-    modelId: config.modelId,
-    timeoutMs: config.timeoutMs,
-    maxOutputTokens: config.maxOutputTokens,
-    compatibilityParams: {},
-  };
-}
-
-/** Convenience for UI defaults when creating from preset. */
 export function presetDefaultsForCreate(preset: string) {
   return getPiProviderPreset(preset);
 }

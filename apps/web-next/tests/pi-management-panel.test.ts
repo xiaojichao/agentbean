@@ -12,17 +12,18 @@ const settingsSource = readFileSync(
 );
 
 describe('PI Management settings scope', () => {
-  test('settings sidebar includes PI Agent tab separate from team settings', () => {
+  test('settings sidebar includes PI Agent tab separate from team settings for admins only', () => {
     expect(settingsSource).toContain("id: 'pi'");
     expect(settingsSource).toContain("label: 'PI Agent'");
     expect(settingsSource).toContain('PiManagementPanel');
-    expect(settingsSource).toContain('isSystemAdmin={Boolean(isSystemAdmin)}');
+    expect(settingsSource).toContain('settingsTabsForRole');
+    expect(settingsSource).toContain('resolveSettingsTab');
+    expect(settingsSource).toContain('tab === \'pi\' && isSystemAdmin');
   });
 
-  test('non-admin path fails closed without provider supply fields', () => {
+  test('panel itself remains system-admin scoped', () => {
     expect(panelSource).toContain('settings-pi-forbidden');
     expect(panelSource).toContain('仅系统管理员可访问');
-    expect(panelSource).toContain('不会展示 Provider、Model、Endpoint 或 Credential');
   });
 
   test('system admin panel supports four presets, form/advanced editors, and credential-safe UX', () => {

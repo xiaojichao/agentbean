@@ -31,7 +31,7 @@ import {
   type ManagementMemoryTransactionRepositories,
 } from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
-import { createSqlitePiProviderRepositories } from './pi-provider-repositories.js';
+import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -166,7 +166,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const management = createSqliteManagementPersistence(teamDb);
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
   const memory = createSqliteMemoryRepositories(teamDb);
-  const piProvider = createSqlitePiProviderRepositories(globalDb);
+  const piProvider = createSqlitePiProviderPersistence(globalDb);
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
 
   let repositories!: ServerNextRepositories;
@@ -189,7 +189,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             tasks: repositories.tasks, coordination: taskCoordination }));
       },
     },
-    piProvider,
+    piProvider: piProvider.repositories,
+    piProviderUnitOfWork: piProvider.unitOfWork,
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run((managementRepositories) =>

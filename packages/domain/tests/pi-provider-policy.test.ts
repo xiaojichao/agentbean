@@ -5,7 +5,6 @@ import {
   isPiProviderPreset,
   listPiProviderPresets,
   normalizePiProviderConfig,
-  shouldCreateDraftRevisionForEdit,
   validatePiProviderApiKey,
   validatePiProviderConsoleUrl,
   validatePiProviderDisplayName,
@@ -137,15 +136,3 @@ describe('metadata validators', () => {
   });
 });
 
-describe('draft revision fencing', () => {
-  test('edits always create a new draft revision instead of mutating published', () => {
-    expect(shouldCreateDraftRevisionForEdit({
-      hasPublishedRevision: true,
-      hasDraftRevision: false,
-    })).toBe(true);
-    expect(shouldCreateDraftRevisionForEdit({
-      hasPublishedRevision: true,
-      hasDraftRevision: true,
-    })).toBe(true);
-  });
-});

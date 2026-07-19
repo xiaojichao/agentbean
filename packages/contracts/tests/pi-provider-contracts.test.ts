@@ -39,6 +39,9 @@ describe('PI Provider contracts', () => {
         id: 'rev-1',
         cardId: 'card-1',
         status: 'draft',
+        displayName: 'OpenAI Draft',
+        notes: 'primary',
+        consoleUrl: 'https://platform.openai.com',
         config: {
           protocol: 'openai_chat_completions',
           baseUrl: 'https://api.openai.com/v1',

@@ -19,3 +19,4 @@ export * from './memory-ranking.js';
 export * from './memory-hashing.js';
 export * from './memory-candidate-policy.js';
 export * from './pi-provider-policy.js';
+export * from './pi-provider-request.js';

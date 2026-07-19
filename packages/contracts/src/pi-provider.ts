@@ -55,12 +55,20 @@ export interface PiProviderCardRevisionDto {
   readonly id: ID;
   readonly cardId: ID;
   readonly status: PiProviderRevisionStatus;
+  /** 显示名称属于 revision 元数据；编辑已发布 Card 时进入新 Draft，不改 published。 */
+  readonly displayName: string;
+  readonly notes: string | null;
+  readonly consoleUrl: string | null;
   readonly config: PiProviderConfigDto;
   readonly createdBy: ID;
   readonly createdAt: UnixMs;
 }
 
-/** 系统管理员可见的 PI Provider Card。 */
+/**
+ * 系统管理员可见的 PI Provider Card。
+ * displayName/notes/consoleUrl 是当前工作 revision（draft 优先，否则 published）的投影，
+ * 不是可原地改写的 published 元数据。
+ */
 export interface PiProviderCardDto {
   readonly id: ID;
   readonly displayName: string;

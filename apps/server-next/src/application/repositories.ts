@@ -6,7 +6,7 @@ import type { TaskCoordinationUnitOfWork } from './task-coordination-unit-of-wor
 import type { MemoryRepositories } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
 import type { ManagementMemoryUnitOfWork } from './management-memory-unit-of-work.js';
-import type { PiProviderRepositories } from './pi-provider-repositories.js';
+import type { PiProviderRepositories, PiProviderUnitOfWork } from './pi-provider-repositories.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -323,6 +323,7 @@ export interface ServerNextRepositories {
   memoryUnitOfWork: MemoryUnitOfWork;
   managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   piProvider: PiProviderRepositories;
+  piProviderUnitOfWork: PiProviderUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

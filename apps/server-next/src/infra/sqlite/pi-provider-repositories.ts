@@ -8,6 +8,7 @@ import type {
   PiProviderCardRevisionRecord,
   PiProviderCredentialRecord,
   PiProviderRepositories,
+  PiProviderUnitOfWork,
 } from '../../application/pi-provider-repositories.js';
 import type { SqliteDatabase } from './repositories.js';
 
@@ -52,6 +53,9 @@ function mapRevision(row: Record<string, unknown>): PiProviderCardRevisionRecord
     id: sqliteText(row, 'id'),
     cardId: sqliteText(row, 'card_id'),
     status: sqliteText(row, 'status') as PiProviderRevisionStatus,
+    displayName: sqliteText(row, 'display_name'),
+    notes: sqliteNullableText(row, 'notes'),
+    consoleUrl: sqliteNullableText(row, 'console_url'),
     config: {
       protocol: 'openai_chat_completions',
       baseUrl: sqliteText(row, 'base_url'),
@@ -69,10 +73,7 @@ function mapRevision(row: Record<string, unknown>): PiProviderCardRevisionRecord
 function mapCard(row: Record<string, unknown>): PiProviderCardRecord {
   return {
     id: sqliteText(row, 'id'),
-    displayName: sqliteText(row, 'display_name'),
     preset: sqliteText(row, 'preset') as PiProviderPreset,
-    notes: sqliteNullableText(row, 'notes'),
-    consoleUrl: sqliteNullableText(row, 'console_url'),
     credentialRef: sqliteText(row, 'credential_ref'),
     draftRevisionId: sqliteNullableText(row, 'draft_revision_id'),
     publishedRevisionId: sqliteNullableText(row, 'published_revision_id'),
@@ -109,13 +110,16 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
       async create(input) {
         db.prepare(`
           INSERT INTO pi_provider_card_revisions (
-            id, card_id, status, protocol, base_url, endpoint_mode, model_id,
+            id, card_id, status, display_name, notes, console_url, protocol, base_url, endpoint_mode, model_id,
             timeout_ms, max_output_tokens, compatibility_params_json, created_by, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           input.id,
           input.cardId,
           input.status,
+          input.displayName,
+          input.notes,
+          input.consoleUrl,
           input.config.protocol,
           input.config.baseUrl,
           input.config.endpointMode,
@@ -143,15 +147,11 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
       async create(input) {
         db.prepare(`
           INSERT INTO pi_provider_cards (
-            id, display_name, preset, notes, console_url, credential_ref,
-            draft_revision_id, published_revision_id, created_by, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, preset, credential_ref, draft_revision_id, published_revision_id, created_by, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           input.id,
-          input.displayName,
           input.preset,
-          input.notes,
-          input.consoleUrl,
           input.credentialRef,
           input.draftRevisionId,
           input.publishedRevisionId,
@@ -172,19 +172,38 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
       async update(input) {
         db.prepare(`
           UPDATE pi_provider_cards
-          SET display_name = ?, notes = ?, console_url = ?, draft_revision_id = ?,
-              published_revision_id = ?, updated_at = ?
+          SET draft_revision_id = ?, published_revision_id = ?, updated_at = ?
           WHERE id = ?
         `).run(
-          input.displayName,
-          input.notes,
-          input.consoleUrl,
           input.draftRevisionId,
           input.publishedRevisionId,
           input.updatedAt,
           input.id,
         );
         return input;
+      },
+    },
+  };
+}
+
+export function createSqlitePiProviderPersistence(db: SqliteDatabase): {
+  repositories: PiProviderRepositories;
+  unitOfWork: PiProviderUnitOfWork;
+} {
+  const repositories = createSqlitePiProviderRepositories(db);
+  return {
+    repositories,
+    unitOfWork: {
+      async run(operation) {
+        db.exec('BEGIN IMMEDIATE;');
+        try {
+          const result = await operation(repositories);
+          db.exec('COMMIT;');
+          return result;
+        } catch (error) {
+          try { db.exec('ROLLBACK;'); } catch { /* preserve original */ }
+          throw error;
+        }
       },
     },
   };

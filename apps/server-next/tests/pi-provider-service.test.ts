@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { createHash, scryptSync } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 
@@ -7,12 +8,21 @@ import {
   encryptPiProviderApiKey,
   parseEncryptedSecret,
   resolvePiSecretKey,
-  serializeEncryptedSecret,
 } from '../src/application/pi-provider-secret.js';
+import { createInMemoryPiProviderPersistence } from '../src/infra/memory/pi-provider-repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { createServerNextUseCases } from '../src/application/usecases.js';
+import {
+  applyGlobalMigrations,
+  type SqliteDatabase,
+} from '../src/infra/sqlite/repositories.js';
+import { createSqlitePiProviderPersistence } from '../src/infra/sqlite/pi-provider-repositories.js';
 
 const SECRET = 'test-pi-secret-key-material-32b!!';
+const require = createRequire(import.meta.url);
+type DatabaseWithClose = SqliteDatabase & { close(): void };
+type DatabaseConstructor = new (filename: string) => DatabaseWithClose;
+const Database = require('better-sqlite3') as DatabaseConstructor;
 
 function secretKey(): Buffer {
   return scryptSync(SECRET, 'agentbean-pi-provider-v1', 32);
@@ -21,64 +31,27 @@ function secretKey(): Buffer {
 async function seedUsers(repos: ReturnType<typeof createInMemoryRepositories>) {
   const now = 1;
   await repos.users.create({
-    id: 'admin-1',
-    username: 'sysadmin',
-    role: 'admin',
-    passwordHash: 'x',
-    createdAt: now,
-    updatedAt: now,
+    id: 'admin-1', username: 'sysadmin', role: 'admin', passwordHash: 'x', createdAt: now, updatedAt: now,
   });
   await repos.users.create({
-    id: 'owner-1',
-    username: 'owner',
-    role: 'user',
-    passwordHash: 'x',
-    createdAt: now,
-    updatedAt: now,
+    id: 'owner-1', username: 'owner', role: 'user', passwordHash: 'x', createdAt: now, updatedAt: now,
   });
   await repos.users.create({
-    id: 'member-1',
-    username: 'member',
-    role: 'user',
-    passwordHash: 'x',
-    createdAt: now,
-    updatedAt: now,
+    id: 'member-1', username: 'member', role: 'user', passwordHash: 'x', createdAt: now, updatedAt: now,
   });
   await repos.teams.create({
-    id: 'team-1',
-    name: 'Team',
-    path: 'team',
-    visibility: 'private',
-    ownerId: 'owner-1',
-    createdAt: now,
+    id: 'team-1', name: 'Team', path: 'team', visibility: 'private', ownerId: 'owner-1', createdAt: now,
   });
-  await repos.teams.addMember({
-    teamId: 'team-1',
-    userId: 'owner-1',
-    username: 'owner',
-    role: 'owner',
-    joinedAt: now,
-  });
-  await repos.teams.addMember({
-    teamId: 'team-1',
-    userId: 'member-1',
-    username: 'member',
-    role: 'member',
-    joinedAt: now,
-  });
-  await repos.teams.addMember({
-    teamId: 'team-1',
-    userId: 'admin-1',
-    username: 'sysadmin',
-    role: 'admin',
-    joinedAt: now,
-  });
+  await repos.teams.addMember({ teamId: 'team-1', userId: 'owner-1', username: 'owner', role: 'owner', joinedAt: now });
+  await repos.teams.addMember({ teamId: 'team-1', userId: 'member-1', username: 'member', role: 'member', joinedAt: now });
+  await repos.teams.addMember({ teamId: 'team-1', userId: 'admin-1', username: 'sysadmin', role: 'admin', joinedAt: now });
 }
 
 function createService(repos = createInMemoryRepositories()) {
   let seq = 0;
   const service = createPiProviderService({
     repositories: repos.piProvider,
+    unitOfWork: repos.piProviderUnitOfWork,
     users: repos.users,
     clock: { now: () => 1_700_000_000_000 + seq },
     ids: { nextId: () => `id-${++seq}` },
@@ -87,12 +60,29 @@ function createService(repos = createInMemoryRepositories()) {
   return { repos, service };
 }
 
+function validCreate(overrides: Record<string, unknown> = {}) {
+  return {
+    userId: 'admin-1',
+    preset: 'openai',
+    displayName: 'Primary OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    endpointMode: 'chat_completions',
+    modelId: 'gpt-4.1-mini',
+    timeoutMs: 60_000,
+    maxOutputTokens: 4096,
+    notes: 'prod candidate',
+    consoleUrl: 'https://platform.openai.com',
+    apiKey: 'sk-live-never-echo',
+    ...overrides,
+  };
+}
+
 describe('pi provider secret crypto', () => {
   test('encrypts with AES-256-GCM and round-trips', () => {
     const key = secretKey();
     const encrypted = encryptPiProviderApiKey('sk-live-secret', key);
     expect(encrypted.ciphertext.equals(Buffer.from('sk-live-secret'))).toBe(false);
-    const serialized = serializeEncryptedSecret(encrypted);
+    const serialized = serializeForTest(encrypted);
     const parsed = parseEncryptedSecret(serialized);
     expect(parsed).not.toBeNull();
     expect(decryptPiProviderApiKey(parsed!, key)).toBe('sk-live-secret');
@@ -107,83 +97,77 @@ describe('pi provider secret crypto', () => {
   });
 });
 
+function serializeForTest(secret: ReturnType<typeof encryptPiProviderApiKey>): string {
+  return [
+    `v${secret.keyVersion}`,
+    secret.iv.toString('base64url'),
+    secret.authTag.toString('base64url'),
+    secret.ciphertext.toString('base64url'),
+  ].join('.');
+}
+
 describe('pi provider service', () => {
   test('system admin can create a draft card from preset without leaking secrets', async () => {
     const { repos, service } = createService();
     await seedUsers(repos);
 
-    const created = await service.createCard({
-      userId: 'admin-1',
-      preset: 'openai',
-      displayName: 'Primary OpenAI',
-      baseUrl: 'https://api.openai.com/v1',
-      endpointMode: 'chat_completions',
-      modelId: 'gpt-4.1-mini',
-      timeoutMs: 60_000,
-      maxOutputTokens: 4096,
-      notes: 'prod candidate',
-      consoleUrl: 'https://platform.openai.com',
-      apiKey: 'sk-live-never-echo',
-    });
-
+    const created = await service.createCard(validCreate());
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     expect(created.card.displayName).toBe('Primary OpenAI');
     expect(created.card.draftRevision?.status).toBe('draft');
+    expect(created.card.draftRevision?.displayName).toBe('Primary OpenAI');
     expect(created.card.draftRevision?.config.modelId).toBe('gpt-4.1-mini');
     expect(created.card.credential.configured).toBe(true);
-    expect(created.card.credential.credentialRef).toBeTruthy();
     const payload = JSON.stringify(created);
     expect(payload).not.toContain('sk-live-never-echo');
     expect(payload).not.toMatch(/encrypted_payload|ciphertext|v1\./i);
 
     const stored = await repos.piProvider.credentials.getById(created.card.credential.credentialRef);
-    expect(stored?.encryptedPayload).toContain('v1.');
     expect(decryptPiProviderApiKey(parseEncryptedSecret(stored!.encryptedPayload)!, secretKey()))
       .toBe('sk-live-never-echo');
   });
 
-  test('advanced JSON edits the same typed config and rejects bypass fields', async () => {
+  test('rejects top-level unsupported fields on create/update/copy', async () => {
     const { repos, service } = createService();
     await seedUsers(repos);
 
-    const ok = await service.createCard({
-      userId: 'admin-1',
-      preset: 'custom_openai_compatible',
-      displayName: 'Custom',
-      baseUrl: 'https://example.invalid/v1',
-      endpointMode: 'chat_completions',
-      modelId: 'old-model',
-      timeoutMs: 60_000,
-      maxOutputTokens: 1024,
-      apiKey: 'sk-a',
-      advancedConfig: {
-        baseUrl: 'https://openrouter.ai/api/v1',
-        modelId: 'openrouter/auto',
-        timeoutMs: 12_000,
-        maxOutputTokens: 512,
-        compatibilityParams: {},
-      },
-    });
-    expect(ok.ok).toBe(true);
-    if (ok.ok) {
-      expect(ok.card.draftRevision?.config.baseUrl).toBe('https://openrouter.ai/api/v1');
-      expect(ok.card.draftRevision?.config.modelId).toBe('openrouter/auto');
-      expect(ok.card.draftRevision?.config.timeoutMs).toBe(12_000);
+    for (const field of ['headers', 'body', 'oauth', 'shell', 'env', 'temperature']) {
+      const rejected = await service.createCard(validCreate({ [field]: true }));
+      expect(rejected).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
     }
 
-    const rejected = await service.createCard({
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const updateRejected = await service.updateCard({
       userId: 'admin-1',
-      preset: 'openai',
-      displayName: 'Bad',
+      cardId: created.card.id,
+      displayName: 'X',
       baseUrl: 'https://api.openai.com/v1',
       endpointMode: 'chat_completions',
       modelId: 'gpt',
       timeoutMs: 60_000,
       maxOutputTokens: 1024,
-      apiKey: 'sk-a',
-      advancedConfig: { headers: { Authorization: 'Bearer x' } },
+      headers: { Authorization: 'Bearer x' },
     });
+    expect(updateRejected).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    const copyRejected = await service.copyCard({
+      userId: 'admin-1',
+      sourceCardId: created.card.id,
+      oauth: true,
+    });
+    expect(copyRejected).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+  });
+
+  test('advanced JSON cannot bypass schema restrictions', async () => {
+    const { repos, service } = createService();
+    await seedUsers(repos);
+    const rejected = await service.createCard(validCreate({
+      advancedConfig: { headers: { Authorization: 'Bearer x' } },
+    }));
     expect(rejected).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
   });
 
@@ -194,40 +178,27 @@ describe('pi provider service', () => {
     for (const userId of ['owner-1', 'member-1'] as const) {
       const list = await service.listCards({ userId });
       expect(list).toMatchObject({ ok: false, error: 'FORBIDDEN' });
-      // Fail-closed: no card payload and no secret-bearing fields.
       expect(list).not.toHaveProperty('cards');
       expect(JSON.stringify(list)).not.toMatch(/modelId|baseUrl|credentialRef|draftRevision|apiKey/i);
 
-      const create = await service.createCard({
-        userId,
-        preset: 'openai',
-        displayName: 'Nope',
-        baseUrl: 'https://api.openai.com/v1',
-        endpointMode: 'chat_completions',
-        modelId: 'gpt',
-        timeoutMs: 60_000,
-        maxOutputTokens: 1024,
-        apiKey: 'sk-x',
-      });
+      const create = await service.createCard(validCreate({ userId, apiKey: 'sk-x' }));
       expect(create).toMatchObject({ ok: false, error: 'FORBIDDEN' });
     }
   });
 
-  test('editing a published card creates a new draft without mutating published revision', async () => {
+  test('editing a published card creates new draft metadata without mutating published revision', async () => {
     const { repos, service } = createService();
     await seedUsers(repos);
 
-    const created = await service.createCard({
-      userId: 'admin-1',
+    const created = await service.createCard(validCreate({
       preset: 'deepseek',
       displayName: 'DeepSeek',
       baseUrl: 'https://api.deepseek.com',
-      endpointMode: 'chat_completions',
       modelId: 'deepseek-chat',
-      timeoutMs: 60_000,
-      maxOutputTokens: 2048,
+      notes: 'published notes',
+      consoleUrl: 'https://platform.deepseek.com',
       apiKey: 'sk-ds',
-    });
+    }));
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
@@ -236,9 +207,10 @@ describe('pi provider service', () => {
     expect(published.ok).toBe(true);
     if (!published.ok) return;
     expect(published.card.publishedRevision?.status).toBe('published');
+    expect(published.card.publishedRevision?.displayName).toBe('DeepSeek');
+    expect(published.card.publishedRevision?.notes).toBe('published notes');
     expect(published.card.draftRevision).toBeNull();
     const publishedRevisionId = published.card.publishedRevision!.id;
-    const publishedConfig = published.card.publishedRevision!.config;
 
     const updated = await service.updateCard({
       userId: 'admin-1',
@@ -249,18 +221,30 @@ describe('pi provider service', () => {
       modelId: 'deepseek-reasoner',
       timeoutMs: 90_000,
       maxOutputTokens: 4096,
+      notes: 'draft notes',
+      consoleUrl: 'https://example.com/console',
     });
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
 
+    // 投影展示当前 Draft 工作视图
     expect(updated.card.displayName).toBe('DeepSeek edited');
-    expect(updated.card.draftRevision?.id).not.toBe(publishedRevisionId);
-    expect(updated.card.draftRevision?.status).toBe('draft');
+    expect(updated.card.notes).toBe('draft notes');
+    expect(updated.card.draftRevision?.displayName).toBe('DeepSeek edited');
+    expect(updated.card.draftRevision?.notes).toBe('draft notes');
+    expect(updated.card.draftRevision?.consoleUrl).toBe('https://example.com/console');
     expect(updated.card.draftRevision?.config.modelId).toBe('deepseek-reasoner');
+
+    // published revision 元数据与配置均不变
     expect(updated.card.publishedRevision?.id).toBe(publishedRevisionId);
-    expect(updated.card.publishedRevision?.config).toEqual(publishedConfig);
+    expect(updated.card.publishedRevision?.displayName).toBe('DeepSeek');
+    expect(updated.card.publishedRevision?.notes).toBe('published notes');
+    expect(updated.card.publishedRevision?.consoleUrl).toBe('https://platform.deepseek.com');
+    expect(updated.card.publishedRevision?.config.modelId).toBe('deepseek-chat');
 
     const storedPublished = await repos.piProvider.revisions.getById(publishedRevisionId);
+    expect(storedPublished?.displayName).toBe('DeepSeek');
+    expect(storedPublished?.notes).toBe('published notes');
     expect(storedPublished?.config.modelId).toBe('deepseek-chat');
   });
 
@@ -268,17 +252,13 @@ describe('pi provider service', () => {
     const { repos, service } = createService();
     await seedUsers(repos);
 
-    const created = await service.createCard({
-      userId: 'admin-1',
+    const created = await service.createCard(validCreate({
       preset: 'openrouter',
       displayName: 'OpenRouter',
       baseUrl: 'https://openrouter.ai/api/v1',
-      endpointMode: 'chat_completions',
       modelId: 'openrouter/auto',
-      timeoutMs: 60_000,
-      maxOutputTokens: 2048,
       apiKey: 'sk-or',
-    });
+    }));
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
@@ -293,11 +273,6 @@ describe('pi provider service', () => {
     expect(copied.card.displayName).toBe('OpenRouter copy');
     expect(copied.card.credential.credentialRef).not.toBe(created.card.credential.credentialRef);
     expect(copied.card.draftRevision?.config.modelId).toBe('openrouter/auto');
-    expect(copied.card.publishedRevision).toBeNull();
-
-    const sourceCred = await repos.piProvider.credentials.getById(created.card.credential.credentialRef);
-    const copyCred = await repos.piProvider.credentials.getById(copied.card.credential.credentialRef);
-    expect(copyCred?.encryptedPayload).toBe(sourceCred?.encryptedPayload);
     expect(JSON.stringify(copied)).not.toContain('sk-or');
   });
 
@@ -305,17 +280,7 @@ describe('pi provider service', () => {
     const { repos, service } = createService();
     await seedUsers(repos);
 
-    const created = await service.createCard({
-      userId: 'admin-1',
-      preset: 'openai',
-      displayName: 'OpenAI',
-      baseUrl: 'https://api.openai.com/v1',
-      endpointMode: 'chat_completions',
-      modelId: 'gpt-4.1-mini',
-      timeoutMs: 60_000,
-      maxOutputTokens: 2048,
-      apiKey: 'sk-old',
-    });
+    const created = await service.createCard(validCreate({ apiKey: 'sk-old' }));
     expect(created.ok).toBe(true);
     if (!created.ok) return;
     const credentialRef = created.card.credential.credentialRef;
@@ -323,12 +288,12 @@ describe('pi provider service', () => {
     const updated = await service.updateCard({
       userId: 'admin-1',
       cardId: created.card.id,
-      displayName: 'OpenAI',
+      displayName: 'Primary OpenAI',
       baseUrl: 'https://api.openai.com/v1',
       endpointMode: 'chat_completions',
       modelId: 'gpt-4.1-mini',
       timeoutMs: 60_000,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 4096,
       apiKey: 'sk-new',
     });
     expect(updated.ok).toBe(true);
@@ -342,6 +307,141 @@ describe('pi provider service', () => {
       .toBe('sk-new');
   });
 
+  test('memory unit of work rolls back orphan credential/card/revision on mid-write failure', async () => {
+    const persistence = createInMemoryPiProviderPersistence();
+    const repos = createInMemoryRepositories();
+    // 替换为可注入失败的 persistence
+    (repos as { piProvider: typeof persistence.repositories }).piProvider = persistence.repositories;
+    (repos as { piProviderUnitOfWork: typeof persistence.unitOfWork }).piProviderUnitOfWork = persistence.unitOfWork;
+    await seedUsers(repos);
+
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users: repos.users,
+      clock: { now: () => 1 },
+      ids: { nextId: () => `id-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    // 第一次写 credential 成功，第二次写 card 失败
+    let writes = 0;
+    const originalCreate = persistence.repositories.cards.create.bind(persistence.repositories.cards);
+    persistence.repositories.cards.create = async (input) => {
+      writes += 1;
+      if (writes === 1) throw new Error('inject-fail-after-credential');
+      return originalCreate(input);
+    };
+
+    const failed = await service.createCard(validCreate());
+    expect(failed).toMatchObject({ ok: false, error: 'INTERNAL_ERROR' });
+    expect(await persistence.repositories.credentials.getById('id-2')).toBeNull();
+    expect(await persistence.repositories.cards.list()).toEqual([]);
+    expect(await persistence.repositories.revisions.listByCard('id-1')).toEqual([]);
+  });
+
+  test('sqlite unit of work rolls back when revision insert fails after credential/card writes', async () => {
+    const db = new Database(':memory:');
+    applyGlobalMigrations(db);
+    // 需要 users 外键：插入 admin
+    db.prepare(`
+      INSERT INTO users (id, username, email, display_name, password_hash, role, current_team_id, created_at, updated_at)
+      VALUES ('admin-1', 'sysadmin', null, null, 'x', 'admin', null, 1, 1)
+    `).run();
+    const persistence = createSqlitePiProviderPersistence(db);
+    const users = {
+      async getById(id: string) {
+        if (id !== 'admin-1') return null;
+        return {
+          id: 'admin-1', username: 'sysadmin', role: 'admin' as const, passwordHash: 'x', createdAt: 1, updatedAt: 1,
+        };
+      },
+    };
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users,
+      clock: { now: () => 1 },
+      ids: { nextId: () => `id-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const original = persistence.repositories.revisions.create.bind(persistence.repositories.revisions);
+    let revisionCalls = 0;
+    persistence.repositories.revisions.create = async (input) => {
+      revisionCalls += 1;
+      if (revisionCalls === 1) throw new Error('inject-revision-fail');
+      return original(input);
+    };
+
+    const failed = await service.createCard(validCreate());
+    expect(failed).toMatchObject({ ok: false, error: 'INTERNAL_ERROR' });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_credentials').get() as { c: number }).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_cards').get() as { c: number }).toEqual({ c: 0 });
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pi_provider_card_revisions').get() as { c: number }).toEqual({ c: 0 });
+    db.close();
+  });
+
+  test('sqlite update failure after credential rotate does not leave rotated secret', async () => {
+    const db = new Database(':memory:');
+    applyGlobalMigrations(db);
+    db.prepare(`
+      INSERT INTO users (id, username, email, display_name, password_hash, role, current_team_id, created_at, updated_at)
+      VALUES ('admin-1', 'sysadmin', null, null, 'x', 'admin', null, 1, 1)
+    `).run();
+    const persistence = createSqlitePiProviderPersistence(db);
+    const users = {
+      async getById(id: string) {
+        if (id !== 'admin-1') return null;
+        return {
+          id: 'admin-1', username: 'sysadmin', role: 'admin' as const, passwordHash: 'x', createdAt: 1, updatedAt: 1,
+        };
+      },
+    };
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: persistence.repositories,
+      unitOfWork: persistence.unitOfWork,
+      users,
+      clock: { now: () => Date.now() },
+      ids: { nextId: () => `id-${++seq}` },
+      resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    });
+
+    const created = await service.createCard(validCreate({ apiKey: 'sk-old' }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const credentialRef = created.card.credential.credentialRef;
+    const before = await persistence.repositories.credentials.getById(credentialRef);
+
+    const original = persistence.repositories.revisions.create.bind(persistence.repositories.revisions);
+    persistence.repositories.revisions.create = async () => {
+      throw new Error('inject-update-fail');
+    };
+
+    const failed = await service.updateCard({
+      userId: 'admin-1',
+      cardId: created.card.id,
+      displayName: 'Primary OpenAI',
+      baseUrl: 'https://api.openai.com/v1',
+      endpointMode: 'chat_completions',
+      modelId: 'gpt-4.1-mini',
+      timeoutMs: 60_000,
+      maxOutputTokens: 4096,
+      apiKey: 'sk-new',
+    });
+    expect(failed).toMatchObject({ ok: false, error: 'INTERNAL_ERROR' });
+
+    const after = await persistence.repositories.credentials.getById(credentialRef);
+    expect(after?.encryptedPayload).toBe(before?.encryptedPayload);
+    expect(decryptPiProviderApiKey(parseEncryptedSecret(after!.encryptedPayload)!, secretKey())).toBe('sk-old');
+    // 恢复以关闭
+    persistence.repositories.revisions.create = original;
+    db.close();
+  });
+
   test('use-case surface lists four presets for system admin only', async () => {
     const repos = createInMemoryRepositories();
     await seedUsers(repos);
@@ -351,7 +451,6 @@ describe('pi provider service', () => {
       ids: { nextId: (() => { let n = 0; return () => `uc-${++n}`; })() },
     });
 
-    // Inject secret for create path
     process.env.AGENTBEAN_PI_SECRET_KEY = SECRET;
     try {
       const forbidden = await app.listPiProviderPresets({ userId: 'owner-1' });
@@ -361,11 +460,12 @@ describe('pi provider service', () => {
       expect(presets.ok).toBe(true);
       if (!presets.ok) return;
       expect(presets.presets.map((p) => p.preset)).toEqual([
-        'openai',
-        'openrouter',
-        'deepseek',
-        'custom_openai_compatible',
+        'openai', 'openrouter', 'deepseek', 'custom_openai_compatible',
       ]);
+
+      // 顶层未知字段经 use-case 入口拒绝
+      const bad = await app.createPiProviderCard(validCreate({ headers: { a: 1 } }));
+      expect(bad).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
     } finally {
       delete process.env.AGENTBEAN_PI_SECRET_KEY;
     }

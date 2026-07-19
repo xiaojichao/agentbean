@@ -37,7 +37,7 @@ import {
   createMemoryRepositoryMemoryState,
   restoreMemoryRepositoryMemoryState,
 } from './memory-repositories.js';
-import { createInMemoryPiProviderRepositories } from './pi-provider-repositories.js';
+import { createInMemoryPiProviderPersistence } from './pi-provider-repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
@@ -45,8 +45,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const taskCoordination = createInMemoryTaskCoordinationRepositories(taskCoordinationState);
   const memoryState = createMemoryRepositoryMemoryState();
   const memory = createInMemoryMemoryRepositories(memoryState);
-  const piProvider = createInMemoryPiProviderRepositories();
+  const piProvider = createInMemoryPiProviderPersistence();
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
+
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
   const members = new Map<string, TeamMemberRecord>();
@@ -110,7 +111,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         });
       },
     },
-    piProvider,
+    piProvider: piProvider.repositories,
+    piProviderUnitOfWork: piProvider.unitOfWork,
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(async (managementRepositories) => {

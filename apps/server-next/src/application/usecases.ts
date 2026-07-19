@@ -20,12 +20,9 @@ import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
 import type {
-  CopyPiProviderCardInput,
-  CreatePiProviderCardInput,
   ListPiProviderCardsResult,
   ListPiProviderPresetsResult,
   PiProviderCardDto,
-  UpdatePiProviderCardInput,
 } from '../../../../packages/contracts/src/index.js';
 
 export interface ServerNextClock {
@@ -168,12 +165,13 @@ export interface ServerNextUseCases {
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
   getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
-  listPiProviderPresets(input: { userId: string }): Promise<Ack<ListPiProviderPresetsResult>>;
-  listPiProviderCards(input: { userId: string }): Promise<Ack<ListPiProviderCardsResult>>;
-  getPiProviderCard(input: { userId: string; cardId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
-  createPiProviderCard(input: CreatePiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
-  updatePiProviderCard(input: UpdatePiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
-  copyPiProviderCard(input: CopyPiProviderCardInput & { userId: string }): Promise<Ack<{ card: PiProviderCardDto }>>;
+  /** 公开入口接受 unknown，由运行时 exact-key parser fail closed。 */
+  listPiProviderPresets(input: unknown): Promise<Ack<ListPiProviderPresetsResult>>;
+  listPiProviderCards(input: unknown): Promise<Ack<ListPiProviderCardsResult>>;
+  getPiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
+  createPiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
+  updatePiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
+  copyPiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
@@ -935,6 +933,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
   const piProvider = createPiProviderService({
     repositories: repositories.piProvider,
+    unitOfWork: repositories.piProviderUnitOfWork,
     users: repositories.users,
     clock,
     ids,

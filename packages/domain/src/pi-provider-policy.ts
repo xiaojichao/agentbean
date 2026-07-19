@@ -327,19 +327,6 @@ export function validatePiProviderApiKey(value: unknown, options: { required: bo
   return { ok: true, value: apiKey };
 }
 
-/**
- * 编辑已发布 Card 时：永远产生新 Draft revision，不修改已发布 revision 内容。
- * 返回 true 表示应创建新 draft 而不是改写 published。
- */
-export function shouldCreateDraftRevisionForEdit(input: {
-  readonly hasPublishedRevision: boolean;
-  readonly hasDraftRevision: boolean;
-}): boolean {
-  // 任何编辑都写新 draft revision；已发布 revision 保持不可变。
-  void input;
-  return true;
-}
-
 function parseAdvancedConfig(value: unknown):
   | { ok: true; value: Partial<NormalizePiProviderConfigInput> }
   | { ok: false; code: PiProviderConfigValidationErrorCode; message: string } {

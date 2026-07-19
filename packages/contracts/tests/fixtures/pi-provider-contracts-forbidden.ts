@@ -50,6 +50,9 @@ const forbiddenRevisionSecret: PiProviderCardRevisionDto = {
   id: 'rev-1',
   cardId: 'card-1',
   status: 'draft',
+  displayName: 'OpenAI',
+  notes: null,
+  consoleUrl: null,
   config: {
     protocol: 'openai_chat_completions',
     baseUrl: 'https://api.openai.com/v1',
