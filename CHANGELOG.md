@@ -18,6 +18,22 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-20] - 2026-07-20
+### Changed
+- daemon 发版 0.3.16：对齐 pi-management-runtime 0.1.3 导出
+- 记录 2026-07-19 每日更新日志
+- 【PI MVP 02】系统管理员创建 PI Provider Card Draft
+### Fixed
+- 移除 update-cli 注释中的 PI 包名以通过边界检查
+- agentbean update 不再 --ignore-scripts，修复 UPDATE_RECOVERY_REQUIRED
+- 探测 node 并注入 PATH，修复 pnpm codex exit 127
+- LaunchAgent 下注入登录 shell PATH，修复 codex exit 127
+- daemon 发版 0.3.15：将 #738/#739 修复推到 npm latest
+- 加固 codex PTY 对 node-pty #850 的恢复
+- 修复 Codex 缺失 CRS_OAI_KEY 等环境变量时的可操作失败提示
+- 修复 Phase 2/3 下普通 Agent 提及被误判为根任务
+- 修复频道提及 Agent 时的消息发送失败
+
 ## [Daily 2026-07-19] - 2026-07-19
 ### Added
 - 新增 macOS AgentBean 自更新命令（#698）
