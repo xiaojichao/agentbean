@@ -9,11 +9,12 @@
 
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { createCommandExecutor } from '../src/executor';
+import { ensureSpawnHelperExecutable, resolveSpawnHelperPaths } from '../src/executor-pty';
 
 const requireNative = createRequire(import.meta.url);
 // require succeeding is not enough: on the daemon-next CI (Linux, --ignore-scripts) node-pty's
@@ -33,6 +34,9 @@ function hasNodePtyBinary(): boolean {
 
 function hasUsableNodePty(): boolean {
   if (!hasNodePtyBinary()) return false;
+  // node-pty #850: npm tarball ships spawn-helper as 644. chmod before the smoke probe so the gate
+  // does not skip e2e on a fresh install (which would hide the exact regression we need to catch).
+  ensureSpawnHelperExecutable();
   return [0, 1, 2].every(() => {
     const probeCwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-pty-probe-')));
     const fakeCodex = join(probeCwd, 'fake-codex.mjs');
@@ -46,11 +50,17 @@ function hasUsableNodePty(): boolean {
         "child.onExit((event) => { process.exit(event.exitCode === 0 && output.includes('agentbean-pty-smoke') ? 0 : 2); });",
         "setTimeout(() => { try { child.kill('SIGKILL'); } catch {} process.exit(3); }, 1000).unref();",
       ].join('\n');
+      // Resolve node-pty from the monorepo install: a tmpdir cwd cannot see workspace
+      // node_modules, which would skip every e2e on a fresh machine and hide #850.
       const result = spawnSync(process.execPath, ['-e', probe], {
-        cwd: probeCwd,
+        cwd: process.cwd(),
         encoding: 'utf8',
         timeout: 2000,
         stdio: 'ignore',
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), 'node_modules'),
+        },
       });
       return result.status === 0;
     } finally {
@@ -86,6 +96,54 @@ describe('daemon-next codex PTY executor (real node-pty end-to-end)', () => {
       expect(output.workspaceRun?.exitCode).toBe(0);
     } finally {
       try { rmSync(cwd, { recursive: true, force: true }); } catch { /* already gone */ }
+    }
+  });
+
+  // Regression for node-pty #850 / user-facing "codex PTY 启动失败：posix_spawnp failed."
+  // Without ensureSpawnHelperExecutable, mode 644 makes every spawn throw before onData/onExit.
+  testWithPty('recovers when spawn-helper is mode 644 (node-pty #850 posix_spawnp)', async () => {
+    const helpers = resolveSpawnHelperPaths();
+    expect(helpers.length).toBeGreaterThan(0);
+    const modes = helpers.map((helper) => ({ helper, mode: statSync(helper).mode & 0o777 }));
+    try {
+      for (const { helper } of modes) {
+        chmodSync(helper, 0o644);
+        expect(statSync(helper).mode & 0o777).toBe(0o644);
+      }
+
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-codex-e2e-644-')));
+      const fakeCodex = join(cwd, 'fake-codex.mjs');
+      try {
+        writeFileSync(
+          fakeCodex,
+          `process.stdout.write('codex\\nrecovered from 644\\nhook: done');\n`,
+        );
+
+        const executor = createCommandExecutor({ clock: { now: () => Date.now() } });
+        const output = await executor({
+          id: 'e2e-644', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+          agentId: 'agent-1', requestId: 'request-1', prompt: 'hi',
+          customAgent: { adapterKind: 'codex', command: process.execPath, args: [fakeCodex], cwd },
+        });
+
+        if (typeof output !== 'object') throw new Error('expected structured result');
+        // Must NOT surface the user-facing posix_spawnp failure — default loader chmods first.
+        expect(output.body).not.toContain('posix_spawnp');
+        expect(output.body).not.toContain('PTY 启动失败');
+        expect(output.body).toBe('recovered from 644');
+        expect(output.workspaceRun?.status).toBe('succeeded');
+        expect(output.workspaceRun?.exitCode).toBe(0);
+        // ensureSpawnHelperExecutable left helpers executable for subsequent spawns.
+        for (const { helper } of modes) {
+          expect(statSync(helper).mode & 0o111).not.toBe(0);
+        }
+      } finally {
+        try { rmSync(cwd, { recursive: true, force: true }); } catch { /* already gone */ }
+      }
+    } finally {
+      for (const { helper, mode } of modes) {
+        try { chmodSync(helper, mode); } catch { /* best-effort restore */ }
+      }
     }
   });
 });
