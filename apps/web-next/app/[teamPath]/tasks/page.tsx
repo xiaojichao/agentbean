@@ -45,6 +45,7 @@ import {
   type TaskStatus,
 } from '@/lib/task-status';
 import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
+import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 
 type TaskViewMode = 'board' | 'list';
 
@@ -396,14 +397,15 @@ export default function TasksPage() {
     const channelId = selectedTask.channelId;
     const body = threadInput.trim() || '附件';
     const artifactIds = threadAttachments.map((artifact) => artifact.id);
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadParentId, artifactIds }, (res?: { ok?: boolean; error?: string }) => {
+    const clientMessageId = createClientMessageId('task-thread');
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadParentId, artifactIds, clientMessageId }, (res?: { ok?: boolean; error?: string; message?: unknown }) => {
       if (res?.ok) return;
       appendMessage({
         id: `local-task-thread-error-${Date.now()}`,
         channelId,
         senderKind: 'system',
         senderId: null,
-        body: `发送失败：${res?.error ?? 'unknown'}`,
+        body: messageSendFailureText(res),
         createdAt: Date.now(),
         metaJson: JSON.stringify({ kind: 'send-fail' }),
       });

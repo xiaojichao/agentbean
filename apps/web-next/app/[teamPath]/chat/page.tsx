@@ -19,6 +19,7 @@ import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, m
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
+import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
@@ -48,7 +49,7 @@ const MESSAGE_REACTION_CHOICES = ['👍', '❤️', '🎉', '👀', '🔥', '�
 interface SendMessageAck {
   ok?: boolean;
   error?: string;
-  message?: ChatMessage;
+  message?: ChatMessage | string;
   dispatches?: Array<{
     id: string;
     messageId: string;
@@ -869,10 +870,11 @@ export default function ChatPage() {
   };
 
   const appendAckMessage = useCallback((res?: SendMessageAck) => {
-    if (!res?.ok || !res.message) return;
-    const dispatch = res.dispatches?.find((item) => item.messageId === res.message?.id);
+    if (!res?.ok || !res.message || typeof res.message !== 'object') return;
+    const message = res.message;
+    const dispatch = res.dispatches?.find((item) => item.messageId === message.id);
     appendMessage({
-      ...res.message,
+      ...message,
       ...(dispatch ? { dispatchStatus: dispatch.status ?? 'queued', dispatchId: dispatch.id } : {}),
     });
   }, [appendMessage]);
@@ -890,7 +892,8 @@ export default function ChatPage() {
     const artifactIds = artifacts.map((a) => a.id);
     const createTask = asTask;
     const mentions = extractMentions(body, visibleMentionMembers);
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body: body || '附件', asTask, artifactIds, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
+    const clientMessageId = createClientMessageId('chat');
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body: body || '附件', asTask, artifactIds, clientMessageId, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
         if (createTask) setTimeout(() => loadTasks(), 150);
@@ -901,7 +904,7 @@ export default function ChatPage() {
         channelId,
         senderKind: 'system',
         senderId: null,
-        body: `发送失败：${res?.error ?? 'unknown'}`,
+        body: messageSendFailureText(res),
         createdAt: Date.now(),
         metaJson: JSON.stringify({ kind: 'send-fail' }),
       });
@@ -925,7 +928,8 @@ export default function ChatPage() {
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
     const mentions = extractMentions(body, visibleMentionMembers);
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
+    const clientMessageId = createClientMessageId('chat-thread');
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
         return;
@@ -935,7 +939,7 @@ export default function ChatPage() {
         channelId,
         senderKind: 'system',
         senderId: null,
-        body: `发送失败：${res?.error ?? 'unknown'}`,
+        body: messageSendFailureText(res),
         createdAt: Date.now(),
         metaJson: JSON.stringify({ kind: 'send-fail' }),
       });
