@@ -1395,7 +1395,18 @@ function buildRuntimeOptions(runtimes: any[]) {
   });
 }
 
-function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChange: (rows: EnvRow[]) => void }) {
+function EnvironmentVariableEditor({
+  rows,
+  onChange,
+  existingKeys = [],
+  hint,
+}: {
+  rows: EnvRow[];
+  onChange: (rows: EnvRow[]) => void;
+  /** Public key names already stored (values never leave the server). */
+  existingKeys?: string[];
+  hint?: string;
+}) {
   const updateRow = (index: number, patch: Partial<EnvRow>) => {
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
@@ -1405,7 +1416,22 @@ function EnvironmentVariableEditor({ rows, onChange }: { rows: EnvRow[]; onChang
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-neutral-600">环境变量</label>
-      <p className="mb-2 text-[11px] text-neutral-400">创建后会注入到 Coding Agent 运行时环境。</p>
+      <p className="mb-2 text-[11px] text-neutral-400">
+        {hint ?? '创建后会注入到 Coding Agent 运行时环境。'}
+      </p>
+      {existingKeys.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {existingKeys.map((key) => (
+            <span
+              key={key}
+              className="inline-flex items-center rounded-md border border-neutral-200 bg-neutral-50 px-2 py-0.5 font-mono text-[11px] text-neutral-600"
+              title="已配置（值不可回显；下方填写同名 Key 可覆盖）"
+            >
+              {key}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="space-y-2">
         {rows.map((row, index) => (
           <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
@@ -1436,18 +1462,37 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   const [description, setDescription] = useState<string>(agent.description ?? '');
   const [runtimeIndex, setRuntimeIndex] = useState(String(initialRuntimeIndex));
   const [cwd, setCwd] = useState<string>(agent.cwd ?? '');
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
+  const existingEnvKeys: string[] = Array.isArray(agent.envKeys) ? agent.envKeys : [];
 
   const save = async () => {
     if (!canEditMetadataFields) return;
     const trimmedName = name.trim();
     if (!trimmedName) { setError('名称为必填项'); return; }
     if (/\s/.test(trimmedName)) { setError('名称不能包含空格，请使用连字符（-）'); return; }
+    const env: Record<string, string> = {};
+    if (isCustom && canEditRuntimeFields) {
+      for (const row of envRows) {
+        const key = row.key.trim();
+        const value = row.value;
+        if (!key && !value.trim()) continue;
+        if (!key || !ENV_KEY_PATTERN.test(key)) {
+          setError('环境变量 Key 必须以字母或下划线开头，只能包含字母、数字和下划线');
+          return;
+        }
+        if (!value.trim()) {
+          setError(`环境变量 ${key} 的值不能为空（已配置的密钥不可回显；留空行请删除）`);
+          return;
+        }
+        env[key] = value;
+      }
+    }
     setSaving(true);
     setError('');
-    const payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null } = {
+    const payload: { id: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null; env?: Record<string, string> } = {
       id: agent.id,
       name: trimmedName,
       description: description.trim() || null,
@@ -1457,6 +1502,9 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
         payload.adapterKind = selectedRuntime.adapterKind;
         payload.command = selectedRuntime.command;
         payload.cwd = cwd.trim() || null;
+        if (Object.keys(env).length > 0) {
+          payload.env = env;
+        }
       }
     }
     const res = await agentEvents().updateConfig(payload);
@@ -1516,6 +1564,27 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-1.5 font-mono text-sm text-neutral-700 break-all">
                 {cwd.trim() || '未配置'}
               </div>
+            </div>
+          )}
+          {isCustom && canEditRuntimeFields && (
+            <EnvironmentVariableEditor
+              rows={envRows}
+              onChange={setEnvRows}
+              existingKeys={existingEnvKeys}
+              hint="会注入到 Codex 等子进程。密钥值不会回显；填写同名 Key 可覆盖。例如 Codex 报 Missing environment variable: CRS_OAI_KEY 时，在此添加 CRS_OAI_KEY。"
+            />
+          )}
+          {isCustom && !canEditRuntimeFields && existingEnvKeys.length > 0 && (
+            <div>
+              <label className="mb-1 block text-xs font-medium text-neutral-600">环境变量</label>
+              <div className="flex flex-wrap gap-1.5">
+                {existingEnvKeys.map((key) => (
+                  <span key={key} className="inline-flex items-center rounded-md border border-neutral-200 bg-neutral-50 px-2 py-0.5 font-mono text-[11px] text-neutral-600">
+                    {key}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-neutral-400">仅设备拥有者可修改运行时环境变量。</p>
             </div>
           )}
         </div>

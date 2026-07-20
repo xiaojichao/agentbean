@@ -13,12 +13,19 @@
 // rather than silently succeeding. This module now owns the complete PTY adapter contract.
 
 import { createRequire } from 'node:module';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AdapterKind } from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload } from './index.js';
-import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
+import {
+  adapterNeedsCodingRuntimeSecrets,
+  buildChildEnv,
+  buildLogArtifactContent,
+  buildLogExcerpt,
+  formatCodexExitFailureBody,
+  formatCommand,
+} from './executor-helpers.js';
 
 // node-pty is loaded via createRequire (see defaultPtySpawnLoader), NOT a typed import, so tsc
 // never resolves the module: a typed import would make optional native availability a build-time
@@ -182,25 +189,48 @@ function redactCodexArgs(args: string[]): string[] {
 const requireNative = createRequire(import.meta.url);
 
 // node-pty issue #850: the darwin spawn-helper binary ships in the npm tarball without the execute
-// bit (mode 644), so the first posix_spawnp fails. Patch it at runtime before loading — this is
-// the one native-module wart the lazy-import path has to paper over. Best-effort: if we cannot
-// locate/patch it, the subsequent spawn surfaces an explicit failure.
-function ensureSpawnHelperExecutable(): void {
+// bit (mode 644). Fresh `npm install node-pty` leaves prebuilds/*/spawn-helper as 644; node-pty's
+// own postinstall does not fix it. The first posix_spawnp then throws "posix_spawnp failed."
+// Resolve the same candidate paths node-pty's loader checks (prebuilds + build/{Release,Debug}).
+export function resolveSpawnHelperPaths(): string[] {
   try {
     const ptyRoot = dirname(requireNative.resolve('node-pty/package.json'));
-    const platformDir = join('prebuilds', `${process.platform}-${process.arch}`);
-    const candidates = [
-      join(ptyRoot, platformDir, 'spawn-helper'),
+    return [
+      join(ptyRoot, 'prebuilds', `${process.platform}-${process.arch}`, 'spawn-helper'),
       join(ptyRoot, 'build', 'Release', 'spawn-helper'),
-    ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) {
-        try { chmodSync(candidate, 0o755); } catch { /* ignore */ }
-      }
-    }
+      join(ptyRoot, 'build', 'Debug', 'spawn-helper'),
+    ].filter((candidate) => existsSync(candidate));
   } catch {
-    // node-pty not resolvable here — the require below will throw and be handled.
+    // node-pty not resolvable — require() below will surface the real error.
+    return [];
   }
+}
+
+// Patch every located spawn-helper to 0755. Returns paths where chmod failed (empty on success).
+// Callers re-run this on every spawn: npm reinstall mid-process can restore mode 644.
+export function ensureSpawnHelperExecutable(): string[] {
+  const failures: string[] = [];
+  for (const candidate of resolveSpawnHelperPaths()) {
+    try {
+      chmodSync(candidate, 0o755);
+    } catch (err) {
+      failures.push(`${candidate}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return failures;
+}
+
+function describeSpawnHelperState(): string {
+  const helpers = resolveSpawnHelperPaths();
+  if (helpers.length === 0) return 'spawn-helper not found under node-pty';
+  return helpers.map((helper) => {
+    try {
+      const mode = (statSync(helper).mode & 0o777).toString(8);
+      return `${helper} mode=${mode}`;
+    } catch (err) {
+      return `${helper} unreadable (${err instanceof Error ? err.message : String(err)})`;
+    }
+  }).join('; ');
 }
 
 // Lazily load node-pty and adapt its spawn to the PtySpawnFn shape. Loaded via require (not a
@@ -208,19 +238,34 @@ function ensureSpawnHelperExecutable(): void {
 // when node-pty is missing or has no usable native binary; runPtyAgentCommand turns that into an
 // explicit failure result.
 export const defaultPtySpawnLoader = async (): Promise<PtySpawnFn> => {
+  // chmod BEFORE require so the helper is executable by the time the native binding first runs.
+  ensureSpawnHelperExecutable();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports
   const spawnPty: any = requireNative('node-pty').spawn;
-  ensureSpawnHelperExecutable();
   return (command, args, options) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pty: any = spawnPty(command, args, {
-      name: 'xterm-color',
-      cols: options.cols ?? 80,
-      rows: options.rows ?? 30,
-      cwd: options.cwd,
-      env: options.env,
-    });
-    return pty as unknown as PtyProcess;
+    // Re-apply on every spawn: a concurrent npm install can rewrite the binary as 644.
+    const chmodFailures = ensureSpawnHelperExecutable();
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pty: any = spawnPty(command, args, {
+        name: 'xterm-color',
+        cols: options.cols ?? 80,
+        rows: options.rows ?? 30,
+        cwd: options.cwd,
+        env: options.env,
+      });
+      return pty as unknown as PtyProcess;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      // Surface enough state that "posix_spawnp failed." is actionable when chmod could not run.
+      if (detail.includes('posix_spawnp')) {
+        const chmodNote = chmodFailures.length > 0
+          ? `；chmod 失败：${chmodFailures.join('; ')}`
+          : '';
+        throw new Error(`${detail}（${describeSpawnHelperState()}${chmodNote}）`);
+      }
+      throw err;
+    }
   };
 };
 
@@ -270,7 +315,9 @@ export async function runPtyAgentCommand(
     try {
       pty = spawn(customAgent.command as string, args, {
         cwd,
-        env: buildChildEnv(process.env, customAgent.env ?? undefined),
+        env: buildChildEnv(process.env, customAgent.env ?? undefined, {
+          includeCodingRuntimeSecrets: adapterNeedsCodingRuntimeSecrets(customAgent.adapterKind),
+        }),
         cols: 80,
         rows: 30,
       });
@@ -321,7 +368,7 @@ export async function runPtyAgentCommand(
       try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
       const body = exitCode === 0
         ? (fileReply ?? (spec.extractReply(output, payload) || '(Codex 已完成处理)'))
-        : `codex exit ${exitCode}: ${stripAnsi(output).trim().slice(0, 2000) || '(无输出)'}`;
+        : formatCodexExitFailureBody(exitCode, stripAnsi(output));
 
       resolve({
         body,

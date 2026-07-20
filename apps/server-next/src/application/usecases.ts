@@ -2197,8 +2197,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           changes.command = agentInput.command;
         }
         if (agentInput.env !== undefined) {
-          changes.env = agentInput.env;
-          changes.envKeys = Object.keys(agentInput.env).sort();
+          // Partial merge: non-empty values set/overwrite; empty string leaves an existing key
+          // unchanged (web never re-reads secret values). Keys absent from the payload are kept.
+          // To clear a key, clients must send a dedicated empty-after-existing full replace only
+          // when they intentionally re-submit the full map (create-agent style still replaces via
+          // createCustomAgent, not updateAgentConfig).
+          const existingEnv = (await repositories.agents.getExecutionConfig(managed.agent.id))?.env ?? {};
+          const merged: Record<string, string> = { ...existingEnv };
+          for (const [key, value] of Object.entries(agentInput.env)) {
+            if (value === '') {
+              continue;
+            }
+            merged[key] = value;
+          }
+          changes.env = merged;
+          changes.envKeys = Object.keys(merged).sort();
         }
 
         const runtime = agentInput.runtimeId

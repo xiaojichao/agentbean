@@ -1,17 +1,47 @@
 // Shared helpers between the pipe-path executor (executor.ts) and the PTY-path executor
 // (executor-pty.ts). Extracted to a leaf module so neither executor imports the other — both
 // depend only on this. Keeping buildChildEnv here is load-bearing: it is the secrets boundary.
-// The host environment (e.g. tokens exported in ~/.zshrc) must NOT leak into the child process,
-// because child stdout/stderr (and PTY output) are captured and uploaded as downloadable log
-// artifacts. Every spawn path — pipe or PTY — must go through buildChildEnv.
+// The host environment (e.g. tokens exported in ~/.zshrc) must NOT indiscriminately leak into the
+// child process, because child stdout/stderr (and PTY output) are captured and uploaded as
+// downloadable log artifacts. Every spawn path — pipe or PTY — must go through buildChildEnv.
+
+import { spawnSync } from 'node:child_process';
 
 export const SAFE_ENV_KEYS = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'SHELL',
 ]);
 
+// Coding CLI adapters (codex / claude-code / gemini / …) often read provider keys from process
+// env via model_providers.env_key (e.g. CRS_OAI_KEY from CC Switch). Those keys are intentionally
+// allowed when `includeCodingRuntimeSecrets` is set — not the full host environment.
+const CODING_RUNTIME_ENV_PREFIX_RE = /^(OPENAI|ANTHROPIC|GEMINI|GOOGLE|AZURE|CODEX|CRS|CLAUDE|DASHSCOPE|MOONSHOT|DEEPSEEK|GROQ|MISTRAL|TOGETHER|FIREWORKS|XAI|ZAI|MINIMAX|SILICONFLOW|VOLC|ARK)_/i;
+const CODING_RUNTIME_ENV_SUFFIX_RE = /_(API_KEY|API_TOKEN|ACCESS_TOKEN|SECRET_KEY|AUTH_TOKEN|OAI_KEY)$/i;
+
+export function isCodingRuntimeSecretEnvKey(key: string): boolean {
+  if (SAFE_ENV_KEYS.has(key) || key.startsWith('LC_')) {
+    return false;
+  }
+  return CODING_RUNTIME_ENV_PREFIX_RE.test(key) || CODING_RUNTIME_ENV_SUFFIX_RE.test(key);
+}
+
+export interface BuildChildEnvOptions {
+  /**
+   * When true, forward host/login-shell keys that look like coding-runtime provider secrets
+   * (CRS_OAI_KEY, OPENAI_API_KEY, …). Still does NOT forward GH_TOKEN / DATABASE_URL / AWS_*.
+   * customEnv always wins on key collision.
+   */
+  includeCodingRuntimeSecrets?: boolean;
+  /**
+   * Extra host env source (typically login-shell env). Used so LaunchAgent processes that only
+   * have a minimal PATH still pick up keys the user exported in ~/.zshrc. Test injects a stub.
+   */
+  extraHostEnv?: NodeJS.ProcessEnv | Record<string, string>;
+}
+
 export function buildChildEnv(
   sourceEnv: NodeJS.ProcessEnv,
   customEnv?: Record<string, string>,
+  options: BuildChildEnvOptions = {},
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(sourceEnv)) {
@@ -22,12 +52,40 @@ export function buildChildEnv(
       env[key] = value;
     }
   }
+
+  if (options.includeCodingRuntimeSecrets) {
+    const mergedHost: Record<string, string | undefined> = { ...sourceEnv };
+    if (options.extraHostEnv) {
+      for (const [key, value] of Object.entries(options.extraHostEnv)) {
+        if (value !== undefined && mergedHost[key] === undefined) {
+          mergedHost[key] = value;
+        }
+      }
+    } else {
+      // Lazy: only consult login shell when the caller opted into coding secrets and did not
+      // inject a stub. Failures are empty — never block spawn.
+      const loginEnv = readLoginShellEnv();
+      for (const [key, value] of Object.entries(loginEnv)) {
+        if (mergedHost[key] === undefined) {
+          mergedHost[key] = value;
+        }
+      }
+    }
+    for (const [key, value] of Object.entries(mergedHost)) {
+      if (value === undefined) continue;
+      if (isCodingRuntimeSecretEnvKey(key)) {
+        env[key] = value;
+      }
+    }
+  }
+
   return { ...env, ...(customEnv ?? {}) };
 }
 
 export const LOG_EXCERPT_MAX_CHARS = 16000;
 export const LOG_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
-const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
+// Include bare *_KEY (CRS_OAI_KEY) in addition to TOKEN/SECRET/PASSWORD/API_KEY.
+const SENSITIVE_LOG_ASSIGNMENT_RE = /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|_KEY)[A-Z0-9_]*)\s*=\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|`[^`\r\n]*`|[^\s"'`]+)/gi;
 
 export function buildRedactedLog(stdout: string, stderr: string): string {
   return [
@@ -56,4 +114,101 @@ export function buildLogArtifactContent(stdout: string, stderr: string): string 
 
 export function formatCommand(command: string, args: string[]): string {
   return [command, ...args].join(' ');
+}
+
+// Codex model_providers often declare `env_key = "SOME_API_KEY"`. When that process env is
+// missing, codex emits JSON events with `Missing environment variable: NAME.` and exits non-zero.
+const MISSING_ENV_VAR_RE = /Missing environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)/i;
+
+export function formatCodexExitFailureBody(exitCode: number, rawOutput: string): string {
+  const detail = rawOutput.trim().slice(0, 2000) || '(无输出)';
+  const base = `codex exit ${exitCode}: ${detail}`;
+  const match = detail.match(MISSING_ENV_VAR_RE);
+  if (!match) {
+    return base;
+  }
+  const envName = match[1]!;
+  return [
+    base,
+    '',
+    `提示：Codex 需要环境变量 ${envName}。`,
+    `处理方式（任选其一）：`,
+    `1) 在该自定义 Agent 的「环境变量」中配置 ${envName}=<密钥>（推荐，可跨 LaunchAgent 重启保留）；`,
+    `2) 在登录 shell（~/.zshrc）export ${envName} 后执行 agentbean device restart，daemon 会从登录环境注入 coding-runtime 类密钥；`,
+    `3) 确认 Device Service 进程本身能读到该变量（launchctl print 查看）。`,
+  ].join('\n');
+}
+
+// ── login-shell env (LaunchAgent has a minimal PATH and no user exports) ──────
+
+let loginShellEnvCache: Record<string, string> | undefined;
+let loginShellEnvLoader: (() => Record<string, string>) | undefined;
+
+/** Test-only: inject or clear the login-shell env loader / cache. */
+export function setLoginShellEnvLoaderForTests(loader: (() => Record<string, string>) | undefined): void {
+  loginShellEnvLoader = loader;
+  loginShellEnvCache = undefined;
+}
+
+export function readLoginShellEnv(): Record<string, string> {
+  if (loginShellEnvCache) {
+    return loginShellEnvCache;
+  }
+  if (loginShellEnvLoader) {
+    loginShellEnvCache = loginShellEnvLoader();
+    return loginShellEnvCache;
+  }
+  loginShellEnvCache = loadLoginShellEnvFromShell();
+  return loginShellEnvCache;
+}
+
+function loadLoginShellEnvFromShell(): Record<string, string> {
+  try {
+    const shell = process.env.SHELL && process.env.SHELL.length > 0 ? process.env.SHELL : '/bin/zsh';
+    // `env -0` is null-delimited so values may contain newlines. Timeout keeps a broken
+    // interactive shell from hanging every codex dispatch on first use.
+    const result = spawnSync(shell, ['-lic', '/usr/bin/env -0'], {
+      encoding: 'buffer',
+      timeout: 8_000,
+      maxBuffer: 2 * 1024 * 1024,
+      env: {
+        HOME: process.env.HOME,
+        USER: process.env.USER,
+        LOGNAME: process.env.LOGNAME,
+        // Keep a minimal PATH so `env` itself resolves if SHELL is a full login path.
+        PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin',
+        TERM: 'dumb',
+      },
+    });
+    if (result.status !== 0 || !result.stdout) {
+      return {};
+    }
+    const parsed: Record<string, string> = {};
+    for (const entry of result.stdout.toString('utf8').split('\0')) {
+      if (!entry) continue;
+      const eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      const key = entry.slice(0, eq);
+      const value = entry.slice(eq + 1);
+      if (key) parsed[key] = value;
+    }
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+/** Adapters that should receive coding-runtime provider secrets from host/login env. */
+export function adapterNeedsCodingRuntimeSecrets(adapterKind: string | undefined): boolean {
+  if (!adapterKind) return false;
+  switch (adapterKind) {
+    case 'codex':
+    case 'codex-cli':
+    case 'claude-code':
+    case 'gemini':
+    case 'kimi-cli':
+      return true;
+    default:
+      return false;
+  }
 }

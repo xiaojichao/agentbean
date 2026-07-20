@@ -1,10 +1,23 @@
 import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, test } from 'vitest';
-import { buildChildEnv, createCommandExecutor } from '../src/executor';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { createCommandExecutor } from '../src/executor';
+import {
+  buildChildEnv,
+  formatCodexExitFailureBody,
+  isCodingRuntimeSecretEnvKey,
+  setLoginShellEnvLoaderForTests,
+} from '../src/executor-helpers';
 
 describe('daemon-next command executor', () => {
+  // Keep unit tests hermetic: never spawn a real login shell for coding-runtime secret lookup.
+  beforeEach(() => {
+    setLoginShellEnvLoaderForTests(() => ({}));
+  });
+  afterEach(() => {
+    setLoginShellEnvLoaderForTests(() => ({}));
+  });
   test('runs a custom agent command with unified Memory prompt stdin, args, cwd, and dispatch-only env', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const scriptPath = join(cwd, 'echo-agent.mjs');
@@ -206,7 +219,7 @@ describe('daemon-next command executor', () => {
     ).resolves.toMatch(/daemon-next:[\s\S]*\[Device-local Memory redacted\][\s\S]*hello/);
   });
 
-  test('forwards only safe host env keys plus custom agent env to the child process', () => {
+  test('forwards only safe host env keys plus custom agent env to the child process by default', () => {
     const env = buildChildEnv(
       {
         PATH: '/usr/bin',
@@ -228,10 +241,53 @@ describe('daemon-next command executor', () => {
     expect(env.TMPDIR).toBe('/tmp');
     expect(env.PATH).toBe('/custom/bin');
     expect(env.CUSTOM_TOOL_TOKEN).toBe('injected');
+    // Default path still strips coding secrets — only opt-in includeCodingRuntimeSecrets forwards them.
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(env.GH_TOKEN).toBeUndefined();
+  });
+
+  test('includeCodingRuntimeSecrets forwards CRS_OAI_KEY / OPENAI_API_KEY but still strips GH_TOKEN', () => {
+    setLoginShellEnvLoaderForTests(() => ({
+      CRS_OAI_KEY: 'from-login-shell',
+      GH_TOKEN: 'ghp_from_shell',
+    }));
+    const env = buildChildEnv(
+      {
+        PATH: '/usr/bin',
+        HOME: '/home/u',
+        OPENAI_API_KEY: 'sk-from-process',
+        DATABASE_URL: 'postgres://x',
+        GH_TOKEN: 'ghp_from_process',
+      },
+      { OPENAI_API_KEY: 'sk-from-agent' },
+      { includeCodingRuntimeSecrets: true },
+    );
+
+    // process.env coding key is eligible; customAgent.env wins on collision.
+    expect(env.OPENAI_API_KEY).toBe('sk-from-agent');
+    // Login shell fills keys absent from process.env.
+    expect(env.CRS_OAI_KEY).toBe('from-login-shell');
+    // Non-coding secrets stay out even if present on host/login shell.
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(isCodingRuntimeSecretEnvKey('CRS_OAI_KEY')).toBe(true);
+    expect(isCodingRuntimeSecretEnvKey('GH_TOKEN')).toBe(false);
+  });
+
+  test('formatCodexExitFailureBody keeps non-env failures compact and guides missing env_key', () => {
+    expect(formatCodexExitFailureBody(2, 'Error: rate limit exceeded')).toBe(
+      'codex exit 2: Error: rate limit exceeded',
+    );
+    const body = formatCodexExitFailureBody(
+      1,
+      '{"type":"error","message":"Missing environment variable: CRS_OAI_KEY."}',
+    );
+    expect(body).toContain('codex exit 1');
+    expect(body).toContain('CRS_OAI_KEY');
+    expect(body).toContain('环境变量');
+    expect(body).toContain('登录 shell');
   });
 
   test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {

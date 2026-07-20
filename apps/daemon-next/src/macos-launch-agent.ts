@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -173,7 +174,17 @@ export async function writeMacOSServicePayload(input: {
   await ensurePrivateDeviceServiceDirectory(paths.payloadDirectory);
   await ensurePrivateDeviceServiceDirectory(paths.logDirectory);
   const resolvedBaseDir = dirname(paths.root);
-  const content = `#!${input.nodeExecutablePath}\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(resolvedBaseDir)};\nawait import(${JSON.stringify(pathToFileURL(input.sourceExecutablePath).href)});\n`;
+  // process.argv[1] for the npm bin is often a symlink without a .js suffix
+  // (…/bin/agentbean → …/dist/.../bin.js). Node ESM cannot import that bare path via
+  // file:// URL, which makes LaunchAgent exit 5 with ERR_MODULE_NOT_FOUND. Resolve to
+  // the real .js entry before writing the payload.
+  let resolvedSource = input.sourceExecutablePath;
+  try {
+    resolvedSource = realpathSync(input.sourceExecutablePath);
+  } catch {
+    // keep original; write still happens and install-time failure surfaces later
+  }
+  const content = `#!${input.nodeExecutablePath}\nprocess.env.AGENTBEAN_HOME = ${JSON.stringify(resolvedBaseDir)};\nawait import(${JSON.stringify(pathToFileURL(resolvedSource).href)});\n`;
   await writeAtomicFile(paths.payloadFile, content, 0o700);
   return paths.payloadFile;
 }
