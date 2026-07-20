@@ -2,6 +2,9 @@
 
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
+### Fixed
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.15：把 #738/#739 的 Codex 密钥注入与 PTY spawn-helper 修复真正推到 npm latest（0.3.14 合入 main 后因版本未 bump 被 CI skip publish）
+
 ## [Unreleased]
 
 ### Added
