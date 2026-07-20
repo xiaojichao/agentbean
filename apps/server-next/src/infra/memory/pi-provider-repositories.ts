@@ -95,14 +95,6 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
           .filter((item) => item.cardId === cardId)
           .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
       },
-      async getLatestPassingForSummary(cardId, configSummary) {
-        return Array.from(tests.values())
-          .filter((item) =>
-            item.cardId === cardId
-            && item.configSummary === configSummary
-            && item.status === 'passed')
-          .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
-      },
     },
   };
 

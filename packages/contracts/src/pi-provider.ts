@@ -140,6 +140,8 @@ export interface DiscoverPiProviderModelsResult {
   readonly discoverySupported: boolean;
   readonly models: readonly PiProviderModelCandidateDto[];
   readonly updatedAt: UnixMs;
+  /** 脱敏诊断码；发现成功时为 null。 */
+  readonly diagnosticCode: string | null;
 }
 
 export type PiProviderTestStatus = 'passed' | 'failed';
@@ -171,6 +173,10 @@ export interface PiProviderTestResultDto {
 export interface RunPiProviderTestResult {
   readonly test: PiProviderTestResultDto;
   readonly card: PiProviderCardDto;
+}
+
+export interface CancelPiProviderTestResult {
+  readonly cancelled: boolean;
 }
 
 export interface PublishPiProviderCardResult {

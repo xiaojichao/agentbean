@@ -79,10 +79,6 @@ export interface PiProviderRepositories {
   readonly tests: {
     create(input: PiProviderRevisionTestRecord): Promise<PiProviderRevisionTestRecord>;
     getLatestByCard(cardId: string): Promise<PiProviderRevisionTestRecord | null>;
-    getLatestPassingForSummary(
-      cardId: string,
-      configSummary: string,
-    ): Promise<PiProviderRevisionTestRecord | null>;
   };
 }
 

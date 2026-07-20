@@ -152,6 +152,59 @@ describe('PI Provider discover / test / publish', () => {
     if (!discovered.ok) return;
     expect(discovered.discoverySupported).toBe(false);
     expect(discovered.models).toEqual([]);
+    expect(discovered.diagnosticCode).toBe('PI_PROVIDER_DISCOVERY_UNSUPPORTED');
+  });
+
+  test('discovery returns a secret-free diagnostic instead of treating auth failure as unsupported', async () => {
+    const { repos, service } = createService({
+      fetch: vi.fn<typeof fetch>(async () => new Response('secret upstream body', { status: 401 })),
+    });
+    await seedAdmin(repos);
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const discovered = await service.discoverModels({ userId: 'admin-1', cardId: created.card.id });
+    expect(discovered).toMatchObject({
+      ok: true,
+      discoverySupported: false,
+      diagnosticCode: 'PI_PROVIDER_DISCOVERY_AUTH_FAILED',
+    });
+    expect(JSON.stringify(discovered)).not.toMatch(/secret upstream body|sk-live/);
+  });
+
+  test('stale model discovery cannot overwrite candidates after the Draft changes', async () => {
+    let resolveDiscovery!: (response: Response) => void;
+    const discoveryResponse = new Promise<Response>((resolve) => { resolveDiscovery = resolve; });
+    const fetchFn = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).endsWith('/models')) return discoveryResponse;
+      return passingTestFetch()(input);
+    });
+    const { repos, service } = createService({ fetch: fetchFn });
+    await seedAdmin(repos);
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const discovering = service.discoverModels({ userId: 'admin-1', cardId: created.card.id });
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    const updated = await service.updateCard({
+      userId: 'admin-1',
+      cardId: created.card.id,
+      displayName: 'OpenAI',
+      baseUrl: 'https://new.example/v1',
+      endpointMode: 'chat_completions',
+      modelId: 'new-model',
+      timeoutMs: 60_000,
+      maxOutputTokens: 4096,
+    });
+    expect(updated.ok).toBe(true);
+    resolveDiscovery(jsonResponse({ data: [{ id: 'stale-model' }] }));
+
+    await expect(discovering).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    const card = await service.getCard({ userId: 'admin-1', cardId: created.card.id });
+    expect(card.ok && card.card.modelCandidates).toEqual([]);
+    expect(card.ok && card.card.modelCandidatesUpdatedAt).toBeNull();
   });
 
   test('production-path test passes and binds config summary for publish', async () => {
@@ -181,6 +234,113 @@ describe('PI Provider discover / test / publish', () => {
     expect(published.card.canPublish).toBe(false);
   });
 
+  test('production-path test rejects mismatched fixed text and missing response metadata', async () => {
+    const cases: Array<{ name: string; response: Record<string, unknown>; code: string }> = [
+      {
+        name: 'mismatched text',
+        response: {
+          model: 'gpt-4.1-mini',
+          choices: [{ message: { role: 'assistant', content: 'anything' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        },
+        code: 'PI_PROVIDER_TEST_TEXT_MISMATCH',
+      },
+      {
+        name: 'missing model',
+        response: {
+          choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        },
+        code: 'MANAGEMENT_MODEL_RESPONSE_INVALID',
+      },
+      {
+        name: 'missing usage',
+        response: {
+          model: 'gpt-4.1-mini',
+          choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        },
+        code: 'MANAGEMENT_MODEL_RESPONSE_INVALID',
+      },
+    ];
+
+    for (const item of cases) {
+      const { repos, service } = createService({
+        fetch: vi.fn<typeof fetch>(async () => jsonResponse(item.response)),
+      });
+      await seedAdmin(repos);
+      const created = await service.createCard(validCreate({ displayName: item.name }));
+      expect(created.ok).toBe(true);
+      if (!created.ok) continue;
+      const tested = await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+      expect(tested.ok && tested.test, item.name).toMatchObject({
+        status: 'failed',
+        diagnosticCode: item.code,
+      });
+      expect(tested.ok && tested.card.canPublish).toBe(false);
+    }
+  });
+
+  test('production-path test rejects tool calls with arguments or extra calls', async () => {
+    for (const toolCalls of [
+      [{
+        id: 'call-1', type: 'function',
+        function: { name: 'context.get_root_message', arguments: '{"unexpected":true}' },
+      }],
+      [
+        { id: 'call-1', type: 'function', function: { name: 'context.get_root_message', arguments: '{}' } },
+        { id: 'call-2', type: 'function', function: { name: 'context.get_root_message', arguments: '{}' } },
+      ],
+    ]) {
+      let call = 0;
+      const fetchFn = vi.fn<typeof fetch>(async () => {
+        call += 1;
+        if (call === 1) {
+          return jsonResponse({
+            model: 'gpt-4.1-mini',
+            choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          });
+        }
+        return jsonResponse({
+          model: 'gpt-4.1-mini',
+          choices: [{ message: { role: 'assistant', content: null, tool_calls: toolCalls }, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      });
+      const { repos, service } = createService({ fetch: fetchFn });
+      await seedAdmin(repos);
+      const created = await service.createCard(validCreate());
+      expect(created.ok).toBe(true);
+      if (!created.ok) continue;
+      const tested = await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+      expect(tested.ok && tested.test).toMatchObject({
+        status: 'failed',
+        diagnosticCode: 'PI_PROVIDER_TEST_TOOL_CALL_MISSING',
+      });
+    }
+  });
+
+  test('an administrator can cancel an active production-path test', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const { repos, service } = createService({ fetch: fetchFn });
+    await seedAdmin(repos);
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const running = service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    await expect(service.cancelTest({ userId: 'admin-1', cardId: created.card.id }))
+      .resolves.toMatchObject({ ok: true, cancelled: true });
+    await expect(running).resolves.toMatchObject({
+      ok: true,
+      test: { status: 'failed', diagnosticCode: 'MANAGEMENT_MODEL_ABORTED' },
+      card: { canPublish: false },
+    });
+  });
+
   test('401 or tool-call failure blocks publish and returns secret-free diagnostics', async () => {
     const authFailFetch = vi.fn<typeof fetch>(async () => new Response('no', { status: 401 }));
     const { repos, service } = createService({ fetch: authFailFetch });
@@ -208,6 +368,9 @@ describe('PI Provider discover / test / publish', () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
+    const discovered = await service.discoverModels({ userId: 'admin-1', cardId: created.card.id });
+    expect(discovered.ok && discovered.models.length).toBeGreaterThan(0);
+
     const tested = await service.runTest({ userId: 'admin-1', cardId: created.card.id });
     expect(tested.ok && tested.test.status === 'passed').toBe(true);
 
@@ -224,6 +387,8 @@ describe('PI Provider discover / test / publish', () => {
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
     expect(updated.card.canPublish).toBe(false);
+    expect(updated.card.modelCandidates).toEqual([]);
+    expect(updated.card.modelCandidatesUpdatedAt).toBeNull();
 
     const published = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
     expect(published).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });

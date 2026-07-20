@@ -264,14 +264,6 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         ).get(cardId) as Record<string, unknown> | undefined;
         return row ? mapTest(row) : null;
       },
-      async getLatestPassingForSummary(cardId, configSummary) {
-        const row = db.prepare(
-          `SELECT * FROM pi_provider_revision_tests
-           WHERE card_id = ? AND config_summary = ? AND status = 'passed'
-           ORDER BY tested_at DESC LIMIT 1`,
-        ).get(cardId, configSummary) as Record<string, unknown> | undefined;
-        return row ? mapTest(row) : null;
-      },
     },
   };
 }

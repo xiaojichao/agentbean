@@ -2,6 +2,7 @@ import {
   makeFailure,
   makeSuccess,
   type Ack,
+  type CancelPiProviderTestResult,
   type DiscoverPiProviderModelsResult,
   type ListPiProviderCardsResult,
   type ListPiProviderPresetsResult,
@@ -43,7 +44,10 @@ import {
   type PiSecretKeyResolution,
 } from './pi-provider-secret.js';
 import { discoverPiProviderModels } from './pi-provider-model-discovery.js';
-import { runPiProviderProductionTest } from './pi-provider-production-test.js';
+import {
+  runPiProviderProductionTest,
+  type PiProviderProductionTestOutcome,
+} from './pi-provider-production-test.js';
 
 export interface PiProviderServiceDependencies {
   readonly repositories: PiProviderRepositories;
@@ -60,6 +64,11 @@ export interface PiProviderServiceDependencies {
 export function createPiProviderService(deps: PiProviderServiceDependencies) {
   const resolveKey = deps.resolveSecretKey ?? (() => resolvePiSecretKey());
   const fetchFn = deps.fetch ?? fetch;
+  const activeTests = new Map<string, AbortController>();
+
+  function activeTestKey(cardId: string): string {
+    return cardId;
+  }
 
   async function requireSystemAdmin(userId: string): Promise<{ ok: true; user: UserRecord } | Ack<{}>> {
     const user = await deps.users.getById(userId);
@@ -413,6 +422,8 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
           await repositories.cards.update({
             ...existing,
             draftRevisionId: revisionId,
+            modelCandidates: [],
+            modelCandidatesUpdatedAt: null,
             updatedAt: now,
           });
           return {
@@ -473,8 +484,8 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
             credentialRef: credentialId,
             draftRevisionId: revisionId,
             publishedRevisionId: null,
-            modelCandidates: [...source.modelCandidates],
-            modelCandidatesUpdatedAt: source.modelCandidatesUpdatedAt,
+            modelCandidates: [],
+            modelCandidatesUpdatedAt: null,
             createdBy: parsed.value.userId,
             createdAt: now,
             updatedAt: now,
@@ -533,6 +544,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
           card,
           baseUrl: revision.config.baseUrl,
           timeoutMs: revision.config.timeoutMs,
+          workingRevisionId,
           apiKey: apiKey.apiKey,
         };
       });
@@ -555,19 +567,26 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       // 刷新只更新候选，不发布 Draft、不改变生产绑定。
       const now = deps.clock.now();
       const models = discovery.modelIds.map((modelId) => ({ modelId }));
+      let persistOutcome: 'updated' | 'stale';
       try {
-        await deps.unitOfWork.run(async (repositories) => {
+        persistOutcome = await deps.unitOfWork.run(async (repositories) => {
           const card = await repositories.cards.getById(parsed.value.cardId);
           if (!card) throw new Error('card missing');
+          const currentRevisionId = card.draftRevisionId ?? card.publishedRevisionId;
+          if (currentRevisionId !== prepared.workingRevisionId) return 'stale' as const;
           await repositories.cards.update({
             ...card,
             modelCandidates: discovery.discoverySupported ? [...discovery.modelIds] : [...card.modelCandidates],
-            modelCandidatesUpdatedAt: now,
+            modelCandidatesUpdatedAt: discovery.discoverySupported ? now : card.modelCandidatesUpdatedAt,
             updatedAt: now,
           });
+          return 'updated' as const;
         });
       } catch {
         return makeFailure('INTERNAL_ERROR', 'Failed to persist model candidates');
+      }
+      if (persistOutcome === 'stale') {
+        return makeFailure('CONFLICT', 'Provider configuration changed during model discovery; refresh and retry');
       }
 
       // 发现失败仍返回成功 ack 且 discoverySupported=false，允许手填 Model ID；不自动发布。
@@ -576,6 +595,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         discoverySupported: discovery.discoverySupported,
         models: discovery.discoverySupported ? models : [],
         updatedAt: now,
+        diagnosticCode: discovery.diagnosticCode,
       } satisfies DiscoverPiProviderModelsResult);
       assertSafeAckPayload(result);
       return result;
@@ -611,12 +631,25 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         return prepared.failure as Ack<RunPiProviderTestResult>;
       }
 
-      const outcome = await runPiProviderProductionTest({
-        apiKey: prepared.apiKey,
-        config: prepared.draft.config,
-        fetch: fetchFn,
-        now: deps.clock.now,
-      });
+      const testKey = activeTestKey(parsed.value.cardId);
+      if (activeTests.has(testKey)) {
+        return makeFailure('CONFLICT', 'A provider test is already running for this card');
+      }
+      const controller = new AbortController();
+      activeTests.set(testKey, controller);
+
+      let outcome: PiProviderProductionTestOutcome;
+      try {
+        outcome = await runPiProviderProductionTest({
+          apiKey: prepared.apiKey,
+          config: prepared.draft.config,
+          fetch: fetchFn,
+          now: deps.clock.now,
+          signal: controller.signal,
+        });
+      } finally {
+        if (activeTests.get(testKey) === controller) activeTests.delete(testKey);
+      }
 
       const testId = deps.ids.nextId();
       const testedAt = deps.clock.now();
@@ -658,6 +691,17 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       const result = makeSuccess({ test: testDto, card });
       assertSafeAckPayload(result);
       return result;
+    },
+
+    async cancelTest(raw: unknown): Promise<Ack<CancelPiProviderTestResult>> {
+      const parsed = parseRunPiProviderTestRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
+      if (!admin.ok) return admin;
+      const controller = activeTests.get(activeTestKey(parsed.value.cardId));
+      if (!controller) return makeSuccess({ cancelled: false });
+      controller.abort();
+      return makeSuccess({ cancelled: true });
     },
 
     async publishCard(raw: unknown): Promise<Ack<PublishPiProviderCardResult>> {

@@ -20,6 +20,7 @@ export interface RunPiProviderProductionTestInput {
   readonly config: PiProviderConfigDto;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
+  readonly signal?: AbortSignal;
 }
 
 export interface PiProviderProductionTestOutcome {
@@ -74,6 +75,7 @@ export async function runPiProviderProductionTest(
     modelId: input.config.modelId,
     timeoutMs: input.config.timeoutMs,
     maxOutputTokens: Math.min(input.config.maxOutputTokens, 256),
+    requireResponseMetadata: true,
     fetch: input.fetch,
   });
 
@@ -87,7 +89,7 @@ export async function runPiProviderProductionTest(
 
   try {
     // 1) 普通文本
-    const textResponse = await adapter.respond(buildTextRequest(), { callCount: 1 });
+    const textResponse = await adapter.respond(buildTextRequest(input.signal), { callCount: 1 });
     const textCheck = assertTextProbe(textResponse);
     if (!textCheck.ok) {
       return failed(started, now, {
@@ -108,7 +110,7 @@ export async function runPiProviderProductionTest(
     usageOutputTokens = textResponse.usage.outputTokens;
 
     // 2) 发起 tool call
-    const toolCallResponse = await adapter.respond(buildToolCallRequest(), { callCount: 2 });
+    const toolCallResponse = await adapter.respond(buildToolCallRequest(input.signal), { callCount: 2 });
     const toolCall = extractToolCall(toolCallResponse);
     if (!toolCall) {
       return failed(started, now, {
@@ -127,7 +129,7 @@ export async function runPiProviderProductionTest(
 
     // 3) tool result → 最终文本
     const finalResponse = await adapter.respond(
-      buildToolResultRequest(toolCall.id, toolCall.name),
+      buildToolResultRequest(toolCall.id, toolCall.name, input.signal),
       { callCount: 3 },
     );
     const finalCheck = assertFinalProbe(finalResponse);
@@ -147,6 +149,10 @@ export async function runPiProviderProductionTest(
     responseModel = finalResponse.responseModel ?? responseModel;
     usageInputTokens = finalResponse.usage.inputTokens ?? usageInputTokens;
     usageOutputTokens = finalResponse.usage.outputTokens ?? usageOutputTokens;
+
+    if (input.signal?.aborted) {
+      throw new ManagementModelAdapterError('MANAGEMENT_MODEL_ABORTED');
+    }
 
     return {
       status: 'passed',
@@ -174,25 +180,31 @@ export async function runPiProviderProductionTest(
   }
 }
 
-function buildTextRequest(): ManagementModelRequest {
+function buildTextRequest(signal?: AbortSignal): ManagementModelRequest {
   return {
     systemPrompt: PI_PROVIDER_PROBE.textSystem,
     sessionContext: EMPTY_SESSION_CONTEXT as never,
     messages: [{ role: 'user', content: [{ type: 'text', text: PI_PROVIDER_PROBE.textUser }] }],
     tools: [],
+    ...(signal ? { signal } : {}),
   };
 }
 
-function buildToolCallRequest(): ManagementModelRequest {
+function buildToolCallRequest(signal?: AbortSignal): ManagementModelRequest {
   return {
     systemPrompt: PI_PROVIDER_PROBE.toolSystem,
     sessionContext: EMPTY_SESSION_CONTEXT as never,
     messages: [{ role: 'user', content: [{ type: 'text', text: PI_PROVIDER_PROBE.toolUser }] }],
     tools: [PROBE_TOOL as never],
+    ...(signal ? { signal } : {}),
   };
 }
 
-function buildToolResultRequest(toolCallId: string, toolName: string): ManagementModelRequest {
+function buildToolResultRequest(
+  toolCallId: string,
+  toolName: string,
+  signal?: AbortSignal,
+): ManagementModelRequest {
   return {
     systemPrompt: PI_PROVIDER_PROBE.toolFinalSystem,
     sessionContext: EMPTY_SESSION_CONTEXT as never,
@@ -216,13 +228,14 @@ function buildToolResultRequest(toolCallId: string, toolName: string): Managemen
       },
     ],
     tools: [PROBE_TOOL as never],
+    ...(signal ? { signal } : {}),
   };
 }
 
 function assertTextProbe(
   response: ManagementModelResponse,
 ): { ok: true } | { ok: false; code: string } {
-  if (response.finishReason !== 'stop' && response.finishReason !== 'length') {
+  if (response.finishReason !== 'stop') {
     return { ok: false, code: 'PI_PROVIDER_TEST_TEXT_FINISH_REASON' };
   }
   const text = response.content
@@ -230,8 +243,11 @@ function assertTextProbe(
     .map((item) => item.text)
     .join('')
     .trim();
-  if (!text) return { ok: false, code: 'PI_PROVIDER_TEST_TEXT_EMPTY' };
+  if (text !== 'OK') return { ok: false, code: 'PI_PROVIDER_TEST_TEXT_MISMATCH' };
   if (!response.responseModel) return { ok: false, code: 'PI_PROVIDER_TEST_RESPONSE_MODEL_MISSING' };
+  if (response.usage.inputTokens === null || response.usage.outputTokens === null) {
+    return { ok: false, code: 'PI_PROVIDER_TEST_USAGE_MISSING' };
+  }
   return { ok: true };
 }
 
@@ -239,16 +255,19 @@ function extractToolCall(
   response: ManagementModelResponse,
 ): { id: string; name: string } | null {
   if (response.finishReason !== 'tool_use') return null;
-  const call = response.content.find((item) => item.type === 'toolCall');
+  if (response.content.length !== 1) return null;
+  const call = response.content[0];
   if (!call || call.type !== 'toolCall') return null;
   if (call.name !== PI_PROVIDER_PROBE_TOOL.name) return null;
+  if (Object.keys(call.arguments).length !== 0) return null;
+  if (response.usage.inputTokens === null || response.usage.outputTokens === null) return null;
   return { id: call.id, name: call.name };
 }
 
 function assertFinalProbe(
   response: ManagementModelResponse,
 ): { ok: true } | { ok: false; code: string } {
-  if (response.finishReason !== 'stop' && response.finishReason !== 'length') {
+  if (response.finishReason !== 'stop') {
     return { ok: false, code: 'PI_PROVIDER_TEST_FINAL_FINISH_REASON' };
   }
   const text = response.content
@@ -256,7 +275,11 @@ function assertFinalProbe(
     .map((item) => item.text)
     .join('')
     .trim();
-  if (!text) return { ok: false, code: 'PI_PROVIDER_TEST_FINAL_EMPTY' };
+  if (text !== 'DONE') return { ok: false, code: 'PI_PROVIDER_TEST_FINAL_MISMATCH' };
+  if (!response.responseModel) return { ok: false, code: 'PI_PROVIDER_TEST_RESPONSE_MODEL_MISSING' };
+  if (response.usage.inputTokens === null || response.usage.outputTokens === null) {
+    return { ok: false, code: 'PI_PROVIDER_TEST_USAGE_MISSING' };
+  }
   return { ok: true };
 }
 

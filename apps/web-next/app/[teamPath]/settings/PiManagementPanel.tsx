@@ -120,6 +120,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [editorMode, setEditorMode] = useState<EditorMode>('form');
   const [form, setForm] = useState<CardFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [testingCardId, setTestingCardId] = useState<string | null>(null);
   const editorInitializedRef = useRef(false);
 
   const load = useCallback(async (options: {
@@ -276,16 +277,18 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       ok: true,
       text: result.discoverySupported
         ? `已刷新 ${result.models?.length ?? 0} 个候选模型（未发布、未改生产绑定）`
-        : 'Provider 不支持模型发现，请手工填写 Model ID',
+        : result.diagnosticCode === 'PI_PROVIDER_DISCOVERY_UNSUPPORTED'
+          ? 'Provider 不支持模型发现，请手工填写 Model ID'
+          : `模型发现失败：${result.diagnosticCode ?? 'PI_PROVIDER_DISCOVERY_UNKNOWN'}`,
     });
     await load({ preserveEditor: true, preserveMessage: true });
   };
 
   const runTest = async (cardId: string) => {
-    setSaving(true);
+    setTestingCardId(cardId);
     setMessage(null);
     const result = await piProviderEvents().runTest(cardId);
-    setSaving(false);
+    setTestingCardId(null);
     if (!result.ok || !result.card) {
       setMessage({ ok: false, text: result.message ?? result.error ?? '测试失败' });
       return;
@@ -296,9 +299,20 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       ok: test?.status === 'passed',
       text: test?.status === 'passed'
         ? '生产同路径测试通过，可发布'
-        : `测试未通过${test?.diagnosticCode ? `：${test.diagnosticCode}` : ''}`,
+        : test?.diagnosticCode === 'MANAGEMENT_MODEL_ABORTED'
+          ? '生产同路径测试已取消'
+          : `测试未通过${test?.diagnosticCode ? `：${test.diagnosticCode}` : ''}`,
     });
     await load({ preserveEditor: true, preserveMessage: true });
+  };
+
+  const cancelTest = async (cardId: string) => {
+    const result = await piProviderEvents().cancelTest(cardId);
+    if (!result.ok) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '取消测试失败' });
+      return;
+    }
+    setMessage({ ok: true, text: result.cancelled ? '正在取消生产同路径测试' : '当前没有运行中的测试' });
   };
 
   const publishCard = async (cardId: string) => {
@@ -388,9 +402,15 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                     <button type="button" onClick={() => void discoverModels(card.id)} disabled={saving} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-discover">
                       刷新模型
                     </button>
-                    <button type="button" onClick={() => void runTest(card.id)} disabled={saving || !card.draftRevision} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-run-test">
-                      运行测试
-                    </button>
+                    {testingCardId === card.id ? (
+                      <button type="button" onClick={() => void cancelTest(card.id)} className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50" data-smoke="settings-pi-cancel-test">
+                        取消测试
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => void runTest(card.id)} disabled={saving || testingCardId !== null || !card.draftRevision} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-run-test">
+                        运行测试
+                      </button>
+                    )}
                     <button type="button" onClick={() => void publishCard(card.id)} disabled={saving || !card.canPublish} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-publish">
                       发布
                     </button>

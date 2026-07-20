@@ -21,6 +21,7 @@ const request: ManagementModelRequest = {
 function adapter(fetchFn: typeof fetch, overrides: {
   timeoutMs?: number;
   maxOutputTokens?: number;
+  requireResponseMetadata?: boolean;
 } = {}) {
   return createOpenAiCompatibleManagementModelAdapter({
     id: 'provider-1:model-1',
@@ -147,6 +148,24 @@ describe('OpenAI-compatible Management Model Adapter', () => {
       },
       { role: 'tool', tool_call_id: 'call-1', content: 'root body' },
     ]);
+  });
+
+  it('上线探测模式在响应缺少 model 或 usage 时 fail closed', async () => {
+    const missingModel = adapter(vi.fn<typeof fetch>(async () => jsonResponse({
+      choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })), { requireResponseMetadata: true });
+    await expect(missingModel.respond(request, { callCount: 1 })).rejects.toMatchObject({
+      code: 'MANAGEMENT_MODEL_RESPONSE_INVALID',
+    });
+
+    const missingUsage = adapter(vi.fn<typeof fetch>(async () => jsonResponse({
+      model: 'model-1',
+      choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+    })), { requireResponseMetadata: true });
+    await expect(missingUsage.respond(request, { callCount: 1 })).rejects.toMatchObject({
+      code: 'MANAGEMENT_MODEL_RESPONSE_INVALID',
+    });
   });
 
   it.each([

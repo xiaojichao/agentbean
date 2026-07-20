@@ -27,6 +27,3 @@ CREATE TABLE IF NOT EXISTS pi_provider_revision_tests (
 
 CREATE INDEX IF NOT EXISTS idx_pi_provider_revision_tests_card
   ON pi_provider_revision_tests(card_id, tested_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_pi_provider_revision_tests_summary
-  ON pi_provider_revision_tests(card_id, config_summary, status);

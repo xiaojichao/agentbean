@@ -36,6 +36,8 @@ export interface CreateOpenAiCompatibleManagementModelAdapterInput {
   readonly modelId: string;
   readonly timeoutMs?: number;
   readonly maxOutputTokens?: number;
+  /** Provider 上线探测使用：缺少 model 或 usage 时 fail closed。 */
+  readonly requireResponseMetadata?: boolean;
   readonly fetch?: typeof fetch;
 }
 
@@ -103,7 +105,7 @@ export function createOpenAiCompatibleManagementModelAdapter(
           if (abort.didTimeout()) throw adapterError('MANAGEMENT_MODEL_TIMEOUT');
           throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID_JSON');
         }
-        return parseOpenAiResponse(body, modelId);
+        return parseOpenAiResponse(body, modelId, input.requireResponseMetadata ?? false);
       } finally {
         abort.dispose();
       }
@@ -138,7 +140,11 @@ function toOpenAiMessage(message: ManagementModelMessage): Record<string, unknow
   };
 }
 
-function parseOpenAiResponse(value: unknown, fallbackModel: string): ManagementModelResponse {
+function parseOpenAiResponse(
+  value: unknown,
+  fallbackModel: string,
+  requireResponseMetadata: boolean,
+): ManagementModelResponse {
   if (!isRecord(value) || !Array.isArray(value.choices) || !isRecord(value.choices[0])) {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
@@ -166,13 +172,18 @@ function parseOpenAiResponse(value: unknown, fallbackModel: string): ManagementM
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
 
+  const responseModel = typeof value.model === 'string' && value.model.trim()
+    ? value.model.trim()
+    : null;
+  if (requireResponseMetadata && (!responseModel || value.usage === undefined || value.usage === null)) {
+    throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
+  }
+
   return {
     content,
     usage: parseUsage(value.usage),
     finishReason,
-    responseModel: typeof value.model === 'string' && value.model.trim()
-      ? value.model.trim()
-      : fallbackModel,
+    responseModel: responseModel ?? fallbackModel,
   };
 }
 

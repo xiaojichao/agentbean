@@ -43,6 +43,7 @@ export const WEB_EVENTS = {
     copyCard: 'pi-provider:copy-card',
     discoverModels: 'pi-provider:discover-models',
     runTest: 'pi-provider:run-test',
+    cancelTest: 'pi-provider:cancel-test',
     publishCard: 'pi-provider:publish-card',
   },
   join: {
