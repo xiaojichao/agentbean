@@ -208,6 +208,13 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         };
       }
 
+      // Phase 2/3 orchestration is rooted in a Task. A plain channel @mention
+      // without a Task remains the established direct Agent message path; it
+      // must not enter the rooted management preflight and fail validation.
+      if (policy.maxManagementPhase >= 2 && target && !input.rootTaskId?.trim()) {
+        return { kind: 'direct', mode: 'direct' };
+      }
+
       // #647 auto placement：建 run 前解析一次，resolved placement 替换 policy 值并随 run 冻结；
       // 之后守卫、preflight、createOrResumeRun、恢复与审计全部消费 resolved 值，不再感知 auto。
       let placementPolicy = policy.placementPolicy;
