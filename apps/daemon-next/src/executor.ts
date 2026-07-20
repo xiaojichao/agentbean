@@ -136,6 +136,7 @@ async function runCustomAgentCommand(
       cwd: customAgent.cwd,
       env: buildChildEnv(process.env, customAgent.env ?? undefined, {
         includeCodingRuntimeSecrets: adapterNeedsCodingRuntimeSecrets(customAgent.adapterKind),
+        commandPath: typeof customAgent.command === 'string' ? customAgent.command : undefined,
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });

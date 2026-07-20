@@ -317,6 +317,7 @@ export async function runPtyAgentCommand(
         cwd,
         env: buildChildEnv(process.env, customAgent.env ?? undefined, {
           includeCodingRuntimeSecrets: adapterNeedsCodingRuntimeSecrets(customAgent.adapterKind),
+          commandPath: customAgent.command,
         }),
         cols: 80,
         rows: 30,
