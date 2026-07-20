@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path';
 import type { AdapterKind } from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload } from './index.js';
 import {
+  adapterNeedsCodingRuntimeSecrets,
   buildChildEnv,
   buildLogArtifactContent,
   buildLogExcerpt,
@@ -276,7 +277,9 @@ export async function runPtyAgentCommand(
     try {
       pty = spawn(customAgent.command as string, args, {
         cwd,
-        env: buildChildEnv(process.env, customAgent.env ?? undefined),
+        env: buildChildEnv(process.env, customAgent.env ?? undefined, {
+          includeCodingRuntimeSecrets: adapterNeedsCodingRuntimeSecrets(customAgent.adapterKind),
+        }),
         cols: 80,
         rows: 30,
       });

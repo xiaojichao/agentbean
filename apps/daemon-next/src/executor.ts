@@ -1,7 +1,13 @@
 import { spawn } from 'node:child_process';
 import type { AdapterKind } from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from './index.js';
-import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
+import {
+  adapterNeedsCodingRuntimeSecrets,
+  buildChildEnv,
+  buildLogArtifactContent,
+  buildLogExcerpt,
+  formatCommand,
+} from './executor-helpers.js';
 import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './executor-pty.js';
 import type { PtySpawnFn } from './executor-pty.js';
 import { buildRuntimePrompt, redactDeviceLocalMemory } from './memory/runtime-memory-context.js';
@@ -128,7 +134,9 @@ async function runCustomAgentCommand(
     const startedAt = options.clock.now();
     const child = spawn(customAgent.command as string, finalArgs, {
       cwd: customAgent.cwd,
-      env: buildChildEnv(process.env, customAgent.env ?? undefined),
+      env: buildChildEnv(process.env, customAgent.env ?? undefined, {
+        includeCodingRuntimeSecrets: adapterNeedsCodingRuntimeSecrets(customAgent.adapterKind),
+      }),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

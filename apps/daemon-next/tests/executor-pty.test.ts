@@ -1,11 +1,18 @@
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, describe, expect, test } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { extractCodexReply, normalizeCodexExecArgs, renderCodexPayload } from '../src/executor-pty';
 import { createCommandExecutor } from '../src/executor';
+import { setLoginShellEnvLoaderForTests } from '../src/executor-helpers';
 
 describe('daemon-next codex PTY executor', () => {
+  beforeEach(() => {
+    setLoginShellEnvLoaderForTests(() => ({}));
+  });
+  afterEach(() => {
+    setLoginShellEnvLoaderForTests(() => ({}));
+  });
   test('normalizeCodexExecArgs injects the exec subcommand and required flags for empty args', () => {
     const result = normalizeCodexExecArgs([], '/tmp/last-message.txt');
     expect(result.args).toEqual([
@@ -182,7 +189,7 @@ describe('daemon-next codex PTY executor', () => {
       expect(output.body).toContain('Missing environment variable: CRS_OAI_KEY.');
       expect(output.body).toContain('CRS_OAI_KEY');
       expect(output.body).toContain('环境变量');
-      expect(output.body).toContain('自定义 Agent');
+      expect(output.body).toContain('登录 shell');
       expect(output.workspaceRun?.status).toBe('failed');
       expect(output.workspaceRun?.exitCode).toBe(1);
     });
