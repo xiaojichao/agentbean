@@ -18,7 +18,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { AdapterKind } from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload } from './index.js';
-import { buildChildEnv, buildLogArtifactContent, buildLogExcerpt, formatCommand } from './executor-helpers.js';
+import {
+  buildChildEnv,
+  buildLogArtifactContent,
+  buildLogExcerpt,
+  formatCodexExitFailureBody,
+  formatCommand,
+} from './executor-helpers.js';
 
 // node-pty is loaded via createRequire (see defaultPtySpawnLoader), NOT a typed import, so tsc
 // never resolves the module: a typed import would make optional native availability a build-time
@@ -321,7 +327,7 @@ export async function runPtyAgentCommand(
       try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
       const body = exitCode === 0
         ? (fileReply ?? (spec.extractReply(output, payload) || '(Codex 已完成处理)'))
-        : `codex exit ${exitCode}: ${stripAnsi(output).trim().slice(0, 2000) || '(无输出)'}`;
+        : formatCodexExitFailureBody(exitCode, stripAnsi(output));
 
       resolve({
         body,

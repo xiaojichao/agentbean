@@ -57,3 +57,25 @@ export function buildLogArtifactContent(stdout: string, stderr: string): string 
 export function formatCommand(command: string, args: string[]): string {
   return [command, ...args].join(' ');
 }
+
+// Codex model_providers often declare `env_key = "SOME_API_KEY"`. When that process env is
+// missing, codex emits JSON events with `Missing environment variable: NAME.` and exits non-zero.
+// Daemon only injects secrets via customAgent.env (see buildChildEnv), so host shell exports never
+// reach the child — surface that contract next to the raw codex detail so channel replies are actionable.
+const MISSING_ENV_VAR_RE = /Missing environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)/i;
+
+export function formatCodexExitFailureBody(exitCode: number, rawOutput: string): string {
+  const detail = rawOutput.trim().slice(0, 2000) || '(无输出)';
+  const base = `codex exit ${exitCode}: ${detail}`;
+  const match = detail.match(MISSING_ENV_VAR_RE);
+  if (!match) {
+    return base;
+  }
+  const envName = match[1]!;
+  return [
+    base,
+    '',
+    `提示：Codex 需要环境变量 ${envName}，但 AgentBean daemon 不会把宿主机 shell 中的密钥传给子进程（避免写入 workspace 日志）。`,
+    `请在该自定义 Agent 的「环境变量」中配置 ${envName}=<你的 API Key> 后重试。若 Agent 不是 custom，请改为自定义 Agent 并填写环境变量。`,
+  ].join('\n');
+}

@@ -156,6 +156,37 @@ describe('daemon-next codex PTY executor', () => {
       expect(output.workspaceRun?.exitCode).toBe(2);
     });
 
+    test('annotates missing environment variable failures with agent env guidance', async () => {
+      const codexJson = [
+        '{"type":"thread.started","thread_id":"t1"}',
+        '{"type":"turn.started"}',
+        '{"type":"error","message":"Missing environment variable: CRS_OAI_KEY."}',
+        '{"type":"turn.failed","error":{"message":"Missing environment variable: CRS_OAI_KEY."}}',
+      ].join('\n');
+      const fakeSpawn = () => ({
+        onData: (cb: (d: string) => void) => cb(`${codexJson}\n`),
+        onExit: (cb: (e: { exitCode: number }) => void) => cb({ exitCode: 1 }),
+        kill: () => {},
+      });
+      const executor = createCommandExecutor({
+        ptySpawnLoader: async () => fakeSpawn,
+        clock: createClock([1000, 1010]),
+      });
+      const output = await executor({
+        id: 'dispatch-missing-env', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+        agentId: 'agent-1', requestId: 'request-1', prompt: 'hi',
+        customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
+      });
+      if (typeof output !== 'object') throw new Error('expected structured result');
+      expect(output.body).toContain('codex exit 1');
+      expect(output.body).toContain('Missing environment variable: CRS_OAI_KEY.');
+      expect(output.body).toContain('CRS_OAI_KEY');
+      expect(output.body).toContain('环境变量');
+      expect(output.body).toContain('自定义 Agent');
+      expect(output.workspaceRun?.status).toBe('failed');
+      expect(output.workspaceRun?.exitCode).toBe(1);
+    });
+
     test('reports a codex timeout as a failed run (AGENTBEAN_CODEX_TIMEOUT_MS overrides the 15min default)', async () => {
       const prev = process.env.AGENTBEAN_CODEX_TIMEOUT_MS;
       process.env.AGENTBEAN_CODEX_TIMEOUT_MS = '30';

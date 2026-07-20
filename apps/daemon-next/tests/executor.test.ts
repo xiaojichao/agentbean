@@ -2,7 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { buildChildEnv, createCommandExecutor } from '../src/executor';
+import { createCommandExecutor } from '../src/executor';
+import { buildChildEnv, formatCodexExitFailureBody } from '../src/executor-helpers';
 
 describe('daemon-next command executor', () => {
   test('runs a custom agent command with unified Memory prompt stdin, args, cwd, and dispatch-only env', async () => {
@@ -232,6 +233,20 @@ describe('daemon-next command executor', () => {
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(env.GH_TOKEN).toBeUndefined();
+  });
+
+  test('formatCodexExitFailureBody keeps non-env failures compact and guides missing env_key', () => {
+    expect(formatCodexExitFailureBody(2, 'Error: rate limit exceeded')).toBe(
+      'codex exit 2: Error: rate limit exceeded',
+    );
+    const body = formatCodexExitFailureBody(
+      1,
+      '{"type":"error","message":"Missing environment variable: CRS_OAI_KEY."}',
+    );
+    expect(body).toContain('codex exit 1');
+    expect(body).toContain('CRS_OAI_KEY');
+    expect(body).toContain('不会把宿主机 shell 中的密钥传给子进程');
+    expect(body).toContain('环境变量');
   });
 
   test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {
