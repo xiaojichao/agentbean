@@ -118,23 +118,39 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.success;
   }
 
+  const startDetail = [prepared.stderr, prepared.stdout, restarted.stderr, restarted.stdout]
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 800);
   const quiesced = await safeBoolean(deps.quiesceDeviceService ?? (() => quiesceDeviceService({
     ...(deps.home ? { home: deps.home } : {}),
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
   })));
   const rolledBack = await installExactVersion(runNpm, current.version);
   if (!quiesced || !rolledBack) {
-    stderr(`新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`);
+    stderr(
+      `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
+      + (startDetail ? `\n原因摘要：\n${startDetail}` : '')
+      + `\n可手动恢复：npm install -g ${CANONICAL_PACKAGE}@${latest} && agentbean device install && agentbean device restart`,
+    );
     return UPDATE_CLI_EXIT.rejected;
   }
   const restored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
     'device', 'install', '--deadline-ms', String(SERVICE_DEADLINE_MS),
   ]);
   if (restored.exitCode === 0) {
-    stderr(`新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`);
+    stderr(
+      `新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`
+      + (startDetail ? `\n原因摘要：\n${startDetail}` : ''),
+    );
     return UPDATE_CLI_EXIT.rejected;
   }
-  stderr(`新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`);
+  stderr(
+    `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
+    + (startDetail ? `\n原因摘要：\n${startDetail}` : '')
+    + `\n可手动恢复：npm install -g ${CANONICAL_PACKAGE}@${current.version} && agentbean device install && agentbean device restart`,
+  );
   return UPDATE_CLI_EXIT.rejected;
 }
 
@@ -166,8 +182,11 @@ async function installExactVersion(
   runNpm: (argv: readonly string[]) => Promise<PlatformCommandResult>,
   version: string,
 ): Promise<boolean> {
+  // Do NOT pass --ignore-scripts: nested packages (e.g. @earendil-works/pi-coding-agent)
+  // can end up with incomplete installs when scripts are skipped, then Device Service fails
+  // to start (ERR_MODULE_NOT_FOUND) and update rolls back into UPDATE_RECOVERY_REQUIRED.
   const install = await safeRun(runNpm, [
-    'install', '--global', '--no-audit', '--no-fund', '--ignore-scripts',
+    'install', '--global', '--no-audit', '--no-fund',
     `--registry=${CANONICAL_REGISTRY}`, `${CANONICAL_PACKAGE}@${version}`,
   ]);
   if (install.exitCode !== 0) return false;
