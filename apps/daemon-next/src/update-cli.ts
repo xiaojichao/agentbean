@@ -182,9 +182,8 @@ async function installExactVersion(
   runNpm: (argv: readonly string[]) => Promise<PlatformCommandResult>,
   version: string,
 ): Promise<boolean> {
-  // Do NOT pass --ignore-scripts: nested packages (e.g. @earendil-works/pi-coding-agent)
-  // can end up with incomplete installs when scripts are skipped, then Device Service fails
-  // to start (ERR_MODULE_NOT_FOUND) and update rolls back into UPDATE_RECOVERY_REQUIRED.
+  // Do NOT pass --ignore-scripts: nested runtime deps can end up incomplete when scripts are
+  // skipped, then Device Service fails to start (ERR_MODULE_NOT_FOUND) and update recovery fails.
   const install = await safeRun(runNpm, [
     'install', '--global', '--no-audit', '--no-fund',
     `--registry=${CANONICAL_REGISTRY}`, `${CANONICAL_PACKAGE}@${version}`,
