@@ -69,18 +69,67 @@ describe('agentbean update', () => {
     expect(runAgentBean).not.toHaveBeenCalled();
   });
 
-  test('restarts an installed Device Service through the updated CLI', async () => {
-    const runNpm = npmRunner();
-    const runAgentBean = vi.fn(async () => success());
+  test('keeps the installed Device Service available without replacing its package while loaded', async () => {
+    let serviceLoaded = true;
+    const npm = npmRunner();
+    const runNpm = vi.fn(async (argv: readonly string[]) => {
+      if (argv[0] === 'install' && serviceLoaded) {
+        return { exitCode: 1, stdout: '', stderr: 'package is still in use' };
+      }
+      return npm(argv);
+    });
+    const runAgentBean = vi.fn(async () => {
+      serviceLoaded = true;
+      return success();
+    });
+    const stdout = vi.fn();
+
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
       runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
+      quiesceDeviceService: async () => {
+        serviceLoaded = false;
+        return true;
+      },
+      stdout,
     })).resolves.toBe(UPDATE_CLI_EXIT.success);
-    expect(runAgentBean).toHaveBeenNthCalledWith(1, '/opt/agentbean/bin/agentbean', [
+
+    expect(serviceLoaded).toBe(true);
+    expect(stdout).toHaveBeenCalledWith('AgentBean 已更新到 0.3.13，Device Service 已安全重启。');
+  });
+
+  test('leaves the current package untouched when the Device Service cannot stop before update', async () => {
+    const runNpm = npmRunner();
+    const runAgentBean = vi.fn(async () => success());
+    const stderr = vi.fn();
+
+    await expect(runUpdateCli([], {
+      platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
+      runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
+      quiesceDeviceService: async () => false,
+      stderr,
+    })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
+
+    expect(runNpm).toHaveBeenCalledTimes(2);
+    expect(runAgentBean).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledWith(
+      'Device Service 无法在更新前安全停止（UPDATE_SERVICE_STOP_FAILED）。',
+    );
+  });
+
+  test('restores an installed Device Service without restarting it again after health is ready', async () => {
+    const runNpm = npmRunner();
+    const runAgentBean = vi.fn(async (_executable: string, argv: readonly string[]) => argv[1] === 'restart'
+      ? { exitCode: 6, stdout: '', stderr: 'unexpected second restart' }
+      : success());
+    await expect(runUpdateCli([], {
+      platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
+      runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
+      quiesceDeviceService: async () => true,
+    })).resolves.toBe(UPDATE_CLI_EXIT.success);
+    expect(runAgentBean).toHaveBeenCalledOnce();
+    expect(runAgentBean).toHaveBeenCalledWith('/opt/agentbean/bin/agentbean', [
       'device', 'install', '--deadline-ms', '30000',
-    ]);
-    expect(runAgentBean).toHaveBeenNthCalledWith(2, '/opt/agentbean/bin/agentbean', [
-      'device', 'restart', '--deadline-ms', '30000',
     ]);
   });
 
@@ -100,7 +149,6 @@ describe('agentbean update', () => {
   test('rolls back the package and restores the service when the new version cannot start', async () => {
     const runNpm = npmRunner();
     const runAgentBean = vi.fn()
-      .mockResolvedValueOnce(success())
       .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' })
       .mockResolvedValueOnce(success());
     await expect(runUpdateCli([], {
@@ -112,7 +160,7 @@ describe('agentbean update', () => {
       'install', '--global', '--no-audit', '--no-fund',
       '--registry=https://registry.npmjs.org/', '@agentbean/daemon@0.3.12',
     ]);
-    expect(runAgentBean).toHaveBeenCalledTimes(3);
+    expect(runAgentBean).toHaveBeenCalledTimes(2);
     expect(runAgentBean).toHaveBeenLastCalledWith('/opt/agentbean/bin/agentbean', [
       'device', 'install', '--deadline-ms', '30000',
     ]);
@@ -128,26 +176,70 @@ describe('agentbean update', () => {
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
       runNpm,
-      runAgentBean: async (_executable, argv) => argv[1] === 'install'
-        ? success()
-        : { exitCode: 6, stdout: '', stderr: 'not ready' },
+      runAgentBean: vi.fn().mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' }),
       getDeviceServiceStatus: async () => serviceStatus(true),
       quiesceDeviceService: async () => true,
     })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
     expect(runNpm).toHaveBeenCalledTimes(5);
   });
 
-  test('still restores the previous package when the LaunchAgent cannot be quiesced', async () => {
+  test('does not report recovery-required when rollback restores the service after quiesce fails', async () => {
     const runNpm = npmRunner();
     const runAgentBean = vi.fn()
-      .mockResolvedValueOnce(success())
-      .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' });
+      .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' })
+      .mockResolvedValueOnce(success());
+    const quiesceDeviceService = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const stderr = vi.fn();
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
       runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
-      quiesceDeviceService: async () => false,
+      quiesceDeviceService, stderr,
     })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
     expect(runNpm.mock.calls[4]?.[0]?.at(-1)).toBe('@agentbean/daemon@0.3.12');
+    expect(runAgentBean).toHaveBeenLastCalledWith('/opt/agentbean/bin/agentbean', [
+      'device', 'install', '--deadline-ms', '30000',
+    ]);
+    expect(stderr).toHaveBeenCalledWith(
+      '新版本 0.3.13 未能就绪，已回滚到 0.3.12 并恢复 Device Service。',
+    );
+  });
+
+  test('restores the Device Service after an installed package fails verification and rolls back', async () => {
+    let serviceLoaded = true;
+    const runNpm = npmRunner();
+    runNpm.mockImplementationOnce(async () => success('/opt/agentbean'))
+      .mockImplementationOnce(async () => success('"0.3.13"'))
+      .mockImplementationOnce(async () => success())
+      .mockImplementationOnce(async () => success('{invalid json'))
+      .mockImplementationOnce(async () => success())
+      .mockImplementationOnce(async () => success(JSON.stringify({
+        dependencies: { '@agentbean/daemon': { version: '0.3.12' } },
+      })));
+    const runAgentBean = vi.fn(async () => {
+      serviceLoaded = true;
+      return success();
+    });
+    const stderr = vi.fn();
+
+    await expect(runUpdateCli([], {
+      platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
+      runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
+      quiesceDeviceService: async () => {
+        serviceLoaded = false;
+        return true;
+      },
+      stderr,
+    })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
+
+    expect(serviceLoaded).toBe(true);
+    expect(runAgentBean).toHaveBeenCalledWith('/opt/agentbean/bin/agentbean', [
+      'device', 'install', '--deadline-ms', '30000',
+    ]);
+    expect(stderr).toHaveBeenCalledWith(
+      'AgentBean 更新安装验证失败，已恢复 0.3.12 并恢复 Device Service（UPDATE_INSTALL_FAILED）。',
+    );
   });
 
   test('rolls back when npm install succeeds but the installed version cannot be verified', async () => {

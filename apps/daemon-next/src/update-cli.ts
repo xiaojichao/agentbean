@@ -91,11 +91,34 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.rejected;
   }
 
+  if (serviceStatus.loaded) {
+    const quiesced = await safeBoolean(deps.quiesceDeviceService ?? (() => quiesceDeviceService({
+      ...(deps.home ? { home: deps.home } : {}),
+      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+    })));
+    if (!quiesced) {
+      stderr('Device Service 无法在更新前安全停止（UPDATE_SERVICE_STOP_FAILED）。');
+      return UPDATE_CLI_EXIT.rejected;
+    }
+  }
+
+  const runAgentBean = deps.runAgentBean ?? runAgentBeanCommand;
   const installed = await installExactVersion(runNpm, latest);
   if (!installed) {
     const rolledBack = await installExactVersion(runNpm, current.version);
-    stderr(rolledBack
-      ? `AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）；未使用 sudo。`
+    if (!rolledBack) {
+      stderr('AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。');
+      return UPDATE_CLI_EXIT.rejected;
+    }
+    if (!serviceStatus.installed) {
+      stderr(`AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）；未使用 sudo。`);
+      return UPDATE_CLI_EXIT.rejected;
+    }
+    const restored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+      'device', 'install', '--deadline-ms', String(SERVICE_DEADLINE_MS),
+    ]);
+    stderr(restored.exitCode === 0
+      ? `AgentBean 更新安装验证失败，已恢复 ${current.version} 并恢复 Device Service（UPDATE_INSTALL_FAILED）。`
       : 'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。');
     return UPDATE_CLI_EXIT.rejected;
   }
@@ -104,21 +127,15 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.success;
   }
 
-  const runAgentBean = deps.runAgentBean ?? runAgentBeanCommand;
   const prepared = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
     'device', 'install', '--deadline-ms', String(SERVICE_DEADLINE_MS),
   ]);
-  const restarted = prepared.exitCode === 0 && serviceStatus.loaded
-    ? await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
-      'device', 'restart', '--deadline-ms', String(SERVICE_DEADLINE_MS),
-    ])
-    : prepared;
-  if (prepared.exitCode === 0 && restarted.exitCode === 0) {
+  if (prepared.exitCode === 0) {
     stdout(`AgentBean 已更新到 ${latest}，Device Service 已安全${serviceStatus.loaded ? '重启' : '启动'}。`);
     return UPDATE_CLI_EXIT.success;
   }
 
-  const startDetail = [prepared.stderr, prepared.stdout, restarted.stderr, restarted.stdout]
+  const startDetail = [prepared.stderr, prepared.stdout]
     .map((part) => part.trim())
     .filter(Boolean)
     .join('\n')
