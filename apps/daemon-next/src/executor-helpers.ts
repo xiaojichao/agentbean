@@ -36,6 +36,11 @@ export interface BuildChildEnvOptions {
    * have a minimal PATH still pick up keys the user exported in ~/.zshrc. Test injects a stub.
    */
   extraHostEnv?: NodeJS.ProcessEnv | Record<string, string>;
+  /**
+   * Absolute path of the agent command (e.g. `/Users/x/Library/pnpm/codex`). Used only to
+   * derive nearby bin dirs (pnpm global shim dir) when repairing PATH for `node`.
+   */
+  commandPath?: string;
 }
 
 /**
@@ -90,6 +95,140 @@ function mergeHostEnvSources(
   return merged;
 }
 
+/**
+ * True when `node` is resolvable via PATH (using /usr/bin/env for parity with shebangs).
+ */
+export function pathResolvesNode(pathValue: string | undefined): boolean {
+  if (!pathValue || pathValue.trim() === '') {
+    return false;
+  }
+  try {
+    const result = spawnSync('/usr/bin/env', ['node', '-e', 'process.exit(0)'], {
+      env: { PATH: pathValue },
+      encoding: 'utf8',
+      timeout: 3_000,
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function candidateNodeBinDirs(home: string | undefined, commandPath: string | undefined): string[] {
+  const dirs: string[] = [];
+  const push = (dir: string | undefined) => {
+    if (dir && dir.length > 0 && !dirs.includes(dir)) dirs.push(dir);
+  };
+  if (commandPath) {
+    // pnpm global shims live in ~/Library/pnpm; nearby node is often there or in nodejs/*
+    const lastSlash = Math.max(commandPath.lastIndexOf('/'), commandPath.lastIndexOf('\\'));
+    if (lastSlash > 0) {
+      push(commandPath.slice(0, lastSlash));
+    }
+  }
+  if (home) {
+    push(`${home}/Library/pnpm`);
+    push(`${home}/.local/share/pnpm`);
+    push(`${home}/.local/bin`);
+    push(`${home}/.nvm/current/bin`);
+    // nvm versions: pick newest-ish by scanning shallowly without throwing
+    try {
+      const nvmVersions = `${home}/.nvm/versions/node`;
+      // Lazy require-free fs via spawnSync ls — keep this module free of fs import churn.
+      const listed = spawnSync('/bin/ls', ['-1', nvmVersions], { encoding: 'utf8', timeout: 2_000 });
+      if (listed.status === 0 && listed.stdout) {
+        const versions = listed.stdout.split('\n').map((s) => s.trim()).filter(Boolean).sort().reverse();
+        for (const v of versions.slice(0, 5)) {
+          push(`${nvmVersions}/${v}/bin`);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    push(`${home}/.fnm/current/bin`);
+    push(`${home}/.volta/bin`);
+    push(`${home}/.asdf/shims`);
+    push(`${home}/.local/share/mise/shims`);
+  }
+  push('/opt/homebrew/bin');
+  push('/usr/local/bin');
+  return dirs;
+}
+
+/**
+ * Ensure PATH can resolve `node` for npm/pnpm shims (`exec: node: not found` / `env: node: ...`).
+ * Prefers login-shell `command -v node`, then well-known install locations under HOME.
+ */
+export function ensureNodeOnPath(
+  pathValue: string | undefined,
+  home: string | undefined,
+  options: { commandPath?: string; loginPath?: string } = {},
+): string {
+  const base = pathValue && pathValue.length > 0 ? pathValue : '/usr/bin:/bin:/usr/sbin:/sbin';
+  if (pathResolvesNode(base)) {
+    return base;
+  }
+
+  // Prefer node discovered from a full login PATH (nvm hooks often only expand there).
+  const loginPath = options.loginPath;
+  if (loginPath && loginPath !== base) {
+    try {
+      const which = spawnSync('/bin/sh', ['-c', 'command -v node'], {
+        env: { PATH: loginPath, HOME: home ?? '' },
+        encoding: 'utf8',
+        timeout: 3_000,
+      });
+      if (which.status === 0 && which.stdout?.trim()) {
+        const nodePath = which.stdout.trim();
+        const dir = nodePath.includes('/') ? nodePath.slice(0, nodePath.lastIndexOf('/')) : '';
+        if (dir) {
+          const next = `${dir}:${base}`;
+          if (pathResolvesNode(next)) return next;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    if (pathResolvesNode(loginPath)) {
+      return loginPath;
+    }
+  }
+
+  // Also ask login shell directly (loads nvm/fnm hooks that plain PATH may miss).
+  try {
+    const shell = process.env.SHELL && process.env.SHELL.length > 0 ? process.env.SHELL : '/bin/zsh';
+    const which = spawnSync(shell, ['-lic', 'command -v node'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+      env: {
+        HOME: home ?? process.env.HOME,
+        USER: process.env.USER,
+        LOGNAME: process.env.LOGNAME,
+        PATH: loginPath ?? base,
+        TERM: 'dumb',
+      },
+    });
+    if (which.status === 0 && which.stdout?.trim()) {
+      const nodePath = which.stdout.trim().split('\n').pop()!.trim();
+      const dir = nodePath.includes('/') ? nodePath.slice(0, nodePath.lastIndexOf('/')) : '';
+      if (dir) {
+        const next = `${dir}:${base}`;
+        if (pathResolvesNode(next)) return next;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  for (const dir of candidateNodeBinDirs(home, options.commandPath)) {
+    const next = `${dir}:${base}`;
+    if (pathResolvesNode(next)) {
+      return next;
+    }
+  }
+  return base;
+}
+
 export function buildChildEnv(
   sourceEnv: NodeJS.ProcessEnv,
   customEnv?: Record<string, string>,
@@ -124,7 +263,15 @@ export function buildChildEnv(
     }
   }
 
-  return { ...env, ...(customEnv ?? {}) };
+  const merged = { ...env, ...(customEnv ?? {}) };
+  // After customEnv: ensure `node` is resolvable. Covers pnpm shims that do `exec node`
+  // even when login PATH was applied but nvm/pnpm node dir was missing.
+  const loginPath = typeof mergedHost.PATH === 'string' ? mergedHost.PATH : undefined;
+  merged.PATH = ensureNodeOnPath(merged.PATH, merged.HOME ?? sourceEnv.HOME, {
+    commandPath: options.commandPath,
+    loginPath,
+  });
+  return merged;
 }
 
 export const LOG_EXCERPT_MAX_CHARS = 16000;
@@ -170,16 +317,20 @@ const NODE_NOT_ON_PATH_RE = /env:\s*node:\s*No such file or directory/i;
 export function formatCodexExitFailureBody(exitCode: number, rawOutput: string): string {
   const detail = rawOutput.trim().slice(0, 2000) || '(无输出)';
   const base = `codex exit ${exitCode}: ${detail}`;
-  if (NODE_NOT_ON_PATH_RE.test(detail) || (exitCode === 127 && /\bnode\b/i.test(detail))) {
+  if (
+    NODE_NOT_ON_PATH_RE.test(detail)
+    || /exec:\s*node:\s*not found/i.test(detail)
+    || (exitCode === 127 && /\bnode\b/i.test(detail))
+  ) {
     return [
       base,
       '',
-      '提示：Codex 启动时找不到 `node`（常见于 npm 安装的 codex 使用 `#!/usr/bin/env node`）。',
-      'Device Service 由 LaunchAgent 启动时 PATH 极简，不含 nvm / Homebrew。',
+      '提示：Codex 启动时找不到 `node`（npm/pnpm 安装的 codex 会 `exec node` / `#!/usr/bin/env node`）。',
+      'Device Service 由 LaunchAgent 启动时 PATH 极简，常不含 nvm / pnpm / Homebrew。',
       '处理方式（任选其一）：',
-      '1) 升级到已修复 PATH 注入的 daemon（≥0.3.17）并 `agentbean device restart`；',
-      '2) 在该 Agent 环境变量中设置 PATH 为登录 shell 的 PATH（含 node 所在目录）；',
-      '3) 确认交互终端里 `which node` 有结果，且 `agentbean device restart` 后登录 shell 仍能加载 nvm/homebrew。',
+      '1) 升级到 daemon ≥0.3.18 并 `agentbean device restart`（会注入登录 shell PATH 并探测 node）；',
+      '2) 在该 Agent 环境变量中设置 PATH，包含 `which node` 所在目录（及 `~/Library/pnpm` 若用 pnpm）；',
+      '3) 在交互终端确认 `which node` 有结果，并把同一 PATH 写进登录 shell（~/.zprofile）后 restart device。',
     ].join('\n');
   }
   const match = detail.match(MISSING_ENV_VAR_RE);

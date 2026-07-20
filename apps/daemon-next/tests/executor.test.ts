@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { createCommandExecutor } from '../src/executor';
 import {
   buildChildEnv,
+  ensureNodeOnPath,
   formatCodexExitFailureBody,
   isCodingRuntimeSecretEnvKey,
+  pathResolvesNode,
   setLoginShellEnvLoaderForTests,
 } from '../src/executor-helpers';
 
@@ -239,7 +241,8 @@ describe('daemon-next command executor', () => {
     expect(env.USER).toBe('u');
     expect(env.LC_ALL).toBe('en_US.UTF-8');
     expect(env.TMPDIR).toBe('/tmp');
-    expect(env.PATH).toBe('/custom/bin');
+    // customEnv.PATH is applied; ensureNodeOnPath may prepend a real node bin dir.
+    expect(env.PATH).toContain('/custom/bin');
     expect(env.CUSTOM_TOOL_TOKEN).toBe('injected');
     // Default path still strips coding secrets — only opt-in includeCodingRuntimeSecrets forwards them.
     expect(env.OPENAI_API_KEY).toBeUndefined();
@@ -300,12 +303,11 @@ describe('daemon-next command executor', () => {
       undefined,
       { includeCodingRuntimeSecrets: true },
     );
-    expect(codexEnv.PATH).toBe(
-      '/Users/u/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/bin:/bin',
-    );
+    expect(codexEnv.PATH).toContain('/Users/u/.nvm/versions/node/v24.15.0/bin');
+    expect(codexEnv.PATH).toContain('/opt/homebrew/bin');
     expect(codexEnv.CRS_OAI_KEY).toBe('secret');
 
-    // Non-minimal process PATH is kept (interactive terminal / custom launcher).
+    // Non-minimal process PATH is kept as base (may gain node bin prefix via ensureNodeOnPath).
     setLoginShellEnvLoaderForTests(() => ({
       PATH: '/login/only',
     }));
@@ -313,9 +315,10 @@ describe('daemon-next command executor', () => {
       PATH: '/opt/homebrew/bin:/usr/bin',
       HOME: '/Users/u',
     });
-    expect(rich.PATH).toBe('/opt/homebrew/bin:/usr/bin');
+    expect(rich.PATH).toContain('/opt/homebrew/bin');
+    expect(rich.PATH).toContain('/usr/bin');
 
-    // customEnv.PATH still wins.
+    // customEnv.PATH is applied then node-repair may prepend node bins.
     setLoginShellEnvLoaderForTests(() => ({
       PATH: '/login/path',
     }));
@@ -323,7 +326,28 @@ describe('daemon-next command executor', () => {
       { PATH: '/usr/bin:/bin', HOME: '/Users/u' },
       { PATH: '/agent/custom/bin' },
     );
-    expect(custom.PATH).toBe('/agent/custom/bin');
+    expect(custom.PATH).toContain('/agent/custom/bin');
+  });
+
+  test('ensureNodeOnPath prepends pnpm/command dir and discovers node for pnpm shims', () => {
+    // Minimal PATH cannot resolve node.
+    expect(pathResolvesNode('/usr/bin:/bin')).toBe(false);
+
+    // When host has a real node (CI/dev machines), ensureNodeOnPath must succeed.
+    const repaired = ensureNodeOnPath('/usr/bin:/bin:/usr/sbin:/sbin', process.env.HOME, {
+      commandPath: `${process.env.HOME}/Library/pnpm/codex`,
+      loginPath: process.env.PATH,
+    });
+    if (pathResolvesNode(process.env.PATH)) {
+      expect(pathResolvesNode(repaired)).toBe(true);
+      expect(repaired).not.toBe('/usr/bin:/bin:/usr/sbin:/sbin');
+    }
+
+    // commandPath's directory is considered (pnpm global shims).
+    const withPnpmHint = ensureNodeOnPath('/usr/bin:/bin', process.env.HOME, {
+      commandPath: '/Users/zxnimac/Library/pnpm/codex',
+    });
+    expect(withPnpmHint.includes('/Users/zxnimac/Library/pnpm') || pathResolvesNode(withPnpmHint)).toBe(true);
   });
 
   test('formatCodexExitFailureBody keeps non-env failures compact and guides missing env_key', () => {
@@ -344,6 +368,13 @@ describe('daemon-next command executor', () => {
     expect(nodeMissing).toContain('env: node');
     expect(nodeMissing).toContain('LaunchAgent');
     expect(nodeMissing).toContain('PATH');
+
+    const pnpmMissing = formatCodexExitFailureBody(
+      127,
+      '/Users/zxnimac/Library/pnpm/codex: line 20: exec: node: not found',
+    );
+    expect(pnpmMissing).toContain('exec: node: not found');
+    expect(pnpmMissing).toContain('pnpm');
   });
 
   test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {
