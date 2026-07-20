@@ -63,7 +63,7 @@ describe('agentbean update', () => {
       '--registry=https://registry.npmjs.org/',
     ]);
     expect(runNpm.mock.calls[2]?.[0]).toEqual([
-      'install', '--global', '--no-audit', '--no-fund', '--ignore-scripts',
+      'install', '--global', '--no-audit', '--no-fund',
       '--registry=https://registry.npmjs.org/', '@agentbean/daemon@0.3.13',
     ]);
     expect(runAgentBean).not.toHaveBeenCalled();
@@ -109,7 +109,7 @@ describe('agentbean update', () => {
       quiesceDeviceService: async () => true,
     })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
     expect(runNpm.mock.calls[4]?.[0]).toEqual([
-      'install', '--global', '--no-audit', '--no-fund', '--ignore-scripts',
+      'install', '--global', '--no-audit', '--no-fund',
       '--registry=https://registry.npmjs.org/', '@agentbean/daemon@0.3.12',
     ]);
     expect(runAgentBean).toHaveBeenCalledTimes(3);

@@ -3,6 +3,7 @@
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
 ### Fixed
+- 发布 `@agentbean/daemon` 0.3.19：修复 `agentbean update` 使用 `--ignore-scripts` 导致安装残缺与 UPDATE_RECOVERY_REQUIRED
 - 发布 `@agentbean/daemon` 0.3.18：探测并注入 node 所在目录到 PATH，修复 pnpm codex 的 `exec: node: not found`
 - 发布 `@agentbean/daemon` 0.3.17：LaunchAgent 下为子进程注入登录 shell PATH，修复 `env: node: No such file or directory`（exit 127）
 - 发布 `@agentbean/pi-management-runtime` 0.1.3 与 `@agentbean/daemon` 0.3.16：对齐 PI Management Model Adapter 导出（`ManagementModelAdapterError` 等），修复 0.3.15 安装后 Device Service 因 runtime 包过旧无法启动的问题
