@@ -142,10 +142,43 @@ describe('Phase 1 management routing', () => {
     expect(await harness.repositories.dispatches.listByTeam('team-1')).toHaveLength(0);
   });
 
-  test('Phase 2 requires an explicit root Task and green Phase 2 preflight before creating a Run', async () => {
+  test('Phase 2/3 keeps an unrooted explicit Agent mention direct across device and auto placement', async () => {
+    const harness = await createHarness();
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
+
+    await expect(harness.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 });
+    await expect(harness.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+
+    const autoProbe = vi.fn(async () => ({ deviceAvailable: true, serverAvailable: true }));
+    const auto = await createHarness({ autoProbe });
+    await auto.router.updatePolicy(autoPolicy());
+    await expect(auto.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+    expect(autoProbe).not.toHaveBeenCalled();
+
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
+
+    const result = await harness.app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      body: '@agent 你好', clientMessageId: 'phase2-direct-mention',
+      connectedAgentDeviceIds: ['device-1'], dispatchClaimDeviceIds: ['device-1'],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      management: { kind: 'direct', mode: 'direct' },
+      dispatches: [{ agentId: 'agent-1' }],
+    });
+    expect(result).not.toHaveProperty('task');
+    await expect(harness.repositories.management.reservations.getByRequestKey({
+      teamId: 'team-1', requestKey: 'team-1:user-1:phase2-direct-mention',
+    })).resolves.toBeNull();
+  });
+
+  test('Phase 2 requires an explicit root Task for orchestration and green Phase 2 preflight before creating a Run', async () => {
     const blocked = await createHarness({ phase2WorkerAvailable: false });
     await blocked.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 2 });
-    await expect(blocked.router.route(request())).resolves.toMatchObject({
+    await expect(blocked.router.route({ ...request(), targetAgentId: undefined })).resolves.toMatchObject({
       kind: 'unavailable', diagnostics: ['MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED'],
     });
     await expect(blocked.router.route({ ...request(), rootTaskId: 'root-task' })).resolves.toMatchObject({
