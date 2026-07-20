@@ -38,6 +38,58 @@ export interface BuildChildEnvOptions {
   extraHostEnv?: NodeJS.ProcessEnv | Record<string, string>;
 }
 
+/**
+ * LaunchAgent / systemd user services typically only inherit system dirs
+ * (`/usr/bin:/bin:/usr/sbin:/sbin`). npm-installed CLIs use `#!/usr/bin/env node`
+ * and fail with `env: node: No such file or directory` (exit 127) unless PATH
+ * includes nvm/homebrew/local bins from the user's login shell.
+ */
+const SYSTEM_PATH_DIRS = new Set(['/usr/bin', '/bin', '/usr/sbin', '/sbin']);
+
+export function isLaunchAgentMinimalPath(pathValue: string | undefined): boolean {
+  if (pathValue === undefined || pathValue.trim() === '') {
+    return true;
+  }
+  const dirs = pathValue.split(':').map((part) => part.trim()).filter(Boolean);
+  if (dirs.length === 0) {
+    return true;
+  }
+  return dirs.every((dir) => SYSTEM_PATH_DIRS.has(dir));
+}
+
+function mergeHostEnvSources(
+  sourceEnv: NodeJS.ProcessEnv,
+  options: BuildChildEnvOptions,
+): Record<string, string | undefined> {
+  const merged: Record<string, string | undefined> = { ...sourceEnv };
+  if (options.extraHostEnv) {
+    for (const [key, value] of Object.entries(options.extraHostEnv)) {
+      if (value !== undefined && merged[key] === undefined) {
+        merged[key] = value;
+      }
+    }
+    return merged;
+  }
+  // Lazy login-shell load: needed for coding secrets and/or LaunchAgent PATH repair.
+  // Failures are empty — never block spawn.
+  if (!options.includeCodingRuntimeSecrets && !isLaunchAgentMinimalPath(sourceEnv.PATH)) {
+    return merged;
+  }
+  const loginEnv = readLoginShellEnv();
+  for (const [key, value] of Object.entries(loginEnv)) {
+    if (merged[key] === undefined) {
+      merged[key] = value;
+    }
+  }
+  // PATH is special: LaunchAgent always sets a *value*, so "undefined fill" never
+  // picks up login PATH. Prefer the richer login PATH whenever the process PATH is
+  // system-only (typical LaunchAgent / systemd user service default).
+  if (loginEnv.PATH && isLaunchAgentMinimalPath(sourceEnv.PATH)) {
+    merged.PATH = loginEnv.PATH;
+  }
+  return merged;
+}
+
 export function buildChildEnv(
   sourceEnv: NodeJS.ProcessEnv,
   customEnv?: Record<string, string>,
@@ -53,24 +105,17 @@ export function buildChildEnv(
     }
   }
 
+  const mergedHost = mergeHostEnvSources(sourceEnv, options);
+
+  // Always repair LaunchAgent-minimal PATH for every adapter (codex / hermes / …).
+  // Does not leak secrets — PATH only.
+  const preferredPath = mergedHost.PATH;
+  if (typeof preferredPath === 'string' && preferredPath.length > 0
+    && isLaunchAgentMinimalPath(env.PATH)) {
+    env.PATH = preferredPath;
+  }
+
   if (options.includeCodingRuntimeSecrets) {
-    const mergedHost: Record<string, string | undefined> = { ...sourceEnv };
-    if (options.extraHostEnv) {
-      for (const [key, value] of Object.entries(options.extraHostEnv)) {
-        if (value !== undefined && mergedHost[key] === undefined) {
-          mergedHost[key] = value;
-        }
-      }
-    } else {
-      // Lazy: only consult login shell when the caller opted into coding secrets and did not
-      // inject a stub. Failures are empty — never block spawn.
-      const loginEnv = readLoginShellEnv();
-      for (const [key, value] of Object.entries(loginEnv)) {
-        if (mergedHost[key] === undefined) {
-          mergedHost[key] = value;
-        }
-      }
-    }
     for (const [key, value] of Object.entries(mergedHost)) {
       if (value === undefined) continue;
       if (isCodingRuntimeSecretEnvKey(key)) {
@@ -120,9 +165,23 @@ export function formatCommand(command: string, args: string[]): string {
 // missing, codex emits JSON events with `Missing environment variable: NAME.` and exits non-zero.
 const MISSING_ENV_VAR_RE = /Missing environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)/i;
 
+const NODE_NOT_ON_PATH_RE = /env:\s*node:\s*No such file or directory/i;
+
 export function formatCodexExitFailureBody(exitCode: number, rawOutput: string): string {
   const detail = rawOutput.trim().slice(0, 2000) || '(无输出)';
   const base = `codex exit ${exitCode}: ${detail}`;
+  if (NODE_NOT_ON_PATH_RE.test(detail) || (exitCode === 127 && /\bnode\b/i.test(detail))) {
+    return [
+      base,
+      '',
+      '提示：Codex 启动时找不到 `node`（常见于 npm 安装的 codex 使用 `#!/usr/bin/env node`）。',
+      'Device Service 由 LaunchAgent 启动时 PATH 极简，不含 nvm / Homebrew。',
+      '处理方式（任选其一）：',
+      '1) 升级到已修复 PATH 注入的 daemon（≥0.3.17）并 `agentbean device restart`；',
+      '2) 在该 Agent 环境变量中设置 PATH 为登录 shell 的 PATH（含 node 所在目录）；',
+      '3) 确认交互终端里 `which node` 有结果，且 `agentbean device restart` 后登录 shell 仍能加载 nvm/homebrew。',
+    ].join('\n');
+  }
   const match = detail.match(MISSING_ENV_VAR_RE);
   if (!match) {
     return base;

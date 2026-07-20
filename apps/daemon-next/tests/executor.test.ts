@@ -276,6 +276,56 @@ describe('daemon-next command executor', () => {
     expect(isCodingRuntimeSecretEnvKey('GH_TOKEN')).toBe(false);
   });
 
+  test('replaces LaunchAgent-minimal PATH with login-shell PATH so env node resolves', () => {
+    setLoginShellEnvLoaderForTests(() => ({
+      PATH: '/Users/u/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/bin:/bin',
+      CRS_OAI_KEY: 'secret',
+    }));
+    // Default (no coding secrets): still repair PATH for hermes/openclaw under LaunchAgent.
+    const hermesEnv = buildChildEnv({
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      HOME: '/Users/u',
+      USER: 'u',
+    });
+    expect(hermesEnv.PATH).toContain('/.nvm/versions/node/');
+    expect(hermesEnv.PATH).toContain('/opt/homebrew/bin');
+    expect(hermesEnv.CRS_OAI_KEY).toBeUndefined();
+
+    // Coding path: PATH repair + secrets.
+    const codexEnv = buildChildEnv(
+      {
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        HOME: '/Users/u',
+      },
+      undefined,
+      { includeCodingRuntimeSecrets: true },
+    );
+    expect(codexEnv.PATH).toBe(
+      '/Users/u/.nvm/versions/node/v24.15.0/bin:/opt/homebrew/bin:/usr/bin:/bin',
+    );
+    expect(codexEnv.CRS_OAI_KEY).toBe('secret');
+
+    // Non-minimal process PATH is kept (interactive terminal / custom launcher).
+    setLoginShellEnvLoaderForTests(() => ({
+      PATH: '/login/only',
+    }));
+    const rich = buildChildEnv({
+      PATH: '/opt/homebrew/bin:/usr/bin',
+      HOME: '/Users/u',
+    });
+    expect(rich.PATH).toBe('/opt/homebrew/bin:/usr/bin');
+
+    // customEnv.PATH still wins.
+    setLoginShellEnvLoaderForTests(() => ({
+      PATH: '/login/path',
+    }));
+    const custom = buildChildEnv(
+      { PATH: '/usr/bin:/bin', HOME: '/Users/u' },
+      { PATH: '/agent/custom/bin' },
+    );
+    expect(custom.PATH).toBe('/agent/custom/bin');
+  });
+
   test('formatCodexExitFailureBody keeps non-env failures compact and guides missing env_key', () => {
     expect(formatCodexExitFailureBody(2, 'Error: rate limit exceeded')).toBe(
       'codex exit 2: Error: rate limit exceeded',
@@ -288,6 +338,12 @@ describe('daemon-next command executor', () => {
     expect(body).toContain('CRS_OAI_KEY');
     expect(body).toContain('环境变量');
     expect(body).toContain('登录 shell');
+
+    const nodeMissing = formatCodexExitFailureBody(127, 'env: node: No such file or directory');
+    expect(nodeMissing).toContain('codex exit 127');
+    expect(nodeMissing).toContain('env: node');
+    expect(nodeMissing).toContain('LaunchAgent');
+    expect(nodeMissing).toContain('PATH');
   });
 
   test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {

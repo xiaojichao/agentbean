@@ -3,6 +3,7 @@
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
 ### Fixed
+- 发布 `@agentbean/daemon` 0.3.17：LaunchAgent 下为子进程注入登录 shell PATH，修复 `env: node: No such file or directory`（exit 127）
 - 发布 `@agentbean/pi-management-runtime` 0.1.3 与 `@agentbean/daemon` 0.3.16：对齐 PI Management Model Adapter 导出（`ManagementModelAdapterError` 等），修复 0.3.15 安装后 Device Service 因 runtime 包过旧无法启动的问题
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.15：把 #738/#739 的 Codex 密钥注入与 PTY spawn-helper 修复真正推到 npm latest（0.3.14 合入 main 后因版本未 bump 被 CI skip publish）
 
