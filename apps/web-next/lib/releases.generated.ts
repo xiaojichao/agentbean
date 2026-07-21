@@ -2,6 +2,19 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-21",
+    "date": "2026-07-21",
+    "sections": [
+      {
+        "type": "Changed",
+        "items": [
+          "为频道 Agent 失败/超时提供确定性中文提示",
+          "记录 2026-07-20 每日更新日志"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-20",
     "date": "2026-07-20",
     "sections": [
