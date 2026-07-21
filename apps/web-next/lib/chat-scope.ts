@@ -149,6 +149,7 @@ export function isTopLevelAgentReply(
 export interface DispatchStateMessage {
   id: string;
   dispatchStatus?: string;
+  dispatchError?: string;
   dispatchId?: string;
   createdAt?: number;
   meta?: Record<string, unknown>;
@@ -167,6 +168,7 @@ export function mergeChannelHistory<T extends DispatchStateMessage>(
     return {
       ...message,
       dispatchStatus: message.dispatchStatus ?? existing.dispatchStatus,
+      dispatchError: message.dispatchError ?? existing.dispatchError,
       dispatchId: message.dispatchId ?? existing.dispatchId,
     };
   });

@@ -14,6 +14,7 @@ import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
+import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
@@ -3628,7 +3629,7 @@ function ChatBubble({
     emitWithTimeout(getWebSocket(), WEB_EVENTS.dispatch.cancel, { dispatchId: msg.dispatchId })
       .then((res: { ok?: boolean; dispatch?: { id?: string; status?: DispatchStatus } }) => {
         if (res?.ok && res.dispatch?.status) {
-          applyDispatchStatus(msg.channelId, msg.id, res.dispatch.status, res.dispatch.id);
+          applyDispatchStatus(msg.channelId, msg.id, res.dispatch.status, res.dispatch.id, (res.dispatch as { error?: string }).error);
         }
       })
       .catch(() => {});
@@ -3659,15 +3660,32 @@ function ChatBubble({
       return <div className="mt-2 text-xs text-neutral-400">已取消</div>;
     }
     if (dispatch === 'failed') {
+      const meta = (() => {
+        if (msg.meta && typeof msg.meta === 'object') return msg.meta as Record<string, unknown>;
+        if (msg.metaJson) {
+          try { return JSON.parse(msg.metaJson) as Record<string, unknown>; } catch { return undefined; }
+        }
+        return undefined;
+      })();
+      const hint = formatChannelDispatchFailureHint({
+        status: 'failed',
+        errorCode: msg.dispatchError
+          ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
+        detail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
+      });
       return (
-        <div className="mt-2 flex items-center gap-1 text-xs text-red-500">
-          <AlertCircle size={12} />
-          <span>处理失败</span>
+        <div className="mt-2 flex items-start gap-1 text-xs text-red-500">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          <span>{hint}</span>
         </div>
       );
     }
     if (dispatch === 'timed_out') {
-      return <div className="mt-2 text-xs text-amber-600">处理超时</div>;
+      const hint = formatChannelDispatchFailureHint({
+        status: 'timed_out',
+        errorCode: msg.dispatchError ?? 'DISPATCH_TIMEOUT',
+      });
+      return <div className="mt-2 text-xs text-amber-600">{hint}</div>;
     }
     return null;
   };

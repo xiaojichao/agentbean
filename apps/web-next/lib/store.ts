@@ -201,7 +201,7 @@ interface State {
   applyDmsSnapshot(list: DmChannel[]): void;
   applyChannelHistory(channelId: string, msgs: ChatMessage[]): void;
   appendMessage(msg: ChatMessage): void;
-  applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string): void;
+  applyDispatchStatus(channelId: string, messageId: string, dispatchStatus: DispatchStatus, dispatchId?: string, dispatchError?: string): void;
   upsertMessages(msgs: ChatMessage[]): void;
   upsertActivityMessages(msgs: ChatMessage[]): void;
   addOutbound(msg: OutboundMessage): void;
@@ -362,7 +362,7 @@ export const useAgentBeanStore = create<State>((set) => ({
       return { messagesByChannel: { ...s.messagesByChannel, [msg.channelId]: [...list, msg] }, activityMessages };
     });
   },
-  applyDispatchStatus(channelId, messageId, dispatchStatus, dispatchId) {
+  applyDispatchStatus(channelId, messageId, dispatchStatus, dispatchId, dispatchError) {
     set((s) => {
       const list = s.messagesByChannel[channelId];
       if (!list) return s;
@@ -374,6 +374,7 @@ export const useAgentBeanStore = create<State>((set) => ({
           ...msg,
           dispatchStatus,
           ...(dispatchId !== undefined ? { dispatchId } : {}),
+          ...(dispatchError !== undefined ? { dispatchError } : {}),
         };
       });
       if (!changed) return s;

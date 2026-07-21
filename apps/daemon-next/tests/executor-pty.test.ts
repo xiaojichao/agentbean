@@ -157,8 +157,8 @@ describe('daemon-next codex PTY executor', () => {
         customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
       });
       if (typeof output !== 'object') throw new Error('expected structured result');
+      expect(output.body).toContain('额度');
       expect(output.body).toContain('codex exit 2');
-      expect(output.body).toContain('rate limit exceeded');
       expect(output.workspaceRun?.status).toBe('failed');
       expect(output.workspaceRun?.exitCode).toBe(2);
     });
@@ -185,11 +185,10 @@ describe('daemon-next codex PTY executor', () => {
         customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
       });
       if (typeof output !== 'object') throw new Error('expected structured result');
-      expect(output.body).toContain('codex exit 1');
-      expect(output.body).toContain('Missing environment variable: CRS_OAI_KEY.');
       expect(output.body).toContain('CRS_OAI_KEY');
       expect(output.body).toContain('环境变量');
       expect(output.body).toContain('登录 shell');
+      expect(output.body).toContain('codex exit 1');
       expect(output.workspaceRun?.status).toBe('failed');
       expect(output.workspaceRun?.exitCode).toBe(1);
     });
