@@ -5420,7 +5420,13 @@ async function enrichMessagesWithArtifacts(
       ...message,
       ...(artifacts.length > 0 ? { artifacts: artifacts.map(toArtifactDto) } : {}),
       ...(workspaceRun ? { workspaceRun } : {}),
-      ...(chosenDispatch ? { dispatchStatus: chosenDispatch.status, dispatchId: chosenDispatch.id } : {}),
+      ...(chosenDispatch
+        ? {
+            dispatchStatus: chosenDispatch.status,
+            dispatchId: chosenDispatch.id,
+            ...(chosenDispatch.error ? { dispatchError: chosenDispatch.error } : {}),
+          }
+        : {}),
     });
   }
   return enriched;

@@ -46,7 +46,8 @@ const MISSING_ENV_VAR_RE = /Missing environment variable:\s*([A-Za-z_][A-Za-z0-9
 const NODE_NOT_ON_PATH_RE = /env:\s*node:\s*No such file or directory/i;
 const EXEC_NODE_NOT_FOUND_RE = /exec:\s*node:\s*not found/i;
 const USAGE_LIMIT_RE = /hit your usage limit|usage limit|rate limit|配额|额度/i;
-const AUTH_EXPIRED_RE = /refresh token|401 Unauthorized|not logged in|authentication|auth\.json|login required/i;
+// Keep auth matching tight: bare "authentication" is too common in normal agent text.
+const AUTH_EXPIRED_RE = /refresh token|Failed to refresh token|401 Unauthorized|not logged in|auth\.json|login required/i;
 const PTY_UNAVAILABLE_RE = /需要 PTY 运行时|node-pty|PTY 启动失败/i;
 const CODEX_TIMEOUT_RE = /codex 超时|timed? ?out after|AGENTBEAN_CODEX_TIMEOUT/i;
 

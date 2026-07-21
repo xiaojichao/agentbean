@@ -4,7 +4,7 @@ import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { messageSpeakerName } from '@/lib/display-names';
-import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import { formatChannelDispatchFailureHint, rewriteLegacyCodexFailureBody } from '@/lib/dispatch-failure';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -52,11 +52,7 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
 }
 
 function agentFailureDisplayBody(body: string): string {
-  // Older daemons may still post raw `codex exit ...` JSONL. Prefer Chinese summary.
-  if (!/codex exit|Missing environment variable|usage limit|env:\s*node|PTY 启动失败|需要 PTY/i.test(body)) {
-    return body;
-  }
-  return formatChannelDispatchFailureHint({ status: 'failed', detail: body });
+  return rewriteLegacyCodexFailureBody(body);
 }
 
 export function ChannelMessage({ msg }: { msg: ChatMessage }) {
@@ -95,13 +91,14 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
   function cancelDispatch() {
     if (!msg.dispatchId) return;
     emitWithTimeout(getWebSocket(), WEB_EVENTS.dispatch.cancel, { dispatchId: msg.dispatchId })
-      .then((res: { ok?: boolean; dispatch?: { id?: string; status?: DispatchStatus } }) => {
+      .then((res: { ok?: boolean; dispatch?: { id?: string; status?: DispatchStatus; error?: string } }) => {
         if (res?.ok && res.dispatch?.status) {
           useAgentBeanStore.getState().applyDispatchStatus(
             msg.channelId,
             msg.id,
             res.dispatch.status,
             res.dispatch.id,
+            res.dispatch.error,
           );
         }
       })

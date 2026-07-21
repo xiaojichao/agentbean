@@ -143,6 +143,27 @@ describe('mergeChannelHistory', () => {
     expect(merged).toEqual([{ id: 'm1', dispatchStatus: 'running', dispatchId: 'd1' }]);
   });
 
+  test('保留客户端 dispatchError（服务端 history 未带该字段）', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1', dispatchStatus: 'failed' }],
+      [{ id: 'm1', dispatchStatus: 'failed', dispatchError: 'WORKSPACE_RUN_FAILED', dispatchId: 'd1' }],
+    );
+    expect(merged[0]).toEqual({
+      id: 'm1',
+      dispatchStatus: 'failed',
+      dispatchError: 'WORKSPACE_RUN_FAILED',
+      dispatchId: 'd1',
+    });
+  });
+
+  test('服务端带 dispatchError 时以服务端为准', () => {
+    const merged = mergeChannelHistory(
+      [{ id: 'm1', dispatchStatus: 'failed', dispatchError: 'DISPATCH_TIMEOUT' }],
+      [{ id: 'm1', dispatchStatus: 'failed', dispatchError: 'WORKSPACE_RUN_FAILED', dispatchId: 'd1' }],
+    );
+    expect(merged[0]?.dispatchError).toBe('DISPATCH_TIMEOUT');
+  });
+
   test('服务端带 dispatchStatus 时以服务端为准', () => {
     const merged = mergeChannelHistory(
       [{ id: 'm1', dispatchStatus: 'succeeded' }],

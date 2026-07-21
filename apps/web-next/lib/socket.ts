@@ -404,7 +404,7 @@ export function messageReactionEvents(socket: Socket = getWebSocket()): MessageR
 }
 
 export interface DispatchEvents {
-  cancelChannel(teamId: string, channelId: string): Promise<{ ok: boolean; dispatches?: Array<{ id: string; channelId: string; messageId: string; status?: import('./schema').DispatchStatus }>; error?: string }>;
+  cancelChannel(teamId: string, channelId: string): Promise<{ ok: boolean; dispatches?: Array<{ id: string; channelId: string; messageId: string; status?: import('./schema').DispatchStatus; error?: string }>; error?: string }>;
 }
 
 export function dispatchEvents(socket: Socket = getWebSocket()): DispatchEvents {

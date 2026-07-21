@@ -46,3 +46,13 @@ describe('classifyDispatchFailure', () => {
     expect(classifyDispatchFailure({ errorCode: 'WORKSPACE_RUN_CANCELLED' }).category).toBe('workspace_run_cancelled');
   });
 });
+
+  test('does not treat bare authentication text as auth_expired', () => {
+    expect(classifyDispatchFailure({
+      detail: 'Failed authentication with provider configuration docs',
+    }).category).toBe('unknown');
+    expect(classifyDispatchFailure({
+      detail: 'Failed to refresh token: 401 Unauthorized',
+    }).category).toBe('auth_expired');
+  });
+

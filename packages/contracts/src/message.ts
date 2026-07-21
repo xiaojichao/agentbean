@@ -53,6 +53,8 @@ export interface MessageDto {
    */
   dispatchStatus?: DispatchStatus;
   dispatchId?: ID;
+  /** DispatchDto.error 投影（如 DISPATCH_TIMEOUT / WORKSPACE_RUN_FAILED），供频道失败提示分类。 */
+  dispatchError?: string;
 }
 
 export interface ReactInputDto {

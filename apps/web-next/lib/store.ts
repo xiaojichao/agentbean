@@ -354,6 +354,7 @@ export const useAgentBeanStore = create<State>((set) => ({
               ...item,
               ...msg,
               dispatchStatus: msg.dispatchStatus ?? item.dispatchStatus,
+              dispatchError: msg.dispatchError ?? item.dispatchError,
               dispatchId: msg.dispatchId ?? item.dispatchId,
             }
           : item);

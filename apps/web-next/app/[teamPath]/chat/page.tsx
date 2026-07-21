@@ -358,9 +358,9 @@ export default function ChatPage() {
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
     };
-    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string }) => {
+    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string; error?: string }) => {
       if (dispatch.channelId === activeChannel) {
-        applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
+        applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id, dispatch.error);
       }
     };
     const onPinnedUpdated = (payload: { teamId?: string; channelId?: string }) => {
@@ -1285,7 +1285,7 @@ export default function ChatPage() {
       if (res.ok) {
         for (const dispatch of res.dispatches ?? []) {
           if (dispatch.messageId && dispatch.status) {
-            applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
+            applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id, dispatch.error);
           }
         }
         return;

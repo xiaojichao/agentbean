@@ -3469,6 +3469,51 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('projects terminal dispatchError onto channel history messages', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 340,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1', 'message-2']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 340,
+    });
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Codex boom',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+    await expect(app.receiveDispatchError({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      error: 'WORKSPACE_RUN_FAILED',
+    })).resolves.toMatchObject({ ok: true });
+    await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
+      ok: true,
+      messages: [
+        {
+          id: 'message-1',
+          dispatchId: 'dispatch-1',
+          dispatchStatus: 'failed',
+          dispatchError: 'WORKSPACE_RUN_FAILED',
+        },
+      ],
+    });
+  });
+
   test('sendMessage passes uploaded artifacts through to the dispatch request', async () => {
     const app = createInMemoryServerNext({
       now: () => 330,
