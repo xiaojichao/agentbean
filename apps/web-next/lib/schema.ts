@@ -77,6 +77,8 @@ export interface ChatMessage {
   workspaceRun?: WorkspaceRunDetail;
   dispatchStatus?: DispatchStatus;
   dispatchId?: string;
+  /** Server DispatchDto.error (e.g. DISPATCH_TIMEOUT / WORKSPACE_RUN_FAILED). */
+  dispatchError?: string;
 }
 
 export interface Artifact {

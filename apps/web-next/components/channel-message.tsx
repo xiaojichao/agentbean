@@ -4,6 +4,7 @@ import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { messageSpeakerName } from '@/lib/display-names';
+import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -48,6 +49,14 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
       {artifact.filename} ({(artifact.sizeBytes / 1024).toFixed(1)} KB)
     </a>
   );
+}
+
+function agentFailureDisplayBody(body: string): string {
+  // Older daemons may still post raw `codex exit ...` JSONL. Prefer Chinese summary.
+  if (!/codex exit|Missing environment variable|usage limit|env:\s*node|PTY 启动失败|需要 PTY/i.test(body)) {
+    return body;
+  }
+  return formatChannelDispatchFailureHint({ status: 'failed', detail: body });
 }
 
 export function ChannelMessage({ msg }: { msg: ChatMessage }) {
@@ -119,13 +128,27 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     }
     if (dispatch === 'cancelled') return <div className="mt-2 text-xs text-neutral-400">已取消</div>;
     if (dispatch === 'failed') {
+      const hint = formatChannelDispatchFailureHint({
+        status: 'failed',
+        errorCode: msg.dispatchError
+          ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
+        detail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
+      });
       return (
-        <div className="mt-2 flex items-center gap-1 text-xs text-red-500">
-          <AlertCircle size={12} /> 处理失败
+        <div className="mt-2 flex items-start gap-1 text-xs text-red-500">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          <span>{hint}</span>
         </div>
       );
     }
-    if (dispatch === 'timed_out') return <div className="mt-2 text-xs text-amber-600">处理超时</div>;
+    if (dispatch === 'timed_out') {
+      const hint = formatChannelDispatchFailureHint({
+        status: 'timed_out',
+        errorCode: msg.dispatchError
+          ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : 'DISPATCH_TIMEOUT'),
+      });
+      return <div className="mt-2 text-xs text-amber-600">{hint}</div>;
+    }
     return null;
   }
 
@@ -135,7 +158,7 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
         <span className="font-medium">{speaker}</span>
         <span>{time}</span>
       </div>
-      <div className="whitespace-pre-wrap text-sm">{msg.body}</div>
+      <div className="whitespace-pre-wrap text-sm">{msg.senderKind === 'agent' ? agentFailureDisplayBody(msg.body) : msg.body}</div>
       {renderDispatch()}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">

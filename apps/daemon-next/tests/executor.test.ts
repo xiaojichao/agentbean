@@ -350,31 +350,34 @@ describe('daemon-next command executor', () => {
     expect(withPnpmHint.includes('/Users/zxnimac/Library/pnpm') || pathResolvesNode(withPnpmHint)).toBe(true);
   });
 
-  test('formatCodexExitFailureBody keeps non-env failures compact and guides missing env_key', () => {
-    expect(formatCodexExitFailureBody(2, 'Error: rate limit exceeded')).toBe(
-      'codex exit 2: Error: rate limit exceeded',
-    );
+  test('formatCodexExitFailureBody classifies common failures into Chinese guidance', () => {
+    const rateLimited = formatCodexExitFailureBody(2, 'Error: rate limit exceeded');
+    expect(rateLimited).toContain('额度');
+    expect(rateLimited).toContain('codex exit 2');
+
     const body = formatCodexExitFailureBody(
       1,
       '{"type":"error","message":"Missing environment variable: CRS_OAI_KEY."}',
     );
-    expect(body).toContain('codex exit 1');
     expect(body).toContain('CRS_OAI_KEY');
     expect(body).toContain('环境变量');
     expect(body).toContain('登录 shell');
+    expect(body).toContain('codex exit 1');
 
     const nodeMissing = formatCodexExitFailureBody(127, 'env: node: No such file or directory');
-    expect(nodeMissing).toContain('codex exit 127');
-    expect(nodeMissing).toContain('env: node');
-    expect(nodeMissing).toContain('LaunchAgent');
+    expect(nodeMissing).toContain('Node');
     expect(nodeMissing).toContain('PATH');
+    expect(nodeMissing).toContain('codex exit 127');
 
-    const pnpmMissing = formatCodexExitFailureBody(
-      127,
-      '/Users/zxnimac/Library/pnpm/codex: line 20: exec: node: not found',
+    const usage = formatCodexExitFailureBody(
+      1,
+      [
+        '{"type":"error","message":"Reconnecting... 5/5 (request timed out)"}',
+        '{"type":"error","message":"You\'ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage"}',
+      ].join('\n'),
     );
-    expect(pnpmMissing).toContain('exec: node: not found');
-    expect(pnpmMissing).toContain('pnpm');
+    expect(usage).toContain('额度');
+    expect(usage).not.toContain('thread.started');
   });
 
   test('force-kills a custom agent command that ignores SIGTERM after timeout', async () => {

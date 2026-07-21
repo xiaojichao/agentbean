@@ -308,44 +308,125 @@ export function formatCommand(command: string, args: string[]): string {
   return [command, ...args].join(' ');
 }
 
-// Codex model_providers often declare `env_key = "SOME_API_KEY"`. When that process env is
-// missing, codex emits JSON events with `Missing environment variable: NAME.` and exits non-zero.
+// Channel-facing codex failure formatting. Prefer classified Chinese guidance over raw JSONL
+// dumps so the chat bubble is actionable even when PI LLM is not configured yet.
 const MISSING_ENV_VAR_RE = /Missing environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)/i;
-
 const NODE_NOT_ON_PATH_RE = /env:\s*node:\s*No such file or directory/i;
+const EXEC_NODE_NOT_FOUND_RE = /exec:\s*node:\s*not found/i;
+const USAGE_LIMIT_RE = /hit your usage limit|usage limit|rate limit|配额|额度/i;
+const AUTH_EXPIRED_RE = /refresh token|401 Unauthorized|not logged in|authentication|auth\.json|login required/i;
+const PTY_UNAVAILABLE_RE = /需要 PTY 运行时|node-pty|PTY 启动失败/i;
+const CODEX_TIMEOUT_RE = /codex 超时|timed? ?out after|AGENTBEAN_CODEX_TIMEOUT/i;
+
+function extractCodexJsonlMessages(detail: string): string[] {
+  const messages: string[] = [];
+  for (const line of detail.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) continue;
+    try {
+      const event = JSON.parse(trimmed) as {
+        message?: unknown;
+        error?: { message?: unknown } | unknown;
+        item?: { message?: unknown };
+      };
+      if (typeof event.message === 'string' && event.message.trim()) messages.push(event.message.trim());
+      if (event.error && typeof event.error === 'object' && event.error !== null) {
+        const errMsg = (event.error as { message?: unknown }).message;
+        if (typeof errMsg === 'string' && errMsg.trim()) messages.push(errMsg.trim());
+      }
+      if (event.item && typeof event.item === 'object' && event.item !== null) {
+        const itemMsg = (event.item as { message?: unknown }).message;
+        if (typeof itemMsg === 'string' && itemMsg.trim()) messages.push(itemMsg.trim());
+      }
+    } catch {
+      // ignore non-JSON noise
+    }
+  }
+  return messages;
+}
+
+function classifyCodexFailureText(text: string): { summary: string; guidance: string } | null {
+  const envMatch = text.match(MISSING_ENV_VAR_RE);
+  if (envMatch?.[1]) {
+    const envName = envMatch[1];
+    return {
+      summary: `Agent 缺少环境变量 ${envName}`,
+      guidance: [
+        `请在该自定义 Agent 的「环境变量」中配置 ${envName}=<密钥>（推荐，可跨 LaunchAgent 重启保留）；`,
+        `或在登录 shell（~/.zshrc）export ${envName} 后执行 agentbean device restart；`,
+        '也可确认 Device Service 进程本身能读到该变量（launchctl print 查看）。',
+      ].join(''),
+    };
+  }
+  if (
+    NODE_NOT_ON_PATH_RE.test(text)
+    || EXEC_NODE_NOT_FOUND_RE.test(text)
+    || (/\bnode\b/i.test(text) && /not found|No such file or directory/i.test(text))
+  ) {
+    return {
+      summary: '设备上找不到 Node，无法启动 Codex',
+      guidance: [
+        'Codex 启动时找不到 `node`（npm/pnpm 安装的 codex 会 `exec node` / `#!/usr/bin/env node`）。',
+        'Device Service 由 LaunchAgent 启动时 PATH 极简，常不含 nvm / pnpm / Homebrew。',
+        '处理方式：升级 daemon 后 `agentbean device restart`，或在 Agent 环境变量中设置包含 node 的 PATH。',
+      ].join(''),
+    };
+  }
+  if (USAGE_LIMIT_RE.test(text)) {
+    return {
+      summary: 'Codex / ChatGPT 用量或额度已用尽',
+      guidance: '请到 ChatGPT/Codex 用量页检查额度，或切换可用模型 / 本地 provider 后再试。',
+    };
+  }
+  if (AUTH_EXPIRED_RE.test(text)) {
+    return {
+      summary: 'Codex 登录态失效，需要重新登录',
+      guidance: '请在目标设备本机执行 codex login，确认 ~/.codex/auth.json 有效后重试。',
+    };
+  }
+  if (PTY_UNAVAILABLE_RE.test(text)) {
+    return {
+      summary: '本机 Codex 运行环境不可用（缺少 PTY）',
+      guidance: '请确认 daemon 已安装可用的 node-pty，并在目标设备桌面会话中重启 Device Service。',
+    };
+  }
+  if (CODEX_TIMEOUT_RE.test(text)) {
+    return {
+      summary: 'Agent 处理超时，Codex 未在时限内完成',
+      guidance: '可缩短任务、检查模型/网络，或稍后重试；复杂任务建议拆成更小步骤。',
+    };
+  }
+  return null;
+}
 
 export function formatCodexExitFailureBody(exitCode: number, rawOutput: string): string {
   const detail = rawOutput.trim().slice(0, 2000) || '(无输出)';
-  const base = `codex exit ${exitCode}: ${detail}`;
-  if (
-    NODE_NOT_ON_PATH_RE.test(detail)
-    || /exec:\s*node:\s*not found/i.test(detail)
-    || (exitCode === 127 && /\bnode\b/i.test(detail))
-  ) {
+  const candidates = [...extractCodexJsonlMessages(detail), detail];
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const classified = classifyCodexFailureText(candidates[i]!);
+    if (classified) {
+      // Keep a compact technical breadcrumb for support, but lead with Chinese guidance.
+      return [
+        classified.summary,
+        classified.guidance,
+        '',
+        `技术细节：codex exit ${exitCode}`,
+      ].join('\n');
+    }
+  }
+  if (detail === '(无输出)') {
     return [
-      base,
+      'Codex 执行失败，且未返回可读错误输出',
+      '请在设备本机运行 `codex exec --json "Hello"` 验证 Codex 是否可用，并检查 Device Service 日志。',
       '',
-      '提示：Codex 启动时找不到 `node`（npm/pnpm 安装的 codex 会 `exec node` / `#!/usr/bin/env node`）。',
-      'Device Service 由 LaunchAgent 启动时 PATH 极简，常不含 nvm / pnpm / Homebrew。',
-      '处理方式（任选其一）：',
-      '1) 升级到 daemon ≥0.3.18 并 `agentbean device restart`（会注入登录 shell PATH 并探测 node）；',
-      '2) 在该 Agent 环境变量中设置 PATH，包含 `which node` 所在目录（及 `~/Library/pnpm` 若用 pnpm）；',
-      '3) 在交互终端确认 `which node` 有结果，并把同一 PATH 写进登录 shell（~/.zprofile）后 restart device。',
+      `技术细节：codex exit ${exitCode}: (无输出)`,
     ].join('\n');
   }
-  const match = detail.match(MISSING_ENV_VAR_RE);
-  if (!match) {
-    return base;
-  }
-  const envName = match[1]!;
   return [
-    base,
+    'Codex 执行失败',
+    '请查看该消息的执行记录获取完整日志；若持续失败，先在设备本机验证 Codex CLI。',
     '',
-    `提示：Codex 需要环境变量 ${envName}。`,
-    `处理方式（任选其一）：`,
-    `1) 在该自定义 Agent 的「环境变量」中配置 ${envName}=<密钥>（推荐，可跨 LaunchAgent 重启保留）；`,
-    `2) 在登录 shell（~/.zshrc）export ${envName} 后执行 agentbean device restart，daemon 会从登录环境注入 coding-runtime 类密钥；`,
-    `3) 确认 Device Service 进程本身能读到该变量（launchctl print 查看）。`,
+    `技术细节：codex exit ${exitCode}: ${detail.slice(0, 400)}`,
   ].join('\n');
 }
 

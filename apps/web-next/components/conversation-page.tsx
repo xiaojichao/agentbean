@@ -41,9 +41,9 @@ export function ConversationPage({ channelId, mode }: { channelId: string; mode:
     const onMessage = (msg: any) => {
       if (msg.channelId === channelId) appendMessage(msg);
     };
-    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: string; id?: string }) => {
+    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: string; id?: string; error?: string }) => {
       if (dispatch.channelId === channelId) {
-        applyDispatchStatus(channelId, dispatch.messageId, dispatch.status as any, dispatch.id);
+        applyDispatchStatus(channelId, dispatch.messageId, dispatch.status as any, dispatch.id, dispatch.error);
       }
     };
     socket.on('channel:history', onHistory);
