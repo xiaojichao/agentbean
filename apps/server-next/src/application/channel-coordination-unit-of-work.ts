@@ -2,6 +2,8 @@ import type {
   ChannelCoordinationDecisionRecord,
   ChannelCoordinationJobRecord,
   ChannelCoordinationJobStatus,
+  ID,
+  UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import type { ArtifactRepository, MessageRepository, TaskRepository } from './repositories.js';
 
@@ -32,6 +34,15 @@ export interface ChannelCoordinationDecisionRepository {
   create(input: ChannelCoordinationDecisionRecord): Promise<ChannelCoordinationDecisionRecord>;
   getByJobId(jobId: string): Promise<ChannelCoordinationDecisionRecord | null>;
   getByMessageId(messageId: string): Promise<ChannelCoordinationDecisionRecord | null>;
+  /**
+   * 标记该 Task 关联的上一个「仍有效」的 resolved Decision 为被 byDecisionId 取代（AC#8 superseded）。
+   * 返回被取代的 Decision，或 null（无前置 Decision / 已被取代）。
+   */
+  markSupersededByLinkedTask(input: {
+    taskId: ID;
+    byDecisionId: ID;
+    now: UnixMs;
+  }): Promise<ChannelCoordinationDecisionRecord | null>;
 }
 
 export interface ChannelCoordinationRepositories {

@@ -111,6 +111,11 @@ export interface ChannelCoordinationDecisionRecord {
   readonly linkedTaskId: ID | null;
   /** blocked 时的短原因码；其余为 null。 */
   readonly blockingReason: string | null;
+  /**
+   * 被取代状态（AC#8 lifecycle）：非 null = 本 Decision 已被该 id 的新 Decision 取代（superseded）；
+   * null = 仍有效。与 gateStatus 正交——gateStatus 记录门禁裁决，本字段记录后续被取代的生命周期。
+   */
+  readonly supersededByDecisionId: ID | null;
   readonly idempotencyKey: string;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
