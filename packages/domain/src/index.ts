@@ -21,3 +21,4 @@ export * from './memory-candidate-policy.js';
 export * from './pi-provider-policy.js';
 export * from './pi-provider-request.js';
 export * from './pi-provider-test-policy.js';
+export * from './pi-coordination-policy.js';
