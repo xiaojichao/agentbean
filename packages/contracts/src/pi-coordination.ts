@@ -33,13 +33,33 @@ export interface ChannelCoordinationJobRecord {
 }
 
 /**
- * 首期允许的三种无副作用协调意图（#706 / 切片 A）。
- * 其他任何模型输出一律 fail closed（AC#2）；agent_request/tracked_task/task_followup 属后续切片。
+ * 完整六种协调意图（#707）。
+ * - no_action/system_reply/clarification_required：会话型，#706 已实现，始终 applied（不受开关影响）。
+ * - agent_request/tracked_task/task_followup：副作用型，#707 由服务端策略门禁决定 applied/suggested/blocked。
+ * 其他任何模型输出一律 fail closed（AC#2）。
  */
-export type ChannelCoordinationIntent = 'no_action' | 'system_reply' | 'clarification_required';
+export type ChannelCoordinationIntent =
+  | 'no_action'
+  | 'system_reply'
+  | 'clarification_required'
+  | 'agent_request'
+  | 'tracked_task'
+  | 'task_followup';
 
 /** Decision 终态：resolved = 模型给出合法意图；failed = 永久错误或重试耗尽（AC#5/AC#6）。 */
 export type ChannelCoordinationOutcome = 'resolved' | 'failed';
+
+/**
+ * 服务端策略门禁对 proposed Decision 的裁决（#707, AC#8 审计状态）。
+ * - proposed：模型原始提议（门禁前；infra 失败的 failed Decision 留空）。
+ * - applied：门禁放行并执行了副作用。
+ * - suggested：门禁建议但不自动执行（如自动协调关闭，AC#5）。
+ * - blocked：门禁拒绝（高风险/不可逆/敏感/扩作用域/频道归档，AC#7）。
+ */
+export type ChannelCoordinationGateStatus = 'proposed' | 'suggested' | 'applied' | 'blocked';
+
+/** 风险分级：high = 不可逆/敏感/扩作用域，门禁始终 blocked（AC#7）。 */
+export type ChannelCoordinationRiskLevel = 'low' | 'high';
 
 /**
  * Provider 返回的 Token Usage。null 表示未知（AC#8）。
@@ -79,7 +99,39 @@ export interface ChannelCoordinationDecisionRecord {
   readonly attempt: number;
   /** 关联的系统协调消息 id（system_reply/clarification_required 时）；其余为 null。 */
   readonly systemMessageId: ID | null;
+  /** 服务端门禁裁决（AC#8）；failed（infra）时为 null。 */
+  readonly gateStatus: ChannelCoordinationGateStatus | null;
+  /** 门禁评估的风险（副作用意图）；会话意图/failed 时为 null。 */
+  readonly riskLevel: ChannelCoordinationRiskLevel | null;
+  /** 副作用意图的目标描述（tracked_task/agent_request/task_followup）；其余为 null。 */
+  readonly objective: string | null;
+  /** agent_request 的显式目标 agent（来自 @Agent）；其余为 null。 */
+  readonly targetAgentId: ID | null;
+  /** tracked_task/agent_request 创建的 Task 或 task_followup 关联的 Task；其余为 null。 */
+  readonly linkedTaskId: ID | null;
+  /** blocked 时的短原因码；其余为 null。 */
+  readonly blockingReason: string | null;
   readonly idempotencyKey: string;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
+}
+
+/**
+ * Team PI 自动协调开关的产品投影（#707）。
+ * 刻意只暴露 autoCoordinationEnabled —— 不含 mode/Phase/placement/Provider/Model/budget（AC#1）。
+ * 旧 ManagementPolicy 仅供旧 Run 恢复读取，不再是 Team 产品设置。
+ */
+export interface TeamPiPolicyDto {
+  readonly autoCoordinationEnabled: boolean;
+}
+
+export interface GetTeamPiPolicyInput {
+  readonly teamId: ID;
+  readonly userId: ID;
+}
+
+export interface UpdateTeamPiPolicyInput {
+  readonly teamId: ID;
+  readonly userId: ID;
+  readonly autoCoordinationEnabled: boolean;
 }

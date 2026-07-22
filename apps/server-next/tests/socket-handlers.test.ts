@@ -129,6 +129,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.team.update,
       WEB_EVENTS.managementPolicy.get,
       WEB_EVENTS.managementPolicy.update,
+      WEB_EVENTS.piPolicy.get,
+      WEB_EVENTS.piPolicy.update,
       WEB_EVENTS.piProvider.listPresets,
       WEB_EVENTS.piProvider.listCards,
       WEB_EVENTS.piProvider.getCard,

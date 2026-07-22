@@ -155,6 +155,25 @@ export interface TeamRepository {
   delete(teamId: ID): Promise<void>;
 }
 
+export interface TeamPiPolicyRecord {
+  readonly teamId: ID;
+  readonly autoCoordinationEnabled: boolean;
+  readonly updatedBy: ID;
+  readonly updatedAt: UnixMs;
+}
+
+export interface TeamPiPolicyRepository {
+  get(teamId: ID): Promise<TeamPiPolicyRecord | null>;
+  /** 无行 = 默认开启自动协调（新 Team，AC#2）。 */
+  getOrDefault(teamId: ID): Promise<TeamPiPolicyRecord>;
+  setAutoCoordination(input: {
+    teamId: ID;
+    enabled: boolean;
+    actorId: ID;
+    now: UnixMs;
+  }): Promise<TeamPiPolicyRecord>;
+}
+
 export interface JoinLinkRepository {
   create(input: JoinLinkRecord): Promise<JoinLinkRecord>;
   getByCode(code: string): Promise<JoinLinkRecord | null>;
@@ -332,6 +351,7 @@ export interface ServerNextRepositories {
   channelCoordinationUnitOfWork: ChannelCoordinationUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
+  teamPiPolicy: TeamPiPolicyRepository;
   joinLinks: JoinLinkRepository;
   deviceInvites: DeviceInviteRepository;
   channels: ChannelRepository;

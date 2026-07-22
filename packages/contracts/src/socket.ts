@@ -33,6 +33,11 @@ export const WEB_EVENTS = {
     get: 'management-policy:get',
     update: 'management-policy:update',
   },
+  /** Team 作用域 PI 自动协调开关（#707）；任意成员读，Owner/Admin 写。 */
+  piPolicy: {
+    get: 'pi-policy:get',
+    update: 'pi-policy:update',
+  },
   /** 系统作用域 PI Provider Supply；仅系统管理员可访问。 */
   piProvider: {
     listPresets: 'pi-provider:list-presets',

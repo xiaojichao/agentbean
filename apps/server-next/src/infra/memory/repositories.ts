@@ -13,6 +13,7 @@ import type {
   ServerNextRepositories,
   TaskRecord,
   TeamMemberRecord,
+  TeamPiPolicyRecord,
   TeamRecord,
   UserRecord,
   WorkspaceRunRecord,
@@ -55,6 +56,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
 
   const users = new Map<string, UserRecord>();
   const teams = new Map<string, TeamRecord>();
+  const teamPiPolicies = new Map<string, TeamPiPolicyRecord>();
   const members = new Map<string, TeamMemberRecord>();
   const joinLinks = new Map<string, JoinLinkRecord>();
   const deviceInvites = new Map<string, DeviceInviteRecord>();
@@ -218,12 +220,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const artifactSnapshot = new Map(artifacts);
         const jobSnapshot = new Map(channelCoordinationJobs);
         const decisionSnapshot = new Map(channelCoordinationDecisions);
+        const taskSnapshot = new Map(tasks);
         try {
           return await operation({
             messages: repositories.messages,
             artifacts: repositories.artifacts,
             jobs: channelCoordination.jobs,
             decisions: channelCoordination.decisions,
+            tasks: repositories.tasks,
           });
         } catch (error) {
           messages.clear();
@@ -234,6 +238,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, job] of jobSnapshot) channelCoordinationJobs.set(id, job);
           channelCoordinationDecisions.clear();
           for (const [id, decision] of decisionSnapshot) channelCoordinationDecisions.set(id, decision);
+          tasks.clear();
+          for (const [id, task] of taskSnapshot) tasks.set(id, task);
           throw error;
         }
       })),
@@ -494,6 +500,29 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const updated = { ...invite, completedAt: input.completedAt, serverUrl: input.serverUrl ?? invite.serverUrl };
         deviceInvites.set(input.code, updated);
         return updated;
+      },
+    },
+    teamPiPolicy: {
+      async get(teamId) {
+        return teamPiPolicies.get(teamId) ?? null;
+      },
+      async getOrDefault(teamId) {
+        return teamPiPolicies.get(teamId) ?? {
+          teamId,
+          autoCoordinationEnabled: true,
+          updatedBy: 'system',
+          updatedAt: 0,
+        };
+      },
+      async setAutoCoordination(input) {
+        const record: TeamPiPolicyRecord = {
+          teamId: input.teamId,
+          autoCoordinationEnabled: input.enabled,
+          updatedBy: input.actorId,
+          updatedAt: input.now,
+        };
+        teamPiPolicies.set(input.teamId, record);
+        return record;
       },
     },
     channels: {

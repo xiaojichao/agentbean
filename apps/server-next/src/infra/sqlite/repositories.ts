@@ -16,6 +16,7 @@ import type {
   ServerNextRepositories,
   TaskRecord,
   TeamMemberRecord,
+  TeamPiPolicyRecord,
   TeamRecord,
   UserRecord,
   WorkspaceRunRecord,
@@ -104,6 +105,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0025_channel_coordination_jobs.sql');
   applyMigration(db, 'team/0026_channel_coordination_decisions.sql');
+  applyMigration(db, 'team/0027_team_pi_policies.sql');
+  applyMigration(db, 'team/0028_channel_coordination_decisions_gate.sql', { disableForeignKeys: true });
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -269,8 +272,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             id, job_id, team_id, channel_id, message_id, outcome, intent, reason_code, reply_text,
             usage_input, usage_output, active_model_availability, active_model_card_id,
             active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
-            attempt, system_message_id, idempotency_key, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            attempt, system_message_id, gate_status, risk_level, objective, target_agent_id,
+            linked_task_id, blocking_reason, idempotency_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(
               input.id,
               input.jobId,
@@ -291,6 +295,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.diagnosticCode,
               input.attempt,
               input.systemMessageId,
+              input.gateStatus,
+              input.riskLevel,
+              input.objective,
+              input.targetAgentId,
+              input.linkedTaskId,
+              input.blockingReason,
               input.idempotencyKey,
               input.createdAt,
               input.updatedAt,
@@ -340,6 +350,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         artifacts: repositories.artifacts,
         jobs: channelCoordination.jobs,
         decisions: channelCoordination.decisions,
+        tasks: repositories.tasks,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -630,6 +641,29 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM join_links WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM teams WHERE id = ?').run(teamId);
+      },
+    },
+    teamPiPolicy: {
+      async get(teamId) {
+        const row = teamDb.prepare('SELECT * FROM team_pi_policies WHERE team_id = ?').get(teamId);
+        return row ? mapTeamPiPolicy(row) : null;
+      },
+      async getOrDefault(teamId) {
+        const existing = await this.get(teamId);
+        return existing ?? { teamId, autoCoordinationEnabled: true, updatedBy: 'system', updatedAt: 0 };
+      },
+      async setAutoCoordination(input) {
+        teamDb.prepare(`INSERT INTO team_pi_policies (team_id, auto_coordination_enabled, updated_by, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(team_id) DO UPDATE SET
+            auto_coordination_enabled = excluded.auto_coordination_enabled,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at`)
+          .run(input.teamId, input.enabled ? 1 : 0, input.actorId, input.now);
+        const row = teamDb.prepare('SELECT * FROM team_pi_policies WHERE team_id = ?').get(input.teamId);
+        const mapped = mapTeamPiPolicy(row);
+        if (!mapped) throw new Error('team_pi_policies upsert did not return a row');
+        return mapped;
       },
     },
     joinLinks: {
@@ -2304,6 +2338,16 @@ function mapTeam(row: unknown): TeamRecord | null {
   };
 }
 
+function mapTeamPiPolicy(row: unknown): TeamPiPolicyRecord | null {
+  if (!row) return null;
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    autoCoordinationEnabled: sqliteNumber(row, 'auto_coordination_enabled') === 1,
+    updatedBy: sqliteText(row, 'updated_by'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
 function mapJoinLink(row: unknown): JoinLinkRecord | null {
   if (!row) {
     return null;
@@ -2543,6 +2587,12 @@ function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisi
     diagnosticCode: sqliteNullableText(row, 'diagnostic_code') ?? null,
     attempt: sqliteNumber(row, 'attempt'),
     systemMessageId: sqliteNullableText(row, 'system_message_id') ?? null,
+    gateStatus: (sqliteNullableText(row, 'gate_status') ?? null) as ChannelCoordinationDecisionRecord['gateStatus'],
+    riskLevel: (sqliteNullableText(row, 'risk_level') ?? null) as ChannelCoordinationDecisionRecord['riskLevel'],
+    objective: sqliteNullableText(row, 'objective') ?? null,
+    targetAgentId: sqliteNullableText(row, 'target_agent_id') ?? null,
+    linkedTaskId: sqliteNullableText(row, 'linked_task_id') ?? null,
+    blockingReason: sqliteNullableText(row, 'blocking_reason') ?? null,
     idempotencyKey: sqliteText(row, 'idempotency_key'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),

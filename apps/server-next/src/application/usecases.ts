@@ -191,6 +191,10 @@ export interface ServerNextUseCases {
   getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
   getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
+  /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
+  getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
+  /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
+  updatePiPolicy(input: { teamId: string; userId: string; autoCoordinationEnabled: boolean }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
   updateCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ memory: MemoryView }>>;
@@ -964,13 +968,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
-  // Channel Coordinator（#706）：消费 durable Coordination Job，调 Active PI Model 产出无副作用 Decision。
-  // 不依赖 Device 在线；模型失败只影响 Job/Decision，原消息始终展示。
+  // Channel Coordinator（#706/#707）：消费 durable Job，调 Active PI Model 产出提议，
+  // 再由 Server 校验权限、风险与频道状态后应用低风险动作。不依赖 Device 在线。
   const channelCoordinator = createChannelCoordinator({
     jobs: repositories.channelCoordination.jobs,
     decisions: repositories.channelCoordination.decisions,
     unitOfWork: repositories.channelCoordinationUnitOfWork,
     messages: repositories.messages,
+    channels: repositories.channels,
+    teams: repositories.teams,
+    agents: repositories.agents,
+    teamPolicy: repositories.teamPiPolicy,
     modelResolver: piProvider,
     clock,
     ids,
@@ -4757,6 +4765,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return result.ok
         ? makeSuccess({ policy: result.policy, canManage: result.canManage })
         : makeFailure(result.error === 'FORBIDDEN' ? 'FORBIDDEN' : 'VALIDATION_ERROR', 'Management policy update rejected');
+    },
+
+    async getPiPolicy(input) {
+      // 任意成员可读公开的自动协调状态（AC#2 只读）。
+      const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+      if (!role) return makeFailure('FORBIDDEN', 'Not a team member');
+      const policy = await repositories.teamPiPolicy.getOrDefault(input.teamId);
+      // AC#1：刻意只返回 autoCoordinationEnabled，绝不暴露 mode/phase/placement/provider/model/budget。
+      return makeSuccess({ autoCoordinationEnabled: policy.autoCoordinationEnabled });
+    },
+
+    async updatePiPolicy(input) {
+      // 仅 Team Owner/Admin 可切换（AC#2）。
+      const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+      if (role !== 'owner' && role !== 'admin') {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can change PI auto-coordination');
+      }
+      const saved = await repositories.teamPiPolicy.setAutoCoordination({
+        teamId: input.teamId,
+        enabled: input.autoCoordinationEnabled,
+        actorId: input.userId,
+        now: clock.now(),
+      });
+      return makeSuccess({ autoCoordinationEnabled: saved.autoCoordinationEnabled });
     },
 
     async listPiProviderPresets(input) {
