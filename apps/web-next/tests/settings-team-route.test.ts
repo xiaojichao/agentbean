@@ -8,16 +8,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   updateTeam: vi.fn(async () => ({ ok: true })),
-  getManagementPolicy: vi.fn(async () => ({
-    ok: true,
-    policy: {
-      schemaVersion: 2, teamId: 'route-team-id', mode: 'direct', maxManagementPhase: 1,
-      placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true },
-      updatedBy: '', updatedAt: 0,
-    },
-    canManage: true,
-  })),
-  updateManagementPolicy: vi.fn(async () => ({ ok: true })),
+  getPiPolicy: vi.fn(async () => ({ ok: true, autoCoordinationEnabled: true })),
+  updatePiPolicy: vi.fn(async (payload: { autoCoordinationEnabled: boolean }) => ({ ok: true, autoCoordinationEnabled: payload.autoCoordinationEnabled })),
   storeState: {
     currentTeamId: 'stale-team',
     teams: [{ id: 'stale-team', name: 'Stale Team', path: 'stale-team' }],
@@ -51,9 +43,9 @@ vi.mock('@/lib/socket', () => ({
     update: mocks.updateTeam,
     delete: vi.fn(),
   }),
-  managementPolicyEvents: () => ({
-    get: mocks.getManagementPolicy,
-    update: mocks.updateManagementPolicy,
+  piPolicyEvents: () => ({
+    get: mocks.getPiPolicy,
+    update: mocks.updatePiPolicy,
   }),
 }));
 
@@ -90,7 +82,7 @@ describe('SettingsPage Team route binding', () => {
     view.rerender(React.createElement(SettingsPage));
 
     await waitFor(() => expect(input.value).toBe('Route Team'));
-    await waitFor(() => expect(mocks.getManagementPolicy).toHaveBeenCalledWith('route-team-id'));
+    await waitFor(() => expect(mocks.getPiPolicy).toHaveBeenCalledWith('route-team-id'));
     fireEvent.change(input, { target: { value: 'Renamed Route Team' } });
     fireEvent.click(save);
 
@@ -100,28 +92,18 @@ describe('SettingsPage Team route binding', () => {
     }));
   });
 
-  test('saves an explicit Phase 2 ceiling only through the owner/admin management control', async () => {
-    const { ManagementPolicyPanel } = await import('../app/[teamPath]/settings/ManagementPolicyPanel');
-    const view = render(React.createElement(ManagementPolicyPanel, {
-      teamId: 'route-team-id', canManage: true, deviceIds: ['device-1'],
-    }));
-    await waitFor(() => expect(mocks.getManagementPolicy).toHaveBeenCalledWith('route-team-id'));
-    fireEvent.change(view.container.querySelector('[data-smoke="settings-management-mode"]')!, { target: { value: 'managed' } });
-    fireEvent.click(view.container.querySelector('input[type="checkbox"]')!);
-    fireEvent.change(view.container.querySelector('[data-smoke="settings-management-phase"]')!, { target: { value: '2' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存管理模式' }));
-    await waitFor(() => expect(mocks.updateManagementPolicy).toHaveBeenCalledWith({
+  test('PI auto-coordination toggle saves through the owner/admin control', async () => {
+    const { PiPolicyPanel } = await import('../app/[teamPath]/settings/PiPolicyPanel');
+    render(React.createElement(PiPolicyPanel, { teamId: 'route-team-id', canManage: true }));
+    await waitFor(() => expect(mocks.getPiPolicy).toHaveBeenCalledWith('route-team-id'));
+
+    const toggle = document.querySelector('[data-smoke="settings-pi-auto-coordination"] input[type="checkbox"]') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(mocks.updatePiPolicy).toHaveBeenCalledWith({
       teamId: 'route-team-id',
-      mode: 'managed',
-      maxManagementPhase: 2,
-      placementPolicy: {
-        placement: 'device',
-        allowedDeviceIds: ['device-1'],
-        allowServerContext: false,
-        requireLocalModelCredentials: true,
-      },
-      // #648：面板全量表单提交预算区，留空 = 显式回落 Phase 默认（空覆盖对象）。
-      budgetOverrides: {},
+      autoCoordinationEnabled: false,
     }));
   });
 });

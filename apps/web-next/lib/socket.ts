@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -311,15 +311,15 @@ export function teamEvents(socket: Socket = getWebSocket()): TeamEvents {
   };
 }
 
-export interface ManagementPolicyEvents {
-  get(teamId: string): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
-  update(payload: { teamId: string; mode: ManagementMode; maxManagementPhase: 1 | 2 | 3; placementPolicy: ManagerPlacementPolicyDto; budgetOverrides?: Partial<ManagementBudgetDto> }): Promise<{ ok: boolean; policy?: TeamManagementPolicyV2Dto; canManage?: boolean; error?: string }>;
+export interface PiPolicyEvents {
+  get(teamId: string): Promise<{ ok: boolean; autoCoordinationEnabled?: boolean; error?: string }>;
+  update(payload: { teamId: string; autoCoordinationEnabled: boolean }): Promise<{ ok: boolean; autoCoordinationEnabled?: boolean; error?: string }>;
 }
 
-export function managementPolicyEvents(socket: Socket = getWebSocket()): ManagementPolicyEvents {
+export function piPolicyEvents(socket: Socket = getWebSocket()): PiPolicyEvents {
   return {
-    get(teamId) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.get, { teamId }); },
-    update(payload) { return emitWithTimeout(socket, WEB_EVENTS.managementPolicy.update, payload); },
+    get(teamId) { return emitWithTimeout(socket, WEB_EVENTS.piPolicy.get, { teamId }); },
+    update(payload) { return emitWithTimeout(socket, WEB_EVENTS.piPolicy.update, payload); },
   };
 }
 

@@ -18,7 +18,7 @@ import {
 import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
 import { RunsPanel } from './RunsPanel';
-import { ManagementPolicyPanel } from './ManagementPolicyPanel';
+import { PiPolicyPanel } from './PiPolicyPanel';
 import { MemoryGovernancePanel } from './MemoryGovernancePanel';
 import { PiManagementPanel } from './PiManagementPanel';
 import {
@@ -446,7 +446,6 @@ function ServerPanel() {
   }, [settingsTeamId]);
 
   const agentList = visibleAgents;
-  const managementDeviceIds = agentList.flatMap((agent) => agent.deviceId ? [agent.deviceId] : []);
   const canManagePolicy = settingsTeam?.currentUserRole === 'owner' || settingsTeam?.currentUserRole === 'admin';
 
   const loadLinks = useCallback(async () => {
@@ -553,7 +552,7 @@ function ServerPanel() {
       </section>
 
       {settingsTeamId && (
-        <ManagementPolicyPanel teamId={settingsTeamId} canManage={canManagePolicy} deviceIds={managementDeviceIds} />
+        <PiPolicyPanel teamId={settingsTeamId} canManage={canManagePolicy} />
       )}
 
       {/* ADMINS */}
