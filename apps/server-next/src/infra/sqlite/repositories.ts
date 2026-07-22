@@ -107,6 +107,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0026_channel_coordination_decisions.sql');
   applyMigration(db, 'team/0027_team_pi_policies.sql');
   applyMigration(db, 'team/0028_channel_coordination_decisions_gate.sql', { disableForeignKeys: true });
+  applyMigration(db, 'team/0029_channel_coordination_decisions_superseded.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -273,8 +274,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             usage_input, usage_output, active_model_availability, active_model_card_id,
             active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
             attempt, system_message_id, gate_status, risk_level, objective, target_agent_id,
-            linked_task_id, blocking_reason, idempotency_key, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            linked_task_id, blocking_reason, superseded_by_decision_id, idempotency_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(
               input.id,
               input.jobId,
@@ -301,6 +302,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.targetAgentId,
               input.linkedTaskId,
               input.blockingReason,
+              input.supersededByDecisionId,
               input.idempotencyKey,
               input.createdAt,
               input.updatedAt,
@@ -316,6 +318,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapChannelCoordinationDecision(teamDb.prepare(
           'SELECT * FROM channel_coordination_decisions WHERE message_id = ?',
         ).get(messageId));
+      },
+      async markSupersededByLinkedTask(input) {
+        const row = teamDb.prepare(`SELECT * FROM channel_coordination_decisions
+          WHERE linked_task_id = ? AND outcome = 'resolved' AND superseded_by_decision_id IS NULL
+          ORDER BY created_at DESC LIMIT 1`).get(input.taskId) as unknown;
+        const prior = mapChannelCoordinationDecision(row);
+        if (!prior) return null;
+        teamDb.prepare(`UPDATE channel_coordination_decisions
+          SET superseded_by_decision_id = ?, updated_at = ? WHERE id = ?`)
+          .run(input.byDecisionId, input.now, prior.id);
+        return mapChannelCoordinationDecision(teamDb.prepare(
+          'SELECT * FROM channel_coordination_decisions WHERE id = ?',
+        ).get(prior.id));
       },
     },
   };
@@ -2593,6 +2608,7 @@ function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisi
     targetAgentId: sqliteNullableText(row, 'target_agent_id') ?? null,
     linkedTaskId: sqliteNullableText(row, 'linked_task_id') ?? null,
     blockingReason: sqliteNullableText(row, 'blocking_reason') ?? null,
+    supersededByDecisionId: sqliteNullableText(row, 'superseded_by_decision_id') ?? null,
     idempotencyKey: sqliteText(row, 'idempotency_key'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),

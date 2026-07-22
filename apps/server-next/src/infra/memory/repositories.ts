@@ -168,6 +168,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return Array.from(channelCoordinationDecisions.values())
           .find((decision) => decision.messageId === messageId) ?? null;
       },
+      async markSupersededByLinkedTask(input) {
+        const candidates = Array.from(channelCoordinationDecisions.values())
+          .filter((decision) =>
+            decision.linkedTaskId === input.taskId
+            && decision.outcome === 'resolved'
+            && decision.supersededByDecisionId === null)
+          .sort((left, right) => right.createdAt - left.createdAt);
+        const prior = candidates[0];
+        if (!prior) return null;
+        const updated = { ...prior, supersededByDecisionId: input.byDecisionId, updatedAt: input.now };
+        channelCoordinationDecisions.set(prior.id, updated);
+        return updated;
+      },
     },
   };
 

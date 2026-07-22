@@ -784,6 +784,45 @@ describe('channel coordinator: decision gate (#707)', () => {
     // 系统消息正文是「已创建跟踪任务」前缀 + objective，不含模型的解释性 text。
     expect(sys?.body).not.toContain('不应进入审计');
   });
+
+  test('task_followup supersedes the prior tracked_task decision for the same thread task (AC#8 superseded)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([
+        okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' })),
+        okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'progress', risk: 'low', objective: '更新进度' })),
+      ]),
+    });
+    // M1 → tracked_task D1（创建 task T，关联 M1）
+    await seedHumanMessageJob(repos, { messageId: 'message-1', jobId: 'job-1', body: '帮我交付周报' });
+    await coordinator.processJob('job-1');
+    const d1 = await repos.channelCoordination.decisions.getByJobId('job-1');
+    const taskId = d1?.linkedTaskId;
+    expect(taskId).not.toBeNull();
+    expect(d1?.supersededByDecisionId).toBeNull();
+
+    // M2（同线程 message-1）→ task_followup D2
+    await repos.messages.append({
+      id: 'message-2', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: '进度更新', createdAt: 910,
+    });
+    await repos.channelCoordination.jobs.create({
+      id: 'job-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-2',
+      idempotencyKey: 'message:team-1:message-2', status: 'pending', attempt: 0, nextRetryAt: null,
+      activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+      createdAt: 920, updatedAt: 920,
+    });
+    await coordinator.processJob('job-2');
+
+    const d2 = await repos.channelCoordination.decisions.getByJobId('job-2');
+    expect(d2?.intent).toBe('task_followup');
+    expect(d2?.linkedTaskId).toBe(taskId); // D2 关联到同 Task
+    // D1 被标记为被 D2 取代（AC#8 superseded 状态可审计）
+    const d1After = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(d1After?.supersededByDecisionId).toBe(d2?.id);
+    // follow-up 消息也被关联到该 Task
+    const m2 = await repos.messages.getById('message-2');
+    expect(m2?.meta?.taskId).toBe(taskId);
+  });
 });
 
 describe('channel coordinator: SQLite persistence (migration 0026)', () => {
@@ -890,6 +929,59 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
       expect(replay.kind).toBe('already_decided');
       expect(teamDb.prepare('SELECT COUNT(*) AS count FROM channel_coordination_decisions').get()).toEqual({ count: 1 });
       expect(teamDb.prepare('SELECT COUNT(*) AS count FROM messages WHERE sender_kind = ?').get('system')).toEqual({ count: 1 });
+    } finally {
+      globalDb.close();
+      teamDb.close();
+    }
+  });
+
+  test('task_followup marks the prior tracked_task decision superseded_by_decision_id in SQLite (AC#8)', async () => {
+    const globalDb = new Database(':memory:');
+    const teamDb = new Database(':memory:');
+    applyGlobalMigrations(globalDb);
+    applyTeamMigrations(teamDb);
+    try {
+      expect(teamDb.prepare("SELECT 1 FROM pragma_table_info('channel_coordination_decisions') WHERE name='superseded_by_decision_id'").get()).toBeTruthy();
+      const repos = createSqliteRepositories({ globalDb, teamDb });
+      // 增强门禁需要 channel/team/成员访问上下文（tracked_task applied 的前置）。
+      await repos.users.create({ id: 'user-1', username: 'alice', role: 'user', passwordHash: 'x', createdAt: 1, updatedAt: 1 });
+      await repos.teams.create({ id: 'team-1', name: 'Team 1', path: 'team-1', visibility: 'private', ownerId: 'user-1', createdAt: 1 });
+      await repos.teams.addMember({ teamId: 'team-1', userId: 'user-1', username: 'alice', role: 'owner', joinedAt: 1 });
+      await repos.channels.create({ id: 'channel-1', teamId: 'team-1', kind: 'channel', name: 'general', visibility: 'public', createdBy: 'user-1', createdAt: 1, humanMemberIds: ['user-1'], agentMemberIds: [] });
+      const coordinator = createChannelCoordinator({
+        jobs: repos.channelCoordination.jobs,
+        decisions: repos.channelCoordination.decisions,
+        unitOfWork: repos.channelCoordinationUnitOfWork,
+        messages: repos.messages,
+        channels: repos.channels,
+        teams: repos.teams,
+        agents: repos.agents,
+        tasks: repos.tasks,
+        teamPolicy: repos.teamPiPolicy,
+        modelResolver: availableResolver,
+        clock: { now: () => 1000 },
+        ids: { nextId: createIds(['decision-1', 'sysmsg-1', 'task-1', 'decision-2', 'sysmsg-2']) },
+        fetch: makeFetch([
+          okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' })),
+          okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'progress', risk: 'low', objective: '更新进度' })),
+        ]),
+        baseDelayMs: 100,
+      });
+      await repos.messages.append({ id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1', senderKind: 'human', senderId: 'user-1', body: '交付周报', createdAt: 900 });
+      await repos.channelCoordination.jobs.create({ id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1', idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null, activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' }, createdAt: 950, updatedAt: 950 });
+      await coordinator.processJob('job-1');
+      const taskId = (await repos.channelCoordination.decisions.getByJobId('job-1'))?.linkedTaskId;
+
+      await repos.messages.append({ id: 'message-2', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1', senderKind: 'human', senderId: 'user-1', body: '进度更新', createdAt: 910 });
+      await repos.channelCoordination.jobs.create({ id: 'job-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-2', idempotencyKey: 'message:team-1:message-2', status: 'pending', attempt: 0, nextRetryAt: null, activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' }, createdAt: 960, updatedAt: 960 });
+      await coordinator.processJob('job-2');
+
+      expect(taskId).not.toBeNull();
+      const d1 = teamDb.prepare('SELECT superseded_by_decision_id AS s FROM channel_coordination_decisions WHERE job_id = ?').get('job-1') as { s: string | null };
+      const d2Id = (await repos.channelCoordination.decisions.getByJobId('job-2'))?.id;
+      expect(d1.s).toBe(d2Id); // D1 被 D2 取代
+      const d2 = teamDb.prepare('SELECT linked_task_id AS t FROM channel_coordination_decisions WHERE job_id = ?').get('job-2') as { t: string | null };
+      expect(d2.t).toBe(taskId); // D2 关联到同 Task
     } finally {
       globalDb.close();
       teamDb.close();

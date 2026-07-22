@@ -276,7 +276,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         systemMessageId = message.id;
       }
 
-      // applied 副作用意图：tracked_task/agent_request 建 Task；task_followup MVP 仅记录（关联留后续）。
+      // applied 副作用意图：tracked_task/agent_request 建 Task。
       if (verdict.status === 'applied' && (parsed.intent === 'tracked_task' || parsed.intent === 'agent_request')) {
         const taskId = deps.ids.nextId();
         const task = await transaction.tasks.create({
@@ -293,6 +293,28 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         });
         linkedTaskId = task.id;
         await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: task.id });
+      }
+
+      // applied task_followup：关联到本线程已有的 Task（meta.taskId），并把上一个关联该 Task 的
+      // resolved Decision 标记为被本 Decision 取代（AC#8 superseded 生命周期状态）。
+      if (verdict.status === 'applied' && parsed.intent === 'task_followup') {
+        const threadMessages = await transaction.messages.listByThread({
+          channelId: job.channelId,
+          threadId: ctx.threadId,
+          limit: 50,
+        });
+        const priorTaskId = threadMessages
+          .map((m) => m.meta?.taskId)
+          .find((taskId): taskId is string => typeof taskId === 'string');
+        if (priorTaskId) {
+          linkedTaskId = priorTaskId;
+          await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: priorTaskId });
+          await transaction.decisions.markSupersededByLinkedTask({
+            taskId: priorTaskId,
+            byDecisionId: decisionId,
+            now,
+          });
+        }
       }
 
       const decision: ChannelCoordinationDecisionRecord = {
@@ -317,6 +339,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         targetAgentId: parsed.intent === 'agent_request' ? ctx.targetAgentId : null,
         linkedTaskId,
         blockingReason,
+        supersededByDecisionId: null,
         idempotencyKey: `decision:${job.id}`,
         createdAt: now,
         updatedAt: now,
@@ -365,6 +388,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         targetAgentId: null,
         linkedTaskId: null,
         blockingReason: null,
+        supersededByDecisionId: null,
         idempotencyKey: `decision:${job.id}`,
         createdAt: now,
         updatedAt: now,
