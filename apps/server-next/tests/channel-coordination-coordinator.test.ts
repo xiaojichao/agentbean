@@ -1242,3 +1242,133 @@ describe('channel coordinator: system message meta + target anomaly (#708)', () 
     }
   });
 });
+
+describe('channel coordinator: task_followup evidence binding (#709)', () => {
+  function bindingCoordMeta(msg: { meta?: MessageMetaDto } | null | undefined): CoordinationSystemMessageMeta | null {
+    const coordination = msg?.meta?.coordination;
+    return (coordination as CoordinationSystemMessageMeta | undefined) ?? null;
+  }
+
+  async function bindingLastSystemMessage(repos: Setup['repos']) {
+    const msgs = await repos.messages.listByChannel('channel-1', 50);
+    const systems = msgs.filter((m) => m.senderKind === 'system');
+    return systems.length > 0 ? systems[systems.length - 1] : null;
+  }
+
+  async function seedFollowupJob(
+    repos: Setup['repos'],
+    options: { objective?: string; priorTaskIdInThread?: string } = {},
+  ): Promise<void> {
+    await seedAccessContext(repos);
+    if (options.priorTaskIdInThread) {
+      await repos.messages.append({
+        id: 'prior-msg', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+        senderKind: 'system', senderId: 'pi-coordinator', body: '已创建跟踪任务', createdAt: 800,
+        meta: {
+          coordination: {
+            decisionId: 'd0', jobId: 'j0', intent: 'tracked_task', gateStatus: 'applied',
+            taskId: options.priorTaskIdInThread,
+          },
+        },
+      });
+    }
+    await repos.messages.append({
+      id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: options.objective ?? '补充进度', createdAt: 900,
+    });
+    await repos.channelCoordination.jobs.create({
+      id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null,
+      activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+      createdAt: 950, updatedAt: 950,
+    });
+  }
+
+  async function seedChannelTask(
+    repos: Setup['repos'],
+    id: string,
+    status: 'todo' | 'in_progress' | 'in_review' = 'in_progress',
+    sortOrder = 0,
+  ): Promise<void> {
+    await repos.tasks.create({
+      id, teamId: 'team-1', title: `任务 ${id}`, status, creatorId: 'user-1', channelId: 'channel-1',
+      tags: [], sortOrder, createdAt: 700, updatedAt: 700,
+    });
+  }
+
+  test('strong: 线程内含 taskId → 直接关联 + applied (AC1)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充进度' }))]),
+    });
+    await seedFollowupJob(repos, { priorTaskIdInThread: 'existing-task' });
+    await seedChannelTask(repos, 'existing-task');
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.linkedTaskId).toBe('existing-task');
+    expect(decision?.gateStatus).toBe('applied');
+    const sys = await bindingLastSystemMessage(repos);
+    expect(bindingCoordMeta(sys)?.taskId).toBe('existing-task');
+  });
+
+  test('suggested: 无线程 taskId + 唯一活跃候选 → 关联 + confirm_suggested (AC2)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充一个实现细节' }))]),
+    });
+    await seedFollowupJob(repos);
+    await seedChannelTask(repos, 'lone-task');
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.linkedTaskId).toBe('lone-task');
+    const sys = await bindingLastSystemMessage(repos);
+    expect(bindingCoordMeta(sys)?.action).toBe('confirm_suggested');
+  });
+
+  test('needs_confirmation: 无线程 taskId + 多候选 → blocked + 候选列表 (AC3)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '更新进度' }))]),
+    });
+    await seedFollowupJob(repos);
+    await seedChannelTask(repos, 'task-a', 'todo', 0);
+    await seedChannelTask(repos, 'task-b', 'in_progress', 1);
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.linkedTaskId).toBeNull();
+    const sys = await bindingLastSystemMessage(repos);
+    const meta = bindingCoordMeta(sys);
+    expect(meta?.gateStatus).toBe('blocked');
+    expect(meta?.followupCandidateTaskIds).toEqual(['task-a', 'task-b']);
+  });
+
+  test('none: 无线程 taskId + 无候选 → 不关联', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '随便跟进' }))]),
+    });
+    await seedFollowupJob(repos);
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.linkedTaskId).toBeNull();
+  });
+
+  test('replay 同一 job 不重复系统消息 (AC6 幂等)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([
+        okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充' })),
+        okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'followup', risk: 'low', objective: '补充' })),
+      ]),
+    });
+    await seedFollowupJob(repos);
+    await seedChannelTask(repos, 'lone-task');
+
+    await coordinator.processJob('job-1');
+    await coordinator.processJob('job-1');
+    const msgs = await repos.messages.listByChannel('channel-1', 50);
+    expect(msgs.filter((m) => m.senderKind === 'system').length).toBe(1);
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.linkedTaskId).toBe('lone-task');
+  });
+});

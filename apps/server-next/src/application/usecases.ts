@@ -3441,6 +3441,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ] : [],
         };
       }));
+      // #709 root task 的不可变 revision 历史（旧→新），供 Task 视图展示变更原因（AC7）。
+      const revisionHistory = (await repositories.tasks.listRevisions({
+        taskId: rootTask.id,
+        teamId: taskInput.teamId,
+      })).map((task) => ({
+        revision: task.revision,
+        objective: task.description ?? task.title,
+        superseded: task.supersededByRevision !== null,
+        supersededByRevision: task.supersededByRevision,
+        supersededReasonCode: task.supersededReasonCode,
+        supersededAt: task.supersededAt,
+        createdAt: task.createdAt,
+      }));
       return makeSuccess({
         dag: {
           schemaVersion: 1,
@@ -3448,6 +3461,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           rootTaskId: rootTask.id,
           graphRevision: events.at(-1)?.event.sequence ?? 0,
           nodes,
+          revisionHistory,
           handoffs: handoffs.map((handoff) => ({ id: handoff.id,
             ...(handoff.intent.fromAgentId ? { fromAgentId: handoff.intent.fromAgentId } : {}),
             toAgentId: handoff.intent.toAgentId, kind: handoff.intent.kind,

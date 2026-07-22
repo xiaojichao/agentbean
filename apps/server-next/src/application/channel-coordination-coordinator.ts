@@ -34,6 +34,7 @@ import {
   evaluateCoordinationGate,
   parseCoordinationResponse,
   planCoordinationRetry,
+  resolveTaskFollowupBinding,
 } from '../../../../packages/domain/src/index.js';
 import type {
   AgentStatus,
@@ -300,6 +301,26 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     return null;
   }
 
+  /**
+   * #709 收集线程内可解析的 Task id（meta.taskId + coordination 系统消息的 meta.coordination.taskId），
+   * 去重，按时序最早在前。强绑定证据的统一来源（Task 讨论串 / 回复 Task 系统消息 / 明确引用）。
+   */
+  function collectThreadTaskIds(messages: readonly { readonly meta?: MessageMetaDto }[]): ID[] {
+    const ids: ID[] = [];
+    const seen = new Set<ID>();
+    for (const message of messages) {
+      const meta = message.meta as Record<string, unknown> | undefined;
+      const coordination = meta?.coordination as Record<string, unknown> | undefined;
+      for (const candidate of [meta?.taskId, coordination?.taskId]) {
+        if (typeof candidate === 'string' && !seen.has(candidate)) {
+          seen.add(candidate);
+          ids.push(candidate);
+        }
+      }
+    }
+    return ids;
+  }
+
   /** 应用门禁裁决：applied 执行副作用（建 Task/系统消息），suggested/blocked 仅发说明消息，不执行副作用。 */
   async function finalizeGateDecision(
     job: ChannelCoordinationJobRecord,
@@ -323,9 +344,13 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   ): Promise<CoordinationJobOutcome> {
     const decisionId = deps.ids.nextId();
     const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
-    const blockingReason = verdict.status === 'blocked' ? verdict.reason : null;
     return deps.unitOfWork.run(async (transaction) => {
       let linkedTaskId: ID | null = null;
+      // #709 task_followup 证据关联可覆盖门禁裁决（仅收紧 applied/suggested→blocked，从不放松）。
+      let effectiveVerdict: CoordinationGateVerdict = verdict;
+      let effectiveGateStatus: ChannelCoordinationGateStatus = ctx.gateStatus;
+      let effectiveAction: CoordinationSystemMessageAction | null = null;
+      let followupCandidateTaskIds: ID[] | null = null;
 
       // applied 副作用意图：tracked_task/agent_request 先建 Task 拿 linkedTaskId，
       // 使系统消息 meta 能携带 taskId（AC#4）。事务原子，重排不影响外部可观察状态。
@@ -347,25 +372,46 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: task.id });
       }
 
-      // applied task_followup：关联到本线程已有的 Task（meta.taskId），并把上一个关联该 Task 的
-      // resolved Decision 标记为被本 Decision 取代（AC#8 superseded 生命周期状态）。
-      if (verdict.status === 'applied' && parsed.intent === 'task_followup') {
+      // #709 task_followup 证据关联：用 resolveTaskFollowupBinding 判定强绑定/弱建议/需确认/无候选。
+      // 仅在门禁未 blocked 时处理（服从高风险/归档/无权限硬门禁）；binding 只收紧、不放松。
+      if (parsed.intent === 'task_followup' && verdict.status !== 'blocked') {
         const threadMessages = await transaction.messages.listByThread({
           channelId: job.channelId,
           threadId: ctx.threadId,
           limit: 50,
         });
-        const priorTaskId = threadMessages
-          .map((m) => m.meta?.taskId)
-          .find((taskId): taskId is string => typeof taskId === 'string');
-        if (priorTaskId) {
-          linkedTaskId = priorTaskId;
-          await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: priorTaskId });
+        const threadTaskIds = collectThreadTaskIds(threadMessages);
+        const channelActiveTasks = (await transaction.tasks.list({
+          teamId: job.teamId,
+          channelIds: [job.channelId],
+          includeGlobal: false,
+        }))
+          .filter((task) => task.status !== 'done' && task.status !== 'closed')
+          .map((task) => ({ taskId: task.id, objective: task.title }));
+        const binding = resolveTaskFollowupBinding({
+          threadTaskIds,
+          channelActiveTasks,
+          followupObjective: parsed.objective ?? '',
+        });
+        if (binding.kind === 'strong') {
+          // AC1 强绑定：直接关联 + 标记上一有效 Decision superseded。
+          linkedTaskId = binding.taskId;
+          await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: binding.taskId });
           await transaction.decisions.markSupersededByLinkedTask({
-            taskId: priorTaskId,
+            taskId: binding.taskId,
             byDecisionId: decisionId,
             now,
           });
+        } else if (binding.kind === 'suggested') {
+          // AC2 弱建议（可撤销）：关联到唯一明显匹配，action 提示用户可撤销。
+          linkedTaskId = binding.taskId;
+          await transaction.messages.setTaskIdIfAbsent({ messageId: job.messageId, taskId: binding.taskId });
+          effectiveAction = 'confirm_suggested';
+        } else if (binding.kind === 'needs_confirmation') {
+          // AC3 多候选/重大变化：强制 blocked，请求用户在候选中确认。
+          effectiveVerdict = { status: 'blocked', reason: 'TASK_FOLLOWUP_NEEDS_CONFIRMATION' };
+          effectiveGateStatus = 'blocked';
+          followupCandidateTaskIds = [...binding.candidates];
         }
       }
 
@@ -377,21 +423,22 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         needsScopedTarget: ctx.needsScopedTarget,
         scopeValid: ctx.targetScopeValid,
       };
-      const messageBody = coordinationSystemMessageBody(parsed, verdict, targetCtx);
-      const action = pickCoordinationAction(parsed, verdict, targetCtx);
+      const messageBody = coordinationSystemMessageBody(parsed, effectiveVerdict, targetCtx);
+      const action = effectiveAction ?? pickCoordinationAction(parsed, effectiveVerdict, targetCtx);
 
       // 构建完整 meta（含 taskId + 目标信息 + action）；绝不携带 provider/model 身份（AC#4）。
       const coordinationMeta: CoordinationSystemMessageMeta = {
         decisionId,
         jobId: job.id,
         intent: parsed.intent,
-        gateStatus: ctx.gateStatus,
+        gateStatus: effectiveGateStatus,
         taskId: linkedTaskId,
         riskLevel: ctx.riskLevel,
         targetAgentId: parsed.intent === 'agent_request' ? ctx.targetAgentId : null,
         targetAgentName: parsed.intent === 'agent_request' ? ctx.targetAgentName : null,
         targetStatus: parsed.intent === 'agent_request' ? ctx.targetStatus : null,
         action,
+        followupCandidateTaskIds,
       };
 
       let systemMessageId: ID | null = null;
@@ -426,12 +473,12 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         diagnosticCode: null,
         attempt,
         systemMessageId,
-        gateStatus: ctx.gateStatus,
+        gateStatus: effectiveGateStatus,
         riskLevel: ctx.riskLevel,
         objective: isSideEffect ? parsed.objective : null,
         targetAgentId: parsed.intent === 'agent_request' ? ctx.targetAgentId : null,
         linkedTaskId,
-        blockingReason,
+        blockingReason: effectiveVerdict.status === 'blocked' ? effectiveVerdict.reason : null,
         supersededByDecisionId: null,
         idempotencyKey: `decision:${job.id}`,
         createdAt: now,

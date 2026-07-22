@@ -112,6 +112,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0030_agent_exposure_manifests.sql');
   applyMigration(db, 'team/0031_team_agent_exposure_restrictions.sql');
   applyMigration(db, 'team/0032_formal_memory.sql');
+  applyMigration(db, 'team/0033_task_immutable_revisions.sql', { disableForeignKeys: true });
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2054,10 +2055,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             task.updatedAt,
             revision,
           );
-        return { ...task, revision };
+        return {
+          ...task,
+          revision,
+          supersededByRevision: null,
+          supersededAt: null,
+          supersededReasonCode: null,
+        };
       },
       async getById(taskId) {
-        return mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId));
+        return mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ? AND superseded_by_revision IS NULL').get(taskId));
       },
       async list(input) {
         const clauses = ['team_id = ?'];
@@ -2074,6 +2081,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           return [];
         }
         clauses.push(`(${channelClauses.join(' OR ')})`);
+        clauses.push('superseded_by_revision IS NULL');
         return teamDb
           .prepare(`SELECT * FROM tasks WHERE ${clauses.join(' AND ')} ORDER BY sort_order ASC, created_at DESC`)
           .all(...params)
@@ -2086,7 +2094,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
       },
       async update(input) {
-        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ? AND superseded_by_revision IS NULL').get(input.taskId));
         if (!existing) {
           return null;
         }
@@ -2096,7 +2104,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `UPDATE tasks SET
               title = ?, description = ?, status = ?, assignee_id = ?, channel_id = ?,
               tags_json = ?, sort_order = ?, updated_at = ?
-             WHERE id = ?`,
+             WHERE id = ? AND superseded_by_revision IS NULL`,
           )
           .run(
             updated.title,
@@ -2112,40 +2120,78 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return updated;
       },
       async updateAtRevision(input) {
-        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ? AND superseded_by_revision IS NULL').get(input.taskId));
         if (!existing || existing.revision !== input.expectedRevision) {
           return null;
         }
-        const updated = { ...existing, ...input.changes, revision: input.nextRevision };
-        const result = teamDb
+        const updated = {
+          ...existing,
+          ...input.changes,
+          revision: input.nextRevision,
+          supersededByRevision: null,
+          supersededAt: null,
+          supersededReasonCode: null,
+        };
+        // #709 append-only：标记旧行 superseded + INSERT 新 revision 行（历史保留，AC4）。
+        // 旧行复合外键下游（task_coordinations/claim_leases/deliveries/acceptances）仍锚定旧 revision，
+        // revision 变更后自动 stale 为历史证据（AC5）；UNIQUE(id,team_id,revision) 防重号；重放幂等。
+        const supersedeResult = teamDb
           .prepare(
-            `UPDATE tasks SET
-              title = ?, description = ?, status = ?, assignee_id = ?, channel_id = ?,
-              tags_json = ?, sort_order = ?, updated_at = ?, revision = ?
-             WHERE id = ? AND revision = ?`,
+            `UPDATE tasks SET superseded_by_revision = ?, superseded_at = ?, superseded_reason_code = ?
+             WHERE id = ? AND revision = ? AND superseded_by_revision IS NULL`,
           )
           .run(
+            input.nextRevision,
+            updated.updatedAt,
+            input.reasonCode ?? null,
+            input.taskId,
+            input.expectedRevision,
+          );
+        if (sqliteChanges(supersedeResult) !== 1) return null;
+        teamDb
+          .prepare(
+            `INSERT INTO tasks (
+              id, team_id, title, description, status, creator_id, assignee_id, channel_id,
+              tags_json, sort_order, created_at, updated_at, revision,
+              superseded_by_revision, superseded_at, superseded_reason_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+          )
+          .run(
+            updated.id,
+            updated.teamId,
             updated.title,
             updated.description ?? null,
             updated.status,
+            updated.creatorId,
             updated.assigneeId ?? null,
             updated.channelId ?? null,
             JSON.stringify(updated.tags),
             updated.sortOrder,
+            updated.createdAt,
             updated.updatedAt,
             input.nextRevision,
-            input.taskId,
-            input.expectedRevision,
           );
-        return sqliteChanges(result) === 1 ? updated : null;
+        return updated;
       },
       async delete(input) {
-        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ?').get(input.taskId));
+        const existing = mapTask(teamDb.prepare('SELECT * FROM tasks WHERE id = ? AND superseded_by_revision IS NULL').get(input.taskId));
         if (!existing) {
           return null;
         }
         teamDb.prepare('DELETE FROM tasks WHERE id = ?').run(input.taskId);
         return existing;
+      },
+      async listRevisions(input) {
+        return teamDb
+          .prepare('SELECT * FROM tasks WHERE id = ? AND team_id = ? ORDER BY revision ASC')
+          .all(input.taskId, input.teamId)
+          .map((row) => {
+            const task = mapTask(row);
+            if (!task) {
+              throw new Error('SQLite task revision row could not be mapped');
+            }
+            return task;
+          });
       },
     },
     reactions: {
@@ -2709,6 +2755,9 @@ function mapTask(row: unknown): TaskRecord | null {
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
     revision: sqliteNumber(row, 'revision'),
+    supersededByRevision: sqliteNullableNumber(row, 'superseded_by_revision') ?? null,
+    supersededAt: sqliteNullableNumber(row, 'superseded_at') ?? null,
+    supersededReasonCode: sqliteNullableText(row, 'superseded_reason_code') ?? null,
   };
 }
 

@@ -1294,16 +1294,23 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     tasks: {
       async create(input) {
-        const task = { ...input, revision: input.revision ?? 1 };
-        tasks.set(input.id, task);
+        const task: TaskRecord = {
+          ...input,
+          revision: input.revision ?? 1,
+          supersededByRevision: null,
+          supersededAt: null,
+          supersededReasonCode: null,
+        };
+        tasks.set(`${task.id}#${task.revision}`, task);
         return task;
       },
       async getById(taskId) {
-        return tasks.get(taskId) ?? null;
+        return Array.from(tasks.values()).find((t) => t.id === taskId && t.supersededByRevision === null) ?? null;
       },
       async list(input) {
         const channelIds = new Set(input.channelIds);
         return Array.from(tasks.values())
+          .filter((task) => task.supersededByRevision === null)
           .filter((task) =>
             task.teamId === input.teamId &&
             ((input.includeGlobal && !task.channelId) || (task.channelId ? channelIds.has(task.channelId) : false)),
@@ -1311,30 +1318,58 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.sortOrder - right.sortOrder || right.createdAt - left.createdAt);
       },
       async update(input) {
-        const task = tasks.get(input.taskId);
+        const task = Array.from(tasks.values()).find((t) => t.id === input.taskId && t.supersededByRevision === null);
         if (!task) {
           return null;
         }
         const updated = { ...task, ...input.changes };
-        tasks.set(input.taskId, updated);
+        // #709：append-only 下若 update 误带 revision（非设计路径，但兼容历史/测试调用），
+        // 迁移到新 revision key，避免遗留两个 superseded=null 行。生产 revision 变更应走 updateAtRevision。
+        if (updated.revision !== task.revision) {
+          tasks.delete(`${task.id}#${task.revision}`);
+        }
+        tasks.set(`${updated.id}#${updated.revision}`, updated);
         return updated;
       },
       async updateAtRevision(input) {
-        const task = tasks.get(input.taskId);
-        if (!task || task.revision !== input.expectedRevision) {
+        const task = tasks.get(`${input.taskId}#${input.expectedRevision}`);
+        if (!task || task.supersededByRevision !== null) {
           return null;
         }
-        const updated = { ...task, ...input.changes, revision: input.nextRevision };
-        tasks.set(input.taskId, updated);
+        const updated: TaskRecord = {
+          ...task,
+          ...input.changes,
+          revision: input.nextRevision,
+          supersededByRevision: null,
+          supersededAt: null,
+          supersededReasonCode: null,
+        };
+        // #709 append-only：标记旧行 superseded + 写新 revision 行（历史保留, AC4/AC5）；重放幂等。
+        tasks.set(`${input.taskId}#${input.expectedRevision}`, {
+          ...task,
+          supersededByRevision: input.nextRevision,
+          supersededAt: updated.updatedAt,
+          supersededReasonCode: input.reasonCode ?? null,
+        });
+        tasks.set(`${updated.id}#${updated.revision}`, updated);
         return updated;
       },
       async delete(input) {
-        const task = tasks.get(input.taskId);
+        const task = Array.from(tasks.values()).find((t) => t.id === input.taskId && t.supersededByRevision === null);
         if (!task) {
           return null;
         }
-        tasks.delete(input.taskId);
+        for (const key of Array.from(tasks.keys())) {
+          if (key.startsWith(`${input.taskId}#`)) {
+            tasks.delete(key);
+          }
+        }
         return task;
+      },
+      async listRevisions(input) {
+        return Array.from(tasks.values())
+          .filter((task) => task.id === input.taskId && task.teamId === input.teamId)
+          .sort((a, b) => a.revision - b.revision);
       },
     },
     reactions: {
