@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   PiProviderCardDto,
   ActivePiModelDto,
+  PublicPiHealthDto,
   PiProviderEndpointMode,
   PiProviderPreset,
   PiProviderPresetDescriptorDto,
@@ -116,7 +117,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [cards, setCards] = useState<PiProviderCardDto[]>([]);
   const [activeModel, setActiveModel] = useState<ActivePiModelDto | null>(null);
   const [activeHistory, setActiveHistory] = useState<ActivePiModelDto[]>([]);
-  const [activeHealth, setActiveHealth] = useState<'normal' | 'degraded' | 'unavailable' | null>(null);
+  const [activeHealth, setActiveHealth] = useState<PublicPiHealthDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset>('openai');
@@ -153,7 +154,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     if (activeResult.ok) {
       setActiveModel(activeResult.activeModel ?? null);
       setActiveHistory(activeResult.history ?? []);
-      setActiveHealth(activeResult.health?.status ?? null);
+      setActiveHealth(activeResult.health ?? null);
     }
     if (!options.preserveEditor && !editorInitializedRef.current && (presetResult.presets?.length ?? 0) > 0) {
       const first = presetResult.presets![0]!;
@@ -347,7 +348,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       setMessage({ ok: false, text: result.message ?? result.error ?? '切换 Active PI Model 失败' });
       return;
     }
-    setMessage({ ok: true, text: '已切换 Active PI Model；只影响后续新建 Run。' });
+    setMessage({ ok: true, text: '已切换 Active PI Model。' });
     await load({ preserveEditor: true, preserveMessage: true });
   };
 
@@ -447,7 +448,10 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
 
           <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-active-model">
             <h3 className="text-sm font-semibold text-neutral-700">Active PI Model</h3>
-            <p className="mt-1 text-xs text-neutral-500">全系统唯一；仅可切换至已发布且测试通过的 revision。健康：{activeHealth ?? 'unknown'}。</p>
+            <p className="mt-1 text-xs text-neutral-500">
+              全系统唯一；仅可切换至已发布且测试通过的 revision。健康：{activeHealth?.status ?? 'unknown'}。
+              {activeHealth?.diagnosticCode ? ` 诊断：${activeHealth.diagnosticCode}。` : ''}
+            </p>
             <p className="mt-2 text-sm">{activeModel ? `当前模型：${activeModel.modelId}` : '尚未配置 Active PI Model'}</p>
             <div className="mt-3 space-y-2">
               {cards.flatMap((card) => (card.publishedRevisions ?? (card.publishedRevision ? [card.publishedRevision] : []))

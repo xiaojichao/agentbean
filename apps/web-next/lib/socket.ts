@@ -335,6 +335,7 @@ export interface PiProviderEvents {
   cancelTest(cardId: string): Promise<{ ok: boolean; cancelled?: boolean; error?: string; message?: string }>;
   publishCard(cardId: string): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
   getActiveModel(): Promise<{ ok: boolean; activeModel?: ActivePiModelDto | null; history?: ActivePiModelDto[]; health?: PublicPiHealthDto; error?: string; message?: string }>;
+  getPublicHealth(): Promise<{ ok: boolean; health?: PublicPiHealthDto; error?: string; message?: string }>;
   setActiveModel(revisionId: string): Promise<{ ok: boolean; activeModel?: ActivePiModelDto; error?: string; message?: string }>;
 }
 
@@ -351,6 +352,7 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
     cancelTest(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.cancelTest, { cardId }); },
     publishCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.publishCard, { cardId }); },
     getActiveModel() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getActiveModel, {}); },
+    getPublicHealth() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getPublicHealth, {}); },
     setActiveModel(revisionId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.setActiveModel, { revisionId }); },
   };
 }
