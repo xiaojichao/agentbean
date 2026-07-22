@@ -184,4 +184,6 @@ export interface CoordinationSystemMessageMeta {
   readonly targetStatus?: CoordinationTargetStatus | null;
   /** 可操作场景（AC#5）；null/省略 = 普通通知。 */
   readonly action?: CoordinationSystemMessageAction | null;
+  /** #709 task_followup needs_confirmation 时的候选 Task id，供 web 渲染用户选择（切片 C/E）。 */
+  readonly followupCandidateTaskIds?: readonly ID[] | null;
 }

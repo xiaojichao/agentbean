@@ -68,8 +68,19 @@ export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previ
   storagePath?: string;
 }
 export type WorkspaceRunRecord = WorkspaceRunDto;
-export type TaskRecord = TaskDto & { revision: number };
-export type NewTaskRecord = TaskDto & { revision?: number };
+export type TaskRecord = TaskDto & {
+  revision: number;
+  /** #709：本 revision 行已被哪个 revision 取代（null = 当前行）。append-only 历史保留。 */
+  supersededByRevision: number | null;
+  supersededAt: number | null;
+  supersededReasonCode: string | null;
+};
+export type NewTaskRecord = TaskDto & {
+  revision?: number;
+  supersededByRevision?: number | null;
+  supersededAt?: number | null;
+  supersededReasonCode?: string | null;
+};
 export interface DispatchMutationResult {
   dispatch: DispatchRecord;
   changed: boolean;
@@ -332,8 +343,12 @@ export interface TaskRepository {
     taskId: ID;
     expectedRevision: number;
     nextRevision: number;
+    /** #709 supersede 原因码，写入旧行 superseded_reason_code 供 AC7 变更原因投影。 */
+    reasonCode?: string;
     changes: Partial<Pick<TaskRecord, 'title' | 'description' | 'status' | 'assigneeId' | 'channelId' | 'tags' | 'sortOrder' | 'updatedAt'>>;
   }): Promise<TaskRecord | null>;
+  /** #709 查 Task 的全部 revision 历史（按 revision ASC，含已 superseded 旧行），供 AC7 Task 视图投影。 */
+  listRevisions(input: { taskId: ID; teamId: ID }): Promise<TaskRecord[]>;
   delete(input: { taskId: ID }): Promise<TaskRecord | null>;
 }
 

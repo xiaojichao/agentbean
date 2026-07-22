@@ -42,6 +42,39 @@ describe('Phase 2 Task DAG view', () => {
     await expect(app.getTaskDag({ userId: 'outsider', teamId: 'team-1', rootTaskId: 'task-root' }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
+
+  test('projects root task immutable revision history with change reason (#709 AC7)', async () => {
+    const repositories = createInMemoryRepositories();
+    await seed(repositories);
+    let id = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: () => `generated-${++id}` },
+    });
+    // 模拟重大变化创建不可变 revision 2（append-only，保留 revision 1 历史 + 变更原因）。
+    // 生产 reviseInTransaction 把新 objective 写入 description（非 title），故此处改 description 以反映真实行为。
+    await repositories.tasks.updateAtRevision({
+      taskId: 'task-root',
+      expectedRevision: 1,
+      nextRevision: 2,
+      reasonCode: 'TASK_REVISED',
+      changes: { description: 'Root revised objective', updatedAt: 10 },
+    });
+
+    const result = await app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: 'task-root' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected dag');
+    expect(result.dag.revisionHistory).toEqual([
+      expect.objectContaining({
+        revision: 1, objective: 'Root', superseded: true,
+        supersededByRevision: 2, supersededReasonCode: 'TASK_REVISED',
+      }),
+      expect.objectContaining({
+        revision: 2, objective: 'Root revised objective', superseded: false, supersededByRevision: null,
+      }),
+    ]);
+  });
 });
 
 async function seed(repositories: ReturnType<typeof createInMemoryRepositories>) {

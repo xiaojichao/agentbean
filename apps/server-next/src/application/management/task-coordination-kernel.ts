@@ -885,6 +885,7 @@ export function createTaskCoordinationKernel(
         const nextRevision = task.revision + 1;
         const updatedTask = await repositories.tasks.updateAtRevision({ taskId: task.id,
           expectedRevision: task.revision, nextRevision,
+          reasonCode: 'HUMAN_REJECTED_ROOT_DELIVERY',
           changes: { status: 'in_progress', updatedAt: now } });
         if (!updatedTask) conflict('TASK_REVISION_CONFLICT');
         const updatedCoordination = await repositories.coordination.coordinations.update({
@@ -1071,6 +1072,7 @@ async function reviseInTransaction(repositories: TransactionRepositories,
   }
   const updatedTask = await repositories.tasks.updateAtRevision({
     taskId: task.id, expectedRevision: task.revision, nextRevision,
+    reasonCode: 'TASK_REVISED',
     changes: { description: next.objective, assigneeId: next.assigneeId, updatedAt: now },
   });
   if (!updatedTask) conflict('TASK_REVISION_CONFLICT');

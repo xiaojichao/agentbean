@@ -125,4 +125,20 @@ export interface TaskDagViewDto {
   };
   /** run 创建时冻结的预算上限（与 usage 对照展示）。 */
   readonly budget?: ManagementBudgetDto;
+  /** #709 root task 的不可变 revision 历史（旧→新），供 Task 视图展示当前 revision、
+   *  变更原因（supersededReasonCode）与已失效执行关系。已失效执行关系另由 events 中的
+   *  claim-invalidated 事件表达。web 渲染见切片 C/E。 */
+  readonly revisionHistory?: readonly TaskRevisionHistoryEntry[];
+}
+
+/** #709 Task revision 历史条目：append-only 保留的每个 revision 行投影（AC7）。 */
+export interface TaskRevisionHistoryEntry {
+  readonly revision: number;
+  readonly objective: string;
+  /** 是否已被后续 revision 取代（superseded）。 */
+  readonly superseded: boolean;
+  readonly supersededByRevision: number | null;
+  readonly supersededReasonCode: string | null;
+  readonly supersededAt: UnixMs | null;
+  readonly createdAt: UnixMs;
 }
