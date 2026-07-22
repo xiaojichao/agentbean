@@ -75,6 +75,7 @@ function passingTestFetch(): typeof fetch {
     if (hasTools && !hasToolResult) {
       return new Response(JSON.stringify({
         model: 'probe-model',
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
         choices: [{
           message: {
             role: 'assistant',
@@ -91,6 +92,7 @@ function passingTestFetch(): typeof fetch {
     }
     return new Response(JSON.stringify({
       model: 'probe-model',
+      usage: { prompt_tokens: hasToolResult ? 3 : 1, completion_tokens: 1, total_tokens: hasToolResult ? 4 : 2 },
       choices: [{ message: { role: 'assistant', content: hasToolResult ? 'DONE' : 'OK' }, finish_reason: 'stop' }],
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
