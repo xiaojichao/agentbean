@@ -202,7 +202,7 @@ describe('agentbean update', () => {
       'device', 'install', '--deadline-ms', '30000',
     ]);
     expect(stderr).toHaveBeenCalledWith(
-      '新版本 0.3.13 未能就绪，已回滚到 0.3.12 并恢复 Device Service。',
+      '新版本 0.3.13 未能就绪，已回滚到 0.3.12 并恢复 Device Service。\n原因摘要：\nnot ready',
     );
   });
 

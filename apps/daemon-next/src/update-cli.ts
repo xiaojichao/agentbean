@@ -145,7 +145,7 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
   })));
   const rolledBack = await installExactVersion(runNpm, current.version);
-  if (!quiesced || !rolledBack) {
+  if (!rolledBack) {
     stderr(
       `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
       + (startDetail ? `\n原因摘要：\n${startDetail}` : '')
@@ -164,7 +164,9 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.rejected;
   }
   stderr(
-    `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
+    (quiesced
+      ? `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
+      : `新版本 ${latest} 未能就绪，Device Service 无法安全停止且自动恢复失败（UPDATE_RECOVERY_REQUIRED）。`)
     + (startDetail ? `\n原因摘要：\n${startDetail}` : '')
     + `\n可手动恢复：npm install -g ${CANONICAL_PACKAGE}@${current.version} && agentbean device install && agentbean device restart`,
   );
