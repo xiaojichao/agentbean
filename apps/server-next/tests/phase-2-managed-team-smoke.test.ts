@@ -61,6 +61,7 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-phase2-managed-team-'));
     cleanups.push(async () => rmSync(dataDir, { recursive: true, force: true }));
     const server = await startServerNextDevServer({
+      messageIngestionMode: 'legacy',
       config: {
         host: '127.0.0.1', port: 0, storage: 'memory', dataDir,
         sessionSecret: 'phase-2-managed-team-smoke', webEntry: 'preview',
