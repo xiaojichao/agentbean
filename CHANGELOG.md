@@ -18,6 +18,24 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-22] - 2026-07-22
+### Added
+- 实现 Team Agent Exposure 发布与消费（#710）
+- 【PI MVP 03】Provider 模型发现、生产同路径测试与发布
+### Changed
+- 提交 PI MVP 设计文档：架构决策与词汇表（#699）
+- 实现 PI 协调系统消息可操作字段（#708 切片 B 收尾）
+- #707: 补全 Decision superseded 生命周期状态（AC#8）
+- 实现 Team PI 自动协调 Web 开关（#707）
+- 实现 Team PI 自动协调开关与完整 Decision Gate（#707 服务端核心）
+- 实现 Server Channel Coordinator 无副作用理解链路（#706）
+- 实现 Message 与 Coordination Job 原子入队（#705）
+- 实现全局 Active PI Model 与公开健康状态（#746）
+- 补充项目任务与文件管理架构设计
+- 记录 2026-07-21 每日更新日志
+### Fixed
+- 修复自更新回滚与 Device Service 恢复误判
+
 ## [Daily 2026-07-21] - 2026-07-21
 ### Changed
 - 为频道 Agent 失败/超时提供确定性中文提示
