@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -320,6 +320,86 @@ export function piPolicyEvents(socket: Socket = getWebSocket()): PiPolicyEvents 
   return {
     get(teamId) { return emitWithTimeout(socket, WEB_EVENTS.piPolicy.get, { teamId }); },
     update(payload) { return emitWithTimeout(socket, WEB_EVENTS.piPolicy.update, payload); },
+  };
+}
+
+export interface AgentExposureActiveResult {
+  ok: boolean;
+  projection?: AgentExposureActiveProjectionDto;
+  error?: string;
+  message?: string;
+}
+export interface AgentExposureRevisionResult {
+  ok: boolean;
+  revisions?: AgentExposureManifestRevisionDto[];
+  activeRestriction?: AgentExposureRestrictionDto | null;
+  error?: string;
+  message?: string;
+}
+export interface AgentExposureCoverageResult {
+  ok: boolean;
+  coverage?: AgentTeamCoverageDto;
+  error?: string;
+  message?: string;
+}
+export interface AgentExposureManifestResult {
+  ok: boolean;
+  manifest?: AgentExposureManifestRevisionDto;
+  supersededManifestId?: string | null;
+  error?: string;
+  message?: string;
+}
+export interface AgentExposureRestrictionResult {
+  ok: boolean;
+  restriction?: AgentExposureRestrictionDto;
+  error?: string;
+  message?: string;
+}
+
+/** #710 Team Agent Exposure socket 客户端。服务端强制授权（owner 发布、Team admin 收紧）。 */
+export function agentExposureEvents(socket: Socket = getWebSocket()) {
+  return {
+    createDraft(payload: {
+      teamId: string; agentId: string;
+      capabilities: { name: string; description: string }[];
+      skills: { name: string; description: string }[];
+      constraints?: { kind: string; description: string }[];
+      availability?: { status: 'available' | 'unavailable'; reason?: string };
+      validUntil?: number | null;
+    }): Promise<AgentExposureManifestResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.createDraft, payload);
+    },
+    updateDraft(payload: {
+      teamId: string; manifestId: string;
+      capabilities: { name: string; description: string }[];
+      skills: { name: string; description: string }[];
+      constraints?: { kind: string; description: string }[];
+      availability?: { status: 'available' | 'unavailable'; reason?: string };
+      validUntil?: number | null;
+    }): Promise<AgentExposureManifestResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.updateDraft, payload);
+    },
+    publish(payload: { teamId: string; manifestId: string }): Promise<AgentExposureManifestResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.publish, payload);
+    },
+    revoke(payload: { teamId: string; agentId: string }): Promise<{ ok: boolean; revoked?: boolean; error?: string; message?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.revoke, payload);
+    },
+    listRevisions(teamId: string, agentId: string): Promise<AgentExposureRevisionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.listRevisions, { teamId, agentId });
+    },
+    getActive(teamId: string, agentId: string): Promise<AgentExposureActiveResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.getActive, { teamId, agentId });
+    },
+    getTeamCoverage(teamId: string): Promise<AgentExposureCoverageResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.getTeamCoverage, { teamId });
+    },
+    upsertRestriction(payload: {
+      teamId: string; agentId: string;
+      disabledCapabilities: string[]; disabledSkills: string[];
+    }): Promise<AgentExposureRestrictionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.agentExposure.upsertRestriction, payload);
+    },
   };
 }
 
