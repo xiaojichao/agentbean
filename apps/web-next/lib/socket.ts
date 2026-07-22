@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type ManagementBudgetDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type ManagementMode, type ManagerPlacementPolicyDto, type TaskDagViewDto, type TeamManagementPolicyV2Dto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -334,6 +334,8 @@ export interface PiProviderEvents {
   runTest(cardId: string): Promise<{ ok: boolean; test?: unknown; card?: PiProviderCardDto; error?: string; message?: string }>;
   cancelTest(cardId: string): Promise<{ ok: boolean; cancelled?: boolean; error?: string; message?: string }>;
   publishCard(cardId: string): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+  getActiveModel(): Promise<{ ok: boolean; activeModel?: ActivePiModelDto | null; history?: ActivePiModelDto[]; health?: PublicPiHealthDto; error?: string; message?: string }>;
+  setActiveModel(revisionId: string): Promise<{ ok: boolean; activeModel?: ActivePiModelDto; error?: string; message?: string }>;
 }
 
 export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEvents {
@@ -348,6 +350,8 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
     runTest(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.runTest, { cardId }, 300_000); },
     cancelTest(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.cancelTest, { cardId }); },
     publishCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.publishCard, { cardId }); },
+    getActiveModel() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getActiveModel, {}); },
+    setActiveModel(revisionId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.setActiveModel, { revisionId }); },
   };
 }
 

@@ -67,6 +67,11 @@ const CARD_ACTION_KEYS = new Set([
   'cardId',
 ]);
 
+const ACTIVE_MODEL_KEYS = new Set([
+  ...SOCKET_ENRICHED_KEYS,
+  'revisionId',
+]);
+
 /** 顶层敏感/未支持字段：即使出现在 allowlist 外也给出更明确错误码。 */
 const SENSITIVE_TOP_LEVEL = new Set([
   'headers',
@@ -148,6 +153,10 @@ export interface ParsedGetPiProviderCardRequest extends ParsedPiProviderActor {
   readonly cardId: string;
 }
 
+export interface ParsedSetActivePiModelRequest extends ParsedPiProviderActor {
+  readonly revisionId: string;
+}
+
 export function parseListPiProviderPresetsRequest(
   payload: unknown,
 ): PiProviderRequestParseResult<ParsedPiProviderActor> {
@@ -185,6 +194,32 @@ export function parsePublishPiProviderCardRequest(
   payload: unknown,
 ): PiProviderRequestParseResult<ParsedGetPiProviderCardRequest> {
   return parseCardActionRequest(payload, CARD_ACTION_KEYS);
+}
+
+export function parseGetActivePiModelRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedPiProviderActor> {
+  return parseActorOnly(payload, LIST_KEYS);
+}
+
+export function parsePublicPiHealthRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedPiProviderActor> {
+  return parseActorOnly(payload, LIST_KEYS);
+}
+
+export function parseSetActivePiModelRequest(
+  payload: unknown,
+): PiProviderRequestParseResult<ParsedSetActivePiModelRequest> {
+  const base = requireObject(payload);
+  if (!base.ok) return base;
+  const keys = rejectUnknownKeys(base.value, ACTIVE_MODEL_KEYS);
+  if (!keys.ok) return keys;
+  const userId = requireUserId(base.value);
+  if (!userId.ok) return userId;
+  const revisionId = requireNonEmptyString(base.value.revisionId, 'revisionId');
+  if (!revisionId.ok) return revisionId;
+  return { ok: true, value: { userId: userId.value, revisionId: revisionId.value } };
 }
 
 function parseCardActionRequest(

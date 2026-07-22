@@ -59,6 +59,13 @@ export interface PiProviderRevisionTestRecord {
   readonly testedAt: number;
 }
 
+export interface ActivePiModelRecord {
+  readonly cardId: string;
+  readonly revisionId: string;
+  readonly changedBy: string;
+  readonly changedAt: number;
+}
+
 export interface PiProviderRepositories {
   readonly credentials: {
     create(input: PiProviderCredentialRecord): Promise<PiProviderCredentialRecord>;
@@ -79,6 +86,12 @@ export interface PiProviderRepositories {
   readonly tests: {
     create(input: PiProviderRevisionTestRecord): Promise<PiProviderRevisionTestRecord>;
     getLatestByCard(cardId: string): Promise<PiProviderRevisionTestRecord | null>;
+    getLatestByConfigSummary(input: { cardId: string; configSummary: string }): Promise<PiProviderRevisionTestRecord | null>;
+  };
+  readonly activeModel: {
+    get(): Promise<ActivePiModelRecord | null>;
+    set(input: ActivePiModelRecord): Promise<ActivePiModelRecord>;
+    listHistory(): Promise<ActivePiModelRecord[]>;
   };
 }
 

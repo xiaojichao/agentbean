@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   runTest: vi.fn(),
   cancelTest: vi.fn(),
   publishCard: vi.fn(),
+  getActiveModel: vi.fn(),
+  setActiveModel: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -91,6 +93,10 @@ beforeEach(() => {
     ok: true,
     card: { ...sourceCard, draftRevision: null, canPublish: false },
   });
+  mocks.getActiveModel.mockResolvedValue({
+    ok: true, activeModel: null, history: [], health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+  });
+  mocks.setActiveModel.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -140,6 +146,8 @@ describe('PI Management settings scope', () => {
     expect(panelSource).toContain('settings-pi-run-test');
     expect(panelSource).toContain('settings-pi-cancel-test');
     expect(panelSource).toContain('settings-pi-publish');
+    expect(panelSource).toContain('settings-pi-active-model');
+    expect(panelSource).toContain('设为 Active');
   });
 
   test('successful save and copy refresh the list without resetting editor state or success feedback', () => {

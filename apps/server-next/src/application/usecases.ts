@@ -21,10 +21,12 @@ import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runti
 import { createPiProviderService } from './pi-provider-service.js';
 import type {
   CancelPiProviderTestResult,
+  ActivePiModelDto,
   DiscoverPiProviderModelsResult,
   ListPiProviderCardsResult,
   ListPiProviderPresetsResult,
   PiProviderCardDto,
+  PublicPiHealthDto,
   PublishPiProviderCardResult,
   RunPiProviderTestResult,
 } from '../../../../packages/contracts/src/index.js';
@@ -180,6 +182,9 @@ export interface ServerNextUseCases {
   runPiProviderTest(input: unknown): Promise<Ack<RunPiProviderTestResult>>;
   cancelPiProviderTest(input: unknown): Promise<Ack<CancelPiProviderTestResult>>;
   publishPiProviderCard(input: unknown): Promise<Ack<PublishPiProviderCardResult>>;
+  setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
+  getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
+  getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
@@ -4666,6 +4671,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async publishPiProviderCard(input) {
       return piProvider.publishCard(input);
+    },
+
+    async setActivePiModel(input) {
+      return piProvider.setActiveModel(input);
+    },
+
+    async getActivePiModel(input) {
+      return piProvider.getActiveModel(input);
+    },
+
+    async getPublicPiHealth(input) {
+      return piProvider.getPublicHealth(input);
     },
 
     async getMemoryGovernanceSnapshot(memoryInput) {

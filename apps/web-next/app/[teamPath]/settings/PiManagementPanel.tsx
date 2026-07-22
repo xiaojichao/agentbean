@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   PiProviderCardDto,
+  ActivePiModelDto,
   PiProviderEndpointMode,
   PiProviderPreset,
   PiProviderPresetDescriptorDto,
@@ -113,6 +114,9 @@ function applyAdvancedToForm(form: CardFormState, advancedJson: string): CardFor
 export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean }) {
   const [presets, setPresets] = useState<PiProviderPresetDescriptorDto[]>([]);
   const [cards, setCards] = useState<PiProviderCardDto[]>([]);
+  const [activeModel, setActiveModel] = useState<ActivePiModelDto | null>(null);
+  const [activeHistory, setActiveHistory] = useState<ActivePiModelDto[]>([]);
+  const [activeHealth, setActiveHealth] = useState<'normal' | 'degraded' | 'unavailable' | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset>('openai');
@@ -130,9 +134,10 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     if (!isSystemAdmin) return;
     setLoading(true);
     if (!options.preserveMessage) setMessage(null);
-    const [presetResult, cardResult] = await Promise.all([
+    const [presetResult, cardResult, activeResult] = await Promise.all([
       piProviderEvents().listPresets(),
       piProviderEvents().listCards(),
+      piProviderEvents().getActiveModel(),
     ]);
     setLoading(false);
     if (!presetResult.ok) {
@@ -145,6 +150,11 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     }
     setPresets(presetResult.presets ?? []);
     setCards(cardResult.cards ?? []);
+    if (activeResult.ok) {
+      setActiveModel(activeResult.activeModel ?? null);
+      setActiveHistory(activeResult.history ?? []);
+      setActiveHealth(activeResult.health?.status ?? null);
+    }
     if (!options.preserveEditor && !editorInitializedRef.current && (presetResult.presets?.length ?? 0) > 0) {
       const first = presetResult.presets![0]!;
       editorInitializedRef.current = true;
@@ -329,6 +339,18 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     await load({ preserveEditor: true, preserveMessage: true });
   };
 
+  const activateRevision = async (revisionId: string) => {
+    setSaving(true);
+    const result = await piProviderEvents().setActiveModel(revisionId);
+    setSaving(false);
+    if (!result.ok) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '切换 Active PI Model 失败' });
+      return;
+    }
+    setMessage({ ok: true, text: '已切换 Active PI Model；只影响后续新建 Run。' });
+    await load({ preserveEditor: true, preserveMessage: true });
+  };
+
   return (
     <div className="mx-auto max-w-4xl space-y-6" data-smoke="settings-pi-panel" data-pi-scope="system">
       <div>
@@ -421,6 +443,24 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                 </div>
               ))}
             </div>
+          </section>
+
+          <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-active-model">
+            <h3 className="text-sm font-semibold text-neutral-700">Active PI Model</h3>
+            <p className="mt-1 text-xs text-neutral-500">全系统唯一；仅可切换至已发布且测试通过的 revision。健康：{activeHealth ?? 'unknown'}。</p>
+            <p className="mt-2 text-sm">{activeModel ? `当前模型：${activeModel.modelId}` : '尚未配置 Active PI Model'}</p>
+            <div className="mt-3 space-y-2">
+              {cards.flatMap((card) => (card.publishedRevisions ?? (card.publishedRevision ? [card.publishedRevision] : []))
+                .map((revision) => ({ card, revision }))).map(({ card, revision }) => (
+                  <div key={revision.id} className="flex items-center justify-between rounded border border-neutral-100 px-3 py-2 text-xs">
+                    <span>{card.displayName} · {revision.config.modelId}</span>
+                    <button type="button" disabled={saving || activeModel?.revisionId === revision.id} onClick={() => void activateRevision(revision.id)} className="rounded border border-neutral-300 px-2 py-1 disabled:opacity-50">
+                      {activeModel?.revisionId === revision.id ? '正在使用' : '设为 Active'}
+                    </button>
+                  </div>
+                ))}
+            </div>
+            {activeHistory.length > 0 && <p className="mt-3 text-xs text-neutral-500">切换历史：{activeHistory.map((entry) => `${entry.modelId} (${new Date(entry.changedAt).toLocaleString()})`).join(' · ')}</p>}
           </section>
 
           <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-card-editor">

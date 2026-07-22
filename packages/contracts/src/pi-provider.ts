@@ -183,6 +183,27 @@ export interface PublishPiProviderCardResult {
   readonly card: PiProviderCardDto;
 }
 
+/** 全系统唯一的 Active PI Model；只引用不可变且已发布的 revision。 */
+export interface ActivePiModelDto {
+  readonly cardId: ID;
+  readonly revisionId: ID;
+  readonly modelId: string;
+  readonly changedBy: ID;
+  readonly changedAt: UnixMs;
+}
+
+export interface ActivePiModelHistoryEntryDto extends ActivePiModelDto {}
+
+export interface SetActivePiModelInput {
+  readonly revisionId: ID;
+}
+
+/** Team 可见投影：刻意不含 Provider、Model、Card 或 Credential 身份。 */
+export interface PublicPiHealthDto {
+  readonly status: 'normal' | 'degraded' | 'unavailable';
+  readonly diagnosticCode: string | null;
+}
+
 /**
  * 系统管理员可见的 PI Provider Card。
  * displayName/notes/consoleUrl 是当前工作 revision（draft 优先，否则 published）的投影。
@@ -196,6 +217,8 @@ export interface PiProviderCardDto {
   readonly credential: PiProviderCredentialRefDto;
   readonly draftRevision: PiProviderCardRevisionDto | null;
   readonly publishedRevision: PiProviderCardRevisionDto | null;
+  /** 供系统管理员选择历史已发布 revision；不包含 Credential。 */
+  readonly publishedRevisions?: readonly PiProviderCardRevisionDto[];
   readonly modelCandidates: readonly PiProviderModelCandidateDto[];
   readonly modelCandidatesUpdatedAt: UnixMs | null;
   readonly latestTest: PiProviderTestResultDto | null;

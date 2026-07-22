@@ -45,6 +45,9 @@ export const WEB_EVENTS = {
     runTest: 'pi-provider:run-test',
     cancelTest: 'pi-provider:cancel-test',
     publishCard: 'pi-provider:publish-card',
+    setActiveModel: 'pi-provider:set-active-model',
+    getActiveModel: 'pi-provider:get-active-model',
+    getPublicHealth: 'pi-provider:get-public-health',
   },
   join: {
     create: 'join:create',

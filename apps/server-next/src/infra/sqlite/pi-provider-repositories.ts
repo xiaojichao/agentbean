@@ -264,6 +264,29 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         ).get(cardId) as Record<string, unknown> | undefined;
         return row ? mapTest(row) : null;
       },
+      async getLatestByConfigSummary(input) {
+        const row = db.prepare('SELECT * FROM pi_provider_revision_tests WHERE card_id = ? AND config_summary = ? ORDER BY tested_at DESC, id DESC LIMIT 1')
+          .get(input.cardId, input.configSummary) as Record<string, unknown> | undefined;
+        return row ? mapTest(row) : null;
+      },
+    },
+    activeModel: {
+      async get() {
+        const row = db.prepare('SELECT card_id, revision_id, changed_by, changed_at FROM pi_active_model WHERE singleton = 1').get() as Record<string, unknown> | undefined;
+        return row ? { cardId: sqliteText(row, 'card_id'), revisionId: sqliteText(row, 'revision_id'), changedBy: sqliteText(row, 'changed_by'), changedAt: sqliteInt(row, 'changed_at') } : null;
+      },
+      async set(input) {
+        db.prepare(`INSERT INTO pi_active_model (singleton, card_id, revision_id, changed_by, changed_at) VALUES (1, ?, ?, ?, ?)
+          ON CONFLICT(singleton) DO UPDATE SET card_id = excluded.card_id, revision_id = excluded.revision_id, changed_by = excluded.changed_by, changed_at = excluded.changed_at`)
+          .run(input.cardId, input.revisionId, input.changedBy, input.changedAt);
+        db.prepare('INSERT INTO pi_active_model_history (card_id, revision_id, changed_by, changed_at) VALUES (?, ?, ?, ?)')
+          .run(input.cardId, input.revisionId, input.changedBy, input.changedAt);
+        return input;
+      },
+      async listHistory() {
+        const rows = db.prepare('SELECT card_id, revision_id, changed_by, changed_at FROM pi_active_model_history ORDER BY changed_at DESC, id DESC').all() as Record<string, unknown>[];
+        return rows.map((row) => ({ cardId: sqliteText(row, 'card_id'), revisionId: sqliteText(row, 'revision_id'), changedBy: sqliteText(row, 'changed_by'), changedAt: sqliteInt(row, 'changed_at') }));
+      },
     },
   };
 }
