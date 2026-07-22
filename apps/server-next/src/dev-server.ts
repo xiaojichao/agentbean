@@ -79,8 +79,9 @@ export interface StartServerNextDevServerInput {
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
   dispatchTimeout?: DispatchTimeoutSchedulerConfig;
+  coordination?: CoordinationSchedulerConfig;
   webApp?: WebAppHandler;
-  /** Test/rollout injection; production remains legacy until the #706 consumer is available. */
+  /** Test/rollout injection; durable-job also starts the background coordination consumer. */
   messageIngestionMode?: 'legacy' | 'durable-job';
 }
 
@@ -280,6 +281,11 @@ export async function startServerNextDevServer(
     realtime,
     input.dispatchTimeout ?? { timeoutMs: 5 * 60 * 1000, intervalMs: 5000 },
   );
+  const coordinationScheduler = startCoordinationScheduler(
+    app,
+    input.messageIngestionMode === 'durable-job',
+    input.coordination ?? { intervalMs: 1000 },
+  );
 
   await new Promise<void>((resolve) => {
     httpServer.listen(config.port, config.host, () => resolve());
@@ -297,6 +303,7 @@ export async function startServerNextDevServer(
       if (dispatchTimeoutInterval) {
         clearInterval(dispatchTimeoutInterval);
       }
+      await coordinationScheduler?.stop();
       stopVersionRefresh();
       await webApp?.close();
       await new Promise<void>((resolve) => ioServer.close(() => resolve()));
@@ -393,6 +400,42 @@ function startDispatchTimeoutScheduler(
       await realtime.refreshAgents(dispatch.teamId);
     }
   }, config.intervalMs);
+}
+
+interface CoordinationSchedulerConfig {
+  intervalMs: number;
+  limit?: number;
+}
+
+function startCoordinationScheduler(
+  app: ServerNextUseCases,
+  enabled: boolean,
+  config: CoordinationSchedulerConfig,
+): { stop(): Promise<void> } | null {
+  if (!enabled || config.intervalMs <= 0) return null;
+  let stopped = false;
+  let running: Promise<void> | null = null;
+  const run = () => {
+    if (stopped || running) return;
+    running = (async () => {
+      try {
+        await app.runCoordinationCycle(config.limit === undefined ? undefined : { limit: config.limit });
+      } catch {
+        // 单轮失败不终止 consumer；running lease 会让异常中断的 Job 后续可恢复。
+      }
+    })().finally(() => {
+      running = null;
+    });
+  };
+  run();
+  const interval = setInterval(run, config.intervalMs);
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(interval);
+      await running;
+    },
+  };
 }
 
 interface ArtifactHttpInput {

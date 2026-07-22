@@ -124,9 +124,27 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return Array.from(channelCoordinationJobs.values())
           .filter((job) =>
             (job.status === 'pending' || job.status === 'retry_wait')
-            && (job.nextRetryAt === null || job.nextRetryAt <= input.now))
+              ? (job.nextRetryAt === null || job.nextRetryAt <= input.now)
+              : job.status === 'running' && job.updatedAt <= input.runningBefore)
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(0, input.limit);
+      },
+      async claimForProcessing(input) {
+        const job = channelCoordinationJobs.get(input.jobId);
+        if (!job) return null;
+        const claimable = job.status === 'pending'
+          || job.status === 'retry_wait'
+          || (job.status === 'running' && job.updatedAt <= input.runningBefore);
+        if (!claimable) return null;
+        const claimed = {
+          ...job,
+          status: 'running' as const,
+          attempt: job.attempt + 1,
+          nextRetryAt: null,
+          updatedAt: input.now,
+        };
+        channelCoordinationJobs.set(job.id, claimed);
+        return claimed;
       },
     },
     decisions: {

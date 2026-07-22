@@ -11,8 +11,14 @@ export interface ChannelCoordinationJobRepository {
   getByMessageId(messageId: string): Promise<ChannelCoordinationJobRecord | null>;
   getByIdempotencyKey(idempotencyKey: string): Promise<ChannelCoordinationJobRecord | null>;
   listByChannel(channelId: string, limit: number): Promise<ChannelCoordinationJobRecord[]>;
-  /** 取可消费的 Job：status IN('pending','retry_wait') 且到期（nextRetryAt 为空或 <= now），按 createdAt 升序。 */
-  listRunnable(input: { now: number; limit: number }): Promise<ChannelCoordinationJobRecord[]>;
+  /** 取可消费的 Job：pending、到期 retry_wait 或超过 processing lease 的 running，按 createdAt 升序。 */
+  listRunnable(input: { now: number; runningBefore: number; limit: number }): Promise<ChannelCoordinationJobRecord[]>;
+  /** 原子抢占一个可消费 Job；并发 worker 只有一个能成功。成功时 attempt 自增并进入 running。 */
+  claimForProcessing(input: {
+    jobId: string;
+    now: number;
+    runningBefore: number;
+  }): Promise<ChannelCoordinationJobRecord | null>;
   updateState(input: {
     jobId: string;
     status: ChannelCoordinationJobStatus;

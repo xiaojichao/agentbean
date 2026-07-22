@@ -74,6 +74,7 @@ export interface ChannelCoordinatorDependencies {
   readonly fetch?: typeof fetch;
   readonly maxAttempts?: number;
   readonly baseDelayMs?: number;
+  readonly processingTimeoutMs?: number;
 }
 
 export type CoordinationJobOutcome =
@@ -82,7 +83,8 @@ export type CoordinationJobOutcome =
   | { readonly kind: 'terminal'; readonly status: ChannelCoordinationJobRecord['status'] }
   | { readonly kind: 'resolved'; readonly decision: ChannelCoordinationDecisionRecord }
   | { readonly kind: 'failed'; readonly decision: ChannelCoordinationDecisionRecord }
-  | { readonly kind: 'retry_wait'; readonly nextRetryAt: number };
+  | { readonly kind: 'retry_wait'; readonly nextRetryAt: number }
+  | { readonly kind: 'not_runnable'; readonly status: ChannelCoordinationJobRecord['status'] };
 
 export interface CoordinationCycleSummary {
   readonly processed: number;
@@ -108,6 +110,8 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   const fetchFn = deps.fetch ?? fetch;
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_COORDINATION_ATTEMPTS;
   const baseDelayMs = deps.baseDelayMs ?? DEFAULT_COORDINATION_BASE_DELAY_MS;
+  // Provider timeout 最高允许 10 分钟；lease 必须更长，避免合法慢调用被其他 worker 重领。
+  const processingTimeoutMs = deps.processingTimeoutMs ?? 11 * 60_000;
 
   function buildRequest(humanMessageBody: string): ManagementModelRequest {
     return {
@@ -135,6 +139,8 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
           return 'invalid_output';
         case 'MANAGEMENT_MODEL_RESPONSE_INVALID_JSON':
           return 'invalid_json';
+        case 'MANAGEMENT_MODEL_TOOL_CALL_INVALID':
+          return 'invalid_output';
         case 'MANAGEMENT_MODEL_ABORTED':
           return 'aborted';
         case 'MANAGEMENT_MODEL_RESPONSE_REJECTED':
@@ -281,7 +287,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   }
 
   async function processJob(jobId: ID): Promise<CoordinationJobOutcome> {
-    const job = await deps.jobs.getById(jobId);
+    let job = await deps.jobs.getById(jobId);
     if (!job) return { kind: 'not_found' };
 
     // 幂等（AC#7）：已有 Decision 或 Job 已终态 → 跳过。
@@ -292,27 +298,59 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     }
 
     const humanMessage = await deps.messages.getById(job.messageId);
-    if (!humanMessage) return { kind: 'not_found' };
+    if (!humanMessage) {
+      await deps.jobs.updateState({
+        jobId: job.id,
+        status: 'failed',
+        attempt: job.attempt,
+        nextRetryAt: null,
+        updatedAt: deps.clock.now(),
+      });
+      return { kind: 'terminal', status: 'failed' };
+    }
 
     const now = deps.clock.now();
-    const attempt = job.attempt + 1;
-    // 进入 running。runCoordinationCycle 串行消费，避免并发同 Job；UNIQUE(job_id) Decision 是硬兜底。
-    await deps.jobs.updateState({
+    const claimed = await deps.jobs.claimForProcessing({
       jobId: job.id,
-      status: 'running',
-      attempt,
-      nextRetryAt: null,
-      updatedAt: now,
+      now,
+      runningBefore: now - processingTimeoutMs,
     });
+    if (!claimed) {
+      const decided = await deps.decisions.getByJobId(jobId);
+      if (decided) return { kind: 'already_decided', decision: decided };
+      const latest = await deps.jobs.getById(jobId);
+      if (!latest) return { kind: 'not_found' };
+      if (latest.status === 'completed' || latest.status === 'failed' || latest.status === 'cancelled') {
+        return { kind: 'terminal', status: latest.status };
+      }
+      return { kind: 'not_runnable', status: latest.status };
+    }
+    job = claimed;
+    const attempt = job.attempt;
+    if (attempt > maxAttempts) {
+      return finalizeFailed(
+        job,
+        attempt,
+        COORDINATION_DIAGNOSTIC.MODEL_UNKNOWN,
+        toUsage(null, null),
+        null,
+        now,
+      );
+    }
 
     // 解析 pinned Active PI Model（跨 Global DB）。
     if (job.activeModel.availability !== 'available') {
       return finalizeFailed(job, attempt, COORDINATION_DIAGNOSTIC.ACTIVE_MODEL_UNAVAILABLE, toUsage(null, null), null, now);
     }
-    const target = await deps.modelResolver.resolveInvocationTarget({
-      cardId: job.activeModel.cardId,
-      revisionId: job.activeModel.revisionId,
-    });
+    let target: Awaited<ReturnType<CoordinatorModelResolver['resolveInvocationTarget']>>;
+    try {
+      target = await deps.modelResolver.resolveInvocationTarget({
+        cardId: job.activeModel.cardId,
+        revisionId: job.activeModel.revisionId,
+      });
+    } catch {
+      return handleUnrecoverable(job, attempt, 'unknown', toUsage(null, null), null, now);
+    }
     if (target.kind === 'unavailable') {
       return finalizeFailed(job, attempt, target.diagnosticCode, toUsage(null, null), null, now);
     }
@@ -364,7 +402,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   async function runCoordinationCycle(input?: { now?: number; limit?: number }): Promise<CoordinationCycleSummary> {
     const now = input?.now ?? deps.clock.now();
     const limit = input?.limit ?? 50;
-    const runnable = await deps.jobs.listRunnable({ now, limit });
+    const runnable = await deps.jobs.listRunnable({ now, runningBefore: now - processingTimeoutMs, limit });
     const outcomes: CoordinationJobOutcome[] = [];
     for (const job of runnable) {
       outcomes.push(await processJob(job.id));

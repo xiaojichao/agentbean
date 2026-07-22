@@ -237,21 +237,35 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async listRunnable(input) {
         return teamDb.prepare(`SELECT * FROM channel_coordination_jobs
-          WHERE status IN ('pending', 'retry_wait')
-            AND (next_retry_at IS NULL OR next_retry_at <= ?)
+          WHERE (status IN ('pending', 'retry_wait')
+              AND (next_retry_at IS NULL OR next_retry_at <= ?))
+            OR (status = 'running' AND updated_at <= ?)
           ORDER BY created_at, rowid LIMIT ?`)
-          .all(input.now, input.limit)
+          .all(input.now, input.runningBefore, input.limit)
           .map((row) => {
             const job = mapChannelCoordinationJob(row);
             if (!job) throw new Error('SQLite coordination job row could not be mapped');
             return job;
           });
       },
+      async claimForProcessing(input) {
+        const result = teamDb.prepare(`UPDATE channel_coordination_jobs
+          SET status = 'running', attempt = attempt + 1, next_retry_at = NULL, updated_at = ?
+          WHERE id = ? AND (
+            status = 'pending'
+            OR status = 'retry_wait'
+            OR (status = 'running' AND updated_at <= ?)
+          )`)
+          .run(input.now, input.jobId, input.runningBefore) as { changes?: number };
+        if (!result.changes) return null;
+        return mapChannelCoordinationJob(teamDb.prepare(
+          'SELECT * FROM channel_coordination_jobs WHERE id = ?',
+        ).get(input.jobId));
+      },
     },
     decisions: {
       async create(input) {
-        try {
-          teamDb.prepare(`INSERT INTO channel_coordination_decisions (
+        teamDb.prepare(`INSERT INTO channel_coordination_decisions (
             id, job_id, team_id, channel_id, message_id, outcome, intent, reason_code, reply_text,
             usage_input, usage_output, active_model_availability, active_model_card_id,
             active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
@@ -281,10 +295,6 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.createdAt,
               input.updatedAt,
             );
-        } catch (error) {
-          // UNIQUE(job_id) 冲突 = 该 Job 已有 Decision（幂等回放）。
-          throw new Error(`Coordination decision already exists for job: ${input.jobId}`);
-        }
         return input;
       },
       async getByJobId(jobId) {

@@ -1433,6 +1433,30 @@ describe('server-next dev server entry', () => {
       expect(otherTeamStatuses).toEqual([]);
     });
   });
+
+  test('starts the coordination consumer when durable-job ingestion is enabled', async () => {
+    const runCoordinationCycle = vi.fn(async () => ({ processed: 0, outcomes: [] }));
+    const app = { runCoordinationCycle } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
+      messageIngestionMode: 'durable-job',
+      coordination: { intervalMs: 5, limit: 7 },
+      dispatchTimeout: { timeoutMs: 0, intervalMs: 0 },
+    });
+    cleanups.push(() => server.close());
+
+    await eventually(() => {
+      expect(runCoordinationCycle).toHaveBeenCalledWith({ limit: 7 });
+    });
+  });
 });
 
 async function connectClient(url: string): Promise<ClientSocket> {

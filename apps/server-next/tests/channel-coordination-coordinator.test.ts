@@ -31,6 +31,24 @@ function okResponse(
   return { status: 200, body };
 }
 
+function invalidToolCallResponse() {
+  return {
+    status: 200,
+    body: {
+      model: 'pi-test-model',
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'pi_coordinate', arguments: '{' } }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    },
+  };
+}
+
 type FetchSpec = { status?: number; body?: unknown; reject?: string };
 
 /** 受控 fake fetch：按队列消费响应；空队列抛错（测试要求精确调用次数）。 */
@@ -83,7 +101,13 @@ interface Setup {
   coordinator: ReturnType<typeof createChannelCoordinator>;
 }
 
-function setup(input: { fetch?: typeof fetch; resolver?: CoordinatorModelResolver; maxAttempts?: number; now?: number }): Setup {
+function setup(input: {
+  fetch?: typeof fetch;
+  resolver?: CoordinatorModelResolver;
+  maxAttempts?: number;
+  now?: number;
+  processingTimeoutMs?: number;
+}): Setup {
   const repos = createInMemoryRepositories();
   const coordinator = createChannelCoordinator({
     jobs: repos.channelCoordination.jobs,
@@ -96,6 +120,7 @@ function setup(input: { fetch?: typeof fetch; resolver?: CoordinatorModelResolve
     fetch: input.fetch,
     maxAttempts: input.maxAttempts,
     baseDelayMs: 100,
+    processingTimeoutMs: input.processingTimeoutMs,
   });
   return { repos, coordinator };
 }
@@ -251,6 +276,19 @@ describe('channel coordinator: fail-closed on invalid model output (AC#2/AC#5)',
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.diagnosticCode).toBe('MODEL_INVALID_OUTPUT');
   });
+
+  test('an invalid tool call uses the bounded invalid-output retry policy', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([invalidToolCallResponse(), invalidToolCallResponse()]),
+      maxAttempts: 2,
+    });
+    const { jobId } = await seedHumanMessageJob(repos);
+
+    expect((await coordinator.processJob(jobId)).kind).toBe('retry_wait');
+    expect((await coordinator.processJob(jobId)).kind).toBe('failed');
+    expect((await repos.channelCoordination.decisions.getByJobId(jobId))?.diagnosticCode)
+      .toBe('MODEL_INVALID_OUTPUT');
+  });
 });
 
 describe('channel coordinator: model failure classification (AC#5/AC#6)', () => {
@@ -365,6 +403,40 @@ describe('channel coordinator: unavailable active model (AC#1/AC#6)', () => {
 });
 
 describe('channel coordinator: idempotency (AC#7)', () => {
+  test('concurrent consumers atomically claim a job and call the model only once', async () => {
+    let fetchCalls = 0;
+    const { repos, coordinator } = setup({
+      fetch: async () => {
+        fetchCalls += 1;
+        return makeFetch([okResponse(JSON.stringify({ intent: 'no_action', reasonCode: 'ok' }))])();
+      },
+    });
+    const { jobId } = await seedHumanMessageJob(repos);
+
+    const outcomes = await Promise.all([
+      coordinator.processJob(jobId),
+      coordinator.processJob(jobId),
+    ]);
+
+    expect(fetchCalls).toBe(1);
+    expect(outcomes.map((outcome) => outcome.kind).sort()).toEqual(['not_runnable', 'resolved']);
+    expect(await repos.channelCoordination.decisions.getByJobId(jobId)).not.toBeNull();
+  });
+
+  test('a stale running job is reclaimed after its processing lease expires', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'no_action', reasonCode: 'recovered' }))]),
+      now: 1000,
+      processingTimeoutMs: 25,
+    });
+    const { jobId } = await seedHumanMessageJob(repos, { status: 'running', attempt: 1 });
+
+    const outcome = await coordinator.processJob(jobId);
+
+    expect(outcome.kind).toBe('resolved');
+    expect((await repos.channelCoordination.decisions.getByJobId(jobId))?.attempt).toBe(2);
+  });
+
   test('reprocessing a completed job does not create a second decision or system message', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'system_reply', reasonCode: 'ok', text: '回复' }))]),
@@ -487,6 +559,36 @@ describe('channel coordinator: cycle processing', () => {
 });
 
 describe('channel coordinator: SQLite persistence (migration 0026)', () => {
+  test('atomically claims a pending job only once across concurrent consumers', async () => {
+    const globalDb = new Database(':memory:');
+    const teamDb = new Database(':memory:');
+    applyGlobalMigrations(globalDb);
+    applyTeamMigrations(teamDb);
+    try {
+      const repos = createSqliteRepositories({ globalDb, teamDb });
+      await repos.messages.append({
+        id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+        senderKind: 'human', senderId: 'user-1', body: '并发抢占测试', createdAt: 900,
+      });
+      await repos.channelCoordination.jobs.create({
+        id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+        idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null,
+        activeModel: { availability: 'unavailable' }, createdAt: 950, updatedAt: 950,
+      });
+
+      const claims = await Promise.all([
+        repos.channelCoordination.jobs.claimForProcessing({ jobId: 'job-1', now: 1000, runningBefore: 0 }),
+        repos.channelCoordination.jobs.claimForProcessing({ jobId: 'job-1', now: 1000, runningBefore: 0 }),
+      ]);
+
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      expect(claims.find(Boolean)).toMatchObject({ status: 'running', attempt: 1 });
+    } finally {
+      globalDb.close();
+      teamDb.close();
+    }
+  });
+
   test('persists decision + system message in the real team DB; UNIQUE(job_id) enforces idempotency', async () => {
     const globalDb = new Database(':memory:');
     const teamDb = new Database(':memory:');
