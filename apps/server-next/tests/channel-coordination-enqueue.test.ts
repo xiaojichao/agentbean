@@ -23,6 +23,7 @@ describe('human message coordination enqueue', () => {
       repositories,
       clock: { now: () => 100 },
       ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'job-1']) },
+      messageIngestionMode: 'durable-job',
     });
     await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
 

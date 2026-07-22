@@ -872,7 +872,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
-  const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
+  // Keep production on the existing delivery path until #706 wires a consumer for
+  // pending Channel Coordination Jobs. The durable boundary remains explicitly
+  // selectable so #705 can be verified without turning accepted messages into a queue black hole.
+  const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
