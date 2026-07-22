@@ -133,7 +133,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const job = channelCoordinationJobs.get(input.jobId);
         if (!job) return null;
         const claimable = job.status === 'pending'
-          || job.status === 'retry_wait'
+          || (job.status === 'retry_wait' && (job.nextRetryAt === null || job.nextRetryAt <= input.now))
           || (job.status === 'running' && job.updatedAt <= input.runningBefore);
         if (!claimable) return null;
         const claimed = {

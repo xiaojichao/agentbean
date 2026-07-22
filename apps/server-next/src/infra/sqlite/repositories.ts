@@ -253,10 +253,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           SET status = 'running', attempt = attempt + 1, next_retry_at = NULL, updated_at = ?
           WHERE id = ? AND (
             status = 'pending'
-            OR status = 'retry_wait'
+            OR (status = 'retry_wait' AND (next_retry_at IS NULL OR next_retry_at <= ?))
             OR (status = 'running' AND updated_at <= ?)
           )`)
-          .run(input.now, input.jobId, input.runningBefore) as { changes?: number };
+          .run(input.now, input.jobId, input.now, input.runningBefore) as { changes?: number };
         if (!result.changes) return null;
         return mapChannelCoordinationJob(teamDb.prepare(
           'SELECT * FROM channel_coordination_jobs WHERE id = ?',

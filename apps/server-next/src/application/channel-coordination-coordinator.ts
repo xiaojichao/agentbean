@@ -286,7 +286,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     return finalizeFailed(job, attempt, retry.diagnosticCode, usage, responseModel, now);
   }
 
-  async function processJob(jobId: ID): Promise<CoordinationJobOutcome> {
+  async function processJob(jobId: ID, nowOverride?: number): Promise<CoordinationJobOutcome> {
     let job = await deps.jobs.getById(jobId);
     if (!job) return { kind: 'not_found' };
 
@@ -297,6 +297,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       return { kind: 'terminal', status: job.status };
     }
 
+    const now = nowOverride ?? deps.clock.now();
     const humanMessage = await deps.messages.getById(job.messageId);
     if (!humanMessage) {
       await deps.jobs.updateState({
@@ -304,12 +305,11 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         status: 'failed',
         attempt: job.attempt,
         nextRetryAt: null,
-        updatedAt: deps.clock.now(),
+        updatedAt: now,
       });
       return { kind: 'terminal', status: 'failed' };
     }
 
-    const now = deps.clock.now();
     const claimed = await deps.jobs.claimForProcessing({
       jobId: job.id,
       now,
@@ -405,7 +405,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     const runnable = await deps.jobs.listRunnable({ now, runningBefore: now - processingTimeoutMs, limit });
     const outcomes: CoordinationJobOutcome[] = [];
     for (const job of runnable) {
-      outcomes.push(await processJob(job.id));
+      outcomes.push(await processJob(job.id, now));
     }
     return { processed: runnable.length, outcomes };
   }

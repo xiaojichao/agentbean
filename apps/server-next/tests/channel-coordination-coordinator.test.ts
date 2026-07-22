@@ -254,7 +254,7 @@ describe('channel coordinator: fail-closed on invalid model output (AC#2/AC#5)',
     const jobAfterRetry = await repos.channelCoordination.jobs.getById(jobId);
     expect(jobAfterRetry?.status).toBe('retry_wait');
 
-    const second = await coordinator.processJob(jobId);
+    const second = await coordinator.processJob(jobId, 1100);
     expect(second.kind).toBe('failed');
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.outcome).toBe('failed');
@@ -271,7 +271,7 @@ describe('channel coordinator: fail-closed on invalid model output (AC#2/AC#5)',
     });
     const { jobId } = await seedHumanMessageJob(repos);
     await coordinator.processJob(jobId);
-    const second = await coordinator.processJob(jobId);
+    const second = await coordinator.processJob(jobId, 1100);
     expect(second.kind).toBe('failed');
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.diagnosticCode).toBe('MODEL_INVALID_OUTPUT');
@@ -285,7 +285,7 @@ describe('channel coordinator: fail-closed on invalid model output (AC#2/AC#5)',
     const { jobId } = await seedHumanMessageJob(repos);
 
     expect((await coordinator.processJob(jobId)).kind).toBe('retry_wait');
-    expect((await coordinator.processJob(jobId)).kind).toBe('failed');
+    expect((await coordinator.processJob(jobId, 1100)).kind).toBe('failed');
     expect((await repos.channelCoordination.decisions.getByJobId(jobId))?.diagnosticCode)
       .toBe('MODEL_INVALID_OUTPUT');
   });
@@ -329,7 +329,8 @@ describe('channel coordinator: model failure classification (AC#5/AC#6)', () => 
     expect(jobMid?.status).toBe('retry_wait');
     expect(jobMid?.attempt).toBe(1);
 
-    const second = await coordinator.processJob(jobId);
+    expect((await coordinator.processJob(jobId, 1050)).kind).toBe('not_runnable');
+    const second = await coordinator.processJob(jobId, 1100);
     expect(second.kind).toBe('failed');
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.diagnosticCode).toBe('MODEL_RATE_LIMIT');
@@ -346,7 +347,7 @@ describe('channel coordinator: model failure classification (AC#5/AC#6)', () => 
     const { jobId } = await seedHumanMessageJob(repos);
     const first = await coordinator.processJob(jobId);
     expect(first.kind).toBe('retry_wait');
-    const second = await coordinator.processJob(jobId);
+    const second = await coordinator.processJob(jobId, 1100);
     expect(second.kind).toBe('resolved');
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.outcome).toBe('resolved');
@@ -359,7 +360,7 @@ describe('channel coordinator: model failure classification (AC#5/AC#6)', () => 
     });
     const { jobId } = await seedHumanMessageJob(repos);
     await coordinator.processJob(jobId);
-    const second = await coordinator.processJob(jobId);
+    const second = await coordinator.processJob(jobId, 1100);
     expect(second.kind).toBe('failed');
     const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
     expect(decision?.diagnosticCode).toBe('MODEL_NETWORK_ERROR');
