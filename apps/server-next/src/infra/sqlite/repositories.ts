@@ -103,6 +103,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0024_management_budget_overrides.sql');
   }
   applyMigration(db, 'team/0025_channel_coordination_jobs.sql');
+  applyMigration(db, 'team/0026_channel_coordination_decisions.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
