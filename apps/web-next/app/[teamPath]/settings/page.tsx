@@ -19,6 +19,7 @@ import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
 import { RunsPanel } from './RunsPanel';
 import { PiPolicyPanel } from './PiPolicyPanel';
+import { PiTeamCoveragePanel } from '@/components/PiTeamCoveragePanel';
 import { MemoryGovernancePanel } from './MemoryGovernancePanel';
 import { PiManagementPanel } from './PiManagementPanel';
 import {
@@ -554,6 +555,7 @@ function ServerPanel() {
       {settingsTeamId && (
         <PiPolicyPanel key={settingsTeamId} teamId={settingsTeamId} canManage={canManagePolicy} />
       )}
+      {settingsTeamId && <PiTeamCoveragePanel teamId={settingsTeamId} />}
 
       {/* ADMINS */}
       <section className="rounded-lg border border-neutral-200 p-5">

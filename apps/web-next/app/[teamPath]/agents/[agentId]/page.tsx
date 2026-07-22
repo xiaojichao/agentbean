@@ -10,6 +10,7 @@ import { AgentStatusBadge } from '@/components/agent-status-badge';
 import { formatRelative } from '@/lib/format-time';
 import type { AgentSnapshot, AgentWorkspaceRun } from '@/lib/schema';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
+import { AgentExposurePanel } from '@/components/AgentExposurePanel';
 
 export default function AgentDetailPage() {
   const params = useParams<{ teamPath: string; agentId: string }>();
@@ -35,6 +36,11 @@ export default function AgentDetailPage() {
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
   const routeTeam = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath);
   const agentTeamId = agent?.primaryTeamId ?? routeTeam?.id ?? currentTeamId;
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
+  // #710：Agent owner（设备拥有者或系统 admin）可发布/撤回 Exposure；Team owner/admin 可收紧。
+  const canManageExposure = !!agent && (!!currentUser?.id && (currentUser.id === agent.ownerId || currentUser.role === 'admin'));
+  const teamRole = routeTeam?.currentUserRole;
+  const canRestrictExposure = teamRole === 'owner' || teamRole === 'admin';
   const [workspaceRuns, setWorkspaceRuns] = useState<AgentWorkspaceRun[]>([]);
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
 
@@ -311,6 +317,15 @@ export default function AgentDetailPage() {
       )}
 
       <AgentWorkspaceSection runs={workspaceRuns} loading={workspaceLoading} />
+
+      {agent?.id && agentTeamId && (
+        <AgentExposurePanel
+          teamId={agentTeamId}
+          agentId={agent.id}
+          canManage={canManageExposure}
+          canRestrict={canRestrictExposure}
+        />
+      )}
 
       <section>
         <div className="mb-1 text-sm text-neutral-700 font-medium">接入命令</div>

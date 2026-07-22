@@ -47,6 +47,16 @@ vi.mock('@/lib/socket', () => ({
     get: mocks.getPiPolicy,
     update: mocks.updatePiPolicy,
   }),
+  agentExposureEvents: () => ({
+    getActive: vi.fn().mockResolvedValue({ ok: true, projection: null }),
+    listRevisions: vi.fn().mockResolvedValue({ ok: true, revisions: [], activeRestriction: null }),
+    createDraft: vi.fn().mockResolvedValue({ ok: true, manifest: { id: 'm1' } }),
+    updateDraft: vi.fn().mockResolvedValue({ ok: true, manifest: { id: 'm1' } }),
+    publish: vi.fn().mockResolvedValue({ ok: true, manifest: { id: 'm1', revision: 1 } }),
+    revoke: vi.fn().mockResolvedValue({ ok: true, revoked: true }),
+    upsertRestriction: vi.fn().mockResolvedValue({ ok: true, restriction: null }),
+    getTeamCoverage: vi.fn().mockResolvedValue({ ok: true, coverage: { teamId: 'team-1', entries: [] } }),
+  }),
 }));
 
 vi.mock('@/components/connection-banner', () => ({ ConnectionBanner: () => null }));

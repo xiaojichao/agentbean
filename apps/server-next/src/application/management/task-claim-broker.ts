@@ -17,7 +17,7 @@ import {
   evaluateTaskClaimRenew,
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
 } from '../../../../../packages/domain/src/index.js';
-import type { ServerNextRepositories } from '../repositories.js';
+import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
 import type { TaskClaimLeaseRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
@@ -88,6 +88,30 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
   const disconnectedDevices = new Set<string>();
   const taskTails = new Map<string, Promise<void>>();
 
+  // #710：候选硬过滤优先用 Team Agent Exposure 公开 capability（active 能力减去 Team restriction）。
+  // 过渡兼容（计划 §8：旧代码先降为兼容层，切片 E 强制前保留）：无 active manifest 时回退到
+  // legacy skill 名做匹配——仅用名称，永不引入 sourcePath/工具/权限（AC#6）。
+  async function resolveEffectiveCapabilities(teamId: string, agent: AgentRecord): Promise<Set<string>> {
+    const exposure = input.repositories.agentExposure;
+    const now = input.clock.now();
+    const active = await exposure.manifests.getActiveByTeamAgent(teamId, agent.id);
+    if (active) {
+      if (active.validUntil !== null && active.validUntil <= now) {
+        await exposure.manifests.setStatus({ id: active.id, status: 'expired', now });
+      } else {
+        const restriction = await exposure.restrictions.getByTeamAgent(teamId, agent.id);
+        const disabled = restriction && restriction.manifestId === active.id ? restriction.disabledCapabilities : [];
+        const disabledSet = new Set(disabled.map((entry) => entry.toLowerCase()));
+        return new Set(
+          active.capabilities
+            .map((capability) => capability.name.toLowerCase())
+            .filter((name) => !disabledSet.has(name)),
+        );
+      }
+    }
+    return new Set((agent.skills ?? []).map((skill) => skill.name.toLowerCase()));
+  }
+
   async function resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution> {
     const task = await input.repositories.tasks.getById(taskId);
     if (!task) throw new Error('TASK_CLAIM_TASK_NOT_FOUND');
@@ -118,9 +142,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         diagnostics.push('DEVICE_OFFLINE');
       }
       if (agent.status !== 'online') diagnostics.push('AGENT_NOT_READY');
-      const explicitCapabilities = new Set((agent.skills ?? []).map((skill) => skill.name));
+      const explicitCapabilities = await resolveEffectiveCapabilities(task.teamId, agent);
       const missingCapabilities = coordination.requiredCapabilities
-        .filter((capability) => !explicitCapabilities.has(capability));
+        .filter((capability) => !explicitCapabilities.has(capability.toLowerCase()));
       if (missingCapabilities.length > 0) diagnostics.push('CAPABILITY_MISSING');
       if (task.channelId && (!taskChannel || !channelAllowsAgent(taskChannel, agent.id))) {
         diagnostics.push('TASK_CHANNEL_FORBIDDEN');

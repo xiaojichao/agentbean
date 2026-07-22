@@ -33,6 +33,7 @@ import {
 } from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
 import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js';
+import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -108,6 +109,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0027_team_pi_policies.sql');
   applyMigration(db, 'team/0028_channel_coordination_decisions_gate.sql', { disableForeignKeys: true });
   applyMigration(db, 'team/0029_channel_coordination_decisions_superseded.sql');
+  applyMigration(db, 'team/0030_agent_exposure_manifests.sql');
+  applyMigration(db, 'team/0031_team_agent_exposure_restrictions.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -179,6 +182,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
   const memory = createSqliteMemoryRepositories(teamDb);
   const piProvider = createSqlitePiProviderPersistence(globalDb);
+  const agentExposure = createSqliteAgentExposurePersistence(teamDb);
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
       async create(input) {
@@ -358,6 +362,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     },
     piProvider: piProvider.repositories,
     piProviderUnitOfWork: piProvider.unitOfWork,
+    agentExposure: agentExposure.repositories,
+    agentExposureUnitOfWork: agentExposure.unitOfWork,
     channelCoordination,
     channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(() => operation({

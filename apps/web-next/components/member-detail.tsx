@@ -309,7 +309,9 @@ function AgentProfile({ agent, device, applyAgentStatus }: { agent: AgentSnapsho
         <div className="text-sm text-neutral-500">0 个由该 Agent 创建的子 Agent。</div>
       </Section>
 
-      <AgentSkillsSection agent={agent} />
+      {/* #710 AC#6：原始 Skill inventory（含内部来源）仅 Agent 拥有者/admin 可见，用于发布 Exposure；
+          普通成员只通过 AgentExposurePanel 的公开投影了解能力，不看内部 inventory/sourcePath。 */}
+      {canEditProfile && <AgentSkillsSection agent={agent} />}
 
       <Section title="操作" icon={<Zap size={15} />}>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
