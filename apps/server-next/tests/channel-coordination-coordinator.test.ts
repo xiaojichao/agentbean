@@ -9,7 +9,12 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories';
-import type { ChannelCoordinationJobRecord } from '../../../packages/contracts/src/index.js';
+import type {
+  AgentStatus,
+  ChannelCoordinationJobRecord,
+  CoordinationSystemMessageMeta,
+  MessageMetaDto,
+} from '../../../packages/contracts/src/index.js';
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 const requireFromWorkspace = createRequire(import.meta.url);
@@ -982,6 +987,255 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
       expect(d1.s).toBe(d2Id); // D1 被 D2 取代
       const d2 = teamDb.prepare('SELECT linked_task_id AS t FROM channel_coordination_decisions WHERE job_id = ?').get('job-2') as { t: string | null };
       expect(d2.t).toBe(taskId); // D2 关联到同 Task
+    } finally {
+      globalDb.close();
+      teamDb.close();
+    }
+  });
+});
+
+describe('channel coordinator: system message meta + target anomaly (#708)', () => {
+  /** 构造一条显式 @Codex 的人类消息 + Job；agent 可见性/状态可配。 */
+  async function seedAgentRequestJob(
+    repos: Setup['repos'],
+    options: {
+      status?: AgentStatus;
+      visibleTeamIds?: string[];
+      body?: string;
+      autoOff?: boolean;
+    } = {},
+  ): Promise<{ jobId: string }> {
+    await seedAccessContext(repos);
+    await repos.agents.upsert({
+      id: 'agent-codex', primaryTeamId: 'team-1',
+      visibleTeamIds: options.visibleTeamIds ?? ['team-1'],
+      name: 'Codex', adapterKind: 'codex', category: 'executor-hosted', source: 'scanned',
+      status: options.status ?? 'online', lastSeenAt: 1,
+    });
+    await repos.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-codex'], updatedAt: 2 },
+    });
+    await repos.messages.append({
+      id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: options.body ?? '@Codex 重构 X', createdAt: 900,
+      meta: { mentions: [{ id: 'agent-codex', kind: 'agent', name: 'Codex', start: 0, end: 6 }] },
+    });
+    await repos.channelCoordination.jobs.create({
+      id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null,
+      activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+      createdAt: 950, updatedAt: 950,
+    });
+    if (options.autoOff) {
+      await repos.teamPiPolicy.setAutoCoordination({ teamId: 'team-1', enabled: false, actorId: 'user-1', now: 1000 });
+    }
+    return { jobId: 'job-1' };
+  }
+
+  function coordMeta(msg: { meta?: MessageMetaDto } | null | undefined): CoordinationSystemMessageMeta | null {
+    const coordination = msg?.meta?.coordination;
+    return (coordination as CoordinationSystemMessageMeta | undefined) ?? null;
+  }
+
+  async function lastSystemMessage(repos: Setup['repos']) {
+    const msgs = await repos.messages.listByChannel('channel-1', 50);
+    const systems = msgs.filter((m) => m.senderKind === 'system');
+    return systems.length > 0 ? systems[systems.length - 1] : null;
+  }
+
+  test('applied tracked_task 系统消息 meta.coordination.taskId 匹配 linkedTaskId (AC#4)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' }))]),
+    });
+    await seedHumanMessageJob(repos);
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.linkedTaskId).not.toBeNull();
+
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.taskId).toBe(decision?.linkedTaskId);
+    expect(meta?.intent).toBe('tracked_task');
+    expect(meta?.gateStatus).toBe('applied');
+    // meta 绝不泄漏 provider/model 身份（AC#4）。
+    expect(JSON.stringify(sys)).not.toContain('pi-test-model');
+    expect(JSON.stringify(sys)).not.toContain('test-key');
+  });
+
+  test('applied agent_request 离线目标：保持 applied + 建 Task + meta 携带离线状态与请求决定 (AC#5 case b, 约束3)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' }))]),
+    });
+    await seedAgentRequestJob(repos, { status: 'offline', autoOff: true });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    // 硬目标不被吞：离线仍 applied 并建 Task。
+    expect(decision?.gateStatus).toBe('applied');
+    expect(decision?.linkedTaskId).not.toBeNull();
+
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.targetStatus).toBe('offline');
+    expect(meta?.targetAgentId).toBe('agent-codex');
+    expect(meta?.action).toBe('confirm_offline_target');
+    expect(meta?.taskId).toBe(decision?.linkedTaskId);
+    expect(sys?.body).toContain('不可用');
+    expect(sys?.body).toContain('Codex');
+  });
+
+  test('applied agent_request 在线目标：action 为 null，普通记录正文', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' }))]),
+    });
+    await seedAgentRequestJob(repos, { status: 'online' });
+
+    await coordinator.processJob('job-1');
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.targetStatus).toBe('online');
+    expect(meta?.action).toBeNull();
+    expect(sys?.body).toContain('已记录 Agent 请求');
+  });
+
+  test('blocked 目标不在频道作用域：无 Task，正文说明请求用户决定 (AC#5 case a)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' }))]),
+    });
+    // agent 在 channel（mention 通过 sanitize）但 visibleTeamIds 不含本 team → targetScopeValid=false。
+    await seedAgentRequestJob(repos, { status: 'online', visibleTeamIds: [] });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.blockingReason).toBe('TARGET_AGENT_OUT_OF_SCOPE');
+    expect(decision?.linkedTaskId).toBeNull();
+
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.taskId).toBeNull();
+    expect(meta?.action).toBe('specify_target');
+    expect(sys?.body).toContain('不在当前频道');
+  });
+
+  test('blocked 无法确认目标（显式 @ 但名称不匹配）：meta 保留模型给的名 + 请求指定 (AC#5 case c)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Ghost' }))]),
+    });
+    // mention 是 Codex，但模型给 targetAgentName='Ghost' → 无法匹配 → 无法确认。
+    await seedAgentRequestJob(repos, { status: 'online' });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.targetAgentId).toBeNull();
+
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.targetAgentName).toBe('Ghost');
+    expect(meta?.targetAgentId).toBeNull();
+    expect(meta?.action).toBe('specify_target');
+    expect(sys?.body).toContain('无法确认');
+  });
+
+  test('suggested（自动协调关闭、非硬目标）：action=confirm_suggested，无 Task', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'r', risk: 'low', objective: '交付周报' }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await repos.teamPiPolicy.setAutoCoordination({ teamId: 'team-1', enabled: false, actorId: 'user-1', now: 1000 });
+
+    await coordinator.processJob('job-1');
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.action).toBe('confirm_suggested');
+    expect(meta?.taskId).toBeNull();
+  });
+
+  test('high-risk blocked：action=confirm_high_risk', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'r', risk: 'high', objective: '删除生产数据库' }))]),
+    });
+    await seedHumanMessageJob(repos);
+
+    await coordinator.processJob('job-1');
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.action).toBe('confirm_high_risk');
+  });
+
+  test('task_followup applied 系统 meta.taskId 关联线程既有 Task (AC#4)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([
+        okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' })),
+        okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'progress', risk: 'low', objective: '更新进度' })),
+      ]),
+    });
+    await seedHumanMessageJob(repos, { messageId: 'message-1', jobId: 'job-1', body: '帮我交付周报' });
+    await coordinator.processJob('job-1');
+    const taskId = (await repos.channelCoordination.decisions.getByJobId('job-1'))?.linkedTaskId;
+    expect(taskId).not.toBeNull();
+
+    await repos.messages.append({
+      id: 'message-2', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: '进度更新', createdAt: 910,
+    });
+    await repos.channelCoordination.jobs.create({
+      id: 'job-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-2',
+      idempotencyKey: 'message:team-1:message-2', status: 'pending', attempt: 0, nextRetryAt: null,
+      activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+      createdAt: 920, updatedAt: 920,
+    });
+    await coordinator.processJob('job-2');
+
+    const sys = await lastSystemMessage(repos);
+    const meta = coordMeta(sys);
+    expect(meta?.taskId).toBe(taskId);
+    expect(meta?.intent).toBe('task_followup');
+  });
+
+  test('SQLite: applied tracked_task 系统消息行持久化 meta.coordination.taskId', async () => {
+    const globalDb = new Database(':memory:');
+    const teamDb = new Database(':memory:');
+    applyGlobalMigrations(globalDb);
+    applyTeamMigrations(teamDb);
+    try {
+      const repos = createSqliteRepositories({ globalDb, teamDb });
+      await seedAccessContext(repos);
+      await repos.messages.append({
+        id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+        senderKind: 'human', senderId: 'user-1', body: 'SQLite Task 测试', createdAt: 900,
+      });
+      await repos.channelCoordination.jobs.create({
+        id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+        idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null,
+        activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+        createdAt: 950, updatedAt: 950,
+      });
+      const coordinator = createChannelCoordinator({
+        jobs: repos.channelCoordination.jobs,
+        decisions: repos.channelCoordination.decisions,
+        unitOfWork: repos.channelCoordinationUnitOfWork,
+        messages: repos.messages,
+        channels: repos.channels,
+        teams: repos.teams,
+        agents: repos.agents,
+        teamPolicy: repos.teamPiPolicy,
+        modelResolver: availableResolver,
+        clock: { now: () => 1000 },
+        ids: { nextId: createIds(['decision-1', 'sysmsg-1', 'task-1']) },
+        fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' }))]),
+        baseDelayMs: 100,
+      });
+      await coordinator.processJob('job-1');
+      const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+      // 直查 messages 表的系统行，meta JSON 含 coordination.taskId。
+      const sysRow = teamDb.prepare('SELECT meta_json FROM messages WHERE sender_kind = ?').get('system') as { meta_json: string | null };
+      const parsed = sysRow.meta_json ? JSON.parse(sysRow.meta_json) : null;
+      expect(parsed?.coordination?.taskId).toBe(decision?.linkedTaskId);
+      expect(parsed?.coordination?.intent).toBe('tracked_task');
     } finally {
       globalDb.close();
       teamDb.close();

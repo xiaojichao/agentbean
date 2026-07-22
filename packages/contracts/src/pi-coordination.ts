@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { AgentStatus } from './agent.js';
 
 export type ChannelCoordinationJobStatus =
   | 'pending'
@@ -139,4 +140,48 @@ export interface UpdateTeamPiPolicyInput {
   readonly teamId: ID;
   readonly userId: ID;
   readonly autoCoordinationEnabled: boolean;
+}
+
+/**
+ * 目标 Agent 运行时状态投影（#708 AC#5）。直接复用 AgentStatus，避免两份同集合联合漂移。
+ * coordinator 据此判定「不可用」并在系统消息中请求用户决定，不静默改派。
+ */
+export type CoordinationTargetStatus = AgentStatus;
+
+/**
+ * PI 系统协调消息的可操作场景（#708 AC#5）。声明 web 可渲染何种决策点，
+ * 不强制 UI 文案/动词——server 声明「这是什么情况」，web（切片 C/E）映射为按钮。
+ * null = 普通通知，无需用户决策。
+ */
+export type CoordinationSystemMessageAction =
+  /** 目标已解析但当前离线 → 用户可等待上线 / 改派 / 取消（applied 仍建 Task，硬目标不被吞）。 */
+  | 'confirm_offline_target'
+  /** 显式 @Agent 但无法解析到具体 agent → 用户指定目标或取消（blocked）。 */
+  | 'specify_target'
+  /** 高风险/不可逆/敏感/扩作用域被门禁拦截 → 用户确认意图（blocked）。 */
+  | 'confirm_high_risk'
+  /** 自动协调关闭且非硬目标 → 仅建议，用户确认后才执行（suggested）。 */
+  | 'confirm_suggested';
+
+/**
+ * PI 协调系统消息（senderId='pi-coordinator'）的 meta.coordination 形状（#708 AC#4/AC#5）。
+ * 在 MessageMetaDto 开放 schema 下提供类型安全的契约，使 server/web 共享同一形状。
+ * 绝不含 provider/model 身份、完整 prompt 或思维链（AC#4）。
+ */
+export interface CoordinationSystemMessageMeta {
+  readonly decisionId: ID;
+  readonly jobId: ID;
+  readonly intent: ChannelCoordinationIntent;
+  readonly gateStatus: ChannelCoordinationGateStatus;
+  /** AC#4: PI 自动创建/关联的 Task —— web 据此定位 Task 执行取消/修改。null = 未建 Task。 */
+  readonly taskId?: ID | null;
+  readonly riskLevel?: ChannelCoordinationRiskLevel | null;
+  /** agent_request 解析到的目标 agent；其余为 null。 */
+  readonly targetAgentId?: ID | null;
+  /** 模型给的目标名（即使无法解析也保留，便于 web 展示模型意图）。 */
+  readonly targetAgentName?: string | null;
+  /** 目标 agent 当前状态（离线判定依据）。 */
+  readonly targetStatus?: CoordinationTargetStatus | null;
+  /** 可操作场景（AC#5）；null/省略 = 普通通知。 */
+  readonly action?: CoordinationSystemMessageAction | null;
 }
