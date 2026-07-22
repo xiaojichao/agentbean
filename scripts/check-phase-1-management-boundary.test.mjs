@@ -76,6 +76,7 @@ function scaffoldManagementRouting(root) {
   write(root, 'apps/server-next/src/transport/socket-handlers.ts', [
     'safeParseManagementWorkerPayload', 'AGENT_EVENTS.managementWorker.register',
     'WEB_EVENTS.managementPolicy.get', 'WEB_EVENTS.managementPolicy.update',
+    'WEB_EVENTS.piPolicy.get', 'WEB_EVENTS.piPolicy.update',
   ].join('\n'));
   write(root, 'packages/contracts/src/socket.ts', [
     'managementWorker', 'management-worker:register', 'management-worker:lease-offer',
@@ -83,8 +84,9 @@ function scaffoldManagementRouting(root) {
     'management-worker:abort', 'management-worker:tool-request', 'management-worker:checkpoint-fetch',
     'management-worker:outbox-replay', 'management-worker:shadow-evaluate', 'management-worker:shadow-result',
     'management-policy:get', 'management-policy:update',
+    'pi-policy:get', 'pi-policy:update',
   ].join('\n'));
-  write(root, 'apps/web-next/app/[teamPath]/settings/ManagementPolicyPanel.tsx', 'settings-management-policy settings-management-preflight\n');
+  write(root, 'apps/web-next/app/[teamPath]/settings/PiPolicyPanel.tsx', 'settings-pi-policy settings-pi-auto-coordination\n');
 }
 
 function scaffoldDeviceWorkerHost(root) {
