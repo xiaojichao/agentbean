@@ -287,7 +287,9 @@ if (!deviceWorkerHostPresent) {
 console.log('P1_DEVICE_WORKER_HOST_PRESENT: Device runtime composition, credential fail-closed capability, durable replay, lease fencing, and PI Session cleanup are present; semantic readiness is verified by daemon tests');
 
 const managementRouter = readSource('apps/server-next/src/application/management/management-router.ts');
-const managementPolicyPanel = readSource('apps/web-next/app/[teamPath]/settings/ManagementPolicyPanel.tsx');
+// #707：Team PI 产品设置控制从旧 ManagementPolicyPanel（mode/Phase/placement）迁到 PiPolicyPanel
+// （仅 autoCoordinationEnabled 开关）。旧 management 路由服务端保留供 legacy Run 恢复，故服务端标记仍校验。
+const piPolicyPanel = readSource('apps/web-next/app/[teamPath]/settings/PiPolicyPanel.tsx');
 const managementRoutingPresent = [
   'createManagementRouter',
   'getPolicy',
@@ -303,8 +305,12 @@ const managementRoutingPresent = [
   && socketHandlers.includes('WEB_EVENTS.managementPolicy.update')
   && socketContract.includes('management-policy:get')
   && socketContract.includes('management-policy:update')
-  && managementPolicyPanel.includes('settings-management-policy')
-  && managementPolicyPanel.includes('settings-management-preflight');
+  && socketContract.includes('pi-policy:get')
+  && socketContract.includes('pi-policy:update')
+  && socketHandlers.includes('WEB_EVENTS.piPolicy.get')
+  && socketHandlers.includes('WEB_EVENTS.piPolicy.update')
+  && piPolicyPanel.includes('settings-pi-policy')
+  && piPolicyPanel.includes('settings-pi-auto-coordination');
 
 if (!managementRoutingPresent) {
   console.error('P1_MANAGEMENT_ROUTING_INVALID: Team policy, shadow namespace, managed fail-closed routing, or minimal settings control is incomplete');
