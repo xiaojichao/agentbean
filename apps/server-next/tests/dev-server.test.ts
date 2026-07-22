@@ -126,6 +126,17 @@ describe('server-next dev server entry', () => {
     ).toThrow('AGENTBEAN_NEXT_WEB_ENTRY');
   });
 
+  test('allows an explicit legacy message-ingestion compatibility override', () => {
+    expect(parseServerNextDevConfig({
+      env: {},
+      argv: ['--message-ingestion-mode', 'legacy'],
+    }).messageIngestionMode).toBe('legacy');
+    expect(() => parseServerNextDevConfig({
+      env: { AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE: 'invalid' },
+      argv: [],
+    })).toThrow('AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE');
+  });
+
   test('configures the trusted Server Worker transport fail-closed', () => {
     expect(parseServerNextDevConfig({
       env: {

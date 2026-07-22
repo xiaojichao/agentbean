@@ -658,6 +658,8 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'prev
       `browser-smoke-secret-${suffix}`,
       '--web-entry',
       webEntry,
+      '--message-ingestion-mode',
+      'legacy',
     ],
     {
       cwd: process.cwd(),

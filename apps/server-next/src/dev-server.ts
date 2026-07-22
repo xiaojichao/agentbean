@@ -53,6 +53,8 @@ export interface ServerNextDevConfig {
   dataDir: string;
   sessionSecret: string;
   webEntry?: 'preview' | 'app';
+  /** Explicit compatibility override; production defaults to durable-job. */
+  messageIngestionMode?: 'legacy' | 'durable-job';
   serverWorker?: {
     workerPoolId: string;
     providerCredentialRef: string;
@@ -160,6 +162,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const port = Number(args.port ?? env.AGENTBEAN_NEXT_PORT ?? env.PORT ?? 4100);
   const storage = args.storage ?? env.AGENTBEAN_NEXT_STORAGE ?? (env.PORT ? 'sqlite' : 'memory');
   const webEntry = args['web-entry'] ?? env.AGENTBEAN_NEXT_WEB_ENTRY ?? (env.PORT ? 'app' : 'preview');
+  const messageIngestionMode = args['message-ingestion-mode'] ?? env.AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE;
   const configuredDataDir = args['data-dir'] ?? env.AGENTBEAN_NEXT_DATA_DIR;
   const hasExplicitDataDir = configuredDataDir !== undefined && configuredDataDir.length > 0;
   const dataDir = hasExplicitDataDir ? configuredDataDir : join(process.cwd(), '.agentbean-next');
@@ -179,6 +182,9 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   if (webEntry !== 'preview' && webEntry !== 'app') {
     throw new Error('AGENTBEAN_NEXT_WEB_ENTRY or --web-entry must be preview or app');
   }
+  if (messageIngestionMode !== undefined && messageIngestionMode !== 'legacy' && messageIngestionMode !== 'durable-job') {
+    throw new Error('AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE or --message-ingestion-mode must be legacy or durable-job');
+  }
   if (env.PORT && !sessionSecret) {
     throw new Error('AGENTBEAN_NEXT_SESSION_SECRET or --session-secret is required when PORT is set');
   }
@@ -197,6 +203,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
     authToken: serverWorkerAuthToken!,
   } : undefined;
   return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret', webEntry,
+    ...(messageIngestionMode ? { messageIngestionMode } : {}),
     ...(serverWorker ? { serverWorker } : {}) };
 }
 
@@ -210,7 +217,7 @@ export async function startServerNextDevServer(
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, input.messageIngestionMode);
+    : createDefaultApp(config, input.Database, input.messageIngestionMode ?? config.messageIngestionMode);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
