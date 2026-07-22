@@ -313,11 +313,11 @@ const managementRoutingPresent = [
   && piPolicyPanel.includes('settings-pi-auto-coordination');
 
 if (!managementRoutingPresent) {
-  console.error('P1_MANAGEMENT_ROUTING_INVALID: Team policy, shadow namespace, managed fail-closed routing, or minimal settings control is incomplete');
+  console.error('P1_MANAGEMENT_ROUTING_INVALID: Team policy, shadow namespace, managed fail-closed routing, or PI auto-coordination settings control is incomplete');
   process.exit(2);
 }
 
-console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision isolation, managed reservation barrier, policy authorization, and minimal settings control are present; semantic readiness is verified by server/web tests');
+console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision isolation, managed reservation barrier, policy authorization, and PI auto-coordination settings control are present; semantic readiness is verified by server/web tests');
 
 const singleAgentBoundaries = [
   'apps/server-next/tests/managed-single-agent.test.ts',

@@ -552,7 +552,7 @@ function ServerPanel() {
       </section>
 
       {settingsTeamId && (
-        <PiPolicyPanel teamId={settingsTeamId} canManage={canManagePolicy} />
+        <PiPolicyPanel key={settingsTeamId} teamId={settingsTeamId} canManage={canManagePolicy} />
       )}
 
       {/* ADMINS */}

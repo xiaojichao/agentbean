@@ -8,8 +8,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   updateTeam: vi.fn(async () => ({ ok: true })),
-  getPiPolicy: vi.fn(async () => ({ ok: true, autoCoordinationEnabled: true })),
-  updatePiPolicy: vi.fn(async (payload: { autoCoordinationEnabled: boolean }) => ({ ok: true, autoCoordinationEnabled: payload.autoCoordinationEnabled })),
+  getPiPolicy: vi.fn(async (_teamId: string) => ({ ok: true, autoCoordinationEnabled: true })),
+  updatePiPolicy: vi.fn(async (payload: { teamId: string; autoCoordinationEnabled: boolean }) => ({ ok: true, autoCoordinationEnabled: payload.autoCoordinationEnabled })),
   storeState: {
     currentTeamId: 'stale-team',
     teams: [{ id: 'stale-team', name: 'Stale Team', path: 'stale-team' }],
@@ -52,6 +52,11 @@ vi.mock('@/lib/socket', () => ({
 vi.mock('@/components/connection-banner', () => ({ ConnectionBanner: () => null }));
 
 beforeEach(() => {
+  mocks.getPiPolicy.mockImplementation(async (_teamId: string) => ({ ok: true, autoCoordinationEnabled: true }));
+  mocks.updatePiPolicy.mockImplementation(async (payload: { teamId: string; autoCoordinationEnabled: boolean }) => ({
+    ok: true,
+    autoCoordinationEnabled: payload.autoCoordinationEnabled,
+  }));
   mocks.storeState.currentTeamId = 'stale-team';
   mocks.storeState.teams = [{ id: 'stale-team', name: 'Stale Team', path: 'stale-team' }];
 });
@@ -105,5 +110,60 @@ describe('SettingsPage Team route binding', () => {
       teamId: 'route-team-id',
       autoCoordinationEnabled: false,
     }));
+  });
+
+  test('keeps the PI auto-coordination toggle read-only for Team members', async () => {
+    const { PiPolicyPanel } = await import('../app/[teamPath]/settings/PiPolicyPanel');
+    render(React.createElement(PiPolicyPanel, { teamId: 'route-team-id', canManage: false }));
+    await waitFor(() => expect(mocks.getPiPolicy).toHaveBeenCalledWith('route-team-id'));
+
+    const toggle = document.querySelector('[data-smoke="settings-pi-auto-coordination"] input[type="checkbox"]') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.disabled).toBe(true);
+    fireEvent.click(toggle);
+    expect(mocks.updatePiPolicy).not.toHaveBeenCalled();
+    expect(screen.getByText('仅 Team owner/admin 可修改。')).toBeTruthy();
+  });
+
+  test('shows an unknown disabled state instead of treating a failed read as enabled', async () => {
+    mocks.getPiPolicy.mockResolvedValueOnce({ ok: false, autoCoordinationEnabled: false });
+    const { PiPolicyPanel } = await import('../app/[teamPath]/settings/PiPolicyPanel');
+    render(React.createElement(PiPolicyPanel, { teamId: 'route-team-id', canManage: true }));
+
+    await waitFor(() => expect(screen.getByText('状态未知')).toBeTruthy());
+    const toggle = document.querySelector('[data-smoke="settings-pi-auto-coordination"] input[type="checkbox"]') as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(true);
+    expect(screen.queryByText('已开启')).toBeNull();
+    expect(screen.getByText('读取 PI 自动协调状态失败')).toBeTruthy();
+  });
+
+  test('does not let a previous Team save response overwrite the current Team', async () => {
+    let resolveFirstUpdate: ((value: { ok: true; autoCoordinationEnabled: boolean }) => void) | undefined;
+    mocks.updatePiPolicy.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveFirstUpdate = resolve;
+    }));
+    mocks.getPiPolicy.mockImplementation(async (teamId: string) => ({
+      ok: true,
+      autoCoordinationEnabled: teamId === 'team-a',
+    }));
+
+    const { PiPolicyPanel } = await import('../app/[teamPath]/settings/PiPolicyPanel');
+    const view = render(React.createElement(PiPolicyPanel, { key: 'team-a', teamId: 'team-a', canManage: true }));
+    await waitFor(() => expect(screen.getByText('已开启')).toBeTruthy());
+    fireEvent.click(document.querySelector('[data-smoke="settings-pi-auto-coordination"] input[type="checkbox"]')!);
+    await waitFor(() => expect(mocks.updatePiPolicy).toHaveBeenCalledWith({
+      teamId: 'team-a',
+      autoCoordinationEnabled: false,
+    }));
+
+    view.rerender(React.createElement(PiPolicyPanel, { key: 'team-b', teamId: 'team-b', canManage: true }));
+    await waitFor(() => expect(mocks.getPiPolicy).toHaveBeenCalledWith('team-b'));
+    await waitFor(() => expect(screen.getByText('已关闭')).toBeTruthy());
+
+    resolveFirstUpdate?.({ ok: true, autoCoordinationEnabled: true });
+    await Promise.resolve();
+    expect(screen.getByText('已关闭')).toBeTruthy();
+    expect(screen.queryByText('已开启 PI 自动协调')).toBeNull();
   });
 });

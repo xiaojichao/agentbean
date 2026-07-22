@@ -1,21 +1,21 @@
 /**
  * PI 自动协调开关的纯表单逻辑（#707）。
- * 默认开启；从 socket 读取失败或缺失时回落默认开启（AC#2）。
+ * 新 Team 的默认开启由 Server policy 默认值保证；Web 只展示 Server 返回的可信状态。
  */
 
 export interface PiPolicyFormState {
-  readonly autoCoordinationEnabled: boolean;
+  readonly autoCoordinationEnabled: boolean | null;
 }
 
-/** 新 Team / 未读取时默认开启自动协调（AC#2）。 */
-export const DEFAULT_PI_POLICY_STATE: PiPolicyFormState = { autoCoordinationEnabled: true };
+/** 未读取、读取失败或响应缺字段时保持未知，避免把失败误报为“已开启”。 */
+export const UNKNOWN_PI_POLICY_STATE: PiPolicyFormState = { autoCoordinationEnabled: null };
 
-/** 从 socket get 结果导出开关状态；缺失/失败时回落默认开启。 */
+/** 从 socket get 结果导出开关状态；只有明确的 boolean 响应才是可信状态。 */
 export function piPolicyStateFromResult(
   result: { ok: boolean; autoCoordinationEnabled?: boolean },
 ): PiPolicyFormState {
   if (result.ok && typeof result.autoCoordinationEnabled === 'boolean') {
     return { autoCoordinationEnabled: result.autoCoordinationEnabled };
   }
-  return DEFAULT_PI_POLICY_STATE;
+  return UNKNOWN_PI_POLICY_STATE;
 }
