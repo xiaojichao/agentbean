@@ -194,9 +194,17 @@ async function seedAgent(
   visibleTeamIds = ['team-1'],
 ) {
   await repositories.agents.upsert({ id, primaryTeamId: 'team-1', visibleTeamIds, name: id,
-    adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status, deviceId,
-    skills: capabilities.map((name) => ({ name, description: name, scope: 'project',
-      sourcePath: `/skills/${name}`, adapterKind: 'codex' })) });
+    adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status, deviceId });
+  // #710：候选硬过滤的能力来自 Team Agent Exposure active manifest（取代 agent.skills）。
+  // 无 manifest（如 missing-capability）→ 无公开能力 → CAPABILITY_MISSING。
+  if (capabilities.length > 0) {
+    await repositories.agentExposure.manifests.create({
+      id: `manifest-${id}`, teamId: 'team-1', agentId: id, revision: 1, status: 'active',
+      capabilities: capabilities.map((name) => ({ name, description: name })),
+      skills: [], constraints: [], availability: { status: 'available' },
+      validFrom: 0, validUntil: null, createdBy: 'user-1', now: 0,
+    });
+  }
 }
 
 function device(id: string, status: 'online' | 'offline') {

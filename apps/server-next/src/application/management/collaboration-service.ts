@@ -38,25 +38,54 @@ export function createCollaborationService(input: {
   const { repositories, clock, ids } = input;
   const gateway = createInvocationGateway({ repositories, clock, ids });
 
+  // #710：handoff 投影优先用 Team Agent Exposure 公开 skill（active 投影减去 Team restriction）。
+  // 过渡兼容（计划 §8）：无 active manifest 时回退到 legacy skill 名——仅名称，无 sourcePath（AC#6）。
+  async function resolveEffectiveSkills(teamId: string, agentId: string, agent: { skills?: { name: string }[] }): Promise<readonly string[]> {
+    const exposure = repositories.agentExposure;
+    const now = clock.now();
+    const active = await exposure.manifests.getActiveByTeamAgent(teamId, agentId);
+    if (active) {
+      if (active.validUntil !== null && active.validUntil <= now) {
+        await exposure.manifests.setStatus({ id: active.id, status: 'expired', now });
+      } else {
+        const restriction = await exposure.restrictions.getByTeamAgent(teamId, agentId);
+        const disabled = restriction && restriction.manifestId === active.id ? restriction.disabledSkills : [];
+        const disabledSet = new Set(disabled.map((entry) => entry.toLowerCase()));
+        return active.skills.map((skill) => skill.name).filter((name) => !disabledSet.has(name.toLowerCase()));
+      }
+    }
+    return (agent.skills ?? []).map((skill) => skill.name);
+  }
+
   return {
     async listAvailableAgents(request: { managementRunId: string; capabilityQuery?: string; includeBusy?: boolean }) {
       const run = await requireRun(repositories, request.managementRunId);
       const channel = await repositories.channels.getById(run.channelId);
       if (!channel || channel.teamId !== run.teamId || channel.archivedAt) throw new Error('HANDOFF_CHANNEL_FORBIDDEN');
       const query = request.capabilityQuery?.trim().toLowerCase();
-      return (await repositories.agents.listVisibleInTeam(run.teamId))
-        .flatMap((agent) => {
-          const capabilities = ['dispatch'];
-          const skills = (agent.skills ?? []).map((skill) => skill.name);
-          if (agent.deletedAt !== undefined
-            || (channel.dmTargetAgentId !== agent.id && !channel.agentMemberIds.includes(agent.id))
-            || (!request.includeBusy && agent.status === 'busy')
-            || (query && !capabilities.some((capability) => capability.includes(query))
-              && !skills.some((skill) => skill.toLowerCase().includes(query)))) return [];
-          return [{ agentId: agent.id, name: agent.name,
-            kind: agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const,
-            status: normalizeStatus(agent.status), capabilities, skills, channelMember: true }];
+      const agents = await repositories.agents.listVisibleInTeam(run.teamId);
+      const result: {
+        readonly agentId: string; readonly name: string;
+        readonly kind: 'agentos-hosted' | 'custom';
+        readonly status: 'online' | 'busy' | 'offline' | 'unknown';
+        readonly capabilities: readonly string[];
+        readonly skills: readonly string[]; readonly channelMember: boolean;
+      }[] = [];
+      for (const agent of agents) {
+        if (agent.deletedAt !== undefined
+          || (channel.dmTargetAgentId !== agent.id && !channel.agentMemberIds.includes(agent.id))
+          || (!request.includeBusy && agent.status === 'busy')) continue;
+        const capabilities = ['dispatch'];
+        const skills = await resolveEffectiveSkills(run.teamId, agent.id, agent);
+        if (query && !capabilities.some((capability) => capability.includes(query))
+          && !skills.some((skill) => skill.toLowerCase().includes(query))) continue;
+        result.push({
+          agentId: agent.id, name: agent.name,
+          kind: agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const,
+          status: normalizeStatus(agent.status), capabilities, skills, channelMember: true,
         });
+      }
+      return result;
     },
 
     async recordProposals(request: {

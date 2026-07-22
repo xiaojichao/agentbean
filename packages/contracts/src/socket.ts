@@ -54,6 +54,17 @@ export const WEB_EVENTS = {
     getActiveModel: 'pi-provider:get-active-model',
     getPublicHealth: 'pi-provider:get-public-health',
   },
+  /** #710 Team Agent Exposure 管理；Agent owner 发布/撤回，Team Owner/Admin 收紧。 */
+  agentExposure: {
+    createDraft: 'agent-exposure:create-draft',
+    updateDraft: 'agent-exposure:update-draft',
+    publish: 'agent-exposure:publish',
+    revoke: 'agent-exposure:revoke',
+    listRevisions: 'agent-exposure:list-revisions',
+    getActive: 'agent-exposure:get-active',
+    upsertRestriction: 'agent-exposure:upsert-restriction',
+    getTeamCoverage: 'agent-exposure:get-team-coverage',
+  },
   join: {
     create: 'join:create',
     validate: 'join:validate',

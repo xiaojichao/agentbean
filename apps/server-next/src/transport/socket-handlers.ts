@@ -260,6 +260,15 @@ export function registerWebSocketHandlers(
     bind(socket, WEB_EVENTS.piProvider.getActiveModel, app, 'getActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getPublicHealth, app, 'getPublicPiHealth', undefined, piProviderBindOptions);
   }
+  // #710 Team Agent Exposure：team 作用域，使用 authenticatedUser 防止 client 伪造 userId。
+  bind(socket, WEB_EVENTS.agentExposure.createDraft, app, 'createAgentExposureDraft', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.updateDraft, app, 'updateAgentExposureDraft', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.publish, app, 'publishAgentExposure', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.revoke, app, 'revokeAgentExposure', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.listRevisions, app, 'listAgentExposureRevisions', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.getActive, app, 'getAgentExposureActive', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.upsertRestriction, app, 'upsertAgentExposureRestriction', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.agentExposure.getTeamCoverage, app, 'getAgentTeamCoverage', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.delete, app, 'deleteTeam', async (payload, result) => {
     updateAuthenticatedCurrentTeam(options.authenticatedUser, result, 'fallbackTeam');
     await afterTeamMutation(payload, result);

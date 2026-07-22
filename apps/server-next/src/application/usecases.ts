@@ -3,6 +3,7 @@ import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from '
 import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
+import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -19,6 +20,7 @@ import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createSer
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
+import { createAgentExposureService } from './agent-exposure-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import type {
   CancelPiProviderTestResult,
@@ -195,6 +197,18 @@ export interface ServerNextUseCases {
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
   updatePiPolicy(input: { teamId: string; userId: string; autoCoordinationEnabled: boolean }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
+  /** #710 Agent Exposure：owner 创建 Draft。 */
+  createAgentExposureDraft(input: CreateAgentExposureDraftInput): Promise<Ack<{ manifest: AgentExposureManifestRevisionDto }>>;
+  updateAgentExposureDraft(input: UpdateAgentExposureDraftInput): Promise<Ack<{ manifest: AgentExposureManifestRevisionDto }>>;
+  publishAgentExposure(input: PublishAgentExposureInput): Promise<Ack<{ manifest: AgentExposureManifestRevisionDto; supersededManifestId: string | null }>>;
+  revokeAgentExposure(input: RevokeAgentExposureInput): Promise<Ack<{ revoked: boolean }>>;
+  listAgentExposureRevisions(input: ListAgentExposureRevisionsInput): Promise<Ack<{ revisions: readonly AgentExposureManifestRevisionDto[]; activeRestriction: AgentExposureRestrictionDto | null }>>;
+  /** PI/成员只读 active 投影（AC#3）。 */
+  getAgentExposureActive(input: GetAgentExposureActiveInput): Promise<Ack<{ projection: AgentExposureActiveProjectionDto | null }>>;
+  /** Team Owner/Admin 收紧（AC#4 fail-closed）。 */
+  upsertAgentExposureRestriction(input: UpsertAgentExposureRestrictionInput): Promise<Ack<{ restriction: AgentExposureRestrictionDto }>>;
+  /** PI Team 页只读 coverage（AC#5）。 */
+  getAgentTeamCoverage(input: GetAgentTeamCoverageInput): Promise<Ack<{ coverage: AgentTeamCoverageDto }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
   updateCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ memory: MemoryView }>>;
@@ -965,6 +979,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     repositories: repositories.piProvider,
     unitOfWork: repositories.piProviderUnitOfWork,
     users: repositories.users,
+    clock,
+    ids,
+  });
+  // #710 Team Agent Exposure：owner 发布/撤回，Team Owner/Admin 收紧，成员只读。
+  // canManageAgent 复用设备拥有者链路授权（fail-closed）。
+  const agentExposure = createAgentExposureService({
+    repositories: {
+      agentExposure: repositories.agentExposure,
+      agentExposureUnitOfWork: repositories.agentExposureUnitOfWork,
+      agents: repositories.agents,
+      teams: repositories.teams,
+    },
+    canManageAgent: async ({ userId, agentId }) => {
+      const agent = await repositories.agents.getById(agentId);
+      return agent ? canManageAgentAsUser(repositories, { userId, agent }) : false;
+    },
     clock,
     ids,
   });
@@ -4789,6 +4819,32 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         now: clock.now(),
       });
       return makeSuccess({ autoCoordinationEnabled: saved.autoCoordinationEnabled });
+    },
+
+    async createAgentExposureDraft(input) {
+      return agentExposure.createDraft(input);
+    },
+    async updateAgentExposureDraft(input) {
+      return agentExposure.updateDraft(input);
+    },
+    async publishAgentExposure(input) {
+      return agentExposure.publish(input);
+    },
+    async revokeAgentExposure(input) {
+      return agentExposure.revoke(input);
+    },
+    async listAgentExposureRevisions(input) {
+      return agentExposure.listRevisions(input);
+    },
+    async getAgentExposureActive(input) {
+      const result = await agentExposure.getActiveProjection(input);
+      return makeSuccess(result);
+    },
+    async upsertAgentExposureRestriction(input) {
+      return agentExposure.upsertRestriction(input);
+    },
+    async getAgentTeamCoverage(input) {
+      return agentExposure.getTeamCoverage(input);
     },
 
     async listPiProviderPresets(input) {

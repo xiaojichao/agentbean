@@ -20,3 +20,4 @@ export * from './management-worker-v2.js';
 export * from './socket.js';
 export * from './pi-provider.js';
 export * from './pi-coordination.js';
+export * from './agent-exposure.js';
