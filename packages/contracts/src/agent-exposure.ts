@@ -207,3 +207,94 @@ export interface ListAgentExposureRevisionsResult {
 export interface GetAgentExposureActiveResult {
   readonly projection: AgentExposureActiveProjectionDto | null;
 }
+
+// ── #711 Agent 候选资格可解释投影（Task/PI coverage 视图消费，AC#1/AC#7） ──
+//
+// 安全要点（AC#4/AC#7）：本组 DTO 是 server 投影、web 渲染共享的唯一资格判定形状。
+// 仅含公开 capability/skill 名与状态 + 人类可读判定码；绝不含 sourcePath、其他 Team
+// 的 manifest、Agent 内部 skill inventory、权限或依赖。unknown 态的 reason 一律
+// `undeclared`，绝不报 `missing`——否则等于推断 Agent 内部缺失，违反 exposure 合同。
+
+/**
+ * 资格判定状态。与 domain `AgentEligibilityState` 同形，作为契约供 server/web 共享。
+ * - qualified：硬门槛（required Capability/Skill）全部满足。
+ * - not_qualified：当前有效声明明确缺失某硬门槛（公开「不做」）。
+ * - unknown：无法获得当前有效声明（未声明/过期/不可达），不能推断内部存在与否。
+ */
+export type AgentEligibilityStateDto = 'qualified' | 'not_qualified' | 'unknown';
+
+/**
+ * 单项硬要求匹配状态。`undeclared` 仅在 unknown 态出现，表示「无法判定」——既非缺失
+ * 也非存在；coverage 视图据此显示「未声明/未知」（AC#4）。
+ */
+export type CapabilityMatchStatusDto = 'covered' | 'missing' | 'undeclared';
+export type SkillMatchStatusDto = 'covered' | 'missing' | 'undeclared';
+
+/** unknown 态成因（AC#4）。contracts canonical，server 投影与 web 渲染共享同一份。 */
+export type AgentEligibilityUnknownCause = 'undeclared' | 'expired' | 'unreachable';
+
+export interface CapabilityMatchReasonDto {
+  readonly name: string;
+  readonly status: CapabilityMatchStatusDto;
+}
+export interface SkillMatchReasonDto {
+  readonly name: string;
+  readonly status: SkillMatchStatusDto;
+}
+export interface PreferredSkillMatchDto {
+  readonly name: string;
+  readonly matched: boolean;
+}
+
+/**
+ * 资格判定判定码（人类可读，视图/审计用）。canonical 常量，server 投影与 web 渲染
+ * 共用，避免两端各自硬编码字符串漂移。不含内部信息。
+ */
+export const ELIGIBILITY_REASON_CODE = {
+  QUALIFIED: 'ELIGIBILITY_QUALIFIED',
+  MISSING_HARD_REQUIREMENT: 'ELIGIBILITY_MISSING_HARD_REQUIREMENT',
+  UNDECLARED: 'ELIGIBILITY_UNDECLARED',
+  MANIFEST_EXPIRED: 'ELIGIBILITY_MANIFEST_EXPIRED',
+  MANIFEST_UNREACHABLE: 'ELIGIBILITY_MANIFEST_UNREACHABLE',
+} as const;
+
+/** 判定码字面量联合，作为 reasonCode 字段的精确类型（防拼写漂移）。 */
+export type EligibilityReasonCodeValue =
+  (typeof ELIGIBILITY_REASON_CODE)[keyof typeof ELIGIBILITY_REASON_CODE];
+
+/**
+ * unknown 成因 → 判定码（canonical，server 投影与 web 渲染共用此映射，消除三包重复）。
+ * 默认臂 fail-closed 到 UNDECLARED：任何意外输入（含运行时 `as` 脏值）仍产出可读码，
+ * 不返回 undefined（AC#4「不留空、不推断」）。
+ */
+export function eligibilityUnknownCauseReasonCode(
+  cause: AgentEligibilityUnknownCause,
+): EligibilityReasonCodeValue {
+  switch (cause) {
+    case 'expired':
+      return ELIGIBILITY_REASON_CODE.MANIFEST_EXPIRED;
+    case 'unreachable':
+      return ELIGIBILITY_REASON_CODE.MANIFEST_UNREACHABLE;
+    case 'undeclared':
+    default:
+      return ELIGIBILITY_REASON_CODE.UNDECLARED;
+  }
+}
+
+/**
+ * 单 Agent 对一组任务要求的资格判定投影（AC#7）。
+ * 一个 Task 的 coverage 视图 = 多个 AgentEligibilityResultDto；一个 Agent 的 coverage
+ * 视图 = 该 Agent 在多组要求下的判定。仅暴露公开字段，绝不泄漏其他 Team/Agent 内部。
+ */
+export interface AgentEligibilityResultDto {
+  readonly agentId: ID;
+  readonly agentName: string;
+  readonly state: AgentEligibilityStateDto;
+  readonly available: boolean;
+  readonly capabilities: readonly CapabilityMatchReasonDto[];
+  readonly requiredSkills: readonly SkillMatchReasonDto[];
+  readonly preferredSkills: readonly PreferredSkillMatchDto[];
+  /** not_qualified 时汇总缺失硬门槛（公开名）；qualified/unknown 时为空。 */
+  readonly missingHardRequirements: readonly string[];
+  readonly reasonCode: EligibilityReasonCodeValue;
+}

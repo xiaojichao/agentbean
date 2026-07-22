@@ -29,6 +29,17 @@ export interface TaskCoordinationDto {
   readonly reviewPolicy: 'human' | 'manager';
   readonly claimPolicy: 'open' | 'targeted';
   readonly requiredCapabilities: readonly string[];
+  /**
+   * #711 AC#1：硬门槛 Skill（必须由候选 Agent 的 active Exposure Manifest 公开声明）。
+   * 可选以保持与既有 task_coordinations 存储的非破坏性演进；缺省视为 []。与
+   * requiredCapabilities 同为硬过滤门槛，缺失任一者不进入合格候选（AC#2）。
+   */
+  readonly requiredSkills?: readonly string[];
+  /**
+   * #711 AC#1：偏好 Skill（仅用于合格候选间排序，AC#3），永不改变资格判定。
+   * 必须引用当前 Team Manifest 真实 skill id（AC#5 fail-closed）。
+   */
+  readonly preferredSkills?: readonly string[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly dependencyTaskIds: readonly ID[];
   readonly attempt: number;
