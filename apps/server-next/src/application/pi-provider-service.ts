@@ -866,6 +866,38 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       assertSafeAckPayload(result);
       return result;
     },
+
+    /**
+     * 服务端内部：把 pinned (cardId, revisionId) 解析成可调用的模型目标（config + 解密后的 apiKey）。
+     * 仅由 Channel Coordinator 调用，apiKey 在内存中直传 adapter，**永不**进 DTO/socket/日志。
+     * 不可用（revision 失效/card 缺失/credential 解密失败）返回 unavailable + 诊断码。
+     */
+    async resolveInvocationTarget(input: {
+      readonly cardId: string;
+      readonly revisionId: string;
+    }): Promise<
+      | { readonly kind: 'available'; readonly config: PiProviderConfigDto; readonly apiKey: string; readonly modelId: string }
+      | { readonly kind: 'unavailable'; readonly diagnosticCode: string }
+    > {
+      return deps.unitOfWork.run(async (repositories) => {
+        const revision = await repositories.revisions.getById(input.revisionId);
+        if (!revision || revision.status !== 'published' || revision.cardId !== input.cardId) {
+          return { kind: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+        }
+        const card = await repositories.cards.getById(input.cardId);
+        if (!card) return { kind: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+        const apiKey = await resolveApiKey(repositories, card.credentialRef);
+        if (!apiKey.ok) {
+          return { kind: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
+        }
+        return {
+          kind: 'available',
+          config: revision.config,
+          apiKey: apiKey.apiKey,
+          modelId: revision.config.modelId,
+        };
+      });
+    },
   };
 }
 

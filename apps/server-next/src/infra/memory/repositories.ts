@@ -42,7 +42,7 @@ import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
 } from '../../application/channel-coordination-unit-of-work.js';
-import type { ChannelCoordinationJobRecord } from '../../../../../packages/contracts/src/index.js';
+import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord } from '../../../../../packages/contracts/src/index.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
@@ -69,6 +69,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const identityLinks = new Map<string, string>();
   const messages = new Map<string, MessageRecord>();
   const channelCoordinationJobs = new Map<string, ChannelCoordinationJobRecord>();
+  const channelCoordinationDecisions = new Map<string, ChannelCoordinationDecisionRecord>();
   const dispatches = new Map<string, DispatchRecord>();
   const artifacts = new Map<string, ArtifactRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
@@ -118,6 +119,34 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         };
         channelCoordinationJobs.set(job.id, updated);
         return updated;
+      },
+      async listRunnable(input) {
+        return Array.from(channelCoordinationJobs.values())
+          .filter((job) =>
+            (job.status === 'pending' || job.status === 'retry_wait')
+            && (job.nextRetryAt === null || job.nextRetryAt <= input.now))
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(0, input.limit);
+      },
+    },
+    decisions: {
+      async create(input) {
+        if (channelCoordinationDecisions.has(input.id)) {
+          throw new Error(`Coordination decision already exists: ${input.id}`);
+        }
+        if (Array.from(channelCoordinationDecisions.values()).some((decision) => decision.jobId === input.jobId)) {
+          throw new Error(`Coordination decision already exists for job: ${input.jobId}`);
+        }
+        channelCoordinationDecisions.set(input.id, input);
+        return input;
+      },
+      async getByJobId(jobId) {
+        return Array.from(channelCoordinationDecisions.values())
+          .find((decision) => decision.jobId === jobId) ?? null;
+      },
+      async getByMessageId(messageId) {
+        return Array.from(channelCoordinationDecisions.values())
+          .find((decision) => decision.messageId === messageId) ?? null;
       },
     },
   };
@@ -170,11 +199,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const messageSnapshot = new Map(messages);
         const artifactSnapshot = new Map(artifacts);
         const jobSnapshot = new Map(channelCoordinationJobs);
+        const decisionSnapshot = new Map(channelCoordinationDecisions);
         try {
           return await operation({
             messages: repositories.messages,
             artifacts: repositories.artifacts,
             jobs: channelCoordination.jobs,
+            decisions: channelCoordination.decisions,
           });
         } catch (error) {
           messages.clear();
@@ -183,6 +214,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, artifact] of artifactSnapshot) artifacts.set(id, artifact);
           channelCoordinationJobs.clear();
           for (const [id, job] of jobSnapshot) channelCoordinationJobs.set(id, job);
+          channelCoordinationDecisions.clear();
+          for (const [id, decision] of decisionSnapshot) channelCoordinationDecisions.set(id, decision);
           throw error;
         }
       })),

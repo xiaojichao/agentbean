@@ -21,7 +21,7 @@ import type {
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
-import type { ChannelCoordinationJobRecord, SkillDto } from '../../../../../packages/contracts/src/index.js';
+import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord, SkillDto } from '../../../../../packages/contracts/src/index.js';
 import { createSqliteManagementPersistence } from './management-repositories.js';
 import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
@@ -235,6 +235,68 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           'SELECT * FROM channel_coordination_jobs WHERE id = ?',
         ).get(input.jobId));
       },
+      async listRunnable(input) {
+        return teamDb.prepare(`SELECT * FROM channel_coordination_jobs
+          WHERE status IN ('pending', 'retry_wait')
+            AND (next_retry_at IS NULL OR next_retry_at <= ?)
+          ORDER BY created_at, rowid LIMIT ?`)
+          .all(input.now, input.limit)
+          .map((row) => {
+            const job = mapChannelCoordinationJob(row);
+            if (!job) throw new Error('SQLite coordination job row could not be mapped');
+            return job;
+          });
+      },
+    },
+    decisions: {
+      async create(input) {
+        try {
+          teamDb.prepare(`INSERT INTO channel_coordination_decisions (
+            id, job_id, team_id, channel_id, message_id, outcome, intent, reason_code, reply_text,
+            usage_input, usage_output, active_model_availability, active_model_card_id,
+            active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
+            attempt, system_message_id, idempotency_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(
+              input.id,
+              input.jobId,
+              input.teamId,
+              input.channelId,
+              input.messageId,
+              input.outcome,
+              input.intent,
+              input.reasonCode,
+              input.replyText,
+              input.usage.inputTokens,
+              input.usage.outputTokens,
+              input.pinnedModel.availability,
+              input.pinnedModel.availability === 'available' ? input.pinnedModel.cardId : null,
+              input.pinnedModel.availability === 'available' ? input.pinnedModel.revisionId : null,
+              input.pinnedModel.availability === 'available' ? input.pinnedModel.modelId : null,
+              input.responseModel,
+              input.diagnosticCode,
+              input.attempt,
+              input.systemMessageId,
+              input.idempotencyKey,
+              input.createdAt,
+              input.updatedAt,
+            );
+        } catch (error) {
+          // UNIQUE(job_id) 冲突 = 该 Job 已有 Decision（幂等回放）。
+          throw new Error(`Coordination decision already exists for job: ${input.jobId}`);
+        }
+        return input;
+      },
+      async getByJobId(jobId) {
+        return mapChannelCoordinationDecision(teamDb.prepare(
+          'SELECT * FROM channel_coordination_decisions WHERE job_id = ?',
+        ).get(jobId));
+      },
+      async getByMessageId(messageId) {
+        return mapChannelCoordinationDecision(teamDb.prepare(
+          'SELECT * FROM channel_coordination_decisions WHERE message_id = ?',
+        ).get(messageId));
+      },
     },
   };
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
@@ -267,6 +329,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         messages: repositories.messages,
         artifacts: repositories.artifacts,
         jobs: channelCoordination.jobs,
+        decisions: channelCoordination.decisions,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -2435,6 +2498,42 @@ function mapChannelCoordinationJob(row: unknown): ChannelCoordinationJobRecord |
     attempt: sqliteNumber(row, 'attempt'),
     nextRetryAt: sqliteNullableNumber(row, 'next_retry_at') ?? null,
     activeModel,
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisionRecord | null {
+  if (!row) return null;
+  const availability = sqliteText(row, 'active_model_availability');
+  const pinnedModel: ChannelCoordinationDecisionRecord['pinnedModel'] = availability === 'available'
+    ? {
+        availability: 'available',
+        cardId: sqliteText(row, 'active_model_card_id'),
+        revisionId: sqliteText(row, 'active_model_revision_id'),
+        modelId: sqliteText(row, 'active_model_model_id'),
+      }
+    : { availability: 'unavailable' };
+  return {
+    id: sqliteText(row, 'id'),
+    jobId: sqliteText(row, 'job_id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    messageId: sqliteText(row, 'message_id'),
+    outcome: sqliteText(row, 'outcome') as ChannelCoordinationDecisionRecord['outcome'],
+    intent: (sqliteNullableText(row, 'intent') ?? null) as ChannelCoordinationDecisionRecord['intent'],
+    reasonCode: sqliteNullableText(row, 'reason_code') ?? null,
+    replyText: sqliteNullableText(row, 'reply_text') ?? null,
+    usage: {
+      inputTokens: sqliteNullableNumber(row, 'usage_input') ?? null,
+      outputTokens: sqliteNullableNumber(row, 'usage_output') ?? null,
+    },
+    pinnedModel,
+    responseModel: sqliteNullableText(row, 'response_model') ?? null,
+    diagnosticCode: sqliteNullableText(row, 'diagnostic_code') ?? null,
+    attempt: sqliteNumber(row, 'attempt'),
+    systemMessageId: sqliteNullableText(row, 'system_message_id') ?? null,
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
   };

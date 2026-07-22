@@ -1,4 +1,5 @@
 import type {
+  ChannelCoordinationDecisionRecord,
   ChannelCoordinationJobRecord,
   ChannelCoordinationJobStatus,
 } from '../../../../packages/contracts/src/index.js';
@@ -10,6 +11,8 @@ export interface ChannelCoordinationJobRepository {
   getByMessageId(messageId: string): Promise<ChannelCoordinationJobRecord | null>;
   getByIdempotencyKey(idempotencyKey: string): Promise<ChannelCoordinationJobRecord | null>;
   listByChannel(channelId: string, limit: number): Promise<ChannelCoordinationJobRecord[]>;
+  /** 取可消费的 Job：status IN('pending','retry_wait') 且到期（nextRetryAt 为空或 <= now），按 createdAt 升序。 */
+  listRunnable(input: { now: number; limit: number }): Promise<ChannelCoordinationJobRecord[]>;
   updateState(input: {
     jobId: string;
     status: ChannelCoordinationJobStatus;
@@ -19,8 +22,15 @@ export interface ChannelCoordinationJobRepository {
   }): Promise<ChannelCoordinationJobRecord | null>;
 }
 
+export interface ChannelCoordinationDecisionRepository {
+  create(input: ChannelCoordinationDecisionRecord): Promise<ChannelCoordinationDecisionRecord>;
+  getByJobId(jobId: string): Promise<ChannelCoordinationDecisionRecord | null>;
+  getByMessageId(messageId: string): Promise<ChannelCoordinationDecisionRecord | null>;
+}
+
 export interface ChannelCoordinationRepositories {
   readonly jobs: ChannelCoordinationJobRepository;
+  readonly decisions: ChannelCoordinationDecisionRepository;
 }
 
 export interface ChannelCoordinationTransactionRepositories extends ChannelCoordinationRepositories {
