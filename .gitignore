@@ -44,3 +44,6 @@ apps/daemon/*.yaml
 *.tgz
 
 Library/
+
+# Canvas editor local state (tldraw-like view/selection snapshots)
+canvas/
