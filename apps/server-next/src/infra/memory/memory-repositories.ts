@@ -113,6 +113,19 @@ export function createInMemoryMemoryRepositories(
         state.items.set(input.record.id, input.record);
         return input.record;
       },
+      async listFormal(input) {
+        return [...state.items.values()]
+          .filter((record) => record.teamId === input.teamId
+            && record.formalKind !== undefined
+            && record.scopeType === input.scopeType && record.scopeRef === input.scopeRef)
+          .sort(compareUpdatedDesc);
+      },
+      async listByVersionFamily(input) {
+        return [...state.items.values()]
+          .filter((record) => record.teamId === input.teamId
+            && record.versionFamilyId === input.versionFamilyId)
+          .sort((a, b) => a.createdAt - b.createdAt || (a.id < b.id ? -1 : 1));
+      },
     },
     sources: {
       async create(record) {

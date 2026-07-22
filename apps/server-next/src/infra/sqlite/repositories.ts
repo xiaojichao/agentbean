@@ -111,6 +111,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0029_channel_coordination_decisions_superseded.sql');
   applyMigration(db, 'team/0030_agent_exposure_manifests.sql');
   applyMigration(db, 'team/0031_team_agent_exposure_restrictions.sql');
+  applyMigration(db, 'team/0032_formal_memory.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

@@ -182,6 +182,17 @@ export const WEB_EVENTS = {
     candidateReject: 'memory:candidate-reject',
     candidateMerge: 'memory:candidate-merge',
     localSummary: 'memory:local-summary',
+    // Formal Memory Center (issue #716)。事件名保持 memory:* 前缀，
+    // 避开 readiness 的 management|invocation|checkpoint 正则豁免陷阱。
+    formalList: 'memory:formal-list',
+    formalDetail: 'memory:formal-detail',
+    formalCreate: 'memory:formal-create',
+    formalRevise: 'memory:formal-revise',
+    formalDeactivate: 'memory:formal-deactivate',
+    formalDelete: 'memory:formal-delete',
+    proposeCorrection: 'memory:propose-correction',
+    formalAccept: 'memory:formal-accept',
+    formalReject: 'memory:formal-reject',
   },
 } as const;
 

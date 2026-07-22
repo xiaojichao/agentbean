@@ -548,6 +548,15 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.memory.candidateAccept, app, 'acceptMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.candidateReject, app, 'rejectMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.candidateMerge, app, 'mergeMemoryCandidate', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalList, app, 'getFormalMemories', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalDetail, app, 'getFormalMemoryDetail', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalCreate, app, 'createFormalMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalRevise, app, 'reviseFormalMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalDeactivate, app, 'deactivateFormalMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalDelete, app, 'deleteFormalMemory', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.proposeCorrection, app, 'proposeFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalAccept, app, 'acceptFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.formalReject, app, 'rejectFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;
@@ -873,6 +882,7 @@ function memoryErrorAck(error: unknown) {
     case 'MEMORY_NOT_FOUND':
     case 'MEMORY_GRANT_NOT_FOUND':
     case 'CANDIDATE_NOT_FOUND':
+    case 'FORMAL_MEMORY_NOT_FOUND':
       return makeFailure('NOT_FOUND', 'Memory record not found');
     case 'MEMORY_INVALID_VALIDITY':
     case 'MEMORY_GRANT_INVALID_EXPIRY':

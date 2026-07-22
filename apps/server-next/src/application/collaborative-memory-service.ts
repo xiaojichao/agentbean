@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type {
   ID,
+  FormalMemoryKind,
   MemoryContentKind,
   MemoryKind,
   MemoryRedactionLevel,
@@ -103,6 +104,10 @@ export interface CreateMemoryInput {
   readonly validUntil?: UnixMs;
   /** 高影响/强规则/敏感摘要默认进入 candidate，等待人工确认。 */
   readonly asCandidate?: boolean;
+  /** Formal Memory 产品标记（issue #716）。提供时记录 formal_kind 并初始化版本族。 */
+  readonly formalKind?: FormalMemoryKind;
+  /** 最近一次人工变更原因（Formal Memory AC#4）。 */
+  readonly changeReason?: string;
 }
 
 export interface UpdateMemoryInput {
@@ -121,6 +126,8 @@ export interface MemoryTargetInput {
   readonly teamId: ID;
   readonly actorId: ID;
   readonly memoryId: ID;
+  /** 变更原因（Formal Memory 停用/删除时记录，AC#4）。 */
+  readonly changeReason?: string;
 }
 
 export interface SupersedeMemoryInput {
@@ -131,6 +138,8 @@ export interface SupersedeMemoryInput {
   readonly summary?: string;
   readonly tags?: readonly string[];
   readonly sourceRefs?: readonly CollaborativeMemorySourceInput[];
+  /** 修订/取代原因（Formal Memory AC#4）。 */
+  readonly changeReason?: string;
 }
 
 export interface IssueGrantInput {
@@ -215,9 +224,10 @@ export function createCollaborativeMemoryService(
         }
         await assertNotDuplicate(memory, input);
 
+        const id = ids.nextId();
         const item: MemoryItemRecord = {
           schemaVersion: 1,
-          id: ids.nextId(),
+          id,
           teamId: input.teamId,
           kind: input.kind,
           status: input.asCandidate ? 'candidate' : 'active',
@@ -231,6 +241,9 @@ export function createCollaborativeMemoryService(
           approvedByUserId: input.asCandidate ? undefined : input.actorId,
           createdAt: now,
           updatedAt: now,
+          formalKind: input.formalKind,
+          changeReason: input.changeReason,
+          versionFamilyId: input.formalKind !== undefined ? id : undefined,
         };
         await memory.items.create(item);
 
@@ -362,6 +375,9 @@ export function createCollaborativeMemoryService(
           approvedByUserId: input.actorId,
           createdAt: now,
           updatedAt: now,
+          formalKind: old.formalKind,
+          changeReason: input.changeReason,
+          versionFamilyId: old.versionFamilyId ?? old.id,
         };
         await assertNotDuplicate(memory, created, old.id);
         await memory.items.create(created);
@@ -540,7 +556,8 @@ export function createCollaborativeMemoryService(
       const now = nextUpdatedAt(clock.now(), current.updatedAt);
       if (current.status !== from) throw new Error('MEMORY_INVALID_TRANSITION');
 
-      const next = await apply(current, now);
+      const applied = await apply(current, now);
+      const next = input.changeReason !== undefined ? { ...applied, changeReason: input.changeReason } : applied;
       const updated = await memory.items.update({ record: next, expectedUpdatedAt: current.updatedAt });
       if (!updated) throw new Error('MEMORY_UPDATE_CONFLICT');
 
@@ -567,7 +584,8 @@ export function createCollaborativeMemoryService(
         throw new Error('MEMORY_INVALID_TRANSITION');
       }
       const deleted = await memory.items.update({
-        record: { ...current, status: 'deleted', updatedAt: now },
+        record: { ...current, status: 'deleted', updatedAt: now,
+          changeReason: input.changeReason ?? current.changeReason },
         expectedUpdatedAt: current.updatedAt,
       });
       if (!deleted) throw new Error('MEMORY_UPDATE_CONFLICT');
