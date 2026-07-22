@@ -728,7 +728,7 @@ describe('channel coordinator: decision gate (#707)', () => {
     expect(decision?.linkedTaskId).toBeNull();
   });
 
-  test('an Agent removed from the channel after enqueue is blocked even when still Team-visible', async () => {
+  test('a direct-channel Agent removal is authoritative even when dmTargetAgentId remains', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({
         intent: 'agent_request', reasonCode: 'targeted', risk: 'low', objective: '重构 X', targetAgentName: 'Codex',
@@ -738,6 +738,12 @@ describe('channel coordinator: decision gate (#707)', () => {
     await repos.agents.upsert({
       id: 'agent-removed', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Codex',
       adapterKind: 'codex', category: 'executor-hosted', source: 'scanned', status: 'offline', lastSeenAt: 1,
+    });
+    await repos.channels.delete({ channelId: 'channel-1' });
+    await repos.channels.create({
+      id: 'channel-1', teamId: 'team-1', kind: 'direct', name: 'dm-codex', visibility: 'private',
+      createdBy: 'user-1', createdAt: 2, humanMemberIds: ['user-1'], agentMemberIds: [],
+      dmTargetAgentId: 'agent-removed', dmOwnerUserId: 'user-1',
     });
     await repos.messages.updateMeta({
       messageId: 'message-1',

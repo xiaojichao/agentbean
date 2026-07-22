@@ -528,8 +528,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     const targetInChannel = Boolean(
       targetAgentId &&
       channel &&
-      (channel.agentMemberIds.includes(targetAgentId) ||
-        (channel.kind === 'direct' && channel.dmTargetAgentId === targetAgentId)),
+      channel.agentMemberIds.includes(targetAgentId),
     );
     const targetScopeValid = !needsScopedTarget || Boolean(
       targetAgent && targetAgent.visibleTeamIds.includes(job.teamId) && targetInChannel,
