@@ -7,7 +7,7 @@
  * - createDraft/updateDraft/publish/revoke：Agent owner（canManageAgent，设备拥有者链路，fail-closed）。
  * - upsertRestriction：Team Owner/Admin。
  * - listRevisions/getTeamCoverage：Team 成员。
- * - getActiveProjection/getEffectiveProjection：Team 作用域只读，供 PI Coordinator/候选解析内部消费（AC#3）。
+ * - getActiveProjection：Team 作用域只读，供 PI Coordinator/候选解析内部消费（AC#3）。
  *
  * 安全合同（AC#3/AC#6）：所有投影只暴露公开 capability/skill/constraint/availability，
  * 绝不包含 sourcePath/工具/权限/依赖。supersede 原子性由 agentExposureUnitOfWork 保证。
@@ -301,32 +301,6 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
     return { projection: active ? toProjection(active) : null };
   }
 
-  /**
-   * 供 PI 候选解析/handoff 内部消费（AC#3/AC#6）：active 投影减去 Team restriction。
-   * 返回 effective capabilities/skills（小写化）。无 active 或无 restriction 时相应为空/全量。
-   */
-  async function getEffectiveProjection(
-    teamId: ID,
-    agentId: ID,
-  ): Promise<{ capabilities: readonly string[]; skills: readonly string[]; available: boolean }> {
-    const now = clock.now();
-    const active = await resolveActive(teamId, agentId, now);
-    if (!active) return { capabilities: [], skills: [], available: false };
-    const restriction = await repo.restrictions.getByTeamAgent(teamId, agentId);
-    // restriction 仅在锁定到当前 active manifest 时生效（revision fence，AC#4）。
-    const disabledCap = restriction && restriction.manifestId === active.id ? restriction.disabledCapabilities : [];
-    const disabledSkill = restriction && restriction.manifestId === active.id ? restriction.disabledSkills : [];
-    const disabledCapSet = new Set(disabledCap);
-    const disabledSkillSet = new Set(disabledSkill);
-    return {
-      capabilities: active.capabilities
-        .map((capability) => capability.name.toLowerCase())
-        .filter((name) => !disabledCapSet.has(name)),
-      skills: active.skills.map((skill) => skill.name.toLowerCase()).filter((name) => !disabledSkillSet.has(name)),
-      available: active.availability.status === 'available',
-    };
-  }
-
   async function upsertRestriction(
     input: UpsertAgentExposureRestrictionInput,
   ): Promise<Ack<{ restriction: AgentExposureRestrictionDto }>> {
@@ -394,7 +368,6 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
     revoke,
     listRevisions,
     getActiveProjection,
-    getEffectiveProjection,
     upsertRestriction,
     getTeamCoverage,
   };

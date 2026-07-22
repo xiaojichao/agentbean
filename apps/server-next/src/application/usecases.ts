@@ -4837,7 +4837,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return agentExposure.listRevisions(input);
     },
     async getAgentExposureActive(input) {
-      const result = await agentExposure.getActiveProjection(input);
+      // AC#3：socket 路径校验 Team 成员身份，防跨 Team 读取他人 active 投影。
+      // userId 由 bind 层从 authenticatedUser 注入；内部 PI 消费者（broker）直接调 repo，不走此校验。
+      if (input.userId !== undefined) {
+        const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+        if (!role) return makeFailure('FORBIDDEN', 'Not a team member');
+      }
+      const result = await agentExposure.getActiveProjection({ teamId: input.teamId, agentId: input.agentId });
       return makeSuccess(result);
     },
     async upsertAgentExposureRestriction(input) {

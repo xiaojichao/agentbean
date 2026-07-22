@@ -184,6 +184,17 @@ describe('Team Agent Exposure (#710)', () => {
     expect(byMember.ok).toBe(false);
   });
 
+  test('非成员无法读取其他 Team 的 active 投影（AC#3 socket 路径隔离）', async () => {
+    const { app } = await createHarness();
+    await publishManifest(app, [{ name: 'code-review', description: '审查' }]);
+    // user-outsider 不在 team-1：socket 路径带 userId 时拒绝（防跨 Team 读取）
+    const blocked = await app.getAgentExposureActive({ teamId: 'team-1', agentId: 'agent-1', userId: 'user-outsider' });
+    expect(blocked.ok).toBe(false);
+    // 成员可读
+    const okResult = await app.getAgentExposureActive({ teamId: 'team-1', agentId: 'agent-1', userId: 'user-member' });
+    expect(okResult.ok).toBe(true);
+  });
+
   test('PI Team coverage 只读展示公开 capability 与收紧；成员可读、非成员被拒（AC#3/AC#5）', async () => {
     const { app } = await createHarness();
     await publishManifest(app, [{ name: 'code-review', description: '审查' }]);

@@ -170,6 +170,8 @@ export interface ListAgentExposureRevisionsInput {
 export interface GetAgentExposureActiveInput {
   readonly teamId: ID;
   readonly agentId: ID;
+  /** 由 socket bind 层从 authenticatedUser 注入；服务端据此做 Team 成员校验（AC#3 隔离）。 */
+  readonly userId?: ID;
 }
 
 export interface GetAgentTeamCoverageInput {
