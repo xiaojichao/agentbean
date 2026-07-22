@@ -238,6 +238,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.managementPolicy.get, app, 'getManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.managementPolicy.update, app, 'updateManagementPolicy', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.piPolicy.get, app, 'getPiPolicy', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.piPolicy.update, app, 'updatePiPolicy', undefined, { authenticatedUser: options.authenticatedUser });
   {
     // PI Provider Supply is system-admin only; never accept client-spoofed userId on unauthenticated sockets.
     const piProviderBindOptions = {

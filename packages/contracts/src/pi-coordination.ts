@@ -83,3 +83,23 @@ export interface ChannelCoordinationDecisionRecord {
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
 }
+
+/**
+ * Team PI 自动协调开关的产品投影（#707）。
+ * 刻意只暴露 autoCoordinationEnabled —— 不含 mode/Phase/placement/Provider/Model/budget（AC#1）。
+ * 旧 ManagementPolicy 仅供旧 Run 恢复读取，不再是 Team 产品设置。
+ */
+export interface TeamPiPolicyDto {
+  readonly autoCoordinationEnabled: boolean;
+}
+
+export interface GetTeamPiPolicyInput {
+  readonly teamId: ID;
+  readonly userId: ID;
+}
+
+export interface UpdateTeamPiPolicyInput {
+  readonly teamId: ID;
+  readonly userId: ID;
+  readonly autoCoordinationEnabled: boolean;
+}

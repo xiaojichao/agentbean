@@ -16,6 +16,7 @@ import type {
   ServerNextRepositories,
   TaskRecord,
   TeamMemberRecord,
+  TeamPiPolicyRecord,
   TeamRecord,
   UserRecord,
   WorkspaceRunRecord,
@@ -104,6 +105,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0025_channel_coordination_jobs.sql');
   applyMigration(db, 'team/0026_channel_coordination_decisions.sql');
+  applyMigration(db, 'team/0027_team_pi_policies.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -630,6 +632,29 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb.prepare('DELETE FROM team_members WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM join_links WHERE team_id = ?').run(teamId);
         globalDb.prepare('DELETE FROM teams WHERE id = ?').run(teamId);
+      },
+    },
+    teamPiPolicy: {
+      async get(teamId) {
+        const row = teamDb.prepare('SELECT * FROM team_pi_policies WHERE team_id = ?').get(teamId);
+        return row ? mapTeamPiPolicy(row) : null;
+      },
+      async getOrDefault(teamId) {
+        const existing = await this.get(teamId);
+        return existing ?? { teamId, autoCoordinationEnabled: true, updatedBy: 'system', updatedAt: 0 };
+      },
+      async setAutoCoordination(input) {
+        teamDb.prepare(`INSERT INTO team_pi_policies (team_id, auto_coordination_enabled, updated_by, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(team_id) DO UPDATE SET
+            auto_coordination_enabled = excluded.auto_coordination_enabled,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at`)
+          .run(input.teamId, input.enabled ? 1 : 0, input.actorId, input.now);
+        const row = teamDb.prepare('SELECT * FROM team_pi_policies WHERE team_id = ?').get(input.teamId);
+        const mapped = mapTeamPiPolicy(row);
+        if (!mapped) throw new Error('team_pi_policies upsert did not return a row');
+        return mapped;
       },
     },
     joinLinks: {
@@ -2301,6 +2326,16 @@ function mapTeam(row: unknown): TeamRecord | null {
     path: sqliteText(row, 'path'),
     visibility: sqliteText(row, 'visibility') as TeamRecord['visibility'],
     createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapTeamPiPolicy(row: unknown): TeamPiPolicyRecord | null {
+  if (!row) return null;
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    autoCoordinationEnabled: sqliteNumber(row, 'auto_coordination_enabled') === 1,
+    updatedBy: sqliteText(row, 'updated_by'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
   };
 }
 
