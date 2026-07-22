@@ -657,6 +657,10 @@ describe('channel coordinator: decision gate (#707)', () => {
       id: 'agent-codex', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Codex',
       adapterKind: 'codex', category: 'executor-hosted', source: 'scanned', status: 'offline', lastSeenAt: 1,
     });
+    await repos.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-codex'], updatedAt: 2 },
+    });
     // 人类消息显式 @Codex（agent 提及）。
     await repos.messages.append({
       id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
@@ -724,13 +728,17 @@ describe('channel coordinator: decision gate (#707)', () => {
     expect(decision?.linkedTaskId).toBeNull();
   });
 
-  test('a stale or out-of-scope @Agent target is blocked at consumption time', async () => {
+  test('an Agent removed from the channel after enqueue is blocked even when still Team-visible', async () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({
         intent: 'agent_request', reasonCode: 'targeted', risk: 'low', objective: '重构 X', targetAgentName: 'Codex',
       }))]),
     });
     await seedHumanMessageJob(repos);
+    await repos.agents.upsert({
+      id: 'agent-removed', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Codex',
+      adapterKind: 'codex', category: 'executor-hosted', source: 'scanned', status: 'offline', lastSeenAt: 1,
+    });
     await repos.messages.updateMeta({
       messageId: 'message-1',
       meta: { mentions: [{ id: 'agent-removed', kind: 'agent', name: 'Codex', start: 0, end: 6 }] },

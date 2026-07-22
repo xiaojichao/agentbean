@@ -525,8 +525,14 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     );
     const needsScopedTarget = parsed.intent === 'agent_request' &&
       (hasExplicitAgentMention || parsed.targetAgentName !== null);
+    const targetInChannel = Boolean(
+      targetAgentId &&
+      channel &&
+      (channel.agentMemberIds.includes(targetAgentId) ||
+        (channel.kind === 'direct' && channel.dmTargetAgentId === targetAgentId)),
+    );
     const targetScopeValid = !needsScopedTarget || Boolean(
-      targetAgent && targetAgent.visibleTeamIds.includes(job.teamId),
+      targetAgent && targetAgent.visibleTeamIds.includes(job.teamId) && targetInChannel,
     );
     const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
     const assessedRisk = isSideEffect
