@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type {
+  FormalMemoryDetailDto,
+  FormalMemoryDto,
+  FormalMemoryKind,
+  FormalMemoryListDto,
+  FormalMemoryScopeType,
   LocalMemoryGovernanceSummaryDto,
   MemoryGovernanceSnapshotDto,
   MemoryKind,
@@ -10,11 +15,19 @@ import type {
 import { AlertTriangle, Check, Database, KeyRound, Laptop, Loader2, Plus, RefreshCw, ShieldAlert } from 'lucide-react';
 import { getWebSocket, memoryEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
+import {
+  FORMAL_KIND_OPTIONS,
+  FORMAL_SCOPE_OPTIONS,
+  formalStatusLabel,
+  validateCorrectionForm,
+  validateFormalMemoryForm,
+} from '@/lib/formal-memory-form';
 
-type MemoryTab = 'memories' | 'candidates' | 'grants' | 'capsules' | 'local';
+type MemoryTab = 'formal' | 'memories' | 'candidates' | 'grants' | 'capsules' | 'local';
 type LoadState = 'loading' | 'ready' | 'permission-denied' | 'error';
 
 const TABS: Array<{ id: MemoryTab; label: string }> = [
+  { id: 'formal', label: 'Formal Memory' },
   { id: 'memories', label: '协作 Memory' },
   { id: 'candidates', label: 'Candidate / 冲突' },
   { id: 'grants', label: '授权' },
@@ -126,6 +139,7 @@ export function MemoryGovernancePanel() {
         {TABS.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={`whitespace-nowrap border-b-2 px-3 py-2 text-sm ${tab === item.id ? 'border-neutral-900 font-medium' : 'border-transparent text-neutral-500'}`} data-smoke={`memory-tab-${item.id}`}>{item.label}</button>)}
       </div>
 
+      {tab === 'formal' && <FormalMemorySection teamId={teamId!} />}
       {tab === 'memories' && <MemoriesSection snapshot={snapshot} teamId={teamId!} mutate={mutate} />}
       {tab === 'candidates' && <CandidatesSection snapshot={snapshot} teamId={teamId!} mutate={mutate} />}
       {tab === 'grants' && <GrantsSection snapshot={snapshot} teamId={teamId!} agents={agents} mutate={mutate} />}
@@ -208,6 +222,191 @@ function LocalSection({ state, items, reload }: { state: string; items: readonly
   if (state === 'denied') return <StateCard icon={<ShieldAlert size={20} />} title="当前 Device 未授权" detail="只允许浏览器查看自身已保存 Device identity 对应的治理摘要。" />;
   if (state === 'error') return <StateCard icon={<AlertTriangle size={20} />} title="本地 Memory 摘要不可用" action={<button onClick={() => void reload()} className="rounded-md border px-3 py-1.5 text-xs">重试</button>} />;
   return <div className="space-y-3"><div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800"><Check size={14} className="mr-1 inline" />仅展示 daemon 明确返回的摘要；正文、结构化内容与完整路径未回传。</div>{items.length === 0 ? <Empty title="当前 Device 暂无可治理摘要" /> : items.map((item) => <article key={item.id} className="rounded-lg border p-4" data-smoke="local-memory-summary"><div className="flex items-center gap-2"><Status value={item.status} warn={item.status !== 'active'} /><span className="text-xs text-neutral-500">{item.kind} · {item.scopeType} · {item.sourceKind}</span></div><p className="mt-2 text-sm">{item.summary}</p>{item.workspaceLabel && <p className="mt-1 text-xs text-neutral-400">Workspace：{item.workspaceLabel}</p>}</article>)}</div>;
+}
+
+/** Formal Memory Center（issue #716）：Team/Channel 正式记忆的产品入口。 */
+function FormalMemorySection({ teamId }: { teamId: string }) {
+  const [scopeType, setScopeType] = useState<FormalMemoryScopeType>('team');
+  const [scopeRef, setScopeRef] = useState(teamId);
+  const [list, setList] = useState<FormalMemoryListDto | null>(null);
+  const [state, setState] = useState<'loading' | 'ready' | 'denied' | 'error'>('loading');
+  const [message, setMessage] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [kind, setKind] = useState<FormalMemoryKind>('fact');
+  const [content, setContent] = useState('');
+  const [summary, setSummary] = useState('');
+  const [changeReason, setChangeReason] = useState('');
+  const [detailFor, setDetailFor] = useState<string | null>(null);
+  const [detail, setDetail] = useState<FormalMemoryDetailDto | null>(null);
+
+  const ref = scopeType === 'team' ? teamId : scopeRef.trim();
+
+  const load = useCallback(async () => {
+    if (!ref) return;
+    setState('loading');
+    const res = await memoryEvents().formalList({ teamId, scopeType, scopeRef: ref });
+    if (res.ok && res.list) { setList(res.list); setState('ready'); setMessage(''); return; }
+    const error = res.error ?? res.message ?? '加载失败';
+    setMessage(error);
+    setState(error === 'FORBIDDEN' ? 'denied' : 'error');
+    setList(null);
+  }, [teamId, scopeType, ref]);
+
+  useEffect(() => {
+    void load();
+    const api = memoryEvents();
+    const off = api.onChanged((payload) => { if (payload.teamId === teamId) void load(); });
+    return () => { off(); };
+  }, [load, teamId]);
+
+  const openDetail = async (memoryId: string) => {
+    const res = await memoryEvents().formalDetail({ teamId, memoryId });
+    if (res.ok && res.memory) setDetail(res.memory);
+  };
+
+  const canManage = list?.canManage ?? false;
+  const canPropose = list?.canProposeCorrection ?? false;
+
+  const create = async () => {
+    const err = validateFormalMemoryForm({ kind, content, summary, changeReason });
+    if (err) { setMessage(err); return; }
+    const res = await memoryEvents().formalCreate({
+      teamId, kind, scopeType, scopeRef: ref, content: content.trim(),
+      ...(summary.trim() ? { summary: summary.trim() } : {}),
+      ...(changeReason.trim() ? { changeReason: changeReason.trim() } : {}),
+    });
+    if (!res.ok) { setMessage(res.error ?? res.message ?? '创建失败'); return; }
+    setContent(''); setSummary(''); setChangeReason(''); setCreating(false); setMessage('');
+    void load();
+  };
+
+  const revise = async (item: FormalMemoryDto) => {
+    const next = window.prompt('修订 Formal Memory 正文', item.content);
+    if (next === null || !next.trim()) return;
+    const reason = window.prompt('修订原因（必填，AC#4）') ?? '';
+    if (!reason.trim()) { setMessage('修订必须填写原因'); return; }
+    const res = await memoryEvents().formalRevise({ teamId, memoryId: item.id, content: next.trim(), changeReason: reason.trim() });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '修订失败');
+    else { setMessage(''); void load(); }
+  };
+
+  const deactivate = async (item: FormalMemoryDto) => {
+    const reason = window.prompt('停用原因（必填，与「时间过期」区分）') ?? '';
+    if (!reason.trim()) { setMessage('停用必须填写原因'); return; }
+    const res = await memoryEvents().formalDeactivate({ teamId, memoryId: item.id, changeReason: reason.trim() });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '停用失败');
+    else { setMessage(''); void load(); }
+  };
+
+  const remove = async (item: FormalMemoryDto) => {
+    if (!window.confirm('确认删除该 Formal Memory？')) return;
+    const res = await memoryEvents().formalDelete({ teamId, memoryId: item.id });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '删除失败');
+    else { setMessage(''); void load(); }
+  };
+
+  const submitCorrection = async (item: FormalMemoryDto) => {
+    const reason = window.prompt('纠错理由（必填）') ?? '';
+    if (!reason.trim()) { setMessage('纠错必须填写理由'); return; }
+    const next = window.prompt('正确的 Formal Memory 正文', item.content) ?? '';
+    const err = validateCorrectionForm({ content: next, reason });
+    if (err) { setMessage(err); return; }
+    const res = await memoryEvents().proposeCorrection({
+      teamId, scopeType, scopeRef: ref, targetMemoryId: item.id,
+      correctionType: 'revise', kind: item.kind, content: next.trim(), reason: reason.trim(),
+    });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '提交失败');
+    else setMessage('纠错已提交，待 Owner/Admin 审批');
+  };
+
+  const accept = async (item: FormalMemoryDto) => {
+    const res = await memoryEvents().formalAccept({ teamId, memoryId: item.id });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '接受失败');
+    else { setMessage(''); void load(); }
+  };
+
+  const rejectCorrection = async (item: FormalMemoryDto) => {
+    const reason = window.prompt('驳回理由（可选）');
+    const res = await memoryEvents().formalReject({ teamId, memoryId: item.id, ...(reason?.trim() ? { changeReason: reason.trim() } : {}) });
+    if (!res.ok) setMessage(res.error ?? res.message ?? '驳回失败');
+    else { setMessage(''); void load(); }
+  };
+
+  if (state === 'loading') return <StateCard icon={<Loader2 className="animate-spin" size={20} />} title="正在加载 Formal Memory" />;
+  if (state === 'denied') return <StateCard icon={<ShieldAlert size={20} />} title="无权查看该作用域的 Formal Memory" detail="Channel Memory 仅对当前频道成员可见（AC#5）。" />;
+  if (state === 'error' || !list) return <StateCard icon={<AlertTriangle size={20} />} title="Formal Memory 加载失败" detail={message} action={<button onClick={() => void load()} className="rounded-md border px-3 py-1.5 text-xs">重试</button>} />;
+
+  return (
+    <div className="space-y-4" data-smoke="formal-memory-section">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-neutral-500">作用域：</span>
+        <select value={scopeType} onChange={(event) => { setScopeType(event.target.value as FormalMemoryScopeType); setScopeRef(teamId); }} className="rounded-md border bg-white px-2 py-1 text-sm" data-smoke="formal-scope">
+          {FORMAL_SCOPE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </select>
+        {scopeType === 'channel' && <input value={scopeRef} onChange={(event) => setScopeRef(event.target.value)} placeholder="频道 ID" className="min-w-48 flex-1 rounded-md border px-2 py-1 text-sm" data-smoke="formal-channel-id" />}
+        <span className="ml-auto text-xs text-neutral-500">{list.items.length} 条 · {canManage ? '可管理' : '只读'}</span>
+        <button onClick={() => void load()} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-neutral-50"><RefreshCw size={12} />刷新</button>
+      </div>
+
+      {message && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="formal-memory-error">{message}</div>}
+
+      {canManage && (creating ? (
+        <section className="grid gap-3 rounded-lg border bg-neutral-50 p-4" data-smoke="formal-create-form">
+          <select value={kind} onChange={(event) => setKind(event.target.value as FormalMemoryKind)} className="rounded-md border bg-white px-3 py-2 text-sm">
+            {FORMAL_KIND_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          </select>
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} placeholder="Formal Memory 正文" className="min-h-24 rounded-md border px-3 py-2 text-sm" data-smoke="formal-create-content" />
+          <input value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="可选摘要" className="rounded-md border px-3 py-2 text-sm" />
+          <input value={changeReason} onChange={(event) => setChangeReason(event.target.value)} placeholder="变更原因（AC#4，可选）" className="rounded-md border px-3 py-2 text-sm" />
+          <div className="flex gap-2">
+            <button onClick={() => void create()} className="rounded-md bg-neutral-900 px-3 py-2 text-sm text-white" data-smoke="formal-create-submit">创建</button>
+            <button onClick={() => setCreating(false)} className="rounded-md border px-3 py-2 text-sm">取消</button>
+          </div>
+        </section>
+      ) : (
+        <button onClick={() => setCreating(true)} className="inline-flex items-center gap-1 rounded-md bg-neutral-900 px-3 py-1.5 text-xs text-white" data-smoke="formal-create-toggle"><Plus size={13} />新建 Formal Memory</button>
+      ))}
+
+      {list.items.length === 0 ? <Empty title="暂无 Formal Memory" /> : list.items.map((item) => (
+        <article key={item.id} className="rounded-lg border p-4" data-smoke="formal-memory-item">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-800">{FORMAL_KIND_OPTIONS.find((o) => o.value === item.kind)?.label ?? item.kind}</span>
+            <Status value={formalStatusLabel(item.status, item.changeReason)} warn={item.status !== 'active' && item.status !== 'candidate'} />
+            <span className="text-xs text-neutral-500">{item.scopeType}:{short(item.scopeRef)}</span>
+            {item.changeReason && <span className="text-xs text-neutral-400">原因：{item.changeReason}</span>}
+          </div>
+          <p className="mt-3 whitespace-pre-wrap text-sm">{item.content}</p>
+          {item.summary && <p className="mt-1 text-xs text-neutral-500">摘要：{item.summary}</p>}
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">{item.sourceRefs.map((s) => <span key={`${s.sourceKind}:${s.sourceId}`} className="rounded bg-neutral-100 px-2 py-1">{s.sourceKind}:{short(s.sourceId)}</span>)}</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Action label="版本历史" onClick={() => { if (detailFor === item.id) { setDetailFor(null); setDetail(null); } else { setDetailFor(item.id); void openDetail(item.id); } }} />
+            {canManage && item.status === 'candidate' && <>
+              <Action label="接受纠错" onClick={() => void accept(item)} />
+              <Action label="驳回纠错" danger onClick={() => void rejectCorrection(item)} />
+            </>}
+            {canManage && item.status === 'active' && <>
+              <Action label="修订" onClick={() => void revise(item)} />
+              <Action label="停用" onClick={() => void deactivate(item)} />
+            </>}
+            {canManage && (item.status === 'active' || item.status === 'candidate') && <Action label="删除" danger onClick={() => void remove(item)} />}
+            {canPropose && !canManage && item.status === 'active' && <Action label="提交纠错" onClick={() => void submitCorrection(item)} />}
+          </div>
+          {detailFor === item.id && detail && (
+            <div className="mt-3 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-xs" data-smoke="formal-memory-versions">
+              <p className="mb-2 font-medium text-neutral-700">版本历史（{detail.versions.length}）</p>
+              {detail.versions.map((v) => (
+                <div key={v.versionId} className="mb-2 border-l-2 border-neutral-300 pl-2">
+                  <div className="flex flex-wrap gap-2"><Status value={formalStatusLabel(v.status)} warn={v.status !== 'active'} /><span className="text-neutral-500">{new Date(v.createdAt).toLocaleString()}</span>{v.actorUserId && <span className="text-neutral-400">by {short(v.actorUserId)}</span>}</div>
+                  <p className="mt-1">{v.content}</p>
+                  {v.changeReason && <p className="text-neutral-400">原因：{v.changeReason}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  );
 }
 
 type Mutation = (operation: () => Promise<{ ok: boolean; error?: string; message?: string }>) => Promise<boolean>;

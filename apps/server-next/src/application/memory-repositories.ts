@@ -181,6 +181,14 @@ export interface MemoryRepositories {
       record: MemoryItemRecord;
       expectedUpdatedAt: UnixMs;
     }): Promise<MemoryItemRecord | null>;
+    /** 列出某作用域下的 Formal Memory（formal_kind 非空，AC#1/7）。 */
+    listFormal(input: {
+      teamId: ID;
+      scopeType: MemoryScopeType;
+      scopeRef: ID;
+    }): Promise<MemoryItemRecord[]>;
+    /** 版本历史：同 version_family_id 的所有版本，按 created_at 升序（AC#4）。 */
+    listByVersionFamily(input: { teamId: ID; versionFamilyId: ID }): Promise<MemoryItemRecord[]>;
   };
   readonly sources: {
     create(record: MemorySourceRecord): Promise<MemorySourceRecord>;

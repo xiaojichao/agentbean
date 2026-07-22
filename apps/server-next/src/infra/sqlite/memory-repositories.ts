@@ -36,13 +36,15 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         db.prepare(`INSERT INTO memory_items
           (id, team_id, kind, status, scope_type, scope_ref, content, summary, confidence,
            created_by_user_id, created_by_agent_id, approved_by_user_id, valid_from, valid_until,
-           superseded_by_id, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           superseded_by_id, created_at, updated_at,
+           formal_kind, change_reason, version_family_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.kind, record.status, record.scopeType, record.scopeRef,
             record.content, record.summary ?? null, record.confidence ?? null,
             record.createdByUserId ?? null, record.createdByAgentId ?? null,
             record.approvedByUserId ?? null, record.validFrom ?? null, record.validUntil ?? null,
-            record.supersededById ?? null, record.createdAt, record.updatedAt);
+            record.supersededById ?? null, record.createdAt, record.updatedAt,
+            record.formalKind ?? null, record.changeReason ?? null, record.versionFamilyId ?? null);
         return record;
       },
       async getById(input) {
@@ -60,6 +62,19 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
           ORDER BY updated_at DESC, id`)
           .all(input.teamId, input.scopeType, input.scopeRef).map(mapItemRequired);
       },
+      async listFormal(input) {
+        return db.prepare(`SELECT * FROM memory_items
+          WHERE team_id = ? AND formal_kind IS NOT NULL
+            AND scope_type = ? AND scope_ref = ?
+          ORDER BY updated_at DESC, id`)
+          .all(input.teamId, input.scopeType, input.scopeRef).map(mapItemRequired);
+      },
+      async listByVersionFamily(input) {
+        return db.prepare(`SELECT * FROM memory_items
+          WHERE team_id = ? AND version_family_id = ?
+          ORDER BY created_at ASC, id`)
+          .all(input.teamId, input.versionFamilyId).map(mapItemRequired);
+      },
       async update(input) {
         assertMemoryItemRecord(input.record);
         const record = input.record;
@@ -70,13 +85,16 @@ export function createSqliteMemoryRepositories(db: SqliteDatabase): MemoryReposi
         const result = db.prepare(`UPDATE memory_items SET
           kind = ?, status = ?, scope_type = ?, scope_ref = ?, content = ?, summary = ?,
           confidence = ?, created_by_user_id = ?, created_by_agent_id = ?, approved_by_user_id = ?,
-          valid_from = ?, valid_until = ?, superseded_by_id = ?, created_at = ?, updated_at = ?
+          valid_from = ?, valid_until = ?, superseded_by_id = ?, created_at = ?, updated_at = ?,
+          formal_kind = ?, change_reason = ?, version_family_id = ?
           WHERE id = ? AND team_id = ? AND updated_at = ?`)
           .run(record.kind, record.status, record.scopeType, record.scopeRef, record.content,
             record.summary ?? null, record.confidence ?? null, record.createdByUserId ?? null,
             record.createdByAgentId ?? null, record.approvedByUserId ?? null,
             record.validFrom ?? null, record.validUntil ?? null, record.supersededById ?? null,
-            record.createdAt, record.updatedAt, record.id, record.teamId, input.expectedUpdatedAt);
+            record.createdAt, record.updatedAt,
+            record.formalKind ?? null, record.changeReason ?? null, record.versionFamilyId ?? null,
+            record.id, record.teamId, input.expectedUpdatedAt);
         return changes(result) === 0 ? null : record;
       },
     },
@@ -357,6 +375,9 @@ function mapItem(value: unknown): MemoryItemRecord | null {
     supersededById: optionalText(value, 'superseded_by_id'),
     createdAt: number(value, 'created_at'),
     updatedAt: number(value, 'updated_at'),
+    formalKind: optionalText(value, 'formal_kind') as MemoryItemRecord['formalKind'],
+    changeReason: optionalText(value, 'change_reason'),
+    versionFamilyId: optionalText(value, 'version_family_id'),
   };
 }
 

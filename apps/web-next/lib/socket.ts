@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -754,6 +754,16 @@ export interface MemoryEvents {
   rejectCandidate(teamId: string, candidateId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
   mergeCandidate(teamId: string, candidateId: string, conflictMemoryId: string): Promise<{ ok: boolean; error?: string; message?: string }>;
   localSummaries(teamId: string): Promise<{ ok: boolean; summaries?: readonly LocalMemoryGovernanceSummaryDto[]; error?: string }>;
+  // Formal Memory Center (issue #716)
+  formalList(payload: { teamId: string; scopeType: FormalMemoryScopeType; scopeRef: string }): Promise<{ ok: boolean; list?: FormalMemoryListDto; error?: string; message?: string }>;
+  formalDetail(payload: { teamId: string; memoryId: string }): Promise<{ ok: boolean; memory?: FormalMemoryDetailDto; error?: string; message?: string }>;
+  formalCreate(payload: { teamId: string; kind: FormalMemoryKind; scopeType: FormalMemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; changeReason?: string; validUntil?: number }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  formalRevise(payload: { teamId: string; memoryId: string; content: string; summary?: string; tags?: readonly string[]; changeReason: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  formalDeactivate(payload: { teamId: string; memoryId: string; changeReason: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  formalDelete(payload: { teamId: string; memoryId: string; changeReason?: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  proposeCorrection(payload: { teamId: string; scopeType: FormalMemoryScopeType; scopeRef: string; targetMemoryId?: string; correctionType: FormalCorrectionType; kind?: FormalMemoryKind; content: string; summary?: string; reason: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  formalAccept(payload: { teamId: string; memoryId: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
+  formalReject(payload: { teamId: string; memoryId: string; changeReason?: string }): Promise<{ ok: boolean; memory?: FormalMemoryDto; error?: string; message?: string }>;
   onChanged(handler: (payload: { teamId: string }) => void): () => void;
 }
 
@@ -771,6 +781,15 @@ export function memoryEvents(socket: Socket = getWebSocket()): MemoryEvents {
     rejectCandidate(teamId, candidateId) { return emitWithTimeout(socket, WEB_EVENTS.memory.candidateReject, { teamId, candidateId }); },
     mergeCandidate(teamId, candidateId, conflictMemoryId) { return emitWithTimeout(socket, WEB_EVENTS.memory.candidateMerge, { teamId, candidateId, conflictMemoryId }); },
     localSummaries(teamId) { return emitWithTimeout(socket, WEB_EVENTS.memory.localSummary, { teamId }); },
+    formalList(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalList, payload); },
+    formalDetail(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalDetail, payload); },
+    formalCreate(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalCreate, payload); },
+    formalRevise(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalRevise, payload); },
+    formalDeactivate(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalDeactivate, payload); },
+    formalDelete(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalDelete, payload); },
+    proposeCorrection(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.proposeCorrection, payload); },
+    formalAccept(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalAccept, payload); },
+    formalReject(payload) { return emitWithTimeout(socket, WEB_EVENTS.memory.formalReject, payload); },
     onChanged(handler) {
       socket.on(WEB_EVENTS.memory.changed, handler);
       return () => { socket.off(WEB_EVENTS.memory.changed, handler); };

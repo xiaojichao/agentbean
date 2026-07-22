@@ -1,4 +1,5 @@
 import {
+  FORMAL_MEMORY_KINDS,
   MEMORY_KINDS,
   MEMORY_SCOPE_TYPES,
   MEMORY_STATUSES,
@@ -19,6 +20,7 @@ import { evaluateCandidateTransition } from '../../../../packages/domain/src/ind
 
 const SERVER_SCOPE_TYPES = new Set<string>(MEMORY_SCOPE_TYPES);
 const MEMORY_KIND_VALUES = new Set<string>(MEMORY_KINDS);
+const FORMAL_MEMORY_KIND_VALUES = new Set<string>(FORMAL_MEMORY_KINDS);
 const MEMORY_STATUS_VALUES = new Set<string>(MEMORY_STATUSES);
 const SOURCE_KIND_VALUES = new Set<string>([
   'message', 'task', 'artifact', 'workspace-run', 'invocation', 'memory', 'manual', 'local-summary',
@@ -56,6 +58,9 @@ export function assertMemoryItemRecord(record: MemoryItemRecord): void {
   }
   if (record.createdByUserId && record.createdByAgentId) {
     throw new Error('memory creator must have one identity kind');
+  }
+  if (record.formalKind !== undefined && !FORMAL_MEMORY_KIND_VALUES.has(record.formalKind)) {
+    throw new Error('memory formal_kind is invalid');
   }
   if (record.validUntil !== undefined && record.validFrom !== undefined
     && record.validUntil <= record.validFrom) {

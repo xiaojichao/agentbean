@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
@@ -16,6 +16,7 @@ import { createMemorySourceInvalidationService } from './memory-source-invalidat
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
 import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
 import { createMemoryGovernanceService } from './memory-governance-service.js';
+import { createFormalMemoryService } from './formal-memory-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -220,6 +221,15 @@ export interface ServerNextUseCases {
   acceptMemoryCandidate(input: { userId: string; teamId: string; candidateId: string; kind: MemoryKind; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
   rejectMemoryCandidate(input: { userId: string; teamId: string; candidateId: string }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
   mergeMemoryCandidate(input: { userId: string; teamId: string; candidateId: string; conflictMemoryId: string }): Promise<Ack<{ candidate: MemoryCandidateView }>>;
+  getFormalMemories(input: { userId: string; teamId: string; scopeType: FormalMemoryScopeType; scopeRef: string }): Promise<Ack<{ list: FormalMemoryListDto }>>;
+  getFormalMemoryDetail(input: { userId: string; teamId: string; memoryId: string }): Promise<Ack<{ memory: FormalMemoryDetailDto }>>;
+  createFormalMemory(input: { userId: string; teamId: string; kind: FormalMemoryKind; scopeType: FormalMemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; changeReason?: string; validUntil?: number }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  reviseFormalMemory(input: { userId: string; teamId: string; memoryId: string; content: string; summary?: string; tags?: readonly string[]; changeReason: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  deactivateFormalMemory(input: { userId: string; teamId: string; memoryId: string; changeReason: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  deleteFormalMemory(input: { userId: string; teamId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  proposeFormalCorrection(input: { userId: string; teamId: string; scopeType: FormalMemoryScopeType; scopeRef: string; targetMemoryId?: string; correctionType: 'revise' | 'delete'; kind?: FormalMemoryKind; content: string; summary?: string; reason: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  acceptFormalCorrection(input: { userId: string; teamId: string; memoryId: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  rejectFormalCorrection(input: { userId: string; teamId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -975,6 +985,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
   });
   const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
+  const formalMemory = createFormalMemoryService({ repositories, collaborativeMemory, clock });
   const piProvider = createPiProviderService({
     repositories: repositories.piProvider,
     unitOfWork: repositories.piProviderUnitOfWork,
@@ -4960,6 +4971,167 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ candidate: await memoryCandidates.mergeCandidate({ ...payload, actorId: userId }) });
     },
 
+    async getFormalMemories(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      const isChannelMember = memoryInput.scopeType === 'channel'
+        ? await isChannelMemberOf(repositories, memoryInput.scopeRef, memoryInput.userId)
+        : false;
+      if (!canReadFormalMemory(role, memoryInput.scopeType, isChannelMember)) {
+        return makeFailure('FORBIDDEN', 'No permission to read Formal Memory in this scope');
+      }
+      try {
+        const items = await formalMemory.list({
+          teamId: memoryInput.teamId,
+          scopeType: memoryInput.scopeType,
+          scopeRef: memoryInput.scopeRef,
+        });
+        return makeSuccess({
+          list: {
+            schemaVersion: 1,
+            teamId: memoryInput.teamId,
+            scopeType: memoryInput.scopeType,
+            scopeRef: memoryInput.scopeRef,
+            channelId: memoryInput.scopeType === 'channel' ? memoryInput.scopeRef : undefined,
+            canManage: canManageFormalMemory(role),
+            canProposeCorrection: canProposeFormalCorrection(role),
+            items,
+          },
+        });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async getFormalMemoryDetail(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      try {
+        const detail = await formalMemory.getDetail({
+          teamId: memoryInput.teamId,
+          memoryId: memoryInput.memoryId,
+        });
+        const isChannelMember = detail.scopeType === 'channel'
+          ? await isChannelMemberOf(repositories, detail.scopeRef, memoryInput.userId)
+          : false;
+        if (!canReadFormalMemory(role, detail.scopeType, isChannelMember)) {
+          return makeFailure('FORBIDDEN', 'No permission to read this Formal Memory');
+        }
+        return makeSuccess({ memory: detail });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async createFormalMemory(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can manage Formal Memory');
+      }
+      const { userId, ...payload } = memoryInput;
+      try {
+        const memory = await formalMemory.create({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async reviseFormalMemory(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can manage Formal Memory');
+      }
+      const { userId, ...payload } = memoryInput;
+      try {
+        const memory = await formalMemory.revise({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deactivateFormalMemory(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can manage Formal Memory');
+      }
+      const { userId, ...payload } = memoryInput;
+      try {
+        const memory = await formalMemory.deactivate({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deleteFormalMemory(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can manage Formal Memory');
+      }
+      const { userId, ...payload } = memoryInput;
+      try {
+        const memory = await formalMemory.delete({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async proposeFormalCorrection(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canProposeFormalCorrection(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team members can propose corrections');
+      }
+      const isChannelMember = memoryInput.scopeType === 'channel'
+        ? await isChannelMemberOf(repositories, memoryInput.scopeRef, memoryInput.userId)
+        : false;
+      if (!canReadFormalMemory(role, memoryInput.scopeType, isChannelMember)) {
+        return makeFailure('FORBIDDEN', 'No permission to propose correction in this scope');
+      }
+      const { userId, ...payload } = memoryInput;
+      try {
+        const memory = await formalMemory.proposeCorrection({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async acceptFormalCorrection(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can accept corrections');
+      }
+      try {
+        const memory = await formalMemory.accept({
+          teamId: memoryInput.teamId,
+          actorId: memoryInput.userId,
+          memoryId: memoryInput.memoryId,
+        });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async rejectFormalCorrection(memoryInput) {
+      const role = await repositories.teams.getMemberRole(memoryInput.teamId, memoryInput.userId);
+      if (!canManageFormalMemory(role)) {
+        return makeFailure('FORBIDDEN', 'Only Team Owner/Admin can reject corrections');
+      }
+      try {
+        const memory = await formalMemory.reject({
+          teamId: memoryInput.teamId,
+          actorId: memoryInput.userId,
+          memoryId: memoryInput.memoryId,
+          changeReason: memoryInput.changeReason,
+        });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return formalMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
     async deleteTeam(deleteInput) {
       const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.userId);
       if (actorRole !== 'owner') {
@@ -7351,3 +7523,45 @@ async function listCustomAgentsForDevice(
       cwd: agent.cwd,
     }));
 }
+
+/** 判断用户是否为某频道的人类成员（Formal Memory channel scope 读门控，AC#5）。 */
+async function isChannelMemberOf(
+  repositories: ServerNextRepositories,
+  channelId: string,
+  userId: string,
+): Promise<boolean> {
+  const channel = await repositories.channels.getById(channelId);
+  return Boolean(channel && channel.humanMemberIds.includes(userId));
+}
+
+/**
+ * 把 Formal Memory service 抛出的错误码转成 Ack failure；未识别的错误返回 undefined
+ * （由调用方 rethrow 经 socket 层 memoryErrorAck 兜底）。底层 collaborative-memory-service
+ * 复用现有 MEMORY_* 错误码，由 socket-handlers memoryErrorAck 统一映射。
+ */
+function formalMemoryErrorAck(error: unknown): Ack<never> | undefined {
+  if (!(error instanceof Error)) return undefined;
+  switch (error.message) {
+    case 'FORMAL_MEMORY_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Formal Memory not found');
+    case 'MEMORY_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Memory record not found');
+    case 'MEMORY_PERMISSION_DENIED':
+    case 'MEMORY_SOURCE_PERMISSION_DENIED':
+      return makeFailure('FORBIDDEN', 'Memory access denied');
+    case 'MEMORY_INVALID_VALIDITY':
+      return makeFailure('VALIDATION_ERROR', 'Memory request is invalid');
+    case 'MEMORY_INVALID_TRANSITION':
+    case 'MEMORY_UPDATE_CONFLICT':
+    case 'MEMORY_DUPLICATE_CONTENT':
+      return makeFailure('CONFLICT', 'Memory state changed; refresh and retry');
+    default:
+      return undefined;
+  }
+}
+
+/** formalMemoryErrorAck 未识别时重新抛出，交给 socket 层兜底处理。 */
+function rethrow(error: unknown): never {
+  throw error;
+}
+

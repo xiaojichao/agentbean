@@ -66,6 +66,12 @@ export interface MemoryRecordDto {
   readonly supersededById?: ID;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
+  /** Formal Memory 产品标记（issue #716）。非 NULL 表示这是 Formal Memory。 */
+  readonly formalKind?: import('./formal-memory.js').FormalMemoryKind;
+  /** 最近一次人工变更原因（Formal Memory AC#4）。 */
+  readonly changeReason?: string;
+  /** 版本族 id，supersede 时继承，用于聚合版本历史。 */
+  readonly versionFamilyId?: ID;
 }
 
 export interface MemoryCapsuleAuthorizationDto {
