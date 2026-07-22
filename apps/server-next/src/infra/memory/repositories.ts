@@ -220,12 +220,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const artifactSnapshot = new Map(artifacts);
         const jobSnapshot = new Map(channelCoordinationJobs);
         const decisionSnapshot = new Map(channelCoordinationDecisions);
+        const taskSnapshot = new Map(tasks);
         try {
           return await operation({
             messages: repositories.messages,
             artifacts: repositories.artifacts,
             jobs: channelCoordination.jobs,
             decisions: channelCoordination.decisions,
+            tasks: repositories.tasks,
           });
         } catch (error) {
           messages.clear();
@@ -236,6 +238,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, job] of jobSnapshot) channelCoordinationJobs.set(id, job);
           channelCoordinationDecisions.clear();
           for (const [id, decision] of decisionSnapshot) channelCoordinationDecisions.set(id, decision);
+          tasks.clear();
+          for (const [id, task] of taskSnapshot) tasks.set(id, task);
           throw error;
         }
       })),

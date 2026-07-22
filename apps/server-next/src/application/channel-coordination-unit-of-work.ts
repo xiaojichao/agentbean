@@ -3,7 +3,7 @@ import type {
   ChannelCoordinationJobRecord,
   ChannelCoordinationJobStatus,
 } from '../../../../packages/contracts/src/index.js';
-import type { ArtifactRepository, MessageRepository } from './repositories.js';
+import type { ArtifactRepository, MessageRepository, TaskRepository } from './repositories.js';
 
 export interface ChannelCoordinationJobRepository {
   create(input: ChannelCoordinationJobRecord): Promise<ChannelCoordinationJobRecord>;
@@ -42,6 +42,7 @@ export interface ChannelCoordinationRepositories {
 export interface ChannelCoordinationTransactionRepositories extends ChannelCoordinationRepositories {
   readonly messages: MessageRepository;
   readonly artifacts: ArtifactRepository;
+  readonly tasks: TaskRepository;
 }
 
 export interface ChannelCoordinationUnitOfWork {

@@ -4,6 +4,7 @@ import {
   COORDINATION_DIAGNOSTIC,
   DEFAULT_COORDINATION_BASE_DELAY_MS,
   DEFAULT_MAX_COORDINATION_ATTEMPTS,
+  evaluateCoordinationGate,
   isTransientCoordinationError,
   parseCoordinationResponse,
   planCoordinationRetry,
@@ -23,6 +24,9 @@ describe('parseCoordinationResponse', () => {
       intent: 'no_action',
       reasonCode: 'greeting',
       text: null,
+      risk: null,
+      objective: null,
+      targetAgentName: null,
     });
   });
 
@@ -30,7 +34,7 @@ describe('parseCoordinationResponse', () => {
     const result = parseCoordinationResponse(
       ok([JSON.stringify({ intent: 'system_reply', reasonCode: 'status_ok', text: 'PI 已就绪' })]),
     );
-    expect(result).toEqual({ kind: 'resolved', intent: 'system_reply', reasonCode: 'status_ok', text: 'PI 已就绪' });
+    expect(result).toMatchObject({ kind: 'resolved', intent: 'system_reply', reasonCode: 'status_ok', text: 'PI 已就绪' });
   });
 
   test('resolves clarification_required with required text', () => {
@@ -89,7 +93,7 @@ describe('parseCoordinationResponse', () => {
     const result = parseCoordinationResponse(
       ok([JSON.stringify({ intent: 'no_action', reasonCode: 'hello world; drop table' })]),
     );
-    expect(result).toEqual({ kind: 'resolved', intent: 'no_action', reasonCode: null, text: null });
+    expect(result).toMatchObject({ kind: 'resolved', intent: 'no_action', reasonCode: null, text: null });
   });
 });
 
@@ -145,5 +149,94 @@ describe('planCoordinationRetry', () => {
   test('defaults are sensible', () => {
     expect(DEFAULT_MAX_COORDINATION_ATTEMPTS).toBeGreaterThanOrEqual(2);
     expect(DEFAULT_COORDINATION_BASE_DELAY_MS).toBeGreaterThan(0);
+  });
+});
+
+describe('parseCoordinationResponse: side-effecting intents (#707)', () => {
+  test('tracked_task resolves with required risk + objective', () => {
+    const result = parseCoordinationResponse(
+      ok([JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' })]),
+    );
+    expect(result).toMatchObject({
+      kind: 'resolved', intent: 'tracked_task', risk: 'low', objective: '交付周报',
+    });
+  });
+
+  test('agent_request resolves with optional targetAgentName', () => {
+    const result = parseCoordinationResponse(
+      ok([JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' })]),
+    );
+    expect(result).toMatchObject({ kind: 'resolved', intent: 'agent_request', targetAgentName: 'Codex' });
+  });
+
+  test('side-effecting intent without risk → invalid', () => {
+    expect(parseCoordinationResponse(ok([JSON.stringify({ intent: 'tracked_task', objective: 'x' })]))).toEqual({
+      kind: 'invalid', code: COORDINATION_DIAGNOSTIC.MODEL_INVALID_OUTPUT,
+    });
+  });
+
+  test('side-effecting intent without objective → invalid', () => {
+    expect(parseCoordinationResponse(ok([JSON.stringify({ intent: 'tracked_task', risk: 'low' })]))).toEqual({
+      kind: 'invalid', code: COORDINATION_DIAGNOSTIC.MODEL_INVALID_OUTPUT,
+    });
+  });
+
+  test('invalid risk value → invalid', () => {
+    expect(parseCoordinationResponse(ok([JSON.stringify({ intent: 'tracked_task', risk: 'medium', objective: 'x' })]))).toEqual({
+      kind: 'invalid', code: COORDINATION_DIAGNOSTIC.MODEL_INVALID_OUTPUT,
+    });
+  });
+});
+
+describe('evaluateCoordinationGate (#707)', () => {
+  const conv = (intent: any) => evaluateCoordinationGate({
+    intent, risk: null, explicitTarget: false, autoCoordinationEnabled: false, channelArchived: false,
+  });
+
+  test('conversational intents are always applied regardless of toggle', () => {
+    expect(conv('no_action').status).toBe('applied');
+    expect(conv('system_reply').status).toBe('applied');
+    expect(conv('clarification_required').status).toBe('applied');
+  });
+
+  test('side-effecting low-risk with auto ON → applied', () => {
+    expect(evaluateCoordinationGate({
+      intent: 'tracked_task', risk: 'low', explicitTarget: false, autoCoordinationEnabled: true, channelArchived: false,
+    }).status).toBe('applied');
+  });
+
+  test('side-effecting low-risk with auto OFF and no explicit target → suggested (AC#5)', () => {
+    const v = evaluateCoordinationGate({
+      intent: 'tracked_task', risk: 'low', explicitTarget: false, autoCoordinationEnabled: false, channelArchived: false,
+    });
+    expect(v.status).toBe('suggested');
+  });
+
+  test('explicit target (@Agent/asTask) is not silenced by toggle OFF → applied (AC#6)', () => {
+    expect(evaluateCoordinationGate({
+      intent: 'agent_request', risk: 'low', explicitTarget: true, autoCoordinationEnabled: false, channelArchived: false,
+    }).status).toBe('applied');
+  });
+
+  test('high risk is always blocked regardless of toggle or explicit target (AC#7)', () => {
+    for (const auto of [true, false]) {
+      for (const explicit of [true, false]) {
+        expect(evaluateCoordinationGate({
+          intent: 'tracked_task', risk: 'high', explicitTarget: explicit, autoCoordinationEnabled: auto, channelArchived: false,
+        }).status).toBe('blocked');
+      }
+    }
+  });
+
+  test('archived channel blocks side-effecting intents', () => {
+    expect(evaluateCoordinationGate({
+      intent: 'tracked_task', risk: 'low', explicitTarget: false, autoCoordinationEnabled: true, channelArchived: true,
+    }).status).toBe('blocked');
+  });
+
+  test('verdict reasons are auditable short codes', () => {
+    expect(evaluateCoordinationGate({
+      intent: 'tracked_task', risk: 'high', explicitTarget: false, autoCoordinationEnabled: true, channelArchived: false,
+    }).reason).toBe('HIGH_RISK_REQUIRES_CONFIRMATION');
   });
 });

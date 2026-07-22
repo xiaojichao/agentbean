@@ -106,6 +106,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0025_channel_coordination_jobs.sql');
   applyMigration(db, 'team/0026_channel_coordination_decisions.sql');
   applyMigration(db, 'team/0027_team_pi_policies.sql');
+  applyMigration(db, 'team/0028_channel_coordination_decisions_gate.sql', { disableForeignKeys: true });
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -271,8 +272,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             id, job_id, team_id, channel_id, message_id, outcome, intent, reason_code, reply_text,
             usage_input, usage_output, active_model_availability, active_model_card_id,
             active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
-            attempt, system_message_id, idempotency_key, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            attempt, system_message_id, gate_status, risk_level, objective, target_agent_id,
+            linked_task_id, blocking_reason, idempotency_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(
               input.id,
               input.jobId,
@@ -293,6 +295,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.diagnosticCode,
               input.attempt,
               input.systemMessageId,
+              input.gateStatus,
+              input.riskLevel,
+              input.objective,
+              input.targetAgentId,
+              input.linkedTaskId,
+              input.blockingReason,
               input.idempotencyKey,
               input.createdAt,
               input.updatedAt,
@@ -342,6 +350,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         artifacts: repositories.artifacts,
         jobs: channelCoordination.jobs,
         decisions: channelCoordination.decisions,
+        tasks: repositories.tasks,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -2578,6 +2587,12 @@ function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisi
     diagnosticCode: sqliteNullableText(row, 'diagnostic_code') ?? null,
     attempt: sqliteNumber(row, 'attempt'),
     systemMessageId: sqliteNullableText(row, 'system_message_id') ?? null,
+    gateStatus: (sqliteNullableText(row, 'gate_status') ?? null) as ChannelCoordinationDecisionRecord['gateStatus'],
+    riskLevel: (sqliteNullableText(row, 'risk_level') ?? null) as ChannelCoordinationDecisionRecord['riskLevel'],
+    objective: sqliteNullableText(row, 'objective') ?? null,
+    targetAgentId: sqliteNullableText(row, 'target_agent_id') ?? null,
+    linkedTaskId: sqliteNullableText(row, 'linked_task_id') ?? null,
+    blockingReason: sqliteNullableText(row, 'blocking_reason') ?? null,
     idempotencyKey: sqliteText(row, 'idempotency_key'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),

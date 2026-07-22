@@ -114,9 +114,12 @@ function setup(input: {
     decisions: repos.channelCoordination.decisions,
     unitOfWork: repos.channelCoordinationUnitOfWork,
     messages: repos.messages,
+    channels: repos.channels,
+    tasks: repos.tasks,
+    teamPolicy: repos.teamPiPolicy,
     modelResolver: input.resolver ?? availableResolver,
     clock: { now: () => input.now ?? 1000 },
-    ids: { nextId: createIds(['decision-1', 'sysmsg-1', 'decision-2', 'sysmsg-2', 'decision-3', 'sysmsg-3']) },
+    ids: { nextId: createIds(['decision-1', 'sysmsg-1', 'task-1', 'decision-2', 'sysmsg-2', 'task-2', 'decision-3', 'sysmsg-3', 'task-3', 'decision-4', 'sysmsg-4', 'task-4']) },
     fetch: input.fetch,
     maxAttempts: input.maxAttempts,
     baseDelayMs: 100,
@@ -559,6 +562,121 @@ describe('channel coordinator: cycle processing', () => {
   });
 });
 
+describe('channel coordinator: decision gate (#707)', () => {
+  test('tracked_task auto-on + low-risk → applied: creates a Task and links it', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报' }))]),
+    });
+    const { jobId } = await seedHumanMessageJob(repos);
+
+    const outcome = await coordinator.processJob(jobId);
+    expect(outcome.kind).toBe('resolved');
+
+    const decision = await repos.channelCoordination.decisions.getByJobId(jobId);
+    expect(decision?.gateStatus).toBe('applied');
+    expect(decision?.riskLevel).toBe('low');
+    expect(decision?.objective).toBe('交付周报');
+    expect(decision?.linkedTaskId).not.toBeNull();
+
+    const task = await repos.tasks.getById(decision!.linkedTaskId!);
+    expect(task?.title).toBe('交付周报');
+    expect(task?.teamId).toBe('team-1');
+    // 系统消息说明已创建，且不含 CoT/model 身份。
+    const sys = (await repos.messages.listByChannel('channel-1', 10)).find((m) => m.senderKind === 'system');
+    expect(sys?.body).toContain('已创建跟踪任务');
+    expect(JSON.stringify(sys)).not.toContain('pi-test-model');
+  });
+
+  test('tracked_task auto-OFF + low-risk + no explicit target → suggested: no Task created (AC#5)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'r', risk: 'low', objective: '交付周报' }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await repos.teamPiPolicy.setAutoCoordination({ teamId: 'team-1', enabled: false, actorId: 'user-1', now: 1000 });
+
+    const outcome = await coordinator.processJob('job-1');
+    expect(outcome.kind).toBe('resolved');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('suggested');
+    expect(decision?.linkedTaskId).toBeNull();
+    const tasks = await repos.tasks.list({ teamId: 'team-1', channelIds: ['channel-1'], includeGlobal: false });
+    expect(tasks).toHaveLength(0);
+    const sys = (await repos.messages.listByChannel('channel-1', 10)).find((m) => m.senderKind === 'system');
+    expect(sys?.body).toContain('PI 建议');
+  });
+
+  test('high-risk tracked_task is always blocked even with auto-on (AC#7)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'r', risk: 'high', objective: '删除生产数据库' }))]),
+    });
+    await seedHumanMessageJob(repos);
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.blockingReason).toBe('HIGH_RISK_REQUIRES_CONFIRMATION');
+    expect(decision?.linkedTaskId).toBeNull();
+    const tasks = await repos.tasks.list({ teamId: 'team-1', channelIds: ['channel-1'], includeGlobal: false });
+    expect(tasks).toHaveLength(0);
+    const sys = (await repos.messages.listByChannel('channel-1', 10)).find((m) => m.senderKind === 'system');
+    expect(sys?.body).toContain('已拦截');
+  });
+
+  test('explicit @Agent with auto-OFF is not silenced → applied + targetAgentId resolved (AC#6)', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' }))]),
+    });
+    // 人类消息显式 @Codex（agent 提及）。
+    await repos.messages.append({
+      id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
+      senderKind: 'human', senderId: 'user-1', body: '@Codex 重构 X', createdAt: 900,
+      meta: { mentions: [{ id: 'agent-codex', kind: 'agent', name: 'Codex', start: 0, end: 6 }] },
+    });
+    await repos.channelCoordination.jobs.create({
+      id: 'job-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+      idempotencyKey: 'message:team-1:message-1', status: 'pending', attempt: 0, nextRetryAt: null,
+      activeModel: { availability: 'available', cardId: 'card-1', revisionId: 'revision-1', modelId: 'pi-test-model' },
+      createdAt: 950, updatedAt: 950,
+    });
+    await repos.teamPiPolicy.setAutoCoordination({ teamId: 'team-1', enabled: false, actorId: 'user-1', now: 1000 });
+
+    const outcome = await coordinator.processJob('job-1');
+    expect(outcome.kind).toBe('resolved');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('applied'); // 不被开关吞
+    expect(decision?.targetAgentId).toBe('agent-codex');
+    expect(decision?.linkedTaskId).not.toBeNull();
+  });
+
+  test('task_followup applied posts a system note and creates no Task', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'task_followup', reasonCode: 'r', risk: 'low', objective: '更新进度' }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('applied');
+    expect(decision?.linkedTaskId).toBeNull();
+    const sys = (await repos.messages.listByChannel('channel-1', 10)).find((m) => m.senderKind === 'system');
+    expect(sys?.body).toContain('已记录任务跟进');
+  });
+
+  test('decision audit fields are populated and system message carries no chain-of-thought', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'tracked_task', reasonCode: 'needs_tracking', risk: 'low', objective: '交付周报', text: '一些模型解释性文本不应进入审计' }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    // 审计字段存在；reasonCode 是短码，objective 是结构化目标。
+    expect(decision?.reasonCode).toBe('needs_tracking');
+    expect(decision?.objective).toBe('交付周报');
+    const sys = (await repos.messages.listByChannel('channel-1', 10)).find((m) => m.senderKind === 'system');
+    // 系统消息正文是「已创建跟踪任务」前缀 + objective，不含模型的解释性 text。
+    expect(sys?.body).not.toContain('不应进入审计');
+  });
+});
+
 describe('channel coordinator: SQLite persistence (migration 0026)', () => {
   test('atomically claims a pending job only once across concurrent consumers', async () => {
     const globalDb = new Database(':memory:');
@@ -617,9 +735,12 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
         decisions: repos.channelCoordination.decisions,
         unitOfWork: repos.channelCoordinationUnitOfWork,
         messages: repos.messages,
+        channels: repos.channels,
+        tasks: repos.tasks,
+        teamPolicy: repos.teamPiPolicy,
         modelResolver: availableResolver,
         clock: { now: () => 1000 },
-        ids: { nextId: createIds(['decision-1', 'sysmsg-1']) },
+        ids: { nextId: createIds(['decision-1', 'sysmsg-1', 'task-1']) },
         fetch: makeFetch([okResponse(JSON.stringify({ intent: 'system_reply', reasonCode: 'ok', text: 'SQLite 回复' }))]),
         baseDelayMs: 100,
       });
