@@ -5,6 +5,7 @@ import {
   DEFAULT_COORDINATION_BASE_DELAY_MS,
   DEFAULT_MAX_COORDINATION_ATTEMPTS,
   evaluateCoordinationGate,
+  assessCoordinationRisk,
   isTransientCoordinationError,
   parseCoordinationResponse,
   planCoordinationRetry,
@@ -232,6 +233,19 @@ describe('evaluateCoordinationGate (#707)', () => {
     expect(evaluateCoordinationGate({
       intent: 'tracked_task', risk: 'low', explicitTarget: false, autoCoordinationEnabled: true, channelArchived: true,
     }).status).toBe('blocked');
+  });
+
+  test('archived channel also blocks conversational replies', () => {
+    expect(evaluateCoordinationGate({
+      intent: 'system_reply', risk: null, explicitTarget: false,
+      autoCoordinationEnabled: true, channelArchived: true,
+    })).toMatchObject({ status: 'blocked', reason: 'CHANNEL_ARCHIVED' });
+  });
+
+  test('server risk assessment elevates destructive and sensitive objectives', () => {
+    expect(assessCoordinationRisk({ modelRisk: 'low', objective: '删除生产数据库' })).toBe('high');
+    expect(assessCoordinationRisk({ modelRisk: 'low', objective: 'export API key to a public file' })).toBe('high');
+    expect(assessCoordinationRisk({ modelRisk: 'low', objective: '交付周报' })).toBe('low');
   });
 
   test('verdict reasons are auditable short codes', () => {

@@ -2,8 +2,8 @@
  * Server Channel Coordinator（#706 / 切片 A）。
  *
  * 异步消费 Channel Coordination Job：用 Job pins 的 Active PI Model 调用模型，
- * 对一条人类频道消息产出 no_action/system_reply/clarification_required Decision，
- * 并（仅 reply/clarify）以 AgentBean 系统协调身份保存一条系统消息。
+ * 对一条人类频道消息产出六种协调 Decision，并在服务端重新执行权限、风险与频道状态门禁；
+ * 只有 applied 的低风险动作才会创建 Task，suggested/blocked 只保留审计与必要说明。
  *
  * 故障原则（AC#1/AC#5/AC#6）：
  * - 不依赖用户 Device 在线，无本地文件/Shell/Workspace/Device-Memory 能力，只调模型 adapter。
@@ -29,6 +29,7 @@ import {
   type CoordinationErrorKind,
   type CoordinationGateVerdict,
   type CoordinationParseResult,
+  assessCoordinationRisk,
   evaluateCoordinationGate,
   parseCoordinationResponse,
   planCoordinationRetry,
@@ -46,7 +47,13 @@ import type {
   ChannelCoordinationJobRepository,
   ChannelCoordinationUnitOfWork,
 } from './channel-coordination-unit-of-work.js';
-import type { ChannelRepository, MessageRepository, TaskRepository, TeamPiPolicyRepository } from './repositories.js';
+import type {
+  AgentRepository,
+  ChannelRepository,
+  MessageRepository,
+  TeamPiPolicyRepository,
+  TeamRepository,
+} from './repositories.js';
 
 /** PI Provider 解析目标的最小依赖（仅 resolveInvocationTarget，避免引入完整服务类型）。 */
 export interface CoordinatorModelResolver {
@@ -75,7 +82,8 @@ export interface ChannelCoordinatorDependencies {
   readonly unitOfWork: ChannelCoordinationUnitOfWork;
   readonly messages: MessageRepository;
   readonly channels: ChannelRepository;
-  readonly tasks: TaskRepository;
+  readonly teams: TeamRepository;
+  readonly agents: AgentRepository;
   readonly teamPolicy: TeamPiPolicyRepository;
   readonly modelResolver: CoordinatorModelResolver;
   readonly clock: { now(): number };
@@ -171,7 +179,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     return { inputTokens, outputTokens };
   }
 
-  /** 硬目标判定（AC#6）：显式 @Agent / 明确作为任务 / 用户已确认。 */
+  /** 硬目标判定（AC#6）：显式 @Agent / 明确作为任务。 */
   function computeExplicitTarget(meta: MessageMetaDto | undefined): boolean {
     if (meta?.asTask === true) return true;
     return Boolean(meta?.mentions?.some((mention) => mention.kind === 'agent'));
@@ -182,10 +190,11 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
     meta: MessageMetaDto | undefined,
   ): ID | null {
-    if (parsed.intent !== 'agent_request' || !parsed.targetAgentName) return null;
-    const match = meta?.mentions?.find(
-      (mention) => mention.kind === 'agent' && mention.name === parsed.targetAgentName,
-    );
+    if (parsed.intent !== 'agent_request') return null;
+    const agentMentions = meta?.mentions?.filter((mention) => mention.kind === 'agent') ?? [];
+    const match = parsed.targetAgentName
+      ? agentMentions.find((mention) => mention.name === parsed.targetAgentName)
+      : agentMentions.length === 1 ? agentMentions[0] : undefined;
     return match?.id ?? null;
   }
 
@@ -194,6 +203,17 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
     verdict: CoordinationGateVerdict,
   ): string | null {
+    if (
+      verdict.status === 'blocked' &&
+      (verdict.reason === COORDINATION_GATE_REASON.CHANNEL_ARCHIVED ||
+        verdict.reason === COORDINATION_GATE_REASON.SENDER_NOT_AUTHORIZED)
+    ) {
+      return null;
+    }
+    if (verdict.status === 'blocked') {
+      const objective = parsed.objective ?? '';
+      return `已拦截（需确认或目标已失效）：${objective}`;
+    }
     switch (parsed.intent) {
       case 'system_reply':
       case 'clarification_required':
@@ -202,7 +222,6 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         return null;
     }
     const objective = parsed.objective ?? '';
-    if (verdict.status === 'blocked') return `已拦截（高风险，需确认）：${objective}`;
     if (verdict.status === 'suggested') return `PI 建议（自动协调未开启，需确认后执行）：${objective}`;
     // applied 副作用意图
     switch (parsed.intent) {
@@ -488,18 +507,40 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
 
     // 服务端策略门禁（#707）：模型只提议(proposed)，此处重新校验风险/开关/显式目标/频道状态，裁决 applied/suggested/blocked。
     const channel = await deps.channels.getById(job.channelId);
-    const channelArchived = Boolean(channel && channel.archivedAt != null);
+    const channelArchived = !channel || channel.teamId !== job.teamId || channel.archivedAt != null;
     const policy = await deps.teamPolicy.getOrDefault(job.teamId);
     const explicitTarget = computeExplicitTarget(humanMessage.meta);
     const targetAgentId = resolveTargetAgentId(parsed, humanMessage.meta);
+    const senderRole = await deps.teams.getMemberRole(job.teamId, humanMessage.senderId);
+    const senderAuthorized = Boolean(
+      senderRole &&
+      humanMessage.teamId === job.teamId &&
+      humanMessage.channelId === job.channelId &&
+      channel &&
+      (channel.visibility !== 'private' || channel.humanMemberIds.includes(humanMessage.senderId)),
+    );
+    const targetAgent = targetAgentId ? await deps.agents.getById(targetAgentId) : null;
+    const hasExplicitAgentMention = Boolean(
+      humanMessage.meta?.mentions?.some((mention) => mention.kind === 'agent'),
+    );
+    const needsScopedTarget = parsed.intent === 'agent_request' &&
+      (hasExplicitAgentMention || parsed.targetAgentName !== null);
+    const targetScopeValid = !needsScopedTarget || Boolean(
+      targetAgent && targetAgent.visibleTeamIds.includes(job.teamId),
+    );
+    const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
+    const assessedRisk = isSideEffect
+      ? assessCoordinationRisk({ modelRisk: parsed.risk, objective: parsed.objective })
+      : null;
     const verdict = evaluateCoordinationGate({
       intent: parsed.intent,
-      risk: parsed.risk,
+      risk: assessedRisk,
       explicitTarget,
       autoCoordinationEnabled: policy.autoCoordinationEnabled,
       channelArchived,
+      senderAuthorized,
+      targetScopeValid,
     });
-    const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
     return finalizeGateDecision(
       job,
       attempt,
@@ -511,7 +552,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         threadId: humanMessage.threadId ?? humanMessage.id,
         senderId: humanMessage.senderId,
         targetAgentId,
-        riskLevel: isSideEffect ? (parsed.risk ?? 'low') : null,
+        riskLevel: assessedRisk,
         gateStatus: verdict.status,
       },
       now,

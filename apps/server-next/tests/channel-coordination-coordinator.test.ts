@@ -115,7 +115,8 @@ function setup(input: {
     unitOfWork: repos.channelCoordinationUnitOfWork,
     messages: repos.messages,
     channels: repos.channels,
-    tasks: repos.tasks,
+    teams: repos.teams,
+    agents: repos.agents,
     teamPolicy: repos.teamPiPolicy,
     modelResolver: input.resolver ?? availableResolver,
     clock: { now: () => input.now ?? 1000 },
@@ -126,6 +127,30 @@ function setup(input: {
     processingTimeoutMs: input.processingTimeoutMs,
   });
   return { repos, coordinator };
+}
+
+async function seedAccessContext(repos: Setup['repos']): Promise<void> {
+  if (!(await repos.users.getById('user-1'))) {
+    await repos.users.create({
+      id: 'user-1', username: 'alice', role: 'user', passwordHash: 'x', createdAt: 1, updatedAt: 1,
+    });
+  }
+  if (!(await repos.teams.getById('team-1'))) {
+    await repos.teams.create({
+      id: 'team-1', name: 'Team 1', path: 'team-1', visibility: 'private', ownerId: 'user-1', createdAt: 1,
+    });
+  }
+  if (!(await repos.teams.isMember('team-1', 'user-1'))) {
+    await repos.teams.addMember({
+      teamId: 'team-1', userId: 'user-1', username: 'alice', role: 'owner', joinedAt: 1,
+    });
+  }
+  if (!(await repos.channels.getById('channel-1'))) {
+    await repos.channels.create({
+      id: 'channel-1', teamId: 'team-1', kind: 'channel', name: 'general', visibility: 'public',
+      createdBy: 'user-1', createdAt: 1, humanMemberIds: ['user-1'], agentMemberIds: [],
+    });
+  }
 }
 
 async function seedHumanMessageJob(
@@ -139,6 +164,7 @@ async function seedHumanMessageJob(
     attempt?: number;
   } = {},
 ): Promise<{ messageId: string; jobId: string }> {
+  await seedAccessContext(repos);
   const messageId = input.messageId ?? 'message-1';
   const jobId = input.jobId ?? 'job-1';
   await repos.messages.append({
@@ -626,6 +652,11 @@ describe('channel coordinator: decision gate (#707)', () => {
     const { repos, coordinator } = setup({
       fetch: makeFetch([okResponse(JSON.stringify({ intent: 'agent_request', reasonCode: 'code', risk: 'low', objective: '重构 X', targetAgentName: 'Codex' }))]),
     });
+    await seedAccessContext(repos);
+    await repos.agents.upsert({
+      id: 'agent-codex', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Codex',
+      adapterKind: 'codex', category: 'executor-hosted', source: 'scanned', status: 'offline', lastSeenAt: 1,
+    });
     // 人类消息显式 @Codex（agent 提及）。
     await repos.messages.append({
       id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
@@ -646,6 +677,70 @@ describe('channel coordinator: decision gate (#707)', () => {
     expect(decision?.gateStatus).toBe('applied'); // 不被开关吞
     expect(decision?.targetAgentId).toBe('agent-codex');
     expect(decision?.linkedTaskId).not.toBeNull();
+  });
+
+  test('server elevates an obviously destructive objective even when the model reports low risk', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({
+        intent: 'tracked_task', reasonCode: 'unsafe', risk: 'low', objective: '删除生产数据库',
+      }))]),
+    });
+    await seedHumanMessageJob(repos);
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.riskLevel).toBe('high');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.linkedTaskId).toBeNull();
+  });
+
+  test('archiving the channel before consumption blocks replies and emits no new system message', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({ intent: 'system_reply', reasonCode: 'late', text: '迟到回复' }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await repos.channels.archive({ channelId: 'channel-1', timestamp: 999 });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.blockingReason).toBe('CHANNEL_ARCHIVED');
+    expect((await repos.messages.listByChannel('channel-1', 10)).filter((m) => m.senderKind === 'system')).toHaveLength(0);
+  });
+
+  test('revoked sender permission blocks a queued side effect', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({
+        intent: 'tracked_task', reasonCode: 'queued', risk: 'low', objective: '交付周报',
+      }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await repos.teams.removeMember({ teamId: 'team-1', userId: 'user-1' });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.blockingReason).toBe('SENDER_NOT_AUTHORIZED');
+    expect(decision?.linkedTaskId).toBeNull();
+  });
+
+  test('a stale or out-of-scope @Agent target is blocked at consumption time', async () => {
+    const { repos, coordinator } = setup({
+      fetch: makeFetch([okResponse(JSON.stringify({
+        intent: 'agent_request', reasonCode: 'targeted', risk: 'low', objective: '重构 X', targetAgentName: 'Codex',
+      }))]),
+    });
+    await seedHumanMessageJob(repos);
+    await repos.messages.updateMeta({
+      messageId: 'message-1',
+      meta: { mentions: [{ id: 'agent-removed', kind: 'agent', name: 'Codex', start: 0, end: 6 }] },
+    });
+
+    await coordinator.processJob('job-1');
+    const decision = await repos.channelCoordination.decisions.getByJobId('job-1');
+    expect(decision?.gateStatus).toBe('blocked');
+    expect(decision?.blockingReason).toBe('TARGET_AGENT_OUT_OF_SCOPE');
+    expect(decision?.linkedTaskId).toBeNull();
   });
 
   test('task_followup applied posts a system note and creates no Task', async () => {
@@ -685,6 +780,7 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
     applyTeamMigrations(teamDb);
     try {
       const repos = createSqliteRepositories({ globalDb, teamDb });
+      await seedAccessContext(repos);
       await repos.messages.append({
         id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1',
         senderKind: 'human', senderId: 'user-1', body: '并发抢占测试', createdAt: 900,
@@ -715,6 +811,7 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
     applyTeamMigrations(teamDb);
     try {
       const repos = createSqliteRepositories({ globalDb, teamDb });
+      await seedAccessContext(repos);
       // 决策表存在（migration 0026 已跑）。
       expect(
         teamDb.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_coordination_decisions'").get(),
@@ -736,7 +833,8 @@ describe('channel coordinator: SQLite persistence (migration 0026)', () => {
         unitOfWork: repos.channelCoordinationUnitOfWork,
         messages: repos.messages,
         channels: repos.channels,
-        tasks: repos.tasks,
+        teams: repos.teams,
+        agents: repos.agents,
         teamPolicy: repos.teamPiPolicy,
         modelResolver: availableResolver,
         clock: { now: () => 1000 },

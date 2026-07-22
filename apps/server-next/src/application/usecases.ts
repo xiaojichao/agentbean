@@ -968,15 +968,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
-  // Channel Coordinator（#706）：消费 durable Coordination Job，调 Active PI Model 产出无副作用 Decision。
-  // 不依赖 Device 在线；模型失败只影响 Job/Decision，原消息始终展示。
+  // Channel Coordinator（#706/#707）：消费 durable Job，调 Active PI Model 产出提议，
+  // 再由 Server 校验权限、风险与频道状态后应用低风险动作。不依赖 Device 在线。
   const channelCoordinator = createChannelCoordinator({
     jobs: repositories.channelCoordination.jobs,
     decisions: repositories.channelCoordination.decisions,
     unitOfWork: repositories.channelCoordinationUnitOfWork,
     messages: repositories.messages,
     channels: repositories.channels,
-    tasks: repositories.tasks,
+    teams: repositories.teams,
+    agents: repositories.agents,
     teamPolicy: repositories.teamPiPolicy,
     modelResolver: piProvider,
     clock,

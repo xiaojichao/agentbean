@@ -44,6 +44,30 @@ export type PiCoordinationRiskLevel = 'low' | 'high';
 const OBJECTIVE_MAX = 600;
 
 /**
+ * 服务端风险兜底词表。模型的 risk 只是提议，不能把明显的破坏性、敏感数据或扩作用域动作降为 low。
+ * 这里不尝试理解任意自然语言，只负责把高置信度信号提升为 high；不确定项仍交给用户确认流程。
+ */
+const HIGH_RISK_OBJECTIVE_PATTERNS = [
+  /(?:删除|销毁|清空|擦除|永久移除).{0,24}(?:生产|数据库|数据|文件|记录|账号|账户|仓库)/i,
+  /(?:导出|公开|发布|外发|共享).{0,24}(?:密码|密钥|令牌|凭证|隐私|敏感|身份证|银行卡|生产数据)/i,
+  /(?:跨团队|跨\s*team|全局范围|扩大.{0,8}作用域)/i,
+  /\b(?:delete|drop|destroy|wipe|erase|purge)\b.{0,40}\b(?:production|database|data|file|record|account|repository)\b/i,
+  /\b(?:export|publish|expose|share)\b.{0,40}\b(?:password|secret|api\s*key|token|credential|private|sensitive|production\s+data)\b/i,
+  /\b(?:cross[- ]team|global scope|expand(?:ing)? scope)\b/i,
+] as const;
+
+/** 模型风险与服务端高置信度规则取更高值，防止模型把明显高风险目标误报为 low。 */
+export function assessCoordinationRisk(input: {
+  readonly modelRisk: PiCoordinationRiskLevel | null;
+  readonly objective: string | null;
+}): PiCoordinationRiskLevel | null {
+  if (input.modelRisk === null) return null;
+  if (input.modelRisk === 'high') return 'high';
+  const objective = input.objective ?? '';
+  return HIGH_RISK_OBJECTIVE_PATTERNS.some((pattern) => pattern.test(objective)) ? 'high' : 'low';
+}
+
+/**
  * 系统协调身份的固定 senderId（AC#3）。
  * PI 不成为 Team 成员、不伪装外部 Agent，仅以 AgentBean 系统协调者身份保存消息。
  */
@@ -251,6 +275,10 @@ export interface CoordinationGateInput {
   readonly explicitTarget: boolean;
   readonly autoCoordinationEnabled: boolean;
   readonly channelArchived: boolean;
+  /** 消费时重新校验发送者仍有 Team/频道权限。 */
+  readonly senderAuthorized?: boolean;
+  /** agent_request 的显式目标仍在当前 Team 可见作用域内。 */
+  readonly targetScopeValid?: boolean;
 }
 
 export type CoordinationGateVerdict =
@@ -260,6 +288,8 @@ export type CoordinationGateVerdict =
 
 export const COORDINATION_GATE_REASON = {
   CONVERSATIONAL_ALWAYS_APPLIED: 'CONVERSATIONAL_ALWAYS_APPLIED',
+  SENDER_NOT_AUTHORIZED: 'SENDER_NOT_AUTHORIZED',
+  TARGET_AGENT_OUT_OF_SCOPE: 'TARGET_AGENT_OUT_OF_SCOPE',
   CHANNEL_ARCHIVED: 'CHANNEL_ARCHIVED',
   HIGH_RISK_REQUIRES_CONFIRMATION: 'HIGH_RISK_REQUIRES_CONFIRMATION',
   EXPLICIT_TARGET_NOT_SILENCED: 'EXPLICIT_TARGET_NOT_SILENCED',
@@ -277,11 +307,17 @@ export const COORDINATION_GATE_REASON = {
  * - 自动协调关 + 非硬目标 → suggested（不执行, AC#5）。
  */
 export function evaluateCoordinationGate(input: CoordinationGateInput): CoordinationGateVerdict {
-  if (PI_COORDINATION_CONVERSATIONAL_INTENTS.has(input.intent)) {
-    return { status: 'applied', reason: COORDINATION_GATE_REASON.CONVERSATIONAL_ALWAYS_APPLIED };
+  if (input.senderAuthorized === false) {
+    return { status: 'blocked', reason: COORDINATION_GATE_REASON.SENDER_NOT_AUTHORIZED };
   }
   if (input.channelArchived) {
     return { status: 'blocked', reason: COORDINATION_GATE_REASON.CHANNEL_ARCHIVED };
+  }
+  if (input.targetScopeValid === false) {
+    return { status: 'blocked', reason: COORDINATION_GATE_REASON.TARGET_AGENT_OUT_OF_SCOPE };
+  }
+  if (PI_COORDINATION_CONVERSATIONAL_INTENTS.has(input.intent)) {
+    return { status: 'applied', reason: COORDINATION_GATE_REASON.CONVERSATIONAL_ALWAYS_APPLIED };
   }
   if (input.risk === 'high') {
     return { status: 'blocked', reason: COORDINATION_GATE_REASON.HIGH_RISK_REQUIRES_CONFIRMATION };
