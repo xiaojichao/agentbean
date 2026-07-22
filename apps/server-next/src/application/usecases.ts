@@ -19,6 +19,7 @@ import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createSer
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
+import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -125,6 +126,10 @@ export interface ServerNextUseCases {
   snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
+  /** Channel Coordinator（#706）：处理单个 Coordination Job。供测试与生产 driver 调用。 */
+  processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome>;
+  /** Channel Coordinator（#706）：串行消费所有到期 Job。供测试与生产 driver 调用。 */
+  runCoordinationCycle(input?: { now?: number; limit?: number }): Promise<CoordinationCycleSummary>;
   getDispatchRequest(input: {
     dispatchId: string;
     purpose?: 'execute' | 'route';
@@ -872,9 +877,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
-  // Keep production on the existing delivery path until #706 wires a consumer for
-  // pending Channel Coordination Jobs. The durable boundary remains explicitly
-  // selectable so #705 can be verified without turning accepted messages into a queue black hole.
+  // #706 已为 durable-job 入队接好 Channel Coordinator 消费者：消费 Job、调 Active PI Model、
+  // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
+  // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
   const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
@@ -956,6 +961,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     repositories: repositories.piProvider,
     unitOfWork: repositories.piProviderUnitOfWork,
     users: repositories.users,
+    clock,
+    ids,
+  });
+  // Channel Coordinator（#706）：消费 durable Coordination Job，调 Active PI Model 产出无副作用 Decision。
+  // 不依赖 Device 在线；模型失败只影响 Job/Decision，原消息始终展示。
+  const channelCoordinator = createChannelCoordinator({
+    jobs: repositories.channelCoordination.jobs,
+    decisions: repositories.channelCoordination.decisions,
+    unitOfWork: repositories.channelCoordinationUnitOfWork,
+    messages: repositories.messages,
+    modelResolver: piProvider,
     clock,
     ids,
   });
@@ -1138,6 +1154,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   }
 
   return {
+    runCoordinationCycle(input?: { now?: number; limit?: number }): Promise<CoordinationCycleSummary> {
+      return channelCoordinator.runCoordinationCycle(input);
+    },
+    processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome> {
+      return channelCoordinator.processJob(jobId);
+    },
     async registerUser(registerInput) {
       const existing = await repositories.users.getByUsername(registerInput.username);
       if (existing) {
