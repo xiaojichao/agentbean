@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { createHash, scryptSync } from 'node:crypto';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { createPiProviderService } from '../src/application/pi-provider-service.js';
 import {
@@ -47,7 +47,10 @@ async function seedUsers(repos: ReturnType<typeof createInMemoryRepositories>) {
   await repos.teams.addMember({ teamId: 'team-1', userId: 'admin-1', username: 'sysadmin', role: 'admin', joinedAt: now });
 }
 
-function createService(repos = createInMemoryRepositories()) {
+function createService(
+  repos = createInMemoryRepositories(),
+  options: { fetch?: typeof fetch } = {},
+) {
   let seq = 0;
   const service = createPiProviderService({
     repositories: repos.piProvider,
@@ -56,8 +59,43 @@ function createService(repos = createInMemoryRepositories()) {
     clock: { now: () => 1_700_000_000_000 + seq },
     ids: { nextId: () => `id-${++seq}` },
     resolveSecretKey: () => ({ ok: true, key: secretKey() }),
+    fetch: options.fetch,
   });
   return { repos, service };
+}
+
+function passingTestFetch(): typeof fetch {
+  return vi.fn<typeof fetch>(async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as {
+      messages?: Array<{ role?: string }>;
+      tools?: unknown[];
+    };
+    const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+    const hasToolResult = body.messages?.some((m) => m.role === 'tool');
+    if (hasTools && !hasToolResult) {
+      return new Response(JSON.stringify({
+        model: 'probe-model',
+        usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call-1',
+              type: 'function',
+              function: { name: 'context.get_root_message', arguments: '{}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      model: 'probe-model',
+      usage: { prompt_tokens: hasToolResult ? 3 : 1, completion_tokens: 1, total_tokens: hasToolResult ? 4 : 2 },
+      choices: [{ message: { role: 'assistant', content: hasToolResult ? 'DONE' : 'OK' }, finish_reason: 'stop' }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  });
 }
 
 function validCreate(overrides: Record<string, unknown> = {}) {
@@ -195,7 +233,7 @@ describe('pi provider service', () => {
   });
 
   test('editing a published card creates new draft metadata without mutating published revision', async () => {
-    const { repos, service } = createService();
+    const { repos, service } = createService(createInMemoryRepositories(), { fetch: passingTestFetch() });
     await seedUsers(repos);
 
     const created = await service.createCard(validCreate({
@@ -210,7 +248,10 @@ describe('pi provider service', () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    await service.__testMarkDraftPublished({ cardId: created.card.id });
+    const tested = await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    expect(tested.ok && tested.test.status === 'passed').toBe(true);
+    const publishedResult = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
+    expect(publishedResult.ok).toBe(true);
     const published = await service.getCard({ userId: 'admin-1', cardId: created.card.id });
     expect(published.ok).toBe(true);
     if (!published.ok) return;

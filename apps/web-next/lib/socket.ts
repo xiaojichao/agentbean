@@ -330,6 +330,10 @@ export interface PiProviderEvents {
   createCard(payload: Omit<CreatePiProviderCardInput, never>): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
   updateCard(payload: UpdatePiProviderCardInput): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
   copyCard(payload: CopyPiProviderCardInput): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
+  discoverModels(cardId: string): Promise<{ ok: boolean; discoverySupported?: boolean; models?: { modelId: string }[]; diagnosticCode?: string | null; error?: string; message?: string }>;
+  runTest(cardId: string): Promise<{ ok: boolean; test?: unknown; card?: PiProviderCardDto; error?: string; message?: string }>;
+  cancelTest(cardId: string): Promise<{ ok: boolean; cancelled?: boolean; error?: string; message?: string }>;
+  publishCard(cardId: string): Promise<{ ok: boolean; card?: PiProviderCardDto; error?: string; message?: string }>;
 }
 
 export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEvents {
@@ -340,6 +344,10 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
     createCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.createCard, payload); },
     updateCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.updateCard, payload); },
     copyCard(payload) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.copyCard, payload); },
+    discoverModels(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.discoverModels, { cardId }); },
+    runTest(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.runTest, { cardId }, 300_000); },
+    cancelTest(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.cancelTest, { cardId }); },
+    publishCard(cardId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.publishCard, { cardId }); },
   };
 }
 

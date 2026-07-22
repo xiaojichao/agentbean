@@ -67,6 +67,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0015_agent_name_source.sql');
   applyMigration(db, 'global/0016_device_capabilities.sql');
   applyMigration(db, 'global/0017_pi_provider_supply.sql');
+  applyMigration(db, 'global/0018_pi_provider_test_publish.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {

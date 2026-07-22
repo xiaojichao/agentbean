@@ -20,9 +20,13 @@ import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
 import type {
+  CancelPiProviderTestResult,
+  DiscoverPiProviderModelsResult,
   ListPiProviderCardsResult,
   ListPiProviderPresetsResult,
   PiProviderCardDto,
+  PublishPiProviderCardResult,
+  RunPiProviderTestResult,
 } from '../../../../packages/contracts/src/index.js';
 
 export interface ServerNextClock {
@@ -172,6 +176,10 @@ export interface ServerNextUseCases {
   createPiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
   updatePiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
   copyPiProviderCard(input: unknown): Promise<Ack<{ card: PiProviderCardDto }>>;
+  discoverPiProviderModels(input: unknown): Promise<Ack<DiscoverPiProviderModelsResult>>;
+  runPiProviderTest(input: unknown): Promise<Ack<RunPiProviderTestResult>>;
+  cancelPiProviderTest(input: unknown): Promise<Ack<CancelPiProviderTestResult>>;
+  publishPiProviderCard(input: unknown): Promise<Ack<PublishPiProviderCardResult>>;
   updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
@@ -4642,6 +4650,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async copyPiProviderCard(input) {
       return piProvider.copyCard(input);
+    },
+
+    async discoverPiProviderModels(input) {
+      return piProvider.discoverModels(input);
+    },
+
+    async runPiProviderTest(input) {
+      return piProvider.runTest(input);
+    },
+
+    async cancelPiProviderTest(input) {
+      return piProvider.cancelTest(input);
+    },
+
+    async publishPiProviderCard(input) {
+      return piProvider.publishCard(input);
     },
 
     async getMemoryGovernanceSnapshot(memoryInput) {

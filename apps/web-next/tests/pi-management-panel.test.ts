@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   createCard: vi.fn(),
   updateCard: vi.fn(),
   copyCard: vi.fn(),
+  discoverModels: vi.fn(),
+  runTest: vi.fn(),
+  cancelTest: vi.fn(),
+  publishCard: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -56,6 +60,10 @@ const sourceCard = {
     createdAt: 1,
   },
   publishedRevision: null,
+  modelCandidates: [{ modelId: 'gpt-4.1-mini' }],
+  modelCandidatesUpdatedAt: 1,
+  latestTest: null,
+  canPublish: false,
   createdBy: 'admin-1',
   createdAt: 1,
   updatedAt: 1,
@@ -69,6 +77,19 @@ beforeEach(() => {
   mocks.copyCard.mockResolvedValue({
     ok: true,
     card: { ...sourceCard, id: 'card-copy', displayName: 'OpenAI (copy)' },
+  });
+  mocks.discoverModels.mockResolvedValue({
+    ok: true, discoverySupported: true, models: [{ modelId: 'gpt-4.1-mini' }],
+  });
+  mocks.runTest.mockResolvedValue({
+    ok: true,
+    test: { status: 'passed', diagnosticCode: null },
+    card: { ...sourceCard, canPublish: true, latestTest: { status: 'passed' } },
+  });
+  mocks.cancelTest.mockResolvedValue({ ok: true, cancelled: true });
+  mocks.publishCard.mockResolvedValue({
+    ok: true,
+    card: { ...sourceCard, draftRevision: null, canPublish: false },
   });
 });
 
@@ -115,6 +136,10 @@ describe('PI Management settings scope', () => {
     expect(panelSource).toContain('openrouter');
     expect(panelSource).toContain('deepseek');
     expect(panelSource).toContain('custom_openai_compatible');
+    expect(panelSource).toContain('settings-pi-discover');
+    expect(panelSource).toContain('settings-pi-run-test');
+    expect(panelSource).toContain('settings-pi-cancel-test');
+    expect(panelSource).toContain('settings-pi-publish');
   });
 
   test('successful save and copy refresh the list without resetting editor state or success feedback', () => {
@@ -123,7 +148,7 @@ describe('PI Management settings scope', () => {
     expect(panelSource).not.toContain('}, [editingCardId, isSystemAdmin]);');
     expect(panelSource).toContain('preserveEditor?: boolean');
     expect(panelSource).toContain('preserveMessage?: boolean');
-    expect(panelSource.match(/load\(\{ preserveEditor: true, preserveMessage: true \}\)/g)).toHaveLength(2);
+    expect((panelSource.match(/load\(\{ preserveEditor: true, preserveMessage: true \}\)/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(panelSource.indexOf('startEdit(result.card)')).toBeLessThan(
       panelSource.indexOf("setMessage({ ok: true, text: '已复制为新 Draft' })"),
     );
@@ -155,6 +180,42 @@ describe('PI Management settings scope', () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(screen.getByText('已复制为新 Draft')).toBeTruthy();
     expect(mocks.listPresets).toHaveBeenCalledTimes(2);
+  });
+
+  test('shows a secret-free discovery diagnostic instead of reporting every failure as unsupported', async () => {
+    mocks.discoverModels.mockResolvedValue({
+      ok: true,
+      discoverySupported: false,
+      models: [],
+      diagnosticCode: 'PI_PROVIDER_DISCOVERY_AUTH_FAILED',
+    });
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新模型' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新模型' }));
+
+    await waitFor(() => expect(screen.getByText('模型发现失败：PI_PROVIDER_DISCOVERY_AUTH_FAILED')).toBeTruthy());
+  });
+
+  test('offers cancellation while a production-path test is running', async () => {
+    let finishTest!: (value: unknown) => void;
+    mocks.runTest.mockImplementation(() => new Promise((resolve) => { finishTest = resolve; }));
+    const { PiManagementPanel } = await import('../app/[teamPath]/settings/PiManagementPanel');
+    render(React.createElement(PiManagementPanel, { isSystemAdmin: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '运行测试' })).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: '运行测试' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消测试' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '取消测试' }));
+
+    await waitFor(() => expect(mocks.cancelTest).toHaveBeenCalledWith('card-1'));
+    finishTest({
+      ok: true,
+      test: { status: 'failed', diagnosticCode: 'MANAGEMENT_MODEL_ABORTED' },
+      card: sourceCard,
+    });
+    await waitFor(() => expect(screen.getByText('生产同路径测试已取消')).toBeTruthy());
   });
 
 });

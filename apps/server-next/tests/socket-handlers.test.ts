@@ -94,6 +94,9 @@ describe('server-next socket handlers', () => {
       createPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       updatePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       copyPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      discoverPiProviderModels: vi.fn(async (payload) => makeSuccess({ payload })),
+      runPiProviderTest: vi.fn(async (payload) => makeSuccess({ payload })),
+      publishPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       getMemoryGovernanceSnapshot: vi.fn(async (payload) => makeSuccess({ payload })),
       createCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
       updateCollaborativeMemory: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -128,6 +131,10 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.piProvider.createCard,
       WEB_EVENTS.piProvider.updateCard,
       WEB_EVENTS.piProvider.copyCard,
+      WEB_EVENTS.piProvider.discoverModels,
+      WEB_EVENTS.piProvider.runTest,
+      WEB_EVENTS.piProvider.cancelTest,
+      WEB_EVENTS.piProvider.publishCard,
       WEB_EVENTS.team.delete,
       WEB_EVENTS.join.create,
       WEB_EVENTS.join.validate,
@@ -916,6 +923,7 @@ describe('server-next socket handlers', () => {
     const unauthenticatedSocket = new FakeSocket();
     const listPiProviderCards = vi.fn(async (payload) => makeSuccess({ payload }));
     const createPiProviderCard = vi.fn(async (payload) => makeSuccess({ payload }));
+    const cancelPiProviderTest = vi.fn(async (payload) => makeSuccess({ payload }));
     const app = {
       listPiProviderCards,
       createPiProviderCard,
@@ -923,6 +931,7 @@ describe('server-next socket handlers', () => {
       getPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       updatePiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
       copyPiProviderCard: vi.fn(async (payload) => makeSuccess({ payload })),
+      cancelPiProviderTest,
     } as unknown as ServerNextUseCases;
     registerWebSocketHandlers(unauthenticatedSocket, app, {
       authenticatedUser: async () => ({
@@ -940,6 +949,10 @@ describe('server-next socket handlers', () => {
     })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
     expect(listPiProviderCards).not.toHaveBeenCalled();
     expect(createPiProviderCard).not.toHaveBeenCalled();
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.piProvider.cancelTest, {
+      userId: 'admin-spoofed', cardId: 'card-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(cancelPiProviderTest).not.toHaveBeenCalled();
 
     const authenticatedSocket = new FakeSocket();
     registerWebSocketHandlers(authenticatedSocket, app, {
@@ -954,6 +967,15 @@ describe('server-next socket handlers', () => {
       userId: 'user-session',
       teamId: 'team-session',
       currentDeviceId: 'device-local',
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.piProvider.cancelTest, {
+      userId: 'admin-spoofed', cardId: 'card-1',
+    });
+    expect(cancelPiProviderTest).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: 'device-local',
+      cardId: 'card-1',
     });
   });
 

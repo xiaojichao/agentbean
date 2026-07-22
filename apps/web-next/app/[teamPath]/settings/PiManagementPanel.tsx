@@ -120,6 +120,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [editorMode, setEditorMode] = useState<EditorMode>('form');
   const [form, setForm] = useState<CardFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [testingCardId, setTestingCardId] = useState<string | null>(null);
   const editorInitializedRef = useRef(false);
 
   const load = useCallback(async (options: {
@@ -263,6 +264,71 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     await load({ preserveEditor: true, preserveMessage: true });
   };
 
+  const discoverModels = async (cardId: string) => {
+    setSaving(true);
+    setMessage(null);
+    const result = await piProviderEvents().discoverModels(cardId);
+    setSaving(false);
+    if (!result.ok) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '模型发现失败' });
+      return;
+    }
+    setMessage({
+      ok: true,
+      text: result.discoverySupported
+        ? `已刷新 ${result.models?.length ?? 0} 个候选模型（未发布、未改生产绑定）`
+        : result.diagnosticCode === 'PI_PROVIDER_DISCOVERY_UNSUPPORTED'
+          ? 'Provider 不支持模型发现，请手工填写 Model ID'
+          : `模型发现失败：${result.diagnosticCode ?? 'PI_PROVIDER_DISCOVERY_UNKNOWN'}`,
+    });
+    await load({ preserveEditor: true, preserveMessage: true });
+  };
+
+  const runTest = async (cardId: string) => {
+    setTestingCardId(cardId);
+    setMessage(null);
+    const result = await piProviderEvents().runTest(cardId);
+    setTestingCardId(null);
+    if (!result.ok || !result.card) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '测试失败' });
+      return;
+    }
+    const test = result.test as { status?: string; diagnosticCode?: string | null } | undefined;
+    startEdit(result.card);
+    setMessage({
+      ok: test?.status === 'passed',
+      text: test?.status === 'passed'
+        ? '生产同路径测试通过，可发布'
+        : test?.diagnosticCode === 'MANAGEMENT_MODEL_ABORTED'
+          ? '生产同路径测试已取消'
+          : `测试未通过${test?.diagnosticCode ? `：${test.diagnosticCode}` : ''}`,
+    });
+    await load({ preserveEditor: true, preserveMessage: true });
+  };
+
+  const cancelTest = async (cardId: string) => {
+    const result = await piProviderEvents().cancelTest(cardId);
+    if (!result.ok) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '取消测试失败' });
+      return;
+    }
+    setMessage({ ok: true, text: result.cancelled ? '正在取消生产同路径测试' : '当前没有运行中的测试' });
+  };
+
+  const publishCard = async (cardId: string) => {
+    setSaving(true);
+    setMessage(null);
+    const result = await piProviderEvents().publishCard(cardId);
+    setSaving(false);
+    if (!result.ok || !result.card) {
+      setMessage({ ok: false, text: result.message ?? result.error ?? '发布失败' });
+      return;
+    }
+    startEdit(result.card);
+    setMessage({ ok: true, text: '已发布为不可变 revision' });
+    await load({ preserveEditor: true, preserveMessage: true });
+  };
+
   return (
     <div className="mx-auto max-w-4xl space-y-6" data-smoke="settings-pi-panel" data-pi-scope="system">
       <div>
@@ -323,11 +389,30 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                       {' · '}
                       Credential {card.credential.configured ? '已配置' : '未配置'}
                       {card.credential.fingerprint ? ` (${card.credential.fingerprint})` : ''}
+                      {' · '}
+                      测试 {card.latestTest?.status === 'passed' ? '通过' : card.latestTest?.status === 'failed' ? '失败' : '未测'}
+                      {card.canPublish ? ' · 可发布' : ''}
+                      {(card.modelCandidates?.length ?? 0) > 0 ? ` · 候选 ${card.modelCandidates.length}` : ''}
                     </div>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2 justify-end">
                     <button type="button" onClick={() => startEdit(card)} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50">
                       编辑
+                    </button>
+                    <button type="button" onClick={() => void discoverModels(card.id)} disabled={saving} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-discover">
+                      刷新模型
+                    </button>
+                    {testingCardId === card.id ? (
+                      <button type="button" onClick={() => void cancelTest(card.id)} className="rounded border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50" data-smoke="settings-pi-cancel-test">
+                        取消测试
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => void runTest(card.id)} disabled={saving || testingCardId !== null || !card.draftRevision} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-run-test">
+                        运行测试
+                      </button>
+                    )}
+                    <button type="button" onClick={() => void publishCard(card.id)} disabled={saving || !card.canPublish} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50" data-smoke="settings-pi-publish">
+                      发布
                     </button>
                     <button type="button" onClick={() => void copyCard(card.id)} disabled={saving} className="rounded border border-neutral-300 px-2 py-1 text-xs hover:bg-neutral-50 disabled:opacity-50">
                       复制
@@ -371,7 +456,12 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
                 </label>
                 <label className="block text-xs text-neutral-500">
                   Model ID
-                  <input value={form.modelId} onChange={(e) => patchForm({ modelId: e.target.value })} className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-model-id" />
+                  <input value={form.modelId} onChange={(e) => patchForm({ modelId: e.target.value })} list="pi-model-candidates" className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm" data-smoke="settings-pi-field-model-id" placeholder="可手填或从候选选择" />
+                  <datalist id="pi-model-candidates">
+                    {(cards.find((c) => c.id === editingCardId)?.modelCandidates ?? []).map((item) => (
+                      <option key={item.modelId} value={item.modelId} />
+                    ))}
+                  </datalist>
                 </label>
                 <label className="block text-xs text-neutral-500">
                   Timeout (ms)

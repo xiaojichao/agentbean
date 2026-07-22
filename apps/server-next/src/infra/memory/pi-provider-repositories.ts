@@ -3,6 +3,7 @@ import type {
   PiProviderCardRevisionRecord,
   PiProviderCredentialRecord,
   PiProviderRepositories,
+  PiProviderRevisionTestRecord,
   PiProviderUnitOfWork,
 } from '../../application/pi-provider-repositories.js';
 import { serializeTransactions } from '../../application/transaction-serialization.js';
@@ -10,7 +11,6 @@ import { serializeTransactions } from '../../application/transaction-serializati
 export interface InMemoryPiProviderPersistence {
   readonly repositories: PiProviderRepositories;
   readonly unitOfWork: PiProviderUnitOfWork;
-  /** 测试用：在 unitOfWork 事务中注入失败。 */
   failNextWriteWith?: Error | null;
 }
 
@@ -18,6 +18,7 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
   const credentials = new Map<string, PiProviderCredentialRecord>();
   const revisions = new Map<string, PiProviderCardRevisionRecord>();
   const cards = new Map<string, PiProviderCardRecord>();
+  const tests = new Map<string, PiProviderRevisionTestRecord>();
   let failNextWriteWith: Error | null = null;
 
   function maybeFail(): void {
@@ -62,7 +63,10 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
     cards: {
       async create(input) {
         maybeFail();
-        cards.set(input.id, input);
+        cards.set(input.id, {
+          ...input,
+          modelCandidates: [...(input.modelCandidates ?? [])],
+        });
         return input;
       },
       async getById(id) {
@@ -73,8 +77,23 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
       },
       async update(input) {
         maybeFail();
-        cards.set(input.id, input);
+        cards.set(input.id, {
+          ...input,
+          modelCandidates: [...(input.modelCandidates ?? [])],
+        });
         return input;
+      },
+    },
+    tests: {
+      async create(input) {
+        maybeFail();
+        tests.set(input.id, input);
+        return input;
+      },
+      async getLatestByCard(cardId) {
+        return Array.from(tests.values())
+          .filter((item) => item.cardId === cardId)
+          .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
       },
     },
   };
@@ -84,6 +103,7 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
       const credSnap = new Map(credentials);
       const revSnap = new Map(revisions);
       const cardSnap = new Map(cards);
+      const testSnap = new Map(tests);
       try {
         return await operation(repositories);
       } catch (error) {
@@ -93,6 +113,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         for (const [id, value] of revSnap) revisions.set(id, value);
         cards.clear();
         for (const [id, value] of cardSnap) cards.set(id, value);
+        tests.clear();
+        for (const [id, value] of testSnap) tests.set(id, value);
         throw error;
       }
     },

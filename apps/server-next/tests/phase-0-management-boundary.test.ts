@@ -203,9 +203,13 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(artifactContract).not.toMatch(/\b(?:invocationId|managementRunId)\b/);
 
     const serverSource = readTreeText(serverRoot);
+    // Phase 0 仍禁止 Server 接入完整 PI Session / Worker Host。
+    // PI MVP (#701/#703) 允许 Server 复用共享 OpenAI-compatible Adapter 做 Provider 生产同路径测试，
+    // 因此不再 ban 包名 `pi-management-runtime` 与 adapter 符号。
     expect(serverSource).not.toMatch(
-      /pi-management-runtime|createManagementRuntimeFactory|ManagementRuntimeFactory|ManagementSession|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b/,
+      /createManagementRuntimeFactory|ManagementRuntimeFactory|\bManagementSession\b|PiManagerWorkerHost|ManagementWorkerHost|\bManagementOutbox\b|pi-session-adapter/,
     );
+    expect(serverSource).toMatch(/createOpenAiCompatibleManagementModelAdapter|pi-provider-production-test/);
   });
 });
 
