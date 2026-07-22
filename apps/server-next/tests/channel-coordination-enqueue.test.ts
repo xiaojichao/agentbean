@@ -23,7 +23,6 @@ describe('human message coordination enqueue', () => {
       repositories,
       clock: { now: () => 100 },
       ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'job-1']) },
-      messageIngestionMode: 'durable-job',
     });
     await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
 
@@ -46,6 +45,34 @@ describe('human message coordination enqueue', () => {
     });
   });
 
+  test('uses the same durable enqueue boundary for human direct messages', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'dm-1', 'message-1', 'job-1']) },
+      messageIngestionMode: 'durable-job',
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.registerAgent({
+      id: 'agent-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Agent',
+      adapterKind: 'codex', category: 'agentos-hosted', source: 'scanned', status: 'offline',
+      deviceId: 'device-1', lastSeenAt: 90,
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+
+    await expect(app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'dm-1', body: 'DM 也先可靠保存',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', channelId: 'dm-1' },
+      dispatches: [],
+    });
+    await expect(repositories.channelCoordination.jobs.getByMessageId('message-1')).resolves.toMatchObject({
+      id: 'job-1', channelId: 'dm-1', status: 'pending',
+    });
+  });
+
   test('replays the same client idempotency key as the original message and job', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
@@ -60,6 +87,28 @@ describe('human message coordination enqueue', () => {
       userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
       clientMessageId: 'client-1', body: '幂等消息',
     };
+    const first = await app.sendMessage(input);
+    const replay = await app.sendMessage(input);
+
+    expect(replay).toEqual(first);
+    await expect(repositories.messages.listByChannel('channel-1', 10)).resolves.toHaveLength(1);
+    await expect(repositories.channelCoordination.jobs.listByChannel('channel-1', 10)).resolves.toHaveLength(1);
+  });
+
+  test('replays the same durable message id as the original message and job', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'job-1']) },
+      messageIngestionMode: 'durable-job',
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const input = {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      messageId: 'message-client-1', body: '稳定 Message ID',
+    };
+
     const first = await app.sendMessage(input);
     const replay = await app.sendMessage(input);
 

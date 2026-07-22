@@ -80,6 +80,8 @@ export interface StartServerNextDevServerInput {
   Database?: BetterSqlite3Constructor;
   dispatchTimeout?: DispatchTimeoutSchedulerConfig;
   webApp?: WebAppHandler;
+  /** Test/compatibility injection only; production default is durable-job. */
+  messageIngestionMode?: 'legacy' | 'durable-job';
 }
 
 export interface ServerNextDevServerHandle {
@@ -208,7 +210,7 @@ export async function startServerNextDevServer(
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database);
+    : createDefaultApp(config, input.Database, input.messageIngestionMode);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
@@ -1187,6 +1189,7 @@ function findWebNextDir(): string {
 function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
+  messageIngestionMode: 'legacy' | 'durable-job' = 'durable-job',
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   if (config.storage === 'memory') {
@@ -1213,7 +1216,7 @@ function createDefaultApp(
         managementKernel: management.kernel,
         taskCoordinationKernel: management.taskCoordinationKernel,
         serverCapsuleRuntimeContextResolver,
-        messageIngestionMode: 'durable-job',
+        messageIngestionMode,
       }),
       managementWorkerScheduler: management.scheduler,
       serverWorkerScheduler: management.serverScheduler,
@@ -1259,7 +1262,7 @@ function createDefaultApp(
       managementKernel: management.kernel,
       taskCoordinationKernel: management.taskCoordinationKernel,
       serverCapsuleRuntimeContextResolver,
-      messageIngestionMode: 'durable-job',
+      messageIngestionMode,
     }),
     managementWorkerScheduler: management.scheduler,
     serverWorkerScheduler: management.serverScheduler,

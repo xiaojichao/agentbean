@@ -4,7 +4,10 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test, vi } from 'vitest';
-import { createServerNextUseCases } from '../src/application/usecases';
+import {
+  createServerNextUseCases as createServerNextUseCasesBase,
+  type CreateServerNextUseCasesInput,
+} from '../src/application/usecases';
 import type { WorkspaceRunRecord } from '../src/application/repositories';
 import {
   applyGlobalMigrations,
@@ -20,6 +23,9 @@ const requireFromWorkspace = createRequire(import.meta.url);
 const Database = loadBetterSqlite3();
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '../src/infra/sqlite/migrations');
+
+const createServerNextUseCases = (input: CreateServerNextUseCasesInput) =>
+  createServerNextUseCasesBase({ ...input, messageIngestionMode: 'legacy' });
 
 describe('server-next SQLite repositories', () => {
   test('applies executable first-slice migrations to global and team databases', () => {

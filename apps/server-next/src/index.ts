@@ -32,6 +32,7 @@ export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = 
           return `id-${fallbackId}`;
         }),
     },
+    messageIngestionMode: 'legacy',
     ...(input.joinCodes ? { joinCodes: { nextCode: input.joinCodes } } : {}),
     ...(input.deviceInviteCodes ? { deviceInviteCodes: { nextCode: input.deviceInviteCodes } } : {}),
   });

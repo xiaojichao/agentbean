@@ -2776,6 +2776,7 @@ describe('server-next first-slice use cases', () => {
         'message-1', 'dispatch-1', 'request-1',
         'message-2', 'dispatch-2', 'request-2',
       ]) },
+      messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({
@@ -2947,6 +2948,7 @@ describe('server-next first-slice use cases', () => {
       repositories,
       clock: { now: () => now },
       ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'task-1', 'dispatch-1', 'request-1', 'message-2', 'message-3']) },
+      messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({
@@ -3096,6 +3098,7 @@ describe('server-next first-slice use cases', () => {
           'request-2',
         ]),
       },
+      messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({
@@ -3187,6 +3190,7 @@ describe('server-next first-slice use cases', () => {
         ]),
       },
       joinCodes: { nextCode: createIds(['code-1']) },
+      messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.createJoinLink({ userId: 'user-1', teamId: 'team-1' });
@@ -4183,6 +4187,7 @@ describe('server-next first-slice use cases', () => {
         'user-1', 'team-1', 'channel-1',
         'message-1', 'dispatch-1', 'request-1',
       ]) },
+      messageIngestionMode: 'legacy',
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
     await app.registerAgent({

@@ -459,6 +459,8 @@ export interface SendMessageInput {
   userId: string;
   teamId: string;
   channelId: string;
+  /** Optional durable server message id for transport-level replay. */
+  messageId?: string;
   threadId?: string;
   body: string;
   asTask?: boolean;
@@ -870,7 +872,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
-  const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
+  const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
@@ -976,6 +978,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     const channel = await repositories.channels.getById(messageInput.channelId);
     if (!channel || channel.teamId !== messageInput.teamId) {
       return makeFailure('NOT_FOUND', 'Channel not found');
+    }
+    if (channel.archivedAt != null) {
+      return makeFailure('VALIDATION_ERROR', 'Archived channels do not accept new messages');
     }
     if (channel.visibility === 'private' && !channel.humanMemberIds.includes(messageInput.userId)) {
       return makeFailure('FORBIDDEN', 'User cannot view channel');
@@ -2880,27 +2885,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
 
-      const activeModel = await repositories.piProviderUnitOfWork.run(async (piRepositories) => {
-        const active = await piRepositories.activeModel.get();
-        if (!active) return { availability: 'unavailable' as const };
-        const revision = await piRepositories.revisions.getById(active.revisionId);
-        if (!revision || revision.status !== 'published' || revision.cardId !== active.cardId) {
-          return { availability: 'unavailable' as const };
-        }
-        return {
-          availability: 'available' as const,
-          cardId: active.cardId,
-          revisionId: active.revisionId,
-          modelId: revision.config.modelId,
-        };
-      }).catch(() => ({ availability: 'unavailable' as const }));
-
       const clientIdempotencyKey = messageInput.clientMessageId
         ? `client:${messageInput.teamId}:${messageInput.clientMessageId}`
         : null;
-      const outcome = await repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
-        if (clientIdempotencyKey) {
-          const existingJob = await transaction.jobs.getByIdempotencyKey(clientIdempotencyKey);
+      const outcome = await repositories.piProviderUnitOfWork.run(async (piRepositories) => {
+        const active = await piRepositories.activeModel.get();
+        const revision = active ? await piRepositories.revisions.getById(active.revisionId) : null;
+        const activeModel = active && revision?.status === 'published' && revision.cardId === active.cardId
+          ? {
+              availability: 'available' as const,
+              cardId: active.cardId,
+              revisionId: active.revisionId,
+              modelId: revision.config.modelId,
+            }
+          : { availability: 'unavailable' as const };
+
+        // Keep the Active Model UoW open until the Team transaction commits. A model switch
+        // uses the same UoW and therefore cannot race between snapshot and message creation.
+        return repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
+          const existingByMessageId = messageInput.messageId
+            ? await transaction.jobs.getByMessageId(messageInput.messageId)
+            : null;
+          const existingByClientKey = clientIdempotencyKey
+            ? await transaction.jobs.getByIdempotencyKey(clientIdempotencyKey)
+            : null;
+          if (existingByMessageId && existingByClientKey && existingByMessageId.id !== existingByClientKey.id) {
+            return { kind: 'conflict' as const };
+          }
+          const existingJob = existingByMessageId ?? existingByClientKey;
           if (existingJob) {
             const existingMessage = await transaction.messages.getById(existingJob.messageId);
             if (!existingMessage) throw new Error('Coordination job references a missing message');
@@ -2913,44 +2925,44 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             const replayArtifacts = await transaction.artifacts.listByMessage(existingMessage.id);
             return { kind: 'saved' as const, message: existingMessage, artifacts: replayArtifacts };
           }
-        }
 
-        const messageId = ids.nextId();
-        const jobId = ids.nextId();
-        const message = await transaction.messages.append({
-          id: messageId,
-          teamId: messageInput.teamId,
-          channelId: messageInput.channelId,
-          threadId: messageInput.threadId ?? messageId,
-          senderKind: 'human',
-          senderId: messageInput.userId,
-          body: messageInput.body,
-          createdAt: now,
-          meta: {
-            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-            ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
-            ...(messageInput.asTask === true ? { asTask: true } : {}),
-            ...(mentions.length ? { mentions } : {}),
-          },
+          const messageId = messageInput.messageId ?? ids.nextId();
+          const jobId = ids.nextId();
+          const message = await transaction.messages.append({
+            id: messageId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            threadId: messageInput.threadId ?? messageId,
+            senderKind: 'human',
+            senderId: messageInput.userId,
+            body: messageInput.body,
+            createdAt: now,
+            meta: {
+              ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+              ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+              ...(messageInput.asTask === true ? { asTask: true } : {}),
+              ...(mentions.length ? { mentions } : {}),
+            },
+          });
+          const attachedArtifacts: ArtifactRecord[] = [];
+          for (const artifact of attachmentResult.artifacts) {
+            attachedArtifacts.push(await transaction.artifacts.create({ ...artifact, messageId }));
+          }
+          await transaction.jobs.create({
+            id: jobId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            messageId,
+            idempotencyKey: clientIdempotencyKey ?? `message:${messageInput.teamId}:${messageId}`,
+            status: 'pending',
+            attempt: 0,
+            nextRetryAt: null,
+            activeModel,
+            createdAt: now,
+            updatedAt: now,
+          });
+          return { kind: 'saved' as const, message, artifacts: attachedArtifacts };
         });
-        const attachedArtifacts: ArtifactRecord[] = [];
-        for (const artifact of attachmentResult.artifacts) {
-          attachedArtifacts.push(await transaction.artifacts.create({ ...artifact, messageId }));
-        }
-        await transaction.jobs.create({
-          id: jobId,
-          teamId: messageInput.teamId,
-          channelId: messageInput.channelId,
-          messageId,
-          idempotencyKey: clientIdempotencyKey ?? `message:${messageId}`,
-          status: 'pending',
-          attempt: 0,
-          nextRetryAt: null,
-          activeModel,
-          createdAt: now,
-          updatedAt: now,
-        });
-        return { kind: 'saved' as const, message, artifacts: attachedArtifacts };
       });
 
       if (outcome.kind === 'conflict') {
