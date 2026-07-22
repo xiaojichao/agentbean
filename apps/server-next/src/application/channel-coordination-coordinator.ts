@@ -29,16 +29,20 @@ import {
   type CoordinationErrorKind,
   type CoordinationGateVerdict,
   type CoordinationParseResult,
+  type PiCoordinationIntent,
   assessCoordinationRisk,
   evaluateCoordinationGate,
   parseCoordinationResponse,
   planCoordinationRetry,
 } from '../../../../packages/domain/src/index.js';
 import type {
+  AgentStatus,
   ChannelCoordinationDecisionRecord,
   ChannelCoordinationDecisionUsage,
   ChannelCoordinationGateStatus,
   ChannelCoordinationJobRecord,
+  CoordinationSystemMessageAction,
+  CoordinationSystemMessageMeta,
   ID,
   MessageMetaDto,
 } from '../../../../packages/contracts/src/index.js';
@@ -198,11 +202,45 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     return match?.id ?? null;
   }
 
-  /** 依据意图 + 门禁裁决组装面向 Team 的系统协调消息正文（null = 不发消息）。 */
+  /** 目标 Agent 上下文：agent_request 不可见/不可用/无法确认三分的判定输入（AC#5）。 */
+  interface CoordinationTargetContext {
+    readonly agentId: ID | null;
+    readonly name: string | null;
+    readonly status: AgentStatus | null;
+    readonly needsScopedTarget: boolean;
+    readonly scopeValid: boolean;
+  }
+
+  /** 目标异常分类（统一 body/action 判别，AC#5 三分）。null = 无目标异常。 */
+  type TargetAnomaly = 'out_of_scope' | 'unavailable' | 'unresolvable';
+
+  /** 视为「不可用」的状态：PI 在消息中请求用户决定，但不阻止硬目标建 Task（约束 3）。 */
+  function isAgentUnavailable(status: AgentStatus | null): boolean {
+    return status === 'offline' || status === 'connecting' || status === 'error';
+  }
+
+  /** 把目标上下文分类为单一异常种类（agent_request 专属；其余意图返回 null）。 */
+  function classifyTargetAnomaly(
+    target: CoordinationTargetContext | null,
+    intent: PiCoordinationIntent,
+  ): TargetAnomaly | null {
+    if (intent !== 'agent_request' || !target) return null;
+    if (target.agentId === null && target.needsScopedTarget) return 'unresolvable';
+    if (target.agentId !== null && !target.scopeValid) return 'out_of_scope';
+    if (isAgentUnavailable(target.status)) return 'unavailable';
+    return null;
+  }
+
+  /** 依据意图 + 门禁裁决 + 目标异常组装面向 Team 的系统协调消息正文（null = 不发消息）。 */
   function coordinationSystemMessageBody(
     parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
     verdict: CoordinationGateVerdict,
+    target: CoordinationTargetContext | null,
   ): string | null {
+    const objective = parsed.objective ?? '';
+    const name = target?.name ?? '未指定';
+    const anomaly = classifyTargetAnomaly(target, parsed.intent);
+    // 归档/无权限：不发系统消息（无面向用户的内容可说）。
     if (
       verdict.status === 'blocked' &&
       (verdict.reason === COORDINATION_GATE_REASON.CHANNEL_ARCHIVED ||
@@ -211,7 +249,14 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       return null;
     }
     if (verdict.status === 'blocked') {
-      const objective = parsed.objective ?? '';
+      // 目标异常都请求用户决定（AC#5）：无法确认 → 指定；不在作用域 → 加入/改派/取消。
+      if (anomaly === 'unresolvable') {
+        return `无法确认目标 Agent「${name}」，已拦截：${objective}。请指定目标 Agent 或取消。`;
+      }
+      if (anomaly === 'out_of_scope') {
+        return `目标 Agent「${name}」不在当前频道或作用域，已拦截：${objective}。请将其加入频道、改派或取消。`;
+      }
+      // 高风险等其他 blocked。
       return `已拦截（需确认或目标已失效）：${objective}`;
     }
     switch (parsed.intent) {
@@ -221,19 +266,38 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       case 'no_action':
         return null;
     }
-    const objective = parsed.objective ?? '';
     if (verdict.status === 'suggested') return `PI 建议（自动协调未开启，需确认后执行）：${objective}`;
-    // applied 副作用意图
     switch (parsed.intent) {
       case 'tracked_task':
         return `已创建跟踪任务：${objective}`;
-      case 'agent_request':
-        return `已记录 Agent 请求：${objective}`;
       case 'task_followup':
         return `已记录任务跟进：${objective}`;
+      case 'agent_request':
+        // 目标不可用 → applied 仍建 Task，但消息请求用户决定（等待/改派/取消），不静默改派。
+        if (anomaly === 'unavailable') {
+          return `目标 Agent「${name}」当前不可用，已创建请求任务。你可等待其上线、改派或取消。`;
+        }
+        return `已记录 Agent 请求：${objective}`;
       default:
         return null;
     }
+  }
+
+  /** 把门禁裁决 + 目标异常映射为可操作场景（AC#5），供 web 渲染决策点；null = 普通通知。 */
+  function pickCoordinationAction(
+    parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
+    verdict: CoordinationGateVerdict,
+    target: CoordinationTargetContext | null,
+  ): CoordinationSystemMessageAction | null {
+    const anomaly = classifyTargetAnomaly(target, parsed.intent);
+    if (verdict.status === 'suggested') return 'confirm_suggested';
+    if (verdict.status === 'blocked') {
+      // 目标异常（不可见/无法确认）→ 请求用户指定有效目标（AC#5）。
+      if (anomaly === 'unresolvable' || anomaly === 'out_of_scope') return 'specify_target';
+      return 'confirm_high_risk';
+    }
+    if (anomaly === 'unavailable') return 'confirm_offline_target';
+    return null;
   }
 
   /** 应用门禁裁决：applied 执行副作用（建 Task/系统消息），suggested/blocked 仅发说明消息，不执行副作用。 */
@@ -248,6 +312,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       readonly threadId: ID;
       readonly senderId: ID;
       readonly targetAgentId: ID | null;
+      readonly targetAgentName: string | null;
+      readonly targetStatus: AgentStatus | null;
+      readonly needsScopedTarget: boolean;
+      readonly targetScopeValid: boolean;
       readonly riskLevel: ChannelCoordinationDecisionRecord['riskLevel'];
       readonly gateStatus: ChannelCoordinationGateStatus;
     },
@@ -257,26 +325,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
     const blockingReason = verdict.status === 'blocked' ? verdict.reason : null;
     return deps.unitOfWork.run(async (transaction) => {
-      let systemMessageId: ID | null = null;
       let linkedTaskId: ID | null = null;
 
-      const messageBody = coordinationSystemMessageBody(parsed, verdict);
-      if (messageBody) {
-        const message = await transaction.messages.append({
-          id: deps.ids.nextId(),
-          teamId: job.teamId,
-          channelId: job.channelId,
-          threadId: ctx.threadId,
-          senderKind: 'system',
-          senderId: PI_COORDINATION_SYSTEM_SENDER_ID,
-          body: messageBody,
-          createdAt: now,
-          meta: { coordination: { decisionId, intent: parsed.intent, gateStatus: ctx.gateStatus, jobId: job.id } },
-        });
-        systemMessageId = message.id;
-      }
-
-      // applied 副作用意图：tracked_task/agent_request 建 Task。
+      // applied 副作用意图：tracked_task/agent_request 先建 Task 拿 linkedTaskId，
+      // 使系统消息 meta 能携带 taskId（AC#4）。事务原子，重排不影响外部可观察状态。
       if (verdict.status === 'applied' && (parsed.intent === 'tracked_task' || parsed.intent === 'agent_request')) {
         const taskId = deps.ids.nextId();
         const task = await transaction.tasks.create({
@@ -315,6 +367,47 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
             now,
           });
         }
+      }
+
+      // 组装系统消息正文 + 可操作场景（目标三分：不可见/离线/无法确认, AC#5）。
+      const targetCtx: CoordinationTargetContext = {
+        agentId: ctx.targetAgentId,
+        name: ctx.targetAgentName,
+        status: ctx.targetStatus,
+        needsScopedTarget: ctx.needsScopedTarget,
+        scopeValid: ctx.targetScopeValid,
+      };
+      const messageBody = coordinationSystemMessageBody(parsed, verdict, targetCtx);
+      const action = pickCoordinationAction(parsed, verdict, targetCtx);
+
+      // 构建完整 meta（含 taskId + 目标信息 + action）；绝不携带 provider/model 身份（AC#4）。
+      const coordinationMeta: CoordinationSystemMessageMeta = {
+        decisionId,
+        jobId: job.id,
+        intent: parsed.intent,
+        gateStatus: ctx.gateStatus,
+        taskId: linkedTaskId,
+        riskLevel: ctx.riskLevel,
+        targetAgentId: parsed.intent === 'agent_request' ? ctx.targetAgentId : null,
+        targetAgentName: parsed.intent === 'agent_request' ? ctx.targetAgentName : null,
+        targetStatus: parsed.intent === 'agent_request' ? ctx.targetStatus : null,
+        action,
+      };
+
+      let systemMessageId: ID | null = null;
+      if (messageBody) {
+        const message = await transaction.messages.append({
+          id: deps.ids.nextId(),
+          teamId: job.teamId,
+          channelId: job.channelId,
+          threadId: ctx.threadId,
+          senderKind: 'system',
+          senderId: PI_COORDINATION_SYSTEM_SENDER_ID,
+          body: messageBody,
+          createdAt: now,
+          meta: { coordination: coordinationMeta },
+        });
+        systemMessageId = message.id;
       }
 
       const decision: ChannelCoordinationDecisionRecord = {
@@ -581,6 +674,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         threadId: humanMessage.threadId ?? humanMessage.id,
         senderId: humanMessage.senderId,
         targetAgentId,
+        targetAgentName: parsed.targetAgentName,
+        targetStatus: targetAgent?.status ?? null,
+        needsScopedTarget,
+        targetScopeValid,
         riskLevel: assessedRisk,
         gateStatus: verdict.status,
       },
