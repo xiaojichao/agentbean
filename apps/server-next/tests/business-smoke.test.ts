@@ -18,6 +18,7 @@ const AGENT_EVENTS = {
 describe('AgentBean Next business smoke', () => {
   test('runs register -> daemon -> custom agent -> message -> reply against server-next', async () => {
     const server = await startServerNextDevServer({
+      messageIngestionMode: 'legacy',
       config: {
         host: '127.0.0.1',
         port: 0,

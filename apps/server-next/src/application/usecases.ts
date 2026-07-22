@@ -459,6 +459,8 @@ export interface SendMessageInput {
   userId: string;
   teamId: string;
   channelId: string;
+  /** Optional durable server message id for transport-level replay. */
+  messageId?: string;
   threadId?: string;
   body: string;
   asTask?: boolean;
@@ -474,7 +476,7 @@ export interface SendMessageInput {
 export interface SendMessageResult {
   message: MessageDto;
   dispatches: DispatchDto[];
-  route: RouteResult;
+  route?: RouteResult;
   coalescedDispatchId?: string;
   task?: TaskDto;
   acknowledgementMessage?: MessageDto;
@@ -860,6 +862,8 @@ export interface CreateServerNextUseCasesInput {
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
+  /** Production uses durable-job; legacy exists only for explicitly unmigrated callers. */
+  messageIngestionMode?: 'legacy' | 'durable-job';
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -868,6 +872,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
+  // Keep production on the existing delivery path until #706 wires a consumer for
+  // pending Channel Coordination Jobs. The durable boundary remains explicitly
+  // selectable so #705 can be verified without turning accepted messages into a queue black hole.
+  const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
@@ -965,6 +973,169 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // 来源失效是 best-effort；任何异常都不得影响删除主路径。
     }
   };
+
+  async function sendLegacyMessage(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
+    if (!(await repositories.teams.isMember(messageInput.teamId, messageInput.userId))) {
+      return makeFailure('FORBIDDEN', 'User is not a team member');
+    }
+    const channel = await repositories.channels.getById(messageInput.channelId);
+    if (!channel || channel.teamId !== messageInput.teamId) {
+      return makeFailure('NOT_FOUND', 'Channel not found');
+    }
+    if (channel.archivedAt != null) {
+      return makeFailure('VALIDATION_ERROR', 'Archived channels do not accept new messages');
+    }
+    if (channel.visibility === 'private' && !channel.humanMemberIds.includes(messageInput.userId)) {
+      return makeFailure('FORBIDDEN', 'User cannot view channel');
+    }
+
+    const now = clock.now();
+    const messageId = ids.nextId();
+    const threadId = messageInput.threadId ?? messageId;
+    const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
+    const mentions = sanitizeMessageMentions({
+      body: messageInput.body,
+      mentions: messageInput.meta?.mentions,
+      channel,
+      visibleAgents,
+    });
+    const contextOwner = messageInput.threadId
+      ? await resolveRoutingContextAgentId(repositories, {
+          teamId: messageInput.teamId,
+          channel,
+          threadId: messageInput.threadId,
+        })
+      : undefined;
+    const route = routeMessageForChannel({
+      channel,
+      visibleAgents,
+      teamId: messageInput.teamId,
+      body: messageInput.body,
+      mentions,
+      contextOwner,
+      connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+      dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+    });
+    const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
+      userId: messageInput.userId,
+      teamId: messageInput.teamId,
+      channelId: messageInput.channelId,
+      artifactIds: messageInput.artifactIds ?? [],
+    });
+    if (!attachmentResult.ok) return attachmentResult;
+    const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
+    const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
+      body: messageInput.body,
+      channel,
+      route,
+      threadId: messageInput.threadId,
+    });
+    const taskId = shouldCreateTask ? ids.nextId() : undefined;
+    let management: ManagementRoutingResult = await managementRouter.route({
+      userId: messageInput.userId,
+      teamId: messageInput.teamId,
+      channelId: messageInput.channelId,
+      rootMessageId: messageId,
+      ...(taskId ? { rootTaskId: taskId } : {}),
+      ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+      body: messageInput.body,
+      ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+    });
+    if (management.kind === 'unavailable') {
+      return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
+    }
+    const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
+    const task = shouldCreateTask
+      ? await repositories.tasks.create({
+          id: taskId!, teamId: messageInput.teamId, title: messageInput.body.trim() || '附件',
+          description: undefined,
+          status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
+          creatorId: messageInput.userId,
+          assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
+          channelId: messageInput.channelId, tags: [], sortOrder: now, createdAt: now, updatedAt: now,
+        })
+      : null;
+    if (task && management.kind === 'managed' && management.managementPhase >= 2) {
+      await taskCoordinationKernel.bootstrapRootCoordination({
+        managementRunId: management.managementRunId,
+        taskId: task.id,
+        idempotencyKey: `bootstrap-root:${task.id}`,
+        acceptanceCriteria: [{
+          id: `root-completion:${task.id}`,
+          description: '根任务目标已完成并可供用户审核',
+          evidenceRequired: false,
+        }],
+        maxAttempts: 1,
+      });
+    }
+    const message = await repositories.messages.append({
+      id: messageId,
+      teamId: messageInput.teamId,
+      channelId: messageInput.channelId,
+      threadId,
+      senderKind: 'human',
+      senderId: messageInput.userId,
+      body: messageInput.body,
+      createdAt: now,
+      meta: {
+        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+        ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+        ...(task ? { taskId: task.id } : {}),
+        ...(mentions.length ? { mentions } : {}),
+        routeReason: toRouteReason(route),
+      },
+    });
+    const releaseDispatchCoalescingLock = await acquireKeyedLock(
+      dispatchCoalescingLocks,
+      `${message.teamId}:${message.channelId}:${message.senderId}`,
+    );
+    try {
+      const coalescedDispatchId = management.kind === 'managed'
+        ? undefined
+        : await touchPendingCoalescibleDispatch(repositories, { message, updatedAt: now });
+      const attachedArtifacts: ArtifactRecord[] = [];
+      for (const artifact of attachmentResult.artifacts) {
+        attachedArtifacts.push(await repositories.artifacts.create({ ...artifact, messageId: message.id }));
+      }
+      const dispatches: DispatchDto[] = [];
+      let acknowledgementMessage: MessageDto | undefined;
+      if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
+        const dispatch = await repositories.dispatches.create({
+          id: ids.nextId(), teamId: messageInput.teamId, channelId: messageInput.channelId,
+          messageId: message.id, agentId: route.agentId, status: 'queued', requestId: ids.nextId(),
+          prompt: messageInput.body, createdAt: now, updatedAt: now,
+        });
+        dispatches.push(toDispatchDto(dispatch));
+        await repositories.agents.updateStatus({ agentId: dispatch.agentId, status: 'busy', lastSeenAt: now });
+        if (task) {
+          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
+            id: ids.nextId(), message, task, dispatch: toDispatchDto(dispatch), createdAt: now,
+          });
+        }
+      }
+      if (management.kind === 'managed') management = await managementRouter.scheduleManaged(management);
+      if (management.mode === 'shadow' && management.shadowRequestKey) {
+        void managementRouter.recordShadowDecision({
+          shadowRequestKey: management.shadowRequestKey,
+          body: messageInput.body,
+          ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+        }).catch(() => undefined);
+      }
+      return makeSuccess({
+        message: attachedArtifacts.length > 0
+          ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
+          : message,
+        dispatches,
+        route,
+        ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
+        ...(task ? { task } : {}),
+        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
+        management,
+      });
+    } finally {
+      releaseDispatchCoalescingLock();
+    }
+  }
 
   return {
     async registerUser(registerInput) {
@@ -2683,6 +2854,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async sendMessage(messageInput) {
+      if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
       if (!(await repositories.teams.isMember(messageInput.teamId, messageInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -2690,36 +2862,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!channel || channel.teamId !== messageInput.teamId) {
         return makeFailure('NOT_FOUND', 'Channel not found');
       }
+      if (channel.archivedAt != null) {
+        return makeFailure('VALIDATION_ERROR', 'Archived channels do not accept new messages');
+      }
       if (channel.visibility === 'private' && !channel.humanMemberIds.includes(messageInput.userId)) {
         return makeFailure('FORBIDDEN', 'User cannot view channel');
       }
 
       const now = clock.now();
-      const messageId = ids.nextId();
-      const threadId = messageInput.threadId ?? messageId;
       const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
       const mentions = sanitizeMessageMentions({
         body: messageInput.body,
         mentions: messageInput.meta?.mentions,
         channel,
         visibleAgents,
-      });
-      const contextOwner = messageInput.threadId
-        ? await resolveRoutingContextAgentId(repositories, {
-            teamId: messageInput.teamId,
-            channel,
-            threadId: messageInput.threadId,
-          })
-        : undefined;
-      const route = routeMessageForChannel({
-        channel,
-        visibleAgents,
-        teamId: messageInput.teamId,
-        body: messageInput.body,
-        mentions,
-        contextOwner,
-        connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-        dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
       });
       const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
         userId: messageInput.userId,
@@ -2731,147 +2887,95 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return attachmentResult;
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
-      const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
-        body: messageInput.body,
-        channel,
-        route,
-        threadId: messageInput.threadId,
-      });
-      const taskId = shouldCreateTask ? ids.nextId() : undefined;
-      let management: ManagementRoutingResult = await managementRouter.route({
-        userId: messageInput.userId,
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
-        rootMessageId: messageId,
-        ...(taskId ? { rootTaskId: taskId } : {}),
-        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-        body: messageInput.body,
-        ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-      });
-      if (management.kind === 'unavailable') {
-        return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
-      }
-      const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
-      const task = shouldCreateTask
-        ? await repositories.tasks.create({
-            id: taskId!,
-            teamId: messageInput.teamId,
-            title: messageInput.body.trim() || '附件',
-            description: undefined,
-            status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
-            creatorId: messageInput.userId,
-            assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
-            channelId: messageInput.channelId,
-            tags: [],
-            sortOrder: now,
-            createdAt: now,
-            updatedAt: now,
-          })
+
+      const clientIdempotencyKey = messageInput.clientMessageId
+        ? `client:${messageInput.teamId}:${messageInput.clientMessageId}`
         : null;
-      if (task && management.kind === 'managed' && management.managementPhase >= 2) {
-        await taskCoordinationKernel.bootstrapRootCoordination({
-          managementRunId: management.managementRunId,
-          taskId: task.id,
-          idempotencyKey: `bootstrap-root:${task.id}`,
-          acceptanceCriteria: [{
-            id: `root-completion:${task.id}`,
-            description: '根任务目标已完成并可供用户审核',
-            evidenceRequired: false,
-          }],
-          maxAttempts: 1,
-        });
-      }
-      const message = await repositories.messages.append({
-        id: messageId,
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
-        threadId,
-        senderKind: 'human',
-        senderId: messageInput.userId,
-        body: messageInput.body,
-        createdAt: now,
-        meta: {
-          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-          ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
-          ...(task ? { taskId: task.id } : {}),
-          ...(mentions.length ? { mentions } : {}),
-          routeReason: toRouteReason(route),
-        },
-      });
-      const releaseDispatchCoalescingLock = await acquireKeyedLock(
-        dispatchCoalescingLocks,
-        `${message.teamId}:${message.channelId}:${message.senderId}`,
-      );
-      try {
-        const coalescedDispatchId = management.kind === 'managed'
-          ? undefined
-          : await touchPendingCoalescibleDispatch(repositories, { message, updatedAt: now });
-        const attachedArtifacts: ArtifactRecord[] = [];
-        for (const artifact of attachmentResult.artifacts) {
-          attachedArtifacts.push(await repositories.artifacts.create({
-            ...artifact,
-            messageId: message.id,
-          }));
-        }
-        const dispatches: DispatchDto[] = [];
-        let acknowledgementMessage: MessageDto | undefined;
+      const outcome = await repositories.piProviderUnitOfWork.run(async (piRepositories) => {
+        const active = await piRepositories.activeModel.get();
+        const revision = active ? await piRepositories.revisions.getById(active.revisionId) : null;
+        const activeModel = active && revision?.status === 'published' && revision.cardId === active.cardId
+          ? {
+              availability: 'available' as const,
+              cardId: active.cardId,
+              revisionId: active.revisionId,
+              modelId: revision.config.modelId,
+            }
+          : { availability: 'unavailable' as const };
 
-        if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
-          const dispatch = await repositories.dispatches.create({
-            id: ids.nextId(),
+        // Keep the Active Model UoW open until the Team transaction commits. A model switch
+        // uses the same UoW and therefore cannot race between snapshot and message creation.
+        return repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
+          const existingByMessageId = messageInput.messageId
+            ? await transaction.jobs.getByMessageId(messageInput.messageId)
+            : null;
+          const existingByClientKey = clientIdempotencyKey
+            ? await transaction.jobs.getByIdempotencyKey(clientIdempotencyKey)
+            : null;
+          if (existingByMessageId && existingByClientKey && existingByMessageId.id !== existingByClientKey.id) {
+            return { kind: 'conflict' as const };
+          }
+          const existingJob = existingByMessageId ?? existingByClientKey;
+          if (existingJob) {
+            const existingMessage = await transaction.messages.getById(existingJob.messageId);
+            if (!existingMessage) throw new Error('Coordination job references a missing message');
+            const sameRequest = existingMessage.teamId === messageInput.teamId
+              && existingMessage.channelId === messageInput.channelId
+              && existingMessage.senderId === messageInput.userId
+              && existingMessage.body === messageInput.body
+              && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
+            if (!sameRequest) return { kind: 'conflict' as const };
+            const replayArtifacts = await transaction.artifacts.listByMessage(existingMessage.id);
+            return { kind: 'saved' as const, message: existingMessage, artifacts: replayArtifacts };
+          }
+
+          const messageId = messageInput.messageId ?? ids.nextId();
+          const jobId = ids.nextId();
+          const message = await transaction.messages.append({
+            id: messageId,
             teamId: messageInput.teamId,
             channelId: messageInput.channelId,
-            messageId: message.id,
-            agentId: route.agentId,
-            status: 'queued',
-            requestId: ids.nextId(),
-            prompt: messageInput.body,
+            threadId: messageInput.threadId ?? messageId,
+            senderKind: 'human',
+            senderId: messageInput.userId,
+            body: messageInput.body,
+            createdAt: now,
+            meta: {
+              ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+              ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+              ...(messageInput.asTask === true ? { asTask: true } : {}),
+              ...(mentions.length ? { mentions } : {}),
+            },
+          });
+          const attachedArtifacts: ArtifactRecord[] = [];
+          for (const artifact of attachmentResult.artifacts) {
+            attachedArtifacts.push(await transaction.artifacts.create({ ...artifact, messageId }));
+          }
+          await transaction.jobs.create({
+            id: jobId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            messageId,
+            idempotencyKey: clientIdempotencyKey ?? `message:${messageInput.teamId}:${messageId}`,
+            status: 'pending',
+            attempt: 0,
+            nextRetryAt: null,
+            activeModel,
             createdAt: now,
             updatedAt: now,
           });
-          dispatches.push(toDispatchDto(dispatch));
-          await repositories.agents.updateStatus({
-            agentId: dispatch.agentId,
-            status: 'busy',
-            lastSeenAt: now,
-          });
-          if (task) {
-            acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
-              id: ids.nextId(),
-              message,
-              task,
-              dispatch: toDispatchDto(dispatch),
-              createdAt: now,
-            });
-          }
-        }
-
-        if (management.kind === 'managed') {
-          management = await managementRouter.scheduleManaged(management);
-        }
-
-        if (management.mode === 'shadow' && management.shadowRequestKey) {
-          void managementRouter.recordShadowDecision({
-            shadowRequestKey: management.shadowRequestKey,
-            body: messageInput.body,
-            ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-          }).catch(() => undefined);
-        }
-
-        return makeSuccess({
-          message: attachedArtifacts.length > 0
-            ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
-            : message,
-          dispatches,
-          route,
-          ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
-          ...(task ? { task } : {}),
-          ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
-          management,
+          return { kind: 'saved' as const, message, artifacts: attachedArtifacts };
         });
-      } finally {
-        releaseDispatchCoalescingLock();
+      });
+
+      if (outcome.kind === 'conflict') {
+        return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
+
+      const message = outcome.artifacts.length > 0
+        ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
+        : outcome.message;
+      return makeSuccess({ message, dispatches: [] });
     },
 
     async getDispatchRequest(requestInput) {

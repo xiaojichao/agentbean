@@ -219,6 +219,7 @@ async function createHarness(ids: string[]) {
     repositories,
     clock: { now: () => 500 },
     ids: { nextId: createIds(ids) },
+    messageIngestionMode: 'legacy',
   });
   await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
   await app.registerAgent({

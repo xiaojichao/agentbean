@@ -37,6 +37,7 @@ describe('Phase 1 managed 真实 Device smoke', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-phase1-managed-device-'));
     cleanups.push(async () => rmSync(dataDir, { recursive: true, force: true }));
     const server = await startServerNextDevServer({
+      messageIngestionMode: 'legacy',
       config: {
         host: '127.0.0.1',
         port: 0,

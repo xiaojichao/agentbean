@@ -7,6 +7,10 @@ import type { MemoryRepositories } from './memory-repositories.js';
 import type { MemoryUnitOfWork } from './memory-unit-of-work.js';
 import type { ManagementMemoryUnitOfWork } from './management-memory-unit-of-work.js';
 import type { PiProviderRepositories, PiProviderUnitOfWork } from './pi-provider-repositories.js';
+import type {
+  ChannelCoordinationRepositories,
+  ChannelCoordinationUnitOfWork,
+} from './channel-coordination-unit-of-work.js';
 
 export interface UserRecord extends UserDto {
   passwordHash: string;
@@ -324,6 +328,8 @@ export interface ServerNextRepositories {
   managementMemoryUnitOfWork: ManagementMemoryUnitOfWork;
   piProvider: PiProviderRepositories;
   piProviderUnitOfWork: PiProviderUnitOfWork;
+  channelCoordination: ChannelCoordinationRepositories;
+  channelCoordinationUnitOfWork: ChannelCoordinationUnitOfWork;
   users: UserRepository;
   teams: TeamRepository;
   joinLinks: JoinLinkRepository;

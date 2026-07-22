@@ -577,6 +577,8 @@ async function createHarness(overrides: Partial<{
     }),
   };
   const router = createManagementRouter({ repositories, kernel, gateway, clock, ids });
-  const app = createServerNextUseCases({ repositories, clock, ids, managementRouter: router });
+  const app = createServerNextUseCases({
+    repositories, clock, ids, managementRouter: router, messageIngestionMode: 'legacy',
+  });
   return { repositories, kernel, gateway, router, app };
 }

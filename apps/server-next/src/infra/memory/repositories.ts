@@ -38,6 +38,11 @@ import {
   restoreMemoryRepositoryMemoryState,
 } from './memory-repositories.js';
 import { createInMemoryPiProviderPersistence } from './pi-provider-repositories.js';
+import {
+  createChannelCoordinationUnitOfWork,
+  type ChannelCoordinationRepositories,
+} from '../../application/channel-coordination-unit-of-work.js';
+import type { ChannelCoordinationJobRecord } from '../../../../../packages/contracts/src/index.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
@@ -63,6 +68,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const agentEnv = new Map<string, Record<string, string>>();
   const identityLinks = new Map<string, string>();
   const messages = new Map<string, MessageRecord>();
+  const channelCoordinationJobs = new Map<string, ChannelCoordinationJobRecord>();
   const dispatches = new Map<string, DispatchRecord>();
   const artifacts = new Map<string, ArtifactRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
@@ -70,6 +76,51 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
+
+  const channelCoordination: ChannelCoordinationRepositories = {
+    jobs: {
+      async create(input) {
+        if (channelCoordinationJobs.has(input.id)) {
+          throw new Error(`Coordination job already exists: ${input.id}`);
+        }
+        if (Array.from(channelCoordinationJobs.values()).some((job) =>
+          job.messageId === input.messageId || job.idempotencyKey === input.idempotencyKey)) {
+          throw new Error(`Coordination job idempotency conflict: ${input.idempotencyKey}`);
+        }
+        channelCoordinationJobs.set(input.id, input);
+        return input;
+      },
+      async getById(jobId) {
+        return channelCoordinationJobs.get(jobId) ?? null;
+      },
+      async getByMessageId(messageId) {
+        return Array.from(channelCoordinationJobs.values()).find((job) => job.messageId === messageId) ?? null;
+      },
+      async getByIdempotencyKey(idempotencyKey) {
+        return Array.from(channelCoordinationJobs.values())
+          .find((job) => job.idempotencyKey === idempotencyKey) ?? null;
+      },
+      async listByChannel(channelId, limit) {
+        return Array.from(channelCoordinationJobs.values())
+          .filter((job) => job.channelId === channelId)
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(-limit);
+      },
+      async updateState(input) {
+        const job = channelCoordinationJobs.get(input.jobId);
+        if (!job) return null;
+        const updated = {
+          ...job,
+          status: input.status,
+          attempt: input.attempt,
+          nextRetryAt: input.nextRetryAt,
+          updatedAt: input.updatedAt,
+        };
+        channelCoordinationJobs.set(job.id, updated);
+        return updated;
+      },
+    },
+  };
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -113,6 +164,28 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     piProvider: piProvider.repositories,
     piProviderUnitOfWork: piProvider.unitOfWork,
+    channelCoordination,
+    channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
+      management.unitOfWork.run(async () => {
+        const messageSnapshot = new Map(messages);
+        const artifactSnapshot = new Map(artifacts);
+        const jobSnapshot = new Map(channelCoordinationJobs);
+        try {
+          return await operation({
+            messages: repositories.messages,
+            artifacts: repositories.artifacts,
+            jobs: channelCoordination.jobs,
+          });
+        } catch (error) {
+          messages.clear();
+          for (const [id, message] of messageSnapshot) messages.set(id, message);
+          artifacts.clear();
+          for (const [id, artifact] of artifactSnapshot) artifacts.set(id, artifact);
+          channelCoordinationJobs.clear();
+          for (const [id, job] of jobSnapshot) channelCoordinationJobs.set(id, job);
+          throw error;
+        }
+      })),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(async (managementRepositories) => {

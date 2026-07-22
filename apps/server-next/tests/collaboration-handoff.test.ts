@@ -205,7 +205,8 @@ describe('serial collaboration handoff', () => {
       objective: '咨询 B', reason: '需要信息', contextRefIds: [], dependencyInvocationIds: [],
       attachmentIds: [], acceptanceCriteria: [], returnMode: 'return_to_manager' });
     const app = createServerNextUseCases({ repositories: harness.repositories,
-      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel,
+      messageIngestionMode: 'legacy' });
 
     await expect(app.receiveDispatchError({ dispatchId: requested.view.activeDispatchId!,
       agentId: 'agent-b', error: 'handoff failed' })).resolves.toMatchObject({ ok: true });
@@ -716,7 +717,8 @@ describe('serial collaboration handoff', () => {
       attachmentIds: [], acceptanceCriteria: [], returnMode: 'deliver_to_root' });
     await harness.service.recordAccepted({ dispatchId: requested.view.activeDispatchId! });
     const app = createServerNextUseCases({ repositories: harness.repositories,
-      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel });
+      clock: harness.clock, ids: harness.ids, managementKernel: harness.kernel,
+      messageIngestionMode: 'legacy' });
 
     await expect(app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
       threadId: 'message-root', body: '补充一个要求' }))
