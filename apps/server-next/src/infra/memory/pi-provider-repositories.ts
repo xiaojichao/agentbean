@@ -1,4 +1,5 @@
 import type {
+  ActivePiModelRecord,
   PiProviderCardRecord,
   PiProviderCardRevisionRecord,
   PiProviderCredentialRecord,
@@ -19,6 +20,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
   const revisions = new Map<string, PiProviderCardRevisionRecord>();
   const cards = new Map<string, PiProviderCardRecord>();
   const tests = new Map<string, PiProviderRevisionTestRecord>();
+  let activeModel: ActivePiModelRecord | null = null;
+  const activeModelHistory: ActivePiModelRecord[] = [];
   let failNextWriteWith: Error | null = null;
 
   function maybeFail(): void {
@@ -95,6 +98,21 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
           .filter((item) => item.cardId === cardId)
           .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
       },
+      async getLatestByConfigSummary(input) {
+        return Array.from(tests.values())
+          .filter((item) => item.cardId === input.cardId && item.configSummary === input.configSummary)
+          .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
+      },
+    },
+    activeModel: {
+      async get() { return activeModel; },
+      async set(input) {
+        maybeFail();
+        activeModel = input;
+        activeModelHistory.unshift(input);
+        return input;
+      },
+      async listHistory() { return [...activeModelHistory]; },
     },
   };
 
@@ -104,6 +122,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
       const revSnap = new Map(revisions);
       const cardSnap = new Map(cards);
       const testSnap = new Map(tests);
+      const activeModelSnap = activeModel;
+      const activeModelHistorySnap = [...activeModelHistory];
       try {
         return await operation(repositories);
       } catch (error) {
@@ -115,6 +135,8 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         for (const [id, value] of cardSnap) cards.set(id, value);
         tests.clear();
         for (const [id, value] of testSnap) tests.set(id, value);
+        activeModel = activeModelSnap;
+        activeModelHistory.splice(0, activeModelHistory.length, ...activeModelHistorySnap);
         throw error;
       }
     },

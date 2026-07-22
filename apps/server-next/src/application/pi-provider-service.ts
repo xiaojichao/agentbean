@@ -2,6 +2,8 @@ import {
   makeFailure,
   makeSuccess,
   type Ack,
+  type ActivePiModelDto,
+  type ActivePiModelHistoryEntryDto,
   type CancelPiProviderTestResult,
   type DiscoverPiProviderModelsResult,
   type ListPiProviderCardsResult,
@@ -10,6 +12,7 @@ import {
   type PiProviderCardRevisionDto,
   type PiProviderConfigDto,
   type PiProviderTestResultDto,
+  type PublicPiHealthDto,
   type PublishPiProviderCardResult,
   type RunPiProviderTestResult,
 } from '../../../../packages/contracts/src/index.js';
@@ -25,7 +28,10 @@ import {
   parseListPiProviderCardsRequest,
   parseListPiProviderPresetsRequest,
   parsePublishPiProviderCardRequest,
+  parseGetActivePiModelRequest,
+  parsePublicPiHealthRequest,
   parseRunPiProviderTestRequest,
+  parseSetActivePiModelRequest,
   parseUpdatePiProviderCardRequest,
 } from '../../../../packages/domain/src/index.js';
 import type {
@@ -188,6 +194,8 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     const published = card.publishedRevisionId
       ? await repositories.revisions.getById(card.publishedRevisionId)
       : null;
+    const publishedRevisions = (await repositories.revisions.listByCard(cardId))
+      .filter((revision) => revision.status === 'published');
     const preferred = draft ?? published;
     const latestTest = await repositories.tests.getLatestByCard(cardId);
     let canPublish = false;
@@ -224,6 +232,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       },
       draftRevision: draft ? toRevisionDto(draft) : null,
       publishedRevision: published ? toRevisionDto(published) : null,
+      publishedRevisions: publishedRevisions.map(toRevisionDto),
       modelCandidates: (card.modelCandidates ?? []).map((modelId) => ({ modelId })),
       modelCandidatesUpdatedAt: card.modelCandidatesUpdatedAt,
       latestTest: latestTest ? toTestDto(latestTest) : null,
@@ -239,6 +248,34 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     if (/encrypted_payload|ciphertext|apiKeyCiphertext|"apiKey"\s*:/i.test(text)) {
       throw new Error('PI provider response leaked secret material');
     }
+  }
+
+  async function toActiveModelDto(
+    active: { cardId: string; revisionId: string; changedBy: string; changedAt: number },
+    repositories: PiProviderRepositories,
+  ): Promise<ActivePiModelDto | null> {
+    const revision = await repositories.revisions.getById(active.revisionId);
+    if (!revision || revision.cardId !== active.cardId || revision.status !== 'published') return null;
+    return { ...active, modelId: revision.config.modelId };
+  }
+
+  async function activeModelHealth(repositories: PiProviderRepositories): Promise<PublicPiHealthDto> {
+    const active = await repositories.activeModel.get();
+    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' };
+    const revision = await repositories.revisions.getById(active.revisionId);
+    if (!revision || revision.status !== 'published' || revision.cardId !== active.cardId) {
+      return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+    }
+    const card = await repositories.cards.getById(active.cardId);
+    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+    const credential = await resolveApiKey(repositories, card.credentialRef);
+    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
+    const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
+    const test = await repositories.tests.getLatestByConfigSummary({ cardId: card.id, configSummary: summary });
+    if (!test || test.status !== 'passed' || test.configSummary !== summary) {
+      return { status: 'degraded', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' };
+    }
+    return { status: 'normal', diagnosticCode: null };
   }
 
   async function resolveApiKey(
@@ -773,6 +810,59 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       }
       if (!outcome.card) return makeFailure('INTERNAL_ERROR', 'Failed to load published card');
       const result = makeSuccess({ card: outcome.card });
+      assertSafeAckPayload(result);
+      return result;
+    },
+
+    async setActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>> {
+      const parsed = parseSetActivePiModelRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
+      if (!admin.ok) return admin;
+      const now = deps.clock.now();
+      const active = await deps.unitOfWork.run(async (repositories) => {
+        const revision = await repositories.revisions.getById(parsed.value.revisionId);
+        if (!revision || revision.status !== 'published') return null;
+        const card = await repositories.cards.getById(revision.cardId);
+        if (!card) return null;
+        const credential = await repositories.credentials.getById(card.credentialRef);
+        if (!credential) return null;
+        const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
+        const test = await repositories.tests.getLatestByConfigSummary({ cardId: card.id, configSummary: summary });
+        if (!test || test.status !== 'passed' || test.configSummary !== summary) return null;
+        const saved = await repositories.activeModel.set({ cardId: card.id, revisionId: revision.id, changedBy: parsed.value.userId, changedAt: now });
+        return toActiveModelDto(saved, repositories);
+      });
+      if (!active) return makeFailure('VALIDATION_ERROR', 'Active PI Model must reference a tested published revision');
+      const result = makeSuccess({ activeModel: active });
+      assertSafeAckPayload(result);
+      return result;
+    },
+
+    async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; health: PublicPiHealthDto }>> {
+      const parsed = parseGetActivePiModelRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const admin = await requireSystemAdmin(parsed.value.userId);
+      if (!admin.ok) return admin;
+      const result = await deps.unitOfWork.run(async (repositories) => {
+        const active = await repositories.activeModel.get();
+        const history = await repositories.activeModel.listHistory();
+        return makeSuccess({
+          activeModel: active ? await toActiveModelDto(active, repositories) : null,
+          history: (await Promise.all(history.map((entry) => toActiveModelDto(entry, repositories)))).filter((entry): entry is ActivePiModelHistoryEntryDto => entry !== null),
+          health: await activeModelHealth(repositories),
+        });
+      });
+      assertSafeAckPayload(result);
+      return result;
+    },
+
+    async getPublicHealth(raw: unknown): Promise<Ack<{ health: PublicPiHealthDto }>> {
+      const parsed = parsePublicPiHealthRequest(raw);
+      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
+      const user = await deps.users.getById(parsed.value.userId);
+      if (!user) return makeFailure('UNAUTHENTICATED', 'User not found');
+      const result = makeSuccess({ health: await deps.unitOfWork.run(activeModelHealth) });
       assertSafeAckPayload(result);
       return result;
     },

@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   runTest: vi.fn(),
   cancelTest: vi.fn(),
   publishCard: vi.fn(),
+  getActiveModel: vi.fn(),
+  setActiveModel: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -91,6 +93,10 @@ beforeEach(() => {
     ok: true,
     card: { ...sourceCard, draftRevision: null, canPublish: false },
   });
+  mocks.getActiveModel.mockResolvedValue({
+    ok: true, activeModel: null, history: [], health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+  });
+  mocks.setActiveModel.mockResolvedValue({ ok: true });
 });
 
 afterEach(() => {
@@ -104,6 +110,14 @@ const panelSource = readFileSync(
 );
 const settingsSource = readFileSync(
   resolve(import.meta.dirname, '../app/[teamPath]/settings/page.tsx'),
+  'utf8',
+);
+const sidebarSource = readFileSync(
+  resolve(import.meta.dirname, '../components/sidebar.tsx'),
+  'utf8',
+);
+const socketSource = readFileSync(
+  resolve(import.meta.dirname, '../lib/socket.ts'),
   'utf8',
 );
 
@@ -120,6 +134,14 @@ describe('PI Management settings scope', () => {
   test('panel itself remains system-admin scoped', () => {
     expect(panelSource).toContain('settings-pi-forbidden');
     expect(panelSource).toContain('仅系统管理员可访问');
+  });
+
+  test('team users can consume only the public PI health projection', () => {
+    expect(socketSource).toContain('getPublicHealth()');
+    expect(socketSource).toContain('WEB_EVENTS.piProvider.getPublicHealth');
+    expect(sidebarSource).toContain('piProviderEvents().getPublicHealth()');
+    expect(sidebarSource).toContain('data-smoke="pi-public-health"');
+    expect(sidebarSource).not.toContain('activeModel');
   });
 
   test('system admin panel supports four presets, form/advanced editors, and credential-safe UX', () => {
@@ -140,6 +162,10 @@ describe('PI Management settings scope', () => {
     expect(panelSource).toContain('settings-pi-run-test');
     expect(panelSource).toContain('settings-pi-cancel-test');
     expect(panelSource).toContain('settings-pi-publish');
+    expect(panelSource).toContain('settings-pi-active-model');
+    expect(panelSource).toContain('设为 Active');
+    expect(panelSource).toContain('activeHealth.diagnosticCode');
+    expect(panelSource).not.toContain('只影响后续新建 Run');
   });
 
   test('successful save and copy refresh the list without resetting editor state or success feedback', () => {

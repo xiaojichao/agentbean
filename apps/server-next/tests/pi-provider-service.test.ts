@@ -153,6 +153,57 @@ function serializeForTest(secret: ReturnType<typeof encryptPiProviderApiKey>): s
 }
 
 describe('pi provider service', () => {
+  test('system admin selects only a tested published revision and records switch history', async () => {
+    const { repos, service } = createService(undefined, { fetch: passingTestFetch() });
+    await seedUsers(repos);
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    const published = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
+    expect(published.ok).toBe(true);
+    if (!published.ok) return;
+
+    const updated = await service.updateCard({
+      userId: 'admin-1', cardId: created.card.id, displayName: 'Primary OpenAI',
+      baseUrl: 'https://api.openai.com/v1', endpointMode: 'chat_completions', modelId: 'gpt-4o',
+      timeoutMs: 60_000, maxOutputTokens: 4096,
+    });
+    expect(updated.ok).toBe(true);
+    await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    const republished = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
+    expect(republished.ok).toBe(true);
+
+    await expect(service.setActiveModel({ userId: 'admin-1', revisionId: published.card.publishedRevision!.id }))
+      .resolves.toMatchObject({ ok: true, activeModel: { revisionId: published.card.publishedRevision!.id } });
+    await expect(service.getActiveModel({ userId: 'admin-1' })).resolves.toMatchObject({
+      ok: true,
+      activeModel: { cardId: created.card.id, revisionId: published.card.publishedRevision!.id, modelId: 'gpt-4.1-mini' },
+      history: [{ revisionId: published.card.publishedRevision!.id, changedBy: 'admin-1' }],
+    });
+  });
+
+  test('public PI health never reveals provider or model identity and degrades safely without a usable credential', async () => {
+    const { repos, service } = createService(undefined, { fetch: passingTestFetch() });
+    await seedUsers(repos);
+    await expect(service.getPublicHealth({ userId: 'member-1' })).resolves.toEqual({
+      ok: true,
+      health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+    });
+
+    const created = await service.createCard(validCreate());
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    const published = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
+    if (!published.ok) return;
+    await service.setActiveModel({ userId: 'admin-1', revisionId: published.card.publishedRevision!.id });
+
+    const health = await service.getPublicHealth({ userId: 'member-1' });
+    expect(health).toEqual({ ok: true, health: { status: 'normal', diagnosticCode: null } });
+    expect(JSON.stringify(health)).not.toMatch(/openai|gpt-4|credential|apiKey/i);
+  });
+
   test('system admin can create a draft card from preset without leaking secrets', async () => {
     const { repos, service } = createService();
     await seedUsers(repos);

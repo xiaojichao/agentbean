@@ -228,6 +228,10 @@ describe('PI Provider discover / test / publish', () => {
     const published = await service.publishCard({ userId: 'admin-1', cardId: created.card.id });
     expect(published.ok).toBe(true);
     if (!published.ok) return;
+    const activated = await service.setActiveModel({
+      userId: 'admin-1', revisionId: published.card.publishedRevision!.id,
+    });
+    expect(activated.ok).toBe(true);
     expect(published.card.publishedRevision?.status).toBe('published');
     expect(published.card.publishedRevision?.config.modelId).toBe('gpt-4.1-mini');
     expect(published.card.draftRevision).toBeNull();
@@ -449,6 +453,11 @@ describe('PI Provider discover / test / publish', () => {
     expect(published.ok).toBe(true);
     if (!published.ok) return;
 
+    const activated = await service.setActiveModel({
+      userId: 'admin-1', revisionId: published.card.publishedRevision!.id,
+    });
+    expect(activated.ok).toBe(true);
+
     const cardRow = db.prepare('SELECT * FROM pi_provider_cards WHERE id = ?').get(created.card.id) as {
       published_revision_id: string | null;
       draft_revision_id: string | null;
@@ -464,6 +473,10 @@ describe('PI Provider discover / test / publish', () => {
     expect(JSON.stringify(testRow)).not.toContain('sk-live');
     expect(testRow).not.toHaveProperty('prompt');
     expect(testRow).not.toHaveProperty('messages');
+
+    const activeRow = db.prepare('SELECT revision_id FROM pi_active_model WHERE singleton = 1').get() as { revision_id: string };
+    expect(activeRow.revision_id).toBe(published.card.publishedRevision!.id);
+    expect((db.prepare('SELECT COUNT(*) AS c FROM pi_active_model_history').get() as { c: number }).c).toBe(1);
 
     db.close();
   });
