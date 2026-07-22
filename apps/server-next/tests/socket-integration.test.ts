@@ -42,6 +42,45 @@ afterEach(async () => {
 });
 
 describe('server-next Socket.IO namespaces', () => {
+  test('acknowledges a durable human message after its coordination job is saved', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1000 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'job-1']) },
+      messageIngestionMode: 'durable-job',
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => web.disconnect());
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw', password: 'secret', teamName: 'AgentBean',
+    });
+
+    const ack = await web.emitWithAck(WEB_EVENTS.message.send, {
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      clientMessageId: 'client-1',
+      body: '@离线Agent 仍然先保存',
+    });
+
+    expect(ack).toMatchObject({
+      ok: true,
+      message: { id: 'message-1', senderKind: 'human', body: '@离线Agent 仍然先保存' },
+      dispatches: [],
+    });
+    expect(ack).not.toHaveProperty('task');
+    expect(ack).not.toHaveProperty('management');
+    await expect(repositories.channelCoordination.jobs.getByMessageId('message-1')).resolves.toMatchObject({
+      id: 'job-1', status: 'pending', activeModel: { availability: 'unavailable' },
+    });
+  });
+
   test('serves first-slice /web and /agent event flows through real Socket.IO clients', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
