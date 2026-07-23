@@ -5,6 +5,9 @@ import type {
   SubtaskAcceptanceV1,
   SubtaskDeliveryV1,
   TaskCoordinationDto,
+  TaskOfferObjectiveDto,
+  TaskOfferResponseRecordDto,
+  TaskOfferStatus,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 
@@ -79,6 +82,29 @@ export interface SubtaskAcceptanceRecord extends SubtaskAcceptanceV1 {
   readonly canonical: boolean;
 }
 
+/**
+ * #712 切片 C 后续：Task Offer 持久化记录。
+ * 对应 contracts TaskOfferDto；objective 与发布时冻结的 taskRevision/manifestRevision 一并落库。
+ * response 内联最新响应（domain 状态机保证每 offer 至多一个终态响应），null = 尚未响应。
+ */
+export interface TaskOfferRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly taskId: ID;
+  readonly agentId: ID;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly manifestRevision: number;
+  readonly objective: TaskOfferObjectiveDto;
+  readonly offerTtlMs: UnixMs;
+  readonly offerExpiresAt: UnixMs;
+  readonly hardSpecified: boolean;
+  readonly status: TaskOfferStatus;
+  readonly response: TaskOfferResponseRecordDto | null;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
 export interface TaskCoordinationRepositories {
   coordinations: {
     create(record: TaskCoordinationRecord): Promise<TaskCoordinationRecord>;
@@ -149,5 +175,27 @@ export interface TaskCoordinationRepositories {
     create(record: SubtaskAcceptanceRecord): Promise<SubtaskAcceptanceRecord>;
     getCanonicalByDelivery(deliveryId: ID): Promise<SubtaskAcceptanceRecord | null>;
     listByDelivery(deliveryId: ID): Promise<SubtaskAcceptanceRecord[]>;
+  };
+  offers: {
+    create(record: TaskOfferRecord): Promise<TaskOfferRecord>;
+    getById(id: ID): Promise<TaskOfferRecord | null>;
+    listByTask(taskId: ID): Promise<TaskOfferRecord[]>;
+    listByAgent(input: {
+      teamId: ID;
+      agentId: ID;
+      statuses?: readonly TaskOfferStatus[];
+    }): Promise<TaskOfferRecord[]>;
+    /**
+     * CAS 状态转移（AC#3 状态机 + AC#6 并发单赢家的持久化兜底）。
+     * expectedStatus 不匹配（已被并发改动）→ 返回 null，调用方据此回滚/判 overtaken，
+     * 不写入。与 claimLeases.update 同款乐观并发。
+     */
+    updateStatus(input: {
+      id: ID;
+      expectedStatus: TaskOfferStatus;
+      status: TaskOfferStatus;
+      response: TaskOfferResponseRecordDto | null;
+      now: UnixMs;
+    }): Promise<TaskOfferRecord | null>;
   };
 }

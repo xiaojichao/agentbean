@@ -113,6 +113,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0031_team_agent_exposure_restrictions.sql');
   applyMigration(db, 'team/0032_formal_memory.sql');
   applyMigration(db, 'team/0033_task_immutable_revisions.sql', { disableForeignKeys: true });
+  applyMigration(db, 'team/0036_task_offers.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
