@@ -269,9 +269,12 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
       id: candidateId,
       status: 'conflict', conflictMemoryIds: [createdMemory.memory.item.id],
     }]);
+    // 候选来源是频道 message（resolveSourceScope→channel scope），目标是 team scope，
+    // 属 channel→team 的 scope expansion（ADR-0007/#719 AC#4），合并须显式确认扩 scope。
     await expect(authenticatedWebSocket.emitWithAck(WEB_EVENTS.memory.candidateMerge, {
       token, userId, teamId, candidateId,
       conflictMemoryId: createdMemory.memory.item.id,
+      confirmScopeExpansion: true,
     })).resolves.toMatchObject({ ok: true, candidate: { candidate: {
       status: 'merged', mergedIntoMemoryId: expect.any(String),
     } } });

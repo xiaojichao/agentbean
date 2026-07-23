@@ -8,10 +8,12 @@ import type {
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import {
+  assessCandidateScopeExpansion,
   computeProjectionHash,
   evaluateCandidateTransition,
   hashMemoryContent,
   hashSourceRefs,
+  type ScopeExpansionAssessment,
 } from '../../../../packages/domain/src/index.js';
 import type {
   MemoryAuditActorKind,
@@ -105,10 +107,23 @@ export interface AcceptCandidateInput extends DecideInput {
   readonly summary?: string;
   readonly tags?: readonly string[];
   readonly validUntil?: UnixMs;
+  /**
+   * 冲突选择（issue #719 / ADR-0048）：候选与同 scope 现有 active Memory 来源冲突时，
+   * 默认 accept 会被拒绝（须走 merge=取代）；显式传 `'coexist'` 表示选择「二者并存」——
+   * 建新 active 且旧冲突项保持 active，二者共存。取代走 `mergeCandidate`，故此处仅 coexist。
+   */
+  readonly conflictResolution?: 'coexist';
+  /**
+   * 作用域扩大确认（issue #719 / ADR-0007）：候选把来源证据写入比原始 scope 更宽的受众时，
+   * accept 必须显式确认。未确认抛 `CANDIDATE_SCOPE_EXPANSION_REQUIRES_CONFIRMATION`。
+   */
+  readonly confirmScopeExpansion?: boolean;
 }
 
 export interface MergeCandidateInput extends DecideInput {
   readonly conflictMemoryId: ID;
+  /** 作用域扩大确认（同 AcceptCandidateInput）。merge 同样建新 active，扩大须确认。 */
+  readonly confirmScopeExpansion?: boolean;
 }
 
 export interface MemoryCandidateView {
@@ -183,6 +198,34 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
       }
     }
     return [...conflicts].sort();
+  }
+
+  /**
+   * 评估候选是否涉及 scope expansion（ADR-0007）：任一来源 scope 比候选目标 scope 更窄/不同即扩大。
+   * 返回纯策略评估，由 accept/merge 按 `confirmScopeExpansion` 决定是否放行。
+   */
+  function assessCandidateExpansion(
+    candidate: MemoryCandidateRecord,
+    candidateSources: readonly MemoryCandidateSourceRecord[],
+  ): ScopeExpansionAssessment {
+    return assessCandidateScopeExpansion({
+      sources: candidateSources.map((source) => ({
+        sourceScopeType: source.sourceScopeType,
+        sourceScopeRef: source.sourceScopeRef,
+      })),
+      targetScopeType: candidate.scopeType,
+      targetScopeRef: candidate.scopeRef,
+    });
+  }
+
+  /** scope expansion 门禁：扩大且未显式确认 → 抛错，强制人工确认（AC#4）。 */
+  function assertScopeExpansionConfirmed(
+    expansion: ScopeExpansionAssessment,
+    confirmed: boolean | undefined,
+  ): void {
+    if (expansion.isExpansion && confirmed !== true) {
+      throw new Error('CANDIDATE_SCOPE_EXPANSION_REQUIRES_CONFIRMATION');
+    }
   }
 
   async function assertSourcesAvailable(
@@ -395,9 +438,20 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
         });
         // 防来源失效后 accept：每个来源须仍可用。
         await assertSourcesAvailable(candidateSources, input.teamId);
-        // 防来源冲突被静默接受：accept 只用于无冲突场景。
+        // AC#4：scope expansion 须显式确认（ADR-0007）。
+        assertScopeExpansionConfirmed(
+          assessCandidateExpansion(candidate, candidateSources),
+          input.confirmScopeExpansion,
+        );
+        // AC#5：来源冲突选择（ADR-0048）。默认 accept 拒绝冲突（须走 merge=取代）；
+        // 显式 conflictResolution='coexist' 选择「二者并存」——建新 active 且旧冲突项保持 active。
+        // 审计可推导（AC#8，不加 migration）：coexist 由 candidate.conflictMemoryIds 非空 + status=accepted
+        //   + 无 memory-superseded 事件区分于取代（取代=merged + memory-superseded）；扩 scope 确认由
+        //   candidate 目标 scope vs 来源 scope + candidate-decided 事件可重建。均不记录正文。
         const conflicts = await detectConflicts(memory, candidateSources, input.teamId);
-        if (conflicts.length > 0) throw new Error('CANDIDATE_HAS_CONFLICT');
+        if (conflicts.length > 0 && input.conflictResolution !== 'coexist') {
+          throw new Error('CANDIDATE_HAS_CONFLICT');
+        }
         const transition = evaluateCandidateTransition(candidate.status, 'accepted');
         if (!transition.ok) throw new Error('CANDIDATE_INVALID_TRANSITION');
         if (!memoryKindMatchesContentKind(input.kind, candidate.contentKind)) {
@@ -468,6 +522,11 @@ export function createMemoryCandidateService(deps: MemoryCandidateServiceDeps): 
           teamId: input.teamId, candidateId: candidate.id,
         });
         await assertSourcesAvailable(candidateSources, input.teamId);
+        // AC#4：scope expansion 须显式确认（ADR-0007）。merge 同样在候选 scope 建新 active。
+        assertScopeExpansionConfirmed(
+          assessCandidateExpansion(candidate, candidateSources),
+          input.confirmScopeExpansion,
+        );
         const currentConflicts = await detectConflicts(memory, candidateSources, input.teamId);
         if (currentConflicts.length !== 1 || currentConflicts[0] !== input.conflictMemoryId) {
           throw new Error('CANDIDATE_CONFLICT_SET_CHANGED');

@@ -155,6 +155,26 @@ describe.each([
     }
   });
 
+  test('an undecided conflict candidate creates no active Memory and stays out of active context (issue #719 AC#6)', async () => {
+    const { service, memory, close } = createHarness(permissivePermissions());
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1', { content: 'old conclusion' });
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+      });
+      // 无法判断时新内容保持 Candidate（conflict 为非终态停泊），不自动建 active、不影响协作。
+      expect(proposed.candidate.status).toBe('conflict');
+      const scoped = await memory.items.listByScope({ teamId: 'team-1', scopeType: 'task', scopeRef: 'task-1' });
+      const activeContents = scoped.filter((m) => m.status === 'active').map((m) => m.content);
+      expect(activeContents).not.toContain('new conclusion');
+      expect(activeContents).toEqual(['old conclusion']);
+    } finally {
+      close();
+    }
+  });
+
   test('proposeCandidate validates source authority before exposing conflicts', async () => {
     const permissions = {
       ...permissivePermissions(),
@@ -392,6 +412,123 @@ describe.each([
       await expect(service.mergeCandidate({
         teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-1',
       })).rejects.toThrow(/MEMORY_WRITE_NOT_AUTHORIZED/);
+    } finally {
+      close();
+    }
+  });
+
+  test('acceptCandidate with conflictResolution=coexist keeps both memories active (issue #719 AC#5 / ADR-0048)', async () => {
+    const { service, memory, close } = createHarness(permissivePermissions());
+    try {
+      await seedActiveMemory(memory, 'team-1', 'mem-1', 'msg-1', { content: 'old conclusion' });
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'task', scopeRef: 'task-1', contentKind: 'decision',
+        proposedContent: 'new conclusion', sourceRefs: [sourceRef('msg-1')],
+      });
+      expect(proposed.candidate.status).toBe('conflict');
+      // 默认 accept 仍拒绝冲突（须走 merge=取代 或显式 coexist）。
+      await expect(service.acceptCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
+      })).rejects.toThrow(/CANDIDATE_HAS_CONFLICT/);
+
+      const accepted = await service.acceptCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
+        conflictResolution: 'coexist',
+      });
+      expect(accepted.candidate.status).toBe('accepted');
+      expect(accepted.candidate.acceptedMemoryId).toBeDefined();
+      // 二者并存：旧冲突项仍 active，新项也 active。
+      const oldMem = await memory.items.getById({ teamId: 'team-1', id: 'mem-1' });
+      expect(oldMem?.status).toBe('active');
+      const newMem = await memory.items.getById({ teamId: 'team-1', id: accepted.candidate.acceptedMemoryId! });
+      expect(newMem?.status).toBe('active');
+      expect(newMem?.content).toBe('new conclusion');
+      // coexist 不产生 memory-superseded（与 merge 取代区分 → AC#8 可审计）。
+      const oldAudit = await memory.auditEvents.listBySubject({
+        teamId: 'team-1', subjectKind: 'memory', subjectId: 'mem-1',
+      });
+      expect(oldAudit.some((e) => e.eventType === 'memory-superseded')).toBe(false);
+    } finally {
+      close();
+    }
+  });
+
+  test('acceptCandidate without confirmScopeExpansion is blocked on scope expansion (issue #719 AC#4 / ADR-0007)', async () => {
+    const { service, close } = createHarness(permissivePermissions());
+    try {
+      const channelSource: MemoryCandidateSourceInput = {
+        schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-c', snapshotHash: 'sha256:c',
+        sourceScopeType: 'channel', sourceScopeRef: 'channel-1', sourceVisibility: 'team',
+      };
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'team', scopeRef: 'team-1', contentKind: 'decision',
+        proposedContent: 'team-wide rule', sourceRefs: [channelSource],
+      });
+      await expect(service.acceptCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
+      })).rejects.toThrow(/CANDIDATE_SCOPE_EXPANSION_REQUIRES_CONFIRMATION/);
+    } finally {
+      close();
+    }
+  });
+
+  test('acceptCandidate with confirmScopeExpansion succeeds on scope expansion (issue #719 AC#4)', async () => {
+    const { service, memory, close } = createHarness(permissivePermissions());
+    try {
+      const channelSource: MemoryCandidateSourceInput = {
+        schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-c', snapshotHash: 'sha256:c',
+        sourceScopeType: 'channel', sourceScopeRef: 'channel-1', sourceVisibility: 'team',
+      };
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'team', scopeRef: 'team-1', contentKind: 'decision',
+        proposedContent: 'team-wide rule', sourceRefs: [channelSource],
+      });
+      const accepted = await service.acceptCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, kind: 'decision',
+        confirmScopeExpansion: true,
+      });
+      expect(accepted.candidate.status).toBe('accepted');
+      const active = await memory.items.getById({ teamId: 'team-1', id: accepted.candidate.acceptedMemoryId! });
+      expect(active?.scopeType).toBe('team');
+      expect(active?.status).toBe('active');
+    } finally {
+      close();
+    }
+  });
+
+  test('mergeCandidate gates scope expansion and supersedes once confirmed (issue #719 AC#4 + 取代)', async () => {
+    const { service, memory, close } = createHarness(permissivePermissions());
+    try {
+      await memory.items.create({
+        schemaVersion: 1, id: 'mem-team', teamId: 'team-1', kind: 'decision', status: 'active',
+        scopeType: 'team', scopeRef: 'team-1', content: 'old team rule', createdAt: 500, updatedAt: 500,
+      });
+      await memory.sources.create({
+        memoryId: 'mem-team', teamId: 'team-1', sourceKind: 'message', sourceId: 'msg-c', snapshotHash: 'sha256:c',
+        sourceScopeType: 'channel', sourceScopeRef: 'channel-1', sourceVisibility: 'team', createdAt: 500,
+      });
+      const channelSource: MemoryCandidateSourceInput = {
+        schemaVersion: 1, sourceKind: 'message', sourceId: 'msg-c', snapshotHash: 'sha256:c',
+        sourceScopeType: 'channel', sourceScopeRef: 'channel-1', sourceVisibility: 'team',
+      };
+      const proposed = await service.proposeCandidate({
+        teamId: 'team-1', sourceAgentId: 'agent-1', sourceInvocationId: 'inv-1', targetAgentId: 'target-agent-1', managementRunId: 'run-1',
+        scopeType: 'team', scopeRef: 'team-1', contentKind: 'decision',
+        proposedContent: 'new team rule', sourceRefs: [channelSource],
+      });
+      await expect(service.mergeCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-team',
+      })).rejects.toThrow(/CANDIDATE_SCOPE_EXPANSION_REQUIRES_CONFIRMATION/);
+      const merged = await service.mergeCandidate({
+        teamId: 'team-1', actorId: 'user-1', candidateId: proposed.candidate.id, conflictMemoryId: 'mem-team',
+        confirmScopeExpansion: true,
+      });
+      expect(merged.candidate.status).toBe('merged');
+      const old = await memory.items.getById({ teamId: 'team-1', id: 'mem-team' });
+      expect(old?.status).toBe('superseded');
     } finally {
       close();
     }
