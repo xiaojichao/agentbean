@@ -700,9 +700,6 @@ export default function ChatPage() {
   }, [activeChannel, openChannelDocument]);
 
   const previewOpenMarkdownRevision = useCallback(async (revision: ChannelDocumentRevisionDto) => {
-    if (revision.artifact.sizeBytes > 10 * 1024 * 1024) {
-      throw new Error('该历史版本超过 10 MB，仅支持下载');
-    }
     const previewUrl = messageArtifactUrl(revision.artifact as Artifact, 'preview', revision.artifact.teamId);
     if (!previewUrl) throw new Error('该历史版本没有可用的在线内容');
     const response = await fetch(previewUrl);

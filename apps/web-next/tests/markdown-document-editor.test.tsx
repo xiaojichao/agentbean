@@ -293,6 +293,33 @@ describe('MarkdownDocumentEditor', () => {
     expect(screen.queryByRole('button', { name: '保存并分享到频道' })).toBeNull();
   });
 
+  test('普通保存后仍可显式保存并分享到频道', async () => {
+    const onPublish = vi.fn().mockResolvedValue({ ok: true, revisionId: 'revision-2' });
+    render(
+      <MarkdownDocumentEditor
+        draftIdentity={{
+          userId: 'user-1', teamId: 'team-1', documentId: 'document-1', baseRevisionId: 'revision-1',
+        }}
+        filename="notes.md"
+        initialContent="# already saved"
+        onSave={vi.fn()}
+        onPublish={onPublish}
+        renderPreview={(content) => content}
+      />,
+    );
+
+    const publishButton = screen.getByRole('button', { name: '保存并分享到频道' });
+    expect((publishButton as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(publishButton);
+
+    await waitFor(() => expect(onPublish).toHaveBeenCalledWith(
+      '# already saved',
+      'notes.md',
+      'revision-1',
+      expect.stringMatching(/^publish:/),
+    ));
+  });
+
   test('恢复遇到基线冲突时先展示历史与最新版，再以同一幂等键明确确认', async () => {
     const revisions: ChannelDocumentRevisionDto[] = [
       {

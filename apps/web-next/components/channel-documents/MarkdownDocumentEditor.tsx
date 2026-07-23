@@ -323,7 +323,7 @@ export function MarkdownDocumentEditor({
     }
   };
   const publish = async () => {
-    if (!onPublish || readOnly || saving || !dirty || !currentBaseRevisionId) return;
+    if (!onPublish || readOnly || saving || !currentBaseRevisionId) return;
     setSaving(true);
     setSaveError(null);
     const keyTarget = `${currentBaseRevisionId}:${filename}:${content}`;
@@ -372,7 +372,7 @@ export function MarkdownDocumentEditor({
       >{saving ? '保存中…' : '保存'}</button>
       {!readOnly && onPublish && <button
         type="button"
-        disabled={saving || !dirty || !currentBaseRevisionId}
+        disabled={saving || !currentBaseRevisionId}
         onClick={() => void publish()}
       >保存并分享到频道</button>}
       {onClose && <button type="button" onClick={() => { if (!dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose(); }}>关闭</button>}
