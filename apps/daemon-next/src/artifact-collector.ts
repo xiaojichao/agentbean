@@ -7,7 +7,15 @@ const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
 const MAX_OUTPUT_FILES_PER_ROOT = 2000;
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
+export type ArtifactSourceRootKind = 'run_output' | 'agent_workspace' | 'configured_output' | 'adapter_generated';
+export type ArtifactRole = 'intermediate' | 'run_output' | 'deliverable' | 'attachment';
+
+export interface ArtifactSourceRoot {
+  id: string;
+  kind: ArtifactSourceRootKind;
+  label: string;
+}
 
 export interface CollectedArtifact {
   absolutePath: string;
@@ -15,6 +23,8 @@ export interface CollectedArtifact {
   sha256: string;
   sizeBytes: number;
   filename: string;
+  sourceRoot: ArtifactSourceRoot;
+  role: ArtifactRole;
 }
 
 export interface CollectArtifactsInput {
@@ -24,6 +34,10 @@ export interface CollectArtifactsInput {
   cwd?: string;
   /** Extra output roots such as Codex-native generated_images; mtime filtered. */
   extraOutputDirs?: string[];
+  /** Additional roots with safe public labels; absolute paths never leave the daemon. */
+  configuredOutputRoots?: Array<{ path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
+  /** Stable public label for the agent workspace root. */
+  workspaceLabel?: string;
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
   startedAt: number;
   /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
@@ -36,10 +50,15 @@ export interface CollectArtifactsInput {
  * semantic filename). Returns the candidate artifacts to upload.
  */
 export async function collectArtifacts(input: CollectArtifactsInput): Promise<CollectedArtifact[]> {
-  const bySha = new Map<string, CollectedArtifact>();
+  const byRootPath = new Map<string, CollectedArtifact>();
   const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
 
-  const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean): void => {
+  const excludedNestedRoots = new Set([
+    ...(input.outputDir ? [input.outputDir] : []),
+    ...(input.extraOutputDirs ?? []),
+    ...(input.configuredOutputRoots ?? []).map((root) => root.path),
+  ]);
+  const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean, sourceRoot: ArtifactSourceRoot, role: ArtifactRole, recursive = true): void => {
     let visited = 0;
     const stack: string[] = [rootAbs];
     while (stack.length > 0) {
@@ -56,7 +75,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           if (IGNORED_OUTPUT_DIRS.has(entry.name)) {
             continue;
           }
-          stack.push(abs);
+          if (recursive && !(sourceRoot.kind === 'agent_workspace' && excludedNestedRoots.has(abs))) stack.push(abs);
         } else if (entry.isFile() && OUTPUT_FILE_EXT_RE.test(entry.name)) {
           visited += 1;
           let stat;
@@ -88,10 +107,22 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             sha256,
             sizeBytes: stat.size,
             filename: basename(abs),
+            sourceRoot,
+            role,
           };
-          const existing = bySha.get(sha256);
+          const duplicateWithDifferentPath = [...byRootPath.values()].find((existing) => existing.sha256 === sha256 && existing.relativePath !== candidate.relativePath);
+          if (duplicateWithDifferentPath) {
+            if (fileNamePreference(candidate.filename) < fileNamePreference(duplicateWithDifferentPath.filename)) {
+              for (const [existingKey, existing] of byRootPath) {
+                if (existing === duplicateWithDifferentPath) byRootPath.set(existingKey, candidate);
+              }
+            }
+            continue;
+          }
+          const key = `${sourceRoot.id}:${candidate.relativePath}`;
+          const existing = byRootPath.get(key);
           if (!existing || fileNamePreference(candidate.filename) < fileNamePreference(existing.filename)) {
-            bySha.set(sha256, candidate);
+            byRootPath.set(key, candidate);
           }
         }
       }
@@ -99,15 +130,23 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   };
 
   if (input.outputDir) {
-    ingest(input.outputDir, input.outputDir, false);
+    ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出'), 'run_output');
   }
   for (const dir of input.extraOutputDirs ?? []) {
-    ingest(dir, dir, true);
+    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录'), 'run_output');
+  }
+  for (const root of input.configuredOutputRoots ?? []) {
+    ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label), root.defaultRole ?? 'run_output', root.recursive ?? true);
   }
   if (input.cwd) {
-    ingest(input.cwd, input.cwd, true);
+    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录'), 'intermediate');
   }
-  return [...bySha.values()];
+  return [...byRootPath.values()];
+}
+
+function makeSourceRoot(kind: ArtifactSourceRootKind, label: string): ArtifactSourceRoot {
+  const id = createHash('sha256').update(`agentbean:artifact-source-root:${kind}:${label}`).digest('hex').slice(0, 24);
+  return { id, kind, label };
 }
 
 function fileNamePreference(name: string): number {

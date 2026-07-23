@@ -139,4 +139,26 @@ describe('artifact-collector', () => {
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 0, maxBytes: 10 });
     expect(collected.map((c) => c.filename)).toEqual(['small.txt']);
   });
+
+  test('keeps same relative files independent across source roots and assigns explicit roles', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const outputDir = join(cwd, 'outputs');
+    const configuredDir = join(cwd, 'deliverables');
+    mkdirSync(outputDir, { recursive: true });
+    mkdirSync(configuredDir, { recursive: true });
+    writeFileSync(join(outputDir, 'report.md'), 'same');
+    writeFileSync(join(configuredDir, 'report.md'), 'same');
+
+    const collected = await collectArtifacts({
+      outputDir,
+      configuredOutputRoots: [{ path: configuredDir, label: '交付目录', defaultRole: 'deliverable' }],
+      startedAt: 0,
+    });
+
+    const reports = collected.filter((artifact) => artifact.filename === 'report.md');
+    expect(reports).toHaveLength(2);
+    expect(new Set(reports.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
+    expect(reports.map((artifact) => artifact.role).sort()).toEqual(['deliverable', 'run_output']);
+    expect(reports.every((artifact) => !artifact.absolutePath.includes('AGENTBEAN_OUTPUT_DIR'))).toBe(true);
+  });
 });
