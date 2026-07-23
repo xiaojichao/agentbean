@@ -104,6 +104,53 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('频道文档在 SQLite 中幂等创建并原子追加 revision', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const initialArtifact = {
+        id: 'artifact-doc-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
+        uploaderId: 'user-1', filename: 'notes.md', mimeType: 'text/markdown', sizeBytes: 5,
+        storagePath: 'artifacts/team-1/artifact-doc-1/notes.md', pathKind: 'upload' as const, createdAt: 100,
+      };
+      await repositories.artifacts.create(initialArtifact);
+      const initial = {
+        document: {
+          id: 'channel-document:artifact-doc-1', teamId: 'team-1', channelId: 'channel-1', filename: 'notes.md',
+          currentRevisionId: 'revision-1', createdAt: 100, updatedAt: 100,
+        },
+        revision: {
+          id: 'revision-1', documentId: 'channel-document:artifact-doc-1', artifact: initialArtifact,
+          revision: 1, createdBy: 'user-1', createdAt: 100,
+        },
+      };
+      await repositories.channelDocuments.create(initial);
+      await repositories.channelDocuments.create(initial);
+
+      const nextArtifact = {
+        ...initialArtifact, id: 'artifact-doc-2', messageId: undefined, storagePath: 'artifacts/team-1/artifact-doc-2/notes.md', createdAt: 200,
+      };
+      const nextRevision = {
+        id: 'revision-2', documentId: initial.document.id, artifact: nextArtifact,
+        revision: 2, createdBy: 'user-1', createdAt: 200,
+      };
+      await expect(repositories.channelDocuments.addRevision({
+        documentId: initial.document.id,
+        expectedCurrentRevisionId: initial.revision.id,
+        document: { ...initial.document, currentRevisionId: nextRevision.id, updatedAt: 200 },
+        revision: nextRevision,
+        artifact: nextArtifact,
+      })).resolves.toMatchObject({ currentRevisionId: 'revision-2' });
+
+      await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toMatchObject([
+        { id: 'revision-2', artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath } },
+       { id: 'revision-1', artifact: { id: 'artifact-doc-1', storagePath: initialArtifact.storagePath } },
+      ]);
+    } finally {
+      close();
+    }
+  });
+
   test('applies device invite migration after an existing first-slice SQLite database', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

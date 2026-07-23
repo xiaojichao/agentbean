@@ -1272,7 +1272,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     channelDocuments: {
       async create(input) {
-        if (channelDocuments.has(input.document.id)) throw new Error('Channel document already exists');
+        const existing = channelDocuments.get(input.document.id);
+        if (existing) return existing;
         channelDocuments.set(input.document.id, input.document);
         channelDocumentRevisions.set(input.revision.id, input.revision);
         return input.document;

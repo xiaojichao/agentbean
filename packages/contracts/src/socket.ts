@@ -162,7 +162,6 @@ export const WEB_EVENTS = {
     get: 'channel-documents:get',
     revisions: 'channel-documents:revisions',
     save: 'channel-documents:save',
-    restore: 'channel-documents:restore',
   },
   dm: {
     start: 'dm:start',

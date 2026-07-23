@@ -1965,9 +1965,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     channelDocuments: {
       async create(input) {
         const insert = teamDb.transaction(() => {
-          teamDb.prepare(`INSERT INTO channel_documents (id, team_id, channel_id, filename, current_revision_id, created_at, updated_at)
+          teamDb.prepare(`INSERT OR IGNORE INTO channel_documents (id, team_id, channel_id, filename, current_revision_id, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.document.id, input.document.teamId, input.document.channelId, input.document.filename, input.document.currentRevisionId, input.document.createdAt, input.document.updatedAt);
-          teamDb.prepare(`INSERT INTO channel_document_revisions (id, document_id, artifact_id, revision, created_by, created_at)
+          teamDb.prepare(`INSERT OR IGNORE INTO channel_document_revisions (id, document_id, artifact_id, revision, created_by, created_at)
             VALUES (?, ?, ?, ?, ?, ?)`).run(input.revision.id, input.revision.documentId, input.revision.artifact.id, input.revision.revision, input.revision.createdBy, input.revision.createdAt);
         });
         insert();
@@ -1982,7 +1982,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async listRevisions(input) {
         return teamDb.prepare(`SELECT r.id AS revision_id, r.document_id, r.revision, r.created_by, r.created_at AS revision_created_at,
           a.id AS artifact_id, a.team_id, a.channel_id, a.message_id, a.dispatch_id, a.workspace_run_id, a.uploader_id,
-          a.filename, a.mime_type, a.size_bytes, a.relative_path, a.path_kind, a.sha256, a.created_at AS artifact_created_at
+          a.filename, a.mime_type, a.size_bytes, a.storage_path, a.relative_path, a.path_kind, a.sha256, a.created_at AS artifact_created_at
           FROM channel_document_revisions r JOIN artifacts a ON a.id = r.artifact_id WHERE r.document_id = ? ORDER BY r.revision DESC`).all(input.documentId).map((row) => mapChannelDocumentRevision(row)!);
       },
       async addRevision(input) {
@@ -2818,6 +2818,7 @@ function mapChannelDocumentRevision(row: unknown): ChannelDocumentRevisionRecord
       id: sqliteText(row, 'artifact_id'), teamId: sqliteText(row, 'team_id'), channelId: sqliteText(row, 'channel_id'),
       messageId: sqliteNullableText(row, 'message_id'), dispatchId: sqliteNullableText(row, 'dispatch_id'), workspaceRunId: sqliteNullableText(row, 'workspace_run_id'),
       filename: sqliteText(row, 'filename'), mimeType: sqliteText(row, 'mime_type'), sizeBytes: sqliteNumber(row, 'size_bytes'),
+      uploaderId: sqliteText(row, 'uploader_id'), storagePath: sqliteNullableText(row, 'storage_path'),
       relativePath: sqliteNullableText(row, 'relative_path'), pathKind: sqliteNullableText(row, 'path_kind') as ArtifactRecord['pathKind'],
       sha256: sqliteNullableText(row, 'sha256'), createdAt: sqliteNumber(row, 'artifact_created_at'),
     },

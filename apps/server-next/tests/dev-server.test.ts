@@ -785,6 +785,55 @@ describe('server-next dev server entry', () => {
     await expect(response.text()).resolves.toBe('<script>localStorage.token</script>');
   });
 
+  test('限制 Markdown 在线预览大小并要求 UTF-8，同时保留下载能力', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-markdown-preview-'));
+    const truncatedBody = Buffer.concat([Buffer.alloc(2 * 1024 * 1024 - 1, 0x61), Buffer.from('你tail')]);
+    const oversizedBody = Buffer.alloc(10 * 1024 * 1024 + 1, 0x62);
+    writeFileSync(join(dataDir, 'truncated.md'), truncatedBody);
+    writeFileSync(join(dataDir, 'oversized.md'), oversizedBody);
+    writeFileSync(join(dataDir, 'invalid.md'), Buffer.from([0xff, 0xfe]));
+    const bodies = {
+      truncated: { filename: 'truncated.md', sizeBytes: truncatedBody.length },
+      oversized: { filename: 'oversized.md', sizeBytes: oversizedBody.length },
+      invalid: { filename: 'invalid.md', sizeBytes: 2 },
+    };
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getArtifactFile: vi.fn(async ({ artifactId }: { artifactId: keyof typeof bodies }) => {
+        const file = bodies[artifactId];
+        return makeSuccess({
+          artifact: {
+            id: artifactId, teamId: 'team-1', channelId: 'channel-1', filename: file.filename,
+            mimeType: 'text/markdown', sizeBytes: file.sizeBytes, createdAt: 1,
+          },
+          storagePath: file.filename,
+        });
+      }),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const truncated = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/truncated/preview?token=token-1`);
+    expect(truncated.status).toBe(200);
+    expect(truncated.headers.get('x-agentbean-preview-truncated')).toBe('true');
+    const truncatedText = await truncated.text();
+    expect(Buffer.byteLength(truncatedText, 'utf8')).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(truncatedText).not.toContain('\uFFFD');
+
+    const oversized = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/oversized/preview?token=token-1`);
+    expect(oversized.status).toBe(413);
+    const invalid = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/invalid/preview?token=token-1`);
+    expect(invalid.status).toBe(415);
+
+    const download = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/oversized/download?token=token-1`);
+    expect(download.status).toBe(200);
+    expect((await download.arrayBuffer()).byteLength).toBe(oversizedBody.length);
+  });
+
   test('serves custom agent env only with bearer device credentials', async () => {
     const app = {
       getAgentEnvForDevice: vi.fn(async () => makeSuccess({ env: { OPENAI_API_KEY: 'secret-value' } })),

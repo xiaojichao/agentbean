@@ -558,7 +558,6 @@ export interface ChannelEvents {
   getDocument(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
   listDocumentRevisions(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentRevisionsResultDto['document']; revisions?: ChannelDocumentRevisionsResultDto['revisions']; error?: string }>;
   saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
-  restoreDocument(channelId: string, documentId: string, revisionId: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -587,7 +586,6 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     getDocument(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.get, { channelId, documentId }); },
     listDocumentRevisions(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.revisions, { channelId, documentId }); },
     saveDocument(channelId, documentId, baseRevisionId, content, filename) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}) }); },
-    restoreDocument(channelId, documentId, revisionId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.restore, { channelId, documentId, revisionId }); },
   };
 }
 

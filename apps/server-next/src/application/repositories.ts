@@ -70,7 +70,9 @@ export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previ
   storagePath?: string;
 }
 export interface ChannelDocumentRecord extends Omit<ChannelDocumentDto, 'currentRevision'> {}
-export type ChannelDocumentRevisionRecord = ChannelDocumentRevisionDto;
+export interface ChannelDocumentRevisionRecord extends Omit<ChannelDocumentRevisionDto, 'artifact'> {
+  artifact: ArtifactRecord;
+}
 export type WorkspaceRunRecord = WorkspaceRunDto;
 export type TaskRecord = TaskDto & {
   revision: number;

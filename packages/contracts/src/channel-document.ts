@@ -39,10 +39,6 @@ export interface SaveChannelDocumentInput extends GetChannelDocumentInput {
   filename?: string;
 }
 
-export interface RestoreChannelDocumentInput extends GetChannelDocumentInput {
-  revisionId: ID;
-}
-
 export interface ChannelDocumentResultDto {
   document: ChannelDocumentDto;
 }

@@ -1,11 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
@@ -71,6 +71,7 @@ export interface ArtifactContentStoreWriteResult {
 
 export interface ArtifactContentStore {
   writeContent(input: ArtifactContentStoreWriteInput): Promise<ArtifactContentStoreWriteResult>;
+  deleteContent?(input: { teamId: string; artifactId: string }): Promise<void>;
 }
 
 export interface ServerNextUseCases {
@@ -150,7 +151,6 @@ export interface ServerNextUseCases {
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
   saveChannelDocument(input: SaveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
-  restoreChannelDocument(input: RestoreChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
@@ -1233,9 +1233,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const artifact of attachmentResult.artifacts) {
         attachedArtifacts.push(await repositories.artifacts.create({ ...artifact, messageId: message.id }));
       }
-      for (const artifact of attachedArtifacts) {
-        await createInitialChannelDocument(repositories, artifact, messageInput.userId, now);
-      }
+      await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
       const dispatches: DispatchDto[] = [];
       let acknowledgementMessage: MessageDto | undefined;
       if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
@@ -3117,9 +3115,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
 
-      for (const artifact of outcome.artifacts) {
-        await createInitialChannelDocument(repositories, artifact, messageInput.userId, now);
-      }
+      await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
 
       const message = outcome.artifacts.length > 0
         ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
@@ -3232,7 +3228,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!access.ok) return access;
       const document = await repositories.channelDocuments.getForTeam(documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
-      return makeSuccess({ document: await toChannelDocumentDto(repositories, document), revisions: await repositories.channelDocuments.listRevisions({ documentId: document.id }) });
+      const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
+      return makeSuccess({
+        document: await toChannelDocumentDto(repositories, document),
+        revisions: revisions.map(toChannelDocumentRevisionDto),
+      });
     },
 
     async saveChannelDocument(documentInput) {
@@ -3245,35 +3245,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
       const document = await repositories.channelDocuments.getForTeam(documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      if (document.currentRevisionId !== documentInput.baseRevisionId) {
+        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+      }
       const artifactId = ids.nextId();
       const filename = sanitizeMarkdownFilename(documentInput.filename ?? document.filename);
       const stored = artifactContentStore ? await artifactContentStore.writeContent({ teamId: documentInput.teamId, artifactId, filename, content: Buffer.from(content, 'utf8') }) : undefined;
       const now = clock.now();
       const artifact: ArtifactRecord = { id: artifactId, teamId: document.teamId, channelId: document.channelId, uploaderId: documentInput.userId, filename, mimeType: 'text/markdown', sizeBytes: bytes, pathKind: 'upload', createdAt: now, ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}) };
       const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
-      const revision: ChannelDocumentRevisionDto = { id: ids.nextId(), documentId: document.id, artifact: toArtifactDto(artifact), revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId, createdAt: now };
+      const revision = { id: ids.nextId(), documentId: document.id, artifact, revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId, createdAt: now };
       const next = { ...document, filename, currentRevisionId: revision.id, currentRevision: undefined as never, updatedAt: now };
       const saved = await repositories.channelDocuments.addRevision({ documentId: document.id, expectedCurrentRevisionId: documentInput.baseRevisionId, document: next, revision, artifact });
-      if (!saved) return makeFailure('CONFLICT', 'Document has changed; reload before saving');
-      return makeSuccess({ document: { ...saved, currentRevision: revision } });
-    },
-
-    async restoreChannelDocument(documentInput) {
-      const access = await ensureUserCanViewChannel(repositories, documentInput);
-      if (!access.ok) return access;
-      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
-      const document = await repositories.channelDocuments.getForTeam(documentInput);
-      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
-      const target = (await repositories.channelDocuments.listRevisions({ documentId: document.id })).find((revision) => revision.id === documentInput.revisionId);
-      if (!target) return makeFailure('NOT_FOUND', 'Document revision not found');
-      const now = clock.now();
-      const revision: ChannelDocumentRevisionDto = { ...target, id: ids.nextId(), revision: target.revision + 1, createdBy: documentInput.userId, createdAt: now };
-      const artifact: ArtifactRecord = { ...target.artifact, id: ids.nextId(), messageId: undefined, createdAt: now, uploaderId: documentInput.userId };
-      revision.artifact = toArtifactDto(artifact);
-      const next = { ...document, currentRevisionId: revision.id, currentRevision: undefined as never, updatedAt: now };
-      const saved = await repositories.channelDocuments.addRevision({ documentId: document.id, expectedCurrentRevisionId: document.currentRevisionId, document: next, revision, artifact });
-      if (!saved) return makeFailure('CONFLICT', 'Document has changed; reload before restoring');
-      return makeSuccess({ document: { ...saved, currentRevision: revision } });
+      if (!saved) {
+        await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+      }
+      return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
     },
 
     async searchMessages(searchInput) {
@@ -7587,7 +7575,11 @@ async function toChannelDocumentDto(
   const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
   const current = revisions.find((revision) => revision.id === document.currentRevisionId) ?? revisions[0];
   if (!current) throw new Error('Channel document has no current revision');
-  return { ...document, currentRevision: current };
+  return { ...document, currentRevision: toChannelDocumentRevisionDto(current) };
+}
+
+function toChannelDocumentRevisionDto(revision: ChannelDocumentRevisionRecord): ChannelDocumentRevisionDto {
+  return { ...revision, artifact: toArtifactDto(revision.artifact) };
 }
 
 function sanitizeMarkdownFilename(value: string): string {
@@ -7606,8 +7598,8 @@ async function createInitialChannelDocument(
   // Artifact ID 已由上传/运行结果分配且全局唯一；复用它生成文档身份，不额外消耗
   // message send 的有限测试/幂等 ID 序列，也让重放时身份稳定。
   const documentId = `channel-document:${artifact.id}`;
-  const revision: ChannelDocumentRevisionDto = {
-    id: `${documentId}:revision:1`, documentId, artifact: toArtifactDto(artifact), revision: 1, createdBy, createdAt,
+  const revision: ChannelDocumentRevisionRecord = {
+    id: `${documentId}:revision:1`, documentId, artifact, revision: 1, createdBy, createdAt,
   };
   await repositories.channelDocuments.create({
     document: {
@@ -7616,6 +7608,17 @@ async function createInitialChannelDocument(
     },
     revision,
   });
+}
+
+async function createInitialChannelDocuments(
+  repositories: Pick<ServerNextRepositories, 'channelDocuments'>,
+  artifacts: ArtifactRecord[],
+  createdBy: string,
+  createdAt: number,
+): Promise<void> {
+  for (const artifact of artifacts) {
+    await createInitialChannelDocument(repositories, artifact, createdBy, createdAt);
+  }
 }
 
 async function listPublicChannelFiles(
