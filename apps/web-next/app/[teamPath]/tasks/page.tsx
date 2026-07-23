@@ -9,9 +9,7 @@ import {
   Check,
   ChevronDown,
   Copy,
-  Download,
   ExternalLink,
-  FileText,
   Hash,
   Image,
   LayoutGrid,
@@ -32,6 +30,8 @@ import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket,
 import { WEB_EVENTS, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
+import { ArtifactCard } from '@/components/artifact/ArtifactCard';
+import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { acceptTaskDagSnapshot } from '@/lib/task-dag';
 import type { AgentSnapshot, Artifact, ChannelSummary, ChatMessage } from '@/lib/schema';
 import {
@@ -1315,34 +1315,16 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: Artifact[]; o
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const downloadUrl = artifactUrl(artifact.downloadUrl);
   const previewUrl = artifactUrl(artifact.previewUrl);
-  if (artifact.mimeType.startsWith('image/') && downloadUrl && previewUrl) {
-    return (
-      <a href={downloadUrl} target="_blank" rel="noreferrer" className="block max-w-80">
-        <img src={previewUrl} alt={artifact.filename} className="max-h-64 rounded-md border border-neutral-200 object-contain" />
-        <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
-      </a>
-    );
-  }
-  if (!downloadUrl) {
-    return (
-      <span className="group inline-flex min-h-16 max-w-96 items-center gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500"><FileText size={15} /></span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
-          <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{formatFileSize(artifact.sizeBytes)}</span>
-        </span>
-      </span>
-    );
-  }
   return (
-    <a href={downloadUrl} target="_blank" rel="noreferrer" className="group inline-flex min-h-16 max-w-96 items-center gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white"><FileText size={15} /></span>
-      <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
-        <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{formatFileSize(artifact.sizeBytes)}</span>
-      </span>
-      <Download size={14} className="shrink-0 text-neutral-400 group-hover:text-neutral-700" />
-    </a>
+    <ArtifactCard
+      artifact={artifact}
+      previewUrl={previewUrl}
+      downloadUrl={downloadUrl}
+      imagePrimaryAction="download"
+      renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
+        ? <MarkdownMessage body={content} />
+        : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
+    />
   );
 }
 
@@ -1456,12 +1438,6 @@ function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>,
 function formatTime(ts: number): string {
   const date = new Date(ts);
   return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
 }
 
 function safeHref(href: string): string | null {
