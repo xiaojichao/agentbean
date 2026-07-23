@@ -18,6 +18,45 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-23] - 2026-07-23
+### Added
+- 新增 #676 Windows 真机会话验收 runbook（取证 SOP）
+### Changed
+- 实现频道历史文件幂等分批回填（#791）
+- 实现 Run Markdown 派生文档与固定资源
+- 收紧冲突后手工合并门槛
+- 实现频道运行产物来源隔离与目录浏览
+- 实现频道文档并发冲突与本地草稿保护
+- 实现频道 Markdown 文档不可变版本（#788）
+- 实现频道大媒体文件流式上传、播放与下载
+- 实现频道文件媒体预览衍生链路（#789）
+- 实现频道文件 Server 权威索引查询
+- 实现 #715 多 Agent Skill coverage 与混合 Task allocation(PI MVP 15)
+- 加 task-claim:respond socket 协议（#712 切片 C-2a：显式 Offer 响应 server 端点）
+- 提取共享 Artifact 卡片与站内预览器
+- 实现 PI MVP 14 Team-local reliability 排序与 operation restriction（#714）
+- 实现 broker Task Offer 显式接受事务接线（#712 切片 C-1，AC#4）
+- 实现 Claim relinquishment 与 Manifest revision fencing（#713 切片 C 核心）
+- 实现 Team-scoped Agent Memory 投影（#718）
+- 实现 PI Task Offer 持久化（#712 切片 C 后续：task_offers 表 + 仓库）
+- 实现 System Knowledge 与 User Memory 隔离（#717）
+- 实现 PI Memory Candidate scope-expansion 门禁与冲突并存（#719 切片 D 核心）
+- 实现 PI Task Offer 四类响应与显式接受（#712 切片 C 核心）
+- 实现 PI 候选资格可解释判断（#711 切片 C 核心）
+- 记录 2026-07-22 每日更新日志
+- 实现 PI Task followup 证据关联与不可变修订（#709）
+- 实现 Team/Channel Formal Memory Center（#716）
+### Fixed
+- 修复频道文档迁移升级兼容性
+- 修复历史文档回填发布状态
+- 修复频道文档迁移的旧库兼容性
+- 修复频道文档历史分享与预览入口
+- 实现频道 Markdown 历史恢复与发布闭环
+- 修复派生文档并发同名冲突
+- 修复文档冲突手工合并绕过
+- 修复 main CI/CD 被后续推送取消
+- 修复成员管理员无法提升普通成员角色
+
 ## [Daily 2026-07-22] - 2026-07-22
 ### Added
 - 实现 Team Agent Exposure 发布与消费（#710）
