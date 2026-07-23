@@ -53,6 +53,15 @@ vi.mock('@/lib/socket', () => ({
     upsertRestriction: vi.fn().mockResolvedValue({ ok: true, restriction: null }),
     getTeamCoverage: vi.fn().mockResolvedValue({ ok: true, coverage: { teamId: 'team-1', entries: [] } }),
   }),
+  agentMemoryProjectionEvents: () => ({
+    listRevisions: vi.fn().mockResolvedValue({ ok: true, revisions: [], activeOptIn: null }),
+    createDraft: vi.fn().mockResolvedValue({ ok: true, projection: { id: 'p1', revision: 1 } }),
+    updateDraft: vi.fn().mockResolvedValue({ ok: true, projection: { id: 'p1', revision: 1 } }),
+    publish: vi.fn().mockResolvedValue({ ok: true, projection: { id: 'p1', revision: 1 } }),
+    withdraw: vi.fn().mockResolvedValue({ ok: true, withdrawn: true }),
+    upsertOptIn: vi.fn().mockResolvedValue({ ok: true, optIn: null }),
+    getConsumable: vi.fn().mockResolvedValue({ ok: true, projections: [] }),
+  }),
 }));
 
 vi.mock('@/lib/store', () => ({

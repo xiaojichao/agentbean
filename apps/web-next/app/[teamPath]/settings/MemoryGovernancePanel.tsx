@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type {
+  AgentMemoryProjectionConsumptionDto,
   FormalMemoryDetailDto,
   FormalMemoryDto,
   FormalMemoryKind,
@@ -13,7 +14,7 @@ import type {
   MemoryScopeType,
 } from '@agentbean/contracts';
 import { AlertTriangle, Check, Database, KeyRound, Laptop, Loader2, Plus, RefreshCw, ShieldAlert } from 'lucide-react';
-import { getWebSocket, memoryEvents } from '@/lib/socket';
+import { agentMemoryProjectionEvents, getWebSocket, memoryEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import {
   FORMAL_KIND_OPTIONS,
@@ -22,8 +23,9 @@ import {
   validateCorrectionForm,
   validateFormalMemoryForm,
 } from '@/lib/formal-memory-form';
+import { PROJECTION_KIND_LABELS } from '@/lib/agent-memory-projection-form';
 
-type MemoryTab = 'formal' | 'memories' | 'candidates' | 'grants' | 'capsules' | 'local';
+type MemoryTab = 'formal' | 'memories' | 'candidates' | 'grants' | 'capsules' | 'local' | 'projection';
 type LoadState = 'loading' | 'ready' | 'permission-denied' | 'error';
 
 const TABS: Array<{ id: MemoryTab; label: string }> = [
@@ -33,6 +35,7 @@ const TABS: Array<{ id: MemoryTab; label: string }> = [
   { id: 'grants', label: '授权' },
   { id: 'capsules', label: 'Capsule / Invocation' },
   { id: 'local', label: '当前 Device' },
+  { id: 'projection', label: 'Agent 投影' },
 ];
 const KINDS: MemoryKind[] = ['semantic', 'episodic', 'procedural', 'preference', 'decision', 'artifact-summary'];
 const SCOPES: MemoryScopeType[] = ['team', 'channel', 'dm', 'task', 'agent', 'user'];
@@ -145,6 +148,7 @@ export function MemoryGovernancePanel() {
       {tab === 'grants' && <GrantsSection snapshot={snapshot} teamId={teamId!} agents={agents} mutate={mutate} />}
       {tab === 'capsules' && <CapsulesSection snapshot={snapshot} agents={agents} />}
       {tab === 'local' && <LocalSection state={localState} items={local} reload={loadLocal} />}
+      {tab === 'projection' && <ProjectionConsumptionSection teamId={teamId!} />}
     </div>
   );
 }
@@ -222,6 +226,52 @@ function LocalSection({ state, items, reload }: { state: string; items: readonly
   if (state === 'denied') return <StateCard icon={<ShieldAlert size={20} />} title="当前 Device 未授权" detail="只允许浏览器查看自身已保存 Device identity 对应的治理摘要。" />;
   if (state === 'error') return <StateCard icon={<AlertTriangle size={20} />} title="本地 Memory 摘要不可用" action={<button onClick={() => void reload()} className="rounded-md border px-3 py-1.5 text-xs">重试</button>} />;
   return <div className="space-y-3"><div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800"><Check size={14} className="mr-1 inline" />仅展示 daemon 明确返回的摘要；正文、结构化内容与完整路径未回传。</div>{items.length === 0 ? <Empty title="当前 Device 暂无可治理摘要" /> : items.map((item) => <article key={item.id} className="rounded-lg border p-4" data-smoke="local-memory-summary"><div className="flex items-center gap-2"><Status value={item.status} warn={item.status !== 'active'} /><span className="text-xs text-neutral-500">{item.kind} · {item.scopeType} · {item.sourceKind}</span></div><p className="mt-2 text-sm">{item.summary}</p>{item.workspaceLabel && <p className="mt-1 text-xs text-neutral-400">Workspace：{item.workspaceLabel}</p>}</article>)}</div>;
+}
+
+/** Agent Memory 投影消费（issue #718 AC#6）：只读展示当前 Team 已 opt-in 的 Agent 公开投影。 */
+function ProjectionConsumptionSection({ teamId }: { teamId: string }) {
+  const [items, setItems] = useState<readonly AgentMemoryProjectionConsumptionDto[]>([]);
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  const load = useCallback(async () => {
+    setState('loading');
+    const res = await agentMemoryProjectionEvents().getConsumable(teamId);
+    if (res.ok) {
+      setItems(res.projections ?? []);
+      setState('ready');
+    } else {
+      setState('error');
+    }
+  }, [teamId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (state === 'loading') return <StateCard icon={<Loader2 className="animate-spin" size={20} />} title="读取已启用 Agent 投影" />;
+  if (state === 'error') return <StateCard icon={<AlertTriangle size={20} />} title="加载失败" action={<button onClick={() => void load()} className="rounded-md border px-3 py-1.5 text-xs">重试</button>} />;
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        <Check size={14} className="mr-1 inline" />仅展示 Agent owner 已发布且本 Team 已启用的公开投影；不含 Agent 内部 Session、私有历史或 Device-local 原文。
+      </div>
+      {items.length === 0 ? (
+        <Empty title="本 Team 暂无已启用的 Agent 投影" />
+      ) : items.map((item) => (
+        <article key={item.projectionId} className="rounded-lg border p-4" data-smoke="agent-projection-consumption">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-neutral-700">{item.agentName}</span>
+            <span className="text-xs text-neutral-500">{PROJECTION_KIND_LABELS[item.kind]} · revision {item.revision}</span>
+          </div>
+          <p className="mt-2 whitespace-pre-wrap text-sm text-neutral-800">{item.content}</p>
+          {item.summary && <p className="mt-1 text-xs text-neutral-500">{item.summary}</p>}
+          {item.tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {item.tags.map((tag) => <span key={tag} className="rounded bg-neutral-100 px-2 py-0.5 text-xs text-neutral-700">{tag}</span>)}
+            </div>
+          )}
+        </article>
+      ))}
+    </div>
+  );
 }
 
 /** Formal Memory Center（issue #716）：Team/Channel 正式记忆的产品入口。 */

@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -355,6 +355,32 @@ export interface AgentExposureRestrictionResult {
   error?: string;
   message?: string;
 }
+export interface AgentMemoryProjectionResult {
+  ok: boolean;
+  projection?: AgentMemoryProjectionDto;
+  supersededProjectionId?: string | null;
+  error?: string;
+  message?: string;
+}
+export interface AgentMemoryProjectionRevisionResult {
+  ok: boolean;
+  revisions?: AgentMemoryProjectionDto[];
+  activeOptIn?: TeamAgentMemoryOptInDto | null;
+  error?: string;
+  message?: string;
+}
+export interface AgentMemoryProjectionConsumptionResult {
+  ok: boolean;
+  projections?: AgentMemoryProjectionConsumptionDto[];
+  error?: string;
+  message?: string;
+}
+export interface TeamAgentMemoryOptInResult {
+  ok: boolean;
+  optIn?: TeamAgentMemoryOptInDto;
+  error?: string;
+  message?: string;
+}
 
 /** #710 Team Agent Exposure socket 客户端。服务端强制授权（owner 发布、Team admin 收紧）。 */
 export function agentExposureEvents(socket: Socket = getWebSocket()) {
@@ -399,6 +425,39 @@ export function agentExposureEvents(socket: Socket = getWebSocket()) {
       disabledCapabilities: string[]; disabledSkills: string[];
     }): Promise<AgentExposureRestrictionResult> {
       return emitWithTimeout(socket, WEB_EVENTS.agentExposure.upsertRestriction, payload);
+    },
+  };
+}
+
+/** #718 Team-scoped Agent Memory 投影 socket 客户端。owner 发布/撤回，Team Owner/Admin opt-in，成员/PI 只读消费。 */
+export function agentMemoryProjectionEvents(socket: Socket = getWebSocket()) {
+  return {
+    createDraft(payload: {
+      teamId: string; agentId: string; kind: FormalMemoryKind; content: string;
+      summary?: string; tags?: string[]; validUntil?: number | null;
+    }): Promise<AgentMemoryProjectionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionCreateDraft, payload);
+    },
+    updateDraft(payload: {
+      teamId: string; projectionId: string; kind: FormalMemoryKind; content: string;
+      summary?: string; tags?: string[]; validUntil?: number | null;
+    }): Promise<AgentMemoryProjectionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionUpdateDraft, payload);
+    },
+    publish(payload: { teamId: string; projectionId: string }): Promise<AgentMemoryProjectionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionPublish, payload);
+    },
+    withdraw(payload: { teamId: string; agentId: string }): Promise<{ ok: boolean; withdrawn?: boolean; error?: string; message?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionWithdraw, payload);
+    },
+    listRevisions(teamId: string, agentId: string): Promise<AgentMemoryProjectionRevisionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionListRevisions, { teamId, agentId });
+    },
+    upsertOptIn(payload: { teamId: string; agentId: string; enabled: boolean }): Promise<TeamAgentMemoryOptInResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionUpsertOptIn, payload);
+    },
+    getConsumable(teamId: string, agentId?: string): Promise<AgentMemoryProjectionConsumptionResult> {
+      return emitWithTimeout(socket, WEB_EVENTS.memory.projectionGetConsumable, { teamId, agentId });
     },
   };
 }
