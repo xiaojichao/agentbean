@@ -3,6 +3,7 @@ import type {
   AgentRecord,
   ArtifactRecord,
   ChannelDocumentRecord,
+  ChannelDocumentOperationRecord,
   ChannelDocumentRevisionRecord,
   ChannelRecord,
   DeviceInviteRecord,
@@ -84,6 +85,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const artifacts = new Map<string, ArtifactRecord>();
   const channelDocuments = new Map<string, ChannelDocumentRecord>();
   const channelDocumentRevisions = new Map<string, ChannelDocumentRevisionRecord>();
+  const channelDocumentOperations = new Map<string, ChannelDocumentOperationRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
   const tasks = new Map<string, TaskRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
@@ -1301,13 +1303,60 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .filter((revision) => revision.documentId === input.documentId)
           .sort((a, b) => b.revision - a.revision);
       },
+      async getRevision(input) {
+        const revision = channelDocumentRevisions.get(input.revisionId);
+        return revision?.documentId === input.documentId ? revision : null;
+      },
+      async getRevisionByIdempotencyKey(input) {
+        const operation = channelDocumentOperations.get(`${input.documentId}:${input.idempotencyKey}`);
+        if (!operation) return null;
+        const revision = channelDocumentRevisions.get(operation.revisionId);
+        const current = channelDocuments.get(input.documentId);
+        if (!revision || !current) return null;
+        return {
+          document: {
+            ...current,
+            filename: revision.artifact.filename,
+            currentRevisionId: revision.id,
+            updatedAt: revision.createdAt,
+          },
+          revision,
+          operation,
+          replayed: true,
+        };
+      },
       async addRevision(input) {
+        const operationKey = `${input.documentId}:${input.operation.idempotencyKey}`;
+        const existingOperation = channelDocumentOperations.get(operationKey);
+        if (existingOperation) {
+          const existingRevision = channelDocumentRevisions.get(existingOperation.revisionId);
+          const existingDocument = channelDocuments.get(input.documentId);
+          if (!existingRevision || !existingDocument) return null;
+          return {
+            document: {
+              ...existingDocument,
+              filename: existingRevision.artifact.filename,
+              currentRevisionId: existingRevision.id,
+              updatedAt: existingRevision.createdAt,
+            },
+            revision: existingRevision,
+            operation: existingOperation,
+            replayed: true,
+          };
+        }
         const current = channelDocuments.get(input.documentId);
         if (!current || current.currentRevisionId !== input.expectedCurrentRevisionId) return null;
         artifacts.set(input.artifact.id, input.artifact);
         channelDocuments.set(input.documentId, input.document);
         channelDocumentRevisions.set(input.revision.id, input.revision);
-        return input.document;
+        channelDocumentOperations.set(operationKey, input.operation);
+        if (input.message) messages.set(input.message.id, input.message);
+        return {
+          document: input.document,
+          revision: input.revision,
+          operation: input.operation,
+          replayed: false,
+        };
       },
       async deleteByChannel(channelId) {
         const documentIds = new Set(Array.from(channelDocuments.values())
@@ -1316,6 +1365,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const documentId of documentIds) channelDocuments.delete(documentId);
         for (const [revisionId, revision] of channelDocumentRevisions) {
           if (documentIds.has(revision.documentId)) channelDocumentRevisions.delete(revisionId);
+        }
+        for (const [operationKey, operation] of channelDocumentOperations) {
+          if (documentIds.has(operation.documentId)) channelDocumentOperations.delete(operationKey);
         }
       },
     },

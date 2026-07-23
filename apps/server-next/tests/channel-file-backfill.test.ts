@@ -75,6 +75,14 @@ describe('频道历史文件回填', () => {
         artifact_id: 'artifact-1',
         revision: 1,
       }]);
+      expect(db.prepare(`SELECT id, revision_id, message_id, published_by, published_at
+        FROM channel_document_publications`).all()).toEqual([{
+        id: 'channel-document:artifact-1:revision:1:publication',
+        revision_id: 'channel-document:artifact-1:revision:1',
+        message_id: 'message-1',
+        published_by: 'user-1',
+        published_at: 100,
+      }]);
       expect(db.prepare(
         'SELECT cursor_created_at, cursor_artifact_id, completed_at FROM channel_file_backfill_progress',
       ).get()).toEqual({

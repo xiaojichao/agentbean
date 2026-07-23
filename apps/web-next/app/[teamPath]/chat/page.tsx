@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -100,6 +100,7 @@ interface ConversationFile {
 
 interface OpenChannelDocument {
   document: ChannelDocumentDto;
+  revisions: ChannelDocumentRevisionDto[];
   content: string;
   readOnly: boolean;
   readOnlyReason?: string;
@@ -627,14 +628,23 @@ export default function ChatPage() {
   const openMarkdownDocumentEditor = useCallback(async (artifact: Artifact, documentId?: string) => {
     if (!activeChannel || !isMarkdownArtifact(artifact)) return;
     const resolvedDocumentId = documentId ?? channelDocumentIdForArtifact(artifact.id);
-    const result = await channelEvents().getDocument(activeChannel, resolvedDocumentId);
+    const [result, history] = await Promise.all([
+      channelEvents().getDocument(activeChannel, resolvedDocumentId),
+      channelEvents().listDocumentRevisions(activeChannel, resolvedDocumentId),
+    ]);
     if (!result.ok || !result.document) {
       window.alert(result.error ?? '无法打开 Markdown 文档');
       return;
     }
     const currentArtifact = result.document.currentRevision.artifact;
     if (currentArtifact.sizeBytes > 10 * 1024 * 1024) {
-      window.alert('该 Markdown 超过 10 MB，仅支持下载');
+      setOpenChannelDocument({
+        document: result.document,
+        revisions: history.ok ? history.revisions ?? [] : [result.document.currentRevision],
+        content: '',
+        readOnly: true,
+        readOnlyReason: '当前版本超过 10 MB，仅支持下载；仍可查看版本历史',
+      });
       return;
     }
     const previewUrl = messageArtifactUrl(currentArtifact, 'preview', currentArtifact.teamId);
@@ -650,6 +660,7 @@ export default function ChatPage() {
     const largePreview = currentArtifact.sizeBytes > 2 * 1024 * 1024;
     setOpenChannelDocument({
       document: result.document,
+      revisions: history.ok ? history.revisions ?? [] : [result.document.currentRevision],
       content: await response.text(),
       readOnly: Boolean(activeChannelObj?.archivedAt) || largePreview,
       readOnlyReason: activeChannelObj?.archivedAt
@@ -675,12 +686,106 @@ export default function ChatPage() {
       }
       throw new Error(result.error ?? '保存失败');
     }
-    setOpenChannelDocument((current) => current ? { ...current, document: result.document!, content } : null);
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content,
+    } : null);
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
     return { ok: true as const, revisionId: result.document.currentRevisionId };
   }, [activeChannel, openChannelDocument]);
+
+  const previewOpenMarkdownRevision = useCallback(async (revision: ChannelDocumentRevisionDto) => {
+    const previewUrl = messageArtifactUrl(revision.artifact as Artifact, 'preview', revision.artifact.teamId);
+    if (!previewUrl) throw new Error('该历史版本没有可用的在线内容');
+    const response = await fetch(previewUrl);
+    if (!response.ok) {
+      throw new Error(response.status === 415 ? '该历史版本不是 UTF-8，仅支持下载' : '历史版本预览失败');
+    }
+    return response.text();
+  }, []);
+
+  const restoreOpenMarkdownRevision = useCallback(async (
+    revisionId: string,
+    baseRevisionId: string,
+    idempotencyKey: string,
+  ) => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().restoreDocument(
+      activeChannel,
+      openChannelDocument.document.id,
+      revisionId,
+      baseRevisionId,
+      idempotencyKey,
+    );
+    if (!result.ok || !result.document) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后重试恢复' };
+      }
+      throw new Error(result.error ?? '恢复失败');
+    }
+    const content = await previewOpenMarkdownRevision(result.document.currentRevision);
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content,
+    } : null);
+    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
+      ? { ...file, artifact: result.document!.currentRevision.artifact }
+      : file));
+    return {
+      ok: true as const,
+      snapshot: {
+        content,
+        filename: result.document.filename,
+        revisionId: result.document.currentRevisionId,
+      },
+    };
+  }, [activeChannel, openChannelDocument, previewOpenMarkdownRevision]);
+
+  const publishOpenMarkdownDocument = useCallback(async (
+    content: string,
+    filename: string,
+    baseRevisionId: string,
+    idempotencyKey: string,
+  ) => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().publishDocument(
+      activeChannel,
+      openChannelDocument.document.id,
+      baseRevisionId,
+      content,
+      filename,
+      idempotencyKey,
+    );
+    if (!result.ok || !result.document || !result.message) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后手工合并' };
+      }
+      throw new Error(result.error ?? '保存并分享失败');
+    }
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content,
+    } : null);
+    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
+      ? { ...file, artifact: result.document!.currentRevision.artifact }
+      : file));
+    appendMessage({
+      ...result.message,
+      artifacts: [result.document.currentRevision.artifact],
+    } as ChatMessage);
+    return { ok: true as const, revisionId: result.document.currentRevisionId };
+  }, [activeChannel, appendMessage, openChannelDocument]);
 
   const loadLatestOpenMarkdownDocument = useCallback(async () => {
     if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
@@ -1991,9 +2096,18 @@ export default function ChatPage() {
               } : {})}
               filename={openChannelDocument.document.filename}
               initialContent={openChannelDocument.content}
+              revisions={openChannelDocument.revisions}
               readOnly={openChannelDocument.readOnly}
               readOnlyReason={openChannelDocument.readOnlyReason}
               onSave={saveOpenMarkdownDocument}
+              onPublish={publishOpenMarkdownDocument}
+              onPreviewRevision={previewOpenMarkdownRevision}
+              onRestoreRevision={restoreOpenMarkdownRevision}
+              getRevisionDownloadUrl={(revision) => messageArtifactUrl(
+                revision.artifact as Artifact,
+                'download',
+                revision.artifact.teamId,
+              ) ?? undefined}
               onLoadLatest={loadLatestOpenMarkdownDocument}
               onClose={() => setOpenChannelDocument(null)}
               renderPreview={(content) => <MarkdownMessage body={content} />}
