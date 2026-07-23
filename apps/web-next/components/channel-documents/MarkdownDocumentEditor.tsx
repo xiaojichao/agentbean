@@ -59,14 +59,11 @@ export function MarkdownDocumentEditor({
   const [loadingLatest, setLoadingLatest] = useState(false);
   const [manualMergeStart, setManualMergeStart] = useState<{
     content: string;
-    filename: string;
     baseRevisionId: string;
   } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dirty = content !== baselineContent || filename !== baselineFilename;
-  const manualMergeChanged = manualMergeStart
-    ? content !== manualMergeStart.content || filename !== manualMergeStart.filename
-    : false;
+  const manualMergeChanged = manualMergeStart ? content !== manualMergeStart.content : false;
   const draftIdentity: ChannelDocumentDraftIdentity | null =
     initialDraftIdentity && currentBaseRevisionId
       ? { ...initialDraftIdentity, baseRevisionId: currentBaseRevisionId }
@@ -231,7 +228,6 @@ export function MarkdownDocumentEditor({
           if (!latest) return;
           setManualMergeStart({
             content,
-            filename,
             baseRevisionId: latest.revisionId,
           });
           setSaveError(null);

@@ -115,6 +115,7 @@ describe('MarkdownDocumentEditor', () => {
       />,
     );
 
+    const titleInput = screen.getAllByRole('textbox')[0] as HTMLInputElement;
     const editor = screen.getAllByRole('textbox')[1]!;
     fireEvent.change(editor, { target: { value: 'complete local draft' } });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
@@ -134,12 +135,15 @@ describe('MarkdownDocumentEditor', () => {
     expect(screen.getByText('latest server content')).toBeTruthy();
     expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true);
 
+    fireEvent.change(titleInput, { target: { value: 'renamed-only.md' } });
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true);
+
     fireEvent.change(editor, { target: { value: 'latest server content\n\nmanually merged local changes' } });
     expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(
       'latest server content\n\nmanually merged local changes',
-      'notes.md',
+      'renamed-only.md',
       'revision-2',
     ));
   });
