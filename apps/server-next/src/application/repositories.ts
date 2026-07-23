@@ -348,6 +348,7 @@ export interface ArtifactRepository {
 
 export interface ChannelDocumentRepository {
   create(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord }): Promise<ChannelDocumentRecord>;
+  createDerived(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
   getForTeam(input: { teamId: ID; channelId: ID; documentId: ID }): Promise<ChannelDocumentRecord | null>;
   listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelDocumentRecord[]>;
   listWithCurrentRevisionByChannel(input: { teamId: ID; channelId: ID }): Promise<Array<{
@@ -363,6 +364,7 @@ export interface ChannelDocumentRepository {
     document: ChannelDocumentRecord;
     revision: ChannelDocumentRevisionRecord;
     artifact: ArtifactRecord;
+    requireUniqueFilename?: boolean;
     operation: ChannelDocumentOperationRecord;
     message?: MessageRecord;
   }): Promise<ChannelDocumentRevisionCommit | null>;

@@ -33,6 +33,7 @@ export interface MarkdownDocumentEditorProps {
   revisions?: ChannelDocumentRevisionDto[];
   readOnly?: boolean;
   readOnlyReason?: string;
+  notice?: string;
   onSave: (content: string, filename: string, baseRevisionId?: string) => Promise<void | MarkdownDocumentSaveResult>;
   onPublish?: (content: string, filename: string, baseRevisionId: string, idempotencyKey: string) => Promise<MarkdownDocumentSaveResult>;
   onPreviewRevision?: (revision: ChannelDocumentRevisionDto) => Promise<string>;
@@ -51,6 +52,7 @@ export function MarkdownDocumentEditor({
   revisions = [],
   readOnly = false,
   readOnlyReason,
+  notice,
   onSave,
   onPublish,
   onPreviewRevision,
@@ -354,6 +356,7 @@ export function MarkdownDocumentEditor({
   };
 
   return <section className="flex min-h-0 flex-col gap-3" aria-label="Markdown 文档编辑器">
+    {notice && <div role="status" className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</div>}
     <header className="flex flex-wrap items-center gap-2">
       <input value={filename} disabled={readOnly || saving} onChange={(event) => setFilename(event.target.value)} aria-label="文档标题" className="rounded border px-2 py-1 text-sm" />
       <div className="flex gap-1" role="toolbar" aria-label="Markdown 工具栏">

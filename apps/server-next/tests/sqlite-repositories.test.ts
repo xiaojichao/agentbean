@@ -133,6 +133,17 @@ describe('server-next SQLite repositories', () => {
       const nextRevision = {
         id: 'revision-2', documentId: initial.document.id, artifact: nextArtifact,
         revision: 2, createdBy: 'user-1', createdAt: 200, source: 'edit' as const, published: false,
+        derivationSource: {
+          taskId: 'task-1', workspaceRunId: 'run-1', agentId: 'agent-1',
+          messageCreatedAt: 100,
+          sourceRoot: { id: 'root-1', kind: 'run_output' as const, label: '运行输出' },
+          relativePath: 'docs/notes.md', normalizedRelativePath: 'docs/notes.md',
+          artifactId: 'artifact-source', artifactRole: 'run_output' as const,
+        },
+        resources: [{
+          original: '../image.png', normalizedPath: 'image.png', kind: 'image' as const,
+          status: 'resolved' as const, artifactId: 'artifact-image',
+        }],
       };
       await expect(repositories.channelDocuments.addRevision({
         documentId: initial.document.id,
@@ -147,7 +158,12 @@ describe('server-next SQLite repositories', () => {
       })).resolves.toMatchObject({ document: { currentRevisionId: 'revision-2' } });
 
       await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toMatchObject([
-        { id: 'revision-2', artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath } },
+        {
+          id: 'revision-2',
+          derivationSource: { artifactId: 'artifact-source', relativePath: 'docs/notes.md' },
+          resources: [{ artifactId: 'artifact-image', status: 'resolved' }],
+          artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath },
+        },
        { id: 'revision-1', artifact: { id: 'artifact-doc-1', storagePath: initialArtifact.storagePath } },
       ]);
       await expect(repositories.channelDocuments.listWithCurrentRevisionByChannel({
@@ -156,7 +172,6 @@ describe('server-next SQLite repositories', () => {
         document: { id: initial.document.id, currentRevisionId: 'revision-2' },
         currentRevision: { id: 'revision-2', artifact: { id: 'artifact-doc-2' } },
       }]);
-
       const rejectedArtifact = {
         ...nextArtifact,
         id: 'artifact-doc-rejected',
@@ -191,6 +206,63 @@ describe('server-next SQLite repositories', () => {
         documentId: initial.document.id,
       })).resolves.toHaveLength(2);
 
+      const derivedArtifact = {
+        ...nextArtifact, id: 'artifact-doc-3', storagePath: 'artifacts/team-1/artifact-doc-3/derived.md', createdAt: 300,
+      };
+      const derived = {
+        document: {
+          id: 'document-derived', teamId: 'team-1', channelId: 'channel-1', filename: 'derived.md',
+          currentRevisionId: 'revision-derived', createdAt: 300, updatedAt: 300,
+        },
+        revision: {
+          ...nextRevision, id: 'revision-derived', documentId: 'document-derived',
+          artifact: derivedArtifact, revision: 1, createdAt: 300,
+        },
+        artifact: derivedArtifact,
+      };
+      await expect(repositories.channelDocuments.createDerived(derived))
+        .resolves.toMatchObject({ id: 'document-derived' });
+      await expect(repositories.channelDocuments.createDerived(derived)).resolves.toBeNull();
+      const collisionArtifact = {
+        ...nextArtifact,
+        id: 'artifact-doc-collision',
+        filename: 'derived.md',
+        storagePath: 'artifacts/team-1/artifact-doc-collision/derived.md',
+        createdAt: 400,
+      };
+      await expect(repositories.channelDocuments.addRevision({
+        documentId: initial.document.id,
+        expectedCurrentRevisionId: 'revision-2',
+        document: {
+          ...initial.document,
+          filename: 'derived.md',
+          currentRevisionId: 'revision-collision',
+          updatedAt: 400,
+        },
+        revision: {
+          id: 'revision-collision',
+          documentId: initial.document.id,
+          artifact: collisionArtifact,
+          revision: 3,
+          createdBy: 'user-1',
+          createdAt: 400,
+          source: 'run',
+          published: false,
+        },
+        artifact: collisionArtifact,
+        requireUniqueFilename: true,
+        operation: {
+          documentId: initial.document.id,
+          idempotencyKey: 'derive-collision',
+          operationType: 'save',
+          requestFingerprint: 'derive-collision',
+          revisionId: 'revision-collision',
+        },
+      })).resolves.toBeNull();
+      await expect(repositories.artifacts.getForTeam({
+        teamId: 'team-1',
+        artifactId: collisionArtifact.id,
+      })).resolves.toBeNull();
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',
@@ -542,6 +614,34 @@ describe('server-next SQLite repositories', () => {
       expect(teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0008_artifact_workspace_boundary_index.sql'").get()).toEqual({
         id: 'team/0008_artifact_workspace_boundary_index.sql',
       });
+    } finally {
+      close();
+    }
+  });
+
+  test('保留已发布的频道文档来源迁移标识', () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      // 模拟旧版本已执行 0039_channel_document_sources 后升级：
+      // 列已经存在，schema_migrations 只记录旧的稳定文件名。
+      teamDb.prepare(
+        "DELETE FROM schema_migrations WHERE id IN ('team/0039_channel_document_sources.sql', 'team/0040_channel_document_sources.sql')",
+      ).run();
+      teamDb.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(
+        'team/0039_channel_document_sources.sql',
+        1,
+      );
+
+      expect(() => applyTeamMigrations(teamDb)).not.toThrow();
+      expect(columnNames(teamDb, 'channel_document_revisions')).toEqual(
+        expect.arrayContaining(['source_json', 'resources_json']),
+      );
+      expect(
+        teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0039_channel_document_sources.sql'").get(),
+      ).toEqual({ id: 'team/0039_channel_document_sources.sql' });
+      expect(
+        teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0040_channel_document_sources.sql'").get(),
+      ).toBeUndefined();
     } finally {
       close();
     }

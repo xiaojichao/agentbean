@@ -1280,6 +1280,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         channelDocumentRevisions.set(input.revision.id, input.revision);
         return input.document;
       },
+      async createDerived(input) {
+        if (channelDocuments.has(input.document.id)
+          || channelDocumentRevisions.has(input.revision.id)
+          || artifacts.has(input.artifact.id)
+          || Array.from(channelDocuments.values()).some((document) =>
+            document.teamId === input.document.teamId
+            && document.channelId === input.document.channelId
+            && document.filename.toLocaleLowerCase() === input.document.filename.toLocaleLowerCase())) return null;
+        artifacts.set(input.artifact.id, input.artifact);
+        channelDocuments.set(input.document.id, input.document);
+        channelDocumentRevisions.set(input.revision.id, input.revision);
+        return input.document;
+      },
       async getForTeam(input) {
         const document = channelDocuments.get(input.documentId);
         return document && document.teamId === input.teamId && document.channelId === input.channelId ? document : null;
@@ -1344,6 +1357,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             replayed: true,
           };
         }
+        if (input.requireUniqueFilename && Array.from(channelDocuments.values()).some((document) =>
+          document.id !== input.document.id
+          && document.teamId === input.document.teamId
+          && document.channelId === input.document.channelId
+          && document.filename.toLocaleLowerCase() === input.document.filename.toLocaleLowerCase())) return null;
         const current = channelDocuments.get(input.documentId);
         if (!current || current.currentRevisionId !== input.expectedCurrentRevisionId) return null;
         artifacts.set(input.artifact.id, input.artifact);
