@@ -379,6 +379,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channel.members, app, 'listChannelMembers', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.archive, app, 'archiveChannel', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channel.delete, app, 'deleteChannel', afterChannelMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channelFiles.list, app, 'listChannelFiles', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channelFiles.search, app, 'searchChannelFiles', undefined, { authenticatedUser: options.authenticatedUser });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
       const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));

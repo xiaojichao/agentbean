@@ -12,6 +12,84 @@ import {
 const serverRoot = fileURLToPath(new URL('../src', import.meta.url));
 
 describe('Phase 0 existing execution fact boundary', () => {
+  test('channel file index reads historical message attachments with stable cursor and visibility filters', async () => {
+    const { app, repositories } = await createHarness(['user-1', 'team-1', 'channel-1', 'member-1', 'agent-1', 'device-1', 'artifact-id', 'message-id']);
+    const channel = await repositories.channels.getDefaultChannel('team-1');
+    expect(channel).not.toBeNull();
+    const messages = [
+      { id: 'message-old', createdAt: 100 },
+      { id: 'message-new', createdAt: 200 },
+      { id: 'message-deleted', createdAt: 300 },
+    ];
+    for (const message of messages) {
+      await repositories.messages.append({
+        id: message.id, teamId: 'team-1', channelId: channel!.id,
+        senderKind: 'human', senderId: 'user-1', body: 'attachment', createdAt: message.createdAt,
+        ...(message.id === 'message-deleted' ? { meta: { deletedAt: 301 } } : {}),
+      });
+    }
+    await repositories.artifacts.create({
+      id: 'artifact-old', teamId: 'team-1', channelId: channel!.id, messageId: 'message-old', uploaderId: 'user-1',
+      filename: 'same-name.md', mimeType: 'text/markdown', sizeBytes: 1, createdAt: 100,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-new', teamId: 'team-1', channelId: channel!.id, messageId: 'message-new', uploaderId: 'user-1',
+      filename: 'same-name.md', mimeType: 'text/markdown', sizeBytes: 2, createdAt: 200,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-deleted', teamId: 'team-1', channelId: channel!.id, messageId: 'message-deleted', uploaderId: 'user-1',
+      filename: 'deleted.txt', mimeType: 'text/plain', sizeBytes: 1, createdAt: 300,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-log', teamId: 'team-1', channelId: channel!.id, messageId: 'message-new', workspaceRunId: 'run-1', uploaderId: 'user-1',
+      filename: 'workspace-run.log', mimeType: 'text/plain', sizeBytes: 1, relativePath: 'logs/workspace-run.log', createdAt: 400,
+    });
+    await expect(repositories.artifacts.listByChannel({
+      teamId: 'team-1', channelId: channel!.id,
+    })).resolves.toMatchObject([
+      { id: 'artifact-log' },
+      { id: 'artifact-deleted' },
+      { id: 'artifact-new' },
+      { id: 'artifact-old' },
+    ]);
+
+    const first = await app.listChannelFiles({ userId: 'user-1', teamId: 'team-1', channelId: channel!.id, pageSize: 1 });
+    expect(first).toMatchObject({ ok: true, files: [{ artifact: { id: 'artifact-new' }, source: { messageId: 'message-new' } }] });
+    expect(first.nextCursor).toBeTruthy();
+    const second = await app.listChannelFiles({ userId: 'user-1', teamId: 'team-1', channelId: channel!.id, cursor: first.nextCursor, pageSize: 10 });
+    expect(second).toMatchObject({ ok: true, files: [{ artifact: { id: 'artifact-old' } }] });
+    expect(second.files).toHaveLength(1);
+    await expect(app.searchChannelFiles({ userId: 'user-1', teamId: 'team-1', channelId: channel!.id, query: 'same-name' })).resolves.toMatchObject({
+      ok: true, files: [{ artifact: { id: 'artifact-new' } }, { artifact: { id: 'artifact-old' } }],
+    });
+  });
+
+  test('in-memory channel artifact ordering matches SQLite binary id ordering', async () => {
+    const repositories = createInMemoryRepositories();
+    for (const id of ['artifact-!', 'artifact-B', 'artifact-a', 'artifact-\uE000', 'artifact-\u{10000}']) {
+      await repositories.artifacts.create({
+        id,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        uploaderId: 'user-1',
+        filename: `${id}.txt`,
+        mimeType: 'text/plain',
+        sizeBytes: 1,
+        createdAt: 100,
+      });
+    }
+
+    await expect(repositories.artifacts.listByChannel({
+      teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toMatchObject([
+      { id: 'artifact-\u{10000}' },
+      { id: 'artifact-\uE000' },
+      { id: 'artifact-a' },
+      { id: 'artifact-B' },
+      { id: 'artifact-!' },
+    ]);
+  });
+
   test('direct channel and DM messages create only canonical Dispatch records', async () => {
     const channel = await createHarness([
       'user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1',
@@ -149,6 +227,12 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(workspaceRun).toMatchObject({ id: 'workspace-run-1', dispatchId: 'dispatch-1' });
     expect(artifact).not.toHaveProperty('invocationId');
     expect(workspaceRun).not.toHaveProperty('invocationId');
+    await expect(app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [{ artifact: { id: 'artifact-1' }, source: { messageId: 'result-message-1' } }],
+    });
   });
 
   test('Worker transport stays isolated from existing Task and Dispatch APIs', () => {

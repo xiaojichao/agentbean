@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -549,6 +549,8 @@ export interface ChannelEvents {
   archive(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   delete(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   searchMessages(query: string, limit?: number, channelId?: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
+  listFiles(channelId: string, cursor?: string, pageSize?: number): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; nextCursor?: string; error?: string }>;
+  searchFiles(channelId: string, query: string, cursor?: string, pageSize?: number): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; nextCursor?: string; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -566,6 +568,12 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     delete(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.delete, { channelId, ...(teamId ? { teamId } : {}) }); },
     searchMessages(query, limit, channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit, ...(channelId ? { channelId } : {}) });
+    },
+    listFiles(channelId, cursor, pageSize) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.list, { channelId, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}) });
+    },
+    searchFiles(channelId, query, cursor, pageSize) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.search, { channelId, query, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}) });
     },
   };
 }

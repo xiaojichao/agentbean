@@ -178,6 +178,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channel.members,
       WEB_EVENTS.channel.archive,
       WEB_EVENTS.channel.delete,
+      WEB_EVENTS.channelFiles.list,
+      WEB_EVENTS.channelFiles.search,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,

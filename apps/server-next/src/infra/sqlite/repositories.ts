@@ -1913,6 +1913,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return artifact;
           });
       },
+      async listByChannel(input) {
+        return teamDb
+          .prepare('SELECT * FROM artifacts WHERE team_id = ? AND channel_id = ? ORDER BY created_at DESC, id DESC')
+          .all(input.teamId, input.channelId)
+          .map((row) => {
+            const artifact = mapArtifact(row);
+            if (!artifact) {
+              throw new Error('SQLite channel artifact row could not be mapped');
+            }
+            return artifact;
+          });
+      },
       async listByWorkspaceRunForChannel(input) {
         return teamDb
           .prepare('SELECT * FROM artifacts WHERE team_id = ? AND channel_id = ? AND workspace_run_id = ? ORDER BY created_at')

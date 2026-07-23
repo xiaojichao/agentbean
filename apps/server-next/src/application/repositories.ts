@@ -324,6 +324,7 @@ export interface ArtifactRepository {
   create(input: ArtifactRecord): Promise<ArtifactRecord>;
   getForTeam(input: { teamId: ID; artifactId: ID }): Promise<ArtifactRecord | null>;
   listByMessage(messageId: ID): Promise<ArtifactRecord[]>;
+  listByChannel(input: { teamId: ID; channelId: ID }): Promise<ArtifactRecord[]>;
   listByWorkspaceRunForChannel(input: { teamId: ID; channelId: ID; runId: ID }): Promise<ArtifactRecord[]>;
   deleteByChannel(channelId: ID): Promise<ID[]>;
 }

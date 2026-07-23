@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ChannelFileEntryDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -261,6 +261,11 @@ export default function ChatPage() {
   const [mentionIndex, setMentionIndex] = useState(0);
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([]);
   const [threadAttachments, setThreadAttachments] = useState<ComposerAttachment[]>([]);
+  const [channelFiles, setChannelFiles] = useState<ConversationFile[]>([]);
+  const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
+  const [channelFilesQuery, setChannelFilesQuery] = useState('');
+  const [channelFilesLoading, setChannelFilesLoading] = useState(false);
+  const channelFilesRequestRevisionRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
@@ -389,6 +394,36 @@ export default function ChatPage() {
       socket.off(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     };
   }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage]);
+
+  const loadChannelFiles = useCallback(async (reset = true) => {
+    if (!activeChannel || conn !== 'open') return;
+    const requestRevision = channelFilesRequestRevisionRef.current + 1;
+    channelFilesRequestRevisionRef.current = requestRevision;
+    setChannelFilesLoading(true);
+    try {
+      const cursor = reset ? undefined : channelFilesCursor;
+      const result = channelFilesQuery.trim()
+        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50)
+        : await channelEvents().listFiles(activeChannel, cursor, 50);
+      if (requestRevision !== channelFilesRequestRevisionRef.current) return;
+      if (!result.ok || !result.files) return;
+      const mapped = result.files.map(channelFileToConversationFile);
+      setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
+      setChannelFilesCursor(result.nextCursor);
+    } finally {
+      if (requestRevision === channelFilesRequestRevisionRef.current) {
+        setChannelFilesLoading(false);
+      }
+    }
+  }, [activeChannel, channelFilesCursor, channelFilesQuery, conn]);
+
+  useEffect(() => {
+    channelFilesRequestRevisionRef.current += 1;
+    setChannelFiles([]);
+    setChannelFilesCursor(undefined);
+    setChannelFilesLoading(false);
+    if (tab === 'files') void loadChannelFiles(true);
+  }, [activeChannel, conn, tab, channelFilesQuery]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -997,16 +1032,6 @@ export default function ChatPage() {
     }, 120);
     return () => window.clearTimeout(timer);
   }, [activeChannel, messageParam, threadParam, visibleMessages.length]);
-  const conversationFiles = messages
-    .filter((msg) => !isDeletedMessage(msg))
-    .flatMap((msg) => (msg.artifacts ?? []).map((artifact) => ({
-      artifact,
-      messageId: msg.id,
-      createdAt: artifact.createdAt || msg.createdAt,
-      senderKind: msg.senderKind,
-      senderId: msg.senderId,
-    } satisfies ConversationFile)))
-    .sort((a, b) => b.createdAt - a.createdAt);
   const toggleSave = (msgId: string) => {
     const isSaved = savedIds.has(msgId);
     // Optimistic update
@@ -1729,7 +1754,12 @@ export default function ChatPage() {
           )
         ) : (
             <ConversationFiles
-            files={conversationFiles}
+            files={channelFiles}
+            loading={channelFilesLoading}
+            hasMore={Boolean(channelFilesCursor)}
+            searchQuery={channelFilesQuery}
+            onSearchQuery={setChannelFilesQuery}
+            onLoadMore={() => void loadChannelFiles(false)}
             agents={agents}
             humanProfiles={humanProfiles}
             channelMembers={channelMembers}
@@ -2492,12 +2522,22 @@ function TaskCard({
 
 function ConversationFiles({
   files,
+  loading,
+  hasMore,
+  searchQuery,
+  onSearchQuery,
+  onLoadMore,
   agents,
   humanProfiles,
   channelMembers,
   onJump,
 }: {
   files: ConversationFile[];
+  loading: boolean;
+  hasMore: boolean;
+  searchQuery: string;
+  onSearchQuery: (query: string) => void;
+  onLoadMore: () => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   channelMembers: ChannelMemberEntry[];
@@ -2506,7 +2546,13 @@ function ConversationFiles({
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
-      {files.length === 0 ? (
+      <div className="mb-3 flex items-center gap-2">
+        <Search size={14} className="text-neutral-400" />
+        <input value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
+      </div>
+      {loading && files.length === 0 ? (
+        <div className="flex h-32 items-center justify-center text-sm text-neutral-400">加载文件中…</div>
+      ) : files.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-400">
           <FolderOpen size={32} strokeWidth={1.5} />
           <span className="text-sm">暂无文件</span>
@@ -2514,51 +2560,25 @@ function ConversationFiles({
       ) : (
         <div className="space-y-2">
           {files.map((file) => {
-            const isImage = file.artifact.mimeType.startsWith('image/');
-            const previewUrl = artifactUrl(isImage ? file.artifact.previewUrl : file.artifact.downloadUrl);
-            const downloadUrl = artifactUrl(file.artifact.downloadUrl);
-            const thumbnail = (
-              <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50">
-                {isImage && previewUrl ? (
-                  <img src={previewUrl} alt={file.artifact.filename} className="h-full w-full object-cover" />
-                ) : (
-                  <Paperclip size={20} className="text-neutral-400" />
-                )}
-              </span>
-            );
-            const summary = (
-              <>
-                <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                  <span>{formatFileSize(file.artifact.sizeBytes)}</span>
-                  <span className="text-neutral-300">·</span>
-                  <span>{formatDateTime(file.createdAt)}</span>
-                  <span className="text-neutral-300">·</span>
-                  <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
-                </div>
-              </>
-            );
             return (
-              <div key={`${file.messageId}-${file.artifact.id}`} className="flex min-h-20 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 hover:border-neutral-900">
-                {previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer" title="预览文件">{thumbnail}</a> : thumbnail}
-                {previewUrl ? (
-                  <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">{summary}</a>
-                ) : (
-                  <div className="min-w-0 flex-1">{summary}</div>
-                )}
-                <div className="flex shrink-0 items-center gap-2">
-                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+              <div key={`${file.messageId}-${file.artifact.id}`} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
+                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
+                    <span>{formatDateTime(file.createdAt)}</span>
+                    <span className="text-neutral-300">·</span>
+                    <span className="truncate">{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                  </div>
+                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
                     <ExternalLink size={15} />
                   </button>
-                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
-                    <Download size={15} />
-                  </a>}
                 </div>
               </div>
             );
           })}
         </div>
       )}
+      {hasMore && <button onClick={onLoadMore} disabled={loading} className="mt-4 w-full border border-neutral-300 py-2 text-xs text-neutral-600 hover:border-neutral-900 disabled:opacity-50">{loading ? '加载中…' : '加载更多'}</button>}
     </div>
   );
 }
@@ -4599,6 +4619,16 @@ function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
   const map = new Map<string, Artifact>();
   for (const artifact of artifacts) map.set(artifact.id, artifact);
   return [...map.values()];
+}
+
+function channelFileToConversationFile(entry: ChannelFileEntryDto): ConversationFile {
+  return {
+    artifact: entry.artifact,
+    messageId: entry.source.messageId,
+    createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
+    senderKind: entry.source.senderKind,
+    senderId: entry.source.senderId,
+  };
 }
 
 function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): NonNullable<ChatMessage['workspaceRun']>[] {
