@@ -48,7 +48,7 @@ export interface CollectArtifactsInput {
   /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
   maxBytes?: number;
   /** Reports files that could not be collected without silently omitting them. */
-  onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
+  onSkipped?: (artifact: SkippedArtifactDiagnostic, sourceRoot: ArtifactSourceRoot) => void;
   /** Stable, path-free diagnostics for Run details and logs. */
   onDiagnostic?: (diagnostic: ArtifactCollectionDiagnostic) => void;
 }
@@ -131,7 +131,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes: stat.size,
               reason: 'FILE_TOO_LARGE',
-            });
+            }, sourceRoot);
             input.onDiagnostic?.({
               code: 'ARTIFACT_FILE_TOO_LARGE',
               sourceRootId: sourceRoot.id,
@@ -163,7 +163,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes,
               reason: 'COLLECTION_FAILED',
-            });
+            }, sourceRoot);
             input.onDiagnostic?.({
               code: 'ARTIFACT_FILE_UNREADABLE',
               sourceRootId: sourceRoot.id,
@@ -178,7 +178,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes,
               reason: sizeBytes > maxBytes ? 'FILE_TOO_LARGE' : 'COLLECTION_FAILED',
-            });
+            }, sourceRoot);
             input.onDiagnostic?.({
               code: sizeBytes > maxBytes ? 'ARTIFACT_FILE_TOO_LARGE' : 'ARTIFACT_FILE_UNREADABLE',
               sourceRootId: sourceRoot.id,

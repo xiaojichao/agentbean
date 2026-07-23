@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -24,6 +24,7 @@ import { createClientMessageId, messageSendFailureText } from '@/lib/message-sen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
+import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
   TASK_STATUS_MENU_DOT_CLASS,
@@ -87,6 +88,7 @@ interface TaskItem {
 
 interface ConversationFile {
   artifact: Artifact;
+  documentId?: string;
   messageId?: string;
   createdAt: number;
   senderKind: ChatMessage['senderKind'];
@@ -94,6 +96,13 @@ interface ConversationFile {
   logicalPath?: string;
   role?: string;
   workspaceRunId?: string;
+}
+
+interface OpenChannelDocument {
+  document: ChannelDocumentDto;
+  content: string;
+  readOnly: boolean;
+  readOnlyReason?: string;
 }
 
 interface ChannelMemberEntry {
@@ -271,6 +280,7 @@ export default function ChatPage() {
   const [channelFilesPath, setChannelFilesPath] = useState('');
   const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
+  const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
@@ -408,12 +418,16 @@ export default function ChatPage() {
     setChannelFilesLoading(true);
     try {
       const cursor = reset ? undefined : channelFilesCursor;
-      const result = channelFilesQuery.trim()
-        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath, channelFilesRole)
-        : await channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath, channelFilesRole);
+      const [result, documentsResult] = await Promise.all([
+        channelFilesQuery.trim()
+          ? channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath, channelFilesRole)
+          : channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath, channelFilesRole),
+        channelEvents().listDocuments(activeChannel),
+      ]);
       if (requestRevision !== channelFilesRequestRevisionRef.current) return;
       if (!result.ok || !result.files) return;
-      const mapped = result.files.map(channelFileToConversationFile);
+      const documents = new Map((documentsResult.documents ?? []).map((document) => [document.id, document]));
+      const mapped = result.files.map((entry) => channelFileToConversationFile(entry, documents));
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
       setChannelFilesCursor(result.nextCursor);
       if (reset) setChannelFileDirectories(result.directories ?? []);
@@ -609,6 +623,58 @@ export default function ChatPage() {
   const activeChannelObj = channels.find((c) => c.id === activeChannel);
   const activeName = activeChannelObj?.name ?? '';
   const activeDm = dms.find((d) => d.id === activeChannel);
+
+  const openMarkdownDocumentEditor = useCallback(async (artifact: Artifact, documentId?: string) => {
+    if (!activeChannel || !isMarkdownArtifact(artifact)) return;
+    const resolvedDocumentId = documentId ?? channelDocumentIdForArtifact(artifact.id);
+    const result = await channelEvents().getDocument(activeChannel, resolvedDocumentId);
+    if (!result.ok || !result.document) {
+      window.alert(result.error ?? '无法打开 Markdown 文档');
+      return;
+    }
+    const currentArtifact = result.document.currentRevision.artifact;
+    if (currentArtifact.sizeBytes > 10 * 1024 * 1024) {
+      window.alert('该 Markdown 超过 10 MB，仅支持下载');
+      return;
+    }
+    const previewUrl = messageArtifactUrl(currentArtifact, 'preview', currentArtifact.teamId);
+    if (!previewUrl) {
+      window.alert('该 Markdown 没有可用的在线内容');
+      return;
+    }
+    const response = await fetch(previewUrl);
+    if (!response.ok) {
+      window.alert(response.status === 415 ? '该 Markdown 不是 UTF-8，仅支持下载' : 'Markdown 内容加载失败');
+      return;
+    }
+    const largePreview = currentArtifact.sizeBytes > 2 * 1024 * 1024;
+    setOpenChannelDocument({
+      document: result.document,
+      content: await response.text(),
+      readOnly: Boolean(activeChannelObj?.archivedAt) || largePreview,
+      readOnlyReason: activeChannelObj?.archivedAt
+        ? '频道已归档，只读'
+        : largePreview
+          ? '文件超过 2 MB，仅显示截断预览'
+          : undefined,
+    });
+  }, [activeChannel, activeChannelObj?.archivedAt]);
+
+  const saveOpenMarkdownDocument = useCallback(async (content: string, filename: string) => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().saveDocument(
+      activeChannel,
+      openChannelDocument.document.id,
+      openChannelDocument.document.currentRevisionId,
+      content,
+      filename,
+    );
+    if (!result.ok || !result.document) throw new Error(result.error ?? '保存失败');
+    setOpenChannelDocument((current) => current ? { ...current, document: result.document!, content } : null);
+    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
+      ? { ...file, artifact: result.document!.currentRevision.artifact }
+      : file));
+  }, [activeChannel, openChannelDocument]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
   const canManageActiveChannel = Boolean(
@@ -1655,6 +1721,7 @@ export default function ChatPage() {
                         onCopyMarkdown={() => copyMessageMarkdown(msg)}
                         onSelectMessage={() => selectMessage(msg)}
                         onEditMessage={(body) => editMessage(msg, body)}
+                        onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
                         onOpenTaskDetailById={openTaskDetailById}
@@ -1788,6 +1855,7 @@ export default function ChatPage() {
               router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
             }}
             onLoadMore={() => void loadChannelFiles(false)}
+            onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
             agents={agents}
             humanProfiles={humanProfiles}
             channelMembers={channelMembers}
@@ -1874,6 +1942,7 @@ export default function ChatPage() {
           onCopyMarkdown={copyMessageMarkdown}
           onSelectMessage={selectMessage}
           onEditMessage={editMessage}
+          onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
           onDeleteMessage={deleteMessage}
           onOpenTaskDetail={openTaskDetail}
           onOpenTaskDetailById={openTaskDetailById}
@@ -1884,6 +1953,22 @@ export default function ChatPage() {
           onViewInChannel={viewThreadRootInChannel}
           onClose={closeThread}
         />
+      )}
+
+      {openChannelDocument && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/60 p-4" role="dialog" aria-modal="true" aria-label={openChannelDocument.document.filename}>
+          <div className="flex h-[min(90vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white p-4 shadow-2xl">
+            <MarkdownDocumentEditor
+              filename={openChannelDocument.document.filename}
+              initialContent={openChannelDocument.content}
+              readOnly={openChannelDocument.readOnly}
+              readOnlyReason={openChannelDocument.readOnlyReason}
+              onSave={saveOpenMarkdownDocument}
+              onClose={() => setOpenChannelDocument(null)}
+              renderPreview={(content) => <MarkdownMessage body={content} />}
+            />
+          </div>
+        </div>
       )}
 
       {showNewChannel && <NewChannelDialog onClose={() => setShowNewChannel(false)} teamId={currentTeamId} teamPath={np} />}
@@ -2561,6 +2646,7 @@ function ConversationFiles({
   onOpenDirectory,
   onOpenRoot,
   onLoadMore,
+  onEditArtifact,
   agents,
   humanProfiles,
   channelMembers,
@@ -2578,6 +2664,7 @@ function ConversationFiles({
   onOpenDirectory: (path: string) => void;
   onOpenRoot: () => void;
   onLoadMore: () => void;
+  onEditArtifact: (artifact: Artifact, documentId?: string) => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   channelMembers: ChannelMemberEntry[];
@@ -2631,7 +2718,7 @@ function ConversationFiles({
           {files.map((file) => {
             return (
               <div key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
-                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} />
+                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} onEdit={() => onEditArtifact(file.artifact, file.documentId)} />
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
                     <span>{formatDateTime(file.createdAt)}</span>
@@ -3049,6 +3136,7 @@ function ThreadPanel({
   onCopyMarkdown,
   onSelectMessage,
   onEditMessage,
+  onEditArtifact,
   onDeleteMessage,
   onOpenTaskDetail,
   onOpenTaskDetailById,
@@ -3094,6 +3182,7 @@ function ThreadPanel({
   onCopyMarkdown: (msg: ChatMessage) => void;
   onSelectMessage: (msg: ChatMessage) => void;
   onEditMessage: (msg: ChatMessage, body: string) => Promise<boolean>;
+  onEditArtifact: (artifact: Artifact) => void;
   onDeleteMessage: (msg: ChatMessage) => void;
   onOpenTaskDetail: (msg: ChatMessage) => void;
   onOpenTaskDetailById: (taskId: string) => void;
@@ -3214,6 +3303,7 @@ function ThreadPanel({
         onCopyMarkdown={() => onCopyMarkdown(msg)}
         onSelectMessage={() => onSelectMessage(msg)}
         onEditMessage={(body) => onEditMessage(msg, body)}
+        onEditArtifact={onEditArtifact}
         onDeleteMessage={() => onDeleteMessage(msg)}
         onOpenTaskDetail={() => onOpenTaskDetail(msg)}
         onOpenTaskDetailById={onOpenTaskDetailById}
@@ -3560,6 +3650,7 @@ function ChatBubble({
   onCopyMarkdown,
   onSelectMessage,
   onEditMessage,
+  onEditArtifact,
   onDeleteMessage,
   onOpenTaskDetail,
   onOpenTaskDetailById,
@@ -3596,6 +3687,7 @@ function ChatBubble({
   onCopyMarkdown: () => void;
   onSelectMessage: () => void;
   onEditMessage: (body: string) => Promise<boolean>;
+  onEditArtifact: (artifact: Artifact) => void;
   onDeleteMessage: () => void;
   onOpenTaskDetail: () => void;
   onOpenTaskDetailById?: (taskId: string) => void;
@@ -3942,7 +4034,7 @@ function ChatBubble({
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
-              <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} />
+              <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} onEdit={() => onEditArtifact(artifact)} />
             ))}
           </div>
         )}
@@ -4321,7 +4413,7 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
     .map((token) => structuredMentionPattern(token.slice(1)));
   const mentionPattern = [...structuredMentionPatterns, '@[\\p{L}\\p{N}_-]+'].join('|');
   const pattern = new RegExp(
-    '(`[^`]+`|\\*\\*[^*]+\\*\\*|\\[[^\\]]+\\]\\([^)]+\\)|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
+    '(`[^`]+`|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*|\\[[^\\]]+\\]\\([^)]+\\)|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
     'gu',
   );
   const nodes: ReactNode[] = [];
@@ -4342,6 +4434,8 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
       );
     } else if (token.startsWith('**') && token.endsWith('**')) {
       nodes.push(<strong key={`strong-${match.index}`} className="font-semibold text-neutral-950">{renderInlineMarkdown(token.slice(2, -2), options)}</strong>);
+    } else if (token.startsWith('*') && token.endsWith('*')) {
+      nodes.push(<em key={`em-${match.index}`}>{renderInlineMarkdown(token.slice(1, -1), options)}</em>);
     } else if (token.startsWith('[')) {
       const link = token.match(/^\[([^\]]+)]\(([^)]+)\)$/);
       const href = link ? safeMarkdownHref(link[2]!) : null;
@@ -4644,18 +4738,26 @@ function sortModeLabel(mode: SidebarSortMode): string {
   return '手动';
 }
 
-function ChatArtifactPreview({ artifact, teamId }: { artifact: Artifact; teamId?: string }) {
+function ChatArtifactPreview({ artifact, teamId, onEdit }: { artifact: Artifact; teamId?: string; onEdit?: () => void }) {
   const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
   const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
-  return <ArtifactCard
-    artifact={artifact}
-    previewUrl={previewUrl}
-    downloadUrl={downloadUrl}
-    thumbnailUrl={artifact.preview?.status === 'ready' ? artifact.preview.url : null}
-    renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
-      ? <MarkdownMessage body={content} />
-      : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
-  />;
+  return <div className="space-y-1">
+    <ArtifactCard
+      artifact={artifact}
+      previewUrl={artifact.sizeBytes > 10 * 1024 * 1024 && isMarkdownArtifact(artifact) ? null : previewUrl}
+      thumbnailUrl={artifact.preview?.status === 'ready' ? artifact.preview.url : null}
+      downloadUrl={downloadUrl}
+      renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
+        ? <MarkdownMessage body={content} />
+        : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
+    />
+    {onEdit && isMarkdownArtifact(artifact) && artifact.sizeBytes <= 10 * 1024 * 1024 && (
+      <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
+        <Pencil size={12} />
+        {artifact.sizeBytes > 2 * 1024 * 1024 ? '截断预览' : '编辑 Markdown'}
+      </button>
+    )}
+  </div>;
 }
 
 function formatTime(ts: number): string {
@@ -4712,9 +4814,16 @@ function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
   return [...map.values()];
 }
 
-function channelFileToConversationFile(entry: ChannelFileEntryDto): ConversationFile {
+function channelDocumentIdForArtifact(artifactId: string): string {
+  return `channel-document:${artifactId}`;
+}
+
+function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Map<string, ChannelDocumentDto>): ConversationFile {
+  const documentId = channelDocumentIdForArtifact(entry.artifact.id);
+  const document = documents.get(documentId);
   return {
-    artifact: entry.artifact,
+    artifact: document?.currentRevision.artifact ?? entry.artifact,
+    ...(document ? { documentId: document.id } : {}),
     ...(entry.source.messageId ? { messageId: entry.source.messageId } : {}),
     createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
     senderKind: entry.source.senderKind,

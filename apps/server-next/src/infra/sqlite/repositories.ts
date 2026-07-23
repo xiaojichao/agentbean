@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import type {
   AgentRecord,
   ArtifactRecord,
+  ChannelDocumentRecord,
+  ChannelDocumentRevisionRecord,
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
@@ -50,6 +52,7 @@ export interface SqliteStatement {
 export interface SqliteDatabase {
   exec(sql: string): unknown;
   prepare(sql: string): SqliteStatement;
+  transaction<T>(fn: () => T): () => T;
 }
 
 export interface CreateSqliteRepositoriesInput {
@@ -122,6 +125,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'artifacts')) {
     applyMigration(db, 'team/0037_artifact_sources.sql');
   }
+  applyMigration(db, 'team/0038_channel_documents.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -1958,6 +1962,76 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return deletedIds;
       },
     },
+    channelDocuments: {
+      async create(input) {
+        const insert = teamDb.transaction(() => {
+          teamDb.prepare(`INSERT OR IGNORE INTO channel_documents (id, team_id, channel_id, filename, current_revision_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.document.id, input.document.teamId, input.document.channelId, input.document.filename, input.document.currentRevisionId, input.document.createdAt, input.document.updatedAt);
+          teamDb.prepare(`INSERT OR IGNORE INTO channel_document_revisions (id, document_id, artifact_id, revision, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)`).run(input.revision.id, input.revision.documentId, input.revision.artifact.id, input.revision.revision, input.revision.createdBy, input.revision.createdAt);
+        });
+        insert();
+        return input.document;
+      },
+      async getForTeam(input) {
+        return mapChannelDocument(teamDb.prepare('SELECT * FROM channel_documents WHERE team_id = ? AND channel_id = ? AND id = ?').get(input.teamId, input.channelId, input.documentId));
+      },
+      async listByChannel(input) {
+        return teamDb.prepare('SELECT * FROM channel_documents WHERE team_id = ? AND channel_id = ? ORDER BY updated_at DESC, id DESC').all(input.teamId, input.channelId).map((row) => mapChannelDocument(row)!);
+      },
+      async listWithCurrentRevisionByChannel(input) {
+        return teamDb.prepare(`SELECT d.id AS document_id, d.team_id, d.channel_id, d.filename AS document_filename,
+          d.current_revision_id, d.created_at AS document_created_at, d.updated_at AS document_updated_at,
+          r.id AS revision_id, r.revision, r.created_by, r.created_at AS revision_created_at,
+          a.id AS artifact_id, a.message_id, a.dispatch_id, a.workspace_run_id, a.uploader_id,
+          a.filename, a.mime_type, a.size_bytes, a.storage_path, a.relative_path, a.path_kind, a.sha256,
+          a.created_at AS artifact_created_at
+          FROM channel_documents d
+          JOIN channel_document_revisions r ON r.id = d.current_revision_id
+          JOIN artifacts a ON a.id = r.artifact_id
+          WHERE d.team_id = ? AND d.channel_id = ?
+          ORDER BY d.updated_at DESC, d.id DESC`).all(input.teamId, input.channelId).map((row) => ({
+            document: {
+              id: sqliteText(row, 'document_id'),
+              teamId: sqliteText(row, 'team_id'),
+              channelId: sqliteText(row, 'channel_id'),
+              filename: sqliteText(row, 'document_filename'),
+              currentRevisionId: sqliteText(row, 'current_revision_id'),
+              createdAt: sqliteNumber(row, 'document_created_at'),
+              updatedAt: sqliteNumber(row, 'document_updated_at'),
+            },
+            currentRevision: mapChannelDocumentRevision(row)!,
+          }));
+      },
+      async listRevisions(input) {
+        return teamDb.prepare(`SELECT r.id AS revision_id, r.document_id, r.revision, r.created_by, r.created_at AS revision_created_at,
+          a.id AS artifact_id, a.team_id, a.channel_id, a.message_id, a.dispatch_id, a.workspace_run_id, a.uploader_id,
+          a.filename, a.mime_type, a.size_bytes, a.storage_path, a.relative_path, a.path_kind, a.sha256, a.created_at AS artifact_created_at
+          FROM channel_document_revisions r JOIN artifacts a ON a.id = r.artifact_id WHERE r.document_id = ? ORDER BY r.revision DESC`).all(input.documentId).map((row) => mapChannelDocumentRevision(row)!);
+      },
+      async addRevision(input) {
+        const tx = teamDb.transaction(() => {
+          const artifact = input.artifact;
+          teamDb.prepare(`INSERT INTO artifacts (id, team_id, channel_id, message_id, dispatch_id, workspace_run_id, uploader_id, filename, mime_type, size_bytes, storage_path, relative_path, path_kind, sha256, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, artifact.teamId, artifact.channelId, artifact.messageId ?? null, artifact.dispatchId ?? null, artifact.workspaceRunId ?? null, artifact.uploaderId, artifact.filename, artifact.mimeType, artifact.sizeBytes, artifact.storagePath ?? null, artifact.relativePath ?? null, artifact.pathKind ?? null, artifact.sha256 ?? null, artifact.createdAt);
+          const result = teamDb.prepare('UPDATE channel_documents SET filename = ?, current_revision_id = ?, updated_at = ? WHERE id = ? AND current_revision_id = ?').run(input.document.filename, input.document.currentRevisionId, input.document.updatedAt, input.document.id, input.expectedCurrentRevisionId) as { changes?: number };
+          if (result.changes !== 1) throw new Error('channel document revision conflict');
+          teamDb.prepare(`INSERT INTO channel_document_revisions (id, document_id, artifact_id, revision, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`).run(input.revision.id, input.revision.documentId, input.revision.artifact.id, input.revision.revision, input.revision.createdBy, input.revision.createdAt);
+          return true;
+        });
+        try {
+          return tx() ? input.document : null;
+        } catch {
+          return null;
+        }
+      },
+      async deleteByChannel(channelId) {
+        teamDb.transaction(() => {
+          teamDb.prepare('DELETE FROM channel_document_revisions WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?)').run(channelId);
+          teamDb.prepare('DELETE FROM channel_documents WHERE channel_id = ?').run(channelId);
+        })();
+      },
+    },
     workspaceRuns: {
       async create(run) {
         teamDb
@@ -2753,6 +2827,31 @@ function mapArtifact(row: unknown): ArtifactRecord | null {
       : undefined,
     sha256: sqliteNullableText(row, 'sha256'),
     createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapChannelDocument(row: unknown): ChannelDocumentRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'), teamId: sqliteText(row, 'team_id'), channelId: sqliteText(row, 'channel_id'),
+    filename: sqliteText(row, 'filename'), currentRevisionId: sqliteText(row, 'current_revision_id'),
+    createdAt: sqliteNumber(row, 'created_at'), updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+function mapChannelDocumentRevision(row: unknown): ChannelDocumentRevisionRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'revision_id'), documentId: sqliteText(row, 'document_id'), revision: sqliteNumber(row, 'revision'),
+    createdBy: sqliteText(row, 'created_by'), createdAt: sqliteNumber(row, 'revision_created_at'),
+    artifact: {
+      id: sqliteText(row, 'artifact_id'), teamId: sqliteText(row, 'team_id'), channelId: sqliteText(row, 'channel_id'),
+      messageId: sqliteNullableText(row, 'message_id'), dispatchId: sqliteNullableText(row, 'dispatch_id'), workspaceRunId: sqliteNullableText(row, 'workspace_run_id'),
+      filename: sqliteText(row, 'filename'), mimeType: sqliteText(row, 'mime_type'), sizeBytes: sqliteNumber(row, 'size_bytes'),
+      uploaderId: sqliteText(row, 'uploader_id'), storagePath: sqliteNullableText(row, 'storage_path'),
+      relativePath: sqliteNullableText(row, 'relative_path'), pathKind: sqliteNullableText(row, 'path_kind') as ArtifactRecord['pathKind'],
+      sha256: sqliteNullableText(row, 'sha256'), createdAt: sqliteNumber(row, 'artifact_created_at'),
+    },
   };
 }
 

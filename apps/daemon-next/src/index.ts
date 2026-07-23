@@ -558,7 +558,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
               maxBytes: input.artifactMaxBytes,
-              onSkipped: (artifact) => skippedProductArtifacts.push(artifact),
+              onSkipped: (artifact, sourceRoot) => {
+                if (sourceRoot.kind !== 'adapter_generated') {
+                  skippedProductArtifacts.push(artifact);
+                }
+              },
               onDiagnostic: (diagnostic) => artifactDiagnostics.push(diagnostic),
             });
             collectedProductArtifacts.push(...collected);
