@@ -86,7 +86,7 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
 
   async process(input: { inputPath: string; outputPath: string; mimeType: string }) {
     const mimeType = input.mimeType.toLowerCase();
-    if (!isSupportedMime(mimeType)) throw new UnsupportedPreviewError(mimeType);
+    if (!supportsArtifactPreviewMime(mimeType)) throw new UnsupportedPreviewError(mimeType);
     const args = processorArgs(input, mimeType);
     try {
       await runCommand(this.command, args, this.timeoutMs);
@@ -105,7 +105,7 @@ export class UnsupportedPreviewError extends Error {
   }
 }
 
-function isSupportedMime(mimeType: string) {
+export function supportsArtifactPreviewMime(mimeType: string): boolean {
   return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/.test(mimeType);
 }
 

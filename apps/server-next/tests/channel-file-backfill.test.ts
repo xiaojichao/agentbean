@@ -227,6 +227,31 @@ describe('频道历史文件回填', () => {
     }
   });
 
+  test('带 charset 参数的历史 Markdown MIME 仍建立文档', () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      insertChannel(db);
+      insertMessage(db, { id: 'message-1', senderId: 'user-1' });
+      insertArtifact(db, {
+        id: 'artifact-markdown-charset',
+        messageId: 'message-1',
+        filename: 'README',
+        mimeType: 'text/markdown; charset=utf-8',
+      });
+
+      createChannelFileBackfill({
+        db, dataDir: '/srv/agentbean', now: () => 500,
+      }).runBatch();
+
+      expect(db.prepare('SELECT id FROM channel_documents').all()).toEqual([{
+        id: 'channel-document:artifact-markdown-charset',
+      }]);
+    } finally {
+      db.close();
+    }
+  });
+
   test('已删除消息附件不会建立文档或 preview job', () => {
     const db = new Database(':memory:');
     try {

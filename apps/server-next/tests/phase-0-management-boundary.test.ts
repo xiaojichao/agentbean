@@ -134,6 +134,115 @@ describe('Phase 0 existing execution fact boundary', () => {
     });
   });
 
+  test('channel file index exposes a legacy Run artifact when the Workspace Run row is missing', async () => {
+    const { app, repositories } = await createHarness([
+      'user-1', 'team-1', 'channel-1', 'member-1', 'agent-1', 'device-1',
+    ]);
+    await repositories.artifacts.create({
+      id: 'artifact-legacy-run',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      workspaceRunId: 'missing-run',
+      uploaderId: 'agent-1',
+      filename: 'result.csv',
+      mimeType: 'text/csv',
+      sizeBytes: 3,
+      relativePath: 'result.csv',
+      role: 'run_output',
+      sourceRoot: {
+        id: 'legacy_run:missing-run',
+        kind: 'legacy_run',
+        label: '历史运行产物',
+      },
+      createdAt: 100,
+    });
+
+    await expect(app.listChannelFiles({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      path: '运行产物/未关联任务/Run missing-run/历史运行产物 [legacy_run:missing-run]',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [{
+        artifact: { id: 'artifact-legacy-run' },
+        source: {
+          workspaceRunId: 'missing-run',
+          senderKind: 'system',
+          senderId: null,
+        },
+      }],
+    });
+  });
+
+  test('channel file index keeps an internal handoff artifact hidden when its Workspace Run row is missing', async () => {
+    const { app, repositories } = await createHarness([
+      'user-1', 'team-1', 'channel-1', 'member-1', 'agent-1', 'device-1',
+    ]);
+    await repositories.management.dispatchAttempts.create({
+      id: 'attempt-internal',
+      invocationId: 'invocation-internal',
+      dispatchId: 'dispatch-internal',
+      attemptNumber: 1,
+      status: 'succeeded',
+      startedAt: 50,
+      completedAt: 60,
+    });
+    await repositories.management.handoffs.create({
+      schemaVersion: 1,
+      id: 'handoff-internal',
+      managementRunId: 'management-run-1',
+      invocationId: 'invocation-internal',
+      intent: {
+        schemaVersion: 1,
+        managementRunId: 'management-run-1',
+        toAgentId: 'agent-1',
+        kind: 'consult',
+        objective: 'internal consultation',
+        reason: 'private sub-call',
+        contextRefs: [],
+        dependencyResults: [],
+        acceptanceCriteria: [],
+        attachmentIds: [],
+        returnMode: 'return_to_manager',
+      },
+      intentHash: 'internal-hash',
+      idempotencyKey: 'internal-handoff',
+      status: 'returned',
+      createdAt: 40,
+      updatedAt: 60,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-internal',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      dispatchId: 'dispatch-internal',
+      workspaceRunId: 'missing-internal-run',
+      uploaderId: 'agent-1',
+      filename: 'private.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 3,
+      relativePath: 'private.txt',
+      role: 'run_output',
+      sourceRoot: {
+        id: 'legacy_run:missing-internal-run',
+        kind: 'legacy_run',
+        label: '历史运行产物',
+      },
+      createdAt: 100,
+    });
+
+    await expect(app.searchChannelFiles({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      query: 'private',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [],
+    });
+  });
+
   test('in-memory channel artifact ordering matches SQLite binary id ordering', async () => {
     const repositories = createInMemoryRepositories();
     for (const id of ['artifact-!', 'artifact-B', 'artifact-a', 'artifact-\uE000', 'artifact-\u{10000}']) {

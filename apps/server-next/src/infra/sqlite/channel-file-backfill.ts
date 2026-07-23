@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import { resolve, sep } from 'node:path';
+import {
+  initialChannelDocumentIds,
+  isMarkdownArtifact,
+  sanitizeMarkdownFilename,
+} from '../../application/channel-document-policy.js';
+import { supportsArtifactPreviewMime } from '../../application/artifact-preview-service.js';
 import type { SqliteDatabase } from './repositories.js';
 
 const BACKFILL_ID = 'channel-files-v1';
@@ -146,7 +152,7 @@ function backfillArtifact(
     db.prepare(`UPDATE artifacts SET artifact_role = COALESCE(artifact_role, 'attachment'),
       relative_path = ?
       WHERE id = ?`).run(safeRelativePath(artifact), artifact.id);
-    if (isMarkdown(artifact)) {
+    if (isMarkdownArtifact(artifact)) {
       createInitialDocument(db, artifact);
     }
   } else if (artifact.workspaceRunId) {
@@ -164,7 +170,7 @@ function backfillArtifact(
   }
 
   const inputPath = previewInputPath(dataDir, artifact.storagePath);
-  if (!deletedMessage && inputPath && supportsPreview(artifact.mimeType)) {
+  if (!deletedMessage && inputPath && supportsArtifactPreviewMime(normalizedMediaType(artifact.mimeType))) {
     db.prepare(`INSERT OR IGNORE INTO artifact_preview_jobs (
       id, artifact_id, team_id, input_path, mime_type, attempts, status, priority, updated_at
     ) VALUES (?, ?, ?, ?, ?, 0, 'pending', ?, ?)`).run(
@@ -180,8 +186,7 @@ function backfillArtifact(
 }
 
 function createInitialDocument(db: SqliteDatabase, artifact: ArtifactBackfillRow): void {
-  const documentId = `channel-document:${artifact.id}`;
-  const revisionId = `${documentId}:revision:1`;
+  const { documentId, revisionId } = initialChannelDocumentIds(artifact.id);
   const createdBy = artifact.messageSenderId ?? artifact.uploaderId;
   db.prepare(`INSERT OR IGNORE INTO channel_document_revisions (
     id, document_id, artifact_id, revision, created_by, created_at
@@ -257,17 +262,6 @@ function isSafePublicRelativePath(value: string): boolean {
   return parts.every((part) => part.length > 0 && part !== '.' && part !== '..');
 }
 
-function sanitizeMarkdownFilename(value: string): string {
-  const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').slice(0, 240);
-  if (!normalized) return 'document.md';
-  return /\.(?:md|markdown)$/i.test(normalized) ? normalized : `${normalized}.md`;
-}
-
-function isMarkdown(artifact: Pick<ArtifactBackfillRow, 'filename' | 'mimeType'>): boolean {
-  return artifact.mimeType.toLowerCase() === 'text/markdown'
-    || /\.(?:md|markdown)$/i.test(artifact.filename);
-}
-
 function isDeletedMessageMeta(metaJson: string | undefined): boolean {
   if (!metaJson) return false;
   try {
@@ -287,9 +281,8 @@ function previewInputPath(dataDir: string, storagePath: string | undefined): str
     : undefined;
 }
 
-function supportsPreview(mimeType: string): boolean {
-  return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/i
-    .test(mimeType);
+function normalizedMediaType(mimeType: string): string {
+  return mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
 }
 
 function requiredString(value: unknown, field: string): string {
