@@ -679,7 +679,7 @@ export function HumanDetail({
           )}
           <div className="flex flex-wrap gap-2">
             {/* Role change */}
-            {isOwner && human.role !== 'admin' && (
+            {isAdmin && human.role !== 'admin' && (
               <button
                 onClick={() => handleRoleChange('admin')}
                 disabled={!!actionLoading}
