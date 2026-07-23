@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { CollectedArtifact } from './artifact-collector.js';
 
-/** 10MB, matching server MAX_ARTIFACT_UPLOAD_BODY_BYTES. */
+/** 10MB until the streaming upload path lands. */
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface UploadedArtifact {
@@ -12,6 +12,8 @@ export interface UploadedArtifact {
   pathKind: 'generated';
   sha256: string;
   sizeBytes: number;
+  role: CollectedArtifact['role'];
+  sourceRoot: CollectedArtifact['sourceRoot'];
 }
 
 export interface UploadArtifactsInput {
@@ -52,6 +54,8 @@ export async function uploadArtifacts(
         pathKind: 'generated',
         sha256: artifact.sha256,
         sizeBytes: artifact.sizeBytes,
+        role: artifact.role,
+        sourceRoot: artifact.sourceRoot,
       });
     }
   }
@@ -71,6 +75,10 @@ async function uploadOne(
       const blob = new Blob([bytes], { type: mimeTypeForFilename(artifact.filename) });
       const form = new FormData();
       form.append('channelId', input.channelId);
+      form.append('artifactRole', artifact.role);
+      form.append('sourceRootId', artifact.sourceRoot.id);
+      form.append('sourceRootKind', artifact.sourceRoot.kind);
+      form.append('sourceRootLabel', artifact.sourceRoot.label);
       form.append('file', blob, artifact.filename);
       const response = await fetchFn(url, {
         method: 'POST',

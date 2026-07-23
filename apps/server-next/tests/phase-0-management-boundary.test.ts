@@ -8,6 +8,7 @@ import {
   createInMemoryRepositories,
   createServerNextUseCases,
 } from '../src/index.js';
+import type { CreateServerNextUseCasesInput } from '../src/application/usecases.js';
 
 const serverRoot = fileURLToPath(new URL('../src', import.meta.url));
 
@@ -201,9 +202,20 @@ describe('Phase 0 existing execution fact boundary', () => {
   });
 
   test('Artifact and Workspace Run records remain linked by dispatchId without invocationId', async () => {
+    const committedArtifactIds: string[] = [];
     const { app, repositories } = await createHarness([
       'user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1', 'result-message-1',
-    ]);
+    ], {
+      async onArtifactCommitted(artifact) {
+        committedArtifactIds.push(artifact.id);
+      },
+      async resolveArtifactPreview(artifact) {
+        return {
+          status: 'ready',
+          url: `/api/teams/${artifact.teamId}/artifacts/${artifact.id}/preview-derivative`,
+        };
+      },
+    });
     await app.sendMessage({
       userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex generate output',
     });
@@ -225,13 +237,30 @@ describe('Phase 0 existing execution fact boundary', () => {
       id: 'artifact-1', dispatchId: 'dispatch-1', workspaceRunId: 'workspace-run-1',
     });
     expect(workspaceRun).toMatchObject({ id: 'workspace-run-1', dispatchId: 'dispatch-1' });
+    expect(committedArtifactIds).toEqual(['artifact-1']);
     expect(artifact).not.toHaveProperty('invocationId');
     expect(workspaceRun).not.toHaveProperty('invocationId');
     await expect(app.listChannelFiles({
       userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
     })).resolves.toMatchObject({
       ok: true,
-      files: [{ artifact: { id: 'artifact-1' }, source: { messageId: 'result-message-1' } }],
+      files: [],
+      directories: [{ name: '运行产物', fileCount: 1 }],
+    });
+    await expect(app.listChannelFiles({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      path: '运行产物/Run workspace-run-1/默认运行输出',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [{
+        artifact: {
+          id: 'artifact-1',
+          preview: { status: 'ready', url: '/api/teams/team-1/artifacts/artifact-1/preview-derivative' },
+        },
+        source: { messageId: 'result-message-1' },
+      }],
     });
   });
 
@@ -297,13 +326,17 @@ describe('Phase 0 existing execution fact boundary', () => {
   });
 });
 
-async function createHarness(ids: string[]) {
+async function createHarness(
+  ids: string[],
+  options: Partial<Pick<CreateServerNextUseCasesInput, 'onArtifactCommitted' | 'resolveArtifactPreview'>> = {},
+) {
   const repositories = createInMemoryRepositories();
   const app = createServerNextUseCases({
     repositories,
     clock: { now: () => 500 },
     ids: { nextId: createIds(ids) },
     messageIngestionMode: 'legacy',
+    ...options,
   });
   await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
   await app.registerAgent({

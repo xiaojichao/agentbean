@@ -549,8 +549,8 @@ export interface ChannelEvents {
   archive(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   delete(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   searchMessages(query: string, limit?: number, channelId?: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
-  listFiles(channelId: string, cursor?: string, pageSize?: number): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; nextCursor?: string; error?: string }>;
-  searchFiles(channelId: string, query: string, cursor?: string, pageSize?: number): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; nextCursor?: string; error?: string }>;
+  listFiles(channelId: string, cursor?: string, pageSize?: number, path?: string): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; directories?: ChannelFilesResultDto['directories']; nextCursor?: string; path?: string; error?: string }>;
+  searchFiles(channelId: string, query: string, cursor?: string, pageSize?: number, path?: string): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; directories?: ChannelFilesResultDto['directories']; nextCursor?: string; path?: string; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -569,11 +569,11 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     searchMessages(query, limit, channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit, ...(channelId ? { channelId } : {}) });
     },
-    listFiles(channelId, cursor, pageSize) {
-      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.list, { channelId, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}) });
+    listFiles(channelId, cursor, pageSize, path) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.list, { channelId, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}), ...(path ? { path } : {}) });
     },
-    searchFiles(channelId, query, cursor, pageSize) {
-      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.search, { channelId, query, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}) });
+    searchFiles(channelId, query, cursor, pageSize, path) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelFiles.search, { channelId, query, ...(cursor ? { cursor } : {}), ...(pageSize ? { pageSize } : {}), ...(path ? { path } : {}) });
     },
   };
 }

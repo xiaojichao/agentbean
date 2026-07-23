@@ -254,6 +254,36 @@ _Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
 对已开始执行的 Task 目标、范围或验收要求所做的可追溯新版本。它保留旧要求与交付历史，并使受影响的旧认领、调用或验收失去当前效力，而不是原地覆盖。
 _Avoid_: 编辑覆盖、隐藏变更、复用旧执行权。
 
+## Artifact source root
+
+一次 Agent 运行收集文件时采用的有边界来源目录，例如该 Run 的输出目录、Agent 工作目录或 Agent 配置的额外输出目录。频道成员只看到稳定的来源标签和根内相对路径；真实设备路径不构成公开身份，source root 及其相对路径也不能单独决定文件的业务角色。
+_Avoid_: 无作用域绝对路径、项目产物类型、最终版目录。
+
+## Artifact role
+
+Agent 结果清单或 Server 授权流程为文件明确记录的协作角色，例如中间产物、普通运行产物或交付物。目录可以提供默认分类信号，但最终版必须由独立的人类确认或审核事实确定。
+_Avoid_: 路径推断、文件名标签、`pathKind`、最终版指针。
+
+## Run artifact
+
+一次 Agent Run 从某个 Artifact source root 收集并保留来源路径的不可变文件。中间 Run artifact 在频道文件视图的“运行产物”下可供预览和下载；编辑其中的 Markdown 会派生新的 Channel document，不能回写历史 Run。
+_Avoid_: 频道文档、可变工作区文件、最终版。
+
+## Channel file directory
+
+频道文件视图根据 Artifact source root 和根内相对路径形成的导航层，只表示当前层级实际存在的文件与子路径。它不拥有独立权限或生命周期，空路径也不会被推断为真实目录。
+_Avoid_: Agent 设备绝对目录、独立文件夹实体、递归文件平铺。
+
+## Artifact preview derivative
+
+系统为某个不可变 Artifact（包括 Message artifact revision 和 Run artifact）异步生成的受限尺寸预览资源，例如图片缩略图、视频首帧或 PDF 首页。它只用于安全高效地展示文件，不是频道文件、文档 revision、Agent 输入或用户交付物。
+_Avoid_: 原文件、可下载产物、文件目录项、同步上传前置条件。
+
+## Channel file index
+
+Server 为一个频道维护的权威文件读模型，统一投影公开消息附件、Channel document 最新版、交付物和允许公开的 Run artifact。它支持目录、分页、搜索、角色筛选和稳定排序，不能由浏览器已加载的消息临时推断。
+_Avoid_: 聊天附件平铺、客户端消息缓存、内部日志、预览衍生资源。
+
 ## Channel archive
 
 用户对频道所代表项目已经结束的权威声明，也是 PI 发起项目收尾、Memory 候选与 Reusable Experience Pack 建议的边界事件。它不依赖 PI 从静默时间或 Task 状态推测项目是否结束。

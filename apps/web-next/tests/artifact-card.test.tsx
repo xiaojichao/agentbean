@@ -92,4 +92,37 @@ describe('ArtifactCard', () => {
     expect(screen.queryByRole('button', { name: '预览文件' })).toBeNull();
     expect(screen.getByRole('link', { name: '下载文件' }).getAttribute('href')).toBe('https://example.test/download');
   });
+
+  test('uses a derivative thumbnail for a video while keeping the original preview action', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          filename: 'demo.mp4',
+          mimeType: 'video/mp4',
+          preview: { status: 'ready', url: '/preview-derivative' },
+        }}
+        previewUrl="/preview"
+        thumbnailUrl="/preview-derivative"
+      />,
+    );
+
+    expect(document.querySelector('img[src="/preview-derivative"]')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '预览文件' })).toHaveLength(2);
+  });
+
+  test('shows a processing placeholder while the derivative is pending', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          mimeType: 'video/mp4',
+          preview: { status: 'processing' },
+        }}
+        previewUrl="/preview"
+      />,
+    );
+
+    expect(screen.getByLabelText('正在生成预览')).toBeTruthy();
+  });
 });

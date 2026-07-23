@@ -119,6 +119,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0034_agent_memory_projections.sql');
   applyMigration(db, 'team/0035_team_agent_memory_opt_ins.sql');
   applyMigration(db, 'team/0036_task_offers.sql');
+  if (sqliteTableExists(db, 'artifacts')) {
+    applyMigration(db, 'team/0037_artifact_sources.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -1859,8 +1862,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .prepare(
             `INSERT INTO artifacts (
               id, team_id, channel_id, message_id, dispatch_id, workspace_run_id, uploader_id,
-              filename, mime_type, size_bytes, storage_path, relative_path, path_kind, sha256, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              filename, mime_type, size_bytes, storage_path, relative_path, path_kind, artifact_role,
+              source_root_id, source_root_kind, source_root_label, sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               message_id = excluded.message_id,
               dispatch_id = excluded.dispatch_id,
@@ -1871,6 +1875,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               storage_path = excluded.storage_path,
               relative_path = excluded.relative_path,
               path_kind = excluded.path_kind,
+              artifact_role = excluded.artifact_role,
+              source_root_id = excluded.source_root_id,
+              source_root_kind = excluded.source_root_kind,
+              source_root_label = excluded.source_root_label,
               sha256 = excluded.sha256,
               created_at = excluded.created_at
             WHERE team_id = excluded.team_id AND channel_id = excluded.channel_id`,
@@ -1889,6 +1897,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             artifact.storagePath ?? null,
             artifact.relativePath ?? null,
             artifact.pathKind ?? null,
+            artifact.role ?? null,
+            artifact.sourceRoot?.id ?? null,
+            artifact.sourceRoot?.kind ?? null,
+            artifact.sourceRoot?.label ?? null,
             artifact.sha256 ?? null,
             artifact.createdAt,
           );
@@ -2731,6 +2743,14 @@ function mapArtifact(row: unknown): ArtifactRecord | null {
     storagePath: sqliteNullableText(row, 'storage_path'),
     relativePath: sqliteNullableText(row, 'relative_path'),
     pathKind: sqliteNullableText(row, 'path_kind') as ArtifactRecord['pathKind'],
+    role: sqliteNullableText(row, 'artifact_role') as ArtifactRecord['role'],
+    sourceRoot: sqliteNullableText(row, 'source_root_id')
+      ? {
+        id: sqliteText(row, 'source_root_id'),
+        kind: sqliteText(row, 'source_root_kind') as NonNullable<ArtifactRecord['sourceRoot']>['kind'],
+        label: sqliteText(row, 'source_root_label'),
+      }
+      : undefined,
     sha256: sqliteNullableText(row, 'sha256'),
     createdAt: sqliteNumber(row, 'created_at'),
   };

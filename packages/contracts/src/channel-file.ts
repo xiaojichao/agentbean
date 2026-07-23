@@ -1,5 +1,5 @@
 import type { ID, UnixMs } from './common.js';
-import type { ArtifactDto } from './artifact.js';
+import type { ArtifactDto, ArtifactRole } from './artifact.js';
 
 export interface ChannelFileSourceDto {
   messageId: ID;
@@ -12,12 +12,16 @@ export interface ChannelFileSourceDto {
 export interface ChannelFileEntryDto {
   artifact: ArtifactDto;
   source: ChannelFileSourceDto;
+  logicalPath?: string;
+  role?: ArtifactRole;
 }
 
 export interface ListChannelFilesInput {
   userId: ID;
   teamId: ID;
   channelId: ID;
+  path?: string;
+  role?: ArtifactRole | 'all';
   cursor?: string;
   pageSize?: number;
 }
@@ -28,5 +32,16 @@ export interface SearchChannelFilesInput extends ListChannelFilesInput {
 
 export interface ChannelFilesResultDto {
   files: ChannelFileEntryDto[];
+  directories?: ChannelFileDirectoryDto[];
+  path?: string;
   nextCursor?: string;
+}
+
+export interface ChannelFileDirectoryDto {
+  path: string;
+  name: string;
+  fileCount: number;
+  updatedAt: UnixMs;
+  sourceRoot?: ArtifactDto['sourceRoot'];
+  previewUrls?: string[];
 }

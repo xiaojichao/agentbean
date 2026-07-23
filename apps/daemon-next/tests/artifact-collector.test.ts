@@ -104,7 +104,7 @@ describe('artifact-collector', () => {
     expect(collected.map((c) => c.filename)).not.toContain('nested.png');
   });
 
-  test('dedupes by sha256, keeping the more semantic filename', async () => {
+  test('preserves identical bytes at different source-root paths', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
     mkdirSync(outputDir, { recursive: true });
@@ -115,8 +115,8 @@ describe('artifact-collector', () => {
 
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 1000 });
     const sameContent = collected.filter((c) => c.sha256 === collected[0].sha256);
-    expect(sameContent).toHaveLength(1);
-    expect(collected.length).toBeLessThanOrEqual(2);
+    expect(sameContent).toHaveLength(2);
+    expect(new Set(sameContent.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
   });
 
   test('fills sha256 and sizeBytes', async () => {
@@ -138,5 +138,27 @@ describe('artifact-collector', () => {
 
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 0, maxBytes: 10 });
     expect(collected.map((c) => c.filename)).toEqual(['small.txt']);
+  });
+
+  test('keeps same relative files independent across source roots and assigns explicit roles', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const outputDir = join(cwd, 'outputs');
+    const configuredDir = join(cwd, 'deliverables');
+    mkdirSync(outputDir, { recursive: true });
+    mkdirSync(configuredDir, { recursive: true });
+    writeFileSync(join(outputDir, 'report.md'), 'same');
+    writeFileSync(join(configuredDir, 'report.md'), 'same');
+
+    const collected = await collectArtifacts({
+      outputDir,
+      configuredOutputRoots: [{ path: configuredDir, label: '交付目录', defaultRole: 'deliverable' }],
+      startedAt: 0,
+    });
+
+    const reports = collected.filter((artifact) => artifact.filename === 'report.md');
+    expect(reports).toHaveLength(2);
+    expect(new Set(reports.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
+    expect(reports.map((artifact) => artifact.role).sort()).toEqual(['deliverable', 'run_output']);
+    expect(reports.every((artifact) => !artifact.absolutePath.includes('AGENTBEAN_OUTPUT_DIR'))).toBe(true);
   });
 });
