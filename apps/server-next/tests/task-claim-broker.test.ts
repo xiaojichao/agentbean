@@ -147,6 +147,142 @@ describe('Task Claim Broker', () => {
   });
 });
 
+describe('Task Offer respondToOffer（#712 切片 C-1：显式接受事务接线）', () => {
+  test('accepted 在同事务创建 Claim/Lease：offer=accepted + lease 存在 + task in_progress (AC#4)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1');
+
+    const result = await harness.broker.respondToOffer({
+      offerId: offer.id, agentId: 'agent-1', kind: 'accepted',
+    });
+    expect(result.kind).toBe('claim_granted');
+    // AC#4 同事务：offer 与 lease 同生
+    await expect(harness.repositories.taskCoordination.offers.getById(offer.id))
+      .resolves.toMatchObject({ status: 'accepted', response: { kind: 'accepted' } });
+    const leases = await harness.repositories.taskCoordination.claimLeases.listActive();
+    expect(leases).toHaveLength(1);
+    expect(leases[0]).toMatchObject({ agentId: 'agent-1', status: 'active', fencingToken: 1 });
+    await expect(harness.repositories.tasks.getById('task-a')).resolves.toMatchObject({
+      status: 'in_progress', assigneeId: 'agent-1',
+    });
+  });
+
+  test('rejected/needs_info/counter_proposed 记录响应但不创 Lease (AC#5)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+
+    for (const kind of ['rejected', 'needs_info', 'counter_proposed'] as const) {
+      const offer = await publishOffer(harness, 'agent-1', { id: `offer-${kind}` });
+      const result = await harness.broker.respondToOffer({
+        offerId: offer.id, agentId: 'agent-1', kind, detail: 'reason',
+      });
+      expect(result.kind).toBe('response_recorded');
+      await expect(harness.repositories.taskCoordination.offers.getById(offer.id))
+        .resolves.toMatchObject({ status: kind, response: { kind, detail: 'reason' } });
+    }
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+
+  test('同一 open offer 重复 accepted 不产生第二个 Claim（幂等/单赢家不变量）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1');
+
+    const first = await harness.broker.respondToOffer({ offerId: offer.id, agentId: 'agent-1', kind: 'accepted' });
+    const second = await harness.broker.respondToOffer({ offerId: offer.id, agentId: 'agent-1', kind: 'accepted' });
+    expect(first.kind).toBe('claim_granted');
+    expect(second.kind).not.toBe('claim_granted');
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toHaveLength(1);
+  });
+
+  test('并发：同一 task 的两个 agent offer 各自 accepted，仅一个获 Claim，另一个 overtaken (AC#6)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await seedAgent(harness.repositories, 'agent-2', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1', 'agent-2'], updatedAt: 10 } });
+    const o1 = await publishOffer(harness, 'agent-1');
+    const o2 = await publishOffer(harness, 'agent-2');
+
+    const r1 = await harness.broker.respondToOffer({ offerId: o1.id, agentId: 'agent-1', kind: 'accepted' });
+    const r2 = await harness.broker.respondToOffer({ offerId: o2.id, agentId: 'agent-2', kind: 'accepted' });
+    const granted = [r1, r2].filter((r) => r.kind === 'claim_granted');
+    const overtaken = [r1, r2].filter((r) => r.kind === 'overtaken');
+    expect(granted).toHaveLength(1);
+    expect(overtaken).toHaveLength(1);
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toHaveLength(1);
+  });
+
+  test('accepted 但 Offer 已过期 → not_accepted，不创 Lease (AC#5)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1'); // offerExpiresAt = clock+20 = 30
+    harness.clock.value = 31; // 过期
+
+    const result = await harness.broker.respondToOffer({ offerId: offer.id, agentId: 'agent-1', kind: 'accepted' });
+    expect(result.kind).toBe('not_accepted');
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+
+  test('accepted 但 task revision 已变 → not_accepted(invalidated)，不创 Lease (AC#1/#5 fence)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1'); // taskRevision 冻结为当前值
+    // 推进 task revision（#709 append-only）
+    await harness.repositories.tasks.updateAtRevision({
+      taskId: 'task-a', expectedRevision: offer.taskRevision, nextRevision: offer.taskRevision + 1,
+      reasonCode: 'TASK_REVISED', changes: { title: 'revised', updatedAt: harness.clock.value },
+    });
+
+    const result = await harness.broker.respondToOffer({ offerId: offer.id, agentId: 'agent-1', kind: 'accepted' });
+    expect(result.kind).toBe('not_accepted');
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+
+  test('accepted 但候选不合格（capability 缺失）→ not_accepted(agent_not_qualified)，不创 Lease', async () => {
+    const harness = await createHarness();
+    // agent 无 exposure manifest → CAPABILITY_MISSING
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', []);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const offer = await publishOffer(harness, 'agent-1');
+
+    const result = await harness.broker.respondToOffer({ offerId: offer.id, agentId: 'agent-1', kind: 'accepted' });
+    expect(result.kind).toBe('not_accepted');
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+});
+
+async function publishOffer(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  agentId: string,
+  over: Partial<import('../src/application/task-coordination-repositories.js').TaskOfferRecord> = {},
+) {
+  const task = await harness.repositories.tasks.getById('task-a');
+  const coordination = await harness.repositories.taskCoordination.coordinations.getByTaskId('task-a');
+  return harness.broker.createOffer({
+    id: `offer-${agentId}`, teamId: 'team-1', taskId: 'task-a', agentId,
+    taskRevision: task!.revision, taskAttempt: coordination!.attempt, manifestRevision: 1,
+    objective: { objective: 'objective a', inputs: [], deliverables: [], constraints: [],
+      riskLevel: 'low' as const, requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [] },
+    offerTtlMs: 20, offerExpiresAt: harness.clock.value + 20, hardSpecified: false,
+    status: 'open', response: null,
+    createdAt: harness.clock.value, updatedAt: harness.clock.value,
+    ...over,
+  });
+}
+
 async function createHarness() {
   const repositories = createInMemoryRepositories();
   const clock = { value: 10 };
