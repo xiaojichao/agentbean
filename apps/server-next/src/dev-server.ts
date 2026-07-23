@@ -1,4 +1,5 @@
-import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { isUtf8 } from 'node:buffer';
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -798,6 +799,32 @@ async function handleArtifactRead(
     return;
   }
   const fileSize = statSync(stored.absolutePath).size;
+  const markdownPreview = options.disposition === 'inline'
+    && (result.artifact.mimeType === 'text/markdown' || /\.(?:md|markdown)$/i.test(result.artifact.filename));
+  if (markdownPreview) {
+    if (fileSize > 10 * 1024 * 1024) {
+      writeJson(input.response, 413, { ok: false, error: 'MARKDOWN_PREVIEW_TOO_LARGE' });
+      return;
+    }
+    let body = readFileSync(stored.absolutePath);
+    if (!isUtf8(body)) {
+      writeJson(input.response, 415, { ok: false, error: 'MARKDOWN_PREVIEW_REQUIRES_UTF8' });
+      return;
+    }
+    if (body.length > 2 * 1024 * 1024) {
+      let previewBytes = 2 * 1024 * 1024;
+      while (previewBytes > 0 && !isUtf8(body.subarray(0, previewBytes))) previewBytes -= 1;
+      body = body.subarray(0, previewBytes);
+    }
+    input.response.writeHead(200, {
+      'content-type': result.artifact.mimeType,
+      'content-length': String(body.length),
+      ...(fileSize > body.length ? { 'x-agentbean-preview-truncated': 'true' } : {}),
+      'content-disposition': buildContentDisposition('inline', result.artifact.filename),
+    });
+    input.response.end(body);
+    return;
+  }
   const range = parseArtifactRange(input.request.headers.range, fileSize);
   if (range.kind === 'invalid') {
     input.response.writeHead(416, { 'content-range': `bytes */${fileSize}`, 'accept-ranges': 'bytes' });
@@ -1862,6 +1889,9 @@ function createFileArtifactContentStore(dataDir: string): ArtifactContentStore {
         sizeBytes: input.content.length,
         sha256: createHash('sha256').update(input.content).digest('hex'),
       };
+    },
+    async deleteContent(input) {
+      rmSync(join(dataDir, 'artifacts', input.teamId, input.artifactId), { recursive: true, force: true });
     },
   };
 }

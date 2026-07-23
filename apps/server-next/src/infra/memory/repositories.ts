@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type {
   AgentRecord,
   ArtifactRecord,
+  ChannelDocumentRecord,
+  ChannelDocumentRevisionRecord,
   ChannelRecord,
   DeviceInviteRecord,
   DeviceRecord,
@@ -80,6 +82,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const channelCoordinationDecisions = new Map<string, ChannelCoordinationDecisionRecord>();
   const dispatches = new Map<string, DispatchRecord>();
   const artifacts = new Map<string, ArtifactRecord>();
+  const channelDocuments = new Map<string, ChannelDocumentRecord>();
+  const channelDocumentRevisions = new Map<string, ChannelDocumentRevisionRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
   const tasks = new Map<string, TaskRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
@@ -1264,6 +1268,55 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           }
         }
         return deletedIds.sort();
+      },
+    },
+    channelDocuments: {
+      async create(input) {
+        const existing = channelDocuments.get(input.document.id);
+        if (existing) return existing;
+        channelDocuments.set(input.document.id, input.document);
+        channelDocumentRevisions.set(input.revision.id, input.revision);
+        return input.document;
+      },
+      async getForTeam(input) {
+        const document = channelDocuments.get(input.documentId);
+        return document && document.teamId === input.teamId && document.channelId === input.channelId ? document : null;
+      },
+      async listByChannel(input) {
+        return Array.from(channelDocuments.values())
+          .filter((document) => document.teamId === input.teamId && document.channelId === input.channelId)
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id));
+      },
+      async listWithCurrentRevisionByChannel(input) {
+        return Array.from(channelDocuments.values())
+          .filter((document) => document.teamId === input.teamId && document.channelId === input.channelId)
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id))
+          .flatMap((document) => {
+            const currentRevision = channelDocumentRevisions.get(document.currentRevisionId);
+            return currentRevision ? [{ document, currentRevision }] : [];
+          });
+      },
+      async listRevisions(input) {
+        return Array.from(channelDocumentRevisions.values())
+          .filter((revision) => revision.documentId === input.documentId)
+          .sort((a, b) => b.revision - a.revision);
+      },
+      async addRevision(input) {
+        const current = channelDocuments.get(input.documentId);
+        if (!current || current.currentRevisionId !== input.expectedCurrentRevisionId) return null;
+        artifacts.set(input.artifact.id, input.artifact);
+        channelDocuments.set(input.documentId, input.document);
+        channelDocumentRevisions.set(input.revision.id, input.revision);
+        return input.document;
+      },
+      async deleteByChannel(channelId) {
+        const documentIds = new Set(Array.from(channelDocuments.values())
+          .filter((document) => document.channelId === channelId)
+          .map((document) => document.id));
+        for (const documentId of documentIds) channelDocuments.delete(documentId);
+        for (const [revisionId, revision] of channelDocumentRevisions) {
+          if (documentIds.has(revision.documentId)) channelDocumentRevisions.delete(revisionId);
+        }
       },
     },
     workspaceRuns: {

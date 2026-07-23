@@ -1,11 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
@@ -71,6 +71,7 @@ export interface ArtifactContentStoreWriteResult {
 
 export interface ArtifactContentStore {
   writeContent(input: ArtifactContentStoreWriteInput): Promise<ArtifactContentStoreWriteResult>;
+  deleteContent?(input: { teamId: string; artifactId: string }): Promise<void>;
 }
 
 export interface ServerNextUseCases {
@@ -146,6 +147,10 @@ export interface ServerNextUseCases {
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
+  listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
+  getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
+  listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
+  saveChannelDocument(input: SaveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
@@ -1228,6 +1233,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const artifact of attachmentResult.artifacts) {
         attachedArtifacts.push(await repositories.artifacts.create({ ...artifact, messageId: message.id }));
       }
+      await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
       const dispatches: DispatchDto[] = [];
       let acknowledgementMessage: MessageDto | undefined;
       if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
@@ -2890,6 +2896,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         repositories.management.dispatchAttempts.getByDispatchId(dispatch.id),
       ))).flatMap((attempt) => attempt ? [attempt.invocationId] : []))];
       // 先完成事实源级联，再触发 Memory 失效；跨 source kind 复查必须能看到 Channel 已不存在。
+      await repositories.channelDocuments.deleteByChannel(channel.id);
       const deletedArtifactIds = await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
       const deleted = await repositories.channels.delete({ channelId: channel.id });
@@ -3109,6 +3116,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
 
+      await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+
       const message = outcome.artifacts.length > 0
         ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
         : outcome.message;
@@ -3198,6 +3207,78 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async searchChannelFiles(fileInput) {
       return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
+    },
+
+    async listChannelDocuments(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      let records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
+      const knownDocumentIds = new Set(records.map(({ document }) => document.id));
+      const artifacts = await repositories.artifacts.listByChannel(documentInput);
+      const missingDocuments = artifacts.filter((artifact) =>
+        Boolean(artifact.messageId || artifact.workspaceRunId)
+        && !knownDocumentIds.has(`channel-document:${artifact.id}`));
+      if (missingDocuments.length > 0) {
+        for (const artifact of missingDocuments) {
+          await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+        }
+        records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
+      }
+      return makeSuccess({
+        documents: records.map(({ document, currentRevision }) => ({
+          ...document,
+          currentRevision: toChannelDocumentRevisionDto(currentRevision),
+        })),
+      });
+    },
+
+    async getChannelDocument(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      return makeSuccess({ document: await toChannelDocumentDto(repositories, document) });
+    },
+
+    async listChannelDocumentRevisions(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
+      return makeSuccess({
+        document: await toChannelDocumentDto(repositories, document),
+        revisions: revisions.map(toChannelDocumentRevisionDto),
+      });
+    },
+
+    async saveChannelDocument(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const content = documentInput.content;
+      const bytes = Buffer.byteLength(content, 'utf8');
+      if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
+      if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      if (document.currentRevisionId !== documentInput.baseRevisionId) {
+        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+      }
+      const artifactId = ids.nextId();
+      const filename = sanitizeMarkdownFilename(documentInput.filename ?? document.filename);
+      const stored = artifactContentStore ? await artifactContentStore.writeContent({ teamId: documentInput.teamId, artifactId, filename, content: Buffer.from(content, 'utf8') }) : undefined;
+      const now = clock.now();
+      const artifact: ArtifactRecord = { id: artifactId, teamId: document.teamId, channelId: document.channelId, uploaderId: documentInput.userId, filename, mimeType: 'text/markdown', sizeBytes: bytes, pathKind: 'upload', createdAt: now, ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}) };
+      const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
+      const revision = { id: ids.nextId(), documentId: document.id, artifact, revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId, createdAt: now };
+      const next = { ...document, filename, currentRevisionId: revision.id, currentRevision: undefined as never, updatedAt: now };
+      const saved = await repositories.channelDocuments.addRevision({ documentId: document.id, expectedCurrentRevisionId: documentInput.baseRevisionId, document: next, revision, artifact });
+      if (!saved) {
+        await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+      }
+      return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
     },
 
     async searchMessages(searchInput) {
@@ -4258,6 +4339,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           })
         : null;
       const artifacts: ArtifactDto[] = [];
+      const committedArtifacts: ArtifactRecord[] = [];
       for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
         const uploadedArtifact = await repositories.artifacts.getForTeam({
           teamId: completed.dispatch.teamId,
@@ -4276,6 +4358,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           workspaceRunId: workspaceRun?.id,
           pathKind: 'generated',
         });
+        committedArtifacts.push(linkedArtifact);
         artifacts.push(toArtifactDto(linkedArtifact));
       }
       for (const artifactInput of resultInput.artifacts ?? []) {
@@ -4306,8 +4389,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           createdAt: now,
         });
         await onArtifactCommitted?.(artifact).catch(() => undefined);
+        committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
+      await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
@@ -7503,6 +7588,75 @@ async function ensureUserCanViewChannel(
 }
 
 type ChannelFileCursor = { createdAt: number; id: string };
+
+async function getOrCreateChannelDocument(
+  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments'>,
+  input: { teamId: string; channelId: string; documentId: string },
+): Promise<ChannelDocumentRecord | null> {
+  const existing = await repositories.channelDocuments.getForTeam(input);
+  if (existing) return existing;
+  const prefix = 'channel-document:';
+  if (!input.documentId.startsWith(prefix)) return null;
+  const artifactId = input.documentId.slice(prefix.length);
+  if (!artifactId) return null;
+  const artifact = await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId });
+  if (!artifact || artifact.channelId !== input.channelId) return null;
+  await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+  return repositories.channelDocuments.getForTeam(input);
+}
+
+async function toChannelDocumentDto(
+  repositories: ServerNextRepositories,
+  document: ChannelDocumentRecord,
+): Promise<ChannelDocumentDto> {
+  const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
+  const current = revisions.find((revision) => revision.id === document.currentRevisionId) ?? revisions[0];
+  if (!current) throw new Error('Channel document has no current revision');
+  return { ...document, currentRevision: toChannelDocumentRevisionDto(current) };
+}
+
+function toChannelDocumentRevisionDto(revision: ChannelDocumentRevisionRecord): ChannelDocumentRevisionDto {
+  return { ...revision, artifact: toArtifactDto(revision.artifact) };
+}
+
+function sanitizeMarkdownFilename(value: string): string {
+  const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').slice(0, 240);
+  if (!normalized) return 'document.md';
+  return /\.(?:md|markdown)$/i.test(normalized) ? normalized : `${normalized}.md`;
+}
+
+async function createInitialChannelDocument(
+  repositories: Pick<ServerNextRepositories, 'channelDocuments'>,
+  artifact: ArtifactRecord,
+  createdBy: string,
+  createdAt: number,
+): Promise<void> {
+  if (artifact.mimeType !== 'text/markdown' && !/\.(?:md|markdown)$/i.test(artifact.filename)) return;
+  // Artifact ID 已由上传/运行结果分配且全局唯一；复用它生成文档身份，不额外消耗
+  // message send 的有限测试/幂等 ID 序列，也让重放时身份稳定。
+  const documentId = `channel-document:${artifact.id}`;
+  const revision: ChannelDocumentRevisionRecord = {
+    id: `${documentId}:revision:1`, documentId, artifact, revision: 1, createdBy, createdAt,
+  };
+  await repositories.channelDocuments.create({
+    document: {
+      id: revision.documentId, teamId: artifact.teamId, channelId: artifact.channelId, filename: sanitizeMarkdownFilename(artifact.filename),
+      currentRevisionId: revision.id, createdAt, updatedAt: createdAt,
+    },
+    revision,
+  });
+}
+
+async function createInitialChannelDocuments(
+  repositories: Pick<ServerNextRepositories, 'channelDocuments'>,
+  artifacts: ArtifactRecord[],
+  createdBy: string,
+  createdAt: number,
+): Promise<void> {
+  for (const artifact of artifacts) {
+    await createInitialChannelDocument(repositories, artifact, createdBy, createdAt);
+  }
+}
 
 async function listPublicChannelFiles(
   repositories: ServerNextRepositories,
