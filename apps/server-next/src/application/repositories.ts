@@ -337,8 +337,13 @@ export interface ChannelDocumentRepository {
   create(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord }): Promise<ChannelDocumentRecord>;
   getForTeam(input: { teamId: ID; channelId: ID; documentId: ID }): Promise<ChannelDocumentRecord | null>;
   listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelDocumentRecord[]>;
+  listWithCurrentRevisionByChannel(input: { teamId: ID; channelId: ID }): Promise<Array<{
+    document: ChannelDocumentRecord;
+    currentRevision: ChannelDocumentRevisionRecord;
+  }>>;
   listRevisions(input: { documentId: ID }): Promise<ChannelDocumentRevisionRecord[]>;
   addRevision(input: { documentId: ID; expectedCurrentRevisionId: ID; document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
+  deleteByChannel(channelId: ID): Promise<void>;
 }
 
 export interface WorkspaceRunRepository {

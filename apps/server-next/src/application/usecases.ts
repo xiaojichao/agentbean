@@ -2896,6 +2896,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         repositories.management.dispatchAttempts.getByDispatchId(dispatch.id),
       ))).flatMap((attempt) => attempt ? [attempt.invocationId] : []))];
       // 先完成事实源级联，再触发 Memory 失效；跨 source kind 复查必须能看到 Channel 已不存在。
+      await repositories.channelDocuments.deleteByChannel(channel.id);
       const deletedArtifactIds = await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
       const deleted = await repositories.channels.delete({ channelId: channel.id });
@@ -3211,14 +3212,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async listChannelDocuments(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const documents = await repositories.channelDocuments.listByChannel(documentInput);
-      return makeSuccess({ documents: await Promise.all(documents.map((document) => toChannelDocumentDto(repositories, document))) });
+      let records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
+      const knownDocumentIds = new Set(records.map(({ document }) => document.id));
+      const artifacts = await repositories.artifacts.listByChannel(documentInput);
+      const missingDocuments = artifacts.filter((artifact) =>
+        Boolean(artifact.messageId || artifact.workspaceRunId)
+        && !knownDocumentIds.has(`channel-document:${artifact.id}`));
+      if (missingDocuments.length > 0) {
+        for (const artifact of missingDocuments) {
+          await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+        }
+        records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
+      }
+      return makeSuccess({
+        documents: records.map(({ document, currentRevision }) => ({
+          ...document,
+          currentRevision: toChannelDocumentRevisionDto(currentRevision),
+        })),
+      });
     },
 
     async getChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await repositories.channelDocuments.getForTeam(documentInput);
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       return makeSuccess({ document: await toChannelDocumentDto(repositories, document) });
     },
@@ -3226,7 +3243,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async listChannelDocumentRevisions(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await repositories.channelDocuments.getForTeam(documentInput);
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
       return makeSuccess({
@@ -3243,7 +3260,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const bytes = Buffer.byteLength(content, 'utf8');
       if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
       if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
-      const document = await repositories.channelDocuments.getForTeam(documentInput);
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       if (document.currentRevisionId !== documentInput.baseRevisionId) {
         return makeFailure('CONFLICT', 'Document has changed; reload before saving');
@@ -4322,6 +4339,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           })
         : null;
       const artifacts: ArtifactDto[] = [];
+      const committedArtifacts: ArtifactRecord[] = [];
       for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
         const uploadedArtifact = await repositories.artifacts.getForTeam({
           teamId: completed.dispatch.teamId,
@@ -4340,6 +4358,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           workspaceRunId: workspaceRun?.id,
           pathKind: 'generated',
         });
+        committedArtifacts.push(linkedArtifact);
         artifacts.push(toArtifactDto(linkedArtifact));
       }
       for (const artifactInput of resultInput.artifacts ?? []) {
@@ -4370,8 +4389,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           createdAt: now,
         });
         await onArtifactCommitted?.(artifact).catch(() => undefined);
+        committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
+      await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
@@ -7567,6 +7588,22 @@ async function ensureUserCanViewChannel(
 }
 
 type ChannelFileCursor = { createdAt: number; id: string };
+
+async function getOrCreateChannelDocument(
+  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments'>,
+  input: { teamId: string; channelId: string; documentId: string },
+): Promise<ChannelDocumentRecord | null> {
+  const existing = await repositories.channelDocuments.getForTeam(input);
+  if (existing) return existing;
+  const prefix = 'channel-document:';
+  if (!input.documentId.startsWith(prefix)) return null;
+  const artifactId = input.documentId.slice(prefix.length);
+  if (!artifactId) return null;
+  const artifact = await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId });
+  if (!artifact || artifact.channelId !== input.channelId) return null;
+  await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+  return repositories.channelDocuments.getForTeam(input);
+}
 
 async function toChannelDocumentDto(
   repositories: ServerNextRepositories,

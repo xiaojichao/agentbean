@@ -1979,6 +1979,30 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async listByChannel(input) {
         return teamDb.prepare('SELECT * FROM channel_documents WHERE team_id = ? AND channel_id = ? ORDER BY updated_at DESC, id DESC').all(input.teamId, input.channelId).map((row) => mapChannelDocument(row)!);
       },
+      async listWithCurrentRevisionByChannel(input) {
+        return teamDb.prepare(`SELECT d.id AS document_id, d.team_id, d.channel_id, d.filename AS document_filename,
+          d.current_revision_id, d.created_at AS document_created_at, d.updated_at AS document_updated_at,
+          r.id AS revision_id, r.revision, r.created_by, r.created_at AS revision_created_at,
+          a.id AS artifact_id, a.message_id, a.dispatch_id, a.workspace_run_id, a.uploader_id,
+          a.filename, a.mime_type, a.size_bytes, a.storage_path, a.relative_path, a.path_kind, a.sha256,
+          a.created_at AS artifact_created_at
+          FROM channel_documents d
+          JOIN channel_document_revisions r ON r.id = d.current_revision_id
+          JOIN artifacts a ON a.id = r.artifact_id
+          WHERE d.team_id = ? AND d.channel_id = ?
+          ORDER BY d.updated_at DESC, d.id DESC`).all(input.teamId, input.channelId).map((row) => ({
+            document: {
+              id: sqliteText(row, 'document_id'),
+              teamId: sqliteText(row, 'team_id'),
+              channelId: sqliteText(row, 'channel_id'),
+              filename: sqliteText(row, 'document_filename'),
+              currentRevisionId: sqliteText(row, 'current_revision_id'),
+              createdAt: sqliteNumber(row, 'document_created_at'),
+              updatedAt: sqliteNumber(row, 'document_updated_at'),
+            },
+            currentRevision: mapChannelDocumentRevision(row)!,
+          }));
+      },
       async listRevisions(input) {
         return teamDb.prepare(`SELECT r.id AS revision_id, r.document_id, r.revision, r.created_by, r.created_at AS revision_created_at,
           a.id AS artifact_id, a.team_id, a.channel_id, a.message_id, a.dispatch_id, a.workspace_run_id, a.uploader_id,
@@ -2000,6 +2024,12 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         } catch {
           return null;
         }
+      },
+      async deleteByChannel(channelId) {
+        teamDb.transaction(() => {
+          teamDb.prepare('DELETE FROM channel_document_revisions WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?)').run(channelId);
+          teamDb.prepare('DELETE FROM channel_documents WHERE channel_id = ?').run(channelId);
+        })();
       },
     },
     workspaceRuns: {

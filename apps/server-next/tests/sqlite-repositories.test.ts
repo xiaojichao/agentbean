@@ -146,6 +146,19 @@ describe('server-next SQLite repositories', () => {
         { id: 'revision-2', artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath } },
        { id: 'revision-1', artifact: { id: 'artifact-doc-1', storagePath: initialArtifact.storagePath } },
       ]);
+      await expect(repositories.channelDocuments.listWithCurrentRevisionByChannel({
+        teamId: 'team-1', channelId: 'channel-1',
+      })).resolves.toMatchObject([{
+        document: { id: initial.document.id, currentRevisionId: 'revision-2' },
+        currentRevision: { id: 'revision-2', artifact: { id: 'artifact-doc-2' } },
+      }]);
+      await repositories.channelDocuments.deleteByChannel('channel-1');
+      await expect(repositories.channelDocuments.listByChannel({
+        teamId: 'team-1', channelId: 'channel-1',
+      })).resolves.toEqual([]);
+      await expect(repositories.channelDocuments.listRevisions({
+        documentId: initial.document.id,
+      })).resolves.toEqual([]);
     } finally {
       close();
     }
@@ -1135,6 +1148,9 @@ describe('server-next SQLite repositories', () => {
           },
         ],
       });
+      await expect(repositories.channelDocuments.getForTeam({
+        teamId: 'team-1', channelId: 'dm-1', documentId: 'channel-document:artifact-1',
+      })).resolves.toMatchObject({ currentRevisionId: 'channel-document:artifact-1:revision:1' });
       await app.sendMessage({
         userId: 'user-1',
         teamId: 'team-1',

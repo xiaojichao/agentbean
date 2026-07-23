@@ -47,6 +47,43 @@ describe('频道 Markdown 文档', () => {
     await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toHaveLength(1);
   });
 
+  test('历史 Markdown 附件按需回填，列表批量读取当前版本', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await repositories.messages.append({
+      id: 'message-old', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-old',
+      senderKind: 'agent', senderId: 'agent-1', body: 'legacy', createdAt: 100,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-old', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-old',
+      uploaderId: 'agent-1', filename: 'legacy.md', mimeType: 'text/markdown', sizeBytes: 6,
+      storagePath: 'artifacts/team-1/artifact-old/legacy.md', pathKind: 'generated', createdAt: 100,
+    });
+
+    await expect(app.getChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      documentId: 'channel-document:artifact-old',
+    })).resolves.toMatchObject({
+      ok: true,
+      document: { currentRevision: { artifact: { id: 'artifact-old' } } },
+    });
+
+    const revisionReads = vi.spyOn(repositories.channelDocuments, 'listRevisions');
+    const listed = await app.listChannelDocuments({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(listed).toMatchObject({
+      ok: true,
+      documents: [{ id: 'channel-document:artifact-old', currentRevision: { artifact: { id: 'artifact-old' } } }],
+    });
+    expect(revisionReads).not.toHaveBeenCalled();
+  });
+
   test('连续保存保留旧 Artifact 并使用单调递增 revision', async () => {
     const repositories = createInMemoryRepositories();
     const writes: string[] = [];

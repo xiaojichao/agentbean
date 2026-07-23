@@ -1287,6 +1287,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .filter((document) => document.teamId === input.teamId && document.channelId === input.channelId)
           .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id));
       },
+      async listWithCurrentRevisionByChannel(input) {
+        return Array.from(channelDocuments.values())
+          .filter((document) => document.teamId === input.teamId && document.channelId === input.channelId)
+          .sort((a, b) => b.updatedAt - a.updatedAt || b.id.localeCompare(a.id))
+          .flatMap((document) => {
+            const currentRevision = channelDocumentRevisions.get(document.currentRevisionId);
+            return currentRevision ? [{ document, currentRevision }] : [];
+          });
+      },
       async listRevisions(input) {
         return Array.from(channelDocumentRevisions.values())
           .filter((revision) => revision.documentId === input.documentId)
@@ -1299,6 +1308,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         channelDocuments.set(input.documentId, input.document);
         channelDocumentRevisions.set(input.revision.id, input.revision);
         return input.document;
+      },
+      async deleteByChannel(channelId) {
+        const documentIds = new Set(Array.from(channelDocuments.values())
+          .filter((document) => document.channelId === channelId)
+          .map((document) => document.id));
+        for (const documentId of documentIds) channelDocuments.delete(documentId);
+        for (const [revisionId, revision] of channelDocumentRevisions) {
+          if (documentIds.has(revision.documentId)) channelDocumentRevisions.delete(revisionId);
+        }
       },
     },
     workspaceRuns: {
