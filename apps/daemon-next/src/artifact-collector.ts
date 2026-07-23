@@ -67,7 +67,15 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     ...(input.extraOutputDirs ?? []),
     ...(input.configuredOutputRoots ?? []).map((root) => root.path),
   ]);
-  const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean, sourceRoot: ArtifactSourceRoot, role: ArtifactRole, recursive = true): void => {
+  const ingest = (
+    rootAbs: string,
+    rootForRelative: string,
+    timeFilter: boolean,
+    sourceRoot: ArtifactSourceRoot,
+    role: ArtifactRole,
+    recursive = true,
+    reportRootFailure = true,
+  ): void => {
     let visited = 0;
     const stack: string[] = [rootAbs];
     while (stack.length > 0) {
@@ -76,11 +84,13 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
       try {
         entries = readdirSync(current, { withFileTypes: true });
       } catch {
-        input.onDiagnostic?.({
-          code: 'SOURCE_ROOT_UNREADABLE',
-          sourceRootId: sourceRoot.id,
-          sourceRootLabel: sourceRoot.label,
-        });
+        if (reportRootFailure) {
+          input.onDiagnostic?.({
+            code: 'SOURCE_ROOT_UNREADABLE',
+            sourceRootId: sourceRoot.id,
+            sourceRootLabel: sourceRoot.label,
+          });
+        }
         continue;
       }
       for (const entry of entries) {
@@ -157,7 +167,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出', input.outputDir), 'run_output');
   }
   for (const dir of input.extraOutputDirs ?? []) {
-    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output');
+    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output', true, false);
   }
   for (const root of input.configuredOutputRoots ?? []) {
     const sourceRoot = root.id

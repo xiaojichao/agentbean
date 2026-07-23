@@ -69,6 +69,19 @@ describe('artifact-collector', () => {
     expect(names).not.toContain('old.png');
   });
 
+  test('missing optional adapter output dirs do not add Run diagnostics', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const diagnostics: string[] = [];
+
+    await collectArtifacts({
+      extraOutputDirs: [join(cwd, 'missing-generated-images')],
+      startedAt: 0,
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   test('extra output dirs do not let many old files hide a new generated image', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
