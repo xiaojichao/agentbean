@@ -557,6 +557,18 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.memory.proposeCorrection, app, 'proposeFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.formalAccept, app, 'acceptFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.formalReject, app, 'rejectFormalCorrection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.list, app, 'getSystemKnowledge', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.detail, app, 'getSystemKnowledgeDetail', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.create, app, 'createSystemKnowledge', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.revise, app, 'reviseSystemKnowledge', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.deactivate, app, 'deactivateSystemKnowledge', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.systemKnowledge.delete, app, 'deleteSystemKnowledge', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.list, app, 'getUserMemory', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.detail, app, 'getUserMemoryDetail', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.create, app, 'createUserMemory', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.revise, app, 'reviseUserMemory', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.deactivate, app, 'deactivateUserMemory', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.userMemory.delete, app, 'deleteUserMemory', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;

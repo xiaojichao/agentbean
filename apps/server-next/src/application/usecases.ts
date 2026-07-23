@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType } from '../../../../packages/contracts/src/index.js';
+import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
@@ -17,6 +17,7 @@ import { createCollaborativeMemoryService, type MemoryView } from './collaborati
 import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
 import { createMemoryGovernanceService } from './memory-governance-service.js';
 import { createFormalMemoryService } from './formal-memory-service.js';
+import { createSystemUserMemoryService } from './system-user-memory-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -230,6 +231,18 @@ export interface ServerNextUseCases {
   proposeFormalCorrection(input: { userId: string; teamId: string; scopeType: FormalMemoryScopeType; scopeRef: string; targetMemoryId?: string; correctionType: 'revise' | 'delete'; kind?: FormalMemoryKind; content: string; summary?: string; reason: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
   acceptFormalCorrection(input: { userId: string; teamId: string; memoryId: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
   rejectFormalCorrection(input: { userId: string; teamId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ memory: FormalMemoryDto }>>;
+  getSystemKnowledge(input: { userId: string }): Promise<Ack<{ list: SystemKnowledgeListDto }>>;
+  getSystemKnowledgeDetail(input: { userId: string; memoryId: string }): Promise<Ack<{ memory: SystemKnowledgeDetailDto }>>;
+  createSystemKnowledge(input: { userId: string; kind: FormalMemoryKind; content: string; summary?: string; changeReason?: string; validUntil?: number }): Promise<Ack<{ memory: SystemKnowledgeDto }>>;
+  reviseSystemKnowledge(input: { userId: string; memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<Ack<{ memory: SystemKnowledgeDto }>>;
+  deactivateSystemKnowledge(input: { userId: string; memoryId: string; changeReason: string }): Promise<Ack<{ memory: SystemKnowledgeDto }>>;
+  deleteSystemKnowledge(input: { userId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ deleted: true }>>;
+  getUserMemory(input: { userId: string }): Promise<Ack<{ list: UserMemoryListDto }>>;
+  getUserMemoryDetail(input: { userId: string; memoryId: string }): Promise<Ack<{ memory: UserMemoryDetailDto }>>;
+  createUserMemory(input: { userId: string; kind: FormalMemoryKind; content: string; summary?: string; changeReason?: string; validUntil?: number }): Promise<Ack<{ memory: UserMemoryDto }>>;
+  reviseUserMemory(input: { userId: string; memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<Ack<{ memory: UserMemoryDto }>>;
+  deactivateUserMemory(input: { userId: string; memoryId: string; changeReason: string }): Promise<Ack<{ memory: UserMemoryDto }>>;
+  deleteUserMemory(input: { userId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ deleted: true }>>;
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -986,6 +999,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   });
   const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
   const formalMemory = createFormalMemoryService({ repositories, collaborativeMemory, clock });
+  const systemUserMemory = createSystemUserMemoryService({ repositories, clock });
   const piProvider = createPiProviderService({
     repositories: repositories.piProvider,
     unitOfWork: repositories.piProviderUnitOfWork,
@@ -5146,6 +5160,171 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     },
 
+    async getSystemKnowledge(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canReadSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can view System Knowledge');
+      }
+      try {
+        const items = await systemUserMemory.listSystemKnowledge();
+        return makeSuccess({ list: { schemaVersion: 1, scope: 'system', items } });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async getSystemKnowledgeDetail(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canReadSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can view System Knowledge');
+      }
+      try {
+        const memory = await systemUserMemory.getSystemKnowledgeDetail({ id: input.memoryId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async createSystemKnowledge(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canManageSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can manage System Knowledge');
+      }
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.createSystemKnowledge({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async reviseSystemKnowledge(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canManageSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can manage System Knowledge');
+      }
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.reviseSystemKnowledge({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deactivateSystemKnowledge(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canManageSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can manage System Knowledge');
+      }
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.deactivateSystemKnowledge({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deleteSystemKnowledge(input) {
+      const user = await repositories.users.getById(input.userId);
+      if (!canManageSystemKnowledge(user?.role)) {
+        return makeFailure('FORBIDDEN', 'Only system admin can manage System Knowledge');
+      }
+      const { userId, ...payload } = input;
+      try {
+        await systemUserMemory.deleteSystemKnowledge({ ...payload, actorId: userId });
+        return makeSuccess({ deleted: true });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async getUserMemory(input) {
+      // userId 即 owner：任何已登录用户只列出属于自己的 User Memory（AC#3）。
+      try {
+        const items = await systemUserMemory.listUserMemory({ ownerUserId: input.userId });
+        return makeSuccess({ list: { schemaVersion: 1, scope: 'user', ownerUserId: input.userId, items } });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async getUserMemoryDetail(input) {
+      // AC#6 fail-closed：先轻量取 owner 验证本人，通过后才让 service 组装 detail
+      // （含版本历史）——避免服务端读取他人 User Memory 的 versions。
+      const existing = await repositories.userMemory.getById({ id: input.memoryId });
+      if (!existing) return makeFailure('NOT_FOUND', 'User Memory not found');
+      if (!canReadUserMemory(input.userId, existing.ownerUserId)) {
+        return makeFailure('FORBIDDEN', 'No permission to read this User Memory');
+      }
+      try {
+        const memory = await systemUserMemory.getUserMemoryDetail({ id: input.memoryId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async createUserMemory(input) {
+      // owner = actor（service 强制 + DB CHECK owner_user_id=created_by_user_id 双保险）。
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.createUserMemory({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async reviseUserMemory(input) {
+      // 先取 owner 验证本人（AC#6 fail-closed），再 revise。
+      const existing = await repositories.userMemory.getById({ id: input.memoryId });
+      if (!existing) return makeFailure('NOT_FOUND', 'User Memory not found');
+      if (!canManageUserMemory(input.userId, existing.ownerUserId)) {
+        return makeFailure('FORBIDDEN', 'No permission to manage this User Memory');
+      }
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.reviseUserMemory({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deactivateUserMemory(input) {
+      const existing = await repositories.userMemory.getById({ id: input.memoryId });
+      if (!existing) return makeFailure('NOT_FOUND', 'User Memory not found');
+      if (!canManageUserMemory(input.userId, existing.ownerUserId)) {
+        return makeFailure('FORBIDDEN', 'No permission to manage this User Memory');
+      }
+      const { userId, ...payload } = input;
+      try {
+        const memory = await systemUserMemory.deactivateUserMemory({ ...payload, actorId: userId });
+        return makeSuccess({ memory });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async deleteUserMemory(input) {
+      const existing = await repositories.userMemory.getById({ id: input.memoryId });
+      if (!existing) return makeFailure('NOT_FOUND', 'User Memory not found');
+      if (!canManageUserMemory(input.userId, existing.ownerUserId)) {
+        return makeFailure('FORBIDDEN', 'No permission to manage this User Memory');
+      }
+      const { userId, ...payload } = input;
+      try {
+        await systemUserMemory.deleteUserMemory({ ...payload, actorId: userId });
+        return makeSuccess({ deleted: true });
+      } catch (error) {
+        return systemUserMemoryErrorAck(error) ?? rethrow(error);
+      }
+    },
+
     async deleteTeam(deleteInput) {
       const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.userId);
       if (actorRole !== 'owner') {
@@ -7569,6 +7748,20 @@ function formalMemoryErrorAck(error: unknown): Ack<never> | undefined {
     case 'MEMORY_UPDATE_CONFLICT':
     case 'MEMORY_DUPLICATE_CONTENT':
       return makeFailure('CONFLICT', 'Memory state changed; refresh and retry');
+    default:
+      return undefined;
+  }
+}
+
+function systemUserMemoryErrorAck(error: unknown): Ack<never> | undefined {
+  if (!(error instanceof Error)) return undefined;
+  switch (error.message) {
+    case 'SYSTEM_KNOWLEDGE_NOT_FOUND':
+    case 'USER_MEMORY_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'System/User Memory not found');
+    case 'SYSTEM_KNOWLEDGE_ALREADY_SUPERSEDED':
+    case 'USER_MEMORY_ALREADY_SUPERSEDED':
+      return makeFailure('CONFLICT', 'Memory already superseded; refresh and retry');
     default:
       return undefined;
   }

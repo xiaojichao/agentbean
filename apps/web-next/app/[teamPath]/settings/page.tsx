@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database, Bot } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
-import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents } from '@/lib/socket';
+import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents, userMemoryEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import type { JoinLinkInfo } from '@/lib/schema';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -20,6 +20,7 @@ import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/chang
 import { RunsPanel } from './RunsPanel';
 import { PiPolicyPanel } from './PiPolicyPanel';
 import { PiTeamCoveragePanel } from '@/components/PiTeamCoveragePanel';
+import { SystemUserMemoryPanel } from '@/components/SystemUserMemoryPanel';
 import { MemoryGovernancePanel } from './MemoryGovernancePanel';
 import { PiManagementPanel } from './PiManagementPanel';
 import {
@@ -209,6 +210,15 @@ function AccountPanel() {
           </button>
         </div>
       </section>
+
+      <SystemUserMemoryPanel
+        scope="user"
+        events={userMemoryEvents()}
+        title="User Memory"
+        description="个人偏好与工作习惯；跨 Team 属于你本人，仅你可读写。请勿存放 Team 业务事实、客户数据或频道摘要（AC#4）。"
+        dataSmoke="settings-user-memory"
+        enableContentGuidance
+      />
 
       <section>
         <button onClick={logout} className="inline-flex items-center gap-2 rounded-md border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50" data-smoke="settings-account-logout">

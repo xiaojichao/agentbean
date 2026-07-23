@@ -54,6 +54,24 @@ export const WEB_EVENTS = {
     getActiveModel: 'pi-provider:get-active-model',
     getPublicHealth: 'pi-provider:get-public-health',
   },
+  /** 系统作用域 System Knowledge；仅系统管理员可访问（#717）。 */
+  systemKnowledge: {
+    list: 'system-knowledge:list',
+    detail: 'system-knowledge:detail',
+    create: 'system-knowledge:create',
+    revise: 'system-knowledge:revise',
+    deactivate: 'system-knowledge:deactivate',
+    delete: 'system-knowledge:delete',
+  },
+  /** 个人作用域 User Memory；仅用户本人可访问（#717）。 */
+  userMemory: {
+    list: 'user-memory:list',
+    detail: 'user-memory:detail',
+    create: 'user-memory:create',
+    revise: 'user-memory:revise',
+    deactivate: 'user-memory:deactivate',
+    delete: 'user-memory:delete',
+  },
   /** #710 Team Agent Exposure 管理；Agent owner 发布/撤回，Team Owner/Admin 收紧。 */
   agentExposure: {
     createDraft: 'agent-exposure:create-draft',
