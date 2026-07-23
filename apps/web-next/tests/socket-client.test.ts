@@ -25,6 +25,14 @@ describe('web-next socket client', () => {
     expect(urls.every((url) => !url.includes(oldArtifactRoute))).toBe(true);
   });
 
+  test('rejects an oversized browser upload before issuing a request', async () => {
+    const { assertArtifactUploadWithinLimit } = await import('../lib/artifact-upload');
+    const form = new FormData();
+    form.append('file', new File(['12345'], 'large.txt', { type: 'text/plain' }));
+
+    expect(() => assertArtifactUploadWithinLimit(form, 4)).toThrow('large.txt 超过 4 B 上传上限');
+  });
+
   test('removes the compatibility artifact route and non-canonical Team payload fields from UI flows', () => {
     const appDir = join(process.cwd(), 'app');
     expect(existsSync(join(appDir, 'api/teams/[teamId]/artifacts/upload/route.ts'))).toBe(true);

@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -641,6 +641,42 @@ describe('server-next dev server entry', () => {
     const preview = await fetch(`${server.baseUrl}${uploadJson.artifact.previewUrl}?token=${encodeURIComponent(owner.token)}`);
     expect(preview.status).toBe(200);
     await expect(preview.text()).resolves.toBe(fileContent);
+  });
+
+  test('cleans multipart temp files when required fields are missing or the file exceeds the cap', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-cleanup-'));
+    const app = createInMemoryServerNext();
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        maxArtifactBytes: 4,
+      },
+    });
+    cleanups.push(() => server.close());
+
+    const missingChannel = new FormData();
+    missingChannel.append('file', new Blob(['ok'], { type: 'text/plain' }), 'missing-channel.txt');
+    const missingChannelResponse = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload?token=token-1`, {
+      method: 'POST',
+      body: missingChannel,
+    });
+    expect(missingChannelResponse.status).toBe(400);
+
+    const oversized = new FormData();
+    oversized.append('channelId', 'channel-1');
+    oversized.append('file', new Blob(['12345'], { type: 'text/plain' }), 'oversized.txt');
+    const oversizedResponse = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload?token=token-1`, {
+      method: 'POST',
+      body: oversized,
+    });
+    expect(oversizedResponse.status).toBe(413);
+    expect(readdirSync(dataDir).filter((name) => name.endsWith('.part'))).toEqual([]);
   });
 
   test('encodes artifact download filenames from stored artifact metadata', async () => {

@@ -1,18 +1,10 @@
 import { openAsBlob } from 'node:fs';
+import {
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  DEFAULT_ARTIFACT_RUN_MAX_BYTES,
+  type SkippedArtifactDiagnostic,
+} from '../../../packages/contracts/src/index.js';
 import type { CollectedArtifact } from './artifact-collector.js';
-
-/** Keep in sync with the server's default per-file cap. */
-const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
-const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
-
-export type ArtifactUploadSkipReason = 'FILE_TOO_LARGE' | 'RUN_TOTAL_EXCEEDED' | 'UPLOAD_FAILED';
-
-export interface SkippedArtifact {
-  filename: string;
-  relativePath: string;
-  sizeBytes: number;
-  reason: ArtifactUploadSkipReason;
-}
 
 export interface UploadedArtifact {
   id: string;
@@ -35,7 +27,7 @@ export interface UploadArtifactsInput {
   maxRetries?: number;
   maxBytes?: number;
   maxTotalBytes?: number;
-  onSkipped?: (artifact: SkippedArtifact) => void;
+  onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
 }
 
 /**
@@ -49,8 +41,8 @@ export async function uploadArtifacts(
 ): Promise<UploadedArtifact[]> {
   const fetchFn = input.fetch ?? fetch;
   const maxRetries = input.maxRetries ?? 2;
-  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
-  const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
+  const maxBytes = input.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
+  const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_ARTIFACT_RUN_MAX_BYTES;
   const results: UploadedArtifact[] = [];
   let totalBytes = 0;
 

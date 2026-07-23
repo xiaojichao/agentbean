@@ -42,7 +42,7 @@ import {
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { DEFAULT_ARTIFACT_MAX_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -132,8 +132,7 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 type CorsOrigin = string | string[] | false;
 
 const INTERNAL_HTTP_ERROR_MESSAGE = 'Internal server error';
-const DEFAULT_MAX_ARTIFACT_BYTES = 250 * 1024 * 1024;
-const MAX_LEGACY_ARTIFACT_UPLOAD_BODY_BYTES = DEFAULT_MAX_ARTIFACT_BYTES * 4 / 3 + 1024 * 1024;
+const MAX_LEGACY_ARTIFACT_UPLOAD_BODY_BYTES = DEFAULT_ARTIFACT_MAX_BYTES * 4 / 3 + 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
 const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
 const ACTIVE_PREVIEW_MIME_TYPES = new Set([
@@ -701,49 +700,56 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
 
 async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): Promise<void> {
   const upload = await readArtifactUpload(input);
-  const token = readToken(input.url, input.request, upload.fields);
-  const filename = sanitizeFilename(upload.filename);
-  const artifactId = randomUUID();
-  const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
-  const uploadInput = {
-    teamId,
-    channelId: upload.channelId,
-    filename,
-    mimeType: upload.mimeType,
-    sizeBytes: upload.sizeBytes,
-    storagePath: relativeStoragePath,
-    relativePath: filename,
-    role: parseArtifactRole(upload.fields.artifactRole),
-    sourceRoot: parseArtifactSourceRoot(upload.fields),
-    sha256: upload.sha256,
-  };
-  const absoluteDir = join(input.config.dataDir, 'artifacts', teamId, artifactId);
-  const absolutePath = join(absoluteDir, filename);
-  if (upload.tempPath) {
-    mkdirSync(absoluteDir, { recursive: true });
-    renameSync(upload.tempPath, absolutePath);
-  } else if (upload.content) {
-    mkdirSync(absoluteDir, { recursive: true });
-    writeFileSync(absolutePath, upload.content, { flag: 'wx' });
-  }
-  const result = isDeviceToken(token)
-    ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
-    : await uploadArtifactForSession(input, token, uploadInput);
-  if (!result.ok) {
-    if (existsSync(absolutePath)) unlinkSync(absolutePath);
-    writeAckFailure(input.response, result);
-    return;
-  }
-  writeJson(input.response, 201, {
-    ok: true,
-    artifact: withArtifactUrls(result.artifact),
-  });
-  await input.previewService?.enqueue({
-    artifactId: result.artifact.id,
-    teamId,
-    inputPath: join(input.config.dataDir, 'artifacts', teamId, result.artifact.id, filename),
-    mimeType: result.artifact.mimeType,
-  });
+  let cleanupPath = upload.tempPath;
+  try {
+    const token = readToken(input.url, input.request, upload.fields);
+    const filename = sanitizeFilename(upload.filename);
+    const artifactId = randomUUID();
+    const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
+    const uploadInput = {
+      teamId,
+      channelId: upload.channelId,
+      filename,
+      mimeType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+       storagePath: relativeStoragePath,
+       relativePath: filename,
+       role: parseArtifactRole(upload.fields.artifactRole),
+       sourceRoot: parseArtifactSourceRoot(upload.fields),
+       sha256: upload.sha256,
+    };
+    const absoluteDir = join(input.config.dataDir, 'artifacts', teamId, artifactId);
+    const absolutePath = join(absoluteDir, filename);
+    if (upload.tempPath) {
+      mkdirSync(absoluteDir, { recursive: true });
+      renameSync(upload.tempPath, absolutePath);
+      cleanupPath = absolutePath;
+    } else if (upload.content) {
+      mkdirSync(absoluteDir, { recursive: true });
+      cleanupPath = absolutePath;
+      writeFileSync(absolutePath, upload.content, { flag: 'wx' });
+    }
+    const result = isDeviceToken(token)
+      ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
+      : await uploadArtifactForSession(input, token, uploadInput);
+    if (!result.ok) {
+      writeAckFailure(input.response, result);
+      return;
+    }
+    cleanupPath = undefined;
+     writeJson(input.response, 201, {
+       ok: true,
+       artifact: withArtifactUrls(result.artifact),
+     });
+     await input.previewService?.enqueue({
+       artifactId: result.artifact.id,
+       teamId,
+       inputPath: join(input.config.dataDir, 'artifacts', teamId, result.artifact.id, filename),
+       mimeType: result.artifact.mimeType,
+     });
+   } finally {
+     if (cleanupPath) safeUnlink(cleanupPath);
+   }
 }
 
 async function handleArtifactDerivativeRead(
@@ -765,10 +771,11 @@ async function handleArtifactDerivativeRead(
     return;
   }
   const previewPath = join(input.config.dataDir, 'artifact-previews', options.teamId, options.artifactId, 'preview.webp');
-  const stored = readStoredArtifactBody(input, previewPath);
+  const stored = resolveStoredArtifactPath(input, previewPath);
   if (!stored.ok) { writeJson(input.response, stored.status, stored.payload); return; }
-  input.response.writeHead(200, { 'content-type': 'image/webp', 'content-length': String(stored.body.length), 'cache-control': 'private, max-age=31536000, immutable', 'content-disposition': 'inline' });
-  input.response.end(stored.body);
+  const sizeBytes = statSync(stored.absolutePath).size;
+  input.response.writeHead(200, { 'content-type': 'image/webp', 'content-length': String(sizeBytes), 'cache-control': 'private, max-age=31536000, immutable', 'content-disposition': 'inline' });
+  createReadStream(stored.absolutePath).pipe(input.response);
 }
 
 async function handleArtifactRead(
@@ -887,17 +894,22 @@ async function readArtifactUpload(input: ArtifactHttpInput): Promise<{
       input.request,
       contentType,
       input.config.dataDir,
-      input.config.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES,
+      input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES,
     );
-    return {
-      fields: multipart.fields,
-      channelId: readRequiredString(multipart.fields, 'channelId'),
-      filename: multipart.file.filename,
-      mimeType: multipart.file.mimeType,
-      sizeBytes: multipart.file.sizeBytes,
-      sha256: multipart.file.sha256,
-      tempPath: multipart.file.tempPath,
-    };
+    try {
+      return {
+        fields: multipart.fields,
+        channelId: readRequiredString(multipart.fields, 'channelId'),
+        filename: multipart.file.filename,
+        mimeType: multipart.file.mimeType,
+        sizeBytes: multipart.file.sizeBytes,
+        sha256: multipart.file.sha256,
+        tempPath: multipart.file.tempPath,
+      };
+    } catch (error) {
+      safeUnlink(multipart.file.tempPath);
+      throw error;
+    }
   }
   const body = await readJsonBody(input.request);
   const contentBase64 = readRequiredString(body, 'contentBase64');
@@ -905,7 +917,7 @@ async function readArtifactUpload(input: ArtifactHttpInput): Promise<{
   if (content.length === 0 && contentBase64.length > 0) {
     throw new ArtifactHttpError(400, { ok: false, error: 'INVALID_CONTENT' });
   }
-  if (content.length > (input.config.maxArtifactBytes ?? DEFAULT_MAX_ARTIFACT_BYTES)) {
+  if (content.length > (input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES)) {
     throw new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
   }
   return {
@@ -950,19 +962,25 @@ async function readMultipartUpload(
     const hash = createHash('sha256');
     let sizeBytes = 0;
     file.on('data', (chunk: Buffer) => { sizeBytes += chunk.length; hash.update(chunk); });
-    file.on('limit', () => { failure = new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' }); (file as NodeJS.ReadableStream & { destroy(): void }).destroy(); });
+    file.on('limit', () => {
+      failure = new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
+    });
     filePromise = pipeline(file as NodeJS.ReadableStream, output).then(() => {
       fileResult = { filename: info.filename || 'artifact.bin', mimeType: info.mimeType || 'application/octet-stream', sizeBytes, sha256: hash.digest('hex'), tempPath };
     }).catch((error: unknown) => {
-      try { unlinkSync(tempPath); } catch { /* best effort cleanup */ }
+      safeUnlink(tempPath);
       throw error;
     });
   });
   try {
     await pipeline(request, parser);
     await filePromise;
+    if (failure) {
+      if (fileResult?.tempPath) safeUnlink(fileResult.tempPath);
+      throw failure;
+    }
   } catch (error) {
-    try { if (fileResult?.tempPath) unlinkSync(fileResult.tempPath); } catch { /* best effort cleanup */ }
+    if (fileResult?.tempPath) safeUnlink(fileResult.tempPath);
     if (failure) throw failure;
     throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid multipart upload' });
   }
@@ -1017,6 +1035,14 @@ function parsePositiveByteLimit(value: string | undefined, name: string): number
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function safeUnlink(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Cleanup is best effort; the original upload error remains authoritative.
+  }
 }
 
 function parseArtifactRange(

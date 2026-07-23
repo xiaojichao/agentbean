@@ -66,6 +66,8 @@ export interface DaemonNextCliConfig {
   profileId: string;
   hostname: string;
   fallbackPrefix: string;
+  artifactMaxBytes?: number;
+  artifactRunMaxBytes?: number;
   configPath?: string;
   serverUrlExplicit?: boolean;
   /**
@@ -151,12 +153,21 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
   const yaml = configPath ? loadYamlConfig(configPath) : null;
   const yamlString = (key: string): string | undefined =>
     typeof yaml?.[key] === 'string' ? (yaml[key] as string) : undefined;
+  const yamlValue = (key: string): unknown => yaml?.[key];
   // Merge sources per field with priority CLI > env > yaml > default. Validation
   // runs against the merged values so a YAML-only teamId/ownerId is accepted.
   const teamId = args['team-id'] ?? env.AGENTBEAN_NEXT_TEAM_ID ?? yamlString('teamId');
   const ownerId = args['owner-id'] ?? env.AGENTBEAN_NEXT_OWNER_ID ?? yamlString('ownerId');
   const inviteCode = args['invite-code'] ?? env.AGENTBEAN_NEXT_INVITE_CODE ?? yamlString('inviteCode');
   const serverUrl = args['server-url'] ?? env.AGENTBEAN_NEXT_SERVER_URL ?? yamlString('serverUrl');
+  const artifactMaxBytes = parseOptionalPositiveInteger(
+    args['max-artifact-bytes'] ?? env.AGENTBEAN_NEXT_MAX_ARTIFACT_BYTES ?? yamlValue('artifactMaxBytes'),
+    'maxArtifactBytes',
+  );
+  const artifactRunMaxBytes = parseOptionalPositiveInteger(
+    args['max-artifact-run-bytes'] ?? env.AGENTBEAN_NEXT_MAX_ARTIFACT_RUN_BYTES ?? yamlValue('artifactRunMaxBytes'),
+    'artifactRunMaxBytes',
+  );
   const clearProfileId = args['clear-profile'] ? sanitizeProfileId(args['clear-profile']) : undefined;
   const renameProfileFrom = args['rename-profile'] ? sanitizeProfileId(args['rename-profile']) : undefined;
   const renameProfileTo = args['to-profile'] ? sanitizeProfileId(args['to-profile']) : undefined;
@@ -176,6 +187,8 @@ export function parseDaemonNextCliConfig(input: ParseDaemonNextCliConfigInput = 
     hostname: args.hostname ?? env.AGENTBEAN_NEXT_HOSTNAME ?? yamlString('hostname') ?? input.hostname ?? readHostname(),
     fallbackPrefix:
       args['fallback-prefix'] ?? env.AGENTBEAN_NEXT_FALLBACK_PREFIX ?? yamlString('fallbackPrefix') ?? 'daemon-next:',
+    ...(artifactMaxBytes ? { artifactMaxBytes } : {}),
+    ...(artifactRunMaxBytes ? { artifactRunMaxBytes } : {}),
     ...(configPath ? { configPath } : {}),
     ...(serverUrl ? { serverUrlExplicit: true } : {}),
     ...(booleanFlags['all-profiles'] ? { allProfiles: true } : {}),
@@ -634,6 +647,8 @@ export async function runDaemonNextCli(
     runtimes: snapshot.runtimes,
     agents: snapshot.agents,
     scan: createScanProviderFn(),
+    artifactMaxBytes: config.artifactMaxBytes,
+    artifactRunMaxBytes: config.artifactRunMaxBytes,
     onScanChanged: (fresh) => {
       reportScanSnapshot(fresh, { updated: true });
       saveScanCacheFn(fresh, config.profileId);
@@ -888,6 +903,15 @@ function parseArgs(argv: string[]): { args: Record<string, string>; booleanFlags
     index += 1;
   }
   return { args, booleanFlags };
+}
+
+function parseOptionalPositiveInteger(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
 }
 
 function trimTrailingSlash(value: string): string {

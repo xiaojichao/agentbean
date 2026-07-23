@@ -1,14 +1,18 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
-import type { ArtifactRole, ArtifactSourceRootDto } from '../../../packages/contracts/src/index.js';
+import {
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  type ArtifactRole,
+  type ArtifactSourceRootDto,
+  type SkippedArtifactDiagnostic,
+} from '../../../packages/contracts/src/index.js';
 
 const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)$/i;
 const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
 const MAX_OUTPUT_FILES_PER_ROOT = 2000;
-const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
 export type ArtifactSourceRootKind = Exclude<ArtifactSourceRootDto['kind'], 'legacy_run'>;
 export type { ArtifactRole };
 
@@ -43,6 +47,8 @@ export interface CollectArtifactsInput {
   startedAt: number;
   /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
   maxBytes?: number;
+  /** Reports files that could not be collected without silently omitting them. */
+  onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
 }
 
 /**
@@ -52,7 +58,7 @@ export interface CollectArtifactsInput {
  */
 export async function collectArtifacts(input: CollectArtifactsInput): Promise<CollectedArtifact[]> {
   const byRootPath = new Map<string, CollectedArtifact>();
-  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
+  const maxBytes = input.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
 
   const excludedNestedRoots = new Set([
     ...(input.outputDir ? [input.outputDir] : []),
@@ -95,10 +101,16 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           if (timeFilter && stat.mtimeMs <= input.startedAt) {
             continue;
           }
+          const relativePath = relative(rootForRelative, abs);
           if (stat.size > maxBytes) {
+            input.onSkipped?.({
+              filename: basename(abs),
+              relativePath,
+              sizeBytes: stat.size,
+              reason: 'FILE_TOO_LARGE',
+            });
             continue;
           }
-          visited += 1;
           if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
             return;
           }
@@ -112,13 +124,27 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               if (sizeBytes > maxBytes) break;
             }
           } catch {
+            input.onSkipped?.({
+              filename: basename(abs),
+              relativePath,
+              sizeBytes,
+              reason: 'COLLECTION_FAILED',
+            });
             continue;
           }
-          if (sizeBytes > maxBytes || sizeBytes !== stat.size) continue;
+          if (sizeBytes > maxBytes || sizeBytes !== stat.size) {
+            input.onSkipped?.({
+              filename: basename(abs),
+              relativePath,
+              sizeBytes,
+              reason: sizeBytes > maxBytes ? 'FILE_TOO_LARGE' : 'COLLECTION_FAILED',
+            });
+            continue;
+          }
           const sha256 = hash.digest('hex');
           const candidate: CollectedArtifact = {
             absolutePath: abs,
-            relativePath: relative(rootForRelative, abs),
+            relativePath,
             sha256,
             sizeBytes,
             filename: basename(abs),
