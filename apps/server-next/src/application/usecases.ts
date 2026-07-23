@@ -7568,7 +7568,7 @@ function normalizeChannelFilePath(value: string | undefined): string {
 function channelArtifactLogicalPath(artifact: ArtifactRecord): string {
   const relative = normalizeChannelFilePath(artifact.relativePath ?? artifact.filename);
   if (!artifact.workspaceRunId) return relative;
-  const root = artifact.sourceRoot?.label || '默认运行输出';
+  const root = artifact.sourceRoot ? `${artifact.sourceRoot.label} [${artifact.sourceRoot.id}]` : '默认运行输出';
   return ['运行产物', `Run ${artifact.workspaceRunId}`, root, relative].filter(Boolean).join('/');
 }
 

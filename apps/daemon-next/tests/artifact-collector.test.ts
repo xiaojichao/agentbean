@@ -109,9 +109,9 @@ describe('artifact-collector', () => {
     const outputDir = join(cwd, 'outputs');
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, 'image-001.png'), 'same-bytes');
-    mkdirSync(join(cwd, 'sub'), { recursive: true });
-    await touch(join(cwd, 'sub', 'zzz.png'), 5000);
-    writeFileSync(join(cwd, 'sub', 'zzz.png'), 'same-bytes');
+    mkdirSync(join(outputDir, 'sub'), { recursive: true });
+    await touch(join(outputDir, 'sub', 'zzz.png'), 5000);
+    writeFileSync(join(outputDir, 'sub', 'zzz.png'), 'same-bytes');
 
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 1000 });
     const sameContent = collected.filter((c) => c.sha256 === collected[0].sha256);

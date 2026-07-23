@@ -110,16 +110,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             sourceRoot,
             role,
           };
-          const duplicateWithDifferentPath = [...byRootPath.values()].find((existing) => existing.sha256 === sha256 && existing.relativePath !== candidate.relativePath);
-          if (duplicateWithDifferentPath) {
-            if (fileNamePreference(candidate.filename) < fileNamePreference(duplicateWithDifferentPath.filename)) {
-              for (const [existingKey, existing] of byRootPath) {
-                if (existing === duplicateWithDifferentPath) byRootPath.set(existingKey, candidate);
-              }
-            }
-            continue;
-          }
-          const key = `${sourceRoot.id}:${candidate.relativePath}`;
+          const key = `${sourceRoot.id}:${sha256}`;
           const existing = byRootPath.get(key);
           if (!existing || fileNamePreference(candidate.filename) < fileNamePreference(existing.filename)) {
             byRootPath.set(key, candidate);
@@ -139,7 +130,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label), root.defaultRole ?? 'run_output', root.recursive ?? true);
   }
   if (input.cwd) {
-    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录'), 'intermediate');
+    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录'), 'run_output');
   }
   return [...byRootPath.values()];
 }

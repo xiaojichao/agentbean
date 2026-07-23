@@ -413,6 +413,10 @@ export default function ChatPage() {
   }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, conn]);
 
   useEffect(() => {
+    setChannelFilesPath(searchParams.get('filePath') ?? '');
+  }, [searchParams]);
+
+  useEffect(() => {
     setChannelFiles([]);
     setChannelFilesCursor(undefined);
     if (tab !== 'files') setChannelFilesPath('');
@@ -1755,8 +1759,16 @@ export default function ChatPage() {
             onSearchQuery={setChannelFilesQuery}
             path={channelFilesPath}
             directories={channelFileDirectories}
-            onOpenDirectory={(path) => { setChannelFilesPath(path); setChannelFiles([]); setChannelFilesCursor(undefined); }}
-            onOpenRoot={() => { setChannelFilesPath(''); setChannelFiles([]); setChannelFilesCursor(undefined); }}
+            onOpenDirectory={(path) => {
+              setChannelFilesPath(path); setChannelFiles([]); setChannelFilesCursor(undefined);
+              const params = new URLSearchParams(searchParams.toString()); params.set('chatTab', 'files'); params.set('filePath', path);
+              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+            }}
+            onOpenRoot={() => {
+              setChannelFilesPath(''); setChannelFiles([]); setChannelFilesCursor(undefined);
+              const params = new URLSearchParams(searchParams.toString()); params.set('chatTab', 'files'); params.delete('filePath');
+              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+            }}
             onLoadMore={() => void loadChannelFiles(false)}
             agents={agents}
             humanProfiles={humanProfiles}
