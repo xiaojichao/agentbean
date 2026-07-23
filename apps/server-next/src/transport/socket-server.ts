@@ -762,6 +762,11 @@ export function attachServerNextNamespaces(
           acquire: (payload) => options.taskClaimBroker!.acquire(payload),
           renew: (payload) => options.taskClaimBroker!.renew(payload),
           release: (payload) => options.taskClaimBroker!.release(payload),
+          // #712 切片 C-2a：显式 Offer 响应路由到 broker.respondToOffer（AC#4 事务接线，C-1 已合）。
+          respond: (payload) => options.taskClaimBroker!.respondToOffer({
+            offerId: payload.offerId, agentId: payload.agentId, kind: payload.kind,
+            detail: payload.detail ?? null,
+          }),
         },
       } : {}),
     });

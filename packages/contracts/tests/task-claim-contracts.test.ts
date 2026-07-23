@@ -5,8 +5,15 @@ describe('task claim socket contracts', () => {
   test('事件名与 offer 最小披露字段固定', () => {
     expect(AGENT_EVENTS.taskClaim).toEqual({
       offer: 'task-claim:offer', acquire: 'task-claim:acquire', renew: 'task-claim:renew',
-      release: 'task-claim:release', expired: 'task-claim:expired',
+      release: 'task-claim:release', expired: 'task-claim:expired', respond: 'task-claim:respond',
     });
+    // #712 切片 C-2a：respond 携带显式四类响应（AC#2），非法 kind 被拒。
+    expect(parseTaskClaimPayload('respond', {
+      schemaVersion: 1, offerId: 'offer-1', agentId: 'agent-1', kind: 'needs_info', detail: '缺上下文',
+    })).toMatchObject({ kind: 'needs_info', detail: '缺上下文' });
+    expect(safeParseTaskClaimPayload('respond', {
+      schemaVersion: 1, offerId: 'o', agentId: 'a', kind: 'bogus',
+    })).toEqual({ ok: false });
     const offer = parseTaskClaimPayload('offer', {
       schemaVersion: 1, offerId: 'offer-1', deviceId: 'device-1', taskId: 'task-1',
       taskRevision: 2, taskAttempt: 1, agentId: 'agent-1',
