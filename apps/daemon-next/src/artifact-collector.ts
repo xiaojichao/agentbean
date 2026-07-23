@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, readdirSync, statSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 import type { ArtifactRole, ArtifactSourceRootDto } from '../../../packages/contracts/src/index.js';
 
@@ -8,7 +8,7 @@ const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
 const MAX_OUTPUT_FILES_PER_ROOT = 2000;
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
 export type ArtifactSourceRootKind = Exclude<ArtifactSourceRootDto['kind'], 'legacy_run'>;
 export type { ArtifactRole };
 
@@ -59,7 +59,14 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     ...(input.extraOutputDirs ?? []),
     ...(input.configuredOutputRoots ?? []).map((root) => root.path),
   ]);
-  const ingest = (rootAbs: string, rootForRelative: string, timeFilter: boolean, sourceRoot: ArtifactSourceRoot, role: ArtifactRole, recursive = true): void => {
+  const ingest = async (
+    rootAbs: string,
+    rootForRelative: string,
+    timeFilter: boolean,
+    sourceRoot: ArtifactSourceRoot,
+    role: ArtifactRole,
+    recursive = true,
+  ): Promise<void> => {
     let visited = 0;
     const stack: string[] = [rootAbs];
     while (stack.length > 0) {
@@ -95,18 +102,25 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
             return;
           }
-          let content;
+          let hash = createHash('sha256');
+          let sizeBytes = 0;
           try {
-            content = readFileSync(abs);
+            for await (const chunk of createReadStream(abs)) {
+              const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              sizeBytes += buffer.length;
+              hash.update(buffer);
+              if (sizeBytes > maxBytes) break;
+            }
           } catch {
             continue;
           }
-          const sha256 = createHash('sha256').update(content).digest('hex');
+          if (sizeBytes > maxBytes || sizeBytes !== stat.size) continue;
+          const sha256 = hash.digest('hex');
           const candidate: CollectedArtifact = {
             absolutePath: abs,
             relativePath: relative(rootForRelative, abs),
             sha256,
-            sizeBytes: stat.size,
+            sizeBytes,
             filename: basename(abs),
             sourceRoot,
             role,
@@ -122,16 +136,16 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   };
 
   if (input.outputDir) {
-    ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出', input.outputDir), 'run_output');
+    await ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出', input.outputDir), 'run_output');
   }
   for (const dir of input.extraOutputDirs ?? []) {
-    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output');
+    await ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output');
   }
   for (const root of input.configuredOutputRoots ?? []) {
-    ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label, root.path), root.defaultRole ?? 'run_output', root.recursive ?? true);
+    await ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label, root.path), root.defaultRole ?? 'run_output', root.recursive ?? true);
   }
   if (input.cwd) {
-    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'intermediate');
+    await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'intermediate');
   }
   return [...byRootPath.values()];
 }

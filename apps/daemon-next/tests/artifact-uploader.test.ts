@@ -118,4 +118,23 @@ describe('artifact-uploader', () => {
 
     expect(uploaded.map((u) => u.filename)).toEqual(['small.txt']);
   });
+
+  test('enforces the per-run total and reports stable skipped-file diagnostics', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'up-')));
+    const first = makeArtifact(dir, 'first.txt', '123456');
+    const second = makeArtifact(dir, 'second.txt', 'abcdef');
+    const skipped: Array<{ filename: string; reason: string }> = [];
+    const fakeFetch: typeof fetch = async (_input, init) => {
+      const file = (init?.body as FormData).get('file') as File;
+      return new Response(JSON.stringify({ ok: true, artifact: { id: `id-${file.name}` } }), { status: 201 });
+    };
+
+    const uploaded = await uploadArtifacts({
+      serverUrl: 'http://server.test', token: 'tok', teamId: 'team-1', channelId: 'chan-1',
+      fetch: fakeFetch, maxTotalBytes: 6, onSkipped: (artifact) => skipped.push({ filename: artifact.filename, reason: artifact.reason }),
+    }, [first, second]);
+
+    expect(uploaded.map((artifact) => artifact.filename)).toEqual(['first.txt']);
+    expect(skipped).toEqual([{ filename: 'second.txt', reason: 'RUN_TOTAL_EXCEEDED' }]);
+  });
 });

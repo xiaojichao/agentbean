@@ -38,7 +38,7 @@ export type { RecoverableWorkspaceRun, WorkspaceRunDir, WorkspaceRunManifest } f
 export { collectArtifacts } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
-export type { UploadedArtifact } from './artifact-uploader.js';
+export type { ArtifactUploadSkipReason, SkippedArtifact, UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
 export { createDeviceServiceCore } from './device-service-core.js';
 export type { DeviceServiceComponent, DeviceServiceCore } from './device-service-core.js';
