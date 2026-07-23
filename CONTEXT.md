@@ -274,15 +274,15 @@ _Avoid_: 频道文档、可变工作区文件、最终版。
 频道文件视图根据 Artifact source root 和根内相对路径形成的导航层，只表示当前层级实际存在的文件与子路径。它不拥有独立权限或生命周期，空路径也不会被推断为真实目录。
 _Avoid_: Agent 设备绝对目录、独立文件夹实体、递归文件平铺。
 
-## Artifact preview derivative
-
-系统为某个不可变 Artifact（包括 Message artifact revision 和 Run artifact）异步生成的受限尺寸预览资源，例如图片缩略图、视频首帧或 PDF 首页。它只用于安全高效地展示文件，不是频道文件、文档 revision、Agent 输入或用户交付物。
-_Avoid_: 原文件、可下载产物、文件目录项、同步上传前置条件。
-
 ## Channel file index
 
 Server 为一个频道维护的权威文件读模型，统一投影公开消息附件、Channel document 最新版、交付物和允许公开的 Run artifact。它支持目录、分页、搜索、角色筛选和稳定排序，不能由浏览器已加载的消息临时推断。
 _Avoid_: 聊天附件平铺、客户端消息缓存、内部日志、预览衍生资源。
+
+## Artifact preview derivative
+
+系统为某个不可变 Artifact（包括 Message artifact revision 和 Run artifact）异步生成的受限尺寸预览资源，例如图片缩略图、视频首帧或 PDF 首页。它只用于安全高效地展示文件，不是频道文件、文档 revision、Agent 输入或用户交付物。
+_Avoid_: 原文件、可下载产物、文件目录项、同步上传前置条件。
 
 ## Channel archive
 

@@ -2,8 +2,11 @@ import type { ID, UnixMs } from './common.js';
 import type { ArtifactDto, ArtifactRole } from './artifact.js';
 
 export interface ChannelFileSourceDto {
-  messageId: ID;
+  messageId?: ID;
   threadId?: ID;
+  taskId?: ID;
+  workspaceRunId?: ID;
+  agentId?: ID;
   senderKind: 'human' | 'agent' | 'system';
   senderId: ID | null;
   messageCreatedAt: UnixMs;

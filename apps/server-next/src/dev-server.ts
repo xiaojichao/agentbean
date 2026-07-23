@@ -709,6 +709,9 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
     const filename = sanitizeFilename(upload.filename);
     const artifactId = randomUUID();
     const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
+    const deviceUpload = isDeviceToken(token);
+    const deviceRole = deviceUpload ? parseArtifactRole(upload.fields.artifactRole) : undefined;
+    const deviceSourceRoot = deviceUpload ? parseArtifactSourceRoot(upload.fields) : undefined;
     const uploadInput = {
       teamId,
       channelId: upload.channelId,
@@ -717,8 +720,8 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
       sizeBytes: upload.sizeBytes,
        storagePath: relativeStoragePath,
        relativePath: filename,
-       role: parseArtifactRole(upload.fields.artifactRole),
-       sourceRoot: parseArtifactSourceRoot(upload.fields),
+       role: deviceRole ?? (deviceUpload ? 'run_output' : 'attachment'),
+       ...(deviceSourceRoot ? { sourceRoot: deviceSourceRoot } : {}),
        sha256: upload.sha256,
     };
     const absoluteDir = join(input.config.dataDir, 'artifacts', teamId, artifactId);
@@ -732,7 +735,7 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
       cleanupPath = absolutePath;
       writeFileSync(absolutePath, upload.content, { flag: 'wx' });
     }
-    const result = isDeviceToken(token)
+    const result = deviceUpload
       ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
       : await uploadArtifactForSession(input, token, uploadInput);
     if (!result.ok) {
@@ -974,12 +977,21 @@ async function readMultipartUpload(
   maxArtifactBytes: number,
 ): Promise<MultipartUploadResult> {
   mkdirSync(dataDir, { recursive: true });
-  const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number } }) => NodeJS.WritableStream & { on(event: string, listener: (...args: any[]) => void): unknown };
-  const parser = Busboy({ headers: request.headers, limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024 } });
+  const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number; fields: number; parts: number } }) => NodeJS.WritableStream & { destroy(error?: Error): void; on(event: string, listener: (...args: any[]) => void): unknown };
+  const parser = Busboy({
+    headers: request.headers,
+    limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024, fields: 16, parts: 18 },
+  });
   const fields: Record<string, string> = {};
   let fileResult: MultipartUploadResult['file'] | undefined;
   let filePromise: Promise<void> | undefined;
   let failure: Error | undefined;
+  const rejectPartLimit = (): void => {
+    failure = new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
+    parser.destroy(failure);
+  };
+  parser.on('fieldsLimit', rejectPartLimit);
+  parser.on('partsLimit', rejectPartLimit);
   parser.on('field', (name: string, value: string) => { fields[name] = value; });
   parser.on('file', (name: string, file: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {
     if (name !== 'file' || fileResult) {
@@ -1009,6 +1021,13 @@ async function readMultipartUpload(
       throw failure;
     }
   } catch (error) {
+    if (filePromise) {
+      try {
+        await filePromise;
+      } catch {
+        // The file pipeline already removes its partial output on failure.
+      }
+    }
     if (fileResult?.tempPath) safeUnlink(fileResult.tempPath);
     if (failure) throw failure;
     throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid multipart upload' });
@@ -1052,7 +1071,12 @@ function parseArtifactSourceRoot(fields: Record<string, unknown>): ArtifactSourc
   const id = typeof fields.sourceRootId === 'string' ? fields.sourceRootId.trim() : '';
   const kind = typeof fields.sourceRootKind === 'string' ? fields.sourceRootKind.trim() : '';
   const label = typeof fields.sourceRootLabel === 'string' ? fields.sourceRootLabel.trim() : '';
-  if (!id || !kind || !label || id.length > 128 || label.length > 120) return undefined;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)
+    || !label
+    || label.length > 120
+    || label === '.'
+    || label === '..'
+    || /[/\\\u0000-\u001f]/.test(label)) return undefined;
   if (kind !== 'run_output' && kind !== 'agent_workspace' && kind !== 'configured_output' && kind !== 'adapter_generated' && kind !== 'legacy_run') return undefined;
   return { id, kind, label };
 }

@@ -4799,6 +4799,12 @@ describe('server-next first-slice use cases', () => {
       args: ['--model', 'gpt-5.4'],
       env: {
         OPENAI_API_KEY: 'secret-value',
+        AGENTBEAN_ARTIFACT_SOURCE_ROOTS: JSON.stringify([
+          { id: 'reports', label: '报告', envVarName: 'REPORT_DIR', defaultRole: 'deliverable' },
+          { id: 'slash', label: '伪/目录', envVarName: 'SLASH_DIR', defaultRole: 'run_output' },
+          { id: 'backslash', label: '伪\\目录', envVarName: 'BACKSLASH_DIR', defaultRole: 'run_output' },
+          { id: 'parent', label: '..', envVarName: 'PARENT_DIR', defaultRole: 'run_output' },
+        ]),
       },
     });
 
@@ -4819,14 +4825,14 @@ describe('server-next first-slice use cases', () => {
         command: '/opt/homebrew/bin/codex',
         args: ['--model', 'gpt-5.4'],
         cwd: '/Users/shaw/AgentBean',
-        envKeys: ['OPENAI_API_KEY'],
+        envKeys: ['AGENTBEAN_ARTIFACT_SOURCE_ROOTS', 'OPENAI_API_KEY'],
         lastSeenAt: 550,
       },
     });
     expect(JSON.stringify(ack)).not.toContain('secret-value');
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,
-      agents: [{ id: 'agent-1', source: 'custom', envKeys: ['OPENAI_API_KEY'] }],
+      agents: [{ id: 'agent-1', source: 'custom', envKeys: ['AGENTBEAN_ARTIFACT_SOURCE_ROOTS', 'OPENAI_API_KEY'] }],
     });
     const sendAck = await app.sendMessage({
       userId: 'user-1',
@@ -4848,6 +4854,13 @@ describe('server-next first-slice use cases', () => {
           command: '/opt/homebrew/bin/codex',
           args: ['--model', 'gpt-5.4'],
           cwd: '/Users/shaw/AgentBean',
+          artifactSourceRoots: [{
+            id: 'reports',
+            label: '报告',
+            envVarName: 'REPORT_DIR',
+            defaultRole: 'deliverable',
+            recursive: true,
+          }],
           envRef: { agentId: 'agent-1', teamId: 'team-1' },
         },
       },

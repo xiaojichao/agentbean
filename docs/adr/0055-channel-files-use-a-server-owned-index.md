@@ -8,4 +8,4 @@ status: accepted
 
 索引排除内部运行日志、Artifact preview derivative、只应出现在文档版本历史中的旧 revision、未交付到当前频道根任务的内部调用产物，以及已删除消息中不再公开的普通附件。目录查询、分页、搜索、角色筛选和稳定排序由 Server 提供，文件是否可见不能取决于客户端加载了多少聊天历史。
 
-历史迁移采用保守且幂等的投影：现有消息附件归为普通附件；每个 Markdown 消息附件独立建立只有初始 revision 的 Channel document；带 Workspace Run 和相对路径的文件按 Run 隔离到合成来源根“历史运行产物”。缺失来源信息时放在对应分组根目录，不猜测设备路径、Artifact role、交付物或最终版，不重新扫描 Agent 设备旧目录；Artifact preview derivative 通过低优先级后台任务或访问时逐步补齐。
+历史数据采用保守投影：现有消息附件在读取时归为普通附件；带 Workspace Run 和相对路径但缺少来源根的文件放入该 Run 的“默认运行输出”分组。系统不猜测设备路径、交付物或最终版，也不重新扫描 Agent 设备旧目录。

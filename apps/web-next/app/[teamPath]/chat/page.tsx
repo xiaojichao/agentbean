@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ChannelDocumentDto, type ChannelFileDirectoryDto, type ChannelFileEntryDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -89,10 +89,13 @@ interface TaskItem {
 interface ConversationFile {
   artifact: Artifact;
   documentId?: string;
-  messageId: string;
+  messageId?: string;
   createdAt: number;
   senderKind: ChatMessage['senderKind'];
   senderId: string | null;
+  logicalPath?: string;
+  role?: string;
+  workspaceRunId?: string;
 }
 
 interface OpenChannelDocument {
@@ -271,10 +274,11 @@ export default function ChatPage() {
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([]);
   const [threadAttachments, setThreadAttachments] = useState<ComposerAttachment[]>([]);
   const [channelFiles, setChannelFiles] = useState<ConversationFile[]>([]);
-  const [channelFileDirectories, setChannelFileDirectories] = useState<ChannelFileDirectoryDto[]>([]);
-  const [channelFilesPath, setChannelFilesPath] = useState('');
   const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
   const [channelFilesQuery, setChannelFilesQuery] = useState('');
+  const [channelFilesRole, setChannelFilesRole] = useState<ArtifactRole | 'all'>('all');
+  const [channelFilesPath, setChannelFilesPath] = useState('');
+  const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
@@ -416,8 +420,8 @@ export default function ChatPage() {
       const cursor = reset ? undefined : channelFilesCursor;
       const [result, documentsResult] = await Promise.all([
         channelFilesQuery.trim()
-          ? channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath)
-          : channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath),
+          ? channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath, channelFilesRole)
+          : channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath, channelFilesRole),
         channelEvents().listDocuments(activeChannel),
       ]);
       if (requestRevision !== channelFilesRequestRevisionRef.current) return;
@@ -425,27 +429,27 @@ export default function ChatPage() {
       const documents = new Map((documentsResult.documents ?? []).map((document) => [document.id, document]));
       const mapped = result.files.map((entry) => channelFileToConversationFile(entry, documents));
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
-      if (reset) setChannelFileDirectories(result.directories ?? []);
       setChannelFilesCursor(result.nextCursor);
+      if (reset) setChannelFileDirectories(result.directories ?? []);
     } finally {
       if (requestRevision === channelFilesRequestRevisionRef.current) {
         setChannelFilesLoading(false);
       }
     }
-  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, conn]);
+  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, channelFilesRole, conn]);
+
+  useEffect(() => {
+    setChannelFilesPath(searchParams.get('filePath') ?? '');
+  }, [searchParams]);
 
   useEffect(() => {
     channelFilesRequestRevisionRef.current += 1;
     setChannelFiles([]);
-    setChannelFileDirectories([]);
     setChannelFilesCursor(undefined);
+    setChannelFileDirectories([]);
     setChannelFilesLoading(false);
     if (tab === 'files') void loadChannelFiles(true);
-  }, [activeChannel, channelFilesPath, conn, tab, channelFilesQuery]);
-
-  useEffect(() => {
-    setChannelFilesPath('');
-  }, [activeChannel]);
+  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -1830,14 +1834,27 @@ export default function ChatPage() {
         ) : (
             <ConversationFiles
             files={channelFiles}
-            directories={channelFileDirectories}
-            path={channelFilesPath}
             loading={channelFilesLoading}
             hasMore={Boolean(channelFilesCursor)}
             searchQuery={channelFilesQuery}
             onSearchQuery={setChannelFilesQuery}
+            role={channelFilesRole}
+            onRole={setChannelFilesRole}
+            path={channelFilesPath}
+            directories={channelFileDirectories}
+            onOpenDirectory={(path) => {
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('chatTab', 'files');
+              params.set('filePath', path);
+              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+            }}
+            onOpenRoot={() => {
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('chatTab', 'files');
+              params.delete('filePath');
+              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+            }}
             onLoadMore={() => void loadChannelFiles(false)}
-            onOpenDirectory={setChannelFilesPath}
             onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
             agents={agents}
             humanProfiles={humanProfiles}
@@ -2618,14 +2635,17 @@ function TaskCard({
 
 function ConversationFiles({
   files,
-  directories,
-  path,
   loading,
   hasMore,
   searchQuery,
   onSearchQuery,
-  onLoadMore,
+  role,
+  onRole,
+  path,
+  directories,
   onOpenDirectory,
+  onOpenRoot,
+  onLoadMore,
   onEditArtifact,
   agents,
   humanProfiles,
@@ -2633,14 +2653,17 @@ function ConversationFiles({
   onJump,
 }: {
   files: ConversationFile[];
-  directories: ChannelFileDirectoryDto[];
-  path: string;
   loading: boolean;
   hasMore: boolean;
   searchQuery: string;
   onSearchQuery: (query: string) => void;
-  onLoadMore: () => void;
+  role: ArtifactRole | 'all';
+  onRole: (role: ArtifactRole | 'all') => void;
+  path: string;
+  directories: NonNullable<ChannelFilesResultDto['directories']>;
   onOpenDirectory: (path: string) => void;
+  onOpenRoot: () => void;
+  onLoadMore: () => void;
   onEditArtifact: (artifact: Artifact, documentId?: string) => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
@@ -2653,15 +2676,24 @@ function ConversationFiles({
       <div className="mb-3 flex items-center gap-2">
         <Search size={14} className="text-neutral-400" />
         <input value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
+        <select value={role} onChange={(event) => onRole(event.target.value as ArtifactRole | 'all')} className="h-8 border border-neutral-300 bg-white px-2 text-xs outline-none focus:border-neutral-900" aria-label="按文件角色筛选">
+          <option value="all">全部角色</option>
+          <option value="attachment">普通附件</option>
+          <option value="deliverable">交付物</option>
+          <option value="run_output">运行产物</option>
+          <option value="intermediate">中间产物</option>
+        </select>
       </div>
-      {!searchQuery && path && (
-        <button
-          type="button"
-          onClick={() => onOpenDirectory(path.split('/').slice(0, -1).join('/'))}
-          className="mb-3 text-xs text-neutral-500 hover:text-neutral-900"
-        >
-          ← 返回上一级
-        </button>
+      {path && (
+        <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+          <button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>
+          {path.split('/').map((part, index, parts) => (
+            <span key={`${part}-${index}`}>
+              <span className="mx-1 text-neutral-300">/</span>
+              <button onClick={() => onOpenDirectory(parts.slice(0, index + 1).join('/'))} className="hover:text-neutral-900">{part}</button>
+            </span>
+          ))}
+        </div>
       )}
       {loading && files.length === 0 ? (
         <div className="flex h-32 items-center justify-center text-sm text-neutral-400">加载文件中…</div>
@@ -2671,32 +2703,35 @@ function ConversationFiles({
           <span className="text-sm">暂无文件</span>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {!searchQuery && directories.map((directory) => (
-            <button
-              key={directory.path}
-              type="button"
-              onClick={() => onOpenDirectory(directory.path)}
-              className="border border-neutral-300 bg-white p-3 text-left hover:border-neutral-900"
-            >
-              <DirectoryPreview previews={directory.previewUrls ?? []} />
-              <div className="mt-2 truncate text-sm font-medium text-neutral-900">{directory.name}</div>
-              <div className="mt-0.5 text-xs text-neutral-500">{directory.fileCount} 个文件</div>
+        <div className="space-y-2">
+          {directories.map((directory) => (
+            <button key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900">
+              <div className="w-24 shrink-0">
+                <DirectoryPreview previews={directory.previewUrls ?? []} />
+              </div>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-neutral-900">{directory.name}</span>
+                <span className="text-xs text-neutral-500">{directory.fileCount} 个文件</span>
+              </span>
             </button>
           ))}
           {files.map((file) => {
             return (
-              <div key={`${file.messageId}-${file.artifact.id}`} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
+              <div key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
                 <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} onEdit={() => onEditArtifact(file.artifact, file.documentId)} />
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
                     <span>{formatDateTime(file.createdAt)}</span>
                     <span className="text-neutral-300">·</span>
-                    <span className="truncate">{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                    <span className="truncate">{speakerName({ id: file.messageId ?? file.artifact.id, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                    {file.role && <span>· {channelFileRoleLabel(file.role)}</span>}
+                    {file.logicalPath && <span className="min-w-0 truncate">· {file.logicalPath}</span>}
                   </div>
-                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
-                    <ExternalLink size={15} />
-                  </button>
+                  {file.messageId && (
+                    <button onClick={() => onJump(file.messageId!)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+                      <ExternalLink size={15} />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -4789,11 +4824,21 @@ function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Ma
   return {
     artifact: document?.currentRevision.artifact ?? entry.artifact,
     ...(document ? { documentId: document.id } : {}),
-    messageId: entry.source.messageId,
+    ...(entry.source.messageId ? { messageId: entry.source.messageId } : {}),
     createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
     senderKind: entry.source.senderKind,
     senderId: entry.source.senderId,
+    ...(entry.logicalPath ? { logicalPath: entry.logicalPath } : {}),
+    ...(entry.role ? { role: entry.role } : {}),
+    ...(entry.source.workspaceRunId ? { workspaceRunId: entry.source.workspaceRunId } : {}),
   };
+}
+
+function channelFileRoleLabel(role: string): string {
+  if (role === 'intermediate') return '中间产物';
+  if (role === 'run_output') return '运行产物';
+  if (role === 'deliverable') return '交付物';
+  return '普通附件';
 }
 
 function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): NonNullable<ChatMessage['workspaceRun']>[] {

@@ -69,6 +69,19 @@ describe('artifact-collector', () => {
     expect(names).not.toContain('old.png');
   });
 
+  test('missing optional adapter output dirs do not add Run diagnostics', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
+    const diagnostics: string[] = [];
+
+    await collectArtifacts({
+      extraOutputDirs: [join(cwd, 'missing-generated-images')],
+      startedAt: 0,
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
   test('extra output dirs do not let many old files hide a new generated image', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
@@ -104,19 +117,22 @@ describe('artifact-collector', () => {
     expect(collected.map((c) => c.filename)).not.toContain('nested.png');
   });
 
-  test('preserves identical bytes at different source-root paths', async () => {
+  test('keeps distinct relative paths even when file content is identical', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
     mkdirSync(outputDir, { recursive: true });
     writeFileSync(join(outputDir, 'image-001.png'), 'same-bytes');
-    mkdirSync(join(cwd, 'sub'), { recursive: true });
-    await touch(join(cwd, 'sub', 'zzz.png'), 5000);
-    writeFileSync(join(cwd, 'sub', 'zzz.png'), 'same-bytes');
+    mkdirSync(join(outputDir, 'sub'), { recursive: true });
+    await touch(join(outputDir, 'sub', 'zzz.png'), 5000);
+    writeFileSync(join(outputDir, 'sub', 'zzz.png'), 'same-bytes');
 
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 1000 });
     const sameContent = collected.filter((c) => c.sha256 === collected[0].sha256);
     expect(sameContent).toHaveLength(2);
-    expect(new Set(sameContent.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
+    expect(sameContent.map((artifact) => artifact.relativePath).sort()).toEqual([
+      'image-001.png',
+      join('sub', 'zzz.png'),
+    ]);
   });
 
   test('fills sha256 and sizeBytes', async () => {
@@ -136,8 +152,16 @@ describe('artifact-collector', () => {
     writeFileSync(join(outputDir, 'big.zip'), 'x'.repeat(50));
     writeFileSync(join(outputDir, 'small.txt'), 'ok');
 
-    const collected = await collectArtifacts({ outputDir, cwd, startedAt: 0, maxBytes: 10 });
+    const diagnostics: string[] = [];
+    const collected = await collectArtifacts({
+      outputDir,
+      cwd,
+      startedAt: 0,
+      maxBytes: 10,
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
+    });
     expect(collected.map((c) => c.filename)).toEqual(['small.txt']);
+    expect(diagnostics).toContain('ARTIFACT_FILE_TOO_LARGE');
   });
 
   test('keeps same relative files independent across source roots and assigns explicit roles', async () => {
@@ -151,7 +175,7 @@ describe('artifact-collector', () => {
 
     const collected = await collectArtifacts({
       outputDir,
-      configuredOutputRoots: [{ path: configuredDir, label: '交付目录', defaultRole: 'deliverable' }],
+      configuredOutputRoots: [{ id: 'deliverables', path: configuredDir, label: '交付目录', defaultRole: 'deliverable' }],
       startedAt: 0,
     });
 
@@ -159,6 +183,7 @@ describe('artifact-collector', () => {
     expect(reports).toHaveLength(2);
     expect(new Set(reports.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
     expect(reports.map((artifact) => artifact.role).sort()).toEqual(['deliverable', 'run_output']);
+    expect(reports.find((artifact) => artifact.role === 'deliverable')?.sourceRoot.id).toBe('deliverables');
     expect(reports.every((artifact) => !artifact.absolutePath.includes('AGENTBEAN_OUTPUT_DIR'))).toBe(true);
   });
 });

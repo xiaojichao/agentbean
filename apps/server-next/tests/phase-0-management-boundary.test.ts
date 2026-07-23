@@ -26,6 +26,7 @@ describe('Phase 0 existing execution fact boundary', () => {
       await repositories.messages.append({
         id: message.id, teamId: 'team-1', channelId: channel!.id,
         senderKind: 'human', senderId: 'user-1', body: 'attachment', createdAt: message.createdAt,
+        ...(message.id === 'message-new' ? { meta: { taskId: 'task-1' } } : {}),
         ...(message.id === 'message-deleted' ? { meta: { deletedAt: 301 } } : {}),
       });
     }
@@ -45,10 +46,38 @@ describe('Phase 0 existing execution fact boundary', () => {
       id: 'artifact-log', teamId: 'team-1', channelId: channel!.id, messageId: 'message-new', workspaceRunId: 'run-1', uploaderId: 'user-1',
       filename: 'workspace-run.log', mimeType: 'text/plain', sizeBytes: 1, relativePath: 'logs/workspace-run.log', createdAt: 400,
     });
+    await repositories.workspaceRuns.create({
+      id: 'run-1',
+      teamId: 'team-1',
+      channelId: channel!.id,
+      messageId: 'message-new',
+      dispatchId: 'dispatch-run-1',
+      agentId: 'agent-1',
+      status: 'succeeded',
+      createdAt: 350,
+      updatedAt: 350,
+      artifactIds: ['artifact-run'],
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-run',
+      teamId: 'team-1',
+      channelId: channel!.id,
+      workspaceRunId: 'run-1',
+      dispatchId: 'dispatch-run-1',
+      uploaderId: 'agent-1',
+      filename: 'brief.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 3,
+      relativePath: 'reports/brief.md',
+      role: 'run_output',
+      sourceRoot: { id: 'root-default', kind: 'run_output', label: '默认运行输出' },
+      createdAt: 350,
+    });
     await expect(repositories.artifacts.listByChannel({
       teamId: 'team-1', channelId: channel!.id,
     })).resolves.toMatchObject([
       { id: 'artifact-log' },
+      { id: 'artifact-run' },
       { id: 'artifact-deleted' },
       { id: 'artifact-new' },
       { id: 'artifact-old' },
@@ -62,6 +91,46 @@ describe('Phase 0 existing execution fact boundary', () => {
     expect(second.files).toHaveLength(1);
     await expect(app.searchChannelFiles({ userId: 'user-1', teamId: 'team-1', channelId: channel!.id, query: 'same-name' })).resolves.toMatchObject({
       ok: true, files: [{ artifact: { id: 'artifact-new' } }, { artifact: { id: 'artifact-old' } }],
+    });
+    const root = await app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: channel!.id,
+    });
+    expect(root).toMatchObject({
+      ok: true,
+      directories: [{ name: '运行产物', fileCount: 1 }],
+    });
+    const sourceRootPath = '运行产物/任务 task-1/Run run-1/默认运行输出 [root-default]';
+    await expect(app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: channel!.id, path: sourceRootPath,
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [],
+      directories: [{ name: 'reports', fileCount: 1 }],
+    });
+    await expect(app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: channel!.id, path: `${sourceRootPath}/reports`,
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [{
+        artifact: { id: 'artifact-run', role: 'run_output', sourceRoot: { id: 'root-default' } },
+        source: { messageId: 'message-new', taskId: 'task-1', workspaceRunId: 'run-1', agentId: 'agent-1' },
+        logicalPath: `${sourceRootPath}/reports/brief.md`,
+        role: 'run_output',
+      }],
+      directories: [],
+    });
+    await expect(app.searchChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: channel!.id, query: 'brief',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [{ artifact: { id: 'artifact-run' }, logicalPath: `${sourceRootPath}/reports/brief.md` }],
+    });
+    await expect(app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: channel!.id, role: 'run_output',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [],
+      directories: [{ name: '运行产物', fileCount: 1 }],
     });
   });
 
@@ -251,7 +320,7 @@ describe('Phase 0 existing execution fact boundary', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
-      path: '运行产物/Run workspace-run-1/默认运行输出',
+      path: '运行产物/未关联任务/Run workspace-run-1/默认运行输出',
     })).resolves.toMatchObject({
       ok: true,
       files: [{
@@ -262,6 +331,34 @@ describe('Phase 0 existing execution fact boundary', () => {
         source: { messageId: 'result-message-1' },
       }],
     });
+  });
+
+  test('rejects unsafe source-root labels from dispatch results before persisting artifacts', async () => {
+    const { app, repositories } = await createHarness([
+      'user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1',
+    ]);
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex generate output',
+    });
+
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'generated output',
+      workspaceRun: { id: 'workspace-run-1', status: 'succeeded', exitCode: 0 },
+      artifacts: [{
+        id: 'artifact-unsafe',
+        filename: 'result.txt',
+        sourceRoot: { id: 'reports', kind: 'configured_output', label: '伪/目录' },
+      }],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    await expect(repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: 'artifact-unsafe',
+    })).resolves.toBeNull();
   });
 
   test('Worker transport stays isolated from existing Task and Dispatch APIs', () => {

@@ -21,9 +21,11 @@ describe('chat files surface', () => {
     expect(source).toMatch(/useEffect\(\(\) => \{\s+channelFilesRequestRevisionRef\.current \+= 1;\s+setChannelFiles\(\[\]\)/);
   });
 
-  test('renders directory cards with counts and up to four derivative previews', () => {
-    expect(filesSurface).toContain('<DirectoryPreview previews={directory.previewUrls ?? []}');
-    expect(filesSurface).toContain('{directory.fileCount} 个文件');
-    expect(filesSurface).toContain('previews.slice(0, 4)');
+  test('keeps directory navigation in the URL and exposes role filtering', () => {
+    expect(source).toContain("searchParams.get('filePath')");
+    expect(source).toContain("params.set('filePath', path)");
+    expect(source).toContain("params.delete('filePath')");
+    expect(filesSurface).toContain('按文件角色筛选');
+    expect(filesSurface).toContain('directories.map');
   });
 });

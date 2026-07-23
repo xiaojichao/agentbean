@@ -40,7 +40,7 @@ export interface CollectArtifactsInput {
   /** Extra output roots such as Codex-native generated_images; mtime filtered. */
   extraOutputDirs?: string[];
   /** Additional roots with safe public labels; absolute paths never leave the daemon. */
-  configuredOutputRoots?: Array<{ path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
+  configuredOutputRoots?: Array<{ id?: string; path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
   /** Stable public label for the agent workspace root. */
   workspaceLabel?: string;
   /** command start timestamp (ms); used as mtime threshold for the cwd fallback. */
@@ -48,7 +48,16 @@ export interface CollectArtifactsInput {
   /** Maximum artifact bytes to hash/read; defaults to server upload cap. */
   maxBytes?: number;
   /** Reports files that could not be collected without silently omitting them. */
-  onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
+  onSkipped?: (artifact: SkippedArtifactDiagnostic, sourceRoot: ArtifactSourceRoot) => void;
+  /** Stable, path-free diagnostics for Run details and logs. */
+  onDiagnostic?: (diagnostic: ArtifactCollectionDiagnostic) => void;
+}
+
+export interface ArtifactCollectionDiagnostic {
+  code: 'SOURCE_ROOT_MISSING' | 'SOURCE_ROOT_INVALID' | 'SOURCE_ROOT_UNREADABLE' | 'ARTIFACT_FILE_UNREADABLE' | 'ARTIFACT_FILE_TOO_LARGE' | 'ARTIFACT_FILE_LIMIT_REACHED';
+  sourceRootId: string;
+  sourceRootLabel: string;
+  relativePath?: string;
 }
 
 /**
@@ -72,6 +81,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     sourceRoot: ArtifactSourceRoot,
     role: ArtifactRole,
     recursive = true,
+    reportRootFailure = true,
   ): Promise<void> => {
     let visited = 0;
     const stack: string[] = [rootAbs];
@@ -81,6 +91,13 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
       try {
         entries = readdirSync(current, { withFileTypes: true });
       } catch {
+        if (reportRootFailure) {
+          input.onDiagnostic?.({
+            code: 'SOURCE_ROOT_UNREADABLE',
+            sourceRootId: sourceRoot.id,
+            sourceRootLabel: sourceRoot.label,
+          });
+        }
         continue;
       }
       for (const entry of entries) {
@@ -96,6 +113,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
           try {
             stat = statSync(abs);
           } catch {
+            input.onDiagnostic?.({
+              code: 'ARTIFACT_FILE_UNREADABLE',
+              sourceRootId: sourceRoot.id,
+              sourceRootLabel: sourceRoot.label,
+              relativePath: relative(rootForRelative, abs),
+            });
             continue;
           }
           if (timeFilter && stat.mtimeMs <= input.startedAt) {
@@ -108,10 +131,21 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes: stat.size,
               reason: 'FILE_TOO_LARGE',
+            }, sourceRoot);
+            input.onDiagnostic?.({
+              code: 'ARTIFACT_FILE_TOO_LARGE',
+              sourceRootId: sourceRoot.id,
+              sourceRootLabel: sourceRoot.label,
+              relativePath,
             });
             continue;
           }
           if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
+            input.onDiagnostic?.({
+              code: 'ARTIFACT_FILE_LIMIT_REACHED',
+              sourceRootId: sourceRoot.id,
+              sourceRootLabel: sourceRoot.label,
+            });
             return;
           }
           let hash = createHash('sha256');
@@ -129,6 +163,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes,
               reason: 'COLLECTION_FAILED',
+            }, sourceRoot);
+            input.onDiagnostic?.({
+              code: 'ARTIFACT_FILE_UNREADABLE',
+              sourceRootId: sourceRoot.id,
+              sourceRootLabel: sourceRoot.label,
+              relativePath,
             });
             continue;
           }
@@ -138,6 +178,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
               relativePath,
               sizeBytes,
               reason: sizeBytes > maxBytes ? 'FILE_TOO_LARGE' : 'COLLECTION_FAILED',
+            }, sourceRoot);
+            input.onDiagnostic?.({
+              code: sizeBytes > maxBytes ? 'ARTIFACT_FILE_TOO_LARGE' : 'ARTIFACT_FILE_UNREADABLE',
+              sourceRootId: sourceRoot.id,
+              sourceRootLabel: sourceRoot.label,
+              relativePath,
             });
             continue;
           }
@@ -165,19 +211,22 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     await ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出', input.outputDir), 'run_output');
   }
   for (const dir of input.extraOutputDirs ?? []) {
-    await ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output');
+    await ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output', true, false);
   }
   for (const root of input.configuredOutputRoots ?? []) {
-    await ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label, root.path), root.defaultRole ?? 'run_output', root.recursive ?? true);
+    const sourceRoot = root.id
+      ? { id: root.id, kind: 'configured_output' as const, label: root.label }
+      : makeSourceRoot('configured_output', root.label, root.path);
+    await ingest(root.path, root.path, true, sourceRoot, root.defaultRole ?? 'run_output', root.recursive ?? true);
   }
   if (input.cwd) {
-    await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'intermediate');
+    await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'run_output');
   }
   return [...byRootPath.values()];
 }
 
-function makeSourceRoot(kind: ArtifactSourceRootKind, label: string, rootPath: string): ArtifactSourceRoot {
-  const id = createHash('sha256').update(`agentbean:artifact-source-root:${kind}:${label}:${rootPath}`).digest('hex').slice(0, 24);
+function makeSourceRoot(kind: ArtifactSourceRootKind, label: string, localIdentity: string): ArtifactSourceRoot {
+  const id = createHash('sha256').update(`agentbean:artifact-source-root:${kind}:${localIdentity}`).digest('hex').slice(0, 24);
   return { id, kind, label };
 }
 

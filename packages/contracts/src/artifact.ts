@@ -11,6 +11,7 @@ export interface ArtifactSourceRootDto {
   kind: ArtifactSourceRootKind;
   label: string;
 }
+
 export type ArtifactPreviewStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'unsupported';
 
 export interface ArtifactPreviewDto {
@@ -52,11 +53,11 @@ export interface ArtifactDto {
   pathKind?: ArtifactPathKind;
   role?: ArtifactRole;
   sourceRoot?: ArtifactSourceRootDto;
+  preview?: ArtifactPreviewDto;
   sha256?: string;
   createdAt: UnixMs;
   downloadUrl?: string;
   previewUrl?: string;
-  preview?: ArtifactPreviewDto;
 }
 
 export interface WorkspaceRunDto {

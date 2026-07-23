@@ -569,6 +569,9 @@ describe('server-next dev server entry', () => {
     const body = new FormData();
     body.append('token', owner.token);
     body.append('channelId', owner.defaultChannel.id);
+    for (let index = 0; index < 14; index += 1) {
+      body.append(`extra-${index}`, 'ignored');
+    }
     body.append('file', new Blob(['# hello multipart\n'], { type: 'text/markdown' }), 'reply.md');
 
     const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {
@@ -676,6 +679,17 @@ describe('server-next dev server entry', () => {
       body: oversized,
     });
     expect(oversizedResponse.status).toBe(413);
+
+    const tooManyParts = new FormData();
+    for (let index = 0; index < 17; index += 1) {
+      tooManyParts.append(`field-${index}`, 'value');
+    }
+    tooManyParts.append('file', new Blob(['ok'], { type: 'text/plain' }), 'too-many-parts.txt');
+    const tooManyPartsResponse = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload?token=token-1`, {
+      method: 'POST',
+      body: tooManyParts,
+    });
+    expect(tooManyPartsResponse.status).toBe(413);
     expect(readdirSync(dataDir).filter((name) => name.endsWith('.part'))).toEqual([]);
   });
 
