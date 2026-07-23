@@ -259,6 +259,25 @@ function createInitialDocument(db: SqliteDatabase, artifact: ArtifactBackfillRow
     documentId,
     artifact.id,
   );
+  if (artifact.messageId) {
+    db.prepare(`INSERT OR IGNORE INTO channel_document_publications (
+      id, revision_id, message_id, published_by, published_at
+    )
+    SELECT ?, ?, ?, ?, ?
+    WHERE EXISTS (
+      SELECT 1 FROM channel_document_revisions
+      WHERE id = ? AND document_id = ? AND artifact_id = ?
+    )`).run(
+      `${revisionId}:publication`,
+      revisionId,
+      artifact.messageId,
+      createdBy,
+      artifact.createdAt,
+      revisionId,
+      documentId,
+      artifact.id,
+    );
+  }
 }
 
 function saveProgress(
