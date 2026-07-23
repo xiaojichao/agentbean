@@ -7539,16 +7539,12 @@ async function isPublicChannelFileArtifact(
     const run = await repositories.workspaceRuns.getForTeam({ teamId: artifact.teamId, runId: artifact.workspaceRunId });
     if (!run || !(await isPublicWorkspaceRun(repositories, run))) return false;
   }
-  if (artifact.dispatchId) {
-    const attempt = await repositories.management.dispatchAttempts.getByDispatchId(artifact.dispatchId);
-    if (!attempt) return false;
-  }
   return isPublicArtifact(repositories, artifact);
 }
 
 function compareChannelFiles(left: Pick<ArtifactRecord, 'createdAt' | 'id'>, right: Pick<ArtifactRecord, 'createdAt' | 'id'>): number {
   if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
-  return left.id.localeCompare(right.id);
+  return Buffer.compare(Buffer.from(left.id, 'utf8'), Buffer.from(right.id, 'utf8'));
 }
 
 function isAfterChannelFileCursor(artifact: ArtifactRecord, cursor: ChannelFileCursor): boolean {

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS, type ChannelFileEntryDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
@@ -2552,45 +2552,18 @@ function ConversationFiles({
       ) : (
         <div className="space-y-2">
           {files.map((file) => {
-            const isImage = file.artifact.mimeType.startsWith('image/');
-            const previewUrl = messageArtifactUrl(file.artifact, 'preview');
-            const downloadUrl = messageArtifactUrl(file.artifact, 'download');
-            const thumbnail = (
-              <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50">
-                {isImage && previewUrl ? (
-                  <img src={previewUrl} alt={file.artifact.filename} className="h-full w-full object-cover" />
-                ) : (
-                  <Paperclip size={20} className="text-neutral-400" />
-                )}
-              </span>
-            );
-            const summary = (
-              <>
-                <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                  <span>{formatFileSize(file.artifact.sizeBytes)}</span>
-                  <span className="text-neutral-300">·</span>
-                  <span>{formatDateTime(file.createdAt)}</span>
-                  <span className="text-neutral-300">·</span>
-                  <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
-                </div>
-              </>
-            );
             return (
-              <div key={`${file.messageId}-${file.artifact.id}`} className="flex min-h-20 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 hover:border-neutral-900">
-                {previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer" title="预览文件">{thumbnail}</a> : thumbnail}
-                {previewUrl ? (
-                  <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">{summary}</a>
-                ) : (
-                  <div className="min-w-0 flex-1">{summary}</div>
-                )}
-                <div className="flex shrink-0 items-center gap-2">
-                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+              <div key={`${file.messageId}-${file.artifact.id}`} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
+                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
+                    <span>{formatDateTime(file.createdAt)}</span>
+                    <span className="text-neutral-300">·</span>
+                    <span className="truncate">{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                  </div>
+                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
                     <ExternalLink size={15} />
                   </button>
-                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
-                    <Download size={15} />
-                  </a>}
                 </div>
               </div>
             );
