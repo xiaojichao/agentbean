@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { CollectedArtifact } from './artifact-collector.js';
 
-/** Matches the server's default single-artifact limit. */
-const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
+/** 10MB until the streaming upload path lands. */
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface UploadedArtifact {
   id: string;

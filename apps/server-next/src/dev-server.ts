@@ -5,9 +5,9 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
+import { createServerNextUseCases, type ArtifactContentStore, type CreateServerNextUseCasesInput } from './application/usecases.js';
 import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
-import type { ServerNextRepositories } from './application/repositories.js';
+import type { ArtifactRecord, ServerNextRepositories } from './application/repositories.js';
 import { createCapsuleInjectionValidator } from './application/capsule-injection-validator.js';
 import { createServerCapsuleRuntimeContextService } from './application/server-capsule-runtime-context-service.js';
 import {
@@ -38,6 +38,7 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
+import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -295,7 +296,9 @@ export async function startServerNextDevServer(
   });
   const stopVersionRefresh = startDaemonVersionRefresh();
   const previewWorkerInterval = appWithCleanup.artifactPreviewService
-    ? setInterval(() => { void appWithCleanup.artifactPreviewService?.runOnce(); }, 250)
+    ? setInterval(() => {
+      void appWithCleanup.artifactPreviewService?.runOnce().catch(() => undefined);
+    }, 250)
     : undefined;
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
@@ -743,7 +746,7 @@ async function handleArtifactDerivativeRead(
   const previewPath = join(input.config.dataDir, 'artifact-previews', options.teamId, options.artifactId, 'preview.webp');
   const stored = readStoredArtifactBody(input, previewPath);
   if (!stored.ok) { writeJson(input.response, stored.status, stored.payload); return; }
-  input.response.writeHead(200, { 'content-type': 'image/webp', 'content-length': String(stored.body.length), 'cache-control': 'public, max-age=31536000, immutable', 'content-disposition': 'inline' });
+  input.response.writeHead(200, { 'content-type': 'image/webp', 'content-length': String(stored.body.length), 'cache-control': 'private, max-age=31536000, immutable', 'content-disposition': 'inline' });
   input.response.end(stored.body);
 }
 
@@ -1297,8 +1300,10 @@ function createDefaultApp(
   messageIngestionMode: 'legacy' | 'durable-job' = 'legacy',
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
-  const artifactPreviewService = createArtifactPreviewService({ outputDir: join(config.dataDir, 'artifact-previews') });
   if (config.storage === 'memory') {
+    const artifactPreviewService = createArtifactPreviewService({
+      outputDir: join(config.dataDir, 'artifact-previews'),
+    });
     const repositories = createInMemoryRepositories();
     const clock = { now: () => Date.now() };
     const ids = { nextId: () => randomUUID() };
@@ -1318,6 +1323,7 @@ function createDefaultApp(
         ids,
         sessionSecret: config.sessionSecret,
         artifactContentStore,
+        ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
         managementRouter: management.router,
         managementKernel: management.kernel,
         taskCoordinationKernel: management.taskCoordinationKernel,
@@ -1343,6 +1349,10 @@ function createDefaultApp(
   const teamDb = new Sqlite(join(config.dataDir, 'team.sqlite'));
   applyGlobalMigrations(globalDb);
   applyTeamMigrations(teamDb);
+  const artifactPreviewService = createArtifactPreviewService({
+    outputDir: join(config.dataDir, 'artifact-previews'),
+    repository: createSqliteArtifactPreviewRepository(teamDb),
+  });
   // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
   // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
   cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
@@ -1365,6 +1375,7 @@ function createDefaultApp(
       ids,
       sessionSecret: config.sessionSecret,
       artifactContentStore,
+      ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
       managementRouter: management.router,
       managementKernel: management.kernel,
       taskCoordinationKernel: management.taskCoordinationKernel,
@@ -1383,6 +1394,34 @@ function createDefaultApp(
     async close() {
       globalDb.close();
       teamDb.close();
+    },
+  };
+}
+
+function artifactPreviewBindings(
+  service: ArtifactPreviewService,
+  dataDir: string,
+): Pick<CreateServerNextUseCasesInput, 'resolveArtifactPreview' | 'onArtifactCommitted'> {
+  const enqueue = async (artifact: ArtifactRecord) => {
+    if (!artifact.storagePath) return;
+    await service.enqueue({
+      artifactId: artifact.id,
+      teamId: artifact.teamId,
+      inputPath: join(dataDir, artifact.storagePath),
+      mimeType: artifact.mimeType,
+    });
+  };
+  return {
+    async onArtifactCommitted(artifact) {
+      await enqueue(artifact);
+    },
+    async resolveArtifactPreview(artifact) {
+      let preview = await service.get(artifact.id);
+      if (!preview) {
+        await enqueue(artifact);
+        preview = await service.get(artifact.id);
+      }
+      return preview;
     },
   };
 }

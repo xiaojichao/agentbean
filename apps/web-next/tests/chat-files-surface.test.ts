@@ -20,4 +20,10 @@ describe('chat files surface', () => {
     expect(source).toContain('if (requestRevision === channelFilesRequestRevisionRef.current)');
     expect(source).toMatch(/useEffect\(\(\) => \{\s+channelFilesRequestRevisionRef\.current \+= 1;\s+setChannelFiles\(\[\]\)/);
   });
+
+  test('renders directory cards with counts and up to four derivative previews', () => {
+    expect(filesSurface).toContain('<DirectoryPreview previews={directory.previewUrls ?? []}');
+    expect(filesSurface).toContain('{directory.fileCount} 个文件');
+    expect(filesSurface).toContain('previews.slice(0, 4)');
+  });
 });

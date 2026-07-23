@@ -16,6 +16,7 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories';
+import { createSqliteArtifactPreviewRepository } from '../src/infra/sqlite/artifact-preview-repository';
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
@@ -57,8 +58,47 @@ describe('server-next SQLite repositories', () => {
           'message_reactions',
           'saved_messages',
           'pinned_messages',
+          'artifact_preview_jobs',
         ]),
       );
+    } finally {
+      close();
+    }
+  });
+
+  test('persists preview jobs and atomically reclaims expired leases', async () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      teamDb.prepare(`INSERT INTO artifacts (
+        id, team_id, channel_id, uploader_id, filename, mime_type, size_bytes, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        'artifact-preview-1', 'team-1', 'channel-1', 'user-1', 'cover.png', 'image/png', 4, 1,
+      );
+      const repository = createSqliteArtifactPreviewRepository(teamDb);
+      const created = await repository.createIfAbsent({
+        id: 'job-1',
+        artifactId: 'artifact-preview-1',
+        teamId: 'team-1',
+        inputPath: '/tmp/cover.png',
+        mimeType: 'image/png',
+        attempts: 0,
+        status: 'pending',
+        updatedAt: 10,
+      });
+      await expect(repository.createIfAbsent({ ...created, id: 'job-2' })).resolves.toMatchObject({
+        id: 'job-1',
+      });
+
+      await expect(repository.claimNext({ now: 20, leasedUntil: 30, maxAttempts: 3 })).resolves.toMatchObject({
+        id: 'job-1',
+        status: 'processing',
+        attempts: 1,
+      });
+      await expect(repository.claimNext({ now: 29, leasedUntil: 40, maxAttempts: 3 })).resolves.toBeUndefined();
+      await expect(repository.claimNext({ now: 31, leasedUntil: 41, maxAttempts: 3 })).resolves.toMatchObject({
+        id: 'job-1',
+        attempts: 2,
+      });
     } finally {
       close();
     }

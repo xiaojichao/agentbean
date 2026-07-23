@@ -254,36 +254,6 @@ _Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
 对已开始执行的 Task 目标、范围或验收要求所做的可追溯新版本。它保留旧要求与交付历史，并使受影响的旧认领、调用或验收失去当前效力，而不是原地覆盖。
 _Avoid_: 编辑覆盖、隐藏变更、复用旧执行权。
 
-## Message artifact revision
-
-消息、讨论串或 Agent 交付在发布时引用的一份不可变文件快照。后续编辑同一逻辑文档会产生新的 revision，不能改变历史消息当时引用的内容。
-_Avoid_: 可变附件、原地覆盖文件、频道文档。
-
-## Channel document
-
-频道内可由拥有访问权的人类成员持续编辑并拥有一个或多个 Message artifact revision 的逻辑文档，其身份由明确的 revision 链维持而不是由文件名推断。频道文件视图默认展示其最新 revision，历史消息仍保留各自发布时引用的 revision；频道归档后只读。
-_Avoid_: 单个附件版本、历史消息附件、任意二进制文件。
-
-## Channel document publication
-
-用户将某个 Channel document revision 明确分享到频道时间线的动作。保存 revision 本身不会创建频道消息，只有 publication 才让该版本成为新的消息附件。
-_Avoid_: 自动发布、保存文档、覆盖原消息附件。
-
-## Channel document edit conflict
-
-用户保存时所基于的 Channel document revision 已不再是最新版的状态。冲突不能以最后写入者覆盖或创建分叉 revision 解决，编辑者必须保留草稿并基于最新版完成合并。
-_Avoid_: 静默覆盖、自动分叉、丢弃草稿。
-
-## Channel document restoration
-
-用户把某个历史 Channel document revision 的内容复制为新最新版的动作。恢复不会让当前指针倒退、删除后续 revision 或改变历史消息引用。
-_Avoid_: 回滚覆盖、删除版本、修改历史附件。
-
-## Document resource reference
-
-某个 Markdown revision 中的相对资源路径与具体不可变 Artifact revision 之间的稳定引用。历史文档按保存时的 reference 渲染，不能通过同名路径动态切换到后来的文件。
-_Avoid_: 实时路径查找、文件名身份、越过来源根的引用。
-
 ## Artifact source root
 
 一次 Agent 运行收集文件时采用的有边界来源目录，例如该 Run 的输出目录、Agent 工作目录或 Agent 配置的额外输出目录。频道成员只看到稳定的来源标签和根内相对路径；真实设备路径不构成公开身份，source root 及其相对路径也不能单独决定文件的业务角色。

@@ -104,7 +104,7 @@ describe('artifact-collector', () => {
     expect(collected.map((c) => c.filename)).not.toContain('nested.png');
   });
 
-  test('dedupes by sha256, keeping the more semantic filename', async () => {
+  test('preserves identical bytes at different source-root paths', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
     mkdirSync(outputDir, { recursive: true });
@@ -115,8 +115,8 @@ describe('artifact-collector', () => {
 
     const collected = await collectArtifacts({ outputDir, cwd, startedAt: 1000 });
     const sameContent = collected.filter((c) => c.sha256 === collected[0].sha256);
-    expect(sameContent).toHaveLength(1);
-    expect(collected.length).toBeLessThanOrEqual(2);
+    expect(sameContent).toHaveLength(2);
+    expect(new Set(sameContent.map((artifact) => artifact.sourceRoot.id)).size).toBe(2);
   });
 
   test('fills sha256 and sizeBytes', async () => {

@@ -1,15 +1,16 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
+import type { ArtifactRole, ArtifactSourceRootDto } from '../../../packages/contracts/src/index.js';
 
 const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)$/i;
 const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
 const MAX_OUTPUT_FILES_PER_ROOT = 2000;
-const DEFAULT_MAX_BYTES = 250 * 1024 * 1024;
-export type ArtifactSourceRootKind = 'run_output' | 'agent_workspace' | 'configured_output' | 'adapter_generated';
-export type ArtifactRole = 'intermediate' | 'run_output' | 'deliverable' | 'attachment';
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+export type ArtifactSourceRootKind = Exclude<ArtifactSourceRootDto['kind'], 'legacy_run'>;
+export type { ArtifactRole };
 
 export interface ArtifactSourceRoot {
   id: string;
@@ -110,15 +111,6 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             sourceRoot,
             role,
           };
-          const duplicateWithDifferentPath = [...byRootPath.values()].find((existing) => existing.sha256 === sha256 && existing.relativePath !== candidate.relativePath);
-          if (duplicateWithDifferentPath) {
-            if (fileNamePreference(candidate.filename) < fileNamePreference(duplicateWithDifferentPath.filename)) {
-              for (const [existingKey, existing] of byRootPath) {
-                if (existing === duplicateWithDifferentPath) byRootPath.set(existingKey, candidate);
-              }
-            }
-            continue;
-          }
           const key = `${sourceRoot.id}:${candidate.relativePath}`;
           const existing = byRootPath.get(key);
           if (!existing || fileNamePreference(candidate.filename) < fileNamePreference(existing.filename)) {
@@ -130,22 +122,22 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   };
 
   if (input.outputDir) {
-    ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出'), 'run_output');
+    ingest(input.outputDir, input.outputDir, false, makeSourceRoot('run_output', '默认运行输出', input.outputDir), 'run_output');
   }
   for (const dir of input.extraOutputDirs ?? []) {
-    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录'), 'run_output');
+    ingest(dir, dir, true, makeSourceRoot('adapter_generated', '适配器生成目录', dir), 'run_output');
   }
   for (const root of input.configuredOutputRoots ?? []) {
-    ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label), root.defaultRole ?? 'run_output', root.recursive ?? true);
+    ingest(root.path, root.path, true, makeSourceRoot('configured_output', root.label, root.path), root.defaultRole ?? 'run_output', root.recursive ?? true);
   }
   if (input.cwd) {
-    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录'), 'intermediate');
+    ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'intermediate');
   }
   return [...byRootPath.values()];
 }
 
-function makeSourceRoot(kind: ArtifactSourceRootKind, label: string): ArtifactSourceRoot {
-  const id = createHash('sha256').update(`agentbean:artifact-source-root:${kind}:${label}`).digest('hex').slice(0, 24);
+function makeSourceRoot(kind: ArtifactSourceRootKind, label: string, rootPath: string): ArtifactSourceRoot {
+  const id = createHash('sha256').update(`agentbean:artifact-source-root:${kind}:${label}:${rootPath}`).digest('hex').slice(0, 24);
   return { id, kind, label };
 }
 
