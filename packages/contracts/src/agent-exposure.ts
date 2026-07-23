@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { ChannelCoordinationRiskLevel } from './pi-coordination.js';
 
 /**
  * #710 Team Agent Exposure Manifest。
@@ -298,3 +299,115 @@ export interface AgentEligibilityResultDto {
   readonly missingHardRequirements: readonly string[];
   readonly reasonCode: EligibilityReasonCodeValue;
 }
+
+// ── #712 Task Offer：PI → Agent 的结构化工作要约与四类显式响应 ──
+//
+// 产品边界（计划 §4「Agent 自治」、§6.4）：PI 只能向合格 Agent 发布固定字段 Offer；
+// Agent 必须显式返回 accepted/rejected/needs_info/counter_proposed，只有对仍有效 Offer
+// 的 accepted 才原子创建 Claim/Lease（AC#3/AC#4）。ACK 仅表示「可响应」，永不等于
+// Dispatch/Claim/Lease/assignee（AC#3）。rejected/needs_info/counter_proposed/expired/
+// invalidated 均不产 Lease（AC#5）。并发接受同一开放 Offer 时仅一个 Agent 获得有效
+// Claim，fencing token 单调（AC#6，复用既有 task-claim-policy）。显式 @Agent（hardSpecified）
+// 只决定优先询问对象，绝不强迫 Agent 接受（AC#8）。
+//
+// 本组 DTO 是 server 投影与（切片 C/E）Agent 协议共享的唯一 Offer 形状。安全合同同
+// Exposure：仅含公开 capability/skill 名与任务结构化字段，绝不含 sourcePath、其他 Team
+// manifest、Provider/Model 身份或内部工具。
+
+/** Offer 生命周期状态（AC#3/AC#5）。ACK 不改变状态；仅响应或失效转移。 */
+export type TaskOfferStatus =
+  | 'open' // 已发布，等待 Agent 响应；ACK 停留此态（AC#3）
+  | 'accepted' // 某 Agent 明确 accepted 且（服务端同事务）创建了 Claim/Lease（AC#4）
+  | 'rejected' // 某 Agent 明确 rejected（AC#2/AC#5）
+  | 'needs_info' // 某 Agent 请求补充信息（AC#2/AC#5）
+  | 'counter_proposed' // 某 Agent 提出调整（AC#2/AC#5）
+  | 'expired' // 超过 offerExpiresAt 未被有效接受（AC#5）
+  | 'invalidated' // task revision 变化或 manifest supersede 使其失效（AC#5/AC#6）
+  | 'overtaken'; // 并发接受中被另一 Agent 抢先获得 Claim（AC#6 败者）
+
+/**
+ * Agent 对 Offer 的四种明确响应（AC#2）。
+ * 任何其他值（含「无响应 / 仅 ACK」）都不构成 accepted，不产 Claim（AC#3/AC#5）。
+ */
+export type TaskOfferResponseKind =
+  | 'accepted'
+  | 'rejected'
+  | 'needs_info'
+  | 'counter_proposed';
+
+/** Offer 风险等级；沿用协调 Decision 风险语义，避免两份同集合联合漂移。 */
+export type TaskOfferRiskLevel = ChannelCoordinationRiskLevel;
+
+/**
+ * AC#1：Offer 固定的「工作内容」字段组（发布时冻结，Agent 可见契约）。
+ * 与 Exposure 同源：requiredCapabilities / requiredSkills 必须由候选 Agent 的 active
+ * Manifest 公开声明（#711 硬门槛），preferredSkills 仅参与排序。
+ */
+export interface TaskOfferObjectiveDto {
+  readonly objective: string;
+  readonly inputs: readonly string[];
+  readonly deliverables: readonly string[];
+  readonly constraints: readonly string[];
+  readonly riskLevel: TaskOfferRiskLevel;
+  readonly requiredCapabilities: readonly string[];
+  readonly requiredSkills: readonly string[];
+  readonly preferredSkills: readonly string[];
+}
+
+/**
+ * AC#1：Offer 主体（持久化投影 + Agent 可见契约）。
+ * taskRevision / manifestRevision 在发布时冻结，作为 accept 时的 fence（AC#5/AC#6）：
+ * task 产生新 revision（#709）或 agent active manifest 被新 revision 取代时，旧 Offer 失效。
+ */
+export interface TaskOfferDto {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly taskId: ID;
+  readonly agentId: ID;
+  /** 发布时冻结的 Task revision（AC#1/AC#5 fence）。 */
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  /** 发布时冻结的 Agent active Exposure Manifest revision（AC#1/AC#6 fence）。 */
+  readonly manifestRevision: number;
+  readonly objective: TaskOfferObjectiveDto;
+  /** Offer TTL（AC#1）；offerExpiresAt = createdAt + offerTtlMs，超过且未有效接受 → expired。 */
+  readonly offerTtlMs: number;
+  readonly offerExpiresAt: UnixMs;
+  /**
+   * 显式 @Agent 硬指定（AC#8）：仅决定优先询问该 Agent，绝不强迫其接受。
+   * hardSpecified=true 的 Offer 仍需 Agent 显式 accepted 才产 Claim，仍可被 rejected。
+   */
+  readonly hardSpecified: boolean;
+  readonly status: TaskOfferStatus;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+/**
+ * Agent 对 Offer 的响应记录（AC#2/AC#5）。
+ * - needs_info：detail = 请求的补充信息描述。
+ * - counter_proposed：detail = 调整建议（目标/交付/约束/工期等的差异）。
+ * - rejected：detail = 拒绝原因（可选）。
+ * - accepted：detail 留空（Claim 由服务端同事务创建，不经此字段）。
+ */
+export interface TaskOfferResponseRecordDto {
+  readonly offerId: ID;
+  readonly agentId: ID;
+  readonly kind: TaskOfferResponseKind;
+  readonly detail: string | null;
+  readonly respondedAt: UnixMs;
+}
+
+/**
+ * Offer 失效成因码（canonical，server 投影/审计共享，消除字符串漂移）。
+ * 与 domain `OfferInvalidationReason` 同义；这里仅含可投影给 Task 视图/审计的稳定码。
+ */
+export const TASK_OFFER_INVALIDATION_REASON_CODE = {
+  EXPIRED: 'TASK_OFFER_EXPIRED',
+  TASK_REVISION_CHANGED: 'TASK_OFFER_TASK_REVISION_CHANGED',
+  MANIFEST_SUPERSEDED: 'TASK_OFFER_MANIFEST_SUPERSEDED',
+  NOT_OPEN: 'TASK_OFFER_NOT_OPEN',
+} as const;
+
+export type TaskOfferInvalidationReasonCode =
+  (typeof TASK_OFFER_INVALIDATION_REASON_CODE)[keyof typeof TASK_OFFER_INVALIDATION_REASON_CODE];
