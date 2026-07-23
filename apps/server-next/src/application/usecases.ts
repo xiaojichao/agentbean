@@ -7801,6 +7801,12 @@ async function channelFileSource(
   const directMessage = artifact.messageId
     ? await repositories.messages.getById(artifact.messageId)
     : null;
+  const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
+  if (directMessage
+    && (directMessage.channelId !== artifact.channelId || isDeletedMessage(directMessage))
+    && role === 'attachment') {
+    return null;
+  }
   if (directMessage
     && directMessage.channelId === artifact.channelId
     && !isDeletedMessage(directMessage)) {

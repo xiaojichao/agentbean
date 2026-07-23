@@ -28,6 +28,9 @@ interface ArtifactBackfillRow {
   mimeType: string;
   storagePath?: string;
   relativePath?: string;
+  role?: string;
+  sourceRootId?: string;
+  sourceRootKind?: string;
   createdAt: number;
   messageMeta?: string;
   messageSenderId?: string;
@@ -38,6 +41,18 @@ export interface ChannelFileBackfillResult {
   processed: number;
   completed: boolean;
   cursor?: BackfillCursor;
+}
+
+export function createChannelFileBackfillIfSupported(input: {
+  db: SqliteDatabase;
+  dataDir: string;
+  batchSize?: number;
+  now?: () => number;
+}) {
+  const progressTable = input.db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'channel_file_backfill_progress'",
+  ).get();
+  return progressTable ? createChannelFileBackfill(input) : undefined;
 }
 
 export function createChannelFileBackfill(input: {
@@ -113,6 +128,9 @@ function artifactBackfillSelect(): string {
     a.mime_type,
     a.storage_path,
     a.relative_path,
+    a.artifact_role,
+    a.source_root_id,
+    a.source_root_kind,
     a.created_at,
     m.meta_json AS message_meta_json,
     m.sender_id AS message_sender_id,
@@ -134,6 +152,9 @@ function mapArtifactBackfillRow(row: unknown): ArtifactBackfillRow {
     mimeType: requiredString(value.mime_type, 'artifacts.mime_type'),
     storagePath: optionalString(value.storage_path),
     relativePath: optionalString(value.relative_path),
+    role: optionalString(value.artifact_role),
+    sourceRootId: optionalString(value.source_root_id),
+    sourceRootKind: optionalString(value.source_root_kind),
     createdAt: requiredNumber(value.created_at, 'artifacts.created_at'),
     messageMeta: optionalString(value.message_meta_json),
     messageSenderId: optionalString(value.message_sender_id),
@@ -148,7 +169,29 @@ function backfillArtifact(
   updatedAt: number,
 ): void {
   const deletedMessage = artifact.messageExists && isDeletedMessageMeta(artifact.messageMeta);
-  if (artifact.messageExists && !deletedMessage) {
+  const inferredLegacyRunRole = artifact.workspaceRunId !== undefined
+    && artifact.role === 'attachment'
+    && artifact.sourceRootKind === 'legacy_run'
+    && artifact.sourceRootId === `legacy_run:${artifact.workspaceRunId}`;
+  const runScopedArtifact = artifact.workspaceRunId !== undefined
+    && (artifact.role !== 'attachment' || inferredLegacyRunRole);
+  if (runScopedArtifact) {
+    db.prepare(`UPDATE artifacts SET
+      artifact_role = CASE
+        WHEN artifact_role IS NULL OR ? THEN 'run_output'
+        ELSE artifact_role
+      END,
+      source_root_id = COALESCE(source_root_id, ?),
+      source_root_kind = COALESCE(source_root_kind, 'legacy_run'),
+      source_root_label = COALESCE(source_root_label, '历史运行产物'),
+      relative_path = ?
+      WHERE id = ?`).run(
+      inferredLegacyRunRole ? 1 : 0,
+      `legacy_run:${artifact.workspaceRunId}`,
+      safeRelativePath(artifact),
+      artifact.id,
+    );
+  } else if (artifact.messageExists && !deletedMessage) {
     db.prepare(`UPDATE artifacts SET artifact_role = COALESCE(artifact_role, 'attachment'),
       relative_path = ?
       WHERE id = ?`).run(safeRelativePath(artifact), artifact.id);

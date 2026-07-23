@@ -5,7 +5,10 @@ import {
   applyTeamMigrations,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories';
-import { createChannelFileBackfill } from '../src/infra/sqlite/channel-file-backfill';
+import {
+  createChannelFileBackfill,
+  createChannelFileBackfillIfSupported,
+} from '../src/infra/sqlite/channel-file-backfill';
 import { createSqliteArtifactPreviewRepository } from '../src/infra/sqlite/artifact-preview-repository';
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
@@ -14,6 +17,18 @@ const requireFromWorkspace = createRequire(import.meta.url);
 const Database = requireFromWorkspace('better-sqlite3') as BetterSqlite3Constructor;
 
 describe('频道历史文件回填', () => {
+  test('缺少 0039 能力表的旧库不会启动永久失败的回填轮询', () => {
+    const db = new Database(':memory:');
+    try {
+      expect(createChannelFileBackfillIfSupported({
+        db,
+        dataDir: '/srv/agentbean',
+      })).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
   test('把历史 Markdown 消息附件建立为独立文档并记录批次游标', () => {
     const db = new Database(':memory:');
     try {
@@ -157,6 +172,39 @@ describe('频道历史文件回填', () => {
           relative_path: expect.stringMatching(/^未分组\/历史文件-[a-f0-9]{12}$/),
         },
       ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('纠正 0037 已按消息误标为 attachment 的历史 Run 文件', () => {
+    const db = new Database(':memory:');
+    try {
+      applyTeamMigrations(db);
+      insertChannel(db);
+      insertMessage(db, { id: 'message-run', senderId: 'agent-1' });
+      insertArtifact(db, {
+        id: 'artifact-message-run',
+        messageId: 'message-run',
+        workspaceRunId: 'run-legacy',
+        filename: 'result.md',
+        mimeType: 'text/markdown',
+        artifactRole: 'attachment',
+        sourceRootId: 'legacy_run:run-legacy',
+        sourceRootKind: 'legacy_run',
+      });
+
+      createChannelFileBackfill({
+        db, dataDir: '/srv/agentbean', now: () => 500,
+      }).runBatch();
+
+      expect(db.prepare(`SELECT artifact_role, source_root_id, source_root_kind
+        FROM artifacts WHERE id = ?`).get('artifact-message-run')).toEqual({
+        artifact_role: 'run_output',
+        source_root_id: 'legacy_run:run-legacy',
+        source_root_kind: 'legacy_run',
+      });
+      expect(db.prepare('SELECT id FROM channel_documents').all()).toEqual([]);
     } finally {
       db.close();
     }
@@ -438,13 +486,16 @@ function insertArtifact(
     storagePath?: string;
     relativePath?: string;
     artifactRole?: string;
+    sourceRootId?: string;
+    sourceRootKind?: string;
     createdAt?: number;
   },
 ): void {
   db.prepare(`INSERT INTO artifacts (
     id, team_id, channel_id, message_id, workspace_run_id, uploader_id,
-    filename, mime_type, size_bytes, storage_path, relative_path, artifact_role, created_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    filename, mime_type, size_bytes, storage_path, relative_path, artifact_role,
+    source_root_id, source_root_kind, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     input.id,
     'team-1',
     'channel-1',
@@ -457,6 +508,8 @@ function insertArtifact(
     input.storagePath ?? null,
     input.relativePath ?? null,
     input.artifactRole ?? null,
+    input.sourceRootId ?? null,
+    input.sourceRootKind ?? null,
     input.createdAt ?? 100,
   );
 }

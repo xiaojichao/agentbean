@@ -106,7 +106,8 @@ export class UnsupportedPreviewError extends Error {
 }
 
 export function supportsArtifactPreviewMime(mimeType: string): boolean {
-  return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/.test(mimeType);
+  const mediaType = mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/.test(mediaType);
 }
 
 function processorArgs(

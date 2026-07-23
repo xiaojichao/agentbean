@@ -41,7 +41,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
-import { createChannelFileBackfill } from './infra/sqlite/channel-file-backfill.js';
+import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { DEFAULT_ARTIFACT_MAX_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -103,7 +103,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   artifactPreviewService?: ArtifactPreviewService;
-  channelFileBackfill?: ReturnType<typeof createChannelFileBackfill>;
+  channelFileBackfill?: NonNullable<ReturnType<typeof createChannelFileBackfillIfSupported>>;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
@@ -1575,7 +1575,7 @@ function createDefaultApp(
     outputDir: join(config.dataDir, 'artifact-previews'),
     repository: createSqliteArtifactPreviewRepository(teamDb),
   });
-  const channelFileBackfill = createChannelFileBackfill({
+  const channelFileBackfill = createChannelFileBackfillIfSupported({
     db: teamDb,
     dataDir: config.dataDir,
   });

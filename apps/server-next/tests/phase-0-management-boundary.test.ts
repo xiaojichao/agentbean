@@ -39,7 +39,8 @@ describe('Phase 0 existing execution fact boundary', () => {
       filename: 'same-name.md', mimeType: 'text/markdown', sizeBytes: 2, createdAt: 200,
     });
     await repositories.artifacts.create({
-      id: 'artifact-deleted', teamId: 'team-1', channelId: channel!.id, messageId: 'message-deleted', uploaderId: 'user-1',
+      id: 'artifact-deleted', teamId: 'team-1', channelId: channel!.id, messageId: 'message-deleted',
+      workspaceRunId: 'run-1', uploaderId: 'user-1', role: 'attachment',
       filename: 'deleted.txt', mimeType: 'text/plain', sizeBytes: 1, createdAt: 300,
     });
     await repositories.artifacts.create({
