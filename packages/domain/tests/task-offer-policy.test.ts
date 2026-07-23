@@ -7,7 +7,8 @@ import {
   evaluateOfferDecline,
   evaluateOfferValidity,
   isValidOfferStatusTransition,
-  type OfferValidity,
+  selectInvalidatableOpenOffers,
+  type InvalidatableOfferView,
 } from '../src/task-offer-policy.js';
 import type { TaskClaimAcquireInput, TaskClaimLeaseRecord } from '../src/task-claim-policy.js';
 
@@ -289,5 +290,77 @@ describe('isValidOfferStatusTransition', () => {
     for (const s of terminals) {
       expect(isValidOfferStatusTransition(s, s)).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectInvalidatableOpenOffers —— AC#1（revision 变化使「所有」未接受旧 Offer 失效）
+// ---------------------------------------------------------------------------
+
+describe('selectInvalidatableOpenOffers', () => {
+  const CURRENT_TASK_REV = 3;
+  const CURRENT_MANIFEST_REV = 2;
+
+  function offerView(over: Partial<InvalidatableOfferView> & { id: string }): InvalidatableOfferView {
+    return {
+      status: 'open',
+      offerExpiresAt: NOW + 15_000,
+      offerTaskRevision: CURRENT_TASK_REV,
+      offerManifestRevision: CURRENT_MANIFEST_REV,
+      ...over,
+    };
+  }
+
+  function select(offers: readonly InvalidatableOfferView[], over: Partial<{ currentTaskRevision: number; currentManifestRevision: number; now: number }> = {}) {
+    return selectInvalidatableOpenOffers({
+      offers,
+      currentTaskRevision: over.currentTaskRevision ?? CURRENT_TASK_REV,
+      currentManifestRevision: over.currentManifestRevision ?? CURRENT_MANIFEST_REV,
+      now: over.now ?? NOW,
+    });
+  }
+
+  test('空 offers → 空', () => {
+    expect(select([])).toEqual([]);
+  });
+
+  test('混合：仅返回 open 且失效的 offer + 正确 reason；终态与仍有效 open 排除（AC#1）', () => {
+    const result = select([
+      offerView({ id: 'valid' }), // open + 匹配 → 不返回
+      offerView({ id: 'task-stale', offerTaskRevision: 2 }), // task revision 变 → task_revision_changed
+      offerView({ id: 'manifest-super', offerManifestRevision: 1 }), // manifest 取代 → manifest_superseded
+      offerView({ id: 'expired', offerExpiresAt: NOW }), // 过期 → expired
+      offerView({ id: 'accepted', status: 'accepted' }), // 终态 → 排除
+      offerView({ id: 'rejected', status: 'rejected' }), // 终态 → 排除
+    ]);
+    expect(result).toEqual([
+      { id: 'task-stale', reason: 'task_revision_changed' },
+      { id: 'manifest-super', reason: 'manifest_superseded' },
+      { id: 'expired', reason: 'expired' },
+    ]);
+  });
+
+  test('全终态 → 空（无操作）', () => {
+    const result = select([
+      offerView({ id: 'a', status: 'accepted' }),
+      offerView({ id: 'b', status: 'overtaken' }),
+    ]);
+    expect(result).toEqual([]);
+  });
+
+  test('currentTaskRevision 严格推进 → 所有未接受的旧 Offer 全部失效（证明「所有」，AC#1）', () => {
+    const result = select(
+      [
+        offerView({ id: 'o1', offerTaskRevision: 3 }),
+        offerView({ id: 'o2', offerTaskRevision: 3 }),
+        offerView({ id: 'o3', offerTaskRevision: 3 }),
+      ],
+      { currentTaskRevision: 4 },
+    );
+    expect(result).toEqual([
+      { id: 'o1', reason: 'task_revision_changed' },
+      { id: 'o2', reason: 'task_revision_changed' },
+      { id: 'o3', reason: 'task_revision_changed' },
+    ]);
   });
 });

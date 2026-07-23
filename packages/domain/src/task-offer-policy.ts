@@ -162,3 +162,57 @@ export function isValidOfferStatusTransition(from: TaskOfferStatus, to: TaskOffe
   if (from === 'open') return true; // open → 任意他态（响应/失效）合法
   return false; // 终态 → 他态非法；未知非 open 状态 fail-closed
 }
+
+// ── AC#1：revision 变化使「所有」未接受旧 Offer 失效（批量聚合）──
+
+/**
+ * selectInvalidatableOpenOffers 的窄视图：仅需 fence 判定字段，刻意不耦合完整 TaskOfferDto，
+ * 让 domain 决策与持久化形状解耦（接入层投影成此视图后调用）。
+ */
+export interface InvalidatableOfferView {
+  readonly id: string;
+  readonly status: TaskOfferStatus;
+  readonly offerExpiresAt: number;
+  readonly offerTaskRevision: number;
+  readonly offerManifestRevision: number;
+}
+
+export interface SelectInvalidatableOpenOffersInput {
+  readonly offers: readonly InvalidatableOfferView[];
+  readonly currentTaskRevision: number;
+  readonly currentManifestRevision: number;
+  readonly now: number;
+}
+
+export interface InvalidatableOffer {
+  readonly id: string;
+  readonly reason: OfferInvalidationReason;
+}
+
+/**
+ * AC#1：当 task 产生新 revision（#709）或 agent active manifest 被新 revision 取代（#710）时，
+ * 选出所有「仍 open 但因 revision/过期变得不可接受」的 Offer——接线层据此原子翻转 invalidated。
+ * 终态 Offer（accepted/rejected/...）排除；纯 map+filter，复用 evaluateOfferValidity 单点判定，
+ * 无新逻辑。返回集合即接线层必须移动的 Offer，避免手写循环导致两个 Offer 以不同原因翻转。
+ */
+export function selectInvalidatableOpenOffers(
+  input: SelectInvalidatableOpenOffersInput,
+): readonly InvalidatableOffer[] {
+  const result: InvalidatableOffer[] = [];
+  for (const offer of input.offers) {
+    if (offer.status !== 'open') continue; // 终态不再处理
+    const validity = evaluateOfferValidity({
+      status: offer.status,
+      offerExpiresAt: offer.offerExpiresAt,
+      offerTaskRevision: offer.offerTaskRevision,
+      offerManifestRevision: offer.offerManifestRevision,
+      now: input.now,
+      currentTaskRevision: input.currentTaskRevision,
+      currentManifestRevision: input.currentManifestRevision,
+    });
+    if (!validity.acceptable) {
+      result.push({ id: offer.id, reason: validity.reason });
+    }
+  }
+  return result;
+}

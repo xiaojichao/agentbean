@@ -29,4 +29,5 @@ export * from './agent-exposure-policy.js';
 export * from './agent-memory-projection-policy.js';
 export * from './agent-eligibility.js';
 export * from './task-offer-policy.js';
+export * from './claim-relinquishment-policy.js';
 export * from './task-followup-binding.js';
