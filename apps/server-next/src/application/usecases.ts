@@ -1,6 +1,6 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   initialChannelDocumentIds,
@@ -76,6 +76,13 @@ export interface ArtifactContentStoreWriteResult {
 
 export interface ArtifactContentStore {
   writeContent(input: ArtifactContentStoreWriteInput): Promise<ArtifactContentStoreWriteResult>;
+  copyContent?(input: {
+    teamId: string;
+    sourceArtifactId: string;
+    sourceStoragePath?: string;
+    artifactId: string;
+    filename: string;
+  }): Promise<ArtifactContentStoreWriteResult>;
   deleteContent?(input: { teamId: string; artifactId: string }): Promise<void>;
 }
 
@@ -157,6 +164,8 @@ export interface ServerNextUseCases {
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
   deriveChannelDocument(input: DeriveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   saveChannelDocument(input: SaveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
+  restoreChannelDocument(input: RestoreChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
+  publishChannelDocument(input: PublishChannelDocumentInput): Promise<Ack<PublishChannelDocumentResultDto>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
@@ -3351,7 +3360,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const revision: ChannelDocumentRevisionRecord = {
           id: ids.nextId(), documentId: selectedTarget.id, artifact,
           revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId,
-          createdAt: now, source, resources: pinned.resources,
+          createdAt: now, source: 'run', derivationSource: source, resources: pinned.resources,
+          published: false,
         };
         const saved = await repositories.channelDocuments.addRevision({
           documentId: selectedTarget.id,
@@ -3360,17 +3370,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           revision,
           artifact,
           requireUniqueFilename: true,
+          operation: {
+            documentId: selectedTarget.id,
+            idempotencyKey: `derive:${revision.id}`,
+            operationType: 'save',
+            requestFingerprint: createHash('sha256').update(JSON.stringify({
+              sourceArtifactId: sourceArtifact.id,
+              targetBaseRevisionId: selectedTarget.currentRevisionId,
+              filename,
+            })).digest('hex'),
+            revisionId: revision.id,
+          },
         });
         if (!saved) {
           await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
           return makeFailure('CONFLICT', 'Target document has changed; reload before deriving');
         }
-        return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
+        return makeSuccess({ document: toCommittedChannelDocumentDto(saved.document, saved.revision) });
       }
       const documentId = ids.nextId();
       const revision: ChannelDocumentRevisionRecord = {
         id: ids.nextId(), documentId, artifact, revision: 1, createdBy: documentInput.userId,
-        createdAt: now, source, resources: pinned.resources,
+        createdAt: now, source: 'run', derivationSource: source, resources: pinned.resources,
+        published: false,
       };
       const document: ChannelDocumentRecord = {
         id: documentId, teamId: documentInput.teamId, channelId: documentInput.channelId,
@@ -3390,46 +3412,48 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
-      if (document.currentRevisionId !== documentInput.baseRevisionId) {
-        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
-      }
-      const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
-      let content = documentInput.content;
-      let resources: ChannelDocumentResourceBindingDto[] | undefined;
-      const source = latestRevision?.source;
-      if (source) {
-        const sourceArtifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
-          teamId: documentInput.teamId,
-          channelId: documentInput.channelId,
-          runId: source.workspaceRunId,
-        });
-        const pinned = pinChannelDocumentResources(content, source, sourceArtifacts);
-        if (!pinned.ok) return makeFailure('VALIDATION_ERROR', pinned.message);
-        content = pinned.content;
-        resources = pinned.resources;
-      }
-      const bytes = Buffer.byteLength(content, 'utf8');
-      if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
-      if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
-      const artifactId = ids.nextId();
-      const filename = sanitizeMarkdownFilename(documentInput.filename ?? document.filename);
-      const stored = artifactContentStore ? await artifactContentStore.writeContent({ teamId: documentInput.teamId, artifactId, filename, content: Buffer.from(content, 'utf8') }) : undefined;
-      const now = clock.now();
-      const artifact: ArtifactRecord = { id: artifactId, teamId: document.teamId, channelId: document.channelId, uploaderId: documentInput.userId, filename, mimeType: 'text/markdown', sizeBytes: bytes, pathKind: 'upload', createdAt: now, ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}) };
-      const revision: ChannelDocumentRevisionRecord = {
-        id: ids.nextId(), documentId: document.id, artifact,
-        revision: (latestRevision?.revision ?? 0) + 1,
-        createdBy: documentInput.userId, createdAt: now,
-        ...(source ? { source } : {}),
-        ...(resources ? { resources } : {}),
-      };
-      const next = { ...document, filename, currentRevisionId: revision.id, currentRevision: undefined as never, updatedAt: now };
-      const saved = await repositories.channelDocuments.addRevision({ documentId: document.id, expectedCurrentRevisionId: documentInput.baseRevisionId, document: next, revision, artifact });
-      if (!saved) {
-        await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
-        return makeFailure('CONFLICT', 'Document has changed; reload before saving');
-      }
-      return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
+      return commitChannelDocumentRevision({
+        repositories, artifactContentStore, clock, ids, document, input: documentInput,
+        operationType: 'save', source: 'edit',
+      });
+    },
+
+    async restoreChannelDocument(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      const sourceRevision = await repositories.channelDocuments.getRevision({
+        documentId: document.id,
+        revisionId: documentInput.revisionId,
+      });
+      if (!sourceRevision) return makeFailure('NOT_FOUND', 'Channel document revision not found');
+      return commitChannelDocumentRevision({
+        repositories, artifactContentStore, clock, ids, document, input: documentInput,
+        operationType: 'restore', source: 'restore', sourceRevision,
+      });
+    },
+
+    async publishChannelDocument(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
+      const result = await commitChannelDocumentRevision({
+        repositories, artifactContentStore, clock, ids, document, input: documentInput,
+        operationType: 'publish', source: 'edit',
+      });
+      if (!result.ok) return result;
+      if (!result.message) throw new Error('Published channel document is missing its message');
+      return makeSuccess({
+        document: result.document,
+        message: {
+          ...result.message,
+          artifacts: [result.document.currentRevision.artifact],
+        },
+      });
     },
 
     async searchMessages(searchInput) {
@@ -7805,6 +7829,229 @@ async function ensureUserCanViewChannel(
 
 type ChannelFileCursor = { createdAt: number; id: string };
 
+async function commitChannelDocumentRevision(input: {
+  repositories: ServerNextRepositories;
+  artifactContentStore?: ArtifactContentStore;
+  clock: ServerNextClock;
+  ids: ServerNextIds;
+  document: ChannelDocumentRecord;
+  input: SaveChannelDocumentInput | RestoreChannelDocumentInput;
+  operationType: 'save' | 'restore' | 'publish';
+  source: ChannelDocumentRevisionDto['source'];
+  sourceRevision?: ChannelDocumentRevisionRecord;
+}): Promise<Ack<ChannelDocumentResultDto & { message?: MessageDto }>> {
+  const {
+    repositories,
+    artifactContentStore,
+    clock,
+    ids,
+    document,
+    operationType,
+    source,
+    sourceRevision,
+  } = input;
+  const documentInput = input.input;
+  const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
+  let contentInput = 'content' in documentInput ? documentInput.content : undefined;
+  const derivationSource = sourceRevision?.derivationSource ?? latestRevision?.derivationSource;
+  let resources = sourceRevision?.resources ?? latestRevision?.resources;
+  if (contentInput !== undefined && derivationSource) {
+    const sourceArtifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+      teamId: documentInput.teamId,
+      channelId: documentInput.channelId,
+      runId: derivationSource.workspaceRunId,
+    });
+    const pinned = pinChannelDocumentResources(contentInput, derivationSource, sourceArtifacts);
+    if (!pinned.ok) return makeFailure('VALIDATION_ERROR', pinned.message);
+    contentInput = pinned.content;
+    resources = pinned.resources;
+  }
+  if (contentInput !== undefined) {
+    const bytes = Buffer.byteLength(contentInput, 'utf8');
+    if (bytes > 2 * 1024 * 1024) {
+      return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
+    }
+    if (/<script\b/i.test(contentInput) || /(?:javascript|vbscript|data):/i.test(contentInput)) {
+      return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
+    }
+  }
+  const filename = sanitizeMarkdownFilename(
+    ('filename' in documentInput ? documentInput.filename : undefined)
+      ?? sourceRevision?.artifact.filename
+      ?? document.filename,
+  );
+  const requestFingerprint = channelDocumentOperationFingerprint({
+    operationType,
+    baseRevisionId: documentInput.baseRevisionId,
+    filename,
+    content: contentInput,
+    sourceRevisionId: sourceRevision?.id,
+  });
+  const idempotencyKey = documentInput.idempotencyKey?.trim()
+    || `legacy:${documentInput.userId}:${requestFingerprint}`;
+  const replay = await repositories.channelDocuments.getRevisionByIdempotencyKey({
+    documentId: document.id,
+    idempotencyKey,
+  });
+  if (replay) {
+    if (replay.operation.operationType !== operationType
+      || replay.operation.requestFingerprint !== requestFingerprint) {
+      return makeFailure('VALIDATION_ERROR', 'Idempotency key was already used for a different document operation');
+    }
+    const message = replay.revision.publication
+      ? await repositories.messages.getById(replay.revision.publication.messageId)
+      : null;
+    return makeSuccess({
+      document: toCommittedChannelDocumentDto(replay.document, replay.revision),
+      ...(message ? { message } : {}),
+    });
+  }
+  if (document.currentRevisionId !== documentInput.baseRevisionId) {
+    return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+  }
+
+  const artifactId = ids.nextId();
+  const now = clock.now();
+  let stored: ArtifactContentStoreWriteResult | undefined;
+  if (sourceRevision) {
+    if (artifactContentStore && sourceRevision.artifact.storagePath && !artifactContentStore.copyContent) {
+      return makeFailure('INTERNAL_ERROR', 'Artifact content store cannot restore document revisions');
+    }
+    stored = artifactContentStore?.copyContent
+      ? await artifactContentStore.copyContent({
+          teamId: documentInput.teamId,
+          sourceArtifactId: sourceRevision.artifact.id,
+          sourceStoragePath: sourceRevision.artifact.storagePath,
+          artifactId,
+          filename,
+        })
+      : undefined;
+  } else if (contentInput !== undefined) {
+    stored = artifactContentStore
+      ? await artifactContentStore.writeContent({
+          teamId: documentInput.teamId,
+          artifactId,
+          filename,
+          content: Buffer.from(contentInput, 'utf8'),
+        })
+      : undefined;
+  }
+  const revisionId = ids.nextId();
+  const publicationId = operationType === 'publish' ? ids.nextId() : undefined;
+  const messageId = operationType === 'publish' ? ids.nextId() : undefined;
+  const artifact: ArtifactRecord = {
+    id: artifactId,
+    teamId: document.teamId,
+    channelId: document.channelId,
+    ...(messageId ? { messageId } : {}),
+    uploaderId: documentInput.userId,
+    filename,
+    mimeType: 'text/markdown',
+    sizeBytes: stored?.sizeBytes
+      ?? (contentInput !== undefined ? Buffer.byteLength(contentInput, 'utf8') : sourceRevision?.artifact.sizeBytes ?? 0),
+    pathKind: 'upload',
+    createdAt: now,
+    ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}),
+  };
+  const publication = publicationId && messageId
+    ? { id: publicationId, messageId, publishedBy: documentInput.userId, publishedAt: now }
+    : undefined;
+  const revision: ChannelDocumentRevisionRecord = {
+    id: revisionId,
+    documentId: document.id,
+    artifact,
+    revision: (latestRevision?.revision ?? 0) + 1,
+    createdBy: documentInput.userId,
+    createdAt: now,
+    source,
+    ...(derivationSource ? { derivationSource } : {}),
+    ...(resources ? { resources } : {}),
+    ...(sourceRevision ? { restoredFromRevisionId: sourceRevision.id } : {}),
+    published: Boolean(publication),
+    ...(publication ? { publication } : {}),
+  };
+  const next: ChannelDocumentRecord = {
+    ...document,
+    filename,
+    currentRevisionId: revision.id,
+    updatedAt: now,
+  };
+  const message: MessageRecord | undefined = messageId
+    ? {
+        id: messageId,
+        teamId: document.teamId,
+        channelId: document.channelId,
+        threadId: messageId,
+        senderKind: 'human',
+        senderId: documentInput.userId,
+        body: `分享了文档 ${filename}（版本 ${revision.revision}）`,
+        createdAt: now,
+        meta: {
+          artifactIds: [artifact.id],
+          channelDocumentId: document.id,
+          channelDocumentRevisionId: revision.id,
+        },
+      }
+    : undefined;
+  const operation = {
+    documentId: document.id,
+    idempotencyKey,
+    operationType,
+    requestFingerprint,
+    revisionId: revision.id,
+  } as const;
+  const committed = await repositories.channelDocuments.addRevision({
+    documentId: document.id,
+    expectedCurrentRevisionId: documentInput.baseRevisionId,
+    document: next,
+    revision,
+    artifact,
+    operation,
+    ...(message ? { message } : {}),
+  });
+  if (!committed) {
+    await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+    return makeFailure('CONFLICT', 'Document has changed; reload before saving');
+  }
+  if (committed.replayed) {
+    await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+    if (committed.operation.operationType !== operationType
+      || committed.operation.requestFingerprint !== requestFingerprint) {
+      return makeFailure('VALIDATION_ERROR', 'Idempotency key was already used for a different document operation');
+    }
+  }
+  const committedMessage = committed.revision.publication
+    ? await repositories.messages.getById(committed.revision.publication.messageId)
+    : null;
+  return makeSuccess({
+    document: toCommittedChannelDocumentDto(committed.document, committed.revision),
+    ...(committedMessage ? { message: committedMessage } : {}),
+  });
+}
+
+function channelDocumentOperationFingerprint(input: {
+  operationType: 'save' | 'restore' | 'publish';
+  baseRevisionId: string;
+  filename: string;
+  content?: string;
+  sourceRevisionId?: string;
+}): string {
+  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+}
+
+function toCommittedChannelDocumentDto(
+  document: ChannelDocumentRecord,
+  revision: ChannelDocumentRevisionRecord,
+): ChannelDocumentDto {
+  return {
+    ...document,
+    filename: revision.artifact.filename,
+    currentRevisionId: revision.id,
+    updatedAt: revision.createdAt,
+    currentRevision: toChannelDocumentRevisionDto(revision),
+  };
+}
+
 async function getOrCreateChannelDocument(
   repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments' | 'messages'>,
   input: { teamId: string; channelId: string; documentId: string },
@@ -7841,7 +8088,12 @@ async function toChannelDocumentDto(
 }
 
 function toChannelDocumentRevisionDto(revision: ChannelDocumentRevisionRecord): ChannelDocumentRevisionDto {
-  return { ...revision, artifact: toArtifactDto(revision.artifact) };
+  return {
+    ...revision,
+    source: revision.source ?? channelDocumentInitialRevisionSource(revision.artifact),
+    published: revision.published ?? Boolean(revision.publication),
+    artifact: toArtifactDto(revision.artifact),
+  };
 }
 
 function pinChannelDocumentResources(
@@ -8191,8 +8443,19 @@ async function createInitialChannelDocument(
   // Artifact ID 已由上传/运行结果分配且全局唯一；复用它生成文档身份，不额外消耗
   // message send 的有限测试/幂等 ID 序列，也让重放时身份稳定。
   const { documentId, revisionId } = initialChannelDocumentIds(artifact.id);
+  const publication = artifact.messageId
+    ? {
+        id: `${revisionId}:publication`,
+        messageId: artifact.messageId,
+        publishedBy: createdBy,
+        publishedAt: createdAt,
+      }
+    : undefined;
   const revision: ChannelDocumentRevisionRecord = {
     id: revisionId, documentId, artifact, revision: 1, createdBy, createdAt,
+    source: channelDocumentInitialRevisionSource(artifact),
+    published: Boolean(publication),
+    ...(publication ? { publication } : {}),
   };
   await repositories.channelDocuments.create({
     document: {
@@ -8201,6 +8464,12 @@ async function createInitialChannelDocument(
     },
     revision,
   });
+}
+
+function channelDocumentInitialRevisionSource(
+  artifact: ArtifactRecord,
+): ChannelDocumentRevisionDto['source'] {
+  return artifact.workspaceRunId || artifact.dispatchId ? 'run' : 'attachment';
 }
 
 async function createInitialChannelDocuments(
@@ -8240,7 +8509,7 @@ async function listPublicChannelFiles(
   const documents = await repositories.channelDocuments.listWithCurrentRevisionByChannel(input);
   for (const { document, currentRevision } of documents) {
     currentDocumentArtifactIds.add(currentRevision.artifact.id);
-    const documentSource = currentRevision.source;
+    const documentSource = currentRevision.derivationSource;
     const initialArtifactId = document.id.startsWith('channel-document:')
       ? document.id.slice('channel-document:'.length)
       : undefined;

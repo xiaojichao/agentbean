@@ -1,7 +1,7 @@
 'use client';
 import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
-import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto } from '@agentbean/contracts';
+import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
   assertArtifactUploadWithinLimit,
@@ -560,7 +560,9 @@ export interface ChannelEvents {
   getDocument(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
   listDocumentRevisions(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentRevisionsResultDto['document']; revisions?: ChannelDocumentRevisionsResultDto['revisions']; error?: string }>;
   deriveDocument(channelId: string, sourceArtifactId: string, content: string, filename: string, targetDocumentId?: string, targetBaseRevisionId?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string; message?: string }>;
-  saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string, idempotencyKey?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  restoreDocument(channelId: string, documentId: string, revisionId: string, baseRevisionId: string, idempotencyKey: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  publishDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename: string, idempotencyKey: string): Promise<{ ok: boolean; document?: PublishChannelDocumentResultDto['document']; message?: MessageDto; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -595,7 +597,9 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
         ...(targetBaseRevisionId ? { targetBaseRevisionId } : {}),
       });
     },
-    saveDocument(channelId, documentId, baseRevisionId, content, filename) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}) }); },
+    saveDocument(channelId, documentId, baseRevisionId, content, filename, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}), ...(idempotencyKey ? { idempotencyKey } : {}) }); },
+    restoreDocument(channelId, documentId, revisionId, baseRevisionId, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.restore, { channelId, documentId, revisionId, baseRevisionId, idempotencyKey }); },
+    publishDocument(channelId, documentId, baseRevisionId, content, filename, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.publish, { channelId, documentId, baseRevisionId, content, filename, idempotencyKey }); },
   };
 }
 

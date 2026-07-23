@@ -118,7 +118,7 @@ describe('server-next Socket.IO namespaces', () => {
       document: {
         id: 'document-derived',
         currentRevision: {
-          source: { taskId: 'task-1', artifactId: 'artifact-source' },
+          derivationSource: { taskId: 'task-1', artifactId: 'artifact-source' },
           resources: [
             { artifactId: 'artifact-image', status: 'resolved' },
             { normalizedPath: 'docs/missing.png', status: 'missing' },
@@ -140,7 +140,7 @@ describe('server-next Socket.IO namespaces', () => {
       document: {
         currentRevision: {
           artifact: { id: 'artifact-derived' },
-          source: { workspaceRunId: 'run-1', agentId: 'agent-1' },
+          derivationSource: { workspaceRunId: 'run-1', agentId: 'agent-1' },
         },
       },
     });

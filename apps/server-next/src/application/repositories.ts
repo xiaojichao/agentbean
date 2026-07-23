@@ -73,6 +73,19 @@ export interface ChannelDocumentRecord extends Omit<ChannelDocumentDto, 'current
 export interface ChannelDocumentRevisionRecord extends Omit<ChannelDocumentRevisionDto, 'artifact'> {
   artifact: ArtifactRecord;
 }
+export interface ChannelDocumentOperationRecord {
+  documentId: ID;
+  idempotencyKey: string;
+  operationType: 'save' | 'restore' | 'publish';
+  requestFingerprint: string;
+  revisionId: ID;
+}
+export interface ChannelDocumentRevisionCommit {
+  document: ChannelDocumentRecord;
+  revision: ChannelDocumentRevisionRecord;
+  operation: ChannelDocumentOperationRecord;
+  replayed: boolean;
+}
 export type WorkspaceRunRecord = WorkspaceRunDto;
 export type TaskRecord = TaskDto & {
   revision: number;
@@ -343,6 +356,8 @@ export interface ChannelDocumentRepository {
     currentRevision: ChannelDocumentRevisionRecord;
   }>>;
   listRevisions(input: { documentId: ID }): Promise<ChannelDocumentRevisionRecord[]>;
+  getRevision(input: { documentId: ID; revisionId: ID }): Promise<ChannelDocumentRevisionRecord | null>;
+  getRevisionByIdempotencyKey(input: { documentId: ID; idempotencyKey: string }): Promise<ChannelDocumentRevisionCommit | null>;
   addRevision(input: {
     documentId: ID;
     expectedCurrentRevisionId: ID;
@@ -350,7 +365,9 @@ export interface ChannelDocumentRepository {
     revision: ChannelDocumentRevisionRecord;
     artifact: ArtifactRecord;
     requireUniqueFilename?: boolean;
-  }): Promise<ChannelDocumentRecord | null>;
+    operation: ChannelDocumentOperationRecord;
+    message?: MessageRecord;
+  }): Promise<ChannelDocumentRevisionCommit | null>;
   deleteByChannel(channelId: ID): Promise<void>;
 }
 

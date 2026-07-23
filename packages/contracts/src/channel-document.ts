@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { ArtifactDto, ArtifactRole, ArtifactSourceRootDto } from './artifact.js';
+import type { MessageDto } from './message.js';
 
 export interface ChannelDocumentSourceDto {
   messageId?: ID;
@@ -26,6 +27,15 @@ export interface ChannelDocumentResourceBindingDto {
   artifactId?: ID;
 }
 
+export type ChannelDocumentRevisionSource = 'attachment' | 'run' | 'edit' | 'restore';
+
+export interface ChannelDocumentPublicationDto {
+  id: ID;
+  messageId: ID;
+  publishedBy: ID;
+  publishedAt: UnixMs;
+}
+
 export interface ChannelDocumentRevisionDto {
   id: ID;
   documentId: ID;
@@ -33,8 +43,12 @@ export interface ChannelDocumentRevisionDto {
   revision: number;
   createdBy: ID;
   createdAt: UnixMs;
-  source?: ChannelDocumentSourceDto;
+  source: ChannelDocumentRevisionSource;
+  derivationSource?: ChannelDocumentSourceDto;
   resources?: ChannelDocumentResourceBindingDto[];
+  restoredFromRevisionId?: ID;
+  published: boolean;
+  publication?: ChannelDocumentPublicationDto;
 }
 
 export interface ChannelDocumentDto {
@@ -64,6 +78,19 @@ export interface SaveChannelDocumentInput extends GetChannelDocumentInput {
   baseRevisionId: ID;
   content: string;
   filename?: string;
+  idempotencyKey?: string;
+}
+
+export interface RestoreChannelDocumentInput extends GetChannelDocumentInput {
+  revisionId: ID;
+  baseRevisionId: ID;
+  idempotencyKey: string;
+}
+
+export interface PublishChannelDocumentInput extends SaveChannelDocumentInput {}
+
+export interface PublishChannelDocumentResultDto extends ChannelDocumentResultDto {
+  message: MessageDto;
 }
 
 export interface DeriveChannelDocumentInput extends ListChannelDocumentsInput {
