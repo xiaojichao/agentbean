@@ -6423,6 +6423,9 @@ function parseAgentArtifactSourceRoots(
         || ids.has(id)
         || !label
         || label.length > 80
+        || label === '.'
+        || label === '..'
+        || /[/\\\u0000-\u001f]/.test(label)
         || !/^[A-Z_][A-Z0-9_]{0,63}$/.test(envVarName)
         || (defaultRole !== 'intermediate' && defaultRole !== 'run_output' && defaultRole !== 'deliverable')) {
         continue;

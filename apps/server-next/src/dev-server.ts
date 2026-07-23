@@ -910,6 +910,8 @@ function parseArtifactSourceRoot(fields: Record<string, unknown>): ArtifactSourc
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)
     || !label
     || label.length > 120
+    || label === '.'
+    || label === '..'
     || /[/\\\u0000-\u001f]/.test(label)) return undefined;
   if (kind !== 'run_output' && kind !== 'agent_workspace' && kind !== 'configured_output' && kind !== 'adapter_generated' && kind !== 'legacy_run') return undefined;
   return { id, kind, label };
