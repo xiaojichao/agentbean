@@ -2,6 +2,11 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
+import {
+  initialChannelDocumentIds,
+  isMarkdownArtifact,
+  sanitizeMarkdownFilename,
+} from './channel-document-policy.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
@@ -3218,10 +3223,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const artifacts = await repositories.artifacts.listByChannel(documentInput);
       const missingDocuments = artifacts.filter((artifact) =>
         Boolean(artifact.messageId && !artifact.workspaceRunId)
+        && isMarkdownArtifact(artifact)
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
       if (missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
-          await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+          await getOrCreateChannelDocument(repositories, {
+            ...documentInput,
+            documentId: `channel-document:${artifact.id}`,
+          });
         }
         records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
       }
@@ -7797,7 +7806,7 @@ async function ensureUserCanViewChannel(
 type ChannelFileCursor = { createdAt: number; id: string };
 
 async function getOrCreateChannelDocument(
-  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments'>,
+  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments' | 'messages'>,
   input: { teamId: string; channelId: string; documentId: string },
 ): Promise<ChannelDocumentRecord | null> {
   const existing = await repositories.channelDocuments.getForTeam(input);
@@ -7808,6 +7817,15 @@ async function getOrCreateChannelDocument(
   if (!artifactId) return null;
   const artifact = await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId });
   if (!artifact || artifact.channelId !== input.channelId || artifact.workspaceRunId) return null;
+  const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
+  if (role === 'attachment' && artifact.messageId) {
+    const sourceMessage = await repositories.messages.getById(artifact.messageId);
+    if (!sourceMessage
+      || sourceMessage.channelId !== artifact.channelId
+      || isDeletedMessage(sourceMessage)) {
+      return null;
+    }
+  }
   await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
   return repositories.channelDocuments.getForTeam(input);
 }
@@ -7824,12 +7842,6 @@ async function toChannelDocumentDto(
 
 function toChannelDocumentRevisionDto(revision: ChannelDocumentRevisionRecord): ChannelDocumentRevisionDto {
   return { ...revision, artifact: toArtifactDto(revision.artifact) };
-}
-
-function sanitizeMarkdownFilename(value: string): string {
-  const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').slice(0, 240);
-  if (!normalized) return 'document.md';
-  return /\.(?:md|markdown)$/i.test(normalized) ? normalized : `${normalized}.md`;
 }
 
 function pinChannelDocumentResources(
@@ -8175,12 +8187,12 @@ async function createInitialChannelDocument(
   createdBy: string,
   createdAt: number,
 ): Promise<void> {
-  if (artifact.mimeType !== 'text/markdown' && !/\.(?:md|markdown)$/i.test(artifact.filename)) return;
+  if (!isMarkdownArtifact(artifact)) return;
   // Artifact ID 已由上传/运行结果分配且全局唯一；复用它生成文档身份，不额外消耗
   // message send 的有限测试/幂等 ID 序列，也让重放时身份稳定。
-  const documentId = `channel-document:${artifact.id}`;
+  const { documentId, revisionId } = initialChannelDocumentIds(artifact.id);
   const revision: ChannelDocumentRevisionRecord = {
-    id: `${documentId}:revision:1`, documentId, artifact, revision: 1, createdBy, createdAt,
+    id: revisionId, documentId, artifact, revision: 1, createdBy, createdAt,
   };
   await repositories.channelDocuments.create({
     document: {
@@ -8339,6 +8351,12 @@ async function channelFileSource(
   const directMessage = artifact.messageId
     ? await repositories.messages.getById(artifact.messageId)
     : null;
+  const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
+  if (directMessage
+    && (directMessage.channelId !== artifact.channelId || isDeletedMessage(directMessage))
+    && role === 'attachment') {
+    return null;
+  }
   if (directMessage
     && directMessage.channelId === artifact.channelId
     && !isDeletedMessage(directMessage)) {
@@ -8357,7 +8375,15 @@ async function channelFileSource(
     teamId: artifact.teamId,
     runId: artifact.workspaceRunId,
   });
-  if (!run) return null;
+  if (!run) {
+    if (!isLegacyBackfilledRunArtifact(artifact)) return null;
+    return {
+      workspaceRunId: artifact.workspaceRunId,
+      senderKind: 'system',
+      senderId: null,
+      messageCreatedAt: artifact.createdAt,
+    };
+  }
   const dispatch = await repositories.dispatches.getById(run.dispatchId);
   const sourceMessageId = run.messageId ?? dispatch?.messageId;
   const sourceMessage = sourceMessageId
@@ -8455,9 +8481,23 @@ async function isPublicChannelFileArtifact(
 ): Promise<boolean> {
   if (artifact.workspaceRunId) {
     const run = await repositories.workspaceRuns.getForTeam({ teamId: artifact.teamId, runId: artifact.workspaceRunId });
-    if (!run || !(await isPublicWorkspaceRun(repositories, run))) return false;
+    if (!run) {
+      return isLegacyBackfilledRunArtifact(artifact)
+        && await isPublicArtifact(repositories, artifact);
+    }
+    if (!(await isPublicWorkspaceRun(repositories, run))) return false;
   }
   return isPublicArtifact(repositories, artifact);
+}
+
+function isLegacyBackfilledRunArtifact(
+  artifact: ArtifactRecord,
+): artifact is ArtifactRecord & { workspaceRunId: string } {
+  return Boolean(
+    artifact.workspaceRunId
+    && artifact.sourceRoot?.kind === 'legacy_run'
+    && artifact.sourceRoot.id === `legacy_run:${artifact.workspaceRunId}`,
+  );
 }
 
 function compareChannelFiles(left: Pick<ArtifactRecord, 'createdAt' | 'id'>, right: Pick<ArtifactRecord, 'createdAt' | 'id'>): number {

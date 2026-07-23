@@ -7,6 +7,7 @@ import { AGENT_EVENTS, WEB_EVENTS, makeSuccess, type DispatchDto } from '../../.
 import { createInMemoryServerNext } from '../src/index';
 import type { ServerNextUseCases } from '../src/application/usecases';
 import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
+import { applyTeamMigrations } from '../src/infra/sqlite/repositories';
 
 type SocketIoServerConstructor = ConstructorParameters<typeof startServerNextDevServer>[0] extends { Server?: infer T }
   ? NonNullable<T>
@@ -406,6 +407,54 @@ describe('server-next dev server entry', () => {
       user: { username: 'shaw' },
       currentTeam: { name: 'AgentBean' },
     });
+  });
+
+  test('SQLite 启动后在后台分批回填历史频道文件', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-backfill-'));
+    const teamDbPath = join(dataDir, 'team.sqlite');
+    const setupDb = new Database(teamDbPath);
+    try {
+      applyTeamMigrations(setupDb);
+      setupDb.prepare(`INSERT INTO channels (
+        id, team_id, kind, name, visibility, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        'channel-1', 'team-1', 'channel', 'general', 'public', 'user-1', 1,
+      );
+      setupDb.prepare(`INSERT INTO messages (
+        id, team_id, channel_id, sender_kind, sender_id, body, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        'message-1', 'team-1', 'channel-1', 'human', 'user-1', 'legacy', 50,
+      );
+      setupDb.prepare(`INSERT INTO artifacts (
+        id, team_id, channel_id, message_id, uploader_id, filename, mime_type,
+        size_bytes, storage_path, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        'artifact-1', 'team-1', 'channel-1', 'message-1', 'user-1', 'legacy.md',
+        'text/markdown', 5, 'artifacts/team-1/artifact-1/legacy.md', 100,
+      );
+    } finally {
+      setupDb.close();
+    }
+
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const observer = new Database(teamDbPath);
+    try {
+      await eventually(() => {
+        expect(observer.prepare(
+          'SELECT current_revision_id FROM channel_documents WHERE id = ?',
+        ).get('channel-document:artifact-1')).toEqual({
+          current_revision_id: 'channel-document:artifact-1:revision:1',
+        });
+      }, 100);
+    } finally {
+      observer.close();
+    }
   });
 
   test('reconciles persisted online devices to offline on SQLite startup', async () => {

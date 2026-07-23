@@ -126,7 +126,10 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0037_artifact_sources.sql');
   }
   applyMigration(db, 'team/0038_channel_documents.sql');
-  applyMigration(db, 'team/0039_channel_document_sources.sql');
+  if (sqliteTableExists(db, 'artifact_preview_jobs')) {
+    applyMigration(db, 'team/0039_channel_file_backfill.sql');
+  }
+  applyMigration(db, 'team/0040_channel_document_sources.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
