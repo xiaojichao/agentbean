@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactRole, type ChannelDto, type ChannelMembersDto, type ChannelFileDirectoryDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactRole, type ChannelDto, type ChannelMembersDto, type ChannelFileDirectoryDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
@@ -651,6 +651,8 @@ export interface UploadArtifactInput {
   storagePath: string;
   relativePath?: string;
   sha256?: string;
+  role?: ArtifactRole;
+  sourceRoot?: ArtifactDto['sourceRoot'];
 }
 
 export interface DeviceUploadArtifactInput extends Omit<UploadArtifactInput, 'userId'> {
@@ -791,6 +793,8 @@ export interface ReceiveDispatchArtifactInput {
   storagePath?: string;
   relativePath?: string;
   pathKind?: ArtifactDto['pathKind'];
+  role?: ArtifactRole;
+  sourceRoot?: ArtifactDto['sourceRoot'];
   sha256?: string;
   contentBase64?: string;
 }
@@ -932,6 +936,8 @@ export interface CreateServerNextUseCasesInput {
   deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
   artifactContentStore?: ArtifactContentStore;
+  resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>;
+  onArtifactCommitted?: (artifact: ArtifactRecord) => Promise<void>;
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
@@ -946,6 +952,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
   const artifactContentStore = input.artifactContentStore;
+  const resolveArtifactPreview = input.resolveArtifactPreview;
+  const onArtifactCommitted = input.onArtifactCommitted;
   // #706 已为 durable-job 入队接好 Channel Coordinator 消费者：消费 Job、调 Active PI Model、
   // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
   // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
@@ -3185,11 +3193,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
     },
 
     async searchChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
     },
 
     async searchMessages(searchInput) {
@@ -3803,6 +3811,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         storagePath: artifactInput.storagePath,
         relativePath: artifactInput.relativePath,
         pathKind: 'upload',
+        role: artifactInput.role ?? 'attachment',
+        sourceRoot: artifactInput.sourceRoot,
         sha256: artifactInput.sha256,
         createdAt: clock.now(),
       });
@@ -4290,9 +4300,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
           relativePath: artifactInput.relativePath,
           pathKind: artifactInput.pathKind ?? (workspaceRun ? 'workspace' : 'generated'),
+          role: artifactInput.role ?? (workspaceRun ? 'run_output' : 'deliverable'),
+          sourceRoot: artifactInput.sourceRoot,
           sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
           createdAt: now,
         });
+        await onArtifactCommitted?.(artifact).catch(() => undefined);
         artifacts.push(toArtifactDto(artifact));
       }
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
@@ -7538,6 +7551,7 @@ type ChannelFileCursor = { createdAt: number; id: string };
 async function listPublicChannelFiles(
   repositories: ServerNextRepositories,
   input: ListChannelFilesInput | SearchChannelFilesInput,
+  resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>,
 ): Promise<Ack<ChannelFilesResultDto>> {
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
     return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -7564,11 +7578,20 @@ async function listPublicChannelFiles(
     if (!source) continue;
     const logicalPath = channelArtifactLogicalPath(artifact, source, role);
     if (query && !`${artifact.filename} ${logicalPath}`.toLocaleLowerCase().includes(query)) continue;
-    if (!query) addChannelFileDirectories(directories, logicalPath, artifact);
+    const preview = await resolveArtifactPreview?.(artifact);
+    if (!query) addChannelFileDirectories(
+      directories,
+      logicalPath,
+      artifact,
+      preview?.status === 'ready' ? preview.url : undefined,
+    );
     if (!query && !isDirectChannelFileChild(logicalPath, requestedPath)) continue;
     if (cursor && !isAfterChannelFileCursor(artifact, cursor)) continue;
     entries.push({
-      artifact: toArtifactDto(artifact),
+      artifact: {
+        ...toArtifactDto(artifact),
+        ...(preview ? { preview } : {}),
+      },
       source,
       logicalPath,
       role,
@@ -7687,6 +7710,7 @@ function addChannelFileDirectories(
   directories: Map<string, ChannelFileDirectoryDto>,
   logicalPath: string,
   artifact: ArtifactRecord,
+  previewUrl?: string,
 ): void {
   const parts = logicalPath.split('/');
   for (let index = 0; index < parts.length - 1; index += 1) {
@@ -7698,8 +7722,19 @@ function addChannelFileDirectories(
       fileCount: (existing?.fileCount ?? 0) + 1,
       updatedAt: Math.max(existing?.updatedAt ?? 0, artifact.createdAt),
       ...(artifact.sourceRoot ? { sourceRoot: artifact.sourceRoot } : {}),
+      ...addDirectoryPreview(existing?.previewUrls, previewUrl),
     });
   }
+}
+
+function addDirectoryPreview(
+  existing: string[] | undefined,
+  previewUrl: string | undefined,
+): { previewUrls?: string[] } {
+  if (!previewUrl || existing?.includes(previewUrl) || (existing?.length ?? 0) >= 4) {
+    return existing?.length ? { previewUrls: existing } : {};
+  }
+  return { previewUrls: [...(existing ?? []), previewUrl] };
 }
 
 async function isPublicChannelFileArtifact(

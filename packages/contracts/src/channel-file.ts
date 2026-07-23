@@ -46,4 +46,5 @@ export interface ChannelFileDirectoryDto {
   fileCount: number;
   updatedAt: UnixMs;
   sourceRoot?: ArtifactDto['sourceRoot'];
+  previewUrls?: string[];
 }
