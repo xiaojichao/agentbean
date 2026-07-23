@@ -102,6 +102,23 @@ describe('daemon-next CLI wiring', () => {
     expect(config.serverUrl).toBe('https://api.example.com');
   });
 
+  test('parses configurable Artifact byte limits', () => {
+    expect(parseDaemonNextCliConfig({
+      hostname: 'host.local',
+      env: {
+        AGENTBEAN_NEXT_MAX_ARTIFACT_BYTES: '1048576',
+        AGENTBEAN_NEXT_MAX_ARTIFACT_RUN_BYTES: '4194304',
+      },
+    })).toMatchObject({
+      artifactMaxBytes: 1048576,
+      artifactRunMaxBytes: 4194304,
+    });
+    expect(() => parseDaemonNextCliConfig({
+      hostname: 'host.local',
+      env: { AGENTBEAN_NEXT_MAX_ARTIFACT_BYTES: '0' },
+    })).toThrow('maxArtifactBytes must be a positive integer');
+  });
+
   test('allows invite-code onboarding without manual team or owner config', () => {
     const config = parseDaemonNextCliConfig({
       hostname: 'host.local',
@@ -609,6 +626,8 @@ describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
           profileId: 'agentbean-next',
           serverUrl: 'http://agentbean.example',
           serverUrlExplicit: true,
+          artifactMaxBytes: 1048576,
+          artifactRunMaxBytes: 4194304,
         }),
         deps,
       );
@@ -636,6 +655,10 @@ describe('runDaemonNextCli wiring (loadAuth / saveAuth / device.token)', () => {
         { profileId: 'agentbean-next' },
       );
       expect(protocolInputs).toHaveLength(1);
+      expect(protocolInputs[0]).toMatchObject({
+        artifactMaxBytes: 1048576,
+        artifactRunMaxBytes: 4194304,
+      });
       expect(protocolInputs[0]?.device).toMatchObject({
         token: 'device-token-1',
         teamId: 'team-1',

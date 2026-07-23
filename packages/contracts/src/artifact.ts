@@ -23,6 +23,22 @@ export interface ArtifactPreviewDto {
   updatedAt?: UnixMs;
 }
 
+export const DEFAULT_ARTIFACT_MAX_BYTES = 250 * 1024 * 1024;
+export const DEFAULT_ARTIFACT_RUN_MAX_BYTES = 1024 * 1024 * 1024;
+
+export type ArtifactSkipReason =
+  | 'FILE_TOO_LARGE'
+  | 'RUN_TOTAL_EXCEEDED'
+  | 'COLLECTION_FAILED'
+  | 'UPLOAD_FAILED';
+
+export interface SkippedArtifactDiagnostic {
+  filename: string;
+  relativePath: string;
+  sizeBytes: number;
+  reason: ArtifactSkipReason;
+}
+
 export interface ArtifactDto {
   id: ID;
   teamId: ID;

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -241,6 +241,10 @@ export interface CreateDaemonProtocolClientInput {
   serverUrl: string;
   /** Injectable fetch for tests; defaults to global fetch. */
   fetch?: typeof fetch;
+  /** Per-file Artifact cap; defaults to the shared 250 MB contract. */
+  artifactMaxBytes?: number;
+  /** Per-Run archived Artifact cap; defaults to the shared 1 GB contract. */
+  artifactRunMaxBytes?: number;
   envResolver?: AgentEnvResolver;
   sleep?(ms: number): Promise<void>;
   rescanIntervalMs?: number;
@@ -536,6 +540,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // Scan outputs + cwd fallback, upload, then merge with the executor's log artifact.
           let productArtifactIds: string[] = [];
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
+          const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const generatedImageDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
@@ -552,15 +557,49 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               extraOutputDirs: generatedImageDirs,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
+              maxBytes: input.artifactMaxBytes,
+              onSkipped: (artifact) => skippedProductArtifacts.push(artifact),
               onDiagnostic: (diagnostic) => artifactDiagnostics.push(diagnostic),
             });
             collectedProductArtifacts.push(...collected);
             if (collected.length > 0 && device.token) {
+              const optionalAdapterArtifacts = new Set(collected
+                .filter((artifact) => artifact.sourceRoot.kind === 'adapter_generated')
+                .map((artifact) => `${artifact.relativePath}:${artifact.sizeBytes}`));
               const uploaded = await uploadArtifacts(
-                { serverUrl, token: device.token, teamId: device.teamId, channelId: request.channelId, fetch: fetchFn },
+                {
+                  serverUrl,
+                  token: device.token,
+                  teamId: device.teamId,
+                  channelId: request.channelId,
+                  fetch: fetchFn,
+                  maxBytes: input.artifactMaxBytes,
+                  maxTotalBytes: input.artifactRunMaxBytes,
+                  onSkipped: (artifact) => {
+                    if (!optionalAdapterArtifacts.has(`${artifact.relativePath}:${artifact.sizeBytes}`)) {
+                      skippedProductArtifacts.push(artifact);
+                    }
+                  },
+                },
                 collected,
               );
               productArtifactIds = uploaded.map((u) => u.id);
+            } else if (collected.length > 0) {
+              skippedProductArtifacts.push(...collected
+                .filter((artifact) => artifact.sourceRoot.kind !== 'adapter_generated')
+                .map((artifact) => ({
+                filename: artifact.filename,
+                relativePath: artifact.relativePath,
+                sizeBytes: artifact.sizeBytes,
+                reason: 'UPLOAD_FAILED' as const,
+                })));
+            }
+          }
+          if (skippedProductArtifacts.length > 0) {
+            const diagnostic = formatArtifactSkipDiagnostics(skippedProductArtifacts);
+            result.body = appendDiagnostic(result.body, diagnostic);
+            if (result.workspaceRun) {
+              result.workspaceRun.logExcerpt = appendDiagnostic(result.workspaceRun.logExcerpt, diagnostic);
             }
           }
           if (artifactDiagnostics.length > 0 && result.workspaceRun) {
@@ -760,6 +799,16 @@ function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonD
     return { body: result };
   }
   return result;
+}
+
+function formatArtifactSkipDiagnostics(skipped: readonly SkippedArtifactDiagnostic[]): string {
+  const lines = skipped.map((artifact) =>
+    `- [${artifact.reason}] ${artifact.relativePath} (${artifact.sizeBytes} bytes)`);
+  return ['[AgentBean Artifact 归档诊断]', ...lines].join('\n');
+}
+
+function appendDiagnostic(current: string | undefined, diagnostic: string): string {
+  return current ? `${current}\n\n${diagnostic}` : diagnostic;
 }
 
 async function claimDispatchRequest(
