@@ -8,6 +8,7 @@ import type {
   TaskCoordinationRecord,
   TaskCoordinationRepositories,
   TaskDependencyRecord,
+  TaskOfferRecord,
 } from '../../application/task-coordination-repositories.js';
 
 export interface TaskCoordinationMemoryState {
@@ -18,13 +19,14 @@ export interface TaskCoordinationMemoryState {
   evidenceSnapshots: Map<string, EvidenceSnapshotRecord>;
   deliveries: Map<string, SubtaskDeliveryRecord>;
   acceptances: Map<string, SubtaskAcceptanceRecord>;
+  offers: Map<string, TaskOfferRecord>;
 }
 
 export function createTaskCoordinationMemoryState(): TaskCoordinationMemoryState {
   return {
     coordinations: new Map(), criteria: new Map(), dependencies: new Map(),
     claimLeases: new Map(), evidenceSnapshots: new Map(), deliveries: new Map(),
-    acceptances: new Map(),
+    acceptances: new Map(), offers: new Map(),
   };
 }
 
@@ -35,7 +37,7 @@ export function cloneTaskCoordinationMemoryState(
     coordinations: new Map(state.coordinations), criteria: new Map(state.criteria),
     dependencies: new Map(state.dependencies), claimLeases: new Map(state.claimLeases),
     evidenceSnapshots: new Map(state.evidenceSnapshots), deliveries: new Map(state.deliveries),
-    acceptances: new Map(state.acceptances),
+    acceptances: new Map(state.acceptances), offers: new Map(state.offers),
   };
 }
 
@@ -249,6 +251,34 @@ export function createInMemoryTaskCoordinationRepositories(
       async listByDelivery(deliveryId) {
         return [...state.acceptances.values()].filter((item) => item.deliveryId === deliveryId)
           .sort((left, right) => left.decisionVersion - right.decisionVersion);
+      },
+    },
+    offers: {
+      async create(record) {
+        if (state.offers.has(record.id)) throw new Error('task offer already exists');
+        state.offers.set(record.id, record);
+        return record;
+      },
+      async getById(id) { return state.offers.get(id) ?? null; },
+      async listByTask(taskId) {
+        return [...state.offers.values()].filter((item) => item.taskId === taskId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async listByAgent(input) {
+        const statuses = input.statuses ? new Set(input.statuses) : null;
+        return [...state.offers.values()]
+          .filter((item) => item.teamId === input.teamId && item.agentId === input.agentId
+            && (statuses === null || statuses.has(item.status)))
+          .sort((left, right) => left.offerExpiresAt - right.offerExpiresAt || left.id.localeCompare(right.id));
+      },
+      async updateStatus(input) {
+        const current = state.offers.get(input.id);
+        if (!current || current.status !== input.expectedStatus) return null;
+        const updated: TaskOfferRecord = {
+          ...current, status: input.status, response: input.response, updatedAt: input.now,
+        };
+        state.offers.set(input.id, updated);
+        return updated;
       },
     },
   };

@@ -1,4 +1,4 @@
-import type { EvidenceRefDto } from '../../../../../packages/contracts/src/index.js';
+import type { EvidenceRefDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus } from '../../../../../packages/contracts/src/index.js';
 import type {
   EvidenceSnapshotRecord,
   SubtaskAcceptanceRecord,
@@ -8,6 +8,7 @@ import type {
   TaskCoordinationRecord,
   TaskCoordinationRepositories,
   TaskDependencyRecord,
+  TaskOfferRecord,
 } from '../../application/task-coordination-repositories.js';
 import type { SqliteDatabase } from './repositories.js';
 
@@ -264,6 +265,45 @@ export function createSqliteTaskCoordinationRepositories(
           WHERE delivery_id = ? ORDER BY decision_version`).all(deliveryId).map(mapAcceptanceRequired);
       },
     },
+    offers: {
+      async create(record) {
+        db.prepare(`INSERT INTO task_offers
+          (id, team_id, task_id, agent_id, task_revision, task_attempt, manifest_revision,
+           objective_json, offer_ttl_ms, offer_expires_at, hard_specified, status,
+           response_kind, response_detail, responded_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.teamId, record.taskId, record.agentId, record.taskRevision,
+            record.taskAttempt, record.manifestRevision, json(record.objective), record.offerTtlMs,
+            record.offerExpiresAt, record.hardSpecified ? 1 : 0, record.status,
+            ...responseColumns(record.response), record.createdAt, record.updatedAt);
+        return record;
+      },
+      async getById(id) {
+        return mapOffer(db.prepare('SELECT * FROM task_offers WHERE id = ?').get(id));
+      },
+      async listByTask(taskId) {
+        return db.prepare(`SELECT * FROM task_offers
+          WHERE task_id = ? ORDER BY created_at, id`).all(taskId).map(mapOfferRequired);
+      },
+      async listByAgent(input) {
+        const rows = input.statuses && input.statuses.length > 0
+          ? db.prepare(`SELECT * FROM task_offers WHERE team_id = ? AND agent_id = ?
+              AND status IN (${input.statuses.map(() => '?').join(', ')})
+              ORDER BY offer_expires_at, id`)
+              .all(input.teamId, input.agentId, ...input.statuses)
+          : db.prepare(`SELECT * FROM task_offers WHERE team_id = ? AND agent_id = ?
+              ORDER BY offer_expires_at, id`).all(input.teamId, input.agentId);
+        return rows.map(mapOfferRequired);
+      },
+      async updateStatus(input) {
+        const result = db.prepare(`UPDATE task_offers SET
+          status = ?, response_kind = ?, response_detail = ?, responded_at = ?, updated_at = ?
+          WHERE id = ? AND status = ?`)
+          .run(input.status, ...responseColumns(input.response), input.now, input.id, input.expectedStatus);
+        if (changes(result) === 0) return null;
+        return mapOffer(db.prepare('SELECT * FROM task_offers WHERE id = ?').get(input.id));
+      },
+    },
   };
 }
 
@@ -344,6 +384,31 @@ function mapDelivery(value: unknown): SubtaskDeliveryRecord | null { return valu
 function mapDeliveryRequired(value: unknown): SubtaskDeliveryRecord { return required(mapDelivery(value)); }
 function mapAcceptance(value: unknown): SubtaskAcceptanceRecord | null { return value ? parse(text(value, 'acceptance_json')) : null; }
 function mapAcceptanceRequired(value: unknown): SubtaskAcceptanceRecord { return required(mapAcceptance(value)); }
+function mapOffer(value: unknown): TaskOfferRecord | null {
+  if (!value) return null;
+  const responseKind = nullableText(value, 'response_kind');
+  return {
+    id: text(value, 'id'), teamId: text(value, 'team_id'), taskId: text(value, 'task_id'),
+    agentId: text(value, 'agent_id'), taskRevision: number(value, 'task_revision'),
+    taskAttempt: number(value, 'task_attempt'), manifestRevision: number(value, 'manifest_revision'),
+    objective: parse<TaskOfferObjectiveDto>(text(value, 'objective_json')),
+    offerTtlMs: number(value, 'offer_ttl_ms'), offerExpiresAt: number(value, 'offer_expires_at'),
+    hardSpecified: number(value, 'hard_specified') === 1,
+    status: text(value, 'status') as TaskOfferStatus,
+    response: responseKind ? {
+      offerId: text(value, 'id'), agentId: text(value, 'agent_id'),
+      kind: responseKind as TaskOfferResponseRecordDto['kind'],
+      detail: nullableText(value, 'response_detail') ?? null,
+      respondedAt: number(value, 'responded_at'),
+    } : null,
+    createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'),
+  };
+}
+function mapOfferRequired(value: unknown): TaskOfferRecord { return required(mapOffer(value)); }
+/** response 三列的绑定值（kind/detail/respondedAt）；null response → 三 null。create 与 updateStatus 共用。 */
+function responseColumns(response: TaskOfferRecord['response']): readonly [string | null, string | null, number | null] {
+  return [response?.kind ?? null, response?.detail ?? null, response?.respondedAt ?? null];
+}
 function getRequiredCoordination(db: SqliteDatabase, taskId: string): TaskCoordinationRecord {
   const coordination = mapCoordination(db.prepare('SELECT * FROM task_coordinations WHERE task_id = ?').get(taskId));
   if (!coordination) throw new Error('task coordination does not exist');
