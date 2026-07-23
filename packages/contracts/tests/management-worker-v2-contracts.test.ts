@@ -307,6 +307,42 @@ describe('Phase 2 management worker contracts', () => {
     })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
+  test('parses subtask drafts with optional required/preferred skills and rejects non-array skill fields (#715)', () => {
+    const envelope = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: 'command-1',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-call-1',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'idempotency-1',
+    };
+    const draft = {
+      clientKey: 'draft-1',
+      title: 'Implement slice',
+      claimPolicy: 'open',
+      requiredCapabilities: [],
+      requiredSkills: ['research', 'codegen'],
+      preferredSkills: ['rust'],
+      acceptanceCriteria: [{ id: 'criterion-1', description: 'Verified', evidenceRequired: true, allowedEvidenceKinds: ['task'] }],
+      maxAttempts: 2,
+    };
+    // 带 requiredSkills/preferredSkills 的 draft 被接受（assertExactKeys allowed 键已同步）
+    expect(parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks: [draft] },
+    })).toMatchObject({ toolName: 'tasks.create_subtasks' });
+    // requiredSkills 非 array → 拒绝（assertStringArray 守卫）
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks: [{ ...draft, requiredSkills: 'research' as unknown as string[] }] },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
   test('parses exact Phase 3 Memory tool inputs and rejects contract drift', () => {
     const sourceRef = {
       schemaVersion: 1 as const,

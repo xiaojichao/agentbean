@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import type { TaskOfferStatus } from '@agentbean/contracts';
 
 import {
+  decideOfferAllocationPolicy,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
   evaluateOfferValidity,
@@ -362,5 +363,72 @@ describe('selectInvalidatableOpenOffers', () => {
       { id: 'o2', reason: 'task_revision_changed' },
       { id: 'o3', reason: 'task_revision_changed' },
     ]);
+  });
+});
+
+describe('decideOfferAllocationPolicy', () => {
+  test('hardSpecifiedAgentId 存在 → targeted（@Agent 硬约束，最高优先）', () => {
+    const result = decideOfferAllocationPolicy({
+      hardSpecifiedAgentId: 'agent-x',
+      rankedQualifiedAgentIds: ['agent-a', 'agent-b'],
+      topCandidatesTied: true,
+      loadUncertain: true,
+    });
+    expect(result).toEqual({ kind: 'targeted', targetAgentId: 'agent-x' });
+  });
+
+  test('无 hardSpecified + 无合格候选 → not_decidable', () => {
+    const result = decideOfferAllocationPolicy({
+      rankedQualifiedAgentIds: [],
+      topCandidatesTied: false,
+      loadUncertain: false,
+    });
+    expect(result).toEqual({ kind: 'not_decidable', reason: 'no_qualified_candidate' });
+  });
+
+  test('无 hardSpecified + 单一合格候选 → targeted（候选明确）', () => {
+    const result = decideOfferAllocationPolicy({
+      rankedQualifiedAgentIds: ['agent-a'],
+      topCandidatesTied: false,
+      loadUncertain: false,
+    });
+    expect(result).toEqual({ kind: 'targeted', targetAgentId: 'agent-a' });
+  });
+
+  test('多候选 + topCandidatesTied → open（候选相近）', () => {
+    const result = decideOfferAllocationPolicy({
+      rankedQualifiedAgentIds: ['agent-a', 'agent-b'],
+      topCandidatesTied: true,
+      loadUncertain: false,
+    });
+    expect(result).toEqual({ kind: 'open' });
+  });
+
+  test('多候选 + loadUncertain → open（负载不确定）', () => {
+    const result = decideOfferAllocationPolicy({
+      rankedQualifiedAgentIds: ['agent-a', 'agent-b'],
+      topCandidatesTied: false,
+      loadUncertain: true,
+    });
+    expect(result).toEqual({ kind: 'open' });
+  });
+
+  test('多候选 + 不相近 + 负载确定 → targeted（明显赢家，排名第一）', () => {
+    const result = decideOfferAllocationPolicy({
+      rankedQualifiedAgentIds: ['agent-a', 'agent-b', 'agent-c'],
+      topCandidatesTied: false,
+      loadUncertain: false,
+    });
+    expect(result).toEqual({ kind: 'targeted', targetAgentId: 'agent-a' });
+  });
+
+  test('hardSpecifiedAgentId 优先于候选数为 0', () => {
+    const result = decideOfferAllocationPolicy({
+      hardSpecifiedAgentId: 'agent-x',
+      rankedQualifiedAgentIds: [],
+      topCandidatesTied: false,
+      loadUncertain: false,
+    });
+    expect(result).toEqual({ kind: 'targeted', targetAgentId: 'agent-x' });
   });
 });
