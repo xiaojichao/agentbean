@@ -24,3 +24,4 @@ export * from './pi-provider.js';
 export * from './pi-coordination.js';
 export * from './agent-exposure.js';
 export * from './agent-memory-projection.js';
+export * from './reliability.js';
