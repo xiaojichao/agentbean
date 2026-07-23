@@ -270,8 +270,14 @@ export function createPiManagerWorkerHost(input: CreatePiManagerWorkerHostInput)
       lease.managementPhase = checkpointManagementPhase(restored);
       const factory = runtimeFactory;
       if (!factory) return;
+      // #720 AC#8：ManagementRun 消费 Active Memory Context。server 在 checkpoint 写入时已把
+      // 渲染片段写入 contextHints.activeMemorySection（权限已过滤）；daemon 恢复时拼入 systemPrompt。
+      const basePrompt = input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
+      const memorySection = restored.checkpoint?.contextHints.activeMemorySection;
       const session = await factory.createSession({
-        systemPrompt: input.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+        systemPrompt: memorySection
+          ? { ...basePrompt, content: `${basePrompt.content}\n\n${memorySection}` }
+          : basePrompt,
         mode: 'managed',
         context: runtimeContext(restored),
       });

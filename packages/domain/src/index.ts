@@ -27,6 +27,8 @@ export * from './pi-provider-test-policy.js';
 export * from './pi-coordination-policy.js';
 export * from './agent-exposure-policy.js';
 export * from './agent-memory-projection-policy.js';
+export * from './active-memory-context.js';
+export * from './active-memory-renderer.js';
 export * from './agent-eligibility.js';
 export * from './task-offer-policy.js';
 export * from './claim-relinquishment-policy.js';

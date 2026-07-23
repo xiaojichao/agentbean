@@ -5,6 +5,7 @@ import type { SenderKind } from './message.js';
 import type { TaskStatus } from './task.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 import type { AgentHandoffKind, AgentHandoffReturnMode, AgentHandoffStatus } from './collaboration.js';
+import { ACTIVE_MEMORY_SOURCE_CODES, ACTIVE_MEMORY_SELECTION_REASONS } from './active-memory-context.js';
 
 export const PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES = [
   'context.get_root_message',
@@ -607,6 +608,16 @@ const checkpointSchema = exactObject({
     }))),
     unresolvedQuestions: required(arrayOf(text())),
     nextAction: optional(text()),
+    activeMemorySection: optional(text()),
+    activeMemoryAttribution: optional(exactObject({
+      schemaVersion: required(literal(1)),
+      entries: required(arrayOf(exactObject({
+        id: required(id),
+        source: required(oneOf([...ACTIVE_MEMORY_SOURCE_CODES])),
+        selectionReason: required(oneOf([...ACTIVE_MEMORY_SELECTION_REASONS])),
+      }))),
+      contextHash: required(text()),
+    })),
   })),
   updatedAt: required(integer(0)),
 });

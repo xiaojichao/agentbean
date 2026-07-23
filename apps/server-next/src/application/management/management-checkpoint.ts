@@ -8,6 +8,7 @@ import type { TaskRepository } from '../repositories.js';
 import type { TaskCoordinationRepositories } from '../task-coordination-repositories.js';
 import type { TaskCoordinationUnitOfWork } from '../task-coordination-unit-of-work.js';
 import type { ManagementUnitOfWork } from '../management-unit-of-work.js';
+import type { ActiveMemoryContextResolver } from '../active-memory-context-resolver.js';
 import {
   appendManagementEventInTransaction,
   authorizeManagementWrite,
@@ -18,6 +19,8 @@ export interface ManagementCheckpointDependencies {
   readonly unitOfWork: ManagementUnitOfWork;
   readonly taskCoordinationUnitOfWork?: TaskCoordinationUnitOfWork;
   readonly memoryCapsules?: ManagementCheckpointMemoryCapsules;
+  /** #720 Active Memory Context（AC#8 ManagementRun 接缝）；可选，缺失则不注入 memory。 */
+  readonly activeMemoryContextResolver?: ActiveMemoryContextResolver;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
 }
@@ -102,9 +105,27 @@ async function saveCheckpoint(
     ...await collectManagementCheckpointFacts(repositories, run, phase2),
     validMemoryCapsuleIds: memorySnapshot.validMemoryCapsuleIds,
   };
+  // #720 AC#8：checkpoint 写入时补充 Active Memory Context（daemon 不知 memory，server 补后持久化）。
+  // 失败降级为不注入（fail-soft，不阻塞 checkpoint 持久化）。
+  const activeMemory = dependencies.activeMemoryContextResolver && run.initiatedByUserId
+    ? await dependencies.activeMemoryContextResolver.resolve({
+        teamId: run.teamId,
+        channelId: run.channelId,
+        messageId: run.rootMessageId,
+        senderUserId: run.initiatedByUserId,
+        taskId: run.rootTaskId,
+        prompt: input.contextHints.objective,
+        includeAgentProjections: false,
+      }).catch(() => null)
+    : null;
   const checkpoint: ManagementCheckpointV1 = { schemaVersion: 1, managementRunId: run.id,
     revision, authoritative: toManagementCheckpointAuthoritative(facts),
-    contextHints: input.contextHints, updatedAt: now };
+    contextHints: {
+      ...input.contextHints,
+      ...(activeMemory?.renderedSection ? { activeMemorySection: activeMemory.renderedSection } : {}),
+      ...(activeMemory?.attribution ? { activeMemoryAttribution: activeMemory.attribution } : {}),
+    },
+    updatedAt: now };
   await repositories.checkpoints.put(checkpoint);
   await repositories.runs.update({ ...run, checkpointRevision: revision, updatedAt: now });
   return checkpoint;
