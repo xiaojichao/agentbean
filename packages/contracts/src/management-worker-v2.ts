@@ -77,6 +77,8 @@ export interface Phase2SubtaskDraftV1 {
   readonly claimPolicy: 'open' | 'targeted';
   readonly targetAgentId?: ID;
   readonly requiredCapabilities: readonly string[];
+  readonly requiredSkills?: readonly string[];
+  readonly preferredSkills?: readonly string[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly maxAttempts: number;
 }
@@ -445,7 +447,7 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
     for (const draft of value.subtasks) {
-      assertExactKeys(draft, ['clientKey', 'title', 'description', 'claimPolicy', 'targetAgentId', 'requiredCapabilities', 'acceptanceCriteria', 'maxAttempts'], ['clientKey', 'title', 'claimPolicy', 'requiredCapabilities', 'acceptanceCriteria', 'maxAttempts']);
+      assertExactKeys(draft, ['clientKey', 'title', 'description', 'claimPolicy', 'targetAgentId', 'requiredCapabilities', 'requiredSkills', 'preferredSkills', 'acceptanceCriteria', 'maxAttempts'], ['clientKey', 'title', 'claimPolicy', 'requiredCapabilities', 'acceptanceCriteria', 'maxAttempts']);
       if (!nonEmpty(draft.clientKey) || !nonEmpty(draft.title) || !['open', 'targeted'].includes(String(draft.claimPolicy))) {
         throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       }
@@ -455,6 +457,8 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
         throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       }
       assertStringArray(draft.requiredCapabilities);
+      if (draft.requiredSkills !== undefined) assertStringArray(draft.requiredSkills);
+      if (draft.preferredSkills !== undefined) assertStringArray(draft.preferredSkills);
       if (!Array.isArray(draft.acceptanceCriteria)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       draft.acceptanceCriteria.forEach(assertCriterion);
       assertInteger(draft.maxAttempts, 1);
