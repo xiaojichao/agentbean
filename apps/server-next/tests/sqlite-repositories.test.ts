@@ -213,6 +213,37 @@ describe('server-next SQLite repositories', () => {
       await expect(repositories.channelDocuments.createDerived(derived))
         .resolves.toMatchObject({ id: 'document-derived' });
       await expect(repositories.channelDocuments.createDerived(derived)).resolves.toBeNull();
+      const collisionArtifact = {
+        ...nextArtifact,
+        id: 'artifact-doc-collision',
+        filename: 'derived.md',
+        storagePath: 'artifacts/team-1/artifact-doc-collision/derived.md',
+        createdAt: 400,
+      };
+      await expect(repositories.channelDocuments.addRevision({
+        documentId: initial.document.id,
+        expectedCurrentRevisionId: 'revision-2',
+        document: {
+          ...initial.document,
+          filename: 'derived.md',
+          currentRevisionId: 'revision-collision',
+          updatedAt: 400,
+        },
+        revision: {
+          id: 'revision-collision',
+          documentId: initial.document.id,
+          artifact: collisionArtifact,
+          revision: 3,
+          createdBy: 'user-1',
+          createdAt: 400,
+        },
+        artifact: collisionArtifact,
+        requireUniqueFilename: true,
+      })).resolves.toBeNull();
+      await expect(repositories.artifacts.getForTeam({
+        teamId: 'team-1',
+        artifactId: collisionArtifact.id,
+      })).resolves.toBeNull();
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',

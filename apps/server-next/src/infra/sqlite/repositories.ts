@@ -2044,6 +2044,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async addRevision(input) {
         const tx = teamDb.transaction(() => {
+          if (input.requireUniqueFilename) {
+            const collision = teamDb.prepare(
+              'SELECT id FROM channel_documents WHERE team_id = ? AND channel_id = ? AND id <> ? AND lower(filename) = lower(?) LIMIT 1',
+            ).get(
+              input.document.teamId,
+              input.document.channelId,
+              input.document.id,
+              input.document.filename,
+            );
+            if (collision) throw new Error('channel document filename conflict');
+          }
           insertChannelDocumentArtifact(teamDb, input.artifact);
           const result = teamDb.prepare('UPDATE channel_documents SET filename = ?, current_revision_id = ?, updated_at = ? WHERE id = ? AND current_revision_id = ?').run(input.document.filename, input.document.currentRevisionId, input.document.updatedAt, input.document.id, input.expectedCurrentRevisionId) as { changes?: number };
           if (result.changes !== 1) throw new Error('channel document revision conflict');

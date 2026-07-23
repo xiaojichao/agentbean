@@ -1315,6 +1315,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((a, b) => b.revision - a.revision);
       },
       async addRevision(input) {
+        if (input.requireUniqueFilename && Array.from(channelDocuments.values()).some((document) =>
+          document.id !== input.document.id
+          && document.teamId === input.document.teamId
+          && document.channelId === input.document.channelId
+          && document.filename.toLocaleLowerCase() === input.document.filename.toLocaleLowerCase())) return null;
         const current = channelDocuments.get(input.documentId);
         if (!current || current.currentRevisionId !== input.expectedCurrentRevisionId) return null;
         artifacts.set(input.artifact.id, input.artifact);

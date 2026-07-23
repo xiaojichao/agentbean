@@ -243,6 +243,72 @@ describe('频道 Markdown 文档', () => {
     expect(writeContent).toHaveBeenCalledTimes(1);
   });
 
+  test('并发派生到不同目标文档时只允许一个目标占用同名文件名', async () => {
+    const repositories = createInMemoryRepositories();
+    const first = createInitialRecords();
+    const secondArtifact: ArtifactRecord = {
+      ...first.revision.artifact,
+      id: 'artifact-2',
+      messageId: 'message-2',
+      filename: 'second.md',
+    };
+    const secondRevision: ChannelDocumentRevisionRecord = {
+      ...first.revision,
+      id: 'channel-document:artifact-2:revision:1',
+      documentId: 'channel-document:artifact-2',
+      artifact: secondArtifact,
+    };
+    const secondDocument: ChannelDocumentRecord = {
+      ...first.document,
+      id: secondRevision.documentId,
+      filename: secondArtifact.filename,
+      currentRevisionId: secondRevision.id,
+    };
+    await repositories.artifacts.create(first.revision.artifact);
+    await repositories.channelDocuments.create(first);
+    await repositories.artifacts.create(secondArtifact);
+    await repositories.channelDocuments.create({ document: secondDocument, revision: secondRevision });
+
+    const revisions = [
+      {
+        document: first.document,
+        baseRevision: first.revision,
+        artifact: { ...first.revision.artifact, id: 'artifact-next-1', filename: 'shared.md' },
+        revisionId: 'revision-next-1',
+      },
+      {
+        document: secondDocument,
+        baseRevision: secondRevision,
+        artifact: { ...secondArtifact, id: 'artifact-next-2', filename: 'shared.md' },
+        revisionId: 'revision-next-2',
+      },
+    ];
+    const results = await Promise.all(revisions.map(({ document, baseRevision, artifact, revisionId }) =>
+      repositories.channelDocuments.addRevision({
+        documentId: document.id,
+        expectedCurrentRevisionId: baseRevision.id,
+        document: { ...document, filename: 'shared.md', currentRevisionId: revisionId },
+        revision: {
+          id: revisionId,
+          documentId: document.id,
+          artifact,
+          revision: 2,
+          createdBy: 'user-1',
+          createdAt: 200,
+        },
+        artifact,
+        requireUniqueFilename: true,
+      })));
+
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
+    const documents = await repositories.channelDocuments.listByChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    });
+    expect(documents.filter((document) => document.filename === 'shared.md')).toHaveLength(1);
+  });
+
   test('同名 Markdown 消息附件各自建立独立初始文档', async () => {
     const app = createInMemoryServerNext({
       now: () => 100,

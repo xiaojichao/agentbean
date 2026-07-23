@@ -99,13 +99,19 @@ describe('server-next Socket.IO namespaces', () => {
       filename: 'chart.png', mimeType: 'image/png', sizeBytes: 10,
       relativePath: 'images/chart.png', pathKind: 'generated', role: 'run_output', sourceRoot, createdAt: 100,
     });
+    await repositories.artifacts.create({
+      id: 'artifact-other-run', teamId: 'team-1', channelId: 'channel-1',
+      dispatchId: 'dispatch-other', workspaceRunId: 'run-other', uploaderId: 'agent-2',
+      filename: 'secret.txt', mimeType: 'text/plain', sizeBytes: 10,
+      relativePath: 'docs/secret.txt', pathKind: 'generated', role: 'run_output', sourceRoot, createdAt: 100,
+    });
 
     const derived = await web.emitWithAck(WEB_EVENTS.channelDocuments.derive, {
       teamId: 'team-1',
       channelId: 'channel-1',
       sourceArtifactId: 'artifact-source',
       filename: '派生报告.md',
-      content: '![图](../images/chart.png)',
+      content: '![图](../images/chart.png)\n![缺失](missing.png)',
     }) as { ok: boolean; document?: { id: string } };
     expect(derived).toMatchObject({
       ok: true,
@@ -113,11 +119,17 @@ describe('server-next Socket.IO namespaces', () => {
         id: 'document-derived',
         currentRevision: {
           source: { taskId: 'task-1', artifactId: 'artifact-source' },
-          resources: [{ artifactId: 'artifact-image', status: 'resolved' }],
+          resources: [
+            { artifactId: 'artifact-image', status: 'resolved' },
+            { normalizedPath: 'docs/missing.png', status: 'missing' },
+          ],
         },
       },
     });
-    expect(writes).toEqual(['![图](/api/teams/team-1/artifacts/artifact-image/preview)']);
+    expect(writes).toEqual([
+      '![图](/api/teams/team-1/artifacts/artifact-image/preview)\n'
+      + '![缺失](artifact-missing:docs%2Fmissing.png)',
+    ]);
 
     await expect(web.emitWithAck(WEB_EVENTS.channelDocuments.get, {
       teamId: 'team-1',
@@ -133,16 +145,23 @@ describe('server-next Socket.IO namespaces', () => {
       },
     });
 
-    await expect(web.emitWithAck(WEB_EVENTS.channelDocuments.derive, {
-      teamId: 'team-1',
-      channelId: 'channel-1',
-      sourceArtifactId: 'artifact-source',
-      filename: '危险报告.md',
-      content: '[危险](javascript:alert(1))',
-    })).resolves.toMatchObject({
-      ok: false,
-      error: 'VALIDATION_ERROR',
-    });
+    for (const [filename, content] of [
+      ['越界报告.md', '[越界](../../secret.txt)'],
+      ['跨 Run 报告.md', '[跨 Run](/api/teams/team-1/artifacts/artifact-other-run/download)'],
+      ['超限报告.md', Array.from({ length: 501 }, (_, index) => `[${index}](asset-${index}.png)`).join('\n')],
+      ['危险报告.md', '[危险](javascript:alert(1))'],
+    ]) {
+      await expect(web.emitWithAck(WEB_EVENTS.channelDocuments.derive, {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        sourceArtifactId: 'artifact-source',
+        filename,
+        content,
+      })).resolves.toMatchObject({
+        ok: false,
+        error: 'VALIDATION_ERROR',
+      });
+    }
     await expect(repositories.channelDocuments.listByChannel({
       teamId: 'team-1',
       channelId: 'channel-1',

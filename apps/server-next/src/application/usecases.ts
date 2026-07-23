@@ -3350,6 +3350,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           document: { ...selectedTarget, filename, currentRevisionId: revision.id, updatedAt: now },
           revision,
           artifact,
+          requireUniqueFilename: true,
         });
         if (!saved) {
           await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });

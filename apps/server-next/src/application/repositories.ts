@@ -343,7 +343,14 @@ export interface ChannelDocumentRepository {
     currentRevision: ChannelDocumentRevisionRecord;
   }>>;
   listRevisions(input: { documentId: ID }): Promise<ChannelDocumentRevisionRecord[]>;
-  addRevision(input: { documentId: ID; expectedCurrentRevisionId: ID; document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
+  addRevision(input: {
+    documentId: ID;
+    expectedCurrentRevisionId: ID;
+    document: ChannelDocumentRecord;
+    revision: ChannelDocumentRevisionRecord;
+    artifact: ArtifactRecord;
+    requireUniqueFilename?: boolean;
+  }): Promise<ChannelDocumentRecord | null>;
   deleteByChannel(channelId: ID): Promise<void>;
 }
 
