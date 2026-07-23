@@ -1245,7 +1245,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByChannel(input) {
         return Array.from(artifacts.values()).filter((artifact) =>
-          artifact.teamId === input.teamId && artifact.channelId === input.channelId);
+          artifact.teamId === input.teamId && artifact.channelId === input.channelId)
+          .sort((left, right) => right.createdAt - left.createdAt
+            || Buffer.compare(Buffer.from(right.id, 'utf8'), Buffer.from(left.id, 'utf8')));
       },
       async listByWorkspaceRunForChannel(input) {
         return Array.from(artifacts.values()).filter((artifact) =>

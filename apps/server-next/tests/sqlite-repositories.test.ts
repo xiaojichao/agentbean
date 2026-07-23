@@ -2235,6 +2235,45 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('lists only channel artifacts in the same order as the in-memory repository', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      for (const artifact of [
+        { id: 'artifact-old', teamId: 'team-1', channelId: 'channel-1', createdAt: 100 },
+        { id: 'artifact-new-!', teamId: 'team-1', channelId: 'channel-1', createdAt: 200 },
+        { id: 'artifact-new-B', teamId: 'team-1', channelId: 'channel-1', createdAt: 200 },
+        { id: 'artifact-new-a', teamId: 'team-1', channelId: 'channel-1', createdAt: 200 },
+        { id: 'artifact-new-\uE000', teamId: 'team-1', channelId: 'channel-1', createdAt: 200 },
+        { id: 'artifact-new-\u{10000}', teamId: 'team-1', channelId: 'channel-1', createdAt: 200 },
+        { id: 'artifact-other-channel', teamId: 'team-1', channelId: 'channel-2', createdAt: 300 },
+        { id: 'artifact-other-team', teamId: 'team-2', channelId: 'channel-1', createdAt: 400 },
+      ]) {
+        await repositories.artifacts.create({
+          ...artifact,
+          uploaderId: 'user-1',
+          filename: `${artifact.id}.txt`,
+          mimeType: 'text/plain',
+          sizeBytes: 1,
+        });
+      }
+
+      await expect(repositories.artifacts.listByChannel({
+        teamId: 'team-1',
+        channelId: 'channel-1',
+      })).resolves.toMatchObject([
+        { id: 'artifact-new-\u{10000}' },
+        { id: 'artifact-new-\uE000' },
+        { id: 'artifact-new-a' },
+        { id: 'artifact-new-B' },
+        { id: 'artifact-new-!' },
+        { id: 'artifact-old' },
+      ]);
+    } finally {
+      close();
+    }
+  });
+
   test('workspace run detail only returns artifacts from the authorized run after id upsert collision', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

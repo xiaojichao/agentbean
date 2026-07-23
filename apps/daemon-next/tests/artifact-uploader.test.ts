@@ -14,6 +14,8 @@ function makeArtifact(dir: string, filename: string, content: string): Collected
     sha256: `sha-${filename}`,
     sizeBytes: content.length,
     filename,
+    role: 'run_output',
+    sourceRoot: { id: 'default-output', kind: 'run_output', label: '默认运行输出' },
   };
 }
 
@@ -25,6 +27,8 @@ describe('artifact-uploader', () => {
     const fakeFetch: typeof fetch = async (input, init) => {
       seenBodies.push(String((init?.body as FormData)?.get('channelId')));
       const form = init?.body as FormData;
+      expect(form.get('artifactRole')).toBe('run_output');
+      expect(form.get('sourceRootId')).toBe('default-output');
       const file = form.get('file') as File;
       expect(file.type).toBe(file.name === 'a.png' ? 'image/png' : 'text/plain');
       const id = `id-${file.name}`;

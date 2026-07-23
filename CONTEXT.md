@@ -254,36 +254,6 @@ _Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
 对已开始执行的 Task 目标、范围或验收要求所做的可追溯新版本。它保留旧要求与交付历史，并使受影响的旧认领、调用或验收失去当前效力，而不是原地覆盖。
 _Avoid_: 编辑覆盖、隐藏变更、复用旧执行权。
 
-## Message artifact revision
-
-消息、讨论串或 Agent 交付在发布时引用的一份不可变文件快照。后续编辑同一逻辑文档会产生新的 revision，不能改变历史消息当时引用的内容。
-_Avoid_: 可变附件、原地覆盖文件、频道文档。
-
-## Channel document
-
-频道内可由拥有访问权的人类成员持续编辑并拥有一个或多个 Message artifact revision 的逻辑文档，其身份由明确的 revision 链维持而不是由文件名推断。频道文件视图默认展示其最新 revision，历史消息仍保留各自发布时引用的 revision；频道归档后只读。
-_Avoid_: 单个附件版本、历史消息附件、任意二进制文件。
-
-## Channel document publication
-
-用户将某个 Channel document revision 明确分享到频道时间线的动作。保存 revision 本身不会创建频道消息，只有 publication 才让该版本成为新的消息附件。
-_Avoid_: 自动发布、保存文档、覆盖原消息附件。
-
-## Channel document edit conflict
-
-用户保存时所基于的 Channel document revision 已不再是最新版的状态。冲突不能以最后写入者覆盖或创建分叉 revision 解决，编辑者必须保留草稿并基于最新版完成合并。
-_Avoid_: 静默覆盖、自动分叉、丢弃草稿。
-
-## Channel document restoration
-
-用户把某个历史 Channel document revision 的内容复制为新最新版的动作。恢复不会让当前指针倒退、删除后续 revision 或改变历史消息引用。
-_Avoid_: 回滚覆盖、删除版本、修改历史附件。
-
-## Document resource reference
-
-某个 Markdown revision 中的相对资源路径与具体不可变 Artifact revision 之间的稳定引用。历史文档按保存时的 reference 渲染，不能通过同名路径动态切换到后来的文件。
-_Avoid_: 实时路径查找、文件名身份、越过来源根的引用。
-
 ## Artifact source root
 
 一次 Agent 运行收集文件时采用的有边界来源目录，例如该 Run 的输出目录、Agent 工作目录或 Agent 配置的额外输出目录。频道成员只看到稳定的来源标签和根内相对路径；真实设备路径不构成公开身份，source root 及其相对路径也不能单独决定文件的业务角色。
@@ -296,23 +266,18 @@ _Avoid_: 路径推断、文件名标签、`pathKind`、最终版指针。
 
 ## Run artifact
 
-一次 Agent Run 从某个 Artifact source root 收集并保留来源路径的不可变文件。中间 Run artifact 在频道文件视图的“运行产物”下可供预览和下载；编辑其中的 Markdown 会派生新的 Channel document，不能回写历史 Run。
-_Avoid_: 频道文档、可变工作区文件、最终版。
+一次 Agent Run 从某个 Artifact source root 收集并保留来源路径的不可变文件。中间 Run artifact 在频道文件视图的“运行产物”下可供预览和下载，不能回写历史 Run。
+_Avoid_: 普通消息附件、可变工作区文件、最终版。
 
 ## Channel file directory
 
 频道文件视图根据 Artifact source root 和根内相对路径形成的导航层，只表示当前层级实际存在的文件与子路径。它不拥有独立权限或生命周期，空路径也不会被推断为真实目录。
 _Avoid_: Agent 设备绝对目录、独立文件夹实体、递归文件平铺。
 
-## Artifact preview derivative
-
-系统为某个不可变 Artifact（包括 Message artifact revision 和 Run artifact）异步生成的受限尺寸预览资源，例如图片缩略图、视频首帧或 PDF 首页。它只用于安全高效地展示文件，不是频道文件、文档 revision、Agent 输入或用户交付物。
-_Avoid_: 原文件、可下载产物、文件目录项、同步上传前置条件。
-
 ## Channel file index
 
-Server 为一个频道维护的权威文件读模型，统一投影公开消息附件、Channel document 最新版、交付物和允许公开的 Run artifact。它支持目录、分页、搜索、角色筛选和稳定排序，不能由浏览器已加载的消息临时推断。
-_Avoid_: 聊天附件平铺、客户端消息缓存、内部日志、预览衍生资源。
+Server 为一个频道维护的权威文件读模型，统一投影公开消息附件、交付物和允许公开的 Run artifact。它支持目录、分页、搜索、角色筛选和稳定排序，不能由浏览器已加载的消息临时推断。
+_Avoid_: 聊天附件平铺、客户端消息缓存、内部日志。
 
 ## Channel archive
 

@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactSourceRootDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactRole, type ChannelDto, type ChannelMembersDto, type ChannelFileDirectoryDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
@@ -651,8 +651,6 @@ export interface UploadArtifactInput {
   storagePath: string;
   relativePath?: string;
   sha256?: string;
-  role?: ArtifactRole;
-  sourceRoot?: ArtifactSourceRootDto;
 }
 
 export interface DeviceUploadArtifactInput extends Omit<UploadArtifactInput, 'userId'> {
@@ -793,8 +791,6 @@ export interface ReceiveDispatchArtifactInput {
   storagePath?: string;
   relativePath?: string;
   pathKind?: ArtifactDto['pathKind'];
-  role?: ArtifactRole;
-  sourceRoot?: ArtifactSourceRootDto;
   sha256?: string;
   contentBase64?: string;
 }
@@ -3807,8 +3803,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         storagePath: artifactInput.storagePath,
         relativePath: artifactInput.relativePath,
         pathKind: 'upload',
-        role: artifactInput.role ?? 'attachment',
-        sourceRoot: artifactInput.sourceRoot,
         sha256: artifactInput.sha256,
         createdAt: clock.now(),
       });
@@ -4296,8 +4290,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
           relativePath: artifactInput.relativePath,
           pathKind: artifactInput.pathKind ?? (workspaceRun ? 'workspace' : 'generated'),
-          role: artifactInput.role ?? (workspaceRun ? 'run_output' : 'deliverable'),
-          sourceRoot: artifactInput.sourceRoot,
           sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
           createdAt: now,
         });
@@ -6351,6 +6343,7 @@ async function buildDispatchRequest(
     ? await loadAgentMemoryProjectionContext(repositories, { teamId: dispatch.teamId, agentId: agent.id, now })
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
+  const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
 
   return {
     id: dispatch.id,
@@ -6384,6 +6377,9 @@ async function buildDispatchRequest(
             command: executionConfig.command,
             args: executionConfig.args,
             cwd: executionConfig.cwd,
+            ...(artifactSourceRoots.length > 0
+              ? { artifactSourceRoots }
+              : {}),
             ...(agent.source === 'custom'
               ? { envRef: { agentId: agent.id, teamId: agent.primaryTeamId } }
               : {}),
@@ -6391,6 +6387,46 @@ async function buildDispatchRequest(
         }
       : {}),
   };
+}
+
+function parseAgentArtifactSourceRoots(
+  env: Record<string, string> | undefined,
+): AgentArtifactSourceRootConfigDto[] {
+  const raw = env?.AGENTBEAN_ARTIFACT_SOURCE_ROOTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const roots: AgentArtifactSourceRootConfigDto[] = [];
+    const ids = new Set<string>();
+    for (const value of parsed) {
+      if (!value || typeof value !== 'object') continue;
+      const item = value as Record<string, unknown>;
+      const id = typeof item.id === 'string' ? item.id.trim() : '';
+      const label = typeof item.label === 'string' ? item.label.trim() : '';
+      const envVarName = typeof item.envVarName === 'string' ? item.envVarName.trim() : '';
+      const defaultRole = item.defaultRole;
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)
+        || ids.has(id)
+        || !label
+        || label.length > 80
+        || !/^[A-Z_][A-Z0-9_]{0,63}$/.test(envVarName)
+        || (defaultRole !== 'intermediate' && defaultRole !== 'run_output' && defaultRole !== 'deliverable')) {
+        continue;
+      }
+      ids.add(id);
+      roots.push({
+        id,
+        label,
+        envVarName,
+        defaultRole,
+        recursive: item.recursive !== false,
+      });
+    }
+    return roots.slice(0, 16);
+  } catch {
+    return [];
+  }
 }
 
 async function collectCoalescedDispatchPromptMessages(
@@ -7513,38 +7549,29 @@ async function listPublicChannelFiles(
   if (input.cursor && !cursor) return makeFailure('VALIDATION_ERROR', 'Invalid channel file cursor');
   const query = 'query' in input ? input.query.trim().toLocaleLowerCase() : '';
   if ('query' in input && query.length < 1) return makeFailure('VALIDATION_ERROR', 'File search query is required');
+  const requestedPath = normalizeChannelFilePath(input.path);
+  if (requestedPath === null) return makeFailure('VALIDATION_ERROR', 'Invalid channel file path');
   const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize ?? 50)));
   const candidates = await repositories.artifacts.listByChannel({ teamId: input.teamId, channelId: input.channelId });
   const entries: ChannelFileEntryDto[] = [];
   const directories = new Map<string, ChannelFileDirectoryDto>();
   for (const artifact of candidates) {
     if (isWorkspaceRunLogArtifact(artifact)) continue;
-    if (input.role && input.role !== 'all' && (artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output')) !== input.role) continue;
-    if (cursor && !isAfterChannelFileCursor(artifact, cursor)) continue;
+    const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
+    if (input.role && input.role !== 'all' && role !== input.role) continue;
     if (!(await isPublicChannelFileArtifact(repositories, artifact))) continue;
-    const logicalPath = channelArtifactLogicalPath(artifact);
-    if (input.path && !isDirectChannelFileChild(logicalPath, input.path)) continue;
+    const source = await channelFileSource(repositories, artifact);
+    if (!source) continue;
+    const logicalPath = channelArtifactLogicalPath(artifact, source, role);
     if (query && !`${artifact.filename} ${logicalPath}`.toLocaleLowerCase().includes(query)) continue;
-    const message = artifact.messageId ? await repositories.messages.getById(artifact.messageId) : null;
-    if (artifact.messageId && (!message || message.channelId !== input.channelId || isDeletedMessage(message))) continue;
-    if (!artifact.messageId && !artifact.workspaceRunId) continue;
-    addChannelFileDirectories(directories, logicalPath, artifact);
+    if (!query) addChannelFileDirectories(directories, logicalPath, artifact);
+    if (!query && !isDirectChannelFileChild(logicalPath, requestedPath)) continue;
+    if (cursor && !isAfterChannelFileCursor(artifact, cursor)) continue;
     entries.push({
       artifact: toArtifactDto(artifact),
-      source: message ? {
-        messageId: message.id,
-        ...(message.threadId ? { threadId: message.threadId } : {}),
-        senderKind: message.senderKind,
-        senderId: message.senderId,
-        messageCreatedAt: message.createdAt,
-      } : {
-        messageId: artifact.workspaceRunId!,
-        senderKind: 'system',
-        senderId: null,
-        messageCreatedAt: artifact.createdAt,
-      },
+      source,
       logicalPath,
-      role: artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output'),
+      role,
     });
   }
   entries.sort((left, right) => compareChannelFiles(right.artifact, left.artifact));
@@ -7552,35 +7579,107 @@ async function listPublicChannelFiles(
   const last = page[page.length - 1]?.artifact;
   return makeSuccess({
     files: page,
-    directories: [...directories.values()]
-      .filter((directory) => isDirectDirectoryChild(directory.path, input.path))
-      .sort((left, right) => right.updatedAt - left.updatedAt || left.path.localeCompare(right.path)),
-    path: normalizeChannelFilePath(input.path),
+    directories: query
+      ? []
+      : [...directories.values()]
+          .filter((directory) => isDirectDirectoryChild(directory.path, requestedPath))
+          .sort((left, right) => right.updatedAt - left.updatedAt
+            || Buffer.compare(Buffer.from(left.path, 'utf8'), Buffer.from(right.path, 'utf8'))),
+    path: requestedPath,
     ...(entries.length > pageSize && last ? { nextCursor: encodeChannelFileCursor(last) } : {}),
   });
 }
 
-function normalizeChannelFilePath(value: string | undefined): string {
+function normalizeChannelFilePath(value: string | undefined): string | null {
   if (!value || value === '/') return '';
-  return value.split('/').filter((part) => part && part !== '.' && part !== '..').join('/');
+  const parts = value.split('/').filter(Boolean);
+  if (parts.some((part) => part === '.' || part === '..')) return null;
+  return parts.join('/');
 }
 
-function channelArtifactLogicalPath(artifact: ArtifactRecord): string {
-  const relative = normalizeChannelFilePath(artifact.relativePath ?? artifact.filename);
-  if (!artifact.workspaceRunId) return relative;
-  const root = artifact.sourceRoot ? `${artifact.sourceRoot.label} [${artifact.sourceRoot.id}]` : '默认运行输出';
-  return ['运行产物', `Run ${artifact.workspaceRunId}`, root, relative].filter(Boolean).join('/');
+async function channelFileSource(
+  repositories: ServerNextRepositories,
+  artifact: ArtifactRecord,
+): Promise<ChannelFileSourceDto | null> {
+  const directMessage = artifact.messageId
+    ? await repositories.messages.getById(artifact.messageId)
+    : null;
+  if (directMessage
+    && directMessage.channelId === artifact.channelId
+    && !isDeletedMessage(directMessage)) {
+    return {
+      messageId: directMessage.id,
+      ...(directMessage.threadId ? { threadId: directMessage.threadId } : {}),
+      ...(messageTaskId(directMessage) ? { taskId: messageTaskId(directMessage) } : {}),
+      ...(artifact.workspaceRunId ? { workspaceRunId: artifact.workspaceRunId } : {}),
+      senderKind: directMessage.senderKind,
+      senderId: directMessage.senderId,
+      messageCreatedAt: directMessage.createdAt,
+    };
+  }
+  if (!artifact.workspaceRunId) return null;
+  const run = await repositories.workspaceRuns.getForTeam({
+    teamId: artifact.teamId,
+    runId: artifact.workspaceRunId,
+  });
+  if (!run) return null;
+  const dispatch = await repositories.dispatches.getById(run.dispatchId);
+  const sourceMessageId = run.messageId ?? dispatch?.messageId;
+  const sourceMessage = sourceMessageId
+    ? await repositories.messages.getById(sourceMessageId)
+    : null;
+  const visibleSourceMessage = sourceMessage
+    && sourceMessage.channelId === artifact.channelId
+    && !isDeletedMessage(sourceMessage)
+    ? sourceMessage
+    : null;
+  const taskId = visibleSourceMessage ? messageTaskId(visibleSourceMessage) : undefined;
+  return {
+    ...(visibleSourceMessage ? { messageId: visibleSourceMessage.id } : {}),
+    ...(visibleSourceMessage?.threadId ? { threadId: visibleSourceMessage.threadId } : {}),
+    ...(taskId ? { taskId } : {}),
+    workspaceRunId: run.id,
+    agentId: run.agentId,
+    senderKind: 'agent',
+    senderId: run.agentId,
+    messageCreatedAt: visibleSourceMessage?.createdAt ?? run.createdAt,
+  };
 }
 
-function isDirectChannelFileChild(logicalPath: string, requestedPath: string | undefined): boolean {
-  const parent = normalizeChannelFilePath(requestedPath);
-  const relative = parent ? logicalPath.startsWith(`${parent}/`) ? logicalPath.slice(parent.length + 1) : '' : logicalPath;
+function messageTaskId(message: MessageRecord): string | undefined {
+  return typeof message.meta?.taskId === 'string' && message.meta.taskId
+    ? message.meta.taskId
+    : undefined;
+}
+
+function channelArtifactLogicalPath(
+  artifact: ArtifactRecord,
+  source: ChannelFileSourceDto,
+  role: ArtifactRole,
+): string {
+  const relativePath = normalizeChannelFilePath(artifact.relativePath ?? artifact.filename)
+    ?? artifact.filename;
+  if (!artifact.workspaceRunId || (role !== 'intermediate' && role !== 'run_output')) return relativePath;
+  const taskSegment = source.taskId ? `任务 ${source.taskId}` : '未关联任务';
+  const sourceRoot = artifact.sourceRoot
+    ? `${artifact.sourceRoot.label} [${artifact.sourceRoot.id}]`
+    : '默认运行输出';
+  return ['运行产物', taskSegment, `Run ${artifact.workspaceRunId}`, sourceRoot, relativePath]
+    .filter(Boolean)
+    .join('/');
+}
+
+function isDirectChannelFileChild(logicalPath: string, requestedPath: string): boolean {
+  const relative = requestedPath
+    ? logicalPath.startsWith(`${requestedPath}/`) ? logicalPath.slice(requestedPath.length + 1) : ''
+    : logicalPath;
   return Boolean(relative) && !relative.includes('/');
 }
 
-function isDirectDirectoryChild(directoryPath: string, requestedPath: string | undefined): boolean {
-  const parent = normalizeChannelFilePath(requestedPath);
-  const relative = parent ? directoryPath.startsWith(`${parent}/`) ? directoryPath.slice(parent.length + 1) : '' : directoryPath;
+function isDirectDirectoryChild(directoryPath: string, requestedPath: string): boolean {
+  const relative = requestedPath
+    ? directoryPath.startsWith(`${requestedPath}/`) ? directoryPath.slice(requestedPath.length + 1) : ''
+    : directoryPath;
   return Boolean(relative) && !relative.includes('/');
 }
 
@@ -7611,16 +7710,12 @@ async function isPublicChannelFileArtifact(
     const run = await repositories.workspaceRuns.getForTeam({ teamId: artifact.teamId, runId: artifact.workspaceRunId });
     if (!run || !(await isPublicWorkspaceRun(repositories, run))) return false;
   }
-  if (artifact.dispatchId) {
-    const attempt = await repositories.management.dispatchAttempts.getByDispatchId(artifact.dispatchId);
-    if (!attempt) return false;
-  }
   return isPublicArtifact(repositories, artifact);
 }
 
 function compareChannelFiles(left: Pick<ArtifactRecord, 'createdAt' | 'id'>, right: Pick<ArtifactRecord, 'createdAt' | 'id'>): number {
   if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
-  return left.id.localeCompare(right.id);
+  return Buffer.compare(Buffer.from(left.id, 'utf8'), Buffer.from(right.id, 'utf8'));
 }
 
 function isAfterChannelFileCursor(artifact: ArtifactRecord, cursor: ChannelFileCursor): boolean {

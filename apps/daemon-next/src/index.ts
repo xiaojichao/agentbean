@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { AGENT_EVENTS, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { isAbsolute, join } from 'node:path';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -12,7 +12,7 @@ import {
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-import { collectArtifacts } from './artifact-collector.js';
+import { collectArtifacts, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
@@ -539,12 +539,20 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const startedAt = result.workspaceRun?.startedAt;
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const generatedImageDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
-          const shouldCollectProductArtifacts = startedAt !== undefined && (workspace || generatedImageDirs.length > 0);
+          const configuredRoots = resolveConfiguredArtifactRoots(
+            request.customAgent?.artifactSourceRoots,
+            request.customAgent?.env,
+          );
+          const artifactDiagnostics = [...configuredRoots.diagnostics];
+          const shouldCollectProductArtifacts = startedAt !== undefined
+            && (workspace || generatedImageDirs.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
               ...(workspace ? { outputDir: workspace.outputDir, cwd: workspace.cwd } : {}),
               extraOutputDirs: generatedImageDirs,
+              configuredOutputRoots: configuredRoots.roots,
               startedAt,
+              onDiagnostic: (diagnostic) => artifactDiagnostics.push(diagnostic),
             });
             collectedProductArtifacts.push(...collected);
             if (collected.length > 0 && device.token) {
@@ -554,6 +562,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               );
               productArtifactIds = uploaded.map((u) => u.id);
             }
+          }
+          if (artifactDiagnostics.length > 0 && result.workspaceRun) {
+            const diagnosticLines = uniqueArtifactDiagnostics(artifactDiagnostics)
+              .map((diagnostic) => `[artifact-collection:${diagnostic.code}] ${diagnostic.sourceRootLabel}`);
+            result.workspaceRun.logExcerpt = [
+              result.workspaceRun.logExcerpt,
+              ...diagnosticLines,
+            ].filter(Boolean).join('\n');
           }
           const artifacts = result.artifacts ?? [];
           const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
@@ -846,6 +862,67 @@ async function reportDeviceSnapshot(
       throw error;
     }
   }
+}
+
+function resolveConfiguredArtifactRoots(
+  configs: AgentArtifactSourceRootConfigDto[] | undefined,
+  env: Record<string, string> | undefined,
+): {
+  roots: Array<{
+    id: string;
+    path: string;
+    label: string;
+    defaultRole: AgentArtifactSourceRootConfigDto['defaultRole'];
+    recursive: boolean;
+  }>;
+  diagnostics: ArtifactCollectionDiagnostic[];
+} {
+  const roots: Array<{
+    id: string;
+    path: string;
+    label: string;
+    defaultRole: AgentArtifactSourceRootConfigDto['defaultRole'];
+    recursive: boolean;
+  }> = [];
+  const diagnostics: ArtifactCollectionDiagnostic[] = [];
+  for (const config of configs ?? []) {
+    const path = env?.[config.envVarName]?.trim();
+    if (!path) {
+      diagnostics.push({
+        code: 'SOURCE_ROOT_MISSING',
+        sourceRootId: config.id,
+        sourceRootLabel: config.label,
+      });
+      continue;
+    }
+    if (!isAbsolute(path) || path.includes('\0')) {
+      diagnostics.push({
+        code: 'SOURCE_ROOT_INVALID',
+        sourceRootId: config.id,
+        sourceRootLabel: config.label,
+      });
+      continue;
+    }
+    roots.push({
+      id: config.id,
+      path,
+      label: config.label,
+      defaultRole: config.defaultRole,
+      recursive: config.recursive,
+    });
+  }
+  return { roots, diagnostics };
+}
+
+function uniqueArtifactDiagnostics(
+  diagnostics: ArtifactCollectionDiagnostic[],
+): ArtifactCollectionDiagnostic[] {
+  const unique = new Map<string, ArtifactCollectionDiagnostic>();
+  for (const diagnostic of diagnostics) {
+    const key = `${diagnostic.code}:${diagnostic.sourceRootId}:${diagnostic.relativePath ?? ''}`;
+    unique.set(key, diagnostic);
+  }
+  return [...unique.values()];
 }
 
 /** 扫描每个 custom agent 的 skills。单个 agent 抛错 → 该 agent skills=[]，不影响其它。 */

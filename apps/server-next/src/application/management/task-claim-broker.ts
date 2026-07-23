@@ -10,15 +10,23 @@ import type {
   TaskClaimReleaseV1,
   TaskClaimRenewAckV1,
   TaskClaimRenewV1,
+  TaskOfferResponseKind,
+  TaskOfferResponseRecordDto,
+  TaskOfferStatus,
 } from '../../../../../packages/contracts/src/index.js';
 import {
+  evaluateOfferAcceptance,
+  evaluateOfferDecline,
+  evaluateOfferValidity,
   evaluateTaskClaimAcquire,
   evaluateTaskClaimRelease,
   evaluateTaskClaimRenew,
+  type OfferInvalidationReason,
+  type OfferValidity,
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
 } from '../../../../../packages/domain/src/index.js';
 import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
-import type { TaskClaimLeaseRecord } from '../task-coordination-repositories.js';
+import type { TaskClaimLeaseRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
 } from './management-kernel.js';
@@ -56,6 +64,46 @@ export interface TaskClaimCandidateResolution {
   readonly ancestorAgentIds: readonly string[];
 }
 
+/** #712 切片 C-1：Agent 对显式 Task Offer 的响应输入。 */
+export interface TaskOfferRespondInput {
+  readonly offerId: string;
+  readonly agentId: string;
+  readonly kind: TaskOfferResponseKind;
+  readonly detail?: string | null;
+}
+
+/**
+ * #712 切片 C-1：respondToOffer 结果。
+ * - claim_granted：accepted 且同事务创建了 Claim/Lease（AC#4）。
+ * - overtaken：并发中被抢先获得 Claim（AC#6 败者），不产 Lease。
+ * - response_recorded：rejected/needs_info/counter_proposed 记录为终态，不产 Lease（AC#5）。
+ * - not_accepted：offer 失效/候选不合格/claim 策略拒绝，不产 Lease。
+ */
+export type TaskOfferRespondResult =
+  | {
+      readonly kind: 'claim_granted';
+      readonly lease: TaskClaimAuthorityV1 & { readonly acquiredAt: number; readonly expiresAt: number };
+      readonly execution: {
+        readonly schemaVersion: 1;
+        readonly managementRunId: string;
+        readonly taskId: string;
+        readonly taskRevision: number;
+        readonly taskAttempt: number;
+        readonly title: string;
+        readonly objective: string;
+        readonly acceptanceCriteria: readonly unknown[];
+        readonly dependencyTaskIds: readonly string[];
+        readonly channelId?: string;
+      };
+    }
+  | { readonly kind: 'overtaken' }
+  | { readonly kind: 'response_recorded'; readonly status: TaskOfferStatus }
+  | {
+      readonly kind: 'not_accepted';
+      readonly reason: 'offer_invalid' | 'agent_not_qualified' | 'claim_rejected';
+      readonly diagnosticCode: string;
+    };
+
 export interface TaskClaimBroker {
   resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution>;
   prepareOffers(taskId: string): Promise<readonly TaskClaimOfferV1[]>;
@@ -65,6 +113,10 @@ export interface TaskClaimBroker {
   expireClaims(): Promise<readonly TaskClaimExpiredV1[]>;
   disconnectDevice(deviceId: string): void;
   reconnectDevice(deviceId: string): void;
+  /** #712 切片 C-1：持久化一个结构化 Task Offer（PI → Agent，状态 open）。 */
+  createOffer(record: TaskOfferRecord): Promise<TaskOfferRecord>;
+  /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
+  respondToOffer(input: TaskOfferRespondInput): Promise<TaskOfferRespondResult>;
 }
 
 export interface CreateTaskClaimBrokerInput {
@@ -380,6 +432,177 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     reconnectDevice(deviceId) {
       disconnectedDevices.delete(deviceId);
     },
+    async createOffer(record) {
+      return input.repositories.taskCoordination.offers.create(record);
+    },
+    async respondToOffer(payload) {
+      const offerStore = input.repositories.taskCoordination.offers;
+      const offer = await offerStore.getById(payload.offerId);
+      if (!offer || offer.agentId !== payload.agentId) {
+        return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: 'TASK_CLAIM_OFFER_INVALID' };
+      }
+      const now = input.clock.now();
+      const validity = await computeOfferValidity(input.repositories, offer, now);
+
+      // 非接受响应：rejected / needs_info / counter_proposed（AC#5：不产 Lease）
+      if (payload.kind !== 'accepted') {
+        const decline = evaluateOfferDecline({ kind: payload.kind, validity });
+        if (decline.kind === 'not_accepted') {
+          const diagnosticCode = !validity.acceptable
+            ? offerValidityCode(validity.reason) : 'TASK_CLAIM_OFFER_INVALID';
+          return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode };
+        }
+        const response: TaskOfferResponseRecordDto = {
+          offerId: offer.id, agentId: offer.agentId, kind: payload.kind,
+          detail: payload.detail ?? null, respondedAt: now,
+        };
+        const updated = await offerStore.updateStatus({
+          id: offer.id, expectedStatus: 'open', status: payload.kind, response, now,
+        });
+        // decline 路径无「并发赢家」语义；CAS 失败=offer 已被他者置终态 → not_accepted。
+        return updated
+          ? { kind: 'response_recorded', status: payload.kind }
+          : { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: 'TASK_CLAIM_OFFER_NOT_OPEN' };
+      }
+
+      // accepted
+      if (!validity.acceptable) {
+        return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: offerValidityCode(validity.reason) };
+      }
+      return withTaskLock(offer.taskId, taskTails, async () => {
+        const resolution = await resolveCandidates(offer.taskId);
+        const candidate = resolution.candidates.find((item) => item.agentId === offer.agentId);
+        if (!candidate?.eligible) {
+          return { kind: 'not_accepted', reason: 'agent_not_qualified' as const,
+            diagnosticCode: candidate?.diagnosticCodes[0] ?? 'TASK_CLAIM_CANDIDATE_UNAVAILABLE' };
+        }
+        const leaseToken = leaseTokens.nextToken();
+        const leaseTokenHash = hash(leaseToken);
+        const leaseFingerprint = leaseTokenHash.slice(0, 16);
+        const acceptedResponse: TaskOfferResponseRecordDto = {
+          offerId: offer.id, agentId: offer.agentId, kind: 'accepted', detail: null, respondedAt: now,
+        };
+        try {
+          const result = await input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+            const task = await repositories.tasks.getById(offer.taskId);
+            const coordination = await repositories.coordination.coordinations.getByTaskId(offer.taskId);
+            if (!task || !coordination || task.revision !== offer.taskRevision ||
+                coordination.attempt !== offer.taskAttempt || !['todo', 'in_progress'].includes(task.status)) {
+              // AC#4：task 已变 → 回滚，不留 accepted 无 claim
+              throw new TaskClaimConflict('TASK_CLAIM_OFFER_STALE');
+            }
+            const latest = await repositories.coordination.claimLeases.getLatest({
+              taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+            });
+            if (latest?.status === 'invalidated') throw new TaskClaimConflict('TASK_CLAIM_INVALIDATED');
+            const decision = evaluateOfferAcceptance({
+              eligibility: { state: 'qualified' },
+              validity,
+              acquire: {
+                current: latest ? toDomainLease(latest) : undefined,
+                taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+                agentId: offer.agentId, leaseTokenHash, leaseFingerprint,
+                ancestorAgentIds: resolution.ancestorAgentIds, now, ttlMs: leaseTtlMs,
+              },
+            });
+            if (decision.kind === 'not_accepted') {
+              // 到达此处时 validity/eligibility 已预检通过，剩余 not_accepted 通常为 claim_rejected
+              // （evaluateTaskClaimAcquire 因 invalid-claim-state/clock-regressed/fencing-overflow 拒绝）。
+              // 经 TaskClaimConflict.offerReason 携带 reason，避免被 catch 一律映射成 offer_invalid。
+              throw new TaskClaimConflict(
+                decision.acquireRejection
+                  ? `TASK_CLAIM_${code(decision.acquireRejection)}`
+                  : 'TASK_CLAIM_OFFER_INVALID',
+                decision.reason,
+              );
+            }
+            if (decision.kind === 'overtaken') {
+              // active-claim-held：他 Agent 已持 lease。标 overtaken（CAS 失败=已终态则忽略）。
+              await repositories.coordination.offers.updateStatus({
+                id: offer.id, expectedStatus: 'open', status: 'overtaken', response: acceptedResponse, now,
+              });
+              return { overtaken: true } as const;
+            }
+            // decision.kind === 'claim_granted'：CAS offer→accepted（AC#4：与 lease 同事务，任一失败整体回滚）
+            const accepted = await repositories.coordination.offers.updateStatus({
+              id: offer.id, expectedStatus: 'open', status: 'accepted', response: acceptedResponse, now,
+            });
+            if (!accepted) throw new TaskClaimConflict('TASK_CLAIM_OFFER_OVERTAKEN');
+            // 以下 lease 落库 + events + task 更新镜像 acquire() 的 grant 块（AC#4 同事务）。
+            // 抽取共享 helper 属后续重构——此处内联以保持既有 acquire 路径零改动、降低回归风险。
+            if (latest?.status === 'active') {
+              const expired = await repositories.coordination.claimLeases.update({
+                id: latest.id, expectedStatus: 'active', status: 'expired',
+                heartbeatAt: latest.heartbeatAt, expiresAt: latest.expiresAt,
+              });
+              if (!expired) throw new TaskClaimConflict('TASK_CLAIM_EXPIRE_CONFLICT');
+            }
+            const leaseId = input.ids.nextId();
+            const lease: TaskClaimLeaseRecord = {
+              id: leaseId, teamId: task.teamId, taskId: task.id,
+              taskRevision: task.revision, taskAttempt: coordination.attempt, agentId: offer.agentId,
+              leaseTokenHash, leaseFingerprint, fencingToken: decision.lease.fencingToken,
+              status: 'active', acquiredAt: decision.lease.acquiredAt,
+              heartbeatAt: decision.lease.renewedAt, expiresAt: decision.lease.expiresAt,
+            };
+            await repositories.coordination.claimLeases.create(lease);
+            await appendTaskClaimEvent(repositories.management, {
+              managementRunId: coordination.managementRunId, type: 'task-claimed',
+              actorKind: 'agent', actorId: offer.agentId,
+              idempotencyKey: `task-claimed:${lease.id}`,
+              payload: { taskId: task.id, taskRevision: task.revision, agentId: offer.agentId,
+                claimLeaseId: lease.id, attempt: coordination.attempt },
+            }, now, input.ids);
+            if (task.status === 'todo' || task.assigneeId !== offer.agentId) {
+              const updated = await repositories.tasks.update({ taskId: task.id,
+                changes: { ...(task.status === 'todo' ? { status: 'in_progress' as const } : {}),
+                  assigneeId: offer.agentId, updatedAt: now } });
+              if (!updated) throw new TaskClaimConflict('TASK_CLAIM_TASK_UPDATE_CONFLICT');
+            }
+            if (task.status === 'todo') {
+              await appendTaskClaimEvent(repositories.management, {
+                managementRunId: coordination.managementRunId, type: 'task-state-changed',
+                actorKind: 'agent', actorId: offer.agentId,
+                idempotencyKey: `task-state-changed:${lease.id}`,
+                payload: { taskId: task.id, taskRevision: task.revision, from: 'todo', to: 'in_progress' },
+              }, now, input.ids);
+            }
+            const criteria = (await repositories.coordination.criteria.list(task.id))
+              .filter((criterion) => criterion.introducedRevision <= task.revision &&
+                (criterion.retiredRevision === undefined || criterion.retiredRevision > task.revision))
+              .sort((left, right) => left.position - right.position)
+              .map(({ taskId: _taskId, introducedRevision: _introducedRevision,
+                retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
+            const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
+              .map((dependency) => dependency.dependencyTaskId);
+            return { lease, task, coordination, criteria, dependencyTaskIds };
+          });
+          if ('overtaken' in result) return { kind: 'overtaken' };
+          return {
+            kind: 'claim_granted',
+            lease: authority(result.lease, leaseToken),
+            execution: {
+              schemaVersion: 1, managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id, taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt, title: result.task.title,
+              objective: result.task.description ?? result.task.title,
+              acceptanceCriteria: result.criteria, dependencyTaskIds: result.dependencyTaskIds,
+              ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
+            },
+          };
+        } catch (error) {
+          if (error instanceof TaskClaimConflict) {
+            if (error.message === 'TASK_CLAIM_OFFER_OVERTAKEN') return { kind: 'overtaken' };
+            return {
+              kind: 'not_accepted',
+              reason: error.offerReason ?? 'offer_invalid',
+              diagnosticCode: error.message,
+            };
+          }
+          throw error;
+        }
+      });
+    },
   };
 
   async function expireClaims(): Promise<readonly TaskClaimExpiredV1[]> {
@@ -460,6 +683,41 @@ function channelAllowsAgent(
   return !channel || channel.visibility === 'public' || channel.agentMemberIds.includes(agentId);
 }
 
+/**
+ * #712 切片 C-1：计算 Offer 当前有效性（AC#1 fence + AC#5 失效前置判定）。
+ * currentTaskRevision/manifestRevision 在事务外读取——轻微竞态可接受：UoW 内 lease grant
+ * 会再次校验 task.revision===offer.taskRevision（STALE），manifest 变化由 CAS 状态机兜底。
+ * task 或 active manifest 缺失 → 用 NaN 使 fence 比对失败（判 task_revision_changed / manifest_superseded）。
+ */
+async function computeOfferValidity(
+  repositories: ServerNextRepositories,
+  offer: TaskOfferRecord,
+  now: number,
+): Promise<OfferValidity> {
+  const task = await repositories.tasks.getById(offer.taskId);
+  const activeManifest = await repositories.agentExposure.manifests.getActiveByTeamAgent(offer.teamId, offer.agentId);
+  const manifestRevision = activeManifest && (activeManifest.validUntil === null || activeManifest.validUntil > now)
+    ? activeManifest.revision : Number.NaN;
+  return evaluateOfferValidity({
+    status: offer.status,
+    offerExpiresAt: offer.offerExpiresAt,
+    offerTaskRevision: offer.taskRevision,
+    offerManifestRevision: offer.manifestRevision,
+    now,
+    currentTaskRevision: task?.revision ?? Number.NaN,
+    currentManifestRevision: manifestRevision,
+  });
+}
+
+function offerValidityCode(reason: OfferInvalidationReason): string {
+  switch (reason) {
+    case 'expired': return 'TASK_CLAIM_OFFER_EXPIRED';
+    case 'task_revision_changed': return 'TASK_CLAIM_OFFER_TASK_REVISION_CHANGED';
+    case 'manifest_superseded': return 'TASK_CLAIM_OFFER_MANIFEST_SUPERSEDED';
+    case 'not_open': return 'TASK_CLAIM_OFFER_NOT_OPEN';
+  }
+}
+
 function toDomainLease(lease: TaskClaimLeaseRecord): DomainTaskClaimLeaseRecord {
   return {
     taskId: lease.taskId, taskRevision: lease.taskRevision, taskAttempt: lease.taskAttempt,
@@ -538,4 +796,12 @@ async function withTaskLock<T>(
   }
 }
 
-class TaskClaimConflict extends Error {}
+class TaskClaimConflict extends Error {
+  constructor(
+    message: string,
+    /** #712：respondToOffer not_accepted 时携带 domain reason（claim_rejected 等），供 catch 保留区分。 */
+    readonly offerReason?: 'offer_invalid' | 'agent_not_qualified' | 'claim_rejected',
+  ) {
+    super(message);
+  }
+}

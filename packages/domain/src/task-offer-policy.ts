@@ -163,7 +163,7 @@ export function isValidOfferStatusTransition(from: TaskOfferStatus, to: TaskOffe
   return false; // 终态 → 他态非法；未知非 open 状态 fail-closed
 }
 
-// ── AC#1：revision 变化使「所有」未接受旧 Offer 失效（批量聚合）──
+// ── AC#1（#713）：revision 变化使「所有」未接受旧 Offer 失效（批量聚合）──
 
 /**
  * selectInvalidatableOpenOffers 的窄视图：仅需 fence 判定字段，刻意不耦合完整 TaskOfferDto，
@@ -215,4 +215,65 @@ export function selectInvalidatableOpenOffers(
     }
   }
   return result;
+}
+
+// ── AC#5（#715）：定向 vs 开放 Offer 分配策略（混合 Task allocation） ──
+
+export interface OfferAllocationPolicyInput {
+  /**
+   * 显式 @Agent（hard target）。调用方需已确认 `resolveHardSpecifiedTarget === 'eligible'`
+   * （同 evaluateOfferAcceptance 信任 eligibility.state 的信任模型）。存在时直接定向。
+   */
+  readonly hardSpecifiedAgentId?: string;
+  /** 经 eligibility 过滤 + rankQualifiedCandidates 排序后的合格候选 agent id 列表（降序）。 */
+  readonly rankedQualifiedAgentIds: readonly string[];
+  /**
+   * 排名前两位的候选排序键元组是否全等（"候选相近"）。domain 无法客观测量排序距离，
+   * 由调用方比较 rankQualifiedCandidates 的 top-2 键得出。
+   */
+  readonly topCandidatesTied: boolean;
+  /** 负载数据陈旧或缺失（"负载不确定"）。调用方标记。 */
+  readonly loadUncertain: boolean;
+}
+
+export type OfferAllocationPolicyDecision =
+  | { readonly kind: 'targeted'; readonly targetAgentId: string }
+  | { readonly kind: 'open' }
+  | { readonly kind: 'not_decidable'; readonly reason: 'no_qualified_candidate' };
+
+/**
+ * AC#5：为单个节点选择定向 Offer（显式 @Agent / 单一明确候选）或开放 Offer
+ * （候选相近 / 负载不确定）。依 ADR 0002 混合分配语义。
+ *
+ * 决策顺序：
+ * 1. hardSpecifiedAgentId 存在 → targeted（AC#5「@Agent → 定向」，最高优先；调用方保证 eligible）。
+ * 2. 无合格候选 → not_decidable（交上游 evaluateTaskDecomposability 升级用户调整）。
+ * 3. 单一合格候选 → targeted（ADR 0002「候选明确的简单任务定向指派」）。
+ * 4. 多候选且（topCandidatesTied || loadUncertain）→ open（AC#5「候选相近/负载不确定 → 开放」）。
+ * 5. 多候选且有明显赢家 → targeted（排名第一）。
+ *
+ * 调用方映射：targeted → TaskCoordinationDto.claimPolicy='targeted' + targetAgentId；
+ * open → claimPolicy='open'；not_decidable → 不发布 Offer，升级 AC#4。
+ */
+export function decideOfferAllocationPolicy(input: OfferAllocationPolicyInput): OfferAllocationPolicyDecision {
+  const hardSpecifiedAgentId = input.hardSpecifiedAgentId;
+  if (hardSpecifiedAgentId !== undefined && hardSpecifiedAgentId.length > 0) {
+    return { kind: 'targeted', targetAgentId: hardSpecifiedAgentId };
+  }
+  const ranked = input.rankedQualifiedAgentIds;
+  if (ranked.length === 0) {
+    return { kind: 'not_decidable', reason: 'no_qualified_candidate' };
+  }
+  const topCandidate = ranked[0];
+  if (topCandidate === undefined) {
+    return { kind: 'not_decidable', reason: 'no_qualified_candidate' };
+  }
+  if (ranked.length === 1) {
+    return { kind: 'targeted', targetAgentId: topCandidate };
+  }
+  // ranked.length >= 2
+  if (input.topCandidatesTied || input.loadUncertain) {
+    return { kind: 'open' };
+  }
+  return { kind: 'targeted', targetAgentId: topCandidate };
 }

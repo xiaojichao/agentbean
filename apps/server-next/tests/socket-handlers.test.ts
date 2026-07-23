@@ -1,9 +1,10 @@
 import { describe, expect, test, vi } from 'vitest';
-import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess } from '../../../packages/contracts/src/index';
+import { AGENT_EVENTS, WEB_EVENTS, makeFailure, makeSuccess, parseTaskClaimPayload, type TaskClaimRespondV1 } from '../../../packages/contracts/src/index';
 import {
   registerAgentSocketHandlers,
   registerWebSocketHandlers,
   type SocketLike,
+  type TaskClaimSocketHandlers,
 } from '../src/transport/socket-handlers';
 import type { ServerNextUseCases } from '../src/application/usecases';
 
@@ -1481,6 +1482,51 @@ describe('server-next socket handlers', () => {
 
     expect(app.buildDeviceScanRequest).toHaveBeenCalledWith({ deviceId: 'd1' });
     expect(deviceScan).not.toHaveBeenCalled();
+  });
+});
+
+describe('task-claim:respond（#712 切片 C-2a：显式 Offer 响应 socket 路由）', () => {
+  test('respond 事件路由到 taskClaim.respond handler，解析 payload 并返回其结果', async () => {
+    const socket = new FakeSocket();
+    const app = {} as unknown as ServerNextUseCases;
+    const respond = vi.fn(async (payload: TaskClaimRespondV1) => ({ kind: 'response_recorded', status: payload.kind }));
+    registerAgentSocketHandlers(socket, app, {
+      taskClaim: { acquire: vi.fn(), renew: vi.fn(), release: vi.fn(), respond } as TaskClaimSocketHandlers,
+    });
+
+    const ack = await socket.trigger(AGENT_EVENTS.taskClaim.respond, {
+      schemaVersion: 1, offerId: 'offer-1', agentId: 'agent-1', kind: 'rejected', detail: 'no time',
+    });
+
+    expect(respond).toHaveBeenCalledWith({
+      schemaVersion: 1, offerId: 'offer-1', agentId: 'agent-1', kind: 'rejected', detail: 'no time',
+    });
+    expect(ack).toEqual({ kind: 'response_recorded', status: 'rejected' });
+  });
+
+  test('respond 非法 kind 返回 INVALID_REQUEST ack 且不调 handler', async () => {
+    const socket = new FakeSocket();
+    const app = {} as unknown as ServerNextUseCases;
+    const respond = vi.fn();
+    registerAgentSocketHandlers(socket, app, {
+      taskClaim: { acquire: vi.fn(), renew: vi.fn(), release: vi.fn(), respond } as TaskClaimSocketHandlers,
+    });
+
+    const ack = await socket.trigger(AGENT_EVENTS.taskClaim.respond, {
+      schemaVersion: 1, offerId: 'o', agentId: 'a', kind: 'bogus',
+    });
+
+    expect(respond).not.toHaveBeenCalled();
+    expect(ack).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+  });
+
+  test('parseTaskClaimPayload respond 接受四类 kind、拒绝未知 kind', () => {
+    for (const kind of ['accepted', 'rejected', 'needs_info', 'counter_proposed'] as const) {
+      expect(parseTaskClaimPayload('respond', { schemaVersion: 1, offerId: 'o', agentId: 'a', kind }))
+        .toMatchObject({ kind });
+    }
+    expect(() => parseTaskClaimPayload('respond', { schemaVersion: 1, offerId: 'o', agentId: 'a', kind: 'bogus' }))
+      .toThrow();
   });
 });
 

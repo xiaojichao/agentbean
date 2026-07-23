@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -22,6 +22,8 @@ import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
+import { ArtifactCard } from '@/components/artifact/ArtifactCard';
+import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
   TASK_STATUS_MENU_DOT_CLASS,
@@ -85,10 +87,13 @@ interface TaskItem {
 
 interface ConversationFile {
   artifact: Artifact;
-  messageId: string;
+  messageId?: string;
   createdAt: number;
   senderKind: ChatMessage['senderKind'];
   senderId: string | null;
+  logicalPath?: string;
+  role?: string;
+  workspaceRunId?: string;
 }
 
 interface ChannelMemberEntry {
@@ -262,9 +267,11 @@ export default function ChatPage() {
   const [channelFiles, setChannelFiles] = useState<ConversationFile[]>([]);
   const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
   const [channelFilesQuery, setChannelFilesQuery] = useState('');
+  const [channelFilesRole, setChannelFilesRole] = useState<ArtifactRole | 'all'>('all');
   const [channelFilesPath, setChannelFilesPath] = useState('');
   const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
+  const channelFilesRequestRevisionRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
@@ -396,32 +403,39 @@ export default function ChatPage() {
 
   const loadChannelFiles = useCallback(async (reset = true) => {
     if (!activeChannel || conn !== 'open') return;
+    const requestRevision = channelFilesRequestRevisionRef.current + 1;
+    channelFilesRequestRevisionRef.current = requestRevision;
     setChannelFilesLoading(true);
     try {
       const cursor = reset ? undefined : channelFilesCursor;
       const result = channelFilesQuery.trim()
-        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath)
-        : await channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath);
+        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath, channelFilesRole)
+        : await channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath, channelFilesRole);
+      if (requestRevision !== channelFilesRequestRevisionRef.current) return;
       if (!result.ok || !result.files) return;
       const mapped = result.files.map(channelFileToConversationFile);
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
       setChannelFilesCursor(result.nextCursor);
       if (reset) setChannelFileDirectories(result.directories ?? []);
     } finally {
-      setChannelFilesLoading(false);
+      if (requestRevision === channelFilesRequestRevisionRef.current) {
+        setChannelFilesLoading(false);
+      }
     }
-  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, conn]);
+  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, channelFilesRole, conn]);
 
   useEffect(() => {
     setChannelFilesPath(searchParams.get('filePath') ?? '');
   }, [searchParams]);
 
   useEffect(() => {
+    channelFilesRequestRevisionRef.current += 1;
     setChannelFiles([]);
     setChannelFilesCursor(undefined);
-    if (tab !== 'files') setChannelFilesPath('');
+    setChannelFileDirectories([]);
+    setChannelFilesLoading(false);
     if (tab === 'files') void loadChannelFiles(true);
-  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery]);
+  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -1757,16 +1771,20 @@ export default function ChatPage() {
             hasMore={Boolean(channelFilesCursor)}
             searchQuery={channelFilesQuery}
             onSearchQuery={setChannelFilesQuery}
+            role={channelFilesRole}
+            onRole={setChannelFilesRole}
             path={channelFilesPath}
             directories={channelFileDirectories}
             onOpenDirectory={(path) => {
-              setChannelFilesPath(path); setChannelFiles([]); setChannelFilesCursor(undefined);
-              const params = new URLSearchParams(searchParams.toString()); params.set('chatTab', 'files'); params.set('filePath', path);
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('chatTab', 'files');
+              params.set('filePath', path);
               router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
             }}
             onOpenRoot={() => {
-              setChannelFilesPath(''); setChannelFiles([]); setChannelFilesCursor(undefined);
-              const params = new URLSearchParams(searchParams.toString()); params.set('chatTab', 'files'); params.delete('filePath');
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('chatTab', 'files');
+              params.delete('filePath');
               router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
             }}
             onLoadMore={() => void loadChannelFiles(false)}
@@ -2536,6 +2554,8 @@ function ConversationFiles({
   hasMore,
   searchQuery,
   onSearchQuery,
+  role,
+  onRole,
   path,
   directories,
   onOpenDirectory,
@@ -2551,6 +2571,8 @@ function ConversationFiles({
   hasMore: boolean;
   searchQuery: string;
   onSearchQuery: (query: string) => void;
+  role: ArtifactRole | 'all';
+  onRole: (role: ArtifactRole | 'all') => void;
   path: string;
   directories: NonNullable<ChannelFilesResultDto['directories']>;
   onOpenDirectory: (path: string) => void;
@@ -2567,8 +2589,25 @@ function ConversationFiles({
       <div className="mb-3 flex items-center gap-2">
         <Search size={14} className="text-neutral-400" />
         <input value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
+        <select value={role} onChange={(event) => onRole(event.target.value as ArtifactRole | 'all')} className="h-8 border border-neutral-300 bg-white px-2 text-xs outline-none focus:border-neutral-900" aria-label="按文件角色筛选">
+          <option value="all">全部角色</option>
+          <option value="attachment">普通附件</option>
+          <option value="deliverable">交付物</option>
+          <option value="run_output">运行产物</option>
+          <option value="intermediate">中间产物</option>
+        </select>
       </div>
-      {path && <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500"><button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>{path.split('/').map((part, index, parts) => <span key={`${part}-${index}`}><span className="mx-1 text-neutral-300">/</span><button onClick={() => onOpenDirectory(parts.slice(0, index + 1).join('/'))} className="hover:text-neutral-900">{part}</button></span>)}</div>}
+      {path && (
+        <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
+          <button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>
+          {path.split('/').map((part, index, parts) => (
+            <span key={`${part}-${index}`}>
+              <span className="mx-1 text-neutral-300">/</span>
+              <button onClick={() => onOpenDirectory(parts.slice(0, index + 1).join('/'))} className="hover:text-neutral-900">{part}</button>
+            </span>
+          ))}
+        </div>
+      )}
       {loading && files.length === 0 ? (
         <div className="flex h-32 items-center justify-center text-sm text-neutral-400">加载文件中…</div>
       ) : files.length === 0 && directories.length === 0 ? (
@@ -2578,51 +2617,32 @@ function ConversationFiles({
         </div>
       ) : (
         <div className="space-y-2">
-          {directories.map((directory) => <button key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900"><FolderOpen size={20} className="text-amber-600" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-neutral-900">{directory.name}</span><span className="text-xs text-neutral-500">{directory.fileCount} 个文件</span></span></button>)}
-          {files.map((file) => {
-            const isImage = file.artifact.mimeType.startsWith('image/');
-            const derivativeReady = file.artifact.preview?.status === 'ready' && file.artifact.preview.url;
-            const previewUrl = derivativeReady
-              ? messageArtifactUrl({ ...file.artifact, previewUrl: file.artifact.preview?.url }, 'preview')
-              : messageArtifactUrl(file.artifact, 'preview');
-            const downloadUrl = messageArtifactUrl(file.artifact, 'download');
-            const thumbnail = (
-              <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50">
-                {(isImage || derivativeReady) && previewUrl ? (
-                  <img src={previewUrl} alt={file.artifact.filename} className="h-full w-full object-cover" />
-                ) : (
-                  <Paperclip size={20} className="text-neutral-400" />
-                )}
+          {directories.map((directory) => (
+            <button key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900">
+              <FolderOpen size={20} className="text-amber-600" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-neutral-900">{directory.name}</span>
+                <span className="text-xs text-neutral-500">{directory.fileCount} 个文件</span>
               </span>
-            );
-            const summary = (
-              <>
-                <div className="truncate text-sm font-semibold text-neutral-900">{file.artifact.filename}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
-                  <span>{formatFileSize(file.artifact.sizeBytes)}</span>
-                  <span className="text-neutral-300">·</span>
-                  <span>{formatDateTime(file.createdAt)}</span>
-                  {file.artifact.preview?.status === 'pending' || file.artifact.preview?.status === 'processing' ? <span className="text-amber-600">· 预览生成中</span> : null}
-                  <span className="text-neutral-300">·</span>
-                  <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
-                </div>
-              </>
-            );
+            </button>
+          ))}
+          {files.map((file) => {
             return (
-              <div key={`${file.messageId}-${file.artifact.id}`} className="flex min-h-20 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 hover:border-neutral-900">
-                {previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer" title="预览文件">{thumbnail}</a> : thumbnail}
-                {previewUrl ? (
-                  <a href={previewUrl} target="_blank" rel="noreferrer" className="min-w-0 flex-1" title="预览文件">{summary}</a>
-                ) : (
-                  <div className="min-w-0 flex-1">{summary}</div>
-                )}
-                <div className="flex shrink-0 items-center gap-2">
-                  <button onClick={() => onJump(file.messageId)} className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
-                    <ExternalLink size={15} />
-                  </button>
-                  {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-8 w-8 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="下载文件">
-                    <Download size={15} />
-                  </a>}
+              <div key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
+                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
+                    <span>{formatDateTime(file.createdAt)}</span>
+                    <span className="text-neutral-300">·</span>
+                    <span className="truncate">{speakerName({ id: file.messageId ?? file.artifact.id, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
+                    {file.role && <span>· {channelFileRoleLabel(file.role)}</span>}
+                    {file.logicalPath && <span className="min-w-0 truncate">· {file.logicalPath}</span>}
+                  </div>
+                  {file.messageId && (
+                    <button onClick={() => onJump(file.messageId!)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+                      <ExternalLink size={15} />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -4606,190 +4626,16 @@ function sortModeLabel(mode: SidebarSortMode): string {
 }
 
 function ChatArtifactPreview({ artifact, teamId }: { artifact: Artifact; teamId?: string }) {
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const sizeLabel = formatFileSize(artifact.sizeBytes);
   const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
   const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
-  const canPreview = Boolean(previewUrl);
-  const openViewer = () => {
-    if (canPreview) setViewerOpen(true);
-  };
-  if (artifact.mimeType.startsWith('image/')) {
-    return (
-      <>
-        <div className="group relative block max-w-80">
-          {previewUrl ? (
-            <button onClick={openViewer} className="block text-left" title="预览图片">
-              <img
-                src={previewUrl}
-                alt={artifact.filename}
-                className="max-h-64 rounded-md border border-neutral-200 object-contain transition group-hover:border-neutral-400"
-              />
-            </button>
-          ) : (
-            <div className="inline-flex min-h-16 max-w-96 items-center gap-3 border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-700">
-              <Paperclip size={15} />
-              <span className="truncate">{artifact.filename}</span>
-            </div>
-          )}
-          <div className="pointer-events-none absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-            {previewUrl && <button onClick={openViewer} className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="打开图片">
-              <Eye size={14} />
-            </button>}
-            {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载图片">
-              <Download size={14} />
-            </a>}
-          </div>
-          <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
-        </div>
-        {viewerOpen && <ArtifactViewer artifact={artifact} teamId={teamId} onClose={() => setViewerOpen(false)} />}
-      </>
-    );
-  }
-  const fileKind = artifactKind(artifact);
-  return (
-    <>
-      <div className="group relative inline-flex min-h-16 max-w-96 border border-neutral-300 bg-white text-xs text-neutral-700 transition hover:border-neutral-500 hover:bg-neutral-50">
-        <button onClick={openViewer} disabled={!canPreview} className="inline-flex min-w-0 flex-1 items-center gap-3 px-3 py-2 pr-20 text-left disabled:cursor-default" title={canPreview ? '预览文件' : '文件暂不可预览'}>
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white">
-            <Paperclip size={15} />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
-            <span className="mt-0.5 block truncate text-[11px] text-neutral-500">{fileKind.previewLabel} · {sizeLabel}</span>
-            <span className="mt-0.5 block truncate text-[11px] text-neutral-400">{fileKind.documentLabel}</span>
-          </span>
-        </button>
-        <div className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-          {previewUrl && <button onClick={openViewer} className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="预览文件">
-            <Eye size={14} />
-          </button>}
-          {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md bg-white text-neutral-700 shadow-sm hover:bg-neutral-100" title="下载文件">
-            <Download size={14} />
-          </a>}
-        </div>
-      </div>
-      {viewerOpen && <ArtifactViewer artifact={artifact} teamId={teamId} onClose={() => setViewerOpen(false)} />}
-    </>
-  );
-}
-
-function ArtifactViewer({ artifact, teamId, onClose }: { artifact: Artifact; teamId?: string; onClose: () => void }) {
-  const [content, setContent] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
-  const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
-  const fileKind = artifactKind(artifact);
-  const inlineText = isInlineTextArtifact(artifact);
-
-  if (!previewUrl) {
-    return null;
-  }
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  useEffect(() => {
-    if (!inlineText) return;
-    let cancelled = false;
-    setContent(null);
-    setError(null);
-    fetch(previewUrl)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(await res.text());
-        return res.text();
-      })
-      .then((text) => {
-        if (!cancelled) setContent(formatArtifactTextPreview(artifact, text));
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : '预览失败');
-      });
-    return () => { cancelled = true; };
-  }, [artifact, inlineText, previewUrl]);
-
-  return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-neutral-950/65">
-      <div className="flex h-14 shrink-0 items-center gap-3 bg-white px-4 shadow-sm">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold text-neutral-900">{artifact.filename}</div>
-          <div className="text-[11px] text-neutral-400">{fileKind.previewLabel} · {formatFileSize(artifact.sizeBytes)}</div>
-        </div>
-        {downloadUrl && <a href={downloadUrl} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 px-2.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" title="下载">
-          <Download size={14} />
-          下载
-        </a>}
-        <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900" title="关闭预览">
-          <X size={16} />
-        </button>
-      </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-        {artifact.mimeType.startsWith('image/') ? (
-          <img src={previewUrl} alt={artifact.filename} className="max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl" />
-        ) : inlineText ? (
-          <div className="h-full w-full max-w-5xl overflow-y-auto rounded-lg bg-white p-6 shadow-2xl">
-            {error ? (
-              <div className="rounded-md bg-rose-50 px-3 py-2 text-sm text-rose-600">{error}</div>
-            ) : content === null ? (
-              <div className="text-sm text-neutral-400">正在加载预览...</div>
-            ) : isMarkdownArtifact(artifact) ? (
-              <MarkdownMessage body={content} />
-            ) : (
-              <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>
-            )}
-          </div>
-        ) : (
-          <iframe src={previewUrl} title={artifact.filename} className="h-full w-full max-w-5xl rounded-lg border-0 bg-white shadow-2xl" />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function isMarkdownArtifact(artifact: Artifact): boolean {
-  const name = artifact.filename.toLowerCase();
-  return artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown');
-}
-
-function isInlineTextArtifact(artifact: Artifact): boolean {
-  const name = artifact.filename.toLowerCase();
-  return isMarkdownArtifact(artifact)
-    || artifact.mimeType.startsWith('text/')
-    || artifact.mimeType === 'application/json'
-    || name.endsWith('.txt')
-    || name.endsWith('.json')
-    || name.endsWith('.csv');
-}
-
-function formatArtifactTextPreview(artifact: Artifact, text: string): string {
-  if (artifact.mimeType !== 'application/json' && !artifact.filename.toLowerCase().endsWith('.json')) return text;
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return text;
-  }
-}
-
-function artifactKind(artifact: Artifact): { previewLabel: string; documentLabel: string } {
-  const name = artifact.filename.toLowerCase();
-  if (artifact.mimeType === 'text/markdown' || name.endsWith('.md') || name.endsWith('.markdown')) {
-    return { previewLabel: 'Markdown 预览', documentLabel: 'Markdown 文档' };
-  }
-  if (artifact.mimeType.startsWith('text/') || name.endsWith('.txt')) {
-    return { previewLabel: '文本预览', documentLabel: '文本文件' };
-  }
-  if (artifact.mimeType === 'application/pdf' || name.endsWith('.pdf')) {
-    return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
-  }
-  if (name.endsWith('.json') || artifact.mimeType === 'application/json') {
-    return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
-  }
-  return { previewLabel: '文件预览', documentLabel: '附件文件' };
+  return <ArtifactCard
+    artifact={artifact}
+    previewUrl={previewUrl}
+    downloadUrl={downloadUrl}
+    renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
+      ? <MarkdownMessage body={content} />
+      : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
+  />;
 }
 
 function formatTime(ts: number): string {
@@ -4849,11 +4695,21 @@ function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
 function channelFileToConversationFile(entry: ChannelFileEntryDto): ConversationFile {
   return {
     artifact: entry.artifact,
-    messageId: entry.source.messageId,
+    ...(entry.source.messageId ? { messageId: entry.source.messageId } : {}),
     createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
     senderKind: entry.source.senderKind,
     senderId: entry.source.senderId,
+    ...(entry.logicalPath ? { logicalPath: entry.logicalPath } : {}),
+    ...(entry.role ? { role: entry.role } : {}),
+    ...(entry.source.workspaceRunId ? { workspaceRunId: entry.source.workspaceRunId } : {}),
   };
+}
+
+function channelFileRoleLabel(role: string): string {
+  if (role === 'intermediate') return '中间产物';
+  if (role === 'run_output') return '运行产物';
+  if (role === 'deliverable') return '交付物';
+  return '普通附件';
 }
 
 function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): NonNullable<ChatMessage['workspaceRun']>[] {

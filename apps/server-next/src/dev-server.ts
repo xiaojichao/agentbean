@@ -6,7 +6,6 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore } from './application/usecases.js';
-import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
 import type { ServerNextRepositories } from './application/repositories.js';
 import { createCapsuleInjectionValidator } from './application/capsule-injection-validator.js';
 import { createServerCapsuleRuntimeContextService } from './application/server-capsule-runtime-context-service.js';
@@ -97,7 +96,6 @@ export interface ServerNextDevServerHandle {
 
 interface AppWithCleanup {
   app: ServerNextUseCases;
-  artifactPreviewService?: ArtifactPreviewService;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
@@ -129,7 +127,6 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 type CorsOrigin = string | string[] | false;
 
 const INTERNAL_HTTP_ERROR_MESSAGE = 'Internal server error';
-// 保持现有 HTTP multipart 路径的内存安全上限；preview worker 的输入上限独立配置。
 const MAX_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
 const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
@@ -251,7 +248,7 @@ export async function startServerNextDevServer(
       if (await handleWorkspaceRunHttp({ app, config, request, response, url })) {
         return;
       }
-      if (await handleArtifactHttp({ app, config, request, response, url, previewService: appWithCleanup.artifactPreviewService })) {
+      if (await handleArtifactHttp({ app, config, request, response, url })) {
         return;
       }
       if (await handleAgentEnvHttp({ app, config, request, response, url })) {
@@ -294,9 +291,6 @@ export async function startServerNextDevServer(
     httpServer.listen(config.port, config.host, () => resolve());
   });
   const stopVersionRefresh = startDaemonVersionRefresh();
-  const previewWorkerInterval = appWithCleanup.artifactPreviewService
-    ? setInterval(() => { void appWithCleanup.artifactPreviewService?.runOnce(); }, 250)
-    : undefined;
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   return {
@@ -308,9 +302,6 @@ export async function startServerNextDevServer(
     async close() {
       if (dispatchTimeoutInterval) {
         clearInterval(dispatchTimeoutInterval);
-      }
-      if (previewWorkerInterval) {
-        clearInterval(previewWorkerInterval);
       }
       await coordinationScheduler?.stop();
       stopVersionRefresh();
@@ -453,7 +444,6 @@ interface ArtifactHttpInput {
   request: IncomingMessage;
   response: ServerResponse;
   url: URL;
-  previewService?: ArtifactPreviewService;
 }
 
 async function handleAgentWorkspaceHttp(input: ArtifactHttpInput): Promise<boolean> {
@@ -649,7 +639,7 @@ async function handleWorkspaceRunLogHttp(input: ArtifactHttpInput): Promise<bool
 }
 
 async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
-  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/artifacts(?:\/upload|\/([^/]+)\/(preview|download|preview-derivative))$/);
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/artifacts(?:\/upload|\/([^/]+)\/(preview|download))$/);
   if (!match) {
     return false;
   }
@@ -660,10 +650,6 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
       return true;
     }
     const artifactId = match[2] ? decodeURIComponent(match[2]) : '';
-    if (input.request.method === 'GET' && match[3] === 'preview-derivative' && artifactId) {
-      await handleArtifactDerivativeRead(input, { teamId, artifactId });
-      return true;
-    }
     const disposition = match[3] === 'download' ? 'attachment' : 'inline';
     if (input.request.method === 'GET' && artifactId) {
       await handleArtifactRead(input, { teamId, artifactId, disposition });
@@ -688,6 +674,9 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
   const filename = sanitizeFilename(upload.filename);
   const artifactId = randomUUID();
   const relativeStoragePath = join('artifacts', teamId, artifactId, filename);
+  const deviceUpload = isDeviceToken(token);
+  const deviceRole = deviceUpload ? parseArtifactRole(upload.fields.artifactRole) : undefined;
+  const deviceSourceRoot = deviceUpload ? parseArtifactSourceRoot(upload.fields) : undefined;
   const uploadInput = {
     teamId,
     channelId: upload.channelId,
@@ -696,11 +685,11 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
     sizeBytes: upload.content.length,
     storagePath: relativeStoragePath,
     relativePath: filename,
-    role: parseArtifactRole(upload.fields.artifactRole),
-    sourceRoot: parseArtifactSourceRoot(upload.fields),
+    role: deviceRole ?? (deviceUpload ? 'run_output' : 'attachment'),
+    ...(deviceSourceRoot ? { sourceRoot: deviceSourceRoot } : {}),
     sha256: createHash('sha256').update(upload.content).digest('hex'),
   };
-  const result = isDeviceToken(token)
+  const result = deviceUpload
     ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
     : await uploadArtifactForSession(input, token, uploadInput);
   if (!result.ok) {
@@ -714,37 +703,6 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
     ok: true,
     artifact: withArtifactUrls(result.artifact),
   });
-  await input.previewService?.enqueue({
-    artifactId: result.artifact.id,
-    teamId,
-    inputPath: join(input.config.dataDir, 'artifacts', teamId, result.artifact.id, filename),
-    mimeType: result.artifact.mimeType,
-  });
-}
-
-async function handleArtifactDerivativeRead(
-  input: ArtifactHttpInput,
-  options: { teamId: string; artifactId: string },
-): Promise<void> {
-  if (!input.previewService) {
-    writeJson(input.response, 404, { ok: false, error: 'PREVIEW_NOT_FOUND' });
-    return;
-  }
-  const token = readToken(input.url, input.request);
-  const result = isDeviceToken(token)
-    ? await input.app.getArtifactFileForDevice({ token, teamId: options.teamId, artifactId: options.artifactId })
-    : await getArtifactFileForSession(input, token, options);
-  if (!result.ok) { writeAckFailure(input.response, result); return; }
-  const preview = await input.previewService.get(options.artifactId);
-  if (!preview || preview.status !== 'ready') {
-    writeJson(input.response, preview?.status === 'pending' || preview?.status === 'processing' ? 202 : 404, { ok: false, error: preview?.status === 'unsupported' ? 'PREVIEW_UNSUPPORTED' : 'PREVIEW_NOT_READY', preview });
-    return;
-  }
-  const previewPath = join(input.config.dataDir, 'artifact-previews', options.teamId, options.artifactId, 'preview.webp');
-  const stored = readStoredArtifactBody(input, previewPath);
-  if (!stored.ok) { writeJson(input.response, stored.status, stored.payload); return; }
-  input.response.writeHead(200, { 'content-type': 'image/webp', 'content-length': String(stored.body.length), 'cache-control': 'public, max-age=31536000, immutable', 'content-disposition': 'inline' });
-  input.response.end(stored.body);
 }
 
 async function handleArtifactRead(
@@ -901,7 +859,10 @@ function parseArtifactSourceRoot(fields: Record<string, unknown>): ArtifactSourc
   const id = typeof fields.sourceRootId === 'string' ? fields.sourceRootId.trim() : '';
   const kind = typeof fields.sourceRootKind === 'string' ? fields.sourceRootKind.trim() : '';
   const label = typeof fields.sourceRootLabel === 'string' ? fields.sourceRootLabel.trim() : '';
-  if (!id || !kind || !label || id.length > 128 || label.length > 120) return undefined;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)
+    || !label
+    || label.length > 120
+    || /[/\\\u0000-\u001f]/.test(label)) return undefined;
   if (kind !== 'run_output' && kind !== 'agent_workspace' && kind !== 'configured_output' && kind !== 'adapter_generated' && kind !== 'legacy_run') return undefined;
   return { id, kind, label };
 }
@@ -1297,7 +1258,6 @@ function createDefaultApp(
   messageIngestionMode: 'legacy' | 'durable-job' = 'legacy',
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
-  const artifactPreviewService = createArtifactPreviewService({ outputDir: join(config.dataDir, 'artifact-previews') });
   if (config.storage === 'memory') {
     const repositories = createInMemoryRepositories();
     const clock = { now: () => Date.now() };
@@ -1324,7 +1284,6 @@ function createDefaultApp(
         serverCapsuleRuntimeContextResolver,
         messageIngestionMode,
       }),
-      artifactPreviewService,
       managementWorkerScheduler: management.scheduler,
       serverWorkerScheduler: management.serverScheduler,
       taskClaimBroker,
@@ -1371,7 +1330,6 @@ function createDefaultApp(
       serverCapsuleRuntimeContextResolver,
       messageIngestionMode,
     }),
-    artifactPreviewService,
     managementWorkerScheduler: management.scheduler,
     serverWorkerScheduler: management.serverScheduler,
     taskClaimBroker,

@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { AdapterKind } from './agent.js';
+import type { ArtifactRole } from './artifact.js';
 import type { SenderKind } from './message.js';
 import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
@@ -32,6 +33,14 @@ export interface AgentEnvRefDto {
   teamId: ID;
 }
 
+export interface AgentArtifactSourceRootConfigDto {
+  id: ID;
+  label: string;
+  envVarName: string;
+  defaultRole: Exclude<ArtifactRole, 'attachment'>;
+  recursive: boolean;
+}
+
 export interface DispatchCustomAgentDto {
   id?: ID;
   name?: string;
@@ -40,6 +49,7 @@ export interface DispatchCustomAgentDto {
   command?: string;
   cwd?: string;
   envRef?: AgentEnvRefDto;
+  artifactSourceRoots?: AgentArtifactSourceRootConfigDto[];
 }
 
 export interface DispatchManagementContextDto {

@@ -13,6 +13,7 @@ import type {
   ManagementWorkerToolResultV1,
 } from './management-worker.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
+import type { TaskOfferResponseKind } from './agent-exposure.js';
 
 export const WEB_EVENTS = {
   auth: {
@@ -282,6 +283,7 @@ export const AGENT_EVENTS = {
     renew: 'task-claim:renew',
     release: 'task-claim:release',
     expired: 'task-claim:expired',
+    respond: 'task-claim:respond',
   },
   memory: {
     governanceSummaryRequested: 'memory:governance-summary-requested',
@@ -316,6 +318,18 @@ export interface TaskClaimAcquireV1 {
   readonly schemaVersion: 1;
   readonly offerId: string;
   readonly agentId: string;
+}
+
+/**
+ * #712 切片 C-2a：Agent 对 Task Offer 的显式响应请求（替代旧 canAcceptOffer+acquire 隐式接受）。
+ * 路由到 broker.respondToOffer；只有 accepted 才产 Claim/Lease（AC#4）。
+ */
+export interface TaskClaimRespondV1 {
+  readonly schemaVersion: 1;
+  readonly offerId: string;
+  readonly agentId: string;
+  readonly kind: TaskOfferResponseKind;
+  readonly detail?: string | null;
 }
 
 export interface TaskClaimExecutionSnapshotV1 {
@@ -388,6 +402,7 @@ export interface TaskClaimPayloadMapV1 {
   readonly acquire: TaskClaimAcquireV1;
   readonly renew: TaskClaimRenewV1;
   readonly release: TaskClaimReleaseV1;
+  readonly respond: TaskClaimRespondV1;
   readonly 'acquire-ack': TaskClaimAcquireAckV1;
   readonly 'renew-ack': TaskClaimRenewAckV1;
   readonly 'release-ack': TaskClaimReleaseAckV1;
@@ -417,6 +432,12 @@ export function parseTaskClaimPayload<K extends TaskClaimPayloadKind>(
       break;
     case 'release':
       taskClaimAuthority(value, ['reasonCode']); taskClaimString(value.reasonCode);
+      break;
+    case 'respond':
+      taskClaimExact(value, ['schemaVersion', 'offerId', 'agentId', 'kind'], ['detail']);
+      taskClaimSchema(value); taskClaimStrings(value, ['offerId', 'agentId']);
+      if (!['accepted', 'rejected', 'needs_info', 'counter_proposed'].includes(String(value.kind))) taskClaimInvalid();
+      if (value.detail !== undefined && value.detail !== null && typeof value.detail !== 'string') taskClaimInvalid();
       break;
     case 'expired':
       taskClaimExact(value, ['schemaVersion', 'claimLeaseId', 'taskId', 'agentId', 'expiredAt']);
