@@ -600,6 +600,34 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('保留已发布的频道文档来源迁移标识', () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      // 模拟旧版本已执行 0039_channel_document_sources 后升级：
+      // 列已经存在，schema_migrations 只记录旧的稳定文件名。
+      teamDb.prepare(
+        "DELETE FROM schema_migrations WHERE id IN ('team/0039_channel_document_sources.sql', 'team/0040_channel_document_sources.sql')",
+      ).run();
+      teamDb.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(
+        'team/0039_channel_document_sources.sql',
+        1,
+      );
+
+      expect(() => applyTeamMigrations(teamDb)).not.toThrow();
+      expect(columnNames(teamDb, 'channel_document_revisions')).toEqual(
+        expect.arrayContaining(['source_json', 'resources_json']),
+      );
+      expect(
+        teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0039_channel_document_sources.sql'").get(),
+      ).toEqual({ id: 'team/0039_channel_document_sources.sql' });
+      expect(
+        teamDb.prepare("SELECT id FROM schema_migrations WHERE id = 'team/0040_channel_document_sources.sql'").get(),
+      ).toBeUndefined();
+    } finally {
+      close();
+    }
+  });
+
   test('recreates join_links on a drifted database missing the table (regression for INTERNAL_ERROR)', () => {
     const { globalDb, close } = openMigratedDatabases();
     try {
