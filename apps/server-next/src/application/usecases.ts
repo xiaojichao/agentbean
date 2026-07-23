@@ -7660,7 +7660,7 @@ async function ensureUserCanViewChannel(
 type ChannelFileCursor = { createdAt: number; id: string };
 
 async function getOrCreateChannelDocument(
-  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments'>,
+  repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments' | 'messages'>,
   input: { teamId: string; channelId: string; documentId: string },
 ): Promise<ChannelDocumentRecord | null> {
   const existing = await repositories.channelDocuments.getForTeam(input);
@@ -7671,6 +7671,15 @@ async function getOrCreateChannelDocument(
   if (!artifactId) return null;
   const artifact = await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId });
   if (!artifact || artifact.channelId !== input.channelId) return null;
+  const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
+  if (role === 'attachment' && artifact.messageId) {
+    const sourceMessage = await repositories.messages.getById(artifact.messageId);
+    if (!sourceMessage
+      || sourceMessage.channelId !== artifact.channelId
+      || isDeletedMessage(sourceMessage)) {
+      return null;
+    }
+  }
   await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
   return repositories.channelDocuments.getForTeam(input);
 }
