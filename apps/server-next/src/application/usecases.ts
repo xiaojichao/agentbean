@@ -3222,6 +3222,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const artifacts = await repositories.artifacts.listByChannel(documentInput);
       const missingDocuments = artifacts.filter((artifact) =>
         Boolean(artifact.messageId || artifact.workspaceRunId)
+        && isMarkdownArtifact(artifact)
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
       if (missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
