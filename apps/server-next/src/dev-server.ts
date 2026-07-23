@@ -132,7 +132,9 @@ type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { clo
 type CorsOrigin = string | string[] | false;
 
 const INTERNAL_HTTP_ERROR_MESSAGE = 'Internal server error';
-const MAX_LEGACY_ARTIFACT_UPLOAD_BODY_BYTES = DEFAULT_ARTIFACT_MAX_BYTES * 4 / 3 + 1024 * 1024;
+// Legacy JSON uploads buffer both the base64 request body and decoded bytes in memory.
+// Keep that compatibility path small; large artifacts must use the streaming multipart path.
+const MAX_LEGACY_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
 const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
 const ACTIVE_PREVIEW_MIME_TYPES = new Set([

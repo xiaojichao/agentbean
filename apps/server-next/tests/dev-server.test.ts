@@ -901,7 +901,7 @@ describe('server-next dev server entry', () => {
         storage: 'memory',
         dataDir: '.agentbean-next-test',
         sessionSecret: 'test-secret',
-        maxArtifactBytes: 10 * 1024 * 1024,
+        maxArtifactBytes: 250 * 1024 * 1024,
       },
     });
     cleanups.push(() => server.close());
