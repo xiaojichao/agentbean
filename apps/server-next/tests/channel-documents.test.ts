@@ -114,6 +114,11 @@ describe('频道 Markdown 文档', () => {
       createdAt: 100,
     });
 
+    await expect(app.listChannelDocuments({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: true, documents: [] });
     await expect(app.getChannelDocument({
       userId: 'user-1',
       teamId: 'team-1',

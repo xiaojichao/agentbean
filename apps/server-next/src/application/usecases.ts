@@ -3225,7 +3225,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
       if (missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
-          await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
+          await getOrCreateChannelDocument(repositories, {
+            ...documentInput,
+            documentId: `channel-document:${artifact.id}`,
+          });
         }
         records = await repositories.channelDocuments.listWithCurrentRevisionByChannel(documentInput);
       }
