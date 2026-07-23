@@ -16,6 +16,7 @@ import {
   type TaskClaimAcquireV1,
   type TaskClaimReleaseV1,
   type TaskClaimRenewV1,
+  type TaskClaimRespondV1,
 } from '../../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from '../application/usecases.js';
 
@@ -167,6 +168,7 @@ export interface TaskClaimSocketHandlers {
   acquire(payload: TaskClaimAcquireV1): Promise<unknown>;
   renew(payload: TaskClaimRenewV1): Promise<unknown>;
   release(payload: TaskClaimReleaseV1): Promise<unknown>;
+  respond(payload: TaskClaimRespondV1): Promise<unknown>;
 }
 
 export function registerWebSocketHandlers(
@@ -702,6 +704,7 @@ export function registerAgentSocketHandlers(
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.acquire, 'acquire', options.taskClaim.acquire);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.renew, 'renew', options.taskClaim.renew);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.release, 'release', options.taskClaim.release);
+    bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.respond, 'respond', options.taskClaim.respond);
   }
 }
 
@@ -738,11 +741,11 @@ function bindManagementWorkerRegister(
   });
 }
 
-function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release'>(
+function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release' | 'respond'>(
   socket: SocketLike,
   event: string,
   kind: K,
-  handler: (payload: K extends 'acquire' ? TaskClaimAcquireV1 : K extends 'renew' ? TaskClaimRenewV1 : TaskClaimReleaseV1) => Promise<unknown>,
+  handler: (payload: K extends 'acquire' ? TaskClaimAcquireV1 : K extends 'renew' ? TaskClaimRenewV1 : K extends 'release' ? TaskClaimReleaseV1 : TaskClaimRespondV1) => Promise<unknown>,
 ): void {
   socket.on(event, async (payload, ack) => {
     const parsed = safeParseTaskClaimPayload(kind, payload);
