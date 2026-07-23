@@ -11,6 +11,7 @@ import { formatRelative } from '@/lib/format-time';
 import type { AgentSnapshot, AgentWorkspaceRun } from '@/lib/schema';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 import { AgentExposurePanel } from '@/components/AgentExposurePanel';
+import { AgentMemoryProjectionPanel } from '@/components/AgentMemoryProjectionPanel';
 
 export default function AgentDetailPage() {
   const params = useParams<{ teamPath: string; agentId: string }>();
@@ -324,6 +325,15 @@ export default function AgentDetailPage() {
           agentId={agent.id}
           canManage={canManageExposure}
           canRestrict={canRestrictExposure}
+        />
+      )}
+
+      {agent?.id && agentTeamId && (
+        <AgentMemoryProjectionPanel
+          teamId={agentTeamId}
+          agentId={agent.id}
+          canManage={canManageExposure}
+          canOptIn={canRestrictExposure}
         />
       )}
 

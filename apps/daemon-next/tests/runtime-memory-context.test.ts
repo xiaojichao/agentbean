@@ -118,4 +118,16 @@ describe('Device runtime Memory context', () => {
     expect(prompt.endsWith('Current request wins.')).toBe(true);
     expect(prompt).not.toContain('/Users/');
   });
+
+  test('#718 server/projection provenance renders as projection:<id> (team-opted-in Agent Memory)', () => {
+    const projection: DispatchMemoryContextItemDto = {
+      schemaVersion: 1, id: 'proj-1', kind: 'preference', scopeType: 'agent',
+      content: 'Agent prefers concise replies.', selectionReason: 'team-opted-in-agent-memory-projection',
+      provenance: { origin: 'server', projectionId: 'proj-1', sourceRefs: [] },
+    };
+    const prompt = buildRuntimePrompt({ prompt: 'Do the task.', memoryContext: [projection] });
+    expect(prompt).toContain('projection:proj-1');
+    expect(prompt).not.toContain('capsule:proj-1'); // 不误标为 capsule
+    expect(prompt).toContain('Agent prefers concise replies.');
+  });
 });

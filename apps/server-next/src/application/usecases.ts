@@ -1,9 +1,10 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
+import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -23,6 +24,7 @@ import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
+import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import type {
   CancelPiProviderTestResult,
@@ -211,6 +213,16 @@ export interface ServerNextUseCases {
   upsertAgentExposureRestriction(input: UpsertAgentExposureRestrictionInput): Promise<Ack<{ restriction: AgentExposureRestrictionDto }>>;
   /** PI Team 页只读 coverage（AC#5）。 */
   getAgentTeamCoverage(input: GetAgentTeamCoverageInput): Promise<Ack<{ coverage: AgentTeamCoverageDto }>>;
+  /** #718 Agent Memory Projection：owner 创建 Draft（AC#2）。 */
+  createAgentMemoryProjectionDraft(input: CreateAgentMemoryProjectionDraftInput): Promise<Ack<{ projection: AgentMemoryProjectionDto }>>;
+  updateAgentMemoryProjectionDraft(input: UpdateAgentMemoryProjectionDraftInput): Promise<Ack<{ projection: AgentMemoryProjectionDto }>>;
+  publishAgentMemoryProjection(input: PublishAgentMemoryProjectionInput): Promise<Ack<{ projection: AgentMemoryProjectionDto; supersededProjectionId: string | null }>>;
+  withdrawAgentMemoryProjection(input: WithdrawAgentMemoryProjectionInput): Promise<Ack<{ withdrawn: boolean }>>;
+  listAgentMemoryProjectionRevisions(input: ListAgentMemoryProjectionRevisionsInput): Promise<Ack<{ revisions: readonly AgentMemoryProjectionDto[]; activeOptIn: TeamAgentMemoryOptInDto | null }>>;
+  /** Team Owner/Admin 启用/停用本 Team 对投影的使用（AC#3）。 */
+  upsertTeamAgentMemoryOptIn(input: UpsertTeamAgentMemoryOptInInput): Promise<Ack<{ optIn: TeamAgentMemoryOptInDto }>>;
+  /** PI/成员只读消费当前 Team 已启用投影（AC#6/AC#7 fail-closed）。 */
+  getConsumableAgentMemoryProjections(input: GetConsumableAgentMemoryProjectionsInput): Promise<Ack<GetConsumableAgentMemoryProjectionsResult>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
   updateCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ memory: MemoryView }>>;
@@ -1013,6 +1025,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     repositories: {
       agentExposure: repositories.agentExposure,
       agentExposureUnitOfWork: repositories.agentExposureUnitOfWork,
+      agents: repositories.agents,
+      teams: repositories.teams,
+    },
+    canManageAgent: async ({ userId, agentId }) => {
+      const agent = await repositories.agents.getById(agentId);
+      return agent ? canManageAgentAsUser(repositories, { userId, agent }) : false;
+    },
+    clock,
+    ids,
+  });
+  // #718 Team-scoped Agent Memory 投影：owner 发布/撤回，Team Owner/Admin opt-in，
+  // PI/成员只读消费当前 Team 已启用投影。canManageAgent 复用设备拥有者链路授权（fail-closed）。
+  const agentMemoryProjection = createAgentMemoryProjectionService({
+    repositories: {
+      agentMemoryProjection: repositories.agentMemoryProjection,
+      agentMemoryProjectionUnitOfWork: repositories.agentMemoryProjectionUnitOfWork,
       agents: repositories.agents,
       teams: repositories.teams,
     },
@@ -4892,6 +4920,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return agentExposure.getTeamCoverage(input);
     },
 
+    // #718 Team-scoped Agent Memory 投影：owner 发布/撤回，Team opt-in，PI/成员只读消费。
+    async createAgentMemoryProjectionDraft(input) {
+      return agentMemoryProjection.createDraft(input);
+    },
+    async updateAgentMemoryProjectionDraft(input) {
+      return agentMemoryProjection.updateDraft(input);
+    },
+    async publishAgentMemoryProjection(input) {
+      return agentMemoryProjection.publish(input);
+    },
+    async withdrawAgentMemoryProjection(input) {
+      return agentMemoryProjection.withdraw(input);
+    },
+    async listAgentMemoryProjectionRevisions(input) {
+      return agentMemoryProjection.listRevisions(input);
+    },
+    async upsertTeamAgentMemoryOptIn(input) {
+      return agentMemoryProjection.upsertOptIn(input);
+    },
+    async getConsumableAgentMemoryProjections(input) {
+      const result = await agentMemoryProjection.getConsumableProjections(input);
+      return makeSuccess(result);
+    },
+
     async listPiProviderPresets(input) {
       return piProvider.listPresets(input);
     },
@@ -6161,6 +6213,39 @@ async function touchPendingCoalescibleDispatch(
   return undefined;
 }
 
+/**
+ * #718 加载 Team opted-in 的 Agent Memory 公开投影，作为 dispatch Active Memory Context 的一部分。
+ * 复用 domain evaluateTeamAgentMemoryOptIn 的 fail-closed 判定（active + opt-in + revision fence）。
+ * 懒过期：active 但 validUntil<=now → 标记 expired（镜像 service refreshExpiry）。
+ */
+async function loadAgentMemoryProjectionContext(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; agentId: ID; now: UnixMs },
+): Promise<readonly DispatchMemoryContextItemDto[]> {
+  const repo = repositories.agentMemoryProjection;
+  const active = await repo.projections.getActiveByTeamAgent(input.teamId, input.agentId);
+  if (active && active.validUntil !== null && active.validUntil <= input.now) {
+    await repo.projections.setStatus({ id: active.id, status: 'expired', now: input.now });
+    return [];
+  }
+  if (!active) return [];
+  const optIn = await repo.optIns.getByTeamAgent(input.teamId, input.agentId);
+  const verdict = evaluateTeamAgentMemoryOptIn({
+    activeProjectionId: active.id,
+    optIn: optIn ? { projectionId: optIn.projectionId, enabled: optIn.enabled } : null,
+  });
+  if (!verdict.consumable) return [];
+  return [{
+    schemaVersion: 1,
+    id: active.id,
+    kind: formalKindToStorageKind(active.kind),
+    scopeType: 'agent',
+    content: active.content,
+    selectionReason: 'team-opted-in-agent-memory-projection',
+    provenance: { origin: 'server', projectionId: active.id, sourceRefs: active.sourceRefs },
+  }];
+}
+
 async function buildDispatchRequest(
   repositories: ServerNextRepositories,
   dispatch: DispatchRecord,
@@ -6216,7 +6301,7 @@ async function buildDispatchRequest(
   if (includeRuntimeMemory && capsuleRef && !serverCapsuleRuntimeContextResolver) {
     throw new Error('SERVER_CAPSULE_RUNTIME_CONTEXT_UNAVAILABLE');
   }
-  const memoryContext = includeRuntimeMemory && capsuleRef
+  const capsuleContext = includeRuntimeMemory && capsuleRef
     ? await serverCapsuleRuntimeContextResolver!.resolve({
         teamId: managementInvocation!.intent.teamId,
         managementRunId: managementInvocation!.managementRunId,
@@ -6226,6 +6311,12 @@ async function buildDispatchRequest(
         now,
       })
     : [];
+  // #718: 追加 Team opted-in 的 Agent Memory 公开投影（opt-in 即独立授权，不经 Capsule；
+  // server 端 fail-closed 实时查 active+opt-in+revision fence，AC#7）。
+  const projectionContext = includeRuntimeMemory
+    ? await loadAgentMemoryProjectionContext(repositories, { teamId: dispatch.teamId, agentId: agent.id, now })
+    : [];
+  const memoryContext = [...capsuleContext, ...projectionContext];
 
   return {
     id: dispatch.id,

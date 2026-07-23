@@ -9,6 +9,7 @@ import type { ManagementMemoryUnitOfWork } from './management-memory-unit-of-wor
 import type { PiProviderRepositories, PiProviderUnitOfWork } from './pi-provider-repositories.js';
 import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent-exposure-repositories.js';
 import type { SystemKnowledgeRepository, UserMemoryRepository } from './system-user-memory-repositories.js';
+import type { AgentMemoryProjectionRepositories, AgentMemoryProjectionUnitOfWork } from './agent-memory-projection-repositories.js';
 import type {
   ChannelCoordinationRepositories,
   ChannelCoordinationUnitOfWork,
@@ -368,6 +369,8 @@ export interface ServerNextRepositories {
   userMemory: UserMemoryRepository;
   agentExposure: AgentExposureRepositories;
   agentExposureUnitOfWork: AgentExposureUnitOfWork;
+  agentMemoryProjection: AgentMemoryProjectionRepositories;
+  agentMemoryProjectionUnitOfWork: AgentMemoryProjectionUnitOfWork;
   channelCoordination: ChannelCoordinationRepositories;
   channelCoordinationUnitOfWork: ChannelCoordinationUnitOfWork;
   users: UserRepository;

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   snapshot: vi.fn(),
   formalList: vi.fn(),
   formalDetail: vi.fn(),
+  getConsumable: vi.fn(),
   onChanged: vi.fn(() => () => undefined),
   store: { currentTeamId: 'team-1', agents: {} },
 }));
@@ -32,6 +33,7 @@ vi.mock('@/lib/socket', () => ({
     formalCreate: vi.fn(), formalRevise: vi.fn(), formalDeactivate: vi.fn(), formalDelete: vi.fn(),
     formalAccept: vi.fn(), formalReject: vi.fn(), proposeCorrection: vi.fn(),
   }),
+  agentMemoryProjectionEvents: () => ({ getConsumable: mocks.getConsumable }),
 }));
 
 const snapshotOk = {
@@ -71,6 +73,14 @@ async function renderFormalSection(): Promise<void> {
   fireEvent.click(tabButton);
 }
 
+/** 渲染 MemoryGovernancePanel 并切到「Agent 投影」消费 tab（AC#6b）。 */
+async function renderProjectionSection(): Promise<void> {
+  const { MemoryGovernancePanel } = await import('../app/[teamPath]/settings/MemoryGovernancePanel');
+  render(React.createElement(MemoryGovernancePanel));
+  const tabButton = await screen.findByRole('button', { name: 'Agent 投影' });
+  fireEvent.click(tabButton);
+}
+
 describe('Formal Memory Center (issue #716)', () => {
   test('renders Formal Memory list with kind label (AC#1)', async () => {
     await renderFormalSection();
@@ -100,5 +110,37 @@ describe('Formal Memory Center (issue #716)', () => {
     mocks.formalList.mockResolvedValue({ ok: false, error: 'FORBIDDEN' });
     await renderFormalSection();
     expect(await screen.findByText('无权查看该作用域的 Formal Memory')).toBeTruthy();
+  });
+});
+
+describe('Agent Memory Projection consumption (issue #718 AC#6b)', () => {
+  test('renders team opted-in projections from getConsumable', async () => {
+    mocks.snapshot.mockResolvedValue(snapshotOk);
+    mocks.getConsumable.mockResolvedValue({
+      ok: true,
+      projections: [{
+        projectionId: 'p1', agentId: 'agent-1', agentName: 'Agent One', revision: 1,
+        kind: 'preference' as const, content: 'prefers concise replies', summary: 's',
+        tags: ['style'], validUntil: null,
+      }],
+    });
+    await renderProjectionSection();
+    expect(await screen.findByText('prefers concise replies')).toBeTruthy();
+    expect(screen.getByText('Agent One')).toBeTruthy();
+    expect(screen.getByText('偏好 · revision 1')).toBeTruthy();
+  });
+
+  test('shows error state on getConsumable failure', async () => {
+    mocks.snapshot.mockResolvedValue(snapshotOk);
+    mocks.getConsumable.mockResolvedValue({ ok: false, error: 'FORBIDDEN' });
+    await renderProjectionSection();
+    expect(await screen.findByText('加载失败')).toBeTruthy();
+  });
+
+  test('shows empty state when no team opted-in projection', async () => {
+    mocks.snapshot.mockResolvedValue(snapshotOk);
+    mocks.getConsumable.mockResolvedValue({ ok: true, projections: [] });
+    await renderProjectionSection();
+    expect(await screen.findByText('本 Team 暂无已启用的 Agent 投影')).toBeTruthy();
   });
 });

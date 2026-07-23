@@ -211,6 +211,15 @@ export const WEB_EVENTS = {
     proposeCorrection: 'memory:propose-correction',
     formalAccept: 'memory:formal-accept',
     formalReject: 'memory:formal-reject',
+    // Agent Memory Projection (issue #718)。事件名保持 memory:* 前缀。
+    // Agent owner 发布/撤回投影；Team Owner/Admin opt-in；PI/成员只读消费。
+    projectionCreateDraft: 'memory:projection-create-draft',
+    projectionUpdateDraft: 'memory:projection-update-draft',
+    projectionPublish: 'memory:projection-publish',
+    projectionWithdraw: 'memory:projection-withdraw',
+    projectionListRevisions: 'memory:projection-list-revisions',
+    projectionUpsertOptIn: 'memory:projection-upsert-opt-in',
+    projectionGetConsumable: 'memory:projection-get-consumable',
   },
 } as const;
 
