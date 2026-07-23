@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
@@ -6213,6 +6213,39 @@ async function touchPendingCoalescibleDispatch(
   return undefined;
 }
 
+/**
+ * #718 加载 Team opted-in 的 Agent Memory 公开投影，作为 dispatch Active Memory Context 的一部分。
+ * 复用 domain evaluateTeamAgentMemoryOptIn 的 fail-closed 判定（active + opt-in + revision fence）。
+ * 懒过期：active 但 validUntil<=now → 标记 expired（镜像 service refreshExpiry）。
+ */
+async function loadAgentMemoryProjectionContext(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; agentId: ID; now: UnixMs },
+): Promise<readonly DispatchMemoryContextItemDto[]> {
+  const repo = repositories.agentMemoryProjection;
+  const active = await repo.projections.getActiveByTeamAgent(input.teamId, input.agentId);
+  if (active && active.validUntil !== null && active.validUntil <= input.now) {
+    await repo.projections.setStatus({ id: active.id, status: 'expired', now: input.now });
+    return [];
+  }
+  if (!active) return [];
+  const optIn = await repo.optIns.getByTeamAgent(input.teamId, input.agentId);
+  const verdict = evaluateTeamAgentMemoryOptIn({
+    activeProjectionId: active.id,
+    optIn: optIn ? { projectionId: optIn.projectionId, enabled: optIn.enabled } : null,
+  });
+  if (!verdict.consumable) return [];
+  return [{
+    schemaVersion: 1,
+    id: active.id,
+    kind: formalKindToStorageKind(active.kind),
+    scopeType: 'agent',
+    content: active.content,
+    selectionReason: 'team-opted-in-agent-memory-projection',
+    provenance: { origin: 'server', projectionId: active.id, sourceRefs: active.sourceRefs },
+  }];
+}
+
 async function buildDispatchRequest(
   repositories: ServerNextRepositories,
   dispatch: DispatchRecord,
@@ -6268,7 +6301,7 @@ async function buildDispatchRequest(
   if (includeRuntimeMemory && capsuleRef && !serverCapsuleRuntimeContextResolver) {
     throw new Error('SERVER_CAPSULE_RUNTIME_CONTEXT_UNAVAILABLE');
   }
-  const memoryContext = includeRuntimeMemory && capsuleRef
+  const capsuleContext = includeRuntimeMemory && capsuleRef
     ? await serverCapsuleRuntimeContextResolver!.resolve({
         teamId: managementInvocation!.intent.teamId,
         managementRunId: managementInvocation!.managementRunId,
@@ -6278,6 +6311,12 @@ async function buildDispatchRequest(
         now,
       })
     : [];
+  // #718: 追加 Team opted-in 的 Agent Memory 公开投影（opt-in 即独立授权，不经 Capsule；
+  // server 端 fail-closed 实时查 active+opt-in+revision fence，AC#7）。
+  const projectionContext = includeRuntimeMemory
+    ? await loadAgentMemoryProjectionContext(repositories, { teamId: dispatch.teamId, agentId: agent.id, now })
+    : [];
+  const memoryContext = [...capsuleContext, ...projectionContext];
 
   return {
     id: dispatch.id,

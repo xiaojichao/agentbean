@@ -119,9 +119,15 @@ function renderSection(title: string, items: readonly DispatchMemoryContextItemD
 }
 
 function renderItem(item: DispatchMemoryContextItemDto): string {
-  const source = item.provenance.origin === 'server'
-    ? `capsule:${item.provenance.capsuleId}`
-    : `local:${item.provenance.sourceKind}`;
+  let source: string;
+  if (item.provenance.origin === 'server') {
+    // #718: server 端含 capsule（授权复验）与 projection（team opted-in）两种来源。
+    source = 'capsuleId' in item.provenance
+      ? `capsule:${item.provenance.capsuleId}`
+      : `projection:${item.provenance.projectionId}`;
+  } else {
+    source = `local:${item.provenance.sourceKind}`;
+  }
   return `- [${item.provenance.origin}:${item.id}] (${item.kind}, ${item.scopeType}; ${item.selectionReason}; ${source}) ${item.content}`;
 }
 

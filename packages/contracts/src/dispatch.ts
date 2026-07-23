@@ -50,6 +50,13 @@ export interface DispatchManagementContextDto {
   acceptanceCriteria: readonly AcceptanceCriterionDto[];
 }
 
+/**
+ * Memory context 来源判别联合。
+ * - server/capsule：经 Invocation Capsule 授权复验的协作记忆（capsuleId + authorizationDecisionId）。
+ * - server/projection（#718）：Team opted-in 的 Agent Memory 公开投影（projectionId；opt-in 即独立授权，
+ *   不经 Capsule，server 端 fail-closed 实时查 active+opt-in+revision fence）。
+ * - local：Device 端 scan/workspace_run/manual/local_file，只留 Device 不上送。
+ */
 export type DispatchMemoryContextProvenanceDto =
   | {
       readonly origin: 'server';
@@ -58,13 +65,19 @@ export type DispatchMemoryContextProvenanceDto =
       readonly sourceRefs: readonly MemorySourceRefDto[];
     }
   | {
+      readonly origin: 'server';
+      readonly projectionId: ID;
+      readonly sourceRefs: readonly MemorySourceRefDto[];
+    }
+  | {
       readonly origin: 'local';
       readonly sourceKind: 'scan' | 'workspace_run' | 'manual' | 'local_file';
     };
 
 /**
- * Runtime-only Memory projection. Server entries are already bound to and revalidated against an
- * Invocation Capsule; local entries are appended by the Device and must never be sent upstream.
+ * Runtime-only Memory projection. Server capsule entries are bound to and revalidated against an
+ * Invocation Capsule; server projection entries (#718) are Team opted-in Agent Memory; local entries
+ * are appended by the Device and must never be sent upstream.
  */
 export interface DispatchMemoryContextItemDto {
   readonly schemaVersion: 1;
