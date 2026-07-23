@@ -127,6 +127,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0037_artifact_sources.sql');
   }
   applyMigration(db, 'team/0038_channel_documents.sql');
+  if (sqliteTableExists(db, 'artifact_preview_jobs')) {
+    applyMigration(db, 'team/0039_channel_file_backfill.sql');
+  }
   applyMigration(db, 'team/0040_channel_document_history.sql');
   if (sqliteTableExists(db, 'artifacts')) {
     db.exec(`UPDATE channel_document_revisions

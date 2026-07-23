@@ -3,9 +3,19 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { createArtifactPreviewService, InMemoryArtifactPreviewRepository, UnsupportedPreviewError } from '../src/application/artifact-preview-service';
+import {
+  createArtifactPreviewService,
+  InMemoryArtifactPreviewRepository,
+  supportsArtifactPreviewMime,
+  UnsupportedPreviewError,
+} from '../src/application/artifact-preview-service';
 
 describe('artifact preview service', () => {
+  test('accepts supported MIME types with parameters', () => {
+    expect(supportsArtifactPreviewMime('Image/PNG; charset=binary')).toBe(true);
+    expect(supportsArtifactPreviewMime('application/pdf; version=1.7')).toBe(true);
+  });
+
   test('enqueues idempotently and publishes a bounded derivative', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
     const source = join(root, 'cover.png');
