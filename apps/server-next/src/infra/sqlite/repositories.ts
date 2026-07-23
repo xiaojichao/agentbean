@@ -33,6 +33,7 @@ import {
 } from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
 import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js';
+import { createSqliteSystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
@@ -75,6 +76,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0017_pi_provider_supply.sql');
   applyMigration(db, 'global/0018_pi_provider_test_publish.sql');
   applyMigration(db, 'global/0019_active_pi_model.sql');
+  applyMigration(db, 'global/0020_system_user_memory.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -184,6 +186,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const taskCoordination = createSqliteTaskCoordinationRepositories(teamDb);
   const memory = createSqliteMemoryRepositories(teamDb);
   const piProvider = createSqlitePiProviderPersistence(globalDb);
+  const systemUserMemory = createSqliteSystemUserMemoryRepositories(globalDb);
   const agentExposure = createSqliteAgentExposurePersistence(teamDb);
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -364,6 +367,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     },
     piProvider: piProvider.repositories,
     piProviderUnitOfWork: piProvider.unitOfWork,
+    systemKnowledge: systemUserMemory.systemKnowledge,
+    userMemory: systemUserMemory.userMemory,
     agentExposure: agentExposure.repositories,
     agentExposureUnitOfWork: agentExposure.unitOfWork,
     channelCoordination,

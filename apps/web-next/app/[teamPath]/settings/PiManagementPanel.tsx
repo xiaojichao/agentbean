@@ -9,7 +9,8 @@ import type {
   PiProviderPreset,
   PiProviderPresetDescriptorDto,
 } from '@agentbean/contracts';
-import { piProviderEvents } from '@/lib/socket';
+import { piProviderEvents, systemKnowledgeEvents } from '@/lib/socket';
+import { SystemUserMemoryPanel } from '@/components/SystemUserMemoryPanel';
 
 type EditorMode = 'form' | 'advanced';
 
@@ -360,6 +361,14 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
           系统作用域管理 Provider Supply；与团队设置分离，不共享表单。
         </p>
       </div>
+
+      <SystemUserMemoryPanel
+        scope="system"
+        events={systemKnowledgeEvents()}
+        title="System Knowledge"
+        description="全局产品知识；仅系统管理员维护，频道消息/Agent 结果/PI 推断不会自动改写（AC#2）。"
+        dataSmoke="settings-system-knowledge"
+      />
 
       <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-provider-supply">
             <div className="mb-4 flex items-center justify-between">

@@ -20,6 +20,7 @@ export * from './memory-hashing.js';
 export * from './memory-candidate-policy.js';
 export * from './memory-scope-expansion-policy.js';
 export * from './formal-memory-policy.js';
+export * from './system-user-memory-policy.js';
 export * from './pi-provider-policy.js';
 export * from './pi-provider-request.js';
 export * from './pi-provider-test-policy.js';

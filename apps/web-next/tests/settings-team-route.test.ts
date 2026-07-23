@@ -57,6 +57,14 @@ vi.mock('@/lib/socket', () => ({
     upsertRestriction: vi.fn().mockResolvedValue({ ok: true, restriction: null }),
     getTeamCoverage: vi.fn().mockResolvedValue({ ok: true, coverage: { teamId: 'team-1', entries: [] } }),
   }),
+  userMemoryEvents: () => ({
+    list: vi.fn().mockResolvedValue({ ok: true, list: { items: [] } }),
+    detail: vi.fn().mockResolvedValue({ ok: true }),
+    create: vi.fn().mockResolvedValue({ ok: true }),
+    revise: vi.fn().mockResolvedValue({ ok: true }),
+    deactivate: vi.fn().mockResolvedValue({ ok: true }),
+    delete: vi.fn().mockResolvedValue({ ok: true }),
+  }),
 }));
 
 vi.mock('@/components/connection-banner', () => ({ ConnectionBanner: () => null }));

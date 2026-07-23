@@ -39,6 +39,7 @@ import {
   restoreMemoryRepositoryMemoryState,
 } from './memory-repositories.js';
 import { createInMemoryPiProviderPersistence } from './pi-provider-repositories.js';
+import { createInMemorySystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createInMemoryAgentExposurePersistence } from './agent-exposure-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
@@ -53,6 +54,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const memoryState = createMemoryRepositoryMemoryState();
   const memory = createInMemoryMemoryRepositories(memoryState);
   const piProvider = createInMemoryPiProviderPersistence();
+  const systemUserMemory = createInMemorySystemUserMemoryRepositories();
   const agentExposure = createInMemoryAgentExposurePersistence();
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
 
@@ -228,6 +230,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     piProvider: piProvider.repositories,
     piProviderUnitOfWork: piProvider.unitOfWork,
+    systemKnowledge: systemUserMemory.systemKnowledge,
+    userMemory: systemUserMemory.userMemory,
     agentExposure: agentExposure.repositories,
     agentExposureUnitOfWork: agentExposure.unitOfWork,
     channelCoordination,

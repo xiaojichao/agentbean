@@ -437,6 +437,46 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
   };
 }
 
+export interface SystemKnowledgeEvents {
+  list(): Promise<any>;
+  detail(memoryId: string): Promise<any>;
+  create(payload: { kind: FormalMemoryKind; content: string; summary?: string; changeReason?: string; validUntil?: number }): Promise<any>;
+  revise(payload: { memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<any>;
+  deactivate(payload: { memoryId: string; changeReason: string }): Promise<any>;
+  delete(memoryId: string, changeReason?: string): Promise<any>;
+}
+
+export function systemKnowledgeEvents(socket: Socket = getWebSocket()): SystemKnowledgeEvents {
+  return {
+    list() { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.list, {}); },
+    detail(memoryId) { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.detail, { memoryId }); },
+    create(payload) { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.create, payload); },
+    revise(payload) { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.revise, payload); },
+    deactivate(payload) { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.deactivate, payload); },
+    delete(memoryId, changeReason) { return emitWithTimeout(socket, WEB_EVENTS.systemKnowledge.delete, { memoryId, ...(changeReason ? { changeReason } : {}) }); },
+  };
+}
+
+export interface UserMemoryEvents {
+  list(): Promise<any>;
+  detail(memoryId: string): Promise<any>;
+  create(payload: { kind: FormalMemoryKind; content: string; summary?: string; changeReason?: string; validUntil?: number }): Promise<any>;
+  revise(payload: { memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<any>;
+  deactivate(payload: { memoryId: string; changeReason: string }): Promise<any>;
+  delete(memoryId: string, changeReason?: string): Promise<any>;
+}
+
+export function userMemoryEvents(socket: Socket = getWebSocket()): UserMemoryEvents {
+  return {
+    list() { return emitWithTimeout(socket, WEB_EVENTS.userMemory.list, {}); },
+    detail(memoryId) { return emitWithTimeout(socket, WEB_EVENTS.userMemory.detail, { memoryId }); },
+    create(payload) { return emitWithTimeout(socket, WEB_EVENTS.userMemory.create, payload); },
+    revise(payload) { return emitWithTimeout(socket, WEB_EVENTS.userMemory.revise, payload); },
+    deactivate(payload) { return emitWithTimeout(socket, WEB_EVENTS.userMemory.deactivate, payload); },
+    delete(memoryId, changeReason) { return emitWithTimeout(socket, WEB_EVENTS.userMemory.delete, { memoryId, ...(changeReason ? { changeReason } : {}) }); },
+  };
+}
+
 export interface ChannelEvents {
   join(teamId: string, channelId: string, limit?: number): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
   subscribe(teamId: string): void;

@@ -24,6 +24,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/socket', () => ({
   piProviderEvents: () => mocks,
+  systemKnowledgeEvents: () => ({
+    list: vi.fn().mockResolvedValue({ ok: true, list: { items: [] } }),
+    detail: vi.fn().mockResolvedValue({ ok: true }),
+    create: vi.fn().mockResolvedValue({ ok: true }),
+    revise: vi.fn().mockResolvedValue({ ok: true }),
+    deactivate: vi.fn().mockResolvedValue({ ok: true }),
+    delete: vi.fn().mockResolvedValue({ ok: true }),
+  }),
 }));
 
 const preset = {
