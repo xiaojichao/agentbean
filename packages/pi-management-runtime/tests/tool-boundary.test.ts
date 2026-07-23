@@ -646,3 +646,42 @@ describe('Phase 3 Memory tool definitions', () => {
     expect(executorCalls).toHaveLength(0);
   });
 });
+
+describe('issue #719 AC#2 — PI inferences can only enter memory as Candidates', () => {
+  // 纵深防御：PI 推断只能经 propose_candidate 进 Candidate，不得直写 active Formal Memory，
+  // 也不得自行 accept/merge/reject/decide 候选。Formal Memory 的 create/decide 仅在 owner/admin
+  // usecases 之后，PI runtime 不可达。本测试锁定该不变量，防止未来 PR 在工具白名单静默加入
+  // 直写/决策工具而破坏 ADR-0007/0046。
+  const ALL_PHASE_TOOLS: readonly ManagementToolName[] = [
+    ...PHASE_1_MANAGEMENT_TOOL_NAMES,
+    ...PHASE_2_MANAGEMENT_TOOL_NAMES,
+    ...PHASE_3_MANAGEMENT_TOOL_NAMES,
+  ];
+
+  const DIRECT_CREATE_OR_FORMAL = (name: string): boolean =>
+    name.startsWith('formal.')
+    || name === 'memory.create'
+    || name.startsWith('memory.create_memory')
+    || name.startsWith('memory.activate')
+    || name.startsWith('memory.accept')
+    || name.startsWith('memory.reject')
+    || name.startsWith('memory.merge')
+    || name.startsWith('memory.decide')
+    || name.startsWith('memory.supersede')
+    || name.startsWith('memory.expire')
+    || name.startsWith('memory.delete')
+    || name.startsWith('memory.revise')
+    || name.startsWith('memory.deactivate');
+
+  it('exposes no direct-create / formal-memory / candidate-decide tool on any PI phase', () => {
+    const offenders = [...new Set(ALL_PHASE_TOOLS)].filter(DIRECT_CREATE_OR_FORMAL);
+    expect(offenders).toEqual([]);
+  });
+
+  it('the only PI memory write tools are the three non-creating ones (capsule/propose/link)', () => {
+    const memoryWrites = [...new Set(ALL_PHASE_TOOLS)]
+      .filter((name) => name.startsWith('memory.') && getManagementToolMetadata(name).effect === 'write')
+      .sort();
+    expect(memoryWrites).toEqual(['memory.create_capsule', 'memory.link_sources', 'memory.propose_candidate']);
+  });
+});
