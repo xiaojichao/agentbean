@@ -9,6 +9,7 @@ import {
   artifactUploadProxyUrl as buildArtifactUploadProxyUrl,
   artifactUploadUrl as buildArtifactUploadUrl,
 } from './artifact-upload';
+import { clearChannelDocumentDrafts } from './channel-document-drafts';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL;
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -49,6 +50,7 @@ export function setStoredDeviceToken(deviceToken: string): void {
 
 export function clearStoredAuth(): void {
   if (typeof window === 'undefined') return;
+  clearChannelDocumentDrafts(window.localStorage);
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
   window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);

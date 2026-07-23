@@ -159,6 +159,50 @@ describe('频道 Markdown 文档', () => {
     })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
     expect(writeContent).not.toHaveBeenCalled();
   });
+
+  test('同一基础 revision 的并发保存只有一个成功且失败写入不会留下孤儿数据', async () => {
+    const repositories = createInMemoryRepositories();
+    const deleteContent = vi.fn();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'artifact-2', 'artifact-3', 'revision-2', 'revision-3']) },
+      artifactContentStore: {
+        async writeContent(input) {
+          return {
+            storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.length,
+            sha256: `sha-${input.artifactId}`,
+          };
+        },
+        deleteContent,
+      },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+
+    const results = await Promise.all([
+      app.saveChannelDocument({
+        userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+        baseRevisionId: initial.revision.id, content: '# first writer',
+      }),
+      app.saveChannelDocument({
+        userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+        baseRevisionId: initial.revision.id, content: '# second writer',
+      }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toMatchObject([{ error: 'CONFLICT' }]);
+    await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toHaveLength(2);
+    await expect(repositories.artifacts.listByChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toHaveLength(2);
+    expect(deleteContent).toHaveBeenCalledTimes(1);
+  });
 });
 
 function createInitialRecords(): { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord } {
