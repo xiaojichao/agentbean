@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
@@ -150,6 +150,7 @@ export interface ServerNextUseCases {
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
+  deriveChannelDocument(input: DeriveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   saveChannelDocument(input: SaveChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
@@ -3216,7 +3217,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const knownDocumentIds = new Set(records.map(({ document }) => document.id));
       const artifacts = await repositories.artifacts.listByChannel(documentInput);
       const missingDocuments = artifacts.filter((artifact) =>
-        Boolean(artifact.messageId || artifact.workspaceRunId)
+        Boolean(artifact.messageId && !artifact.workspaceRunId)
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
       if (missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
@@ -3252,26 +3253,166 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async deriveChannelDocument(documentInput) {
+      const access = await ensureUserCanViewChannel(repositories, documentInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const sourceArtifact = await repositories.artifacts.getForTeam({
+        teamId: documentInput.teamId,
+        artifactId: documentInput.sourceArtifactId,
+      });
+      if (!sourceArtifact
+        || sourceArtifact.channelId !== documentInput.channelId
+        || !sourceArtifact.workspaceRunId
+        || !sourceArtifact.sourceRoot
+        || !sourceArtifact.relativePath
+        || (sourceArtifact.mimeType !== 'text/markdown' && !/\.(?:md|markdown)$/i.test(sourceArtifact.filename))) {
+        return makeFailure('NOT_FOUND', 'Run Markdown artifact not found');
+      }
+      const sourcePath = normalizeRootRelativePath(sourceArtifact.relativePath);
+      if (!sourcePath) return makeFailure('VALIDATION_ERROR', 'Source Markdown path is invalid');
+      const run = await repositories.workspaceRuns.getForTeam({
+        teamId: documentInput.teamId,
+        runId: sourceArtifact.workspaceRunId,
+      });
+      if (!run
+        || run.channelId !== documentInput.channelId
+        || !(await isPublicChannelFileArtifact(repositories, sourceArtifact))) {
+        return makeFailure('NOT_FOUND', 'Run Markdown source is unavailable');
+      }
+      const filename = sanitizeMarkdownFilename(documentInput.filename);
+      const existingDocuments = await repositories.channelDocuments.listByChannel(documentInput);
+      const selectedTarget = documentInput.targetDocumentId
+        ? existingDocuments.find((document) => document.id === documentInput.targetDocumentId)
+        : undefined;
+      const filenameMatch = existingDocuments.find((document) =>
+        document.filename.toLocaleLowerCase() === filename.toLocaleLowerCase());
+      if ((filenameMatch && filenameMatch.id !== selectedTarget?.id)
+        || (documentInput.targetDocumentId && !selectedTarget)) {
+        return makeFailure('CONFLICT', 'A document with this filename already exists; rename it or select that document explicitly');
+      }
+      if (selectedTarget && selectedTarget.currentRevisionId !== documentInput.targetBaseRevisionId) {
+        return makeFailure('CONFLICT', 'Target document has changed; reload before deriving');
+      }
+      const sourceInfo = await channelFileSource(repositories, sourceArtifact);
+      const dispatch = await repositories.dispatches.getById(run.dispatchId);
+      const originMessage = dispatch ? await repositories.messages.getById(dispatch.messageId) : null;
+      const taskId = sourceInfo?.taskId ?? (originMessage ? messageTaskId(originMessage) : undefined);
+      const source: ChannelDocumentSourceDto = {
+        ...(sourceInfo?.messageId ? { messageId: sourceInfo.messageId } : {}),
+        ...(sourceInfo?.threadId ? { threadId: sourceInfo.threadId } : {}),
+        ...(taskId ? { taskId } : {}),
+        workspaceRunId: run.id,
+        agentId: run.agentId,
+        messageCreatedAt: sourceInfo?.messageCreatedAt ?? run.createdAt,
+        sourceRoot: sourceArtifact.sourceRoot,
+        relativePath: sourceArtifact.relativePath,
+        normalizedRelativePath: sourcePath,
+        artifactId: sourceArtifact.id,
+        artifactRole: sourceArtifact.role ?? 'run_output',
+      };
+      const sourceArtifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+        teamId: documentInput.teamId,
+        channelId: documentInput.channelId,
+        runId: run.id,
+      });
+      const pinned = pinChannelDocumentResources(documentInput.content, source, sourceArtifacts);
+      if (!pinned.ok) return makeFailure('VALIDATION_ERROR', pinned.message);
+      const bytes = Buffer.byteLength(pinned.content, 'utf8');
+      if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
+      if (/<script\b/i.test(pinned.content) || /(?:javascript|vbscript|data):/i.test(pinned.content)) {
+        return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
+      }
+      const artifactId = ids.nextId();
+      const stored = artifactContentStore ? await artifactContentStore.writeContent({
+        teamId: documentInput.teamId,
+        artifactId,
+        filename,
+        content: Buffer.from(pinned.content, 'utf8'),
+      }) : undefined;
+      const now = clock.now();
+      const artifact: ArtifactRecord = {
+        id: artifactId, teamId: documentInput.teamId, channelId: documentInput.channelId,
+        uploaderId: documentInput.userId, filename, mimeType: 'text/markdown',
+        sizeBytes: bytes, pathKind: 'upload', role: 'attachment', createdAt: now,
+        ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}),
+      };
+      if (selectedTarget) {
+        const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: selectedTarget.id }))[0];
+        const revision: ChannelDocumentRevisionRecord = {
+          id: ids.nextId(), documentId: selectedTarget.id, artifact,
+          revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId,
+          createdAt: now, source, resources: pinned.resources,
+        };
+        const saved = await repositories.channelDocuments.addRevision({
+          documentId: selectedTarget.id,
+          expectedCurrentRevisionId: selectedTarget.currentRevisionId,
+          document: { ...selectedTarget, filename, currentRevisionId: revision.id, updatedAt: now },
+          revision,
+          artifact,
+        });
+        if (!saved) {
+          await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+          return makeFailure('CONFLICT', 'Target document has changed; reload before deriving');
+        }
+        return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
+      }
+      const documentId = ids.nextId();
+      const revision: ChannelDocumentRevisionRecord = {
+        id: ids.nextId(), documentId, artifact, revision: 1, createdBy: documentInput.userId,
+        createdAt: now, source, resources: pinned.resources,
+      };
+      const document: ChannelDocumentRecord = {
+        id: documentId, teamId: documentInput.teamId, channelId: documentInput.channelId,
+        filename, currentRevisionId: revision.id, createdAt: now, updatedAt: now,
+      };
+      const saved = await repositories.channelDocuments.createDerived({ document, revision, artifact });
+      if (!saved) {
+        await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
+        return makeFailure('CONFLICT', 'Document could not be created');
+      }
+      return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
+    },
+
     async saveChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
-      const content = documentInput.content;
-      const bytes = Buffer.byteLength(content, 'utf8');
-      if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
-      if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       if (document.currentRevisionId !== documentInput.baseRevisionId) {
         return makeFailure('CONFLICT', 'Document has changed; reload before saving');
       }
+      const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
+      let content = documentInput.content;
+      let resources: ChannelDocumentResourceBindingDto[] | undefined;
+      const source = latestRevision?.source;
+      if (source) {
+        const sourceArtifacts = await repositories.artifacts.listByWorkspaceRunForChannel({
+          teamId: documentInput.teamId,
+          channelId: documentInput.channelId,
+          runId: source.workspaceRunId,
+        });
+        const pinned = pinChannelDocumentResources(content, source, sourceArtifacts);
+        if (!pinned.ok) return makeFailure('VALIDATION_ERROR', pinned.message);
+        content = pinned.content;
+        resources = pinned.resources;
+      }
+      const bytes = Buffer.byteLength(content, 'utf8');
+      if (bytes > 2 * 1024 * 1024) return makeFailure('VALIDATION_ERROR', 'Markdown content exceeds the 2 MB editing limit');
+      if (/<script\b/i.test(content) || /(?:javascript|vbscript|data):/i.test(content)) return makeFailure('VALIDATION_ERROR', 'Markdown contains unsafe HTML or URL protocol');
       const artifactId = ids.nextId();
       const filename = sanitizeMarkdownFilename(documentInput.filename ?? document.filename);
       const stored = artifactContentStore ? await artifactContentStore.writeContent({ teamId: documentInput.teamId, artifactId, filename, content: Buffer.from(content, 'utf8') }) : undefined;
       const now = clock.now();
       const artifact: ArtifactRecord = { id: artifactId, teamId: document.teamId, channelId: document.channelId, uploaderId: documentInput.userId, filename, mimeType: 'text/markdown', sizeBytes: bytes, pathKind: 'upload', createdAt: now, ...(stored ? { storagePath: stored.storagePath, sha256: stored.sha256 } : {}) };
-      const latestRevision = (await repositories.channelDocuments.listRevisions({ documentId: document.id }))[0];
-      const revision = { id: ids.nextId(), documentId: document.id, artifact, revision: (latestRevision?.revision ?? 0) + 1, createdBy: documentInput.userId, createdAt: now };
+      const revision: ChannelDocumentRevisionRecord = {
+        id: ids.nextId(), documentId: document.id, artifact,
+        revision: (latestRevision?.revision ?? 0) + 1,
+        createdBy: documentInput.userId, createdAt: now,
+        ...(source ? { source } : {}),
+        ...(resources ? { resources } : {}),
+      };
       const next = { ...document, filename, currentRevisionId: revision.id, currentRevision: undefined as never, updatedAt: now };
       const saved = await repositories.channelDocuments.addRevision({ documentId: document.id, expectedCurrentRevisionId: documentInput.baseRevisionId, document: next, revision, artifact });
       if (!saved) {
@@ -7665,7 +7806,7 @@ async function getOrCreateChannelDocument(
   const artifactId = input.documentId.slice(prefix.length);
   if (!artifactId) return null;
   const artifact = await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId });
-  if (!artifact || artifact.channelId !== input.channelId) return null;
+  if (!artifact || artifact.channelId !== input.channelId || artifact.workspaceRunId) return null;
   await createInitialChannelDocument(repositories, artifact, artifact.uploaderId, artifact.createdAt);
   return repositories.channelDocuments.getForTeam(input);
 }
@@ -7688,6 +7829,343 @@ function sanitizeMarkdownFilename(value: string): string {
   const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-').slice(0, 240);
   if (!normalized) return 'document.md';
   return /\.(?:md|markdown)$/i.test(normalized) ? normalized : `${normalized}.md`;
+}
+
+function pinChannelDocumentResources(
+  content: string,
+  source: ChannelDocumentSourceDto,
+  artifacts: ArtifactRecord[],
+): { ok: true; content: string; resources: ChannelDocumentResourceBindingDto[] } | { ok: false; message: string } {
+  const candidates = new Map<string, ArtifactRecord>();
+  const candidatesById = new Map<string, ArtifactRecord>();
+  for (const artifact of artifacts) {
+    if (artifact.sourceRoot?.id !== source.sourceRoot.id
+      || artifact.sourceRoot.kind !== source.sourceRoot.kind
+      || !artifact.relativePath) continue;
+    const normalized = normalizeRootRelativePath(artifact.relativePath);
+    const existing = normalized ? candidates.get(normalized) : undefined;
+    if (normalized && (!existing
+      || artifact.createdAt > existing.createdAt
+      || (artifact.createdAt === existing.createdAt && artifact.id.localeCompare(existing.id) > 0))) {
+      candidates.set(normalized, artifact);
+    }
+    candidatesById.set(artifact.id, artifact);
+  }
+  const resources: ChannelDocumentResourceBindingDto[] = [];
+  let errorMessage: string | undefined;
+  const pushBindings = (binding: ChannelDocumentResourceBindingDto, count: number): boolean => {
+    if (resources.length + count > 500) {
+      errorMessage = 'Markdown contains more than 500 relative resource references';
+      return false;
+    }
+    for (let index = 0; index < count; index += 1) resources.push(binding);
+    return true;
+  };
+  const bindTarget = (rawTarget: string, image: boolean, count = 1): string | null => {
+    const target = rawTarget.startsWith('<') && rawTarget.endsWith('>')
+      ? rawTarget.slice(1, -1)
+      : rawTarget;
+    const pinnedTarget = parsePinnedArtifactTarget(target);
+    if (pinnedTarget) {
+      const artifact = candidatesById.get(pinnedTarget.artifactId);
+      if (!artifact || artifact.teamId !== pinnedTarget.teamId || !artifact.relativePath) {
+        errorMessage = `Pinned resource is outside the source Run or source root: ${rawTarget}`;
+        return rawTarget;
+      }
+      const normalizedPath = normalizeRootRelativePath(artifact.relativePath);
+      if (!normalizedPath) {
+        errorMessage = `Pinned resource path is invalid: ${rawTarget}`;
+        return rawTarget;
+      }
+      pushBindings({
+        original: rawTarget,
+        normalizedPath,
+        kind: image ? 'image' : artifact.mimeType.startsWith('video/') ? 'video' : 'file',
+        status: 'resolved',
+        artifactId: artifact.id,
+      }, count);
+      return rawTarget;
+    }
+    if (target.startsWith('/api/')) {
+      errorMessage = `Pinned resource URL is invalid: ${rawTarget}`;
+      return rawTarget;
+    }
+    if (target.startsWith('artifact-missing:')) {
+      const normalizedPath = decodeMissingResourcePath(target);
+      if (!normalizedPath) {
+        errorMessage = `Missing resource path is invalid: ${rawTarget}`;
+        return rawTarget;
+      }
+      pushBindings({
+        original: rawTarget,
+        normalizedPath,
+        kind: image ? 'image' : 'file',
+        status: 'missing',
+      }, count);
+      return rawTarget;
+    }
+    if (!isRelativeMarkdownResource(target)) return null;
+    const normalizedPath = resolveSourceRelativePath(source.normalizedRelativePath, target);
+    if (!normalizedPath) {
+      errorMessage = `Relative resource path escapes its source root: ${target}`;
+      return rawTarget;
+    }
+    const artifact = candidates.get(normalizedPath);
+    const kind = image ? 'image' : artifact?.mimeType.startsWith('video/') ? 'video' : 'file';
+    pushBindings({
+      original: target,
+      normalizedPath,
+      kind,
+      status: artifact ? 'resolved' : 'missing',
+      ...(artifact ? { artifactId: artifact.id } : {}),
+    }, count);
+    return artifact
+      ? `/api/teams/${encodeURIComponent(artifact.teamId)}/artifacts/${encodeURIComponent(artifact.id)}/${kind === 'file' ? 'download' : 'preview'}`
+      : `artifact-missing:${encodeURIComponent(normalizedPath)}`;
+  };
+
+  const referenceUsage = new Map<string, { count: number; image: boolean }>();
+  const searchableContent = mapMarkdownOutsideCode(content, (text) => text, true);
+  for (const match of searchableContent.matchAll(/(!?)\[([^\]]*)]\[([^\]]*)]/g)) {
+    const id = (match[3] || match[2] || '').trim().toLocaleLowerCase();
+    if (!id) continue;
+    const usage = referenceUsage.get(id);
+    referenceUsage.set(id, {
+      count: (usage?.count ?? 0) + 1,
+      image: Boolean(match[1]) || Boolean(usage?.image),
+    });
+  }
+  let rewritten = mapMarkdownOutsideCode(
+    content,
+    (text) => text.replace(
+      /^(\s{0,3}\[([^\]]+)]:[ \t]*)(.*)$/gm,
+      (line, prefix: string, id: string, remainder: string) => {
+        const usage = referenceUsage.get(id.trim().toLocaleLowerCase());
+        if (!usage) return line;
+        const destination = parseMarkdownDestination(remainder, 0, false);
+        if (!destination) return line;
+        const target = bindTarget(destination.target, usage.image, usage.count);
+        return target === null
+          ? line
+          : `${prefix}${target}${remainder.slice(destination.endIndex)}`;
+      },
+    ),
+  );
+  rewritten = mapMarkdownOutsideCode(
+    rewritten,
+    (text) => replaceInlineMarkdownDestinations(text, (token) => {
+      const target = bindTarget(token.target, token.image);
+      return target === null ? token.raw : `${token.image ? '!' : ''}[${token.label}](${target})`;
+    }),
+  );
+  if (errorMessage) return { ok: false, message: errorMessage };
+  return { ok: true, content: rewritten, resources };
+}
+
+interface MarkdownDestination {
+  target: string;
+  endIndex: number;
+}
+
+function parseMarkdownDestination(value: string, startIndex: number, stopAtClosingParen: boolean): MarkdownDestination | null {
+  let index = startIndex;
+  while (value[index] === ' ' || value[index] === '\t') index += 1;
+  const targetStart = index;
+  if (value[index] === '<') {
+    const closing = value.indexOf('>', index + 1);
+    if (closing < 0 || value.slice(index + 1, closing).includes('\n')) return null;
+    return { target: value.slice(index, closing + 1), endIndex: closing + 1 };
+  }
+  let depth = stopAtClosingParen ? 1 : 0;
+  let escaped = false;
+  while (index < value.length) {
+    const character = value[index]!;
+    if (escaped) {
+      escaped = false;
+      index += 1;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      index += 1;
+      continue;
+    }
+    if (character === '(') {
+      depth += 1;
+    } else if (character === ')') {
+      if (stopAtClosingParen && depth === 1) break;
+      if (depth === 0) break;
+      depth -= 1;
+    } else if ((character === ' ' || character === '\t' || character === '\n') && depth <= (stopAtClosingParen ? 1 : 0)) {
+      break;
+    }
+    index += 1;
+  }
+  return index > targetStart ? { target: value.slice(targetStart, index), endIndex: index } : null;
+}
+
+function replaceInlineMarkdownDestinations(
+  content: string,
+  replace: (token: { raw: string; label: string; target: string; image: boolean }) => string,
+): string {
+  const pattern = /(!?)\[([^\]]*)]\(/g;
+  let output = '';
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    const destination = parseMarkdownDestination(content, pattern.lastIndex, true);
+    if (!destination) continue;
+    let closingIndex = destination.endIndex;
+    let quote: string | undefined;
+    while (content[closingIndex] === ' ' || content[closingIndex] === '\t') closingIndex += 1;
+    if (content[closingIndex] === '"' || content[closingIndex] === "'") {
+      quote = content[closingIndex];
+      closingIndex += 1;
+      while (closingIndex < content.length && content[closingIndex] !== quote && content[closingIndex] !== '\n') {
+        closingIndex += 1;
+      }
+      if (content[closingIndex] !== quote) continue;
+      closingIndex += 1;
+      while (content[closingIndex] === ' ' || content[closingIndex] === '\t') closingIndex += 1;
+    }
+    if (content[closingIndex] !== ')') continue;
+    const raw = content.slice(match.index, closingIndex + 1);
+    output += content.slice(cursor, match.index);
+    output += replace({
+      raw,
+      label: match[2]!,
+      target: destination.target,
+      image: Boolean(match[1]),
+    });
+    cursor = closingIndex + 1;
+    pattern.lastIndex = cursor;
+  }
+  return `${output}${content.slice(cursor)}`;
+}
+
+function mapMarkdownOutsideCode(
+  content: string,
+  map: (text: string) => string,
+  maskCode = false,
+): string {
+  const lines = content.split(/(?<=\n)/);
+  let fence: { character: '`' | '~'; length: number } | undefined;
+  return lines.map((line) => {
+    if (fence) {
+      const closingFenceMatch = line.match(/^(?: {0,3})(`{3,}|~{3,})[ \t]*(?:\r?\n)?$/);
+      const closesFence = closingFenceMatch?.[1]?.[0] === fence.character
+        && closingFenceMatch[1].length >= fence.length;
+      if (closesFence) fence = undefined;
+      return maskCode ? line.replace(/[^\n]/g, ' ') : line;
+    }
+    const fenceMatch = line.match(/^(?: {0,3})(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      fence = {
+        character: fenceMatch[1]![0] as '`' | '~',
+        length: fenceMatch[1]!.length,
+      };
+      return maskCode ? line.replace(/[^\n]/g, ' ') : line;
+    }
+    return mapInlineCodeSegments(line, map, maskCode);
+  }).join('');
+}
+
+function mapInlineCodeSegments(line: string, map: (text: string) => string, maskCode: boolean): string {
+  let output = '';
+  let cursor = 0;
+  while (cursor < line.length) {
+    const opening = line.indexOf('`', cursor);
+    if (opening < 0) return `${output}${map(line.slice(cursor))}`;
+    let runLength = 1;
+    while (line[opening + runLength] === '`') runLength += 1;
+    const closing = findClosingBacktickRun(line, opening + runLength, runLength);
+    if (closing < 0) return `${output}${map(line.slice(cursor))}`;
+    output += map(line.slice(cursor, opening));
+    const code = line.slice(opening, closing + runLength);
+    output += maskCode ? code.replace(/[^\n]/g, ' ') : code;
+    cursor = closing + runLength;
+  }
+  return output;
+}
+
+function findClosingBacktickRun(text: string, startIndex: number, expectedLength: number): number {
+  let cursor = startIndex;
+  while (cursor < text.length) {
+    const opening = text.indexOf('`', cursor);
+    if (opening < 0) return -1;
+    let length = 1;
+    while (text[opening + length] === '`') length += 1;
+    if (length === expectedLength) return opening;
+    cursor = opening + length;
+  }
+  return -1;
+}
+
+function parsePinnedArtifactTarget(target: string): { teamId: string; artifactId: string } | null {
+  const match = target.match(/^\/api\/teams\/([^/]+)\/artifacts\/([^/]+)\/(?:preview|download)$/);
+  if (!match) return null;
+  try {
+    return { teamId: decodeURIComponent(match[1]!), artifactId: decodeURIComponent(match[2]!) };
+  } catch {
+    return null;
+  }
+}
+
+function decodeMissingResourcePath(target: string): string | null {
+  try {
+    const decoded = decodeURIComponent(target.slice('artifact-missing:'.length));
+    const normalized = normalizeRootRelativePath(decoded);
+    return normalized === decoded ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRelativeMarkdownResource(target: string): boolean {
+  const trimmed = target.trim();
+  return Boolean(trimmed)
+    && !trimmed.startsWith('#')
+    && !trimmed.startsWith('/')
+    && !trimmed.startsWith('//')
+    && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed);
+}
+
+function resolveSourceRelativePath(sourcePath: string, target: string): string | null {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(target.split(/[?#]/, 1)[0] ?? '');
+  } catch {
+    return null;
+  }
+  const parts = sourcePath.split('/');
+  parts.pop();
+  for (const part of decoded.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (parts.length === 0) return null;
+      parts.pop();
+      continue;
+    }
+    if (/[\u0000-\u001f]/.test(part)) return null;
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts.join('/') : null;
+}
+
+function normalizeRootRelativePath(value: string): string | null {
+  if (!value || value.startsWith('/') || value.startsWith('\\')) return null;
+  const parts: string[] = [];
+  for (const part of value.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (parts.length === 0) return null;
+      parts.pop();
+      continue;
+    }
+    if (/[\u0000-\u001f]/.test(part)) return null;
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts.join('/') : null;
 }
 
 async function createInitialChannelDocument(
@@ -7744,7 +8222,65 @@ async function listPublicChannelFiles(
   const candidates = await repositories.artifacts.listByChannel({ teamId: input.teamId, channelId: input.channelId });
   const entries: ChannelFileEntryDto[] = [];
   const directories = new Map<string, ChannelFileDirectoryDto>();
+  const currentDocumentArtifactIds = new Set<string>();
+  const messageDocumentOriginArtifactIds = new Set<string>();
+  const documents = await repositories.channelDocuments.listWithCurrentRevisionByChannel(input);
+  for (const { document, currentRevision } of documents) {
+    currentDocumentArtifactIds.add(currentRevision.artifact.id);
+    const documentSource = currentRevision.source;
+    const initialArtifactId = document.id.startsWith('channel-document:')
+      ? document.id.slice('channel-document:'.length)
+      : undefined;
+    if (!documentSource && initialArtifactId) messageDocumentOriginArtifactIds.add(initialArtifactId);
+    const originArtifactId = documentSource?.artifactId ?? initialArtifactId;
+    const originArtifact = originArtifactId
+      ? await repositories.artifacts.getForTeam({ teamId: input.teamId, artifactId: originArtifactId })
+      : null;
+    const source = documentSource
+      ? {
+          ...(documentSource.messageId ? { messageId: documentSource.messageId } : {}),
+          ...(documentSource.threadId ? { threadId: documentSource.threadId } : {}),
+          ...(documentSource.taskId ? { taskId: documentSource.taskId } : {}),
+          workspaceRunId: documentSource.workspaceRunId,
+          agentId: documentSource.agentId,
+          senderKind: 'agent' as const,
+          senderId: documentSource.agentId,
+          messageCreatedAt: documentSource.messageCreatedAt,
+        }
+      : originArtifact
+        ? await channelFileSource(repositories, originArtifact)
+        : null;
+    if (!source) continue;
+    const artifact = currentRevision.artifact;
+    const role: ArtifactRole = 'attachment';
+    if (input.role && input.role !== 'all' && role !== input.role) continue;
+    const logicalPath = document.filename;
+    if (query && !`${artifact.filename} ${logicalPath}`.toLocaleLowerCase().includes(query)) continue;
+    const preview = await resolveArtifactPreview?.(artifact);
+    if (!query) addChannelFileDirectories(
+      directories,
+      logicalPath,
+      artifact,
+      preview?.status === 'ready' ? preview.url : undefined,
+    );
+    if (!query && !isDirectChannelFileChild(logicalPath, requestedPath)) continue;
+    if (cursor && !isAfterChannelFileCursor(artifact, cursor)) continue;
+    entries.push({
+      artifact: {
+        ...toArtifactDto(artifact),
+        ...(preview ? { preview } : {}),
+      },
+      source,
+      logicalPath,
+      role,
+      documentId: document.id,
+      documentRevision: currentRevision.revision,
+      ...(documentSource ? { documentSource } : {}),
+    });
+  }
   for (const artifact of candidates) {
+    if (currentDocumentArtifactIds.has(artifact.id)
+      || messageDocumentOriginArtifactIds.has(artifact.id)) continue;
     if (isWorkspaceRunLogArtifact(artifact)) continue;
     const role = artifact.role ?? (artifact.messageId ? 'attachment' : 'run_output');
     if (input.role && input.role !== 'all' && role !== input.role) continue;

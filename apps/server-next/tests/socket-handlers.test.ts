@@ -183,6 +183,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channelDocuments.list,
       WEB_EVENTS.channelDocuments.get,
       WEB_EVENTS.channelDocuments.revisions,
+      WEB_EVENTS.channelDocuments.derive,
       WEB_EVENTS.channelDocuments.save,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,

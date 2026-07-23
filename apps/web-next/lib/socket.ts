@@ -559,6 +559,7 @@ export interface ChannelEvents {
   listDocuments(channelId: string): Promise<{ ok: boolean; documents?: ChannelDocumentDto[]; error?: string }>;
   getDocument(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
   listDocumentRevisions(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentRevisionsResultDto['document']; revisions?: ChannelDocumentRevisionsResultDto['revisions']; error?: string }>;
+  deriveDocument(channelId: string, sourceArtifactId: string, content: string, filename: string, targetDocumentId?: string, targetBaseRevisionId?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string; message?: string }>;
   saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
 }
 
@@ -587,6 +588,13 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     listDocuments(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.list, { channelId }); },
     getDocument(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.get, { channelId, documentId }); },
     listDocumentRevisions(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.revisions, { channelId, documentId }); },
+    deriveDocument(channelId, sourceArtifactId, content, filename, targetDocumentId, targetBaseRevisionId) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.derive, {
+        channelId, sourceArtifactId, content, filename,
+        ...(targetDocumentId ? { targetDocumentId } : {}),
+        ...(targetBaseRevisionId ? { targetBaseRevisionId } : {}),
+      });
+    },
     saveDocument(channelId, documentId, baseRevisionId, content, filename) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}) }); },
   };
 }

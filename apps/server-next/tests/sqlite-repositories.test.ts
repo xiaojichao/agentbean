@@ -133,6 +133,17 @@ describe('server-next SQLite repositories', () => {
       const nextRevision = {
         id: 'revision-2', documentId: initial.document.id, artifact: nextArtifact,
         revision: 2, createdBy: 'user-1', createdAt: 200,
+        source: {
+          taskId: 'task-1', workspaceRunId: 'run-1', agentId: 'agent-1',
+          messageCreatedAt: 100,
+          sourceRoot: { id: 'root-1', kind: 'run_output' as const, label: '运行输出' },
+          relativePath: 'docs/notes.md', normalizedRelativePath: 'docs/notes.md',
+          artifactId: 'artifact-source', artifactRole: 'run_output' as const,
+        },
+        resources: [{
+          original: '../image.png', normalizedPath: 'image.png', kind: 'image' as const,
+          status: 'resolved' as const, artifactId: 'artifact-image',
+        }],
       };
       await expect(repositories.channelDocuments.addRevision({
         documentId: initial.document.id,
@@ -143,7 +154,12 @@ describe('server-next SQLite repositories', () => {
       })).resolves.toMatchObject({ currentRevisionId: 'revision-2' });
 
       await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toMatchObject([
-        { id: 'revision-2', artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath } },
+        {
+          id: 'revision-2',
+          source: { artifactId: 'artifact-source', relativePath: 'docs/notes.md' },
+          resources: [{ artifactId: 'artifact-image', status: 'resolved' }],
+          artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath },
+        },
        { id: 'revision-1', artifact: { id: 'artifact-doc-1', storagePath: initialArtifact.storagePath } },
       ]);
       await expect(repositories.channelDocuments.listWithCurrentRevisionByChannel({
@@ -152,7 +168,6 @@ describe('server-next SQLite repositories', () => {
         document: { id: initial.document.id, currentRevisionId: 'revision-2' },
         currentRevision: { id: 'revision-2', artifact: { id: 'artifact-doc-2' } },
       }]);
-
       const rejectedArtifact = {
         ...nextArtifact,
         id: 'artifact-doc-rejected',
@@ -181,6 +196,23 @@ describe('server-next SQLite repositories', () => {
         documentId: initial.document.id,
       })).resolves.toHaveLength(2);
 
+      const derivedArtifact = {
+        ...nextArtifact, id: 'artifact-doc-3', storagePath: 'artifacts/team-1/artifact-doc-3/derived.md', createdAt: 300,
+      };
+      const derived = {
+        document: {
+          id: 'document-derived', teamId: 'team-1', channelId: 'channel-1', filename: 'derived.md',
+          currentRevisionId: 'revision-derived', createdAt: 300, updatedAt: 300,
+        },
+        revision: {
+          ...nextRevision, id: 'revision-derived', documentId: 'document-derived',
+          artifact: derivedArtifact, revision: 1, createdAt: 300,
+        },
+        artifact: derivedArtifact,
+      };
+      await expect(repositories.channelDocuments.createDerived(derived))
+        .resolves.toMatchObject({ id: 'document-derived' });
+      await expect(repositories.channelDocuments.createDerived(derived)).resolves.toBeNull();
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',

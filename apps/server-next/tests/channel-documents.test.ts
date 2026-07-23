@@ -3,6 +3,246 @@ import { createInMemoryRepositories, createInMemoryServerNext, createServerNextU
 import type { ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord } from '../src/application/repositories';
 
 describe('频道 Markdown 文档', () => {
+  test('从 Run Markdown 派生独立文档并把相对资源固定到同一来源根的 Artifact', async () => {
+    const repositories = createInMemoryRepositories();
+    const writes: string[] = [];
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'artifact-derived', 'document-derived', 'revision-derived',
+        'artifact-second', 'revision-second',
+      ]) },
+      artifactContentStore: {
+        async writeContent(input) {
+          writes.push(input.content.toString('utf8'));
+          return { storagePath: `artifacts/${input.artifactId}/${input.filename}`, sizeBytes: input.content.length, sha256: 'sha-derived' };
+        },
+        deleteContent: vi.fn(),
+      },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await repositories.messages.append({
+      id: 'message-task', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-task',
+      senderKind: 'human', senderId: 'user-1', body: '生成报告', meta: { taskId: 'task-1' }, createdAt: 90,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-task',
+      agentId: 'agent-1', status: 'succeeded', requestId: 'request-1', prompt: '生成报告', createdAt: 90, updatedAt: 100,
+    });
+    await repositories.workspaceRuns.create({
+      id: 'run-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-task',
+      dispatchId: 'dispatch-1', agentId: 'agent-1', status: 'succeeded', createdAt: 90, updatedAt: 100, artifactIds: [],
+    });
+    const sourceRoot = { id: 'root-output', kind: 'run_output' as const, label: '运行输出' };
+    for (const artifact of [
+      { id: 'artifact-source', filename: 'report.md', mimeType: 'text/markdown', relativePath: 'docs/./report.md' },
+      { id: 'artifact-image', filename: 'chart.png', mimeType: 'image/png', relativePath: 'images/chart.png' },
+      { id: 'artifact-video', filename: 'demo.mp4', mimeType: 'video/mp4', relativePath: 'media/demo.mp4' },
+      { id: 'artifact-file', filename: 'data.csv', mimeType: 'text/csv', relativePath: 'data/data.csv' },
+      { id: 'artifact-paren', filename: 'data(1).csv', mimeType: 'text/csv', relativePath: 'data/data(1).csv' },
+      { id: 'artifact-nested-paren', filename: 'data((1)).csv', mimeType: 'text/csv', relativePath: 'data/data((1)).csv' },
+    ]) {
+      await repositories.artifacts.create({
+        ...artifact, teamId: 'team-1', channelId: 'channel-1', dispatchId: 'dispatch-1', workspaceRunId: 'run-1',
+        uploaderId: 'agent-1', sizeBytes: 10, sourceRoot, pathKind: 'generated', role: 'run_output', createdAt: 100,
+      });
+    }
+    await repositories.artifacts.create({
+      id: 'artifact-other-root', teamId: 'team-1', channelId: 'channel-1',
+      dispatchId: 'dispatch-1', workspaceRunId: 'run-1', uploaderId: 'agent-1',
+      filename: 'missing.png', mimeType: 'image/png', sizeBytes: 10,
+      relativePath: 'docs/missing.png', pathKind: 'generated', role: 'run_output',
+      sourceRoot: { id: 'root-private', kind: 'configured_output', label: '其他来源根' }, createdAt: 100,
+    });
+
+    await expect(app.getChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      documentId: 'channel-document:artifact-source',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+
+    const result = await app.deriveChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', sourceArtifactId: 'artifact-source',
+      filename: '派生报告.md',
+      content: '![图](../images/chart.png)\n[视频](../media/demo.mp4)\n[数据](../data/data.csv)\n'
+        + '![缺失](missing.png)\n![空格路径](<../images/chart.png>)\n[括号路径](../data/data(1).csv)\n'
+        + '[多层括号路径](../data/data((1)).csv)\n'
+        + '![引用图][chart]\n[chart]: ../images/chart.png\n'
+        + '~~~~ markdown example\n![代码示例](/api/teams/team-1/artifacts/foreign/preview)\n'
+        + '[example]: ../data/example.csv\n~~~~\n'
+        + '``内联 ` 示例 ![图](/api/teams/team-1/artifacts/foreign/preview)``',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      document: {
+        id: 'document-derived',
+        currentRevision: {
+          source: {
+            taskId: 'task-1', workspaceRunId: 'run-1', agentId: 'agent-1',
+            sourceRoot: { id: 'root-output' }, relativePath: 'docs/./report.md',
+            normalizedRelativePath: 'docs/report.md', artifactId: 'artifact-source',
+          },
+          resources: [
+            { original: '../images/chart.png', status: 'resolved', artifactId: 'artifact-image', kind: 'image' },
+            { original: '../images/chart.png', status: 'resolved', artifactId: 'artifact-image', kind: 'image' },
+            { original: '../media/demo.mp4', status: 'resolved', artifactId: 'artifact-video', kind: 'video' },
+            { original: '../data/data.csv', status: 'resolved', artifactId: 'artifact-file', kind: 'file' },
+            { original: 'missing.png', status: 'missing', kind: 'image' },
+            { original: '../images/chart.png', status: 'resolved', artifactId: 'artifact-image', kind: 'image' },
+            { original: '../data/data(1).csv', status: 'resolved', artifactId: 'artifact-paren', kind: 'file' },
+            { original: '../data/data((1)).csv', status: 'resolved', artifactId: 'artifact-nested-paren', kind: 'file' },
+          ],
+        },
+      },
+    });
+    expect(writes).toEqual([
+      '![图](/api/teams/team-1/artifacts/artifact-image/preview)\n'
+      + '[视频](/api/teams/team-1/artifacts/artifact-video/preview)\n'
+      + '[数据](/api/teams/team-1/artifacts/artifact-file/download)\n'
+      + '![缺失](artifact-missing:docs%2Fmissing.png)\n'
+      + '![空格路径](/api/teams/team-1/artifacts/artifact-image/preview)\n'
+      + '[括号路径](/api/teams/team-1/artifacts/artifact-paren/download)\n'
+      + '[多层括号路径](/api/teams/team-1/artifacts/artifact-nested-paren/download)\n'
+      + '![引用图][chart]\n'
+      + '[chart]: /api/teams/team-1/artifacts/artifact-image/preview\n'
+      + '~~~~ markdown example\n![代码示例](/api/teams/team-1/artifacts/foreign/preview)\n'
+      + '[example]: ../data/example.csv\n~~~~\n'
+      + '``内联 ` 示例 ![图](/api/teams/team-1/artifacts/foreign/preview)``',
+    ]);
+    await expect(repositories.artifacts.getForTeam({
+      teamId: 'team-1', artifactId: 'artifact-source',
+    })).resolves.toMatchObject({ relativePath: 'docs/./report.md' });
+
+    if (!result.ok) throw new Error(result.error);
+    const second = await app.saveChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      documentId: result.document.id, baseRevisionId: result.document.currentRevisionId,
+      content: '![图](../images/chart.png)\n[新增缺失](new.bin)',
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      document: {
+        currentRevision: {
+          revision: 2,
+          source: { artifactId: 'artifact-source' },
+          resources: [
+            { original: '../images/chart.png', status: 'resolved', artifactId: 'artifact-image' },
+            { original: 'new.bin', status: 'missing' },
+          ],
+        },
+      },
+    });
+    expect(writes[1]).toBe(
+      '![图](/api/teams/team-1/artifacts/artifact-image/preview)\n'
+      + '[新增缺失](artifact-missing:docs%2Fnew.bin)',
+    );
+    const revisions = await repositories.channelDocuments.listRevisions({ documentId: result.document.id });
+    expect(revisions[0]).toMatchObject({
+      revision: 2, resources: [{ original: '../images/chart.png' }, { original: 'new.bin' }],
+    });
+    expect(revisions[1]?.revision).toBe(1);
+    expect(revisions[1]?.resources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ original: '../images/chart.png' }),
+      expect.objectContaining({ original: '../media/demo.mp4' }),
+    ]));
+    await expect(app.listChannelFiles({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      files: [expect.objectContaining({
+        documentId: result.document.id,
+        documentRevision: 2,
+        documentSource: expect.objectContaining({ artifactId: 'artifact-source', artifactRole: 'run_output' }),
+        artifact: expect.objectContaining({ id: 'artifact-second' }),
+      })],
+    });
+  });
+
+  test('派生拒绝同名、越界和超过 500 个相对资源，失败时不产生半保存', async () => {
+    const repositories = createInMemoryRepositories();
+    const writeContent = vi.fn();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'artifact-target', 'revision-target']) },
+      artifactContentStore: { writeContent },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+    await repositories.workspaceRuns.create({
+      id: 'run-1', teamId: 'team-1', channelId: 'channel-1', dispatchId: 'dispatch-1', agentId: 'agent-1',
+      status: 'succeeded', createdAt: 90, updatedAt: 100, artifactIds: ['artifact-source'],
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-source', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-1',
+      uploaderId: 'agent-1', filename: 'notes.md', mimeType: 'text/markdown', sizeBytes: 10,
+      relativePath: 'docs/notes.md', pathKind: 'generated', role: 'run_output',
+      sourceRoot: { id: 'root-output', kind: 'run_output', label: '运行输出' }, createdAt: 100,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-other-run', teamId: 'team-1', channelId: 'channel-1', workspaceRunId: 'run-other',
+      uploaderId: 'agent-2', filename: 'secret.txt', mimeType: 'text/plain', sizeBytes: 10,
+      relativePath: 'docs/secret.txt', pathKind: 'generated', role: 'run_output',
+      sourceRoot: { id: 'root-output', kind: 'run_output', label: '运行输出' }, createdAt: 100,
+    });
+    const input = {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', sourceArtifactId: 'artifact-source',
+      filename: 'notes.md',
+    };
+
+    await expect(app.deriveChannelDocument({ ...input, content: 'safe' }))
+      .resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(app.deriveChannelDocument({ ...input, filename: 'renamed.md', content: '[越界](../../secret.txt)' }))
+      .resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.deriveChannelDocument({
+      ...input,
+      filename: 'renamed.md',
+      content: '[跨 Run](/api/teams/team-1/artifacts/artifact-other-run/preview)',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.deriveChannelDocument({
+      ...input,
+      filename: 'renamed.md',
+      content: '~~~\r\n代码示例\r\n~~~\r\n[跨 Run](/api/teams/team-1/artifacts/artifact-other-run/preview)',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.deriveChannelDocument({
+      ...input,
+      filename: 'renamed.md',
+      content: '[伪固定](/api/teams/team-1/artifacts/artifact-source/preview?download=1)',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.deriveChannelDocument({
+      ...input,
+      filename: 'renamed.md',
+      content: '[危险](javascript:alert(1))',
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.deriveChannelDocument({
+      ...input,
+      filename: 'renamed.md',
+      content: Array.from({ length: 501 }, (_, index) => `[${index}](asset-${index}.png)`).join('\n'),
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    expect(writeContent).not.toHaveBeenCalled();
+    await expect(repositories.channelDocuments.listByChannel({
+      teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toHaveLength(1);
+
+    await expect(app.deriveChannelDocument({
+      ...input,
+      content: 'safe',
+      targetDocumentId: initial.document.id,
+      targetBaseRevisionId: initial.revision.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      document: {
+        id: initial.document.id,
+        currentRevision: { revision: 2, source: { artifactId: 'artifact-source' } },
+      },
+    });
+    expect(writeContent).toHaveBeenCalledTimes(1);
+  });
+
   test('同名 Markdown 消息附件各自建立独立初始文档', async () => {
     const app = createInMemoryServerNext({
       now: () => 100,

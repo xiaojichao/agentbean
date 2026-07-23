@@ -42,6 +42,114 @@ afterEach(async () => {
 });
 
 describe('server-next Socket.IO namespaces', () => {
+  test('derives Run Markdown through Socket.IO and reads the persisted pinned revision', async () => {
+    const repositories = createInMemoryRepositories();
+    const writes: string[] = [];
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'artifact-derived', 'document-derived', 'revision-derived',
+      ]) },
+      artifactContentStore: {
+        async writeContent(input) {
+          writes.push(input.content.toString('utf8'));
+          return {
+            storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.length,
+            sha256: 'sha-derived',
+          };
+        },
+      },
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+    const web = await connectClient(`${baseUrl}/web`);
+    cleanups.push(async () => web.disconnect());
+    await web.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'shaw', password: 'secret', teamName: 'AgentBean',
+    });
+    await repositories.messages.append({
+      id: 'message-task', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-task',
+      senderKind: 'human', senderId: 'user-1', body: '生成报告', meta: { taskId: 'task-1' }, createdAt: 90,
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-task',
+      agentId: 'agent-1', status: 'succeeded', requestId: 'request-1', prompt: '生成报告', createdAt: 90, updatedAt: 100,
+    });
+    await repositories.workspaceRuns.create({
+      id: 'run-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-task',
+      dispatchId: 'dispatch-1', agentId: 'agent-1', status: 'succeeded',
+      createdAt: 90, updatedAt: 100, artifactIds: ['artifact-source', 'artifact-image'],
+    });
+    const sourceRoot = { id: 'root-output', kind: 'run_output' as const, label: '运行输出' };
+    await repositories.artifacts.create({
+      id: 'artifact-source', teamId: 'team-1', channelId: 'channel-1',
+      dispatchId: 'dispatch-1', workspaceRunId: 'run-1', uploaderId: 'agent-1',
+      filename: 'report.md', mimeType: 'text/markdown', sizeBytes: 10,
+      relativePath: 'docs/report.md', pathKind: 'generated', role: 'run_output', sourceRoot, createdAt: 100,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-image', teamId: 'team-1', channelId: 'channel-1',
+      dispatchId: 'dispatch-1', workspaceRunId: 'run-1', uploaderId: 'agent-1',
+      filename: 'chart.png', mimeType: 'image/png', sizeBytes: 10,
+      relativePath: 'images/chart.png', pathKind: 'generated', role: 'run_output', sourceRoot, createdAt: 100,
+    });
+
+    const derived = await web.emitWithAck(WEB_EVENTS.channelDocuments.derive, {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      sourceArtifactId: 'artifact-source',
+      filename: '派生报告.md',
+      content: '![图](../images/chart.png)',
+    }) as { ok: boolean; document?: { id: string } };
+    expect(derived).toMatchObject({
+      ok: true,
+      document: {
+        id: 'document-derived',
+        currentRevision: {
+          source: { taskId: 'task-1', artifactId: 'artifact-source' },
+          resources: [{ artifactId: 'artifact-image', status: 'resolved' }],
+        },
+      },
+    });
+    expect(writes).toEqual(['![图](/api/teams/team-1/artifacts/artifact-image/preview)']);
+
+    await expect(web.emitWithAck(WEB_EVENTS.channelDocuments.get, {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      documentId: derived.document!.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      document: {
+        currentRevision: {
+          artifact: { id: 'artifact-derived' },
+          source: { workspaceRunId: 'run-1', agentId: 'agent-1' },
+        },
+      },
+    });
+
+    await expect(web.emitWithAck(WEB_EVENTS.channelDocuments.derive, {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      sourceArtifactId: 'artifact-source',
+      filename: '危险报告.md',
+      content: '[危险](javascript:alert(1))',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    await expect(repositories.channelDocuments.listByChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toHaveLength(1);
+    expect(writes).toHaveLength(1);
+  });
+
   test('acknowledges a durable human message after its coordination job is saved', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({

@@ -4,6 +4,10 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MarkdownDocumentEditor } from '../components/channel-documents/MarkdownDocumentEditor';
+import {
+  SafeMarkdownResource,
+  collectSafeMarkdownReferenceDefinitions,
+} from '../components/channel-documents/SafeMarkdownResource';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 afterEach(() => document.body.replaceChildren());
@@ -177,5 +181,58 @@ describe('MarkdownDocumentEditor', () => {
     finishSave({ ok: true, revisionId: 'revision-2' });
     await waitFor(() => expect(editor.disabled).toBe(false));
     expect(editor.value).toBe('submitted content');
+  });
+
+  test('派生提示明确原 Run 不变', () => {
+    render(
+      <MarkdownDocumentEditor
+        filename="derived.md"
+        initialContent="preview"
+        notice="已从 Run Markdown 创建 Channel document；原 Run Artifact 和运行目录保持不变。"
+        onSave={async () => {}}
+        renderPreview={(content) => content}
+      />,
+    );
+
+    expect(screen.getByRole('status').textContent).toContain('原 Run Artifact 和运行目录保持不变');
+  });
+
+  test('固定内部图片可加载，外部图片默认只显示链接，缺失资源显示明确状态', () => {
+    const resolveInternalUrl = (path: string) => `https://server.test${path}?token=test`;
+    render(<div>
+      <SafeMarkdownResource label="内部图" target="/api/teams/team-1/artifacts/artifact-1/preview" image resolveInternalUrl={resolveInternalUrl} />
+      <SafeMarkdownResource label="外部图" target="https://example.com/image.png" image resolveInternalUrl={resolveInternalUrl} />
+      <SafeMarkdownResource label="缺失图" target="artifact-missing:docs%2Fmissing.png" image resolveInternalUrl={resolveInternalUrl} />
+      <SafeMarkdownResource label="伪固定" target="/api/teams/team-1/artifacts/artifact-1/preview?x=1" image resolveInternalUrl={resolveInternalUrl} />
+    </div>);
+
+    const images = screen.getAllByRole('img');
+    expect(images).toHaveLength(1);
+    expect((images[0] as HTMLImageElement).src).toContain('/api/teams/team-1/artifacts/artifact-1/preview');
+    const external = screen.getByRole('link', { name: /外部图片（默认不加载）/ });
+    expect((external as HTMLAnchorElement).target).toBe('_blank');
+    expect(screen.getAllByRole('status').map((node) => node.textContent)).toEqual([
+      '资源缺失：docs/missing.png',
+      '不安全或未固定的资源：伪固定',
+    ]);
+  });
+
+  test('收集固定后的 reference-style 资源定义并从正文移除定义行', () => {
+    expect(collectSafeMarkdownReferenceDefinitions([
+      '![图][chart]',
+      '[下载][file]',
+      '~~~~ markdown example',
+      '[inside]: /api/teams/team-1/artifacts/inside/preview',
+      '~~~~',
+      '[chart]: /api/teams/team-1/artifacts/image-1/preview',
+      '[file]: </api/teams/team-1/artifacts/file-1/download> "文件"',
+    ].join('\n'))).toEqual({
+      body: '![图][chart]\n[下载][file]\n~~~~ markdown example\n'
+        + '[inside]: /api/teams/team-1/artifacts/inside/preview\n~~~~',
+      references: new Map([
+        ['chart', '/api/teams/team-1/artifacts/image-1/preview'],
+        ['file', '/api/teams/team-1/artifacts/file-1/download'],
+      ]),
+    });
   });
 });
