@@ -569,6 +569,9 @@ describe('server-next dev server entry', () => {
     const body = new FormData();
     body.append('token', owner.token);
     body.append('channelId', owner.defaultChannel.id);
+    for (let index = 0; index < 14; index += 1) {
+      body.append(`extra-${index}`, 'ignored');
+    }
     body.append('file', new Blob(['# hello multipart\n'], { type: 'text/markdown' }), 'reply.md');
 
     const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {

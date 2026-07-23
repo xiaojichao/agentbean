@@ -980,7 +980,7 @@ async function readMultipartUpload(
   const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number; fields: number; parts: number } }) => NodeJS.WritableStream & { destroy(error?: Error): void; on(event: string, listener: (...args: any[]) => void): unknown };
   const parser = Busboy({
     headers: request.headers,
-    limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024, fields: 16, parts: 17 },
+    limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024, fields: 16, parts: 18 },
   });
   const fields: Record<string, string> = {};
   let fileResult: MultipartUploadResult['file'] | undefined;
@@ -1021,6 +1021,13 @@ async function readMultipartUpload(
       throw failure;
     }
   } catch (error) {
+    if (filePromise) {
+      try {
+        await filePromise;
+      } catch {
+        // The file pipeline already removes its partial output on failure.
+      }
+    }
     if (fileResult?.tempPath) safeUnlink(fileResult.tempPath);
     if (failure) throw failure;
     throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid multipart upload' });
