@@ -4,6 +4,7 @@ import { makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, 
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
+import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -23,6 +24,7 @@ import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
+import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import type {
   CancelPiProviderTestResult,
@@ -211,6 +213,16 @@ export interface ServerNextUseCases {
   upsertAgentExposureRestriction(input: UpsertAgentExposureRestrictionInput): Promise<Ack<{ restriction: AgentExposureRestrictionDto }>>;
   /** PI Team 页只读 coverage（AC#5）。 */
   getAgentTeamCoverage(input: GetAgentTeamCoverageInput): Promise<Ack<{ coverage: AgentTeamCoverageDto }>>;
+  /** #718 Agent Memory Projection：owner 创建 Draft（AC#2）。 */
+  createAgentMemoryProjectionDraft(input: CreateAgentMemoryProjectionDraftInput): Promise<Ack<{ projection: AgentMemoryProjectionDto }>>;
+  updateAgentMemoryProjectionDraft(input: UpdateAgentMemoryProjectionDraftInput): Promise<Ack<{ projection: AgentMemoryProjectionDto }>>;
+  publishAgentMemoryProjection(input: PublishAgentMemoryProjectionInput): Promise<Ack<{ projection: AgentMemoryProjectionDto; supersededProjectionId: string | null }>>;
+  withdrawAgentMemoryProjection(input: WithdrawAgentMemoryProjectionInput): Promise<Ack<{ withdrawn: boolean }>>;
+  listAgentMemoryProjectionRevisions(input: ListAgentMemoryProjectionRevisionsInput): Promise<Ack<{ revisions: readonly AgentMemoryProjectionDto[]; activeOptIn: TeamAgentMemoryOptInDto | null }>>;
+  /** Team Owner/Admin 启用/停用本 Team 对投影的使用（AC#3）。 */
+  upsertTeamAgentMemoryOptIn(input: UpsertTeamAgentMemoryOptInInput): Promise<Ack<{ optIn: TeamAgentMemoryOptInDto }>>;
+  /** PI/成员只读消费当前 Team 已启用投影（AC#6/AC#7 fail-closed）。 */
+  getConsumableAgentMemoryProjections(input: GetConsumableAgentMemoryProjectionsInput): Promise<Ack<GetConsumableAgentMemoryProjectionsResult>>;
   getMemoryGovernanceSnapshot(input: { userId: string; teamId: string }): Promise<Ack<{ snapshot: MemoryGovernanceSnapshotDto }>>;
   createCollaborativeMemory(input: { userId: string; teamId: string; kind: MemoryKind; scopeType: MemoryScopeType; scopeRef: string; content: string; summary?: string; tags?: readonly string[]; validUntil?: number; asCandidate?: boolean }): Promise<Ack<{ memory: MemoryView }>>;
   updateCollaborativeMemory(input: { userId: string; teamId: string; memoryId: string; expectedUpdatedAt: number; content?: string; summary?: string; tags?: readonly string[]; validUntil?: number }): Promise<Ack<{ memory: MemoryView }>>;
@@ -1013,6 +1025,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     repositories: {
       agentExposure: repositories.agentExposure,
       agentExposureUnitOfWork: repositories.agentExposureUnitOfWork,
+      agents: repositories.agents,
+      teams: repositories.teams,
+    },
+    canManageAgent: async ({ userId, agentId }) => {
+      const agent = await repositories.agents.getById(agentId);
+      return agent ? canManageAgentAsUser(repositories, { userId, agent }) : false;
+    },
+    clock,
+    ids,
+  });
+  // #718 Team-scoped Agent Memory 投影：owner 发布/撤回，Team Owner/Admin opt-in，
+  // PI/成员只读消费当前 Team 已启用投影。canManageAgent 复用设备拥有者链路授权（fail-closed）。
+  const agentMemoryProjection = createAgentMemoryProjectionService({
+    repositories: {
+      agentMemoryProjection: repositories.agentMemoryProjection,
+      agentMemoryProjectionUnitOfWork: repositories.agentMemoryProjectionUnitOfWork,
       agents: repositories.agents,
       teams: repositories.teams,
     },
@@ -4890,6 +4918,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
     async getAgentTeamCoverage(input) {
       return agentExposure.getTeamCoverage(input);
+    },
+
+    // #718 Team-scoped Agent Memory 投影：owner 发布/撤回，Team opt-in，PI/成员只读消费。
+    async createAgentMemoryProjectionDraft(input) {
+      return agentMemoryProjection.createDraft(input);
+    },
+    async updateAgentMemoryProjectionDraft(input) {
+      return agentMemoryProjection.updateDraft(input);
+    },
+    async publishAgentMemoryProjection(input) {
+      return agentMemoryProjection.publish(input);
+    },
+    async withdrawAgentMemoryProjection(input) {
+      return agentMemoryProjection.withdraw(input);
+    },
+    async listAgentMemoryProjectionRevisions(input) {
+      return agentMemoryProjection.listRevisions(input);
+    },
+    async upsertTeamAgentMemoryOptIn(input) {
+      return agentMemoryProjection.upsertOptIn(input);
+    },
+    async getConsumableAgentMemoryProjections(input) {
+      const result = await agentMemoryProjection.getConsumableProjections(input);
+      return makeSuccess(result);
     },
 
     async listPiProviderPresets(input) {

@@ -569,6 +569,14 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.userMemory.revise, app, 'reviseUserMemory', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.userMemory.deactivate, app, 'deactivateUserMemory', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.userMemory.delete, app, 'deleteUserMemory', undefined, memoryBindOptions);
+  // #718 Agent Memory Projection：owner 发布/撤回，Team opt-in，PI/成员只读消费当前 Team 已启用投影。
+  bind(socket, WEB_EVENTS.memory.projectionCreateDraft, app, 'createAgentMemoryProjectionDraft', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionUpdateDraft, app, 'updateAgentMemoryProjectionDraft', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionPublish, app, 'publishAgentMemoryProjection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionWithdraw, app, 'withdrawAgentMemoryProjection', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionListRevisions, app, 'listAgentMemoryProjectionRevisions', undefined, memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionUpsertOptIn, app, 'upsertTeamAgentMemoryOptIn', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.memory.projectionGetConsumable, app, 'getConsumableAgentMemoryProjections', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;

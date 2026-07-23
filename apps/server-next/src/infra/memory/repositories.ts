@@ -41,6 +41,7 @@ import {
 import { createInMemoryPiProviderPersistence } from './pi-provider-repositories.js';
 import { createInMemorySystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createInMemoryAgentExposurePersistence } from './agent-exposure-repositories.js';
+import { createInMemoryAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -56,6 +57,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const piProvider = createInMemoryPiProviderPersistence();
   const systemUserMemory = createInMemorySystemUserMemoryRepositories();
   const agentExposure = createInMemoryAgentExposurePersistence();
+  const agentMemoryProjection = createInMemoryAgentMemoryProjectionPersistence();
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
 
   const users = new Map<string, UserRecord>();
@@ -234,6 +236,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     userMemory: systemUserMemory.userMemory,
     agentExposure: agentExposure.repositories,
     agentExposureUnitOfWork: agentExposure.unitOfWork,
+    agentMemoryProjection: agentMemoryProjection.repositories,
+    agentMemoryProjectionUnitOfWork: agentMemoryProjection.unitOfWork,
     channelCoordination,
     channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(async () => {

@@ -35,6 +35,7 @@ import { createSqliteMemoryRepositories } from './memory-repositories.js';
 import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js';
 import { createSqliteSystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
+import { createSqliteAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -115,6 +116,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0031_team_agent_exposure_restrictions.sql');
   applyMigration(db, 'team/0032_formal_memory.sql');
   applyMigration(db, 'team/0033_task_immutable_revisions.sql', { disableForeignKeys: true });
+  applyMigration(db, 'team/0034_agent_memory_projections.sql');
+  applyMigration(db, 'team/0035_team_agent_memory_opt_ins.sql');
   applyMigration(db, 'team/0036_task_offers.sql');
 }
 
@@ -189,6 +192,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const piProvider = createSqlitePiProviderPersistence(globalDb);
   const systemUserMemory = createSqliteSystemUserMemoryRepositories(globalDb);
   const agentExposure = createSqliteAgentExposurePersistence(teamDb);
+  const agentMemoryProjection = createSqliteAgentMemoryProjectionPersistence(teamDb);
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
       async create(input) {
@@ -372,6 +376,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     userMemory: systemUserMemory.userMemory,
     agentExposure: agentExposure.repositories,
     agentExposureUnitOfWork: agentExposure.unitOfWork,
+    agentMemoryProjection: agentMemoryProjection.repositories,
+    agentMemoryProjectionUnitOfWork: agentMemoryProjection.unitOfWork,
     channelCoordination,
     channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(() => operation({
