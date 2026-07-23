@@ -411,3 +411,49 @@ export const TASK_OFFER_INVALIDATION_REASON_CODE = {
 
 export type TaskOfferInvalidationReasonCode =
   (typeof TASK_OFFER_INVALIDATION_REASON_CODE)[keyof typeof TASK_OFFER_INVALIDATION_REASON_CODE];
+
+// ── #713 Claim relinquishment / authority revocation / manifest commitment gate ──
+//
+// 产品边界（ADR 0025 / 切片 C 交付项 #6）：Agent 明确接受 Task 形成独立履约承诺后，Manifest
+// 后续变化不自动取消有效 claim；Agent 无法继续时必须显式 relinquish，由 PI 决定重新规划、
+// 交接或失败。System/Team 当前安全权限撤销优先于旧承诺，可停止进行中操作（AC#4）；
+// 过期/撤回/被取代的 Manifest 不能用于新 Task 或新 Offer（AC#2）。
+//
+// 本组 canonical code 常量是 domain 决策（claim-relinquishment-policy.ts）与 server 投影/
+// 审计共享的稳定字符串，消除跨包漂移。与 #712 TASK_OFFER_INVALIDATION_REASON_CODE 同构：
+// domain 端定义 cause 联合（编译期类型安全），contracts 端定义 code 常量（运行期投影）。
+
+/**
+ * Manifest 用于新 Task/Offer 承诺时不可用的成因（AC#2）。
+ * 派生自 AgentExposureManifestStatus 的非 active 子集——新增非 active 状态时自动同步，
+ * 避免字面量重定义漂移。
+ */
+export type ManifestCommitmentUsabilityReason = Exclude<AgentExposureManifestStatus, 'active'>;
+
+/**
+ * Claim relinquishment 成因码（canonical，server 投影/审计共享，消除字符串漂移）。
+ * 与 domain `ClaimRelinquishmentCause` 同义。
+ */
+export const CLAIM_RELINQUISHMENT_CAUSE_CODE = {
+  AGENT_VOLUNTARY: 'CLAIM_RELINQUISHMENT_AGENT_VOLUNTARY',
+  TASK_UNFEASIBLE: 'CLAIM_RELINQUISHMENT_TASK_UNFEASIBLE',
+  AGENT_UNAVAILABLE: 'CLAIM_RELINQUISHMENT_AGENT_UNAVAILABLE',
+  CONTEXT_CHANGED: 'CLAIM_RELINQUISHMENT_CONTEXT_CHANGED',
+} as const;
+
+export type ClaimRelinquishmentCauseCodeValue =
+  (typeof CLAIM_RELINQUISHMENT_CAUSE_CODE)[keyof typeof CLAIM_RELINQUISHMENT_CAUSE_CODE];
+
+/**
+ * authority revocation 成因码（canonical，server 投影/审计共享，消除字符串漂移）。
+ * 与 domain `AuthorityRevocationCause` 同义。
+ */
+export const AUTHORITY_REVOCATION_CAUSE_CODE = {
+  PERMISSION_REVOKED: 'AUTHORITY_REVOCATION_PERMISSION_REVOKED',
+  MEMBERSHIP_REVOKED: 'AUTHORITY_REVOCATION_MEMBERSHIP_REVOKED',
+  SAFETY_OVERRIDE: 'AUTHORITY_REVOCATION_SAFETY_OVERRIDE',
+  MANIFEST_REVOKED: 'AUTHORITY_REVOCATION_MANIFEST_REVOKED',
+} as const;
+
+export type AuthorityRevocationCauseCodeValue =
+  (typeof AUTHORITY_REVOCATION_CAUSE_CODE)[keyof typeof AUTHORITY_REVOCATION_CAUSE_CODE];
