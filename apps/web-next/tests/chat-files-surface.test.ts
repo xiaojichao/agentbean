@@ -13,4 +13,11 @@ describe('chat files surface', () => {
     expect(filesSurface).not.toContain('target="_blank"');
     expect(filesSurface).not.toContain('title="预览文件"');
   });
+
+  test('ignores stale file responses after the channel or search query changes', () => {
+    expect(source).toContain('const channelFilesRequestRevisionRef = useRef(0)');
+    expect(source).toContain('if (requestRevision !== channelFilesRequestRevisionRef.current) return;');
+    expect(source).toContain('if (requestRevision === channelFilesRequestRevisionRef.current)');
+    expect(source).toMatch(/useEffect\(\(\) => \{\s+channelFilesRequestRevisionRef\.current \+= 1;\s+setChannelFiles\(\[\]\)/);
+  });
 });

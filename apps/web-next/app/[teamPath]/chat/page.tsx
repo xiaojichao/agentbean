@@ -265,6 +265,7 @@ export default function ChatPage() {
   const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
   const [channelFilesQuery, setChannelFilesQuery] = useState('');
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
+  const channelFilesRequestRevisionRef = useRef(0);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
@@ -396,24 +397,31 @@ export default function ChatPage() {
 
   const loadChannelFiles = useCallback(async (reset = true) => {
     if (!activeChannel || conn !== 'open') return;
+    const requestRevision = channelFilesRequestRevisionRef.current + 1;
+    channelFilesRequestRevisionRef.current = requestRevision;
     setChannelFilesLoading(true);
     try {
       const cursor = reset ? undefined : channelFilesCursor;
       const result = channelFilesQuery.trim()
         ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50)
         : await channelEvents().listFiles(activeChannel, cursor, 50);
+      if (requestRevision !== channelFilesRequestRevisionRef.current) return;
       if (!result.ok || !result.files) return;
       const mapped = result.files.map(channelFileToConversationFile);
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
       setChannelFilesCursor(result.nextCursor);
     } finally {
-      setChannelFilesLoading(false);
+      if (requestRevision === channelFilesRequestRevisionRef.current) {
+        setChannelFilesLoading(false);
+      }
     }
   }, [activeChannel, channelFilesCursor, channelFilesQuery, conn]);
 
   useEffect(() => {
+    channelFilesRequestRevisionRef.current += 1;
     setChannelFiles([]);
     setChannelFilesCursor(undefined);
+    setChannelFilesLoading(false);
     if (tab === 'files') void loadChannelFiles(true);
   }, [activeChannel, conn, tab, channelFilesQuery]);
 
