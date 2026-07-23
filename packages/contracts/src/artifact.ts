@@ -2,7 +2,25 @@ import type { ID, UnixMs } from './common.js';
 import type { MemoryCapsuleRefDto } from './management-memory.js';
 
 export type ArtifactPathKind = 'upload' | 'workspace' | 'generated';
+export type ArtifactRole = 'intermediate' | 'run_output' | 'deliverable' | 'attachment';
+export type ArtifactSourceRootKind = 'run_output' | 'agent_workspace' | 'configured_output' | 'adapter_generated' | 'legacy_run';
 export type WorkspaceRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface ArtifactSourceRootDto {
+  id: ID;
+  kind: ArtifactSourceRootKind;
+  label: string;
+}
+export type ArtifactPreviewStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'unsupported';
+
+export interface ArtifactPreviewDto {
+  status: ArtifactPreviewStatus;
+  url?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  updatedAt?: UnixMs;
+}
 
 export interface ArtifactDto {
   id: ID;
@@ -16,10 +34,13 @@ export interface ArtifactDto {
   sizeBytes: number;
   relativePath?: string;
   pathKind?: ArtifactPathKind;
+  role?: ArtifactRole;
+  sourceRoot?: ArtifactSourceRootDto;
   sha256?: string;
   createdAt: UnixMs;
   downloadUrl?: string;
   previewUrl?: string;
+  preview?: ArtifactPreviewDto;
 }
 
 export interface WorkspaceRunDto {

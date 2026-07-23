@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, Download, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ChannelFileEntryDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -262,6 +262,8 @@ export default function ChatPage() {
   const [channelFiles, setChannelFiles] = useState<ConversationFile[]>([]);
   const [channelFilesCursor, setChannelFilesCursor] = useState<string | undefined>();
   const [channelFilesQuery, setChannelFilesQuery] = useState('');
+  const [channelFilesPath, setChannelFilesPath] = useState('');
+  const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
@@ -398,22 +400,24 @@ export default function ChatPage() {
     try {
       const cursor = reset ? undefined : channelFilesCursor;
       const result = channelFilesQuery.trim()
-        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50)
-        : await channelEvents().listFiles(activeChannel, cursor, 50);
+        ? await channelEvents().searchFiles(activeChannel, channelFilesQuery, cursor, 50, channelFilesPath)
+        : await channelEvents().listFiles(activeChannel, cursor, 50, channelFilesPath);
       if (!result.ok || !result.files) return;
       const mapped = result.files.map(channelFileToConversationFile);
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
       setChannelFilesCursor(result.nextCursor);
+      if (reset) setChannelFileDirectories(result.directories ?? []);
     } finally {
       setChannelFilesLoading(false);
     }
-  }, [activeChannel, channelFilesCursor, channelFilesQuery, conn]);
+  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, conn]);
 
   useEffect(() => {
     setChannelFiles([]);
     setChannelFilesCursor(undefined);
+    if (tab !== 'files') setChannelFilesPath('');
     if (tab === 'files') void loadChannelFiles(true);
-  }, [activeChannel, conn, tab, channelFilesQuery]);
+  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -1749,6 +1753,10 @@ export default function ChatPage() {
             hasMore={Boolean(channelFilesCursor)}
             searchQuery={channelFilesQuery}
             onSearchQuery={setChannelFilesQuery}
+            path={channelFilesPath}
+            directories={channelFileDirectories}
+            onOpenDirectory={(path) => { setChannelFilesPath(path); setChannelFiles([]); setChannelFilesCursor(undefined); }}
+            onOpenRoot={() => { setChannelFilesPath(''); setChannelFiles([]); setChannelFilesCursor(undefined); }}
             onLoadMore={() => void loadChannelFiles(false)}
             agents={agents}
             humanProfiles={humanProfiles}
@@ -2516,6 +2524,10 @@ function ConversationFiles({
   hasMore,
   searchQuery,
   onSearchQuery,
+  path,
+  directories,
+  onOpenDirectory,
+  onOpenRoot,
   onLoadMore,
   agents,
   humanProfiles,
@@ -2527,6 +2539,10 @@ function ConversationFiles({
   hasMore: boolean;
   searchQuery: string;
   onSearchQuery: (query: string) => void;
+  path: string;
+  directories: NonNullable<ChannelFilesResultDto['directories']>;
+  onOpenDirectory: (path: string) => void;
+  onOpenRoot: () => void;
   onLoadMore: () => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
@@ -2540,22 +2556,27 @@ function ConversationFiles({
         <Search size={14} className="text-neutral-400" />
         <input value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
       </div>
+      {path && <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500"><button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>{path.split('/').map((part, index, parts) => <span key={`${part}-${index}`}><span className="mx-1 text-neutral-300">/</span><button onClick={() => onOpenDirectory(parts.slice(0, index + 1).join('/'))} className="hover:text-neutral-900">{part}</button></span>)}</div>}
       {loading && files.length === 0 ? (
         <div className="flex h-32 items-center justify-center text-sm text-neutral-400">加载文件中…</div>
-      ) : files.length === 0 ? (
+      ) : files.length === 0 && directories.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-2 text-neutral-400">
           <FolderOpen size={32} strokeWidth={1.5} />
           <span className="text-sm">暂无文件</span>
         </div>
       ) : (
         <div className="space-y-2">
+          {directories.map((directory) => <button key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900"><FolderOpen size={20} className="text-amber-600" /><span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-neutral-900">{directory.name}</span><span className="text-xs text-neutral-500">{directory.fileCount} 个文件</span></span></button>)}
           {files.map((file) => {
             const isImage = file.artifact.mimeType.startsWith('image/');
-            const previewUrl = messageArtifactUrl(file.artifact, 'preview');
+            const derivativeReady = file.artifact.preview?.status === 'ready' && file.artifact.preview.url;
+            const previewUrl = derivativeReady
+              ? messageArtifactUrl({ ...file.artifact, previewUrl: file.artifact.preview?.url }, 'preview')
+              : messageArtifactUrl(file.artifact, 'preview');
             const downloadUrl = messageArtifactUrl(file.artifact, 'download');
             const thumbnail = (
               <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden border border-neutral-200 bg-neutral-50">
-                {isImage && previewUrl ? (
+                {(isImage || derivativeReady) && previewUrl ? (
                   <img src={previewUrl} alt={file.artifact.filename} className="h-full w-full object-cover" />
                 ) : (
                   <Paperclip size={20} className="text-neutral-400" />
@@ -2569,6 +2590,7 @@ function ConversationFiles({
                   <span>{formatFileSize(file.artifact.sizeBytes)}</span>
                   <span className="text-neutral-300">·</span>
                   <span>{formatDateTime(file.createdAt)}</span>
+                  {file.artifact.preview?.status === 'pending' || file.artifact.preview?.status === 'processing' ? <span className="text-amber-600">· 预览生成中</span> : null}
                   <span className="text-neutral-300">·</span>
                   <span>{speakerName({ id: file.messageId, channelId: '', senderKind: file.senderKind, senderId: file.senderId, body: '', createdAt: file.createdAt }, agents, { currentUser, humanProfiles, channelMembers })}</span>
                 </div>

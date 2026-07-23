@@ -93,6 +93,9 @@ export interface Artifact {
   sizeBytes: number;
   relativePath?: string;
   pathKind?: string;
+  role?: 'intermediate' | 'run_output' | 'deliverable' | 'attachment';
+  sourceRoot?: { id: string; kind: string; label: string };
+  preview?: { status: 'pending' | 'processing' | 'ready' | 'failed' | 'unsupported'; url?: string; width?: number; height?: number; durationMs?: number };
   sha256?: string | null;
   createdAt: number;
   downloadUrl?: string;
