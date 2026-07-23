@@ -400,4 +400,65 @@ describe('rankQualifiedCandidates (AC#3 only sorts among qualified)', () => {
     );
     expect(ranked.map((c) => c.agentId)).toEqual(['b', 'a']);
   });
+
+  // ── #714 reliability tie-breaker（AC#3/AC#7） ──
+
+  test('reliability 在「可用」之后、「经验」之前作为 tie-breaker', () => {
+    // a: reliability 低（有已确认失败），b: reliability 高。其余相等（同 hits/available/experience）。
+    const ranked = rankQualifiedCandidates(
+      [
+        { agentId: 'a', exposedSkills: ['typescript'], available: true, experienceScore: 5, reliabilityScore: 0.2 },
+        { agentId: 'b', exposedSkills: ['typescript'], available: true, experienceScore: 5, reliabilityScore: 0.9 },
+      ],
+      ['typescript'],
+    );
+    expect(ranked.map((c) => c.agentId)).toEqual(['b', 'a']);
+  });
+
+  test('reliability 不越过「可用」：不可用但可靠的候选仍排在可用候选之后', () => {
+    const ranked = rankQualifiedCandidates(
+      [
+        { agentId: 'offline', exposedSkills: ['typescript'], available: false, reliabilityScore: 1 },
+        { agentId: 'online', exposedSkills: ['typescript'], available: true, reliabilityScore: 0.1 },
+      ],
+      ['typescript'],
+    );
+    expect(ranked.map((c) => c.agentId)).toEqual(['online', 'offline']);
+  });
+
+  test('reliability 不越过「preferred skill 命中数」：命中更多 preferred 但可靠性低的候选仍优先', () => {
+    const ranked = rankQualifiedCandidates(
+      [
+        { agentId: 'a', exposedSkills: ['typescript', 'python'], available: true, reliabilityScore: 0.1 },
+        { agentId: 'b', exposedSkills: ['typescript'], available: true, reliabilityScore: 1 },
+      ],
+      ['typescript', 'python'],
+    );
+    expect(ranked.map((c) => c.agentId)).toEqual(['a', 'b']);
+  });
+
+  test('AC#3 结构性保证：reliability 排序永不改写候选的 exposedSkills 集合', () => {
+    const candidates = [
+      { agentId: 'a', exposedSkills: ['typescript', 'python'], available: true, reliabilityScore: 0.3 },
+      { agentId: 'b', exposedSkills: ['typescript'], available: true, reliabilityScore: 0.9 },
+    ];
+    const ranked = rankQualifiedCandidates(candidates, ['typescript', 'python']);
+    // 排序后每个候选的 exposedSkills 必须与输入逐字相等——reliability 只重排，不增删 skill。
+    expect(ranked.map((c) => c.exposedSkills)).toEqual([
+      ['typescript', 'python'],
+      ['typescript'],
+    ]);
+  });
+
+  test('未提供 reliabilityScore（缺省）→ 不影响既有排序（向后兼容）', () => {
+    // 两个候选都不传 reliabilityScore：经验决定顺序（与 #714 接入前行为一致）。
+    const ranked = rankQualifiedCandidates(
+      [
+        { agentId: 'a', exposedSkills: ['typescript'], available: true, experienceScore: 1 },
+        { agentId: 'b', exposedSkills: ['typescript'], available: true, experienceScore: 9 },
+      ],
+      ['typescript'],
+    );
+    expect(ranked.map((c) => c.agentId)).toEqual(['b', 'a']);
+  });
 });

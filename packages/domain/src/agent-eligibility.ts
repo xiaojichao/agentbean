@@ -14,6 +14,7 @@ import {
   ELIGIBILITY_REASON_CODE,
   eligibilityUnknownCauseReasonCode,
 } from '@agentbean/contracts';
+import { RELIABILITY_NEUTRAL_SCORE } from './reliability-policy.js';
 
 export interface CapabilityMatchInput {
   readonly exposedCapabilities: readonly string[];
@@ -73,8 +74,8 @@ export interface PreferredSkillCandidate {
 
 /**
  * preferred Skill 排序 hook（切片 C 候选排序）。
- * 按命中 preferred 的数量降序；相同则保持原顺序（稳定）。reliability 维度后续接入，
- * 届时作为次级 key，不影响本函数的 preferred 主排序。
+ * 按命中 preferred 的数量降序；相同则保持原顺序（稳定）。reliability 维度作为合格候选排序
+ * 的次级 key 已接入 `rankQualifiedCandidates`（#714），不影响本函数的 preferred 主排序。
  */
 export function rankByPreferredSkills<T extends PreferredSkillCandidate>(
   candidates: readonly T[],
@@ -290,12 +291,27 @@ export interface QualifiedCandidate extends PreferredSkillCandidate {
   readonly experienceScore?: number;
   /** 负载分（越高=越空闲越好）；缺省 0。 */
   readonly loadScore?: number;
+  /**
+   * 当前 Team reliability 分（#714 AC#3）。越高越可靠，取值 [0,1]；无已确认事实时由
+   * `reliabilityRankingScore` 返回中性 1.0。**只参与合格候选间排序 tie-breaker**——
+   * 结构性永不补齐 capability/skill 或删除 Manifest Skill（AC#3）：它是标量排序输入，
+   * 不进入 `exposedSkills`/`exposedCapabilities` 集合。缺省 = 中性 1.0（RELIABILITY_NEUTRAL_SCORE），
+   * 与 AC#2「无数据永不形成负面事实」一致：未提供 reliabilityScore 的候选不被降权。
+   */
+  readonly reliabilityScore?: number;
 }
 
 /**
  * AC#3：在已通过资格过滤的候选间稳定排序。
- * 主序 preferred skill 命中数，次序 可用 → 经验 → 负载，末序 原序（稳定）。
+ * 主序 preferred skill 命中数，次序 可用 → reliability → 经验 → 负载，末序 原序（稳定）。
+ * reliability 作为「可用」之后、「经验」之前的 tie-breaker：在都胜任且都可用的合格候选间，
+ * 优先选当前 Team 已确认更可靠者（#714 AC#3/AC#7）。reliability 只能凭当前 Team 已确认负向
+ * 事实降权（无数据=中性 1.0），故「无 reliability 数据」永不把候选排到「有数据且可靠」之后以外
+ * 的不利位置——见 reliability-policy `reliabilityRankingScore`。
+ *
  * 本函数不做资格过滤——调用方先用 evaluateAgentEligibility 过出合格候选（AC#3「只在合格候选间排序」）。
+ * reliability 在本函数只读 `reliabilityScore` 标量并用于比较，绝不改写候选的 exposedSkills
+ * 或任何 capability/skill 集合（AC#3 结构性保证；排序前后候选集合的 skill 集合恒等）。
  */
 export function rankQualifiedCandidates<T extends QualifiedCandidate>(
   candidates: readonly T[],
@@ -308,6 +324,7 @@ export function rankQualifiedCandidates<T extends QualifiedCandidate>(
       index,
       hits: candidate.exposedSkills.filter((s) => preferred.has(s.toLowerCase())).length,
       available: candidate.available ? 1 : 0,
+      reliability: candidate.reliabilityScore ?? RELIABILITY_NEUTRAL_SCORE,
       experience: candidate.experienceScore ?? 0,
       load: candidate.loadScore ?? 0,
     }))
@@ -315,6 +332,7 @@ export function rankQualifiedCandidates<T extends QualifiedCandidate>(
       (a, b) =>
         b.hits - a.hits ||
         b.available - a.available ||
+        b.reliability - a.reliability ||
         b.experience - a.experience ||
         b.load - a.load ||
         a.index - b.index,

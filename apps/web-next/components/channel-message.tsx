@@ -1,5 +1,6 @@
 import { AlertCircle, Loader2, X } from 'lucide-react';
 import type { ChatMessage, Artifact, DispatchStatus } from '@/lib/schema';
+import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
@@ -21,34 +22,7 @@ function artifactUrl(path: string): string {
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const downloadUrl = artifact.downloadUrl ? artifactUrl(artifact.downloadUrl) : undefined;
   const previewUrl = artifact.previewUrl ? artifactUrl(artifact.previewUrl) : undefined;
-  if (artifact.mimeType.startsWith('image/') && downloadUrl && previewUrl) {
-    return (
-      <a href={downloadUrl} target="_blank" rel="noreferrer">
-        <img
-          src={previewUrl}
-          alt={artifact.filename}
-          className="max-h-48 rounded border border-neutral-100"
-        />
-      </a>
-    );
-  }
-  if (!downloadUrl) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-neutral-600">
-        {artifact.filename} ({(artifact.sizeBytes / 1024).toFixed(1)} KB)
-      </span>
-    );
-  }
-  return (
-    <a
-      href={downloadUrl}
-      target="_blank"
-      rel="noreferrer"
-      className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs text-blue-600 hover:underline"
-    >
-      {artifact.filename} ({(artifact.sizeBytes / 1024).toFixed(1)} KB)
-    </a>
-  );
+  return <ArtifactCard artifact={artifact} previewUrl={previewUrl} downloadUrl={downloadUrl} imagePrimaryAction="download" />;
 }
 
 function agentFailureDisplayBody(body: string): string {
