@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import type { ManagementRepositories } from './management-repositories.js';
 import type { ManagementUnitOfWork } from './management-unit-of-work.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
@@ -69,6 +69,8 @@ export interface ArtifactRecord extends Omit<ArtifactDto, 'downloadUrl' | 'previ
   uploaderId: ID;
   storagePath?: string;
 }
+export interface ChannelDocumentRecord extends Omit<ChannelDocumentDto, 'currentRevision'> {}
+export type ChannelDocumentRevisionRecord = ChannelDocumentRevisionDto;
 export type WorkspaceRunRecord = WorkspaceRunDto;
 export type TaskRecord = TaskDto & {
   revision: number;
@@ -329,6 +331,14 @@ export interface ArtifactRepository {
   deleteByChannel(channelId: ID): Promise<ID[]>;
 }
 
+export interface ChannelDocumentRepository {
+  create(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord }): Promise<ChannelDocumentRecord>;
+  getForTeam(input: { teamId: ID; channelId: ID; documentId: ID }): Promise<ChannelDocumentRecord | null>;
+  listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelDocumentRecord[]>;
+  listRevisions(input: { documentId: ID }): Promise<ChannelDocumentRevisionRecord[]>;
+  addRevision(input: { documentId: ID; expectedCurrentRevisionId: ID; document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
+}
+
 export interface WorkspaceRunRepository {
   create(input: WorkspaceRunRecord): Promise<WorkspaceRunRecord>;
   getForTeam(input: { teamId: ID; runId: ID }): Promise<WorkspaceRunRecord | null>;
@@ -387,6 +397,7 @@ export interface ServerNextRepositories {
   messages: MessageRepository;
   dispatches: DispatchRepository;
   artifacts: ArtifactRepository;
+  channelDocuments: ChannelDocumentRepository;
   workspaceRuns: WorkspaceRunRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;
