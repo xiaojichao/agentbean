@@ -4253,6 +4253,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const now = clock.now();
       const resultSucceeded = isSuccessfulDispatchResult(resultInput.workspaceRun);
+      if ((resultInput.artifacts ?? []).some((artifact) =>
+        artifact.sourceRoot && !isValidArtifactSourceRoot(artifact.sourceRoot))) {
+        return makeFailure('VALIDATION_ERROR', 'Invalid artifact source root');
+      }
       const collaborationProposalDiagnostics: string[] = [];
       const collaborationProposals = (resultInput.collaborationProposals ?? []).flatMap((proposal) => {
         try {
@@ -6528,6 +6532,20 @@ function parseAgentArtifactSourceRoots(
   } catch {
     return [];
   }
+}
+
+function isValidArtifactSourceRoot(sourceRoot: ArtifactSourceRootDto): boolean {
+  return /^[A-Za-z0-9_-]{1,128}$/.test(sourceRoot.id)
+    && sourceRoot.label.length > 0
+    && sourceRoot.label.length <= 120
+    && sourceRoot.label !== '.'
+    && sourceRoot.label !== '..'
+    && !/[/\\\u0000-\u001f]/.test(sourceRoot.label)
+    && (sourceRoot.kind === 'run_output'
+      || sourceRoot.kind === 'agent_workspace'
+      || sourceRoot.kind === 'configured_output'
+      || sourceRoot.kind === 'adapter_generated'
+      || sourceRoot.kind === 'legacy_run');
 }
 
 async function collectCoalescedDispatchPromptMessages(

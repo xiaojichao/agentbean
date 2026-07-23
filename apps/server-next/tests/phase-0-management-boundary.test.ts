@@ -333,6 +333,34 @@ describe('Phase 0 existing execution fact boundary', () => {
     });
   });
 
+  test('rejects unsafe source-root labels from dispatch results before persisting artifacts', async () => {
+    const { app, repositories } = await createHarness([
+      'user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1',
+    ]);
+    await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex generate output',
+    });
+
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: 'generated output',
+      workspaceRun: { id: 'workspace-run-1', status: 'succeeded', exitCode: 0 },
+      artifacts: [{
+        id: 'artifact-unsafe',
+        filename: 'result.txt',
+        sourceRoot: { id: 'reports', kind: 'configured_output', label: '伪/目录' },
+      }],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    await expect(repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: 'artifact-unsafe',
+    })).resolves.toBeNull();
+  });
+
   test('Worker transport stays isolated from existing Task and Dispatch APIs', () => {
     expect(AGENT_EVENTS.managementWorker).toEqual({
       register: 'management-worker:register',

@@ -977,12 +977,21 @@ async function readMultipartUpload(
   maxArtifactBytes: number,
 ): Promise<MultipartUploadResult> {
   mkdirSync(dataDir, { recursive: true });
-  const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number } }) => NodeJS.WritableStream & { on(event: string, listener: (...args: any[]) => void): unknown };
-  const parser = Busboy({ headers: request.headers, limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024 } });
+  const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number; fields: number; parts: number } }) => NodeJS.WritableStream & { destroy(error?: Error): void; on(event: string, listener: (...args: any[]) => void): unknown };
+  const parser = Busboy({
+    headers: request.headers,
+    limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024, fields: 16, parts: 17 },
+  });
   const fields: Record<string, string> = {};
   let fileResult: MultipartUploadResult['file'] | undefined;
   let filePromise: Promise<void> | undefined;
   let failure: Error | undefined;
+  const rejectPartLimit = (): void => {
+    failure = new ArtifactHttpError(413, { ok: false, error: 'PAYLOAD_TOO_LARGE' });
+    parser.destroy(failure);
+  };
+  parser.on('fieldsLimit', rejectPartLimit);
+  parser.on('partsLimit', rejectPartLimit);
   parser.on('field', (name: string, value: string) => { fields[name] = value; });
   parser.on('file', (name: string, file: NodeJS.ReadableStream, info: { filename: string; mimeType: string }) => {
     if (name !== 'file' || fileResult) {
