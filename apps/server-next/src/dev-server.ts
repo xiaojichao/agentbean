@@ -41,6 +41,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
+import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { DEFAULT_ARTIFACT_MAX_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -102,6 +103,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   artifactPreviewService?: ArtifactPreviewService;
+  channelFileBackfill?: NonNullable<ReturnType<typeof createChannelFileBackfillIfSupported>>;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
@@ -316,6 +318,18 @@ export async function startServerNextDevServer(
       void appWithCleanup.artifactPreviewService?.runOnce().catch(() => undefined);
     }, 250)
     : undefined;
+  const channelFileBackfillInterval = appWithCleanup.channelFileBackfill
+    ? setInterval(() => {
+      try {
+        const result = appWithCleanup.channelFileBackfill?.runBatch();
+        if (result?.completed && channelFileBackfillInterval) {
+          clearInterval(channelFileBackfillInterval);
+        }
+      } catch {
+        // 保留当前批次游标，下一轮从同一位置安全重试。
+      }
+    }, 100)
+    : undefined;
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   return {
@@ -330,6 +344,9 @@ export async function startServerNextDevServer(
       }
       if (previewWorkerInterval) {
         clearInterval(previewWorkerInterval);
+      }
+      if (channelFileBackfillInterval) {
+        clearInterval(channelFileBackfillInterval);
       }
       await coordinationScheduler?.stop();
       stopVersionRefresh();
@@ -1558,6 +1575,10 @@ function createDefaultApp(
     outputDir: join(config.dataDir, 'artifact-previews'),
     repository: createSqliteArtifactPreviewRepository(teamDb),
   });
+  const channelFileBackfill = createChannelFileBackfillIfSupported({
+    db: teamDb,
+    dataDir: config.dataDir,
+  });
   // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
   // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
   cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
@@ -1588,6 +1609,7 @@ function createDefaultApp(
       messageIngestionMode,
     }),
     artifactPreviewService,
+    channelFileBackfill,
     managementWorkerScheduler: management.scheduler,
     serverWorkerScheduler: management.serverScheduler,
     taskClaimBroker,

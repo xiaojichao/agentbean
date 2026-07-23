@@ -37,7 +37,7 @@ export function createSqliteArtifactPreviewRepository(
         FROM artifact_preview_jobs
         WHERE attempts < ?
           AND (status = 'pending' OR (status = 'processing' AND leased_until <= ?))
-        ORDER BY updated_at ASC, id ASC
+        ORDER BY priority DESC, updated_at ASC, id ASC
         LIMIT 1`).get(input.maxAttempts, input.now));
       if (!candidate) return undefined;
       const result = db.prepare(`UPDATE artifact_preview_jobs

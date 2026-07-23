@@ -84,6 +84,53 @@ describe('频道 Markdown 文档', () => {
     expect(revisionReads).not.toHaveBeenCalled();
   });
 
+  test('已删除消息的带参数 Markdown 附件不能按需创建文档', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await repositories.messages.append({
+      id: 'message-deleted',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: '消息已删除',
+      meta: { deletedAt: 150 },
+      createdAt: 100,
+    });
+    await repositories.artifacts.create({
+      id: 'artifact-deleted',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-deleted',
+      uploaderId: 'user-1',
+      filename: 'README',
+      mimeType: 'text/markdown; charset=utf-8',
+      sizeBytes: 6,
+      createdAt: 100,
+    });
+
+    await expect(app.listChannelDocuments({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: true, documents: [] });
+    await expect(app.getChannelDocument({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      documentId: 'channel-document:artifact-deleted',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(repositories.channelDocuments.listByChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([]);
+  });
+
   test('连续保存保留旧 Artifact 并使用单调递增 revision', async () => {
     const repositories = createInMemoryRepositories();
     const writes: string[] = [];
