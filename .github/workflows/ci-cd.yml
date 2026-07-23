@@ -50,7 +50,9 @@ permissions:
 
 concurrency:
   group: agentbean-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Main runs can publish and deploy; never interrupt them after a newer push.
+  # PR validation is safe to supersede because only its newest revision matters.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate-agentbean-next:
