@@ -57,8 +57,16 @@ export function MarkdownDocumentEditor({
   const [conflict, setConflict] = useState<string | null>(null);
   const [latest, setLatest] = useState<MarkdownDocumentSnapshot | null>(null);
   const [loadingLatest, setLoadingLatest] = useState(false);
+  const [manualMergeStart, setManualMergeStart] = useState<{
+    content: string;
+    filename: string;
+    baseRevisionId: string;
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dirty = content !== baselineContent || filename !== baselineFilename;
+  const manualMergeChanged = manualMergeStart
+    ? content !== manualMergeStart.content || filename !== manualMergeStart.filename
+    : false;
   const draftIdentity: ChannelDocumentDraftIdentity | null =
     initialDraftIdentity && currentBaseRevisionId
       ? { ...initialDraftIdentity, baseRevisionId: currentBaseRevisionId }
@@ -72,6 +80,7 @@ export function MarkdownDocumentEditor({
     setCurrentBaseRevisionId(initialDraftIdentity?.baseRevisionId);
     setConflict(null);
     setLatest(null);
+    setManualMergeStart(null);
     if (typeof window === 'undefined' || !initialDraftIdentity) {
       setRecoveryDraft(null);
       return;
@@ -117,14 +126,24 @@ export function MarkdownDocumentEditor({
     setContent(`${content.slice(0, start)}${before}${content.slice(start, end)}${after}${content.slice(end)}`);
   };
   const save = async () => {
+    if (readOnly || saving || !dirty) return;
+    if (conflict && (!manualMergeStart || !manualMergeChanged)) {
+      setSaveError(manualMergeStart
+        ? '请先在编辑区完成手工合并，再保存'
+        : '请先查看最新版并选择继续手工合并');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
-      const result = currentBaseRevisionId
-        ? await onSave(content, filename, currentBaseRevisionId)
+      const baseRevisionId = manualMergeStart?.baseRevisionId ?? currentBaseRevisionId;
+      const result = baseRevisionId
+        ? await onSave(content, filename, baseRevisionId)
         : await onSave(content, filename);
       if (result && !result.ok) {
         setConflict(result.message);
+        setLatest(null);
+        setManualMergeStart(null);
         return;
       }
       if (draftIdentity && typeof window !== 'undefined') {
@@ -136,6 +155,7 @@ export function MarkdownDocumentEditor({
       setRecoveryDraft(null);
       setConflict(null);
       setLatest(null);
+      setManualMergeStart(null);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : '保存失败');
     } finally {
@@ -170,7 +190,11 @@ export function MarkdownDocumentEditor({
         <button type="button" onClick={() => insert('`')} disabled={readOnly || saving} title="代码">代码</button>
       </div>
       {(['edit', 'preview', 'split'] as Mode[]).map((value) => <button key={value} type="button" onClick={() => setMode(value)} aria-pressed={mode === value}>{value}</button>)}
-      <button type="button" disabled={readOnly || saving || !dirty} onClick={() => void save()}>{saving ? '保存中…' : '保存'}</button>
+      <button
+        type="button"
+        disabled={readOnly || saving || !dirty || Boolean(conflict && (!manualMergeStart || !manualMergeChanged))}
+        onClick={() => void save()}
+      >{saving ? '保存中…' : '保存'}</button>
       {onClose && <button type="button" onClick={() => { if (!dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose(); }}>关闭</button>}
       {readOnly && <span className="text-xs text-neutral-500">{readOnlyReason ?? '只读'}</span>}
     </header>
@@ -192,8 +216,9 @@ export function MarkdownDocumentEditor({
     {conflict && <div role="alert" className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
       <p>{conflict}</p>
       <p className="mt-1 text-xs">你的完整草稿仍保存在本机。系统不会强制覆盖或创建分叉版本。</p>
+      {manualMergeStart && <p className="mt-1 text-xs font-medium">请对照服务器最新版修改编辑区内容；完成实际合并后才能保存。</p>}
       <div className="mt-2 flex flex-wrap gap-2">
-        <button type="button" disabled={loadingLatest || !onLoadLatest} onClick={() => {
+        <button type="button" disabled={loadingLatest || !onLoadLatest || Boolean(manualMergeStart)} onClick={() => {
           if (!onLoadLatest) return;
           setLoadingLatest(true);
           void onLoadLatest()
@@ -202,29 +227,20 @@ export function MarkdownDocumentEditor({
             .finally(() => setLoadingLatest(false));
         }}>{loadingLatest ? '加载中…' : '查看最新版'}</button>
         <button type="button" onClick={() => void copyDraft()}>复制草稿</button>
-        <button type="button" disabled={!latest} onClick={() => {
+        <button type="button" disabled={!latest || Boolean(manualMergeStart)} onClick={() => {
           if (!latest) return;
-          if (draftIdentity && typeof window !== 'undefined') {
-            removeChannelDocumentDraft(window.localStorage, draftIdentity);
-          }
-          const nextIdentity = initialDraftIdentity
-            ? { ...initialDraftIdentity, baseRevisionId: latest.revisionId }
-            : null;
-          if (nextIdentity && typeof window !== 'undefined') {
-            writeChannelDocumentDraft(window.localStorage, nextIdentity, {
-              content,
-              filename,
-              updatedAt: Date.now(),
-            });
-          }
-          setBaselineContent(latest.content);
-          setBaselineFilename(latest.filename);
-          setCurrentBaseRevisionId(latest.revisionId);
-          setConflict(null);
+          setManualMergeStart({
+            content,
+            filename,
+            baseRevisionId: latest.revisionId,
+          });
+          setSaveError(null);
         }}>继续手工合并</button>
         <button type="button" onClick={() => {
           setConflict(null);
           setLatest(null);
+          setManualMergeStart(null);
+          setSaveError(null);
         }}>取消</button>
       </div>
       {latest && <div className="mt-3 rounded border border-amber-200 bg-white p-2">

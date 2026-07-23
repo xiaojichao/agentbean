@@ -131,9 +131,14 @@ describe('MarkdownDocumentEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: '复制草稿' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('complete local draft'));
     fireEvent.click(screen.getByRole('button', { name: '继续手工合并' }));
+    expect(screen.getByText('latest server content')).toBeTruthy();
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(editor, { target: { value: 'latest server content\n\nmanually merged local changes' } });
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(onSave).toHaveBeenLastCalledWith(
-      'complete local draft',
+      'latest server content\n\nmanually merged local changes',
       'notes.md',
       'revision-2',
     ));
