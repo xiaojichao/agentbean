@@ -152,6 +152,35 @@ describe('server-next SQLite repositories', () => {
         document: { id: initial.document.id, currentRevisionId: 'revision-2' },
         currentRevision: { id: 'revision-2', artifact: { id: 'artifact-doc-2' } },
       }]);
+
+      const rejectedArtifact = {
+        ...nextArtifact,
+        id: 'artifact-doc-rejected',
+        storagePath: 'artifacts/team-1/artifact-doc-rejected/notes.md',
+        createdAt: 300,
+      };
+      await expect(repositories.channelDocuments.addRevision({
+        documentId: initial.document.id,
+        expectedCurrentRevisionId: initial.revision.id,
+        document: { ...initial.document, currentRevisionId: 'revision-rejected', updatedAt: 300 },
+        revision: {
+          id: 'revision-rejected',
+          documentId: initial.document.id,
+          artifact: rejectedArtifact,
+          revision: 2,
+          createdBy: 'user-2',
+          createdAt: 300,
+        },
+        artifact: rejectedArtifact,
+      })).resolves.toBeNull();
+      await expect(repositories.artifacts.getForTeam({
+        teamId: 'team-1',
+        artifactId: rejectedArtifact.id,
+      })).resolves.toBeNull();
+      await expect(repositories.channelDocuments.listRevisions({
+        documentId: initial.document.id,
+      })).resolves.toHaveLength(2);
+
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',

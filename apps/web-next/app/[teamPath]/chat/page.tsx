@@ -656,20 +656,42 @@ export default function ChatPage() {
     });
   }, [activeChannel, activeChannelObj?.archivedAt]);
 
-  const saveOpenMarkdownDocument = useCallback(async (content: string, filename: string) => {
+  const saveOpenMarkdownDocument = useCallback(async (content: string, filename: string, baseRevisionId?: string) => {
     if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
     const result = await channelEvents().saveDocument(
       activeChannel,
       openChannelDocument.document.id,
-      openChannelDocument.document.currentRevisionId,
+      baseRevisionId ?? openChannelDocument.document.currentRevisionId,
       content,
       filename,
     );
-    if (!result.ok || !result.document) throw new Error(result.error ?? '保存失败');
+    if (!result.ok || !result.document) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后手工合并' };
+      }
+      throw new Error(result.error ?? '保存失败');
+    }
     setOpenChannelDocument((current) => current ? { ...current, document: result.document!, content } : null);
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    return { ok: true as const, revisionId: result.document.currentRevisionId };
+  }, [activeChannel, openChannelDocument]);
+
+  const loadLatestOpenMarkdownDocument = useCallback(async () => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().getDocument(activeChannel, openChannelDocument.document.id);
+    if (!result.ok || !result.document) throw new Error(result.error ?? '最新版加载失败');
+    const artifact = result.document.currentRevision.artifact;
+    const previewUrl = messageArtifactUrl(artifact, 'preview', artifact.teamId);
+    if (!previewUrl) throw new Error('最新版没有可用的在线内容');
+    const response = await fetch(previewUrl);
+    if (!response.ok) throw new Error('最新版内容加载失败');
+    return {
+      content: await response.text(),
+      filename: result.document.filename,
+      revisionId: result.document.currentRevisionId,
+    };
   }, [activeChannel, openChannelDocument]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
@@ -1942,11 +1964,20 @@ export default function ChatPage() {
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/60 p-4" role="dialog" aria-modal="true" aria-label={openChannelDocument.document.filename}>
           <div className="flex h-[min(90vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white p-4 shadow-2xl">
             <MarkdownDocumentEditor
+              {...(currentUser?.id && currentTeamId ? {
+                draftIdentity: {
+                  userId: currentUser.id,
+                  teamId: currentTeamId,
+                  documentId: openChannelDocument.document.id,
+                  baseRevisionId: openChannelDocument.document.currentRevisionId,
+                },
+              } : {})}
               filename={openChannelDocument.document.filename}
               initialContent={openChannelDocument.content}
               readOnly={openChannelDocument.readOnly}
               readOnlyReason={openChannelDocument.readOnlyReason}
               onSave={saveOpenMarkdownDocument}
+              onLoadLatest={loadLatestOpenMarkdownDocument}
               onClose={() => setOpenChannelDocument(null)}
               renderPreview={(content) => <MarkdownMessage body={content} />}
             />
