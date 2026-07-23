@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -643,6 +643,42 @@ describe('server-next dev server entry', () => {
     await expect(preview.text()).resolves.toBe(fileContent);
   });
 
+  test('cleans multipart temp files when required fields are missing or the file exceeds the cap', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-cleanup-'));
+    const app = createInMemoryServerNext();
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        maxArtifactBytes: 4,
+      },
+    });
+    cleanups.push(() => server.close());
+
+    const missingChannel = new FormData();
+    missingChannel.append('file', new Blob(['ok'], { type: 'text/plain' }), 'missing-channel.txt');
+    const missingChannelResponse = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload?token=token-1`, {
+      method: 'POST',
+      body: missingChannel,
+    });
+    expect(missingChannelResponse.status).toBe(400);
+
+    const oversized = new FormData();
+    oversized.append('channelId', 'channel-1');
+    oversized.append('file', new Blob(['12345'], { type: 'text/plain' }), 'oversized.txt');
+    const oversizedResponse = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload?token=token-1`, {
+      method: 'POST',
+      body: oversized,
+    });
+    expect(oversizedResponse.status).toBe(413);
+    expect(readdirSync(dataDir).filter((name) => name.endsWith('.part'))).toEqual([]);
+  });
+
   test('encodes artifact download filenames from stored artifact metadata', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-filename-'));
     writeFileSync(join(dataDir, 'stored.txt'), 'stored content');
@@ -677,6 +713,41 @@ describe('server-next dev server entry', () => {
       `attachment; filename="Q2.txt"; filename*=UTF-8''${encodeURIComponent('报告 "Q2"\n✅.txt')}`,
     );
     await expect(response.text()).resolves.toBe('stored content');
+  });
+
+  test('serves artifact media with single byte ranges and rejects unsatisfiable ranges', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-range-'));
+    writeFileSync(join(dataDir, 'media.bin'), '0123456789');
+    const app = {
+      whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
+      getArtifactFile: vi.fn(async () => makeSuccess({
+        artifact: {
+          id: 'artifact-range', teamId: 'team-1', channelId: 'channel-1', filename: 'media.bin',
+          mimeType: 'video/mp4', sizeBytes: 10, createdAt: 1,
+        },
+        storagePath: 'media.bin',
+      })),
+    } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app, Server,
+      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+
+    const partial = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-range/preview?token=token-1`, {
+      headers: { Range: 'bytes=2-5' },
+    });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get('accept-ranges')).toBe('bytes');
+    expect(partial.headers.get('content-range')).toBe('bytes 2-5/10');
+    expect(partial.headers.get('content-length')).toBe('4');
+    await expect(partial.text()).resolves.toBe('2345');
+
+    const invalid = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-range/preview?token=token-1`, {
+      headers: { Range: 'bytes=10-12' },
+    });
+    expect(invalid.status).toBe(416);
+    expect(invalid.headers.get('content-range')).toBe('bytes */10');
   });
 
   test('forces active artifact preview content to download', async () => {
@@ -830,6 +901,7 @@ describe('server-next dev server entry', () => {
         storage: 'memory',
         dataDir: '.agentbean-next-test',
         sessionSecret: 'test-secret',
+        maxArtifactBytes: 250 * 1024 * 1024,
       },
     });
     cleanups.push(() => server.close());
@@ -837,7 +909,7 @@ describe('server-next dev server entry', () => {
     const response = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/upload`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ token: 'token-1', contentBase64: 'a'.repeat(10 * 1024 * 1024 + 1) }),
+      body: JSON.stringify({ token: 'token-1', contentBase64: 'a'.repeat(14 * 1024 * 1024) }),
     });
 
     expect(response.status).toBe(413);

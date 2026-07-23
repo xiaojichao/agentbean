@@ -10,17 +10,24 @@ function serverUrl(path: string): string {
 
 export async function proxyArtifactUpload(req: NextRequest, teamId: string) {
   const token = req.nextUrl.searchParams.get('token') ?? '';
-  const form = await req.formData();
+  const headers = new Headers();
+  const contentType = req.headers.get('content-type');
+  if (contentType) headers.set('content-type', contentType);
+  const contentLength = req.headers.get('content-length');
+  if (contentLength) headers.set('content-length', contentLength);
+  if (token) headers.set('authorization', `Bearer ${token}`);
   const upstream = await fetch(serverUrl(`/api/teams/${encodeURIComponent(teamId)}/artifacts/upload`), {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    body: form,
-  });
+    headers,
+    body: req.body,
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
 
-  const body = await upstream.arrayBuffer();
-  const contentType = upstream.headers.get('content-type');
-  return new NextResponse(body, {
+  const responseHeaders = new Headers();
+  const upstreamContentType = upstream.headers.get('content-type');
+  if (upstreamContentType) responseHeaders.set('content-type', upstreamContentType);
+  return new NextResponse(upstream.body, {
     status: upstream.status,
-    headers: contentType ? { 'content-type': contentType } : undefined,
+    headers: responseHeaders,
   });
 }

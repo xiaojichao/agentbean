@@ -3,6 +3,7 @@ import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDt
 import { io, type Socket } from 'socket.io-client';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
+  assertArtifactUploadWithinLimit,
   artifactUploadFallbackUrls as buildArtifactUploadFallbackUrls,
   artifactUploadProxyUrl as buildArtifactUploadProxyUrl,
   artifactUploadUrl as buildArtifactUploadUrl,
@@ -92,6 +93,7 @@ function cloneFormData(form: FormData): FormData {
 }
 
 export async function uploadArtifact(teamId: string, form: FormData): Promise<Artifact> {
+  assertArtifactUploadWithinLimit(form);
   let lastError: Error | null = null;
   for (const url of artifactUploadFallbackUrls(teamId)) {
     try {

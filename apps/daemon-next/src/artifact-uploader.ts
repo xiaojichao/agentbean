@@ -1,8 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { openAsBlob } from 'node:fs';
+import {
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  DEFAULT_ARTIFACT_RUN_MAX_BYTES,
+  type SkippedArtifactDiagnostic,
+} from '../../../packages/contracts/src/index.js';
 import type { CollectedArtifact } from './artifact-collector.js';
-
-/** 10MB until the streaming upload path lands. */
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface UploadedArtifact {
   id: string;
@@ -24,6 +26,8 @@ export interface UploadArtifactsInput {
   fetch?: typeof fetch;
   maxRetries?: number;
   maxBytes?: number;
+  maxTotalBytes?: number;
+  onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
 }
 
 /**
@@ -37,15 +41,23 @@ export async function uploadArtifacts(
 ): Promise<UploadedArtifact[]> {
   const fetchFn = input.fetch ?? fetch;
   const maxRetries = input.maxRetries ?? 2;
-  const maxBytes = input.maxBytes ?? DEFAULT_MAX_BYTES;
+  const maxBytes = input.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
+  const maxTotalBytes = input.maxTotalBytes ?? DEFAULT_ARTIFACT_RUN_MAX_BYTES;
   const results: UploadedArtifact[] = [];
+  let totalBytes = 0;
 
   for (const artifact of collected) {
     if (artifact.sizeBytes > maxBytes) {
+      input.onSkipped?.({ filename: artifact.filename, relativePath: artifact.relativePath, sizeBytes: artifact.sizeBytes, reason: 'FILE_TOO_LARGE' });
+      continue;
+    }
+    if (totalBytes + artifact.sizeBytes > maxTotalBytes) {
+      input.onSkipped?.({ filename: artifact.filename, relativePath: artifact.relativePath, sizeBytes: artifact.sizeBytes, reason: 'RUN_TOTAL_EXCEEDED' });
       continue;
     }
     const id = await uploadOne(fetchFn, input, artifact, maxRetries);
     if (id) {
+      totalBytes += artifact.sizeBytes;
       results.push({
         id,
         filename: artifact.filename,
@@ -57,6 +69,8 @@ export async function uploadArtifacts(
         role: artifact.role,
         sourceRoot: artifact.sourceRoot,
       });
+    } else {
+      input.onSkipped?.({ filename: artifact.filename, relativePath: artifact.relativePath, sizeBytes: artifact.sizeBytes, reason: 'UPLOAD_FAILED' });
     }
   }
   return results;
@@ -71,8 +85,7 @@ async function uploadOne(
   const url = `${input.serverUrl}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/upload`;
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
     try {
-      const bytes = readFileSync(artifact.absolutePath);
-      const blob = new Blob([bytes], { type: mimeTypeForFilename(artifact.filename) });
+      const blob = await openAsBlob(artifact.absolutePath, { type: mimeTypeForFilename(artifact.filename) });
       const form = new FormData();
       form.append('channelId', input.channelId);
       form.append('artifactRole', artifact.role);

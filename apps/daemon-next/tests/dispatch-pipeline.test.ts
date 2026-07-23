@@ -191,6 +191,39 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     ]);
   });
 
+  test('returns stable skipped-file diagnostics in the Run result', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-artifact-diagnostic-')));
+    const harness = createFakeSocket();
+    writeFileSync(join(cwd, 'oversized.txt'), '12345');
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      artifactMaxBytes: 4,
+      executor: async () => ({
+        body: 'done',
+        workspaceRun: { status: 'succeeded', cwd, startedAt: 1, completedAt: 2 },
+      }),
+    });
+    await client.start();
+
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-artifact-diagnostic', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-artifact-diagnostic', prompt: 'do work',
+      customAgent: { adapterKind: 'claude', command: 'echo', cwd },
+    });
+
+    const resultEmit = harness.emits.find((event) => event.event === AGENT_EVENTS.dispatch.result);
+    expect(resultEmit?.payload).toMatchObject({
+      body: expect.stringContaining('[FILE_TOO_LARGE] oversized.txt (5 bytes)'),
+      workspaceRun: {
+        logExcerpt: expect.stringContaining('[FILE_TOO_LARGE] oversized.txt (5 bytes)'),
+      },
+    });
+  });
+
   test('observes a completed workspace run into profile-isolated local Memory', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-')));
     const localMemoryBaseDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-observer-home-')));
