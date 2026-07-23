@@ -184,6 +184,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channelDocuments.get,
       WEB_EVENTS.channelDocuments.revisions,
       WEB_EVENTS.channelDocuments.save,
+      WEB_EVENTS.channelDocuments.restore,
+      WEB_EVENTS.channelDocuments.publish,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,

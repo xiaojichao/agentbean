@@ -1914,6 +1914,23 @@ function createFileArtifactContentStore(dataDir: string): ArtifactContentStore {
         sha256: createHash('sha256').update(input.content).digest('hex'),
       };
     },
+    async copyContent(input) {
+      if (!input.sourceStoragePath) {
+        throw new Error('Source artifact has no stored content');
+      }
+      const sourcePath = join(dataDir, input.sourceStoragePath);
+      const content = readFileSync(sourcePath);
+      const filename = sanitizeFilename(input.filename);
+      const relativeStoragePath = join('artifacts', input.teamId, input.artifactId, filename);
+      const absoluteDir = join(dataDir, 'artifacts', input.teamId, input.artifactId);
+      mkdirSync(absoluteDir, { recursive: true });
+      writeFileSync(join(absoluteDir, filename), content);
+      return {
+        storagePath: relativeStoragePath,
+        sizeBytes: content.length,
+        sha256: createHash('sha256').update(content).digest('hex'),
+      };
+    },
     async deleteContent(input) {
       rmSync(join(dataDir, 'artifacts', input.teamId, input.artifactId), { recursive: true, force: true });
     },

@@ -203,6 +203,197 @@ describe('频道 Markdown 文档', () => {
     })).resolves.toHaveLength(2);
     expect(deleteContent).toHaveBeenCalledTimes(1);
   });
+
+  test('历史版本返回来源和发布状态，普通保存幂等重试且不创建频道消息', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'artifact-2', 'revision-2']) },
+      artifactContentStore: {
+        async writeContent(input) {
+          return {
+            storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.length,
+            sha256: `sha-${input.artifactId}`,
+          };
+        },
+      },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+
+    const input = {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      baseRevisionId: initial.revision.id, content: '# second', idempotencyKey: 'save-1',
+    };
+    const first = await app.saveChannelDocument(input);
+    const retry = await app.saveChannelDocument(input);
+
+    expect(first).toMatchObject({ ok: true, document: { currentRevision: { revision: 2, source: 'edit', published: false } } });
+    expect(retry).toEqual(first);
+    await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toHaveLength(2);
+    await expect(repositories.messages.listByChannel('channel-1', 20)).resolves.toHaveLength(0);
+
+    await expect(app.listChannelDocumentRevisions({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+    })).resolves.toMatchObject({
+      ok: true,
+      revisions: [
+        { revision: 2, createdBy: 'user-1', createdAt: 200, source: 'edit', published: false },
+        { revision: 1, source: 'attachment', published: false },
+      ],
+    });
+  });
+
+  test('恢复历史 revision 会复制内容创建新 current revision，保留后来版本并校验并发基线', async () => {
+    const repositories = createInMemoryRepositories();
+    const copyContent = vi.fn().mockResolvedValue({
+      storagePath: 'artifacts/team-1/artifact-3/notes.md',
+      sizeBytes: 7,
+      sha256: 'sha-artifact-3',
+    });
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 300 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'artifact-2', 'revision-2', 'artifact-3', 'revision-3']) },
+      artifactContentStore: {
+        async writeContent(input) {
+          return {
+            storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.length,
+            sha256: `sha-${input.artifactId}`,
+          };
+        },
+        copyContent,
+      },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+    const saved = await app.saveChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      baseRevisionId: initial.revision.id, content: '# second', idempotencyKey: 'save-1',
+    });
+    if (!saved.ok) throw new Error(saved.error);
+
+    await expect(app.restoreChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      revisionId: initial.revision.id, baseRevisionId: 'stale', idempotencyKey: 'restore-stale',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+
+    const restoreInput = {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      revisionId: initial.revision.id, baseRevisionId: saved.document.currentRevisionId, idempotencyKey: 'restore-1',
+    };
+    const restored = await app.restoreChannelDocument(restoreInput);
+    const retry = await app.restoreChannelDocument(restoreInput);
+
+    expect(restored).toMatchObject({
+      ok: true,
+      document: {
+        currentRevisionId: 'revision-3',
+        currentRevision: {
+          revision: 3,
+          source: 'restore',
+          restoredFromRevisionId: initial.revision.id,
+          artifact: { id: 'artifact-3' },
+        },
+      },
+    });
+    expect(retry).toEqual(restored);
+    expect(copyContent).toHaveBeenCalledWith(expect.objectContaining({
+      sourceArtifactId: 'artifact-1',
+      artifactId: 'artifact-3',
+    }));
+    await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id }))
+      .resolves.toMatchObject([{ revision: 3 }, { revision: 2 }, { revision: 1 }]);
+  });
+
+  test('保存并分享到频道原子创建 publication 和引用新 Artifact 的消息，重试不重复且后续编辑不改变历史附件', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 400 },
+      ids: { nextId: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'artifact-2', 'revision-2', 'publication-2', 'message-2',
+        'artifact-3', 'revision-3',
+      ]) },
+      artifactContentStore: {
+        async writeContent(input) {
+          return {
+            storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.length,
+            sha256: `sha-${input.artifactId}`,
+          };
+        },
+      },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+
+    const publishInput = {
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      baseRevisionId: initial.revision.id, content: '# published', filename: 'published.md', idempotencyKey: 'publish-1',
+    };
+    const published = await app.publishChannelDocument(publishInput);
+    const retry = await app.publishChannelDocument(publishInput);
+    expect(published).toMatchObject({
+      ok: true,
+      document: {
+        currentRevision: {
+          id: 'revision-2',
+          published: true,
+          publication: { id: 'publication-2', messageId: 'message-2', publishedBy: 'user-1', publishedAt: 400 },
+          artifact: { id: 'artifact-2', messageId: 'message-2' },
+        },
+      },
+      message: { id: 'message-2', meta: { artifactIds: ['artifact-2'], channelDocumentRevisionId: 'revision-2' } },
+    });
+    expect(retry).toEqual(published);
+    await expect(repositories.messages.listByChannel('channel-1', 20)).resolves.toHaveLength(1);
+
+    const edited = await app.saveChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      baseRevisionId: 'revision-2', content: '# later edit', idempotencyKey: 'save-later',
+    });
+    expect(edited).toMatchObject({ ok: true, document: { currentRevision: { id: 'revision-3' } } });
+    await expect(repositories.messages.getById('message-2')).resolves.toMatchObject({
+      meta: { artifactIds: ['artifact-2'], channelDocumentRevisionId: 'revision-2' },
+    });
+  });
+
+  test('归档频道保留历史读取但拒绝恢复和发布', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const initial = createInitialRecords();
+    await repositories.artifacts.create(initial.revision.artifact);
+    await repositories.channelDocuments.create(initial);
+    await repositories.channels.archive({ channelId: 'channel-1', timestamp: 500 });
+
+    await expect(app.listChannelDocumentRevisions({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+    })).resolves.toMatchObject({ ok: true, revisions: [{ revision: 1 }] });
+    await expect(app.restoreChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      revisionId: initial.revision.id, baseRevisionId: initial.revision.id, idempotencyKey: 'restore-archived',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(app.publishChannelDocument({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', documentId: initial.document.id,
+      baseRevisionId: initial.revision.id, content: '# no', idempotencyKey: 'publish-archived',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
 });
 
 function createInitialRecords(): { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord } {
@@ -226,6 +417,8 @@ function createInitialRecords(): { document: ChannelDocumentRecord; revision: Ch
     revision: 1,
     createdBy: 'user-1',
     createdAt: 100,
+    source: 'attachment',
+    published: false,
   };
   return {
     document: {

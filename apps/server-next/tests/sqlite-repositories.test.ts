@@ -121,7 +121,7 @@ describe('server-next SQLite repositories', () => {
         },
         revision: {
           id: 'revision-1', documentId: 'channel-document:artifact-doc-1', artifact: initialArtifact,
-          revision: 1, createdBy: 'user-1', createdAt: 100,
+          revision: 1, createdBy: 'user-1', createdAt: 100, source: 'attachment' as const, published: false,
         },
       };
       await repositories.channelDocuments.create(initial);
@@ -132,7 +132,7 @@ describe('server-next SQLite repositories', () => {
       };
       const nextRevision = {
         id: 'revision-2', documentId: initial.document.id, artifact: nextArtifact,
-        revision: 2, createdBy: 'user-1', createdAt: 200,
+        revision: 2, createdBy: 'user-1', createdAt: 200, source: 'edit' as const, published: false,
       };
       await expect(repositories.channelDocuments.addRevision({
         documentId: initial.document.id,
@@ -140,7 +140,11 @@ describe('server-next SQLite repositories', () => {
         document: { ...initial.document, currentRevisionId: nextRevision.id, updatedAt: 200 },
         revision: nextRevision,
         artifact: nextArtifact,
-      })).resolves.toMatchObject({ currentRevisionId: 'revision-2' });
+        operation: {
+          documentId: initial.document.id, idempotencyKey: 'save-1', operationType: 'save',
+          requestFingerprint: 'fingerprint-1', revisionId: nextRevision.id,
+        },
+      })).resolves.toMatchObject({ document: { currentRevisionId: 'revision-2' } });
 
       await expect(repositories.channelDocuments.listRevisions({ documentId: initial.document.id })).resolves.toMatchObject([
         { id: 'revision-2', artifact: { id: 'artifact-doc-2', storagePath: nextArtifact.storagePath } },
@@ -170,8 +174,14 @@ describe('server-next SQLite repositories', () => {
           revision: 2,
           createdBy: 'user-2',
           createdAt: 300,
+          source: 'edit',
+          published: false,
         },
         artifact: rejectedArtifact,
+        operation: {
+          documentId: initial.document.id, idempotencyKey: 'save-rejected', operationType: 'save',
+          requestFingerprint: 'fingerprint-rejected', revisionId: 'revision-rejected',
+        },
       })).resolves.toBeNull();
       await expect(repositories.artifacts.getForTeam({
         teamId: 'team-1',
