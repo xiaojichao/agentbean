@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
@@ -144,6 +144,8 @@ export interface ServerNextUseCases {
   cancelDispatch(input: CancelDispatchInput): Promise<Ack<{ dispatch: DispatchDto; task?: TaskDto }>>;
   cancelChannelDispatches(input: CancelChannelDispatchesInput): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
+  listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
+  searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchMessages(input: SearchMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   getMessageContext(input: GetMessageContextInput): Promise<Ack<{ targetMessageId: ID; messages: MessageDto[]; threadRootId?: ID }>>;
   convertMessageToTask(input: ConvertMessageToTaskInput): Promise<Ack<{ message: MessageDto; task: TaskDto }>>;
@@ -555,6 +557,18 @@ export type AcceptDispatchResult =
 export interface ListChannelMessagesInput {
   channelId: string;
   limit: number;
+}
+
+export interface ListChannelFilesInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  cursor?: string;
+  pageSize?: number;
+}
+
+export interface SearchChannelFilesInput extends ListChannelFilesInput {
+  query: string;
 }
 
 export interface SearchMessagesInput {
@@ -3166,6 +3180,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         messages: await enrichMessagesWithArtifacts(repositories, messages),
       });
+    },
+
+    async listChannelFiles(fileInput) {
+      return listPublicChannelFiles(repositories, fileInput);
+    },
+
+    async searchChannelFiles(fileInput) {
+      return listPublicChannelFiles(repositories, fileInput);
     },
 
     async searchMessages(searchInput) {
@@ -7463,6 +7485,92 @@ async function ensureUserCanViewChannel(
   return makeSuccess({ channel });
 }
 
+type ChannelFileCursor = { createdAt: number; id: string };
+
+async function listPublicChannelFiles(
+  repositories: ServerNextRepositories,
+  input: ListChannelFilesInput | SearchChannelFilesInput,
+): Promise<Ack<ChannelFilesResultDto>> {
+  if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+    return makeFailure('FORBIDDEN', 'User is not a team member');
+  }
+  const channelAccess = await ensureUserCanViewChannel(repositories, input);
+  if (!channelAccess.ok) return channelAccess;
+
+  const cursor = decodeChannelFileCursor(input.cursor);
+  if (input.cursor && !cursor) return makeFailure('VALIDATION_ERROR', 'Invalid channel file cursor');
+  const query = 'query' in input ? input.query.trim().toLocaleLowerCase() : '';
+  if ('query' in input && query.length < 1) return makeFailure('VALIDATION_ERROR', 'File search query is required');
+  const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize ?? 50)));
+  const candidates = await repositories.artifacts.listByChannel({ teamId: input.teamId, channelId: input.channelId });
+  const entries: ChannelFileEntryDto[] = [];
+  for (const artifact of candidates) {
+    if (!artifact.messageId || isWorkspaceRunLogArtifact(artifact)) continue;
+    if (query && !artifact.filename.toLocaleLowerCase().includes(query)) continue;
+    if (cursor && !isAfterChannelFileCursor(artifact, cursor)) continue;
+    const message = await repositories.messages.getById(artifact.messageId);
+    if (!message || message.channelId !== input.channelId || isDeletedMessage(message)) continue;
+    if (!(await isPublicChannelFileArtifact(repositories, artifact))) continue;
+    entries.push({
+      artifact: toArtifactDto(artifact),
+      source: {
+        messageId: message.id,
+        ...(message.threadId ? { threadId: message.threadId } : {}),
+        senderKind: message.senderKind,
+        senderId: message.senderId,
+        messageCreatedAt: message.createdAt,
+      },
+    });
+  }
+  entries.sort((left, right) => compareChannelFiles(right.artifact, left.artifact));
+  const page = entries.slice(0, pageSize);
+  const last = page[page.length - 1]?.artifact;
+  return makeSuccess({
+    files: page,
+    ...(entries.length > pageSize && last ? { nextCursor: encodeChannelFileCursor(last) } : {}),
+  });
+}
+
+async function isPublicChannelFileArtifact(
+  repositories: ServerNextRepositories,
+  artifact: ArtifactRecord,
+): Promise<boolean> {
+  if (artifact.workspaceRunId) {
+    const run = await repositories.workspaceRuns.getForTeam({ teamId: artifact.teamId, runId: artifact.workspaceRunId });
+    if (!run || !(await isPublicWorkspaceRun(repositories, run))) return false;
+  }
+  if (artifact.dispatchId) {
+    const attempt = await repositories.management.dispatchAttempts.getByDispatchId(artifact.dispatchId);
+    if (!attempt) return false;
+  }
+  return isPublicArtifact(repositories, artifact);
+}
+
+function compareChannelFiles(left: Pick<ArtifactRecord, 'createdAt' | 'id'>, right: Pick<ArtifactRecord, 'createdAt' | 'id'>): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  return left.id.localeCompare(right.id);
+}
+
+function isAfterChannelFileCursor(artifact: ArtifactRecord, cursor: ChannelFileCursor): boolean {
+  return compareChannelFiles(artifact, cursor) < 0;
+}
+
+function encodeChannelFileCursor(artifact: Pick<ArtifactRecord, 'createdAt' | 'id'>): string {
+  return Buffer.from(JSON.stringify({ createdAt: artifact.createdAt, id: artifact.id }), 'utf8').toString('base64url');
+}
+
+function decodeChannelFileCursor(value: string | undefined): ChannelFileCursor | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<ChannelFileCursor>;
+    return typeof parsed.createdAt === 'number' && Number.isFinite(parsed.createdAt) && typeof parsed.id === 'string' && parsed.id.length > 0
+      ? { createdAt: parsed.createdAt, id: parsed.id }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // 判断 web 用户能否管理某设备：设备拥有者 或 系统管理员（user.role='admin'）。
 // 团队角色（team owner/admin）不再放行 —— 业务规则：用户只能修改自己的设备。
 async function canManageDeviceAsUser(
@@ -7862,4 +7970,3 @@ function systemUserMemoryErrorAck(error: unknown): Ack<never> | undefined {
 function rethrow(error: unknown): never {
   throw error;
 }
-

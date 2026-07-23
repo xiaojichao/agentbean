@@ -152,6 +152,10 @@ export const WEB_EVENTS = {
     archive: 'channel:archive',
     delete: 'channel:delete',
   },
+  channelFiles: {
+    list: 'channel-files:list',
+    search: 'channel-files:search',
+  },
   dm: {
     start: 'dm:start',
     list: 'dm:list',

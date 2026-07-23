@@ -1243,6 +1243,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async listByMessage(messageId) {
         return Array.from(artifacts.values()).filter((artifact) => artifact.messageId === messageId);
       },
+      async listByChannel(input) {
+        return Array.from(artifacts.values()).filter((artifact) =>
+          artifact.teamId === input.teamId && artifact.channelId === input.channelId);
+      },
       async listByWorkspaceRunForChannel(input) {
         return Array.from(artifacts.values()).filter((artifact) =>
           artifact.workspaceRunId === input.runId

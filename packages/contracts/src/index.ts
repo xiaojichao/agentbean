@@ -8,6 +8,7 @@ export * from './message.js';
 export * from './dispatch.js';
 export * from './dispatch-failure.js';
 export * from './artifact.js';
+export * from './channel-file.js';
 export * from './task.js';
 export * from './management.js';
 export * from './task-coordination.js';
