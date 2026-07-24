@@ -222,18 +222,6 @@ export async function runAgentBeanNextBrowserSmoke({
       check('browser-artifact-download-readable', true, 'Browser can fetch artifact download bytes from the rendered link'),
     );
 
-    const channelFilesSmoke = await exerciseChannelFilesBrowserSmoke({
-      page,
-      filename: artifactSmoke.filename,
-      expectedBody: artifactSmoke.downloadBody,
-      timeoutMs,
-    });
-    checks.push(
-      check('browser-channel-files-root-visible', true, 'Browser opens the channel file library root'),
-      check('browser-channel-files-entry-visible', true, 'Channel file library renders the uploaded artifact'),
-      check('browser-channel-files-download-readable', true, 'Channel file library download link returns the uploaded bytes'),
-    );
-
     await page.screenshot(artifacts.screenshot);
     checks.push(check('browser-final-screenshot', true, `Saved final screenshot: ${artifacts.screenshot}`));
 
@@ -369,6 +357,16 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         true,
         `Sent chat message "${chatResult.body}" and restored it after refresh`,
       ),
+    );
+    const channelFilesResult = await exerciseWebUiChannelFilesBrowserSmoke({
+      page,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check('webui-channel-files-root-visible', true, 'WebUI opens the channel file library root'),
+      check('webui-channel-files-entry-visible', true, `WebUI renders ${channelFilesResult.filename} in the channel file library`),
+      check('webui-channel-files-download-readable', true, 'WebUI channel file download returns the uploaded bytes'),
     );
 
     const channelResult = await exerciseWebUiChannelsBusinessSmoke({
@@ -3555,6 +3553,31 @@ export async function exerciseChannelFilesBrowserSmoke({ page, filename, expecte
     throw new Error('Channel file library download failed');
   }
   return result;
+}
+
+export async function exerciseWebUiChannelFilesBrowserSmoke({ page, suffix, timeoutMs }) {
+  const filename = `webui-channel-files-${suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-24)}.md`;
+  const content = '# WebUI channel file smoke\n';
+  const body = `channel file upload ${suffix}`;
+  await page.setFileInputFiles('[data-smoke="chat-file-input"]', [{
+    name: filename,
+    type: 'text/markdown',
+    content,
+  }]);
+  await page.setInputValue('[data-smoke="chat-message-input"]', body);
+  await page.waitForFunction(
+    'document.querySelector(\'[data-smoke="chat-message-send"]\')?.disabled === false',
+    'channel file upload to become sendable',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="chat-message-send"]');
+  await waitForWebUiChatMessage({ page, body, timeoutMs });
+  return exerciseChannelFilesBrowserSmoke({
+    page,
+    filename,
+    expectedBody: content,
+    timeoutMs,
+  });
 }
 
 export async function exerciseTaskBrowserSmoke({ page, suffix, timeoutMs }) {
