@@ -1,4 +1,5 @@
 import type { ID, UnixMs } from './common.js';
+import type { ActiveMemoryAttributionDto } from './active-memory-context.js';
 
 export type ManagementMode = 'direct' | 'shadow' | 'managed';
 
@@ -141,6 +142,13 @@ export interface ManagementCheckpointContextHintsV1 {
   }[];
   readonly unresolvedQuestions: readonly string[];
   readonly nextAction?: string;
+  /**
+   * #720 Active Memory 渲染片段。由 server 在 checkpoint 写入时调 resolver 产出（已完成权限过滤+渲染）；
+   * daemon 恢复时读出拼入 systemPrompt。可选字段——旧 checkpoint 恢复时为 undefined（向后兼容）。
+   */
+  readonly activeMemorySection?: string;
+  /** #720 Active Memory 归因摘要（ID+来源码列表，不存正文）。 */
+  readonly activeMemoryAttribution?: ActiveMemoryAttributionDto;
 }
 
 export interface ManagementCheckpointV1 {

@@ -37,6 +37,7 @@ import {
   resolveTaskFollowupBinding,
 } from '../../../../packages/domain/src/index.js';
 import type {
+  ActiveMemoryAttributionDto,
   AgentStatus,
   ChannelCoordinationDecisionRecord,
   ChannelCoordinationDecisionUsage,
@@ -59,6 +60,7 @@ import type {
   TeamPiPolicyRepository,
   TeamRepository,
 } from './repositories.js';
+import type { ActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 
 /** PI Provider 解析目标的最小依赖（仅 resolveInvocationTarget，避免引入完整服务类型）。 */
 export interface CoordinatorModelResolver {
@@ -91,6 +93,8 @@ export interface ChannelCoordinatorDependencies {
   readonly agents: AgentRepository;
   readonly teamPolicy: TeamPiPolicyRepository;
   readonly modelResolver: CoordinatorModelResolver;
+  /** #720 Active Memory Context 解析器（AC#8 共享接缝）。 */
+  readonly memoryContextResolver: ActiveMemoryContextResolver;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly fetch?: typeof fetch;
@@ -135,13 +139,35 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   // Provider timeout 最高允许 10 分钟；lease 必须更长，避免合法慢调用被其他 worker 重领。
   const processingTimeoutMs = deps.processingTimeoutMs ?? 11 * 60_000;
 
-  function buildRequest(humanMessageBody: string): ManagementModelRequest {
+  function buildRequest(humanMessageBody: string, memorySection: string): ManagementModelRequest {
+    const systemPrompt = memorySection
+      ? `${PI_COORDINATION_SYSTEM_PROMPT}\n\n${memorySection}`
+      : PI_COORDINATION_SYSTEM_PROMPT;
     return {
-      systemPrompt: PI_COORDINATION_SYSTEM_PROMPT,
+      systemPrompt,
       sessionContext: EMPTY_SESSION_CONTEXT as never,
       messages: [{ role: 'user', content: [{ type: 'text', text: humanMessageBody }] }],
       tools: [],
     };
+  }
+
+  /** 合并二次检索（agent_request projection）的 attribution 到初始 attribution（AC#4）。 */
+  function mergeAttribution(
+    base: ActiveMemoryAttributionDto | null,
+    extra: ActiveMemoryAttributionDto,
+  ): ActiveMemoryAttributionDto | null {
+    if (extra.entries.length === 0) return base;
+    if (!base) return extra;
+    const seen = new Set(base.entries.map((entry) => `${entry.source}:${entry.id}`));
+    const entries = [...base.entries];
+    for (const entry of extra.entries) {
+      const key = `${entry.source}:${entry.id}`;
+      if (!seen.has(key)) {
+        entries.push(entry);
+        seen.add(key);
+      }
+    }
+    return { schemaVersion: 1, entries, contextHash: base.contextHash };
   }
 
   function mapAdapterError(error: unknown): CoordinationErrorKind {
@@ -339,6 +365,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       readonly targetScopeValid: boolean;
       readonly riskLevel: ChannelCoordinationDecisionRecord['riskLevel'];
       readonly gateStatus: ChannelCoordinationGateStatus;
+      readonly memoryAttribution: ActiveMemoryAttributionDto | null;
     },
     now: number,
   ): Promise<CoordinationJobOutcome> {
@@ -480,6 +507,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         linkedTaskId,
         blockingReason: effectiveVerdict.status === 'blocked' ? effectiveVerdict.reason : null,
         supersededByDecisionId: null,
+        memoryAttribution: ctx.memoryAttribution,
         idempotencyKey: `decision:${job.id}`,
         createdAt: now,
         updatedAt: now,
@@ -529,6 +557,8 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         linkedTaskId: null,
         blockingReason: null,
         supersededByDecisionId: null,
+        // task 4 正式接入：resolved Decision 写真实 memoryAttribution；当前占位 null。
+        memoryAttribution: null,
         idempotencyKey: `decision:${job.id}`,
         createdAt: now,
         updatedAt: now,
@@ -592,6 +622,24 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       return { kind: 'terminal', status: 'failed' };
     }
 
+    // #720 Active Memory Context（AC#1/2/8）：buildRequest 前解析最小可见 memory，失败降级为空（不阻塞协调）。
+    let memoryAttribution: ActiveMemoryAttributionDto | null = null;
+    let memorySection = '';
+    try {
+      const memoryResult = await deps.memoryContextResolver.resolve({
+        teamId: job.teamId,
+        channelId: job.channelId,
+        messageId: job.messageId,
+        senderUserId: humanMessage.senderId,
+        prompt: humanMessage.body,
+        includeAgentProjections: false,
+      });
+      memorySection = memoryResult.renderedSection;
+      memoryAttribution = memoryResult.attribution;
+    } catch {
+      memoryAttribution = null;
+    }
+
     const claimed = await deps.jobs.claimForProcessing({
       jobId: job.id,
       now,
@@ -650,7 +698,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         // 不强制 response metadata：usage 缺失 → null（unknown, AC#8）而非报错。
         fetch: fetchFn,
       });
-      response = await adapter.respond(buildRequest(humanMessage.body), { callCount: 1 });
+      response = await adapter.respond(buildRequest(humanMessage.body, memorySection), { callCount: 1 });
     } catch (error) {
       return handleUnrecoverable(job, attempt, mapAdapterError(error), toUsage(null, null), null, now);
     }
@@ -675,6 +723,23 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     const policy = await deps.teamPolicy.getOrDefault(job.teamId);
     const explicitTarget = computeExplicitTarget(humanMessage.meta);
     const targetAgentId = resolveTargetAgentId(parsed, humanMessage.meta);
+    // AC#4: agent_request 时按需二次检索目标 Agent 投影（不全量注入 prompt，仅追加 attribution）。
+    if (parsed.kind === 'resolved' && parsed.intent === 'agent_request' && targetAgentId) {
+      try {
+        const agentMemory = await deps.memoryContextResolver.resolve({
+          teamId: job.teamId,
+          channelId: job.channelId,
+          messageId: job.messageId,
+          senderUserId: humanMessage.senderId,
+          prompt: humanMessage.body,
+          targetAgentId,
+          includeAgentProjections: true,
+        });
+        memoryAttribution = mergeAttribution(memoryAttribution, agentMemory.attribution);
+      } catch {
+        /* 二次检索失败保持初始 attribution */
+      }
+    }
     const senderRole = await deps.teams.getMemberRole(job.teamId, humanMessage.senderId);
     const senderAuthorized = Boolean(
       senderRole &&
@@ -727,6 +792,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         targetScopeValid,
         riskLevel: assessedRisk,
         gateStatus: verdict.status,
+        memoryAttribution,
       },
       now,
     );
