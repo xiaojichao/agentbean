@@ -45,7 +45,7 @@ import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-p
 import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { DEFAULT_ARTIFACT_MAX_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -143,26 +143,6 @@ const INTERNAL_HTTP_ERROR_MESSAGE = 'Internal server error';
 const MAX_LEGACY_ARTIFACT_UPLOAD_BODY_BYTES = 10 * 1024 * 1024;
 const DEFAULT_WORKSPACE_LOG_TAIL_LINES = 200;
 const MAX_WORKSPACE_LOG_RESPONSE_BYTES = 64 * 1024;
-const ACTIVE_PREVIEW_MIME_TYPES = new Set([
-  'application/ecmascript',
-  'application/javascript',
-  'application/xhtml+xml',
-  'image/svg+xml',
-  'text/ecmascript',
-  'text/html',
-  'text/javascript',
-]);
-const SAFE_ARTIFACT_PREVIEW_MIME_TYPES = new Set([
-  'application/json',
-  'application/pdf',
-  'image/gif',
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'text/csv',
-  'text/markdown',
-  'text/plain',
-]);
 const WORKSPACE_RUN_STATUSES = new Set<WorkspaceRunStatus>([
   'running',
   'succeeded',
@@ -1322,9 +1302,7 @@ function buildContentDisposition(disposition: 'inline' | 'attachment', filename:
 }
 
 function shouldForceArtifactDownload(mimeType: string): boolean {
-  const normalized = mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? '';
-  return ACTIVE_PREVIEW_MIME_TYPES.has(normalized)
-    || !SAFE_ARTIFACT_PREVIEW_MIME_TYPES.has(normalized) && !normalized.startsWith('video/') && !normalized.startsWith('audio/');
+  return !isSafeArtifactInlinePreviewMimeType(mimeType);
 }
 
 function resolveStoredArtifactPath(

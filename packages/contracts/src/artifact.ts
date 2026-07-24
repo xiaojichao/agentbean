@@ -26,6 +26,55 @@ export interface ArtifactPreviewDto {
 export const DEFAULT_ARTIFACT_MAX_BYTES = 250 * 1024 * 1024;
 export const DEFAULT_ARTIFACT_RUN_MAX_BYTES = 1024 * 1024 * 1024;
 
+const SAFE_ARTIFACT_INLINE_MIME_TYPES = new Set([
+  'application/json',
+  'application/pdf',
+  'image/avif',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/csv',
+  'text/markdown',
+  'text/plain',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/wav',
+  'audio/ogg',
+]);
+
+const ARTIFACT_PREVIEW_DERIVATIVE_MIME_TYPES = new Set([
+  'application/pdf',
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/ogg',
+  'audio/wav',
+  'image/avif',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/svg+xml',
+  'image/webp',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+]);
+
+export function normalizeArtifactMimeType(mimeType: string): string {
+  return mimeType.toLowerCase().split(';', 1)[0]?.trim() ?? '';
+}
+
+export function isSafeArtifactInlinePreviewMimeType(mimeType: string): boolean {
+  return SAFE_ARTIFACT_INLINE_MIME_TYPES.has(normalizeArtifactMimeType(mimeType));
+}
+
+export function supportsArtifactPreviewDerivativeMimeType(mimeType: string): boolean {
+  return ARTIFACT_PREVIEW_DERIVATIVE_MIME_TYPES.has(normalizeArtifactMimeType(mimeType));
+}
+
 export type ArtifactSkipReason =
   | 'FILE_TOO_LARGE'
   | 'RUN_TOTAL_EXCEEDED'

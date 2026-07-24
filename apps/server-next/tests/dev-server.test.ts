@@ -879,14 +879,23 @@ describe('server-next dev server entry', () => {
     await expect(full.text()).resolves.toBe('0123456789');
   });
 
-  test('forces active artifact preview content to download', async () => {
+  test('forces active and unsupported media preview content to download', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifact-active-preview-'));
     writeFileSync(join(dataDir, 'active.html'), '<script>localStorage.token</script>');
+    writeFileSync(join(dataDir, 'unknown.audio'), 'unknown audio');
     const app = {
       whoami: vi.fn(async () => makeSuccess({ user: { id: 'user-1', username: 'shaw', createdAt: 1 } })),
-      getArtifactFile: vi.fn(async () =>
+      getArtifactFile: vi.fn(async ({ artifactId }: { artifactId: string }) =>
         makeSuccess({
-          artifact: {
+          artifact: artifactId === 'artifact-audio' ? {
+            id: artifactId,
+            teamId: 'team-1',
+            channelId: 'channel-1',
+            filename: 'unknown.audio',
+            mimeType: 'audio/x-unknown',
+            sizeBytes: 13,
+            createdAt: 1,
+          } : {
             id: 'artifact-1',
             teamId: 'team-1',
             channelId: 'channel-1',
@@ -895,7 +904,7 @@ describe('server-next dev server entry', () => {
             sizeBytes: 35,
             createdAt: 1,
           },
-          storagePath: 'active.html',
+          storagePath: artifactId === 'artifact-audio' ? 'unknown.audio' : 'active.html',
         }),
       ),
     } as unknown as ServerNextUseCases;
@@ -912,6 +921,11 @@ describe('server-next dev server entry', () => {
     expect(response.headers.get('content-disposition')).toContain('attachment');
     expect(response.headers.get('content-disposition')).toContain('active.html');
     await expect(response.text()).resolves.toBe('<script>localStorage.token</script>');
+
+    const unsupportedAudio = await fetch(`${server.baseUrl}/api/teams/team-1/artifacts/artifact-audio/preview?token=token-1`);
+    expect(unsupportedAudio.status).toBe(200);
+    expect(unsupportedAudio.headers.get('content-disposition')).toContain('attachment');
+    await expect(unsupportedAudio.text()).resolves.toBe('unknown audio');
   });
 
   test('限制 Markdown 在线预览大小并要求 UTF-8，同时保留下载能力', async () => {

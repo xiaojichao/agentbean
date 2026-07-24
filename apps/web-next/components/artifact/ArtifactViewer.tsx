@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Download, X } from 'lucide-react';
+import { normalizeArtifactMimeType } from '@agentbean/contracts';
 import type { Artifact } from '@/lib/schema';
 
 export interface ArtifactViewerProps {
@@ -101,9 +102,11 @@ export function isMarkdownArtifact(artifact: Artifact): boolean {
 
 export function isInlineTextArtifact(artifact: Artifact): boolean {
   const name = artifact.filename.toLowerCase();
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
   return isMarkdownArtifact(artifact)
-    || artifact.mimeType.startsWith('text/')
-    || artifact.mimeType === 'application/json'
+    || mimeType === 'text/plain'
+    || mimeType === 'text/csv'
+    || mimeType === 'application/json'
     || name.endsWith('.txt')
     || name.endsWith('.json')
     || name.endsWith('.csv');
@@ -120,10 +123,12 @@ export function formatArtifactTextPreview(artifact: Artifact, text: string): str
 
 export function artifactKind(artifact: Artifact): { previewLabel: string; documentLabel: string } {
   const name = artifact.filename.toLowerCase();
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
   if (isMarkdownArtifact(artifact)) return { previewLabel: 'Markdown 预览', documentLabel: 'Markdown 文档' };
-  if (artifact.mimeType.startsWith('text/') || name.endsWith('.txt')) return { previewLabel: '文本预览', documentLabel: '文本文件' };
-  if (artifact.mimeType === 'application/pdf' || name.endsWith('.pdf')) return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
-  if (name.endsWith('.json') || artifact.mimeType === 'application/json') return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
+  if (mimeType === 'text/plain' || name.endsWith('.txt')) return { previewLabel: '文本预览', documentLabel: '文本文件' };
+  if (mimeType === 'text/csv' || name.endsWith('.csv')) return { previewLabel: 'CSV 预览', documentLabel: 'CSV 文件' };
+  if (mimeType === 'application/pdf' || name.endsWith('.pdf')) return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
+  if (name.endsWith('.json') || mimeType === 'application/json') return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
   return { previewLabel: '文件预览', documentLabel: '附件文件' };
 }
 

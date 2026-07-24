@@ -2,6 +2,7 @@
 
 import { useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Download, Eye, LoaderCircle, Paperclip, Play } from 'lucide-react';
+import { isSafeArtifactInlinePreviewMimeType, normalizeArtifactMimeType } from '@agentbean/contracts';
 import type { Artifact } from '@/lib/schema';
 import { ArtifactViewer, artifactKind, formatFileSize } from './ArtifactViewer';
 
@@ -17,11 +18,13 @@ export interface ArtifactCardProps {
 export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null, downloadUrl = null, imagePrimaryAction = 'preview', renderTextPreview }: ArtifactCardProps) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const viewerTriggerRef = useRef<HTMLElement | null>(null);
-  const canPreview = Boolean(previewUrl);
-  const imageArtifact = artifact.mimeType.startsWith('image/');
-  const videoArtifact = artifact.mimeType.startsWith('video/');
+  const effectivePreviewUrl = resolveArtifactPreviewUrl(artifact, previewUrl);
+  const canPreview = Boolean(effectivePreviewUrl);
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
+  const imageArtifact = mimeType.startsWith('image/');
+  const videoArtifact = mimeType.startsWith('video/');
   const previewProcessing = artifact.preview?.status === 'pending' || artifact.preview?.status === 'processing';
-  const cardImageUrl = thumbnailUrl ?? (imageArtifact ? previewUrl : null);
+  const cardImageUrl = imageArtifact ? thumbnailUrl : null;
   const labels = imageArtifact
     ? { preview: '预览图片', download: '下载图片' }
     : { preview: '预览文件', download: '下载文件' };
@@ -56,7 +59,7 @@ export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null,
               <span className="truncate">{artifact.filename}</span>
             </div>
           )}
-          <ArtifactActions previewUrl={previewUrl} downloadUrl={downloadUrl} labels={labels} onPreview={openViewer} />
+          <ArtifactActions previewUrl={effectivePreviewUrl} downloadUrl={downloadUrl} labels={labels} onPreview={openViewer} />
           <div className="mt-1 truncate text-xs text-neutral-500">{artifact.filename}</div>
         </div>
       ) : (
@@ -82,12 +85,22 @@ export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null,
               <span className="mt-0.5 block truncate text-[11px] text-neutral-400">{artifactKind(artifact).documentLabel}</span>
             </span>
           </button>
-          <ArtifactActions previewUrl={previewUrl} downloadUrl={downloadUrl} labels={labels} onPreview={openViewer} className="right-2 top-1/2 -translate-y-1/2" />
+          <ArtifactActions previewUrl={effectivePreviewUrl} downloadUrl={downloadUrl} labels={labels} onPreview={openViewer} className="right-2 top-1/2 -translate-y-1/2" />
         </div>
       )}
-      {viewerOpen && previewUrl && <ArtifactViewer artifact={artifact} previewUrl={previewUrl} downloadUrl={downloadUrl} onClose={closeViewer} renderTextPreview={renderTextPreview} />}
+      {viewerOpen && effectivePreviewUrl && <ArtifactViewer artifact={artifact} previewUrl={effectivePreviewUrl} downloadUrl={downloadUrl} onClose={closeViewer} renderTextPreview={renderTextPreview} />}
     </>
   );
+}
+
+function resolveArtifactPreviewUrl(
+  artifact: Artifact,
+  previewUrl: string | null,
+): string | null {
+  if (!previewUrl) return null;
+  if (normalizeArtifactMimeType(artifact.mimeType) === 'image/svg+xml') return previewUrl;
+  if (isSafeArtifactInlinePreviewMimeType(artifact.mimeType)) return previewUrl;
+  return null;
 }
 
 function PreviewPlaceholder({ filename }: { filename: string }) {
