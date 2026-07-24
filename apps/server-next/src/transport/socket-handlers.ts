@@ -384,7 +384,12 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channelDocuments.list, app, 'listChannelDocuments', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channelDocuments.get, app, 'getChannelDocument', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channelDocuments.revisions, app, 'listChannelDocumentRevisions', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channelDocuments.derive, app, 'deriveChannelDocument', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.channelDocuments.save, app, 'saveChannelDocument', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channelDocuments.restore, app, 'restoreChannelDocument', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.channelDocuments.publish, app, 'publishChannelDocument', async (payload, result) => {
+    await options.afterMessageSend?.(payload, result);
+  }, { authenticatedUser: options.authenticatedUser });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
       const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));

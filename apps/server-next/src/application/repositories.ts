@@ -73,6 +73,19 @@ export interface ChannelDocumentRecord extends Omit<ChannelDocumentDto, 'current
 export interface ChannelDocumentRevisionRecord extends Omit<ChannelDocumentRevisionDto, 'artifact'> {
   artifact: ArtifactRecord;
 }
+export interface ChannelDocumentOperationRecord {
+  documentId: ID;
+  idempotencyKey: string;
+  operationType: 'save' | 'restore' | 'publish';
+  requestFingerprint: string;
+  revisionId: ID;
+}
+export interface ChannelDocumentRevisionCommit {
+  document: ChannelDocumentRecord;
+  revision: ChannelDocumentRevisionRecord;
+  operation: ChannelDocumentOperationRecord;
+  replayed: boolean;
+}
 export type WorkspaceRunRecord = WorkspaceRunDto;
 export type TaskRecord = TaskDto & {
   revision: number;
@@ -335,6 +348,7 @@ export interface ArtifactRepository {
 
 export interface ChannelDocumentRepository {
   create(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord }): Promise<ChannelDocumentRecord>;
+  createDerived(input: { document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
   getForTeam(input: { teamId: ID; channelId: ID; documentId: ID }): Promise<ChannelDocumentRecord | null>;
   listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelDocumentRecord[]>;
   listWithCurrentRevisionByChannel(input: { teamId: ID; channelId: ID }): Promise<Array<{
@@ -342,7 +356,18 @@ export interface ChannelDocumentRepository {
     currentRevision: ChannelDocumentRevisionRecord;
   }>>;
   listRevisions(input: { documentId: ID }): Promise<ChannelDocumentRevisionRecord[]>;
-  addRevision(input: { documentId: ID; expectedCurrentRevisionId: ID; document: ChannelDocumentRecord; revision: ChannelDocumentRevisionRecord; artifact: ArtifactRecord }): Promise<ChannelDocumentRecord | null>;
+  getRevision(input: { documentId: ID; revisionId: ID }): Promise<ChannelDocumentRevisionRecord | null>;
+  getRevisionByIdempotencyKey(input: { documentId: ID; idempotencyKey: string }): Promise<ChannelDocumentRevisionCommit | null>;
+  addRevision(input: {
+    documentId: ID;
+    expectedCurrentRevisionId: ID;
+    document: ChannelDocumentRecord;
+    revision: ChannelDocumentRevisionRecord;
+    artifact: ArtifactRecord;
+    requireUniqueFilename?: boolean;
+    operation: ChannelDocumentOperationRecord;
+    message?: MessageRecord;
+  }): Promise<ChannelDocumentRevisionCommit | null>;
   deleteByChannel(channelId: ID): Promise<void>;
 }
 

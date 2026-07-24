@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -25,6 +25,10 @@ import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
+import {
+  SafeMarkdownResource,
+  collectSafeMarkdownReferenceDefinitions,
+} from '@/components/channel-documents/SafeMarkdownResource';
 import {
   TASK_STATUS_COLUMNS as TASK_COLUMNS,
   TASK_STATUS_MENU_DOT_CLASS,
@@ -100,9 +104,11 @@ interface ConversationFile {
 
 interface OpenChannelDocument {
   document: ChannelDocumentDto;
+  revisions: ChannelDocumentRevisionDto[];
   content: string;
   readOnly: boolean;
   readOnlyReason?: string;
+  notice?: string;
 }
 
 interface ChannelMemberEntry {
@@ -632,15 +638,69 @@ export default function ChatPage() {
 
   const openMarkdownDocumentEditor = useCallback(async (artifact: Artifact, documentId?: string) => {
     if (!activeChannel || !isMarkdownArtifact(artifact)) return;
+    if (artifact.workspaceRunId && artifact.sourceRoot && artifact.relativePath) {
+      if (!window.confirm('编辑此 Run Markdown 将创建新的 Channel document；原 Run Artifact 和运行目录不会被修改。是否继续？')) return;
+      if (artifact.sizeBytes > 2 * 1024 * 1024) {
+        window.alert('该 Run Markdown 超过 2 MB，不能在线派生编辑');
+        return;
+      }
+      const sourceUrl = messageArtifactUrl(artifact, 'preview', artifact.teamId);
+      if (!sourceUrl) {
+        window.alert('该 Run Markdown 没有可用的在线内容');
+        return;
+      }
+      const sourceResponse = await fetch(sourceUrl);
+      if (!sourceResponse.ok) {
+        window.alert(sourceResponse.status === 415 ? '该 Run Markdown 不是 UTF-8，仅支持下载' : 'Run Markdown 内容加载失败');
+        return;
+      }
+      const sourceContent = await sourceResponse.text();
+      let filename = artifact.filename;
+      let result = await channelEvents().deriveDocument(activeChannel, artifact.id, sourceContent, filename);
+      if (!result.ok && result.error === 'CONFLICT') {
+        const renamed = window.prompt('频道中已有同名文档。请输入新的文档名称，或取消后从文件库显式选择目标文档。', filename);
+        if (!renamed?.trim()) return;
+        filename = renamed.trim();
+        result = await channelEvents().deriveDocument(activeChannel, artifact.id, sourceContent, filename);
+      }
+      if (!result.ok || !result.document) {
+        window.alert(result.message ?? result.error ?? '无法派生 Channel document');
+        return;
+      }
+      const derivedArtifact = result.document.currentRevision.artifact;
+      const derivedUrl = messageArtifactUrl(derivedArtifact, 'preview', derivedArtifact.teamId);
+      const derivedResponse = derivedUrl ? await fetch(derivedUrl) : null;
+      if (!derivedResponse?.ok) {
+        window.alert('派生文档已创建，但固定资源后的内容加载失败');
+        return;
+      }
+      setOpenChannelDocument({
+        document: result.document,
+        revisions: [result.document.currentRevision],
+        content: await derivedResponse.text(),
+        readOnly: false,
+        notice: '已从 Run Markdown 创建 Channel document；原 Run Artifact 和运行目录保持不变。',
+      });
+      return;
+    }
     const resolvedDocumentId = documentId ?? channelDocumentIdForArtifact(artifact.id);
-    const result = await channelEvents().getDocument(activeChannel, resolvedDocumentId);
+    const [result, history] = await Promise.all([
+      channelEvents().getDocument(activeChannel, resolvedDocumentId),
+      channelEvents().listDocumentRevisions(activeChannel, resolvedDocumentId),
+    ]);
     if (!result.ok || !result.document) {
       window.alert(result.error ?? '无法打开 Markdown 文档');
       return;
     }
     const currentArtifact = result.document.currentRevision.artifact;
     if (currentArtifact.sizeBytes > 10 * 1024 * 1024) {
-      window.alert('该 Markdown 超过 10 MB，仅支持下载');
+      setOpenChannelDocument({
+        document: result.document,
+        revisions: history.ok ? history.revisions ?? [] : [result.document.currentRevision],
+        content: '',
+        readOnly: true,
+        readOnlyReason: '当前版本超过 10 MB，仅支持下载；仍可查看版本历史',
+      });
       return;
     }
     const previewUrl = messageArtifactUrl(currentArtifact, 'preview', currentArtifact.teamId);
@@ -656,6 +716,7 @@ export default function ChatPage() {
     const largePreview = currentArtifact.sizeBytes > 2 * 1024 * 1024;
     setOpenChannelDocument({
       document: result.document,
+      revisions: history.ok ? history.revisions ?? [] : [result.document.currentRevision],
       content: await response.text(),
       readOnly: Boolean(activeChannelObj?.archivedAt) || largePreview,
       readOnlyReason: activeChannelObj?.archivedAt
@@ -666,20 +727,141 @@ export default function ChatPage() {
     });
   }, [activeChannel, activeChannelObj?.archivedAt]);
 
-  const saveOpenMarkdownDocument = useCallback(async (content: string, filename: string) => {
+  const saveOpenMarkdownDocument = useCallback(async (content: string, filename: string, baseRevisionId?: string) => {
     if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
     const result = await channelEvents().saveDocument(
       activeChannel,
       openChannelDocument.document.id,
-      openChannelDocument.document.currentRevisionId,
+      baseRevisionId ?? openChannelDocument.document.currentRevisionId,
       content,
       filename,
     );
-    if (!result.ok || !result.document) throw new Error(result.error ?? '保存失败');
-    setOpenChannelDocument((current) => current ? { ...current, document: result.document!, content } : null);
+    if (!result.ok || !result.document) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后手工合并' };
+      }
+      throw new Error(result.error ?? '保存失败');
+    }
+    const savedArtifact = result.document.currentRevision.artifact;
+    const savedUrl = messageArtifactUrl(savedArtifact, 'preview', savedArtifact.teamId);
+    const savedResponse = savedUrl ? await fetch(savedUrl) : null;
+    const savedContent = savedResponse?.ok ? await savedResponse.text() : content;
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content: savedContent,
+      ...(!savedResponse?.ok ? { notice: '文档已保存；固定资源后的内容将在重新打开时加载。' } : {}),
+    } : null);
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    return { ok: true as const, revisionId: result.document.currentRevisionId };
+  }, [activeChannel, openChannelDocument]);
+
+  const previewOpenMarkdownRevision = useCallback(async (revision: ChannelDocumentRevisionDto) => {
+    const previewUrl = messageArtifactUrl(revision.artifact as Artifact, 'preview', revision.artifact.teamId);
+    if (!previewUrl) throw new Error('该历史版本没有可用的在线内容');
+    const response = await fetch(previewUrl);
+    if (!response.ok) {
+      throw new Error(response.status === 415 ? '该历史版本不是 UTF-8，仅支持下载' : '历史版本预览失败');
+    }
+    return response.text();
+  }, []);
+
+  const restoreOpenMarkdownRevision = useCallback(async (
+    revisionId: string,
+    baseRevisionId: string,
+    idempotencyKey: string,
+  ) => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().restoreDocument(
+      activeChannel,
+      openChannelDocument.document.id,
+      revisionId,
+      baseRevisionId,
+      idempotencyKey,
+    );
+    if (!result.ok || !result.document) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后重试恢复' };
+      }
+      throw new Error(result.error ?? '恢复失败');
+    }
+    const content = await previewOpenMarkdownRevision(result.document.currentRevision);
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content,
+    } : null);
+    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
+      ? { ...file, artifact: result.document!.currentRevision.artifact }
+      : file));
+    return {
+      ok: true as const,
+      snapshot: {
+        content,
+        filename: result.document.filename,
+        revisionId: result.document.currentRevisionId,
+      },
+    };
+  }, [activeChannel, openChannelDocument, previewOpenMarkdownRevision]);
+
+  const publishOpenMarkdownDocument = useCallback(async (
+    content: string,
+    filename: string,
+    baseRevisionId: string,
+    idempotencyKey: string,
+  ) => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().publishDocument(
+      activeChannel,
+      openChannelDocument.document.id,
+      baseRevisionId,
+      content,
+      filename,
+      idempotencyKey,
+    );
+    if (!result.ok || !result.document || !result.message) {
+      if (result.error === 'CONFLICT') {
+        return { ok: false as const, conflict: true as const, message: '文档已被其他成员更新，请查看最新版后手工合并' };
+      }
+      throw new Error(result.error ?? '保存并分享失败');
+    }
+    const history = await channelEvents().listDocumentRevisions(activeChannel, result.document.id);
+    setOpenChannelDocument((current) => current ? {
+      ...current,
+      document: result.document!,
+      revisions: history.ok ? history.revisions ?? current.revisions : current.revisions,
+      content,
+    } : null);
+    setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
+      ? { ...file, artifact: result.document!.currentRevision.artifact }
+      : file));
+    appendMessage({
+      ...result.message,
+      artifacts: [result.document.currentRevision.artifact],
+    } as ChatMessage);
+    return { ok: true as const, revisionId: result.document.currentRevisionId };
+  }, [activeChannel, appendMessage, openChannelDocument]);
+
+  const loadLatestOpenMarkdownDocument = useCallback(async () => {
+    if (!activeChannel || !openChannelDocument) throw new Error('文档已关闭');
+    const result = await channelEvents().getDocument(activeChannel, openChannelDocument.document.id);
+    if (!result.ok || !result.document) throw new Error(result.error ?? '最新版加载失败');
+    const artifact = result.document.currentRevision.artifact;
+    const previewUrl = messageArtifactUrl(artifact, 'preview', artifact.teamId);
+    if (!previewUrl) throw new Error('最新版没有可用的在线内容');
+    const response = await fetch(previewUrl);
+    if (!response.ok) throw new Error('最新版内容加载失败');
+    return {
+      content: await response.text(),
+      filename: result.document.filename,
+      revisionId: result.document.currentRevisionId,
+    };
   }, [activeChannel, openChannelDocument]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
@@ -1965,13 +2147,32 @@ export default function ChatPage() {
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/60 p-4" role="dialog" aria-modal="true" aria-label={openChannelDocument.document.filename}>
           <div className="flex h-[min(90vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white p-4 shadow-2xl">
             <MarkdownDocumentEditor
+              {...(currentUser?.id && currentTeamId ? {
+                draftIdentity: {
+                  userId: currentUser.id,
+                  teamId: currentTeamId,
+                  documentId: openChannelDocument.document.id,
+                  baseRevisionId: openChannelDocument.document.currentRevisionId,
+                },
+              } : {})}
               filename={openChannelDocument.document.filename}
               initialContent={openChannelDocument.content}
+              revisions={openChannelDocument.revisions}
               readOnly={openChannelDocument.readOnly}
               readOnlyReason={openChannelDocument.readOnlyReason}
+              notice={openChannelDocument.notice}
               onSave={saveOpenMarkdownDocument}
+              onPublish={publishOpenMarkdownDocument}
+              onPreviewRevision={previewOpenMarkdownRevision}
+              onRestoreRevision={restoreOpenMarkdownRevision}
+              getRevisionDownloadUrl={(revision) => messageArtifactUrl(
+                revision.artifact as Artifact,
+                'download',
+                revision.artifact.teamId,
+              ) ?? undefined}
+              onLoadLatest={loadLatestOpenMarkdownDocument}
               onClose={() => setOpenChannelDocument(null)}
-              renderPreview={(content) => <MarkdownMessage body={content} />}
+              renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources />}
             />
           </div>
         </div>
@@ -4202,15 +4403,17 @@ function MarkdownMessage({
   mentions,
   onOpenMention,
   compact = false,
+  safeDocumentResources = false,
 }: {
   body: string;
   mentionMembers?: MentionProfileMember[];
   mentions?: MessageMentionDto[];
   onOpenMention?: (target: ProfileTarget) => void;
   compact?: boolean;
+  safeDocumentResources?: boolean;
 }) {
   const agents = useAgentBeanStore((s) => s.agents);
-  const markdownOptions = { mentionMembers, mentions, agents, onOpenMention };
+  const markdownOptions = { mentionMembers, mentions, agents, onOpenMention, safeDocumentResources };
   return (
     <div className={`${compact ? 'mt-0' : 'mt-1'} space-y-2 break-words text-sm leading-relaxed text-neutral-700`}>
       {renderMarkdownBlocks(body, markdownOptions)}
@@ -4223,10 +4426,18 @@ interface MarkdownRenderOptions {
   mentions?: MessageMentionDto[];
   agents?: Record<string, { name?: string }>;
   onOpenMention?: (target: ProfileTarget) => void;
+  safeDocumentResources?: boolean;
+  resourceReferences?: ReadonlyMap<string, string>;
 }
 
 function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {}): ReactNode[] {
-  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const safeDocument = options.safeDocumentResources
+    ? collectSafeMarkdownReferenceDefinitions(body)
+    : { body, references: new Map<string, string>() };
+  const scopedOptions = safeDocument.references.size > 0
+    ? { ...options, resourceReferences: safeDocument.references }
+    : options;
+  const lines = safeDocument.body.replace(/\r\n/g, '\n').split('\n');
   const nodes: ReactNode[] = [];
   let i = 0;
 
@@ -4239,18 +4450,20 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
       continue;
     }
 
-    const fence = trimmed.match(/^```(\w+)?\s*$/);
+    const fence = line.match(/^(?: {0,3})(`{3,}|~{3,})(.*)$/);
     if (fence) {
+      const openingFence = fence[1]!;
+      const info = fence[2]?.trim();
       const codeLines: string[] = [];
       i += 1;
-      while (i < lines.length && !(lines[i] ?? '').trim().startsWith('```')) {
+      while (i < lines.length && !isClosingMarkdownFence(lines[i] ?? '', openingFence)) {
         codeLines.push(lines[i] ?? '');
         i += 1;
       }
       if (i < lines.length) i += 1;
       nodes.push(
         <pre key={`code-${nodes.length}`} className="overflow-x-auto rounded-md border border-neutral-200 bg-neutral-950 px-3 py-2 text-xs leading-relaxed text-neutral-100">
-          {fence[1] && <div className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">{fence[1]}</div>}
+          {info && <div className="mb-1 text-[10px] uppercase tracking-wide text-neutral-400">{info}</div>}
           <code>{codeLines.join('\n')}</code>
         </pre>,
       );
@@ -4261,7 +4474,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
     if (heading) {
       const level = heading[1]!.length;
       const className = headingClassName(level);
-      nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!, options)}</div>);
+      nodes.push(<div key={`heading-${nodes.length}`} className={className}>{renderInlineMarkdown(heading[2]!, scopedOptions)}</div>);
       i += 1;
       continue;
     }
@@ -4281,7 +4494,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
       nodes.push(
         <blockquote key={`quote-${nodes.length}`} className="border-l-2 border-neutral-300 pl-3 text-neutral-600">
           {quoteLines.map((quote, idx) => (
-            <p key={idx}>{renderInlineMarkdown(quote, options)}</p>
+            <p key={idx}>{renderInlineMarkdown(quote, scopedOptions)}</p>
           ))}
         </blockquote>,
       );
@@ -4296,7 +4509,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
       }
       nodes.push(
         <ul key={`ul-${nodes.length}`} className="list-disc space-y-1 pl-5">
-          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, options)}</li>)}
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, scopedOptions)}</li>)}
         </ul>,
       );
       continue;
@@ -4310,7 +4523,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
       }
       nodes.push(
         <ol key={`ol-${nodes.length}`} className="list-decimal space-y-1 pl-5">
-          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, options)}</li>)}
+          {items.map((item, idx) => <li key={idx}>{renderInlineMarkdown(item, scopedOptions)}</li>)}
         </ol>,
       );
       continue;
@@ -4322,7 +4535,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
         tableLines.push(lines[i] ?? '');
         i += 1;
       }
-      nodes.push(renderMarkdownTable(tableLines, `table-${nodes.length}`, options));
+      nodes.push(renderMarkdownTable(tableLines, `table-${nodes.length}`, scopedOptions));
       continue;
     }
 
@@ -4330,7 +4543,7 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
     while (
       i < lines.length &&
       (lines[i] ?? '').trim() &&
-      !/^```/.test((lines[i] ?? '').trim()) &&
+      !/^(?: {0,3})(?:`{3,}|~{3,})/.test(lines[i] ?? '') &&
       !/^(#{1,4})\s+/.test((lines[i] ?? '').trim()) &&
       !/^([-*_])\s*\1\s*\1\s*$/.test((lines[i] ?? '').trim()) &&
       !/^>\s?/.test((lines[i] ?? '').trim()) &&
@@ -4341,10 +4554,15 @@ function renderMarkdownBlocks(body: string, options: MarkdownRenderOptions = {})
       paragraph.push((lines[i] ?? '').trim());
       i += 1;
     }
-    nodes.push(<p key={`p-${nodes.length}`}>{renderParagraphLines(paragraph, options)}</p>);
+    nodes.push(<p key={`p-${nodes.length}`}>{renderParagraphLines(paragraph, scopedOptions)}</p>);
   }
 
   return nodes.length > 0 ? nodes : [<p key="empty" />];
+}
+
+function isClosingMarkdownFence(line: string, openingFence: string): boolean {
+  const match = line.match(/^(?: {0,3})(`{3,}|~{3,})[ \t]*$/);
+  return Boolean(match?.[1]?.[0] === openingFence[0] && match[1].length >= openingFence.length);
 }
 
 function headingClassName(level: number): string {
@@ -4410,6 +4628,16 @@ function renderParagraphLines(lines: string[], options: MarkdownRenderOptions = 
 }
 
 function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {}): ReactNode[] {
+  const codeSpan = findFirstMarkdownCodeSpan(text);
+  if (codeSpan) {
+    return [
+      ...renderInlineMarkdown(text.slice(0, codeSpan.startIndex), options),
+      <code key={`inline-code-${codeSpan.startIndex}`} className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.92em] text-neutral-900">
+        {codeSpan.content}
+      </code>,
+      ...renderInlineMarkdown(text.slice(codeSpan.endIndex), options),
+    ];
+  }
   const structuredMentionPatterns = [...new Set(
     (options.mentions ?? [])
       .map((mention) => `@${mention.name}`)
@@ -4418,8 +4646,11 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
     .sort((left, right) => right.length - left.length)
     .map((token) => structuredMentionPattern(token.slice(1)));
   const mentionPattern = [...structuredMentionPatterns, '@[\\p{L}\\p{N}_-]+'].join('|');
+  const markdownLinkPattern = options.safeDocumentResources
+    ? '!?\\[[^\\]]*\\](?:\\([^)]+\\)|\\[[^\\]]*\\])'
+    : '\\[[^\\]]+\\]\\([^)]+\\)';
   const pattern = new RegExp(
-    '(`[^`]+`|\\*\\*[^*]+\\*\\*|\\*[^*]+\\*|\\[[^\\]]+\\]\\([^)]+\\)|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
+    '(\\*\\*[^*]+\\*\\*|\\*[^*]+\\*|' + markdownLinkPattern + '|https?:\\/\\/[^\\s)]+|' + mentionPattern + ')',
     'gu',
   );
   const nodes: ReactNode[] = [];
@@ -4432,22 +4663,61 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
     }
 
     const token = match[0];
-    if (token.startsWith('`') && token.endsWith('`')) {
-      nodes.push(
-        <code key={`inline-code-${match.index}`} className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.92em] text-neutral-900">
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith('**') && token.endsWith('**')) {
+    if (token.startsWith('**') && token.endsWith('**')) {
       nodes.push(<strong key={`strong-${match.index}`} className="font-semibold text-neutral-950">{renderInlineMarkdown(token.slice(2, -2), options)}</strong>);
     } else if (token.startsWith('*') && token.endsWith('*')) {
       nodes.push(<em key={`em-${match.index}`}>{renderInlineMarkdown(token.slice(1, -1), options)}</em>);
+    } else if (options.safeDocumentResources && token.startsWith('![')) {
+      const image = token.match(/^!\[([^\]]*)]\(([^)]+)\)$/);
+      const reference = token.match(/^!\[([^\]]*)]\[([^\]]*)]$/);
+      const referenceTarget = reference
+        ? options.resourceReferences?.get((reference[2] || reference[1] || '').trim().toLocaleLowerCase())
+        : undefined;
+      nodes.push(image ? (
+        <SafeMarkdownResource
+          key={`image-${match.index}`}
+          label={image[1]!}
+          target={image[2]!}
+          image
+          resolveInternalUrl={artifactUrl}
+        />
+      ) : reference && referenceTarget ? (
+        <SafeMarkdownResource
+          key={`reference-image-${match.index}`}
+          label={reference[1]!}
+          target={referenceTarget}
+          image
+          resolveInternalUrl={artifactUrl}
+        />
+      ) : token);
     } else if (token.startsWith('[')) {
       const link = token.match(/^\[([^\]]+)]\(([^)]+)\)$/);
-      const href = link ? safeMarkdownHref(link[2]!) : null;
+      const reference = options.safeDocumentResources
+        ? token.match(/^\[([^\]]+)]\[([^\]]*)]$/)
+        : null;
+      const referenceTarget = reference
+        ? options.resourceReferences?.get((reference[2] || reference[1] || '').trim().toLocaleLowerCase())
+        : undefined;
+      const resourceLabel = link?.[1] ?? reference?.[1];
+      const resourceTarget = link?.[2] ?? referenceTarget;
+      if (options.safeDocumentResources && resourceLabel && resourceTarget
+        && (resourceTarget.startsWith('artifact-missing:') || resourceTarget.startsWith('/api/'))) {
+        nodes.push(
+          <SafeMarkdownResource
+            key={`missing-${match.index}`}
+            label={resourceLabel}
+            target={resourceTarget}
+            image={false}
+            resolveInternalUrl={artifactUrl}
+          />,
+        );
+        lastIndex = match.index + token.length;
+        continue;
+      }
+      const href = resourceTarget ? safeMarkdownHref(resourceTarget) : null;
       nodes.push(href ? (
         <a key={`link-${match.index}`} href={href} target="_blank" rel="noreferrer" className="font-medium text-blue-600 underline-offset-2 hover:underline">
-          {renderInlineMarkdown(link![1]!, options)}
+          {renderInlineMarkdown(resourceLabel!, options)}
         </a>
       ) : token);
     } else if (token.startsWith('http://') || token.startsWith('https://')) {
@@ -4506,6 +4776,43 @@ function renderInlineMarkdown(text: string, options: MarkdownRenderOptions = {})
   }
 
   return nodes;
+}
+
+function findFirstMarkdownCodeSpan(text: string): {
+  startIndex: number;
+  endIndex: number;
+  content: string;
+} | null {
+  let cursor = 0;
+  while (cursor < text.length) {
+    const opening = text.indexOf('`', cursor);
+    if (opening < 0) return null;
+    let length = 1;
+    while (text[opening + length] === '`') length += 1;
+    const closing = findClosingMarkdownBacktickRun(text, opening + length, length);
+    if (closing >= 0) {
+      return {
+        startIndex: opening,
+        endIndex: closing + length,
+        content: text.slice(opening + length, closing),
+      };
+    }
+    cursor = opening + length;
+  }
+  return null;
+}
+
+function findClosingMarkdownBacktickRun(text: string, startIndex: number, expectedLength: number): number {
+  let cursor = startIndex;
+  while (cursor < text.length) {
+    const opening = text.indexOf('`', cursor);
+    if (opening < 0) return -1;
+    let length = 1;
+    while (text[opening + length] === '`') length += 1;
+    if (length === expectedLength) return opening;
+    cursor = opening + length;
+  }
+  return -1;
 }
 
 function mergeMentionProfileMembers(
@@ -4825,7 +5132,7 @@ function channelDocumentIdForArtifact(artifactId: string): string {
 }
 
 function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Map<string, ChannelDocumentDto>): ConversationFile {
-  const documentId = channelDocumentIdForArtifact(entry.artifact.id);
+  const documentId = entry.documentId ?? channelDocumentIdForArtifact(entry.artifact.id);
   const document = documents.get(documentId);
   return {
     artifact: document?.currentRevision.artifact ?? entry.artifact,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { createInMemoryRepositories, createServerNextUseCases } from '../src/index.js';
 
 import {
   compareChannelFileSnapshots,
@@ -65,8 +66,39 @@ describe('channel file rollout protection', () => {
     expect(metrics.snapshot()).toEqual({
       indexShadowComparisons: 1,
       indexShadowMismatches: 2,
+      indexShadowMissing: 0,
+      indexShadowUnexpected: 0,
+      indexShadowChanged: 0,
       rangeResponses: 1,
     });
     expect(JSON.stringify(metrics.snapshot())).not.toContain('same.md');
+  });
+
+  test('blocks Markdown mutations when the editing rollout is disabled', async () => {
+    const repositories = createInMemoryRepositories();
+    const ids = ['user-1', 'team-1', 'channel-1'];
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1 },
+      ids: { nextId: () => ids.shift() ?? 'unexpected-id' },
+      channelFileRollout: parseChannelFileRolloutConfig({
+        AGENTBEAN_CHANNEL_FILES_MARKDOWN_EDITING: 'off',
+      }),
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+
+    await expect(app.saveChannelDocument({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      documentId: 'document-1',
+      baseRevisionId: 'revision-1',
+      idempotencyKey: 'save-1',
+      content: '# blocked',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'NOT_FOUND',
+      message: 'Channel document editing is disabled',
+    });
   });
 });

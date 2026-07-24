@@ -36,6 +36,9 @@ type ChannelFileMetricName = keyof ChannelFileMetricSnapshot;
 export interface ChannelFileMetricSnapshot {
   indexShadowComparisons: number;
   indexShadowMismatches: number;
+  indexShadowMissing: number;
+  indexShadowUnexpected: number;
+  indexShadowChanged: number;
   rangeResponses: number;
 }
 
@@ -90,6 +93,9 @@ export function createChannelFileMetrics() {
   const counters: ChannelFileMetricSnapshot = {
     indexShadowComparisons: 0,
     indexShadowMismatches: 0,
+    indexShadowMissing: 0,
+    indexShadowUnexpected: 0,
+    indexShadowChanged: 0,
     rangeResponses: 0,
   };
   return {
