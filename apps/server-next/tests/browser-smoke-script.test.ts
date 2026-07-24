@@ -1086,6 +1086,33 @@ describe('AgentBean Next browser smoke script', () => {
     })).rejects.toThrow('Browser artifact row was not rendered');
   });
 
+  test('exercises the channel file library root and download link', async () => {
+    const { exerciseChannelFilesBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const page = {
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson(expression: string) {
+        calls.push(['evaluateJson', expression]);
+        return { filename: 'browser-smoke-artifact.md', downloadStatus: 200, downloadBody: '# artifact browser smoke\n' };
+      },
+    };
+
+    await expect(exerciseChannelFilesBrowserSmoke({
+      page,
+      filename: 'browser-smoke-artifact.md',
+      expectedBody: '# artifact browser smoke\n',
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({ filename: 'browser-smoke-artifact.md', downloadStatus: 200 });
+    expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
+    expect(calls.filter((call) => call[0] === 'waitForFunction')).toHaveLength(2);
+    expect(calls.filter((call) => call[0] === 'evaluateJson')).toHaveLength(1);
+  });
+
   test('exercises thread reply click, indicator, and nested render in the browser', async () => {
     const { exerciseThreadBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];

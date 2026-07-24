@@ -431,7 +431,13 @@ export default function ChatPage() {
         channelEvents().listDocuments(activeChannel),
       ]);
       if (requestRevision !== channelFilesRequestRevisionRef.current) return;
-      if (!result.ok || !result.files) return;
+      if (!result.ok || !result.files) {
+        if (reset && !channelFilesQuery.trim() && !channelFilesPath) {
+          setChannelFiles(legacyConversationFiles(messagesByChannel[activeChannel] ?? []));
+          setChannelFileDirectories([]);
+        }
+        return;
+      }
       const documents = new Map((documentsResult.documents ?? []).map((document) => [document.id, document]));
       const mapped = result.files.map((entry) => channelFileToConversationFile(entry, documents));
       setChannelFiles((previous) => reset ? mapped : [...previous, ...mapped]);
@@ -442,7 +448,7 @@ export default function ChatPage() {
         setChannelFilesLoading(false);
       }
     }
-  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, channelFilesRole, conn]);
+  }, [activeChannel, channelFilesCursor, channelFilesPath, channelFilesQuery, channelFilesRole, conn, messagesByChannel]);
 
   useEffect(() => {
     setChannelFilesPath(searchParams.get('filePath') ?? '');
@@ -1853,7 +1859,7 @@ export default function ChatPage() {
           <div className="flex border-b border-neutral-200">
             <button onClick={() => switchTab('chat')} className={`border-b-2 px-4 py-2 text-xs font-medium tracking-wide ${tab === 'chat' ? 'border-amber-400 text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>聊天</button>
             <button onClick={() => switchTab('tasks')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'tasks' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>任务</button>
-            <button onClick={() => switchTab('files')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>文件</button>
+            <button data-smoke="channel-files-tab" onClick={() => switchTab('files')} className={`border-b-2 px-4 py-2 text-xs tracking-wide ${tab === 'files' ? 'border-amber-400 font-medium text-neutral-900' : 'border-transparent text-neutral-400 hover:text-neutral-600'}`}>文件</button>
           </div>
         )}
 
@@ -2873,10 +2879,10 @@ function ConversationFiles({
 }) {
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
+    <div data-smoke="channel-files-view" className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
       <div className="mb-3 flex items-center gap-2">
         <Search size={14} className="text-neutral-400" />
-        <input value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
+        <input data-smoke="channel-files-search" value={searchQuery} onChange={(event) => onSearchQuery(event.target.value)} placeholder="按文件名搜索" className="h-8 min-w-0 flex-1 border border-neutral-300 px-2 text-xs outline-none focus:border-neutral-900" />
         <select value={role} onChange={(event) => onRole(event.target.value as ArtifactRole | 'all')} className="h-8 border border-neutral-300 bg-white px-2 text-xs outline-none focus:border-neutral-900" aria-label="按文件角色筛选">
           <option value="all">全部角色</option>
           <option value="attachment">普通附件</option>
@@ -2906,7 +2912,7 @@ function ConversationFiles({
       ) : (
         <div className="space-y-2">
           {directories.map((directory) => (
-            <button key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900">
+            <button data-smoke="channel-files-directory" data-path={directory.path} key={directory.path} onClick={() => onOpenDirectory(directory.path)} className="flex w-full items-center gap-3 border border-neutral-300 bg-amber-50 px-3 py-3 text-left hover:border-neutral-900">
               <div className="w-24 shrink-0">
                 <DirectoryPreview previews={directory.previewUrls ?? []} />
               </div>
@@ -2918,7 +2924,7 @@ function ConversationFiles({
           ))}
           {files.map((file) => {
             return (
-              <div key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
+              <div data-smoke="channel-file-entry" data-filename={file.artifact.filename} data-path={file.logicalPath ?? ''} key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
                 <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} onEdit={() => onEditArtifact(file.artifact, file.documentId)} />
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
@@ -5139,6 +5145,19 @@ function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Ma
     ...(entry.role ? { role: entry.role } : {}),
     ...(entry.source.workspaceRunId ? { workspaceRunId: entry.source.workspaceRunId } : {}),
   };
+}
+
+function legacyConversationFiles(messages: ChatMessage[]): ConversationFile[] {
+  return messages
+    .filter((message) => !isDeletedMessage(message))
+    .flatMap((message) => (message.artifacts ?? []).map((artifact) => ({
+      artifact,
+      messageId: message.id,
+      createdAt: artifact.createdAt || message.createdAt,
+      senderKind: message.senderKind,
+      senderId: message.senderId,
+      logicalPath: artifact.relativePath ?? artifact.filename,
+    })));
 }
 
 function channelFileRoleLabel(role: string): string {
