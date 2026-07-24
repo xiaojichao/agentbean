@@ -101,4 +101,50 @@ describe('channel file rollout protection', () => {
       message: 'Channel document editing is disabled',
     });
   });
+
+  test('does not create Markdown documents implicitly when editing rollout is disabled', async () => {
+    const repositories = createInMemoryRepositories();
+    const ids = ['user-1', 'team-1', 'channel-1', 'artifact-1', 'message-1'];
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 1 },
+      ids: { nextId: () => ids.shift() ?? 'unexpected-id' },
+      channelFileRollout: parseChannelFileRolloutConfig({
+        AGENTBEAN_CHANNEL_FILES_MARKDOWN_EDITING: 'off',
+      }),
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'notes.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 5,
+      storagePath: 'artifacts/team-1/artifact-1/notes.md',
+    });
+    await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: 'attachment',
+      artifactIds: ['artifact-1'],
+    });
+
+    await expect(app.listChannelDocuments({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: true, documents: [] });
+    await expect(app.getChannelDocument({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      documentId: 'channel-document:artifact-1',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+    await expect(repositories.channelDocuments.listByChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([]);
+  });
 });

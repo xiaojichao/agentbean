@@ -1264,7 +1264,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const artifact of attachmentResult.artifacts) {
         attachedArtifacts.push(await repositories.artifacts.create({ ...artifact, messageId: message.id }));
       }
-      await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
+      }
       const dispatches: DispatchDto[] = [];
       let acknowledgementMessage: MessageDto | undefined;
       if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
@@ -3147,7 +3149,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
 
-      await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+      }
 
       const message = outcome.artifacts.length > 0
         ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
@@ -3250,7 +3254,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         Boolean(artifact.messageId && !artifact.workspaceRunId)
         && isMarkdownArtifact(artifact)
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
-      if (missingDocuments.length > 0) {
+      if (channelFileRollout.markdownEditing && missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
           await getOrCreateChannelDocument(repositories, {
             ...documentInput,
@@ -3270,7 +3274,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      const document = await getOrCreateChannelDocument(
+        repositories,
+        documentInput,
+        { createIfMissing: channelFileRollout.markdownEditing },
+      );
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       return makeSuccess({ document: await toChannelDocumentDto(repositories, document) });
     },
@@ -3278,7 +3286,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async listChannelDocumentRevisions(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      const document = await getOrCreateChannelDocument(
+        repositories,
+        documentInput,
+        { createIfMissing: channelFileRollout.markdownEditing },
+      );
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
       return makeSuccess({
@@ -4599,7 +4611,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
-      await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+      }
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
@@ -8083,9 +8097,11 @@ function toCommittedChannelDocumentDto(
 async function getOrCreateChannelDocument(
   repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments' | 'messages'>,
   input: { teamId: string; channelId: string; documentId: string },
+  options: { createIfMissing: boolean } = { createIfMissing: true },
 ): Promise<ChannelDocumentRecord | null> {
   const existing = await repositories.channelDocuments.getForTeam(input);
   if (existing) return existing;
+  if (!options.createIfMissing) return null;
   const prefix = 'channel-document:';
   if (!input.documentId.startsWith(prefix)) return null;
   const artifactId = input.documentId.slice(prefix.length);
