@@ -13,6 +13,7 @@ import {
 describe('artifact preview service', () => {
   test('accepts supported MIME types with parameters', () => {
     expect(supportsArtifactPreviewMime('Image/PNG; charset=binary')).toBe(true);
+    expect(supportsArtifactPreviewMime('image/avif')).toBe(true);
     expect(supportsArtifactPreviewMime('application/pdf; version=1.7')).toBe(true);
   });
 

@@ -2,7 +2,11 @@ import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import type { ArtifactPreviewDto, ArtifactPreviewStatus } from '../../../../packages/contracts/src/index.js';
+import {
+  supportsArtifactPreviewDerivativeMimeType,
+  type ArtifactPreviewDto,
+  type ArtifactPreviewStatus,
+} from '../../../../packages/contracts/src/index.js';
 
 const MAX_ATTEMPTS = 3;
 const DEFAULT_LEASE_MS = 30_000;
@@ -106,8 +110,7 @@ export class UnsupportedPreviewError extends Error {
 }
 
 export function supportsArtifactPreviewMime(mimeType: string): boolean {
-  const mediaType = mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
-  return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/.test(mediaType);
+  return supportsArtifactPreviewDerivativeMimeType(mimeType);
 }
 
 function processorArgs(
