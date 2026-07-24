@@ -20,6 +20,12 @@ export interface TaskCoordinationRecord extends Omit<
   readonly taskRevision: number;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
+  /**
+   * AC#4：该 Task 在语义/安全/事务上是否可拆分（create_subtasks 输入，parent 级）。
+   * 未设置视为 decomposable；atomic 的工作由 kernel 拆解 gate 拒绝（TASK_NOT_DECOMPOSABLE，
+   * 不为适配现有 Agent 强拆，ADR 0021）。
+   */
+  readonly atomicityHint?: 'atomic' | 'decomposable';
 }
 
 export interface TaskAcceptanceCriterionRecord extends AcceptanceCriterionDto {

@@ -343,6 +343,40 @@ describe('Phase 2 management worker contracts', () => {
     })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
+  test('accepts atomicityHint on create_subtasks and rejects invalid hint (#798)', () => {
+    const envelope = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: 'command-1',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-call-1',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'idempotency-1',
+    };
+    const draft = {
+      clientKey: 'draft-1',
+      title: 'Implement slice',
+      claimPolicy: 'open',
+      requiredCapabilities: [],
+      acceptanceCriteria: [{ id: 'criterion-1', description: 'Verified', evidenceRequired: true, allowedEvidenceKinds: ['task'] }],
+      maxAttempts: 2,
+    };
+    // atomicityHint: 'atomic' 被接受
+    expect(parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks: [draft], atomicityHint: 'atomic' },
+    })).toMatchObject({ toolName: 'tasks.create_subtasks' });
+    // atomicityHint 非法值被拒绝
+    expect(() => parsePhase2TaskToolRequestV2({
+      ...envelope,
+      toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks: [draft], atomicityHint: 'maybe' as unknown as 'atomic' },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
   test('parses exact Phase 3 Memory tool inputs and rejects contract drift', () => {
     const sourceRef = {
       schemaVersion: 1 as const,

@@ -117,7 +117,7 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
     readonly handoffId: ID;
     readonly timeoutAt?: UnixMs;
   };
-  readonly 'tasks.create_subtasks': { readonly parentTaskId: ID; readonly subtasks: readonly Phase2SubtaskDraftV1[] };
+  readonly 'tasks.create_subtasks': { readonly parentTaskId: ID; readonly subtasks: readonly Phase2SubtaskDraftV1[]; readonly atomicityHint?: 'atomic' | 'decomposable' };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly dependencyTaskId: ID; readonly expectedTaskRevision: number };
   readonly 'tasks.publish_for_claim': { readonly taskId: ID; readonly expectedTaskRevision: number };
   readonly 'tasks.assign': { readonly taskId: ID; readonly agentId: ID; readonly expectedTaskRevision: number };
@@ -442,7 +442,10 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
     return;
   }
   if (toolName === 'tasks.create_subtasks') {
-    assertExactKeys(value, ['parentTaskId', 'subtasks'], ['parentTaskId', 'subtasks']);
+    assertExactKeys(value, ['parentTaskId', 'subtasks', 'atomicityHint'], ['parentTaskId', 'subtasks']);
+    if (value.atomicityHint !== undefined && value.atomicityHint !== 'atomic' && value.atomicityHint !== 'decomposable') {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
     if (!nonEmpty(value.parentTaskId) || !Array.isArray(value.subtasks) || value.subtasks.length === 0 || value.subtasks.length > 8) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }

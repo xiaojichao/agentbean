@@ -370,6 +370,92 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('拆解 gate:中间层子 skills 并集覆盖 parent requiredSkills → 通过并持久化 requiredSkills(#798)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      // step 1:root → task-a(requiredSkills ['research','codegen']);root 空 → 通过,持久化 task-a.requiredSkills
+      await harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s1',
+        parentTaskId: 'root-task', subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['research', 'codegen'],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+        ] });
+      const coordA = await fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a');
+      expect(coordA?.requiredSkills).toEqual(['research', 'codegen']);
+      expect(coordA?.atomicityHint).toBe('decomposable');
+      // step 2:task-a → sub-1/2(并集覆盖) → 通过
+      await expect(harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s2',
+        parentTaskId: 'task-a', subtasks: [
+          { taskId: 'task-a-1', clientKey: 'a1', title: 'A1', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['research'], acceptanceCriteria: [{ id: 'ca1', description: 'A1', evidenceRequired: false }], maxAttempts: 1 },
+          { taskId: 'task-a-2', clientKey: 'a2', title: 'A2', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['codegen'], acceptanceCriteria: [{ id: 'ca2', description: 'A2', evidenceRequired: false }], maxAttempts: 1 },
+        ] })).resolves.toMatchObject({ disposition: 'created' });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('拆解 gate:中间层子 skills 并集不覆盖 parent requiredSkills → TASK_NEEDS_USER_ADJUSTMENT 带 uncoveredSkills(#798)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s1',
+        parentTaskId: 'root-task', subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['research', 'codegen'],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+        ] });
+      await expect(harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s2',
+        parentTaskId: 'task-a', subtasks: [
+          { taskId: 'task-a-1', clientKey: 'a1', title: 'A1', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['research'], acceptanceCriteria: [{ id: 'ca1', description: 'A1', evidenceRequired: false }], maxAttempts: 1 },
+        ] })).rejects.toMatchObject<Partial<ManagementConflictError>>({
+          code: 'TASK_NEEDS_USER_ADJUSTMENT',
+          detail: expect.objectContaining({ uncoveredSkills: ['codegen'] }),
+        });
+      // 事务回滚:被拒绝的子 Task 不落库
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a-1')).resolves.toBeNull();
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('拆解 gate:atomicityHint atomic → TASK_NOT_DECOMPOSABLE(不强拆)(#798)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await expect(harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s1',
+        parentTaskId: 'root-task', atomicityHint: 'atomic', subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+        ] })).rejects.toMatchObject<Partial<ManagementConflictError>>({ code: 'TASK_NOT_DECOMPOSABLE' });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('拆解 gate:draft 不传 requiredSkills → 兜底 requiredCapabilities,root 空 → 通过(向后兼容)(#798)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await expect(harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s1',
+        parentTaskId: 'root-task', subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: ['research'],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+        ] })).resolves.toMatchObject({ disposition: 'created' });
+      const coordA = await fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a');
+      expect(coordA?.requiredSkills).toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 function rootInput(authority: Authority) {

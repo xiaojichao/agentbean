@@ -156,6 +156,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
       WHERE a.message_id IS NOT NULL;`);
   }
   applyMigration(db, 'team/0041_channel_coordination_decisions_memory_attribution.sql');
+  applyMigration(db, 'team/0042_task_coordination_skills_atomicity.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
