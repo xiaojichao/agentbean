@@ -31,6 +31,13 @@ import { createPiProviderService } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
+import {
+  compareChannelFileSnapshots,
+  createChannelFileMetrics,
+  DEFAULT_CHANNEL_FILE_ROLLOUT,
+  type ChannelFileRolloutConfig,
+  type ChannelFileSnapshotEntry,
+} from './channel-file-rollout.js';
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -964,6 +971,8 @@ export interface CreateServerNextUseCasesInput {
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
   /** Production uses durable-job; legacy exists only for explicitly unmigrated callers. */
   messageIngestionMode?: 'legacy' | 'durable-job';
+  channelFileRollout?: ChannelFileRolloutConfig;
+  channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -978,6 +987,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
   // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
   const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
+  const channelFileRollout = input.channelFileRollout ?? {
+    ...DEFAULT_CHANNEL_FILE_ROLLOUT,
+    // Directly constructed use cases preserve the pre-rollout behavior. Production
+    // always injects the parsed rollout config from startServerNextDevServer.
+    markdownEditing: true,
+  };
+  const channelFileMetrics = input.channelFileMetrics ?? createChannelFileMetrics();
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
@@ -1248,7 +1264,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       for (const artifact of attachmentResult.artifacts) {
         attachedArtifacts.push(await repositories.artifacts.create({ ...artifact, messageId: message.id }));
       }
-      await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, attachedArtifacts, messageInput.userId, now);
+      }
       const dispatches: DispatchDto[] = [];
       let acknowledgementMessage: MessageDto | undefined;
       if (route.kind === 'dispatch' && management.kind !== 'managed' && !coalescedDispatchId) {
@@ -3131,7 +3149,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
 
-      await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+      }
 
       const message = outcome.artifacts.length > 0
         ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
@@ -3217,11 +3237,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview, { channelFileRollout, channelFileMetrics });
     },
 
     async searchChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview, { channelFileRollout, channelFileMetrics });
     },
 
     async listChannelDocuments(documentInput) {
@@ -3234,7 +3254,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         Boolean(artifact.messageId && !artifact.workspaceRunId)
         && isMarkdownArtifact(artifact)
         && !knownDocumentIds.has(`channel-document:${artifact.id}`));
-      if (missingDocuments.length > 0) {
+      if (channelFileRollout.markdownEditing && missingDocuments.length > 0) {
         for (const artifact of missingDocuments) {
           await getOrCreateChannelDocument(repositories, {
             ...documentInput,
@@ -3254,7 +3274,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      const document = await getOrCreateChannelDocument(
+        repositories,
+        documentInput,
+        { createIfMissing: channelFileRollout.markdownEditing },
+      );
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       return makeSuccess({ document: await toChannelDocumentDto(repositories, document) });
     },
@@ -3262,7 +3286,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async listChannelDocumentRevisions(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
-      const document = await getOrCreateChannelDocument(repositories, documentInput);
+      const document = await getOrCreateChannelDocument(
+        repositories,
+        documentInput,
+        { createIfMissing: channelFileRollout.markdownEditing },
+      );
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
       const revisions = await repositories.channelDocuments.listRevisions({ documentId: document.id });
       return makeSuccess({
@@ -3274,6 +3302,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async deriveChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
+      if (!channelFileRollout.markdownEditing) {
+        return makeFailure('NOT_FOUND', 'Channel document editing is disabled');
+      }
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const sourceArtifact = await repositories.artifacts.getForTeam({
         teamId: documentInput.teamId,
@@ -3409,6 +3440,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async saveChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
+      if (!channelFileRollout.markdownEditing) {
+        return makeFailure('NOT_FOUND', 'Channel document editing is disabled');
+      }
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
@@ -3421,6 +3455,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async restoreChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
+      if (!channelFileRollout.markdownEditing) {
+        return makeFailure('NOT_FOUND', 'Channel document editing is disabled');
+      }
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
@@ -3438,6 +3475,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async publishChannelDocument(documentInput) {
       const access = await ensureUserCanViewChannel(repositories, documentInput);
       if (!access.ok) return access;
+      if (!channelFileRollout.markdownEditing) {
+        return makeFailure('NOT_FOUND', 'Channel document editing is disabled');
+      }
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
@@ -4571,7 +4611,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
-      await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+      if (channelFileRollout.markdownEditing) {
+        await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+      }
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
@@ -8055,9 +8097,11 @@ function toCommittedChannelDocumentDto(
 async function getOrCreateChannelDocument(
   repositories: Pick<ServerNextRepositories, 'artifacts' | 'channelDocuments' | 'messages'>,
   input: { teamId: string; channelId: string; documentId: string },
+  options: { createIfMissing: boolean } = { createIfMissing: true },
 ): Promise<ChannelDocumentRecord | null> {
   const existing = await repositories.channelDocuments.getForTeam(input);
   if (existing) return existing;
+  if (!options.createIfMissing) return null;
   const prefix = 'channel-document:';
   if (!input.documentId.startsWith(prefix)) return null;
   const artifactId = input.documentId.slice(prefix.length);
@@ -8487,12 +8531,19 @@ async function listPublicChannelFiles(
   repositories: ServerNextRepositories,
   input: ListChannelFilesInput | SearchChannelFilesInput,
   resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>,
+  options: {
+    channelFileRollout: ChannelFileRolloutConfig;
+    channelFileMetrics: ReturnType<typeof createChannelFileMetrics>;
+  } = { channelFileRollout: DEFAULT_CHANNEL_FILE_ROLLOUT, channelFileMetrics: createChannelFileMetrics() },
 ): Promise<Ack<ChannelFilesResultDto>> {
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
     return makeFailure('FORBIDDEN', 'User is not a team member');
   }
   const channelAccess = await ensureUserCanViewChannel(repositories, input);
   if (!channelAccess.ok) return channelAccess;
+  if (!options.channelFileRollout.fileBrowser) {
+    return makeFailure('NOT_FOUND', 'Channel file browser is disabled');
+  }
 
   const cursor = decodeChannelFileCursor(input.cursor);
   if (input.cursor && !cursor) return makeFailure('VALIDATION_ERROR', 'Invalid channel file cursor');
@@ -8503,6 +8554,7 @@ async function listPublicChannelFiles(
   const pageSize = Math.min(100, Math.max(1, Math.floor(input.pageSize ?? 50)));
   const candidates = await repositories.artifacts.listByChannel({ teamId: input.teamId, channelId: input.channelId });
   const entries: ChannelFileEntryDto[] = [];
+  const indexedShadowSnapshot: ChannelFileSnapshotEntry[] = [];
   const directories = new Map<string, ChannelFileDirectoryDto>();
   const currentDocumentArtifactIds = new Set<string>();
   const messageDocumentOriginArtifactIds = new Set<string>();
@@ -8538,6 +8590,9 @@ async function listPublicChannelFiles(
     if (input.role && input.role !== 'all' && role !== input.role) continue;
     const logicalPath = document.filename;
     if (query && !`${artifact.filename} ${logicalPath}`.toLocaleLowerCase().includes(query)) continue;
+    if (source.messageId) {
+      indexedShadowSnapshot.push({ id: artifact.id, logicalPath, role });
+    }
     const preview = await resolveArtifactPreview?.(artifact);
     if (!query) addChannelFileDirectories(
       directories,
@@ -8571,6 +8626,9 @@ async function listPublicChannelFiles(
     if (!source) continue;
     const logicalPath = channelArtifactLogicalPath(artifact, source, role);
     if (query && !`${artifact.filename} ${logicalPath}`.toLocaleLowerCase().includes(query)) continue;
+    if (source.messageId) {
+      indexedShadowSnapshot.push({ id: artifact.id, logicalPath, role });
+    }
     const preview = await resolveArtifactPreview?.(artifact);
     if (!query) addChannelFileDirectories(
       directories,
@@ -8591,6 +8649,24 @@ async function listPublicChannelFiles(
     });
   }
   entries.sort((left, right) => compareChannelFiles(right.artifact, left.artifact));
+  if (options.channelFileRollout.indexShadowCompare
+    && !input.cursor
+    && !requestedPath
+    && !query
+    && (!input.role || input.role === 'all')) {
+    const legacySnapshot = await buildLegacyChannelAttachmentSnapshot(repositories, input.channelId);
+    const diff = compareChannelFileSnapshots(legacySnapshot, indexedShadowSnapshot);
+    options.channelFileMetrics.increment('indexShadowComparisons');
+    if (!diff.equal) {
+      options.channelFileMetrics.increment(
+        'indexShadowMismatches',
+        diff.missingFromIndex.length + diff.unexpectedInIndex.length + diff.changed.length,
+      );
+      options.channelFileMetrics.increment('indexShadowMissing', diff.missingFromIndex.length);
+      options.channelFileMetrics.increment('indexShadowUnexpected', diff.unexpectedInIndex.length);
+      options.channelFileMetrics.increment('indexShadowChanged', diff.changed.length);
+    }
+  }
   const page = entries.slice(0, pageSize);
   const last = page[page.length - 1]?.artifact;
   return makeSuccess({
@@ -8604,6 +8680,31 @@ async function listPublicChannelFiles(
     path: requestedPath,
     ...(entries.length > pageSize && last ? { nextCursor: encodeChannelFileCursor(last) } : {}),
   });
+}
+
+async function buildLegacyChannelAttachmentSnapshot(
+  repositories: ServerNextRepositories,
+  channelId: string,
+): Promise<Array<{ id: string; logicalPath: string; role: string }>> {
+  const messages = await repositories.messages.listByChannel(channelId, 10_000);
+  const snapshot: Array<{ id: string; logicalPath: string; role: string }> = [];
+  for (const message of messages) {
+    if (message.channelId !== channelId || isDeletedMessage(message)) continue;
+    const artifacts = await repositories.artifacts.listByMessage(message.id);
+    for (const artifact of artifacts) {
+      if (artifact.channelId !== channelId || isWorkspaceRunLogArtifact(artifact)) continue;
+      if (!(await isPublicChannelFileArtifact(repositories, artifact))) continue;
+      const source = await channelFileSource(repositories, artifact);
+      if (!source) continue;
+      const role = artifact.role ?? 'attachment';
+      snapshot.push({
+        id: artifact.id,
+        logicalPath: channelArtifactLogicalPath(artifact, source, role),
+        role,
+      });
+    }
+  }
+  return snapshot;
 }
 
 function normalizeChannelFilePath(value: string | undefined): string | null {

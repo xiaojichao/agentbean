@@ -27,6 +27,7 @@ describe('chat files surface', () => {
     expect(source).toContain("params.delete('filePath')");
     expect(filesSurface).toContain('按文件角色筛选');
     expect(filesSurface).toContain('directories.map');
+    expect(source).toContain('data-smoke="chat-file-input"');
   });
 
   test('派生 Run Markdown 前明确确认且同名时要求改名', () => {

@@ -306,6 +306,17 @@ describe('server-next dev server entry', () => {
       ok: true,
       service: 'agentbean-next-server',
     });
+    await expect(fetch(`${server.baseUrl}/metricsz`).then((response) => response.json())).resolves.toEqual({
+      ok: true,
+      channelFiles: {
+        indexShadowComparisons: 0,
+        indexShadowMismatches: 0,
+        indexShadowMissing: 0,
+        indexShadowUnexpected: 0,
+        indexShadowChanged: 0,
+        rangeResponses: 0,
+      },
+    });
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="channel-create-form"');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('channel:create');
@@ -439,7 +450,21 @@ describe('server-next dev server entry', () => {
     const server = await startServerNextDevServer({
       Server,
       Database,
-      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'sqlite',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: false,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: true,
+          indexShadowCompare: false,
+        },
+      },
     });
     cleanups.push(() => server.close());
 
@@ -793,7 +818,21 @@ describe('server-next dev server entry', () => {
     } as unknown as ServerNextUseCases;
     const server = await startServerNextDevServer({
       app, Server,
-      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: true,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: false,
+          indexShadowCompare: false,
+        },
+      },
     });
     cleanups.push(() => server.close());
 
@@ -811,6 +850,33 @@ describe('server-next dev server entry', () => {
     });
     expect(invalid.status).toBe(416);
     expect(invalid.headers.get('content-range')).toBe('bytes */10');
+
+    const compatibilityServer = await startServerNextDevServer({
+      app, Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: false,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: false,
+          indexShadowCompare: false,
+        },
+      },
+    });
+    cleanups.push(() => compatibilityServer.close());
+    const full = await fetch(`${compatibilityServer.baseUrl}/api/teams/team-1/artifacts/artifact-range/preview?token=token-1`, {
+      headers: { Range: 'bytes=2-5' },
+    });
+    expect(full.status).toBe(200);
+    expect(full.headers.get('accept-ranges')).toBeNull();
+    expect(full.headers.get('content-range')).toBeNull();
+    await expect(full.text()).resolves.toBe('0123456789');
   });
 
   test('forces active artifact preview content to download', async () => {
