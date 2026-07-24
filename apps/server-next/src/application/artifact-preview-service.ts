@@ -86,6 +86,7 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
   constructor(
     private readonly command = process.env.AGENTBEAN_PREVIEW_PROCESSOR ?? 'ffmpeg',
     private readonly timeoutMs = DEFAULT_PROCESS_TIMEOUT_MS,
+    private readonly proberCommand = process.env.AGENTBEAN_PREVIEW_PROBER ?? 'ffprobe',
   ) {}
 
   async process(input: { inputPath: string; outputPath: string; mimeType: string }) {
@@ -98,7 +99,27 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
       if (mimeType.startsWith('audio/')) throw new UnsupportedPreviewError(mimeType);
       throw error;
     }
-    return {};
+    if (!mimeType.startsWith('video/')) return {};
+    const durationMs = await this.probeDurationMs(input.inputPath);
+    return durationMs === undefined ? {} : { durationMs };
+  }
+
+  // 时长是增强元数据：探测失败（无 ffprobe、容器无时长、流损坏）只丢弃该字段，
+  // 不影响已经生成的首帧 derivative。
+  private async probeDurationMs(inputPath: string): Promise<number | undefined> {
+    try {
+      const output = await runCommand(this.proberCommand, [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        inputPath,
+      ], this.timeoutMs);
+      const seconds = Number.parseFloat(output.trim());
+      if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+      return Math.round(seconds * 1000);
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -125,8 +146,9 @@ function processorArgs(
 }
 
 function runCommand(command: string, args: string[], timeoutMs: number) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
     let error = '';
     let settled = false;
     const timeout = setTimeout(() => {
@@ -135,6 +157,9 @@ function runCommand(command: string, args: string[], timeoutMs: number) {
       settled = true;
       reject(new Error('PREVIEW_PROCESSOR_TIMEOUT'));
     }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      output = `${output}${String(chunk)}`.slice(-4000);
+    });
     child.stderr.on('data', (chunk) => {
       error = `${error}${String(chunk)}`.slice(-1000);
     });
@@ -148,7 +173,7 @@ function runCommand(command: string, args: string[], timeoutMs: number) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      code === 0 ? resolve() : reject(new Error(error || `PREVIEW_PROCESSOR_EXIT_${code}`));
+      code === 0 ? resolve(output) : reject(new Error(error || `PREVIEW_PROCESSOR_EXIT_${code}`));
     });
   });
 }

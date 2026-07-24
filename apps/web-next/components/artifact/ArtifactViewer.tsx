@@ -139,3 +139,14 @@ export function formatFileSize(bytes: number): string {
   const value = bytes / (1024 ** exponent);
   return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 }
+
+export function formatVideoDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  const totalSeconds = Math.round(durationMs / 1000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const mm = String(minutes).padStart(hours > 0 ? 2 : 1, '0');
+  const ss = String(seconds).padStart(2, '0');
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${minutes}:${ss}`;
+}
