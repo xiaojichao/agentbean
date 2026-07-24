@@ -7,10 +7,10 @@ import type {
   ID,
   MemoryKind,
   MemoryScopeType,
-} from '@agentbean/contracts';
-import { formalKindToStorageKind } from '@agentbean/contracts';
-import type { ActiveMemoryCandidate, ExcludedActiveMemory } from '@agentbean/domain';
-import { assembleActiveMemoryContext, renderActiveMemorySection, scoreMemoryRelevance } from '@agentbean/domain';
+} from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind } from '../../../../packages/contracts/src/index.js';
+import type { ActiveMemoryCandidate, ExcludedActiveMemory } from '../../../../packages/domain/src/index.js';
+import { assembleActiveMemoryContext, renderActiveMemorySection, scoreMemoryRelevance } from '../../../../packages/domain/src/index.js';
 
 import type { AgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createCollaborativeMemorySearchService } from './collaborative-memory-search-service.js';
