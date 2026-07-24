@@ -73,6 +73,19 @@ export interface TaskOfferRespondInput {
 }
 
 /**
+ * #712 切片 C-2b-i：组合+持久化一个完整 Task Offer 的输入。
+ * objective/deliverables/riskLevel 等从 task/coordination/criteria/manifest 派生（过渡）；
+ * decision 的结构化 objective/inputs/constraints 属更底层切片（计划 §6.3 未完成）。
+ */
+export interface TaskOfferPublishInput {
+  readonly taskId: string;
+  readonly agentId: string;
+  readonly offerTtlMs: number;
+  /** 显式 @Agent（AC#8 仅元数据，不强迫接受）。 */
+  readonly hardSpecified: boolean;
+}
+
+/**
  * #712 切片 C-1：respondToOffer 结果。
  * - claim_granted：accepted 且同事务创建了 Claim/Lease（AC#4）。
  * - overtaken：并发中被抢先获得 Claim（AC#6 败者），不产 Lease。
@@ -115,6 +128,12 @@ export interface TaskClaimBroker {
   reconnectDevice(deviceId: string): void;
   /** #712 切片 C-1：持久化一个结构化 Task Offer（PI → Agent，状态 open）。 */
   createOffer(record: TaskOfferRecord): Promise<TaskOfferRecord>;
+  /**
+   * #712 切片 C-2b-i：从 task/coordination/criteria/manifest 派生并持久化完整 Task Offer。
+   * 过渡：objective←task.description、deliverables←acceptance criteria、inputs/constraints 暂空、
+   * riskLevel 默认 low（decision 结构化字段属后续切片）。为 C-2b-ii daemon 切换提供持久化 substrate。
+   */
+  publishOffer(input: TaskOfferPublishInput): Promise<TaskOfferRecord>;
   /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
   respondToOffer(input: TaskOfferRespondInput): Promise<TaskOfferRespondResult>;
 }
@@ -433,6 +452,53 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       disconnectedDevices.delete(deviceId);
     },
     async createOffer(record) {
+      return input.repositories.taskCoordination.offers.create(record);
+    },
+    async publishOffer(params) {
+      // 输入校验：负/零 TTL 会立即过期（wasteful）；与构造期全局 TTL 同款 positiveDuration。
+      positiveDuration(params.offerTtlMs, 'TASK_CLAIM_OFFER_TTL_INVALID');
+      const task = await input.repositories.tasks.getById(params.taskId);
+      if (!task) throw new Error('TASK_CLAIM_TASK_NOT_FOUND');
+      const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(params.taskId);
+      if (!coordination) throw new Error('TASK_CLAIM_COORDINATION_NOT_FOUND');
+      // manifestRevision fence：仅向有当前有效 active manifest 的 agent 发 offer（公开契约存在）。
+      const activeManifest = await input.repositories.agentExposure.manifests.getActiveByTeamAgent(
+        task.teamId, params.agentId,
+      );
+      const now = input.clock.now();
+      if (!activeManifest || (activeManifest.validUntil !== null && activeManifest.validUntil <= now)) {
+        throw new Error('TASK_CLAIM_MANIFEST_NOT_ACTIVE');
+      }
+      // 过滤退休 criterion（#709 修订退休的验收标准不进入新 offer 的 deliverables）。
+      const criteria = (await input.repositories.taskCoordination.criteria.list(params.taskId))
+        .filter((criterion) => criterion.retiredRevision === undefined);
+      const record: TaskOfferRecord = {
+        id: input.ids.nextId(),
+        teamId: task.teamId,
+        taskId: task.id,
+        agentId: params.agentId,
+        taskRevision: task.revision,
+        taskAttempt: coordination.attempt,
+        manifestRevision: activeManifest.revision,
+        // 过渡派生：decision 的结构化 objective/inputs/constraints 属后续切片（计划 §6.3）。
+        objective: {
+          objective: task.description ?? task.title,
+          inputs: [],
+          deliverables: criteria.map((criterion) => criterion.description),
+          constraints: [],
+          riskLevel: 'low',
+          requiredCapabilities: [...coordination.requiredCapabilities],
+          requiredSkills: [...(coordination.requiredSkills ?? [])],
+          preferredSkills: [...(coordination.preferredSkills ?? [])],
+        },
+        offerTtlMs: params.offerTtlMs,
+        offerExpiresAt: now + params.offerTtlMs,
+        hardSpecified: params.hardSpecified,
+        status: 'open',
+        response: null,
+        createdAt: now,
+        updatedAt: now,
+      };
       return input.repositories.taskCoordination.offers.create(record);
     },
     async respondToOffer(payload) {
