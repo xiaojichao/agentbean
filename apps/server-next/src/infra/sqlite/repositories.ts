@@ -155,6 +155,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
       JOIN artifacts a ON a.id = r.artifact_id
       WHERE a.message_id IS NOT NULL;`);
   }
+  applyMigration(db, 'team/0041_channel_coordination_decisions_memory_attribution.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -324,8 +325,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             usage_input, usage_output, active_model_availability, active_model_card_id,
             active_model_revision_id, active_model_model_id, response_model, diagnostic_code,
             attempt, system_message_id, gate_status, risk_level, objective, target_agent_id,
-            linked_task_id, blocking_reason, superseded_by_decision_id, idempotency_key, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            linked_task_id, blocking_reason, superseded_by_decision_id, memory_attribution, idempotency_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(
               input.id,
               input.jobId,
@@ -353,6 +354,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.linkedTaskId,
               input.blockingReason,
               input.supersededByDecisionId,
+              input.memoryAttribution === null ? null : JSON.stringify(input.memoryAttribution),
               input.idempotencyKey,
               input.createdAt,
               input.updatedAt,
@@ -2917,6 +2919,15 @@ function mapChannelCoordinationJob(row: unknown): ChannelCoordinationJobRecord |
   };
 }
 
+function parseMemoryAttribution(raw: string | null | undefined): ChannelCoordinationDecisionRecord['memoryAttribution'] {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as ChannelCoordinationDecisionRecord['memoryAttribution'];
+  } catch {
+    return null;
+  }
+}
+
 function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisionRecord | null {
   if (!row) return null;
   const availability = sqliteText(row, 'active_model_availability');
@@ -2954,6 +2965,7 @@ function mapChannelCoordinationDecision(row: unknown): ChannelCoordinationDecisi
     linkedTaskId: sqliteNullableText(row, 'linked_task_id') ?? null,
     blockingReason: sqliteNullableText(row, 'blocking_reason') ?? null,
     supersededByDecisionId: sqliteNullableText(row, 'superseded_by_decision_id') ?? null,
+    memoryAttribution: parseMemoryAttribution(sqliteNullableText(row, 'memory_attribution')),
     idempotencyKey: sqliteText(row, 'idempotency_key'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),

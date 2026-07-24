@@ -38,6 +38,7 @@ import {
   type ChannelFileRolloutConfig,
   type ChannelFileSnapshotEntry,
 } from './channel-file-rollout.js';
+import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -1111,6 +1112,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
+  // #720 Active Memory Context Resolver：Coordinator 与 ManagementRun 共享的权限过滤接缝（AC#8）。
+  // limit=6：Team/Channel/Task/Agent 四来源配额（floor(6/4)=1 保底 + 2 条高分补充）。
+  const activeMemoryContextResolver = createActiveMemoryContextResolver({
+    repositories,
+    formalMemory,
+    agentMemoryProjection,
+    clock,
+    limit: 6,
+  });
   // Channel Coordinator（#706/#707）：消费 durable Job，调 Active PI Model 产出提议，
   // 再由 Server 校验权限、风险与频道状态后应用低风险动作。不依赖 Device 在线。
   const channelCoordinator = createChannelCoordinator({
@@ -1123,6 +1133,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     agents: repositories.agents,
     teamPolicy: repositories.teamPiPolicy,
     modelResolver: piProvider,
+    memoryContextResolver: activeMemoryContextResolver,
     clock,
     ids,
   });

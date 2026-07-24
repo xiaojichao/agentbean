@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { AgentStatus } from './agent.js';
+import type { ActiveMemoryAttributionDto } from './active-memory-context.js';
 
 export type ChannelCoordinationJobStatus =
   | 'pending'
@@ -117,6 +118,12 @@ export interface ChannelCoordinationDecisionRecord {
    * null = 仍有效。与 gateStatus 正交——gateStatus 记录门禁裁决，本字段记录后续被取代的生命周期。
    */
   readonly supersededByDecisionId: ID | null;
+  /**
+   * #720 Active Memory 归因：实际影响本 Decision 的来源（memoryId/projectionId + 来源码 + 理由码）。
+   * 只存 ID/来源码/理由码，绝不存正文/prompt（AC#5，遵守本接口:77 约束）。
+   * null = 未注入 Active Memory（infra failure 或 resolved 前解析失败）。
+   */
+  readonly memoryAttribution: ActiveMemoryAttributionDto | null;
   readonly idempotencyKey: string;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
