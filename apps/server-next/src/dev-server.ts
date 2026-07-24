@@ -9,6 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore, type CreateServerNextUseCasesInput } from './application/usecases.js';
 import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
+import { createChannelFileMetrics, parseChannelFileRolloutConfig, type ChannelFileRolloutConfig } from './application/channel-file-rollout.js';
 import type { ArtifactRecord, ServerNextRepositories } from './application/repositories.js';
 import { createCapsuleInjectionValidator } from './application/capsule-injection-validator.js';
 import { createServerCapsuleRuntimeContextService } from './application/server-capsule-runtime-context-service.js';
@@ -57,6 +58,8 @@ export interface ServerNextDevConfig {
   dataDir: string;
   sessionSecret: string;
   webEntry?: 'preview' | 'app';
+  channelFileRollout?: ChannelFileRolloutConfig;
+  channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
   maxArtifactBytes?: number;
   serverWorker?: {
     workerPoolId: string;
@@ -224,7 +227,12 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
 export async function startServerNextDevServer(
   input: StartServerNextDevServerInput = {},
 ): Promise<ServerNextDevServerHandle> {
-  const config = input.config ?? parseServerNextDevConfig();
+  const parsedConfig = input.config ?? parseServerNextDevConfig();
+  const config: ServerNextDevConfig = {
+    ...parsedConfig,
+    channelFileRollout: parsedConfig.channelFileRollout ?? parseChannelFileRolloutConfig(),
+    channelFileMetrics: parsedConfig.channelFileMetrics ?? createChannelFileMetrics(),
+  };
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
@@ -829,6 +837,9 @@ async function handleArtifactRead(
     return;
   }
   const range = parseArtifactRange(input.request.headers.range, fileSize);
+  if (range.kind === 'partial') {
+    input.config.channelFileMetrics?.increment('rangeResponses');
+  }
   if (range.kind === 'invalid') {
     input.response.writeHead(416, { 'content-range': `bytes */${fileSize}`, 'accept-ranges': 'bytes' });
     input.response.end();
@@ -1505,10 +1516,12 @@ function createDefaultApp(
   messageIngestionMode: 'legacy' | 'durable-job' = 'legacy',
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
+  const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
+  const channelFileMetrics = config.channelFileMetrics ?? createChannelFileMetrics();
   if (config.storage === 'memory') {
-    const artifactPreviewService = createArtifactPreviewService({
-      outputDir: join(config.dataDir, 'artifact-previews'),
-    });
+    const artifactPreviewService = channelFileRollout.previewWorker
+      ? createArtifactPreviewService({ outputDir: join(config.dataDir, 'artifact-previews') })
+      : undefined;
     const repositories = createInMemoryRepositories();
     const clock = { now: () => Date.now() };
     const ids = { nextId: () => randomUUID() };
@@ -1528,6 +1541,8 @@ function createDefaultApp(
         ids,
         sessionSecret: config.sessionSecret,
         artifactContentStore,
+        channelFileRollout,
+        channelFileMetrics,
         ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
         managementRouter: management.router,
         managementKernel: management.kernel,
@@ -1554,10 +1569,12 @@ function createDefaultApp(
   const teamDb = new Sqlite(join(config.dataDir, 'team.sqlite'));
   applyGlobalMigrations(globalDb);
   applyTeamMigrations(teamDb);
-  const artifactPreviewService = createArtifactPreviewService({
-    outputDir: join(config.dataDir, 'artifact-previews'),
-    repository: createSqliteArtifactPreviewRepository(teamDb),
-  });
+  const artifactPreviewService = channelFileRollout.previewWorker
+    ? createArtifactPreviewService({
+        outputDir: join(config.dataDir, 'artifact-previews'),
+        repository: createSqliteArtifactPreviewRepository(teamDb),
+      })
+    : undefined;
   // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
   // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
   cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
@@ -1580,6 +1597,8 @@ function createDefaultApp(
       ids,
       sessionSecret: config.sessionSecret,
       artifactContentStore,
+      channelFileRollout,
+      channelFileMetrics,
       ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
       managementRouter: management.router,
       managementKernel: management.kernel,
@@ -1604,9 +1623,10 @@ function createDefaultApp(
 }
 
 function artifactPreviewBindings(
-  service: ArtifactPreviewService,
+  service: ArtifactPreviewService | undefined,
   dataDir: string,
 ): Pick<CreateServerNextUseCasesInput, 'resolveArtifactPreview' | 'onArtifactCommitted'> {
+  if (!service) return {};
   const enqueue = async (artifact: ArtifactRecord) => {
     if (!artifact.storagePath) return;
     await service.enqueue({

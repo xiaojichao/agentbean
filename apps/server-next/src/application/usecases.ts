@@ -26,6 +26,13 @@ import { createPiProviderService } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
+import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
+import {
+  compareChannelFileSnapshots,
+  createChannelFileMetrics,
+  DEFAULT_CHANNEL_FILE_ROLLOUT,
+  type ChannelFileRolloutConfig,
+} from './channel-file-rollout.js';
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -949,6 +956,8 @@ export interface CreateServerNextUseCasesInput {
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
   /** Production uses durable-job; legacy exists only for explicitly unmigrated callers. */
   messageIngestionMode?: 'legacy' | 'durable-job';
+  channelFileRollout?: ChannelFileRolloutConfig;
+  channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -963,6 +972,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
   // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
   const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
+  const channelFileRollout = input.channelFileRollout ?? DEFAULT_CHANNEL_FILE_ROLLOUT;
+  const channelFileMetrics = input.channelFileMetrics ?? createChannelFileMetrics();
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
@@ -1080,6 +1091,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     ids,
   });
+  // #720 Active Memory Context Resolver：Coordinator 与 ManagementRun 共享的权限过滤接缝（AC#8）。
+  // limit=6：Team/Channel/Task/Agent 四来源配额（floor(6/4)=1 保底 + 2 条高分补充）。
+  const activeMemoryContextResolver = createActiveMemoryContextResolver({
+    repositories,
+    formalMemory,
+    agentMemoryProjection,
+    clock,
+    limit: 6,
+  });
   // Channel Coordinator（#706/#707）：消费 durable Job，调 Active PI Model 产出提议，
   // 再由 Server 校验权限、风险与频道状态后应用低风险动作。不依赖 Device 在线。
   const channelCoordinator = createChannelCoordinator({
@@ -1092,6 +1112,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     agents: repositories.agents,
     teamPolicy: repositories.teamPiPolicy,
     modelResolver: piProvider,
+    memoryContextResolver: activeMemoryContextResolver,
     clock,
     ids,
   });
@@ -3202,11 +3223,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview, { channelFileRollout, channelFileMetrics });
     },
 
     async searchChannelFiles(fileInput) {
-      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview);
+      return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview, { channelFileRollout, channelFileMetrics });
     },
 
     async listChannelDocuments(documentInput) {
@@ -7727,12 +7748,19 @@ async function listPublicChannelFiles(
   repositories: ServerNextRepositories,
   input: ListChannelFilesInput | SearchChannelFilesInput,
   resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>,
+  options: {
+    channelFileRollout: ChannelFileRolloutConfig;
+    channelFileMetrics: ReturnType<typeof createChannelFileMetrics>;
+  } = { channelFileRollout: DEFAULT_CHANNEL_FILE_ROLLOUT, channelFileMetrics: createChannelFileMetrics() },
 ): Promise<Ack<ChannelFilesResultDto>> {
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
     return makeFailure('FORBIDDEN', 'User is not a team member');
   }
   const channelAccess = await ensureUserCanViewChannel(repositories, input);
   if (!channelAccess.ok) return channelAccess;
+  if (!options.channelFileRollout.fileBrowser) {
+    return makeFailure('NOT_FOUND', 'Channel file browser is disabled');
+  }
 
   const cursor = decodeChannelFileCursor(input.cursor);
   if (input.cursor && !cursor) return makeFailure('VALIDATION_ERROR', 'Invalid channel file cursor');
@@ -7773,6 +7801,24 @@ async function listPublicChannelFiles(
     });
   }
   entries.sort((left, right) => compareChannelFiles(right.artifact, left.artifact));
+  if (options.channelFileRollout.indexShadowCompare && !input.cursor && !requestedPath && !query) {
+    const legacySnapshot = await buildLegacyChannelAttachmentSnapshot(repositories, input.channelId);
+    const indexedSnapshot = entries
+      .filter((entry) => Boolean(entry.artifact.messageId))
+      .map((entry) => ({
+        id: entry.artifact.id,
+        logicalPath: entry.logicalPath ?? entry.artifact.filename,
+        role: entry.role ?? 'attachment',
+      }));
+    const diff = compareChannelFileSnapshots(legacySnapshot, indexedSnapshot);
+    options.channelFileMetrics.increment('indexShadowComparisons');
+    if (!diff.equal) {
+      options.channelFileMetrics.increment(
+        'indexShadowMismatches',
+        diff.missingFromIndex.length + diff.unexpectedInIndex.length + diff.changed.length,
+      );
+    }
+  }
   const page = entries.slice(0, pageSize);
   const last = page[page.length - 1]?.artifact;
   return makeSuccess({
@@ -7786,6 +7832,31 @@ async function listPublicChannelFiles(
     path: requestedPath,
     ...(entries.length > pageSize && last ? { nextCursor: encodeChannelFileCursor(last) } : {}),
   });
+}
+
+async function buildLegacyChannelAttachmentSnapshot(
+  repositories: ServerNextRepositories,
+  channelId: string,
+): Promise<Array<{ id: string; logicalPath: string; role: string }>> {
+  const messages = await repositories.messages.listByChannel(channelId, 10_000);
+  const snapshot: Array<{ id: string; logicalPath: string; role: string }> = [];
+  for (const message of messages) {
+    if (message.channelId !== channelId || isDeletedMessage(message)) continue;
+    const artifacts = await repositories.artifacts.listByMessage(message.id);
+    for (const artifact of artifacts) {
+      if (artifact.channelId !== channelId || isWorkspaceRunLogArtifact(artifact)) continue;
+      if (!(await isPublicChannelFileArtifact(repositories, artifact))) continue;
+      const source = await channelFileSource(repositories, artifact);
+      if (!source) continue;
+      const role = artifact.role ?? 'attachment';
+      snapshot.push({
+        id: artifact.id,
+        logicalPath: channelArtifactLogicalPath(artifact, source, role),
+        role,
+      });
+    }
+  }
+  return snapshot;
 }
 
 function normalizeChannelFilePath(value: string | undefined): string | null {

@@ -217,9 +217,21 @@ export async function runAgentBeanNextBrowserSmoke({
 
     const artifactSmoke = await exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
-      check('browser-artifact-upload-visible', true, `Browser uploaded and rendered ${artifactSmoke.filename}`),
+      check('browser-artifact-upload-visible', true, 'Browser uploaded and rendered an artifact'),
       check('browser-artifact-preview-readable', true, 'Browser can fetch artifact preview bytes from the rendered link'),
       check('browser-artifact-download-readable', true, 'Browser can fetch artifact download bytes from the rendered link'),
+    );
+
+    const channelFilesSmoke = await exerciseChannelFilesBrowserSmoke({
+      page,
+      filename: artifactSmoke.filename,
+      expectedBody: artifactSmoke.downloadBody,
+      timeoutMs,
+    });
+    checks.push(
+      check('browser-channel-files-root-visible', true, 'Browser opens the channel file library root'),
+      check('browser-channel-files-entry-visible', true, 'Channel file library renders the uploaded artifact'),
+      check('browser-channel-files-download-readable', true, 'Channel file library download link returns the uploaded bytes'),
     );
 
     await page.screenshot(artifacts.screenshot);
@@ -3480,10 +3492,10 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
     })()
   `);
   if (!renderedArtifact) {
-    throw new Error(`Browser artifact row was not rendered for ${filename}`);
+    throw new Error('Browser artifact row was not rendered');
   }
   if (!renderedArtifact.previewHref || !renderedArtifact.downloadHref) {
-    throw new Error(`Browser artifact links were not rendered: ${formatAck(renderedArtifact)}`);
+    throw new Error('Browser artifact links were not rendered');
   }
   const http = await page.evaluateJson(`
     (async () => {
@@ -3503,16 +3515,46 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
     })()
   `);
   if (http?.preview?.status !== 200 || http.preview.body !== content) {
-    throw new Error(`Artifact preview fetch failed: ${formatAck(http?.preview)}`);
+    throw new Error('Artifact preview fetch failed');
   }
   if (http?.download?.status !== 200 || http.download.body !== content || !http.download.disposition.includes(filename)) {
-    throw new Error(`Artifact download fetch failed: ${formatAck(http?.download)}`);
+    throw new Error('Artifact download fetch failed');
   }
   return {
     filename,
     previewBody: http.preview.body,
     downloadBody: http.download.body,
   };
+}
+
+export async function exerciseChannelFilesBrowserSmoke({ page, filename, expectedBody, timeoutMs }) {
+  await page.click('[data-smoke="channel-files-tab"]');
+  await page.waitForFunction(
+    'Boolean(document.querySelector(\'[data-smoke="channel-files-view"]\'))',
+    'channel file library root to render',
+    timeoutMs,
+  );
+  await page.waitForFunction(
+    `Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]')).some((entry) => entry.dataset.filename === ${JSON.stringify(filename)})`,
+    'channel file entry to render',
+    timeoutMs,
+  );
+  const result = await page.evaluateJson(`
+    (async () => {
+      const filename = ${JSON.stringify(filename)};
+      const row = Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
+        .find((entry) => entry.dataset.filename === filename);
+      if (!row) return null;
+      const downloadHref = row.querySelector('a[title="下载文件"]')?.href;
+      if (!downloadHref) return { filename, downloadStatus: 0, downloadBody: '' };
+      const response = await fetch(downloadHref);
+      return { filename, downloadStatus: response.status, downloadBody: await response.text() };
+    })()
+  `);
+  if (!result || result.filename !== filename || result.downloadStatus !== 200 || result.downloadBody !== expectedBody) {
+    throw new Error('Channel file library download failed');
+  }
+  return result;
 }
 
 export async function exerciseTaskBrowserSmoke({ page, suffix, timeoutMs }) {
