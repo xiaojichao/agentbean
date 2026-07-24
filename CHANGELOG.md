@@ -18,6 +18,19 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-24] - 2026-07-24
+### Added
+- 补齐 #781 频道文件库灰度验收与生产保护
+### Changed
+- 实现 broker publishOffer 组合+持久化完整 Task Offer（#712 切片 C-2b-i）
+- Remove fetch depth limit in CI/CD workflow
+- 记录 2026-07-23 每日更新日志
+### Fixed
+- 修复 #795 Markdown 灰度关闭时隐式建文档
+- 修复 #795 浏览器验收入口
+### Security
+- 修复频道文件安全预览缺口（#770）
+
 ## [Daily 2026-07-23] - 2026-07-23
 ### Added
 - 新增 #676 Windows 真机会话验收 runbook（取证 SOP）
