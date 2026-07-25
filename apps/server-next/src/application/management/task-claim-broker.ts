@@ -270,7 +270,14 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (current && current.expiresAt > input.clock.now()) return [];
       const now = input.clock.now();
       const prepared: StoredOffer[] = [];
-      for (const candidate of resolution.candidates.filter((item) => item.eligible && item.deviceId)) {
+      // #811 fan-out:targeted 任务仅向 targetAgent 发 1 个 offer,open 向全部 eligible 发
+      const isTargeted = coordination.claimPolicy === 'targeted' && task.assigneeId;
+      const eligibleCandidates = resolution.candidates.filter((item) => {
+        if (!item.eligible || !item.deviceId) return false;
+        if (isTargeted && item.agentId !== task.assigneeId) return false;
+        return true;
+      });
+      for (const candidate of eligibleCandidates) {
         const offerId = input.ids.nextId();
         // C-2b-ii：为 manifest-having 候选持久化完整 TaskOffer（新 respond 路径的 substrate，
         // wire offerId = 持久化 record.id）。legacy（无 active manifest）→ publishOffer 抛
