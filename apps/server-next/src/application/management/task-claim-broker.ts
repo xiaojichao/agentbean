@@ -83,6 +83,12 @@ export interface TaskOfferPublishInput {
   readonly offerTtlMs: number;
   /** 显式 @Agent（AC#8 仅元数据，不强迫接受）。 */
   readonly hardSpecified: boolean;
+  /**
+   * 可选：显式指定 offer id（prepareOffers 持久化时与 wire TaskClaimOfferV1.offerId 共享，
+   * 使 daemon 用同一 offerId 既能 respond（新路径）也能 acquire（旧兼容路径）。
+   * 缺省 nextId 生成。
+   */
+  readonly id?: string;
 }
 
 /**
@@ -263,10 +269,26 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       });
       if (current && current.expiresAt > input.clock.now()) return [];
       const now = input.clock.now();
-      const prepared = resolution.candidates.filter((candidate) => candidate.eligible && candidate.deviceId)
-        .map((candidate): StoredOffer => ({
+      const prepared: StoredOffer[] = [];
+      for (const candidate of resolution.candidates.filter((item) => item.eligible && item.deviceId)) {
+        const offerId = input.ids.nextId();
+        // C-2b-ii：为 manifest-having 候选持久化完整 TaskOffer（新 respond 路径的 substrate，
+        // wire offerId = 持久化 record.id）。legacy（无 active manifest）→ publishOffer 抛
+        // MANIFEST_NOT_ACTIVE，跳过持久化仅内存 StoredOffer（旧 acquire 兼容路径）。
+        try {
+          await this.publishOffer({
+            taskId,
+            agentId: candidate.agentId,
+            offerTtlMs,
+            hardSpecified: coordination.claimPolicy === 'targeted' && task.assigneeId === candidate.agentId,
+            id: offerId,
+          });
+        } catch (error) {
+          if (!(error instanceof Error && error.message === 'TASK_CLAIM_MANIFEST_NOT_ACTIVE')) throw error;
+        }
+        prepared.push({
           schemaVersion: 1,
-          offerId: input.ids.nextId(),
+          offerId,
           deviceId: candidate.deviceId!,
           taskId,
           taskRevision: resolution.taskRevision,
@@ -275,7 +297,8 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           requiredCapabilities: [...coordination.requiredCapabilities],
           offerExpiresAt: now + offerTtlMs,
           ancestorAgentIds: resolution.ancestorAgentIds,
-        }));
+        });
+      }
       for (const offer of prepared) offers.set(offer.offerId, offer);
       return prepared.map(({ ancestorAgentIds: _ancestorAgentIds, ...offer }) => offer);
     },
@@ -473,7 +496,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       const criteria = (await input.repositories.taskCoordination.criteria.list(params.taskId))
         .filter((criterion) => criterion.retiredRevision === undefined);
       const record: TaskOfferRecord = {
-        id: input.ids.nextId(),
+        id: params.id ?? input.ids.nextId(),
         teamId: task.teamId,
         taskId: task.id,
         agentId: params.agentId,
