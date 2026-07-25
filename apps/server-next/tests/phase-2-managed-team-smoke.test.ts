@@ -203,13 +203,9 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
       await withTimeout(serviceA.stop(), 2_000, 'SERVICE_A_STOP_TIMEOUT').catch(() => undefined);
     });
 
-    await expect(webSocket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
-      userId, teamId, mode: 'managed', maxManagementPhase: 3,
-      placementPolicy: {
-        placement: 'device', allowedDeviceIds: [deviceA.deviceId, deviceB.deviceId],
-        allowServerContext: false, requireLocalModelCredentials: true,
-      },
-    })).resolves.toMatchObject({ ok: true, policy: { mode: 'managed', maxManagementPhase: 3 } });
+    await expect(webSocket.emitWithAck(WEB_EVENTS.piPolicy.update, {
+      userId, teamId, autoCoordinationEnabled: true,
+    })).resolves.toMatchObject({ ok: true, autoCoordinationEnabled: true });
 
     const sent = await webSocket.emitWithAck(WEB_EVENTS.message.send, {
       userId, teamId, channelId, body: '请按依赖顺序完成 Phase 3 跨 Agent Memory smoke',

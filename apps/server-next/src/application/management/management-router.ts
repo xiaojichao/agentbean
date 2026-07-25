@@ -193,7 +193,28 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       body: string;
       targetAgentId?: string;
     }): Promise<ManagementRoutingResult> {
-      const policy = await policyForTeam(input.teamId);
+      let policy = await policyForTeam(input.teamId);
+      // #724: 旧 management_policies 未配置（默认 direct）时桥接新 piPolicy。
+      // 仅在消息携带 clientMessageId（客户端显式意图）时桥接；否则保持 direct。
+      // placement 决策：
+      // - 有 target → device placement（Phase 1-3 管理路由，避开 L288 guard）
+      // - 无 target → managed placement（Phase 4 server worker）
+      // maxManagementPhase 由 rootTaskId 驱动。
+      if (policy.mode === 'direct') {
+        const piPolicy = await repositories.teamPiPolicy.getOrDefault(input.teamId);
+        if (piPolicy.autoCoordinationEnabled && input.clientMessageId?.trim()) {
+          const hasRootTask = !!input.rootTaskId?.trim();
+          const hasTarget = !!input.targetAgentId;
+          policy = {
+            ...policy,
+            mode: 'managed' as ManagementMode,
+            maxManagementPhase: (hasRootTask ? 3 : 1) as 1 | 2 | 3,
+            placementPolicy: hasTarget
+              ? DEFAULT_PLACEMENT_POLICY
+              : { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false },
+          };
+        }
+      }
       if (policy.mode === 'direct') return { kind: 'direct', mode: 'direct' };
 
       const target = input.targetAgentId

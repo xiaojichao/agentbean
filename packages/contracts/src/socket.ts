@@ -30,11 +30,8 @@ export const WEB_EVENTS = {
     update: 'team:update',
     delete: 'team:delete',
   },
-  managementPolicy: {
-    get: 'management-policy:get',
-    update: 'management-policy:update',
-  },
   /** Team 作用域 PI 自动协调开关（#707）；任意成员读，Owner/Admin 写。 */
+  /** @deprecated managementPolicy 事件已移除（#724）；请使用 piPolicy。 */
   piPolicy: {
     get: 'pi-policy:get',
     update: 'pi-policy:update',

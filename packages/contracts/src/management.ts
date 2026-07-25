@@ -1,6 +1,11 @@
+/**
+ * @deprecated #724：旧 PI 管理策略类型（direct/shadow/managed 模式已由 auto_coordination_enabled 取代）。
+ * 保留仅供历史 ManagementRun 恢复读取；Team 产品设置不再使用这些类型。
+ */
 import type { ID, UnixMs } from './common.js';
 import type { ActiveMemoryAttributionDto } from './active-memory-context.js';
 
+/** @deprecated 使用 `autoCoordinationEnabled`（`pi-coordination.ts`）代替。 */
 export type ManagementMode = 'direct' | 'shadow' | 'managed';
 
 export type ManagementRunStatus =

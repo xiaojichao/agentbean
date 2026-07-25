@@ -225,7 +225,6 @@ export interface ServerNextUseCases {
   getAgentEnvForDevice(input: { token: string; teamId: string; agentId: string }): Promise<Ack<{ env: Record<string, string> }>>;
   updateMemberHuman(input: UpdateMemberHumanInput): Promise<Ack<{ human: { id: string; teamId: string; userId: string; username: string; role: string; displayName?: string; joinedAt: number } }>>;
   updateTeam(input: UpdateTeamInput): Promise<Ack<{ team: { id: string; name: string; path: string } }>>;
-  getManagementPolicy(input: { userId: string; teamId: string }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   /** 公开入口接受 unknown，由运行时 exact-key parser fail closed。 */
   listPiProviderPresets(input: unknown): Promise<Ack<ListPiProviderPresetsResult>>;
   listPiProviderCards(input: unknown): Promise<Ack<ListPiProviderCardsResult>>;
@@ -240,7 +239,6 @@ export interface ServerNextUseCases {
   setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
   getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
   getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
-  updateManagementPolicy(input: { userId: string; teamId: string; mode: import('../../../../packages/contracts/src/index.js').ManagementMode; maxManagementPhase?: 1 | 2 | 3; placementPolicy?: import('../../../../packages/contracts/src/index.js').ManagerPlacementPolicyDto; budgetOverrides?: Partial<import('../../../../packages/contracts/src/index.js').ManagementBudgetDto> }): Promise<Ack<{ policy: import('./management-repositories.js').ManagementPolicyRecord; canManage: boolean }>>;
   /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
@@ -5375,20 +5373,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({
         team: { id: updated.id, name: updated.name, path: updated.path },
       });
-    },
-
-    async getManagementPolicy(policyInput) {
-      const result = await managementRouter.getPolicy(policyInput);
-      return result.ok
-        ? makeSuccess({ policy: result.policy, canManage: result.canManage })
-        : makeFailure('FORBIDDEN', 'Management policy is not available');
-    },
-
-    async updateManagementPolicy(policyInput) {
-      const result = await managementRouter.updatePolicy(policyInput);
-      return result.ok
-        ? makeSuccess({ policy: result.policy, canManage: result.canManage })
-        : makeFailure(result.error === 'FORBIDDEN' ? 'FORBIDDEN' : 'VALIDATION_ERROR', 'Management policy update rejected');
     },
 
     async getPiPolicy(input) {

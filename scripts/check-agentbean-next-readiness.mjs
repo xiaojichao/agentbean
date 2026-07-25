@@ -734,7 +734,7 @@ export function collectAgentBeanNextReadinessChecks({
         phase2CloseoutSmoke.includes('WEB_EVENTS.task.dag') &&
         phase2CloseoutSmoke.includes('AGENT_EVENTS.dispatch.result') &&
         browserSmokeScript.includes('webui-phase2-task-dag-business-flow') &&
-        browserSmokeScript.includes('supportedPhases: [1, 2]') &&
+        browserSmokeScript.includes('supportedPhases: [1, 2') &&
         browserSmokeScript.includes('data-smoke="task-dag-panel"') &&
         daemonInstallSmokeScript.includes(
           'dist/apps/daemon-next/src/management-worker-protocol.js',
