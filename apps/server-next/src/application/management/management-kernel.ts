@@ -27,7 +27,7 @@ import {
 } from './management-event-validator.js';
 
 export class ManagementConflictError extends Error {
-  constructor(readonly code: string) { super(code); }
+  constructor(readonly code: string, readonly detail?: unknown) { super(code); }
 }
 
 export interface ManagementKernelDependencies {

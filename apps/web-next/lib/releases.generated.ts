@@ -2,6 +2,39 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-07-24",
+    "date": "2026-07-24",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "补齐 #781 频道文件库灰度验收与生产保护"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "实现 broker publishOffer 组合+持久化完整 Task Offer（#712 切片 C-2b-i）",
+          "Remove fetch depth limit in CI/CD workflow",
+          "记录 2026-07-23 每日更新日志"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "修复 #795 Markdown 灰度关闭时隐式建文档",
+          "修复 #795 浏览器验收入口"
+        ]
+      },
+      {
+        "type": "Security",
+        "items": [
+          "修复频道文件安全预览缺口（#770）"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-23",
     "date": "2026-07-23",
     "sections": [

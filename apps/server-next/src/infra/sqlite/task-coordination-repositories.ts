@@ -20,12 +20,14 @@ export function createSqliteTaskCoordinationRepositories(
       async create(record) {
         db.prepare(`INSERT INTO task_coordinations
           (task_id, team_id, management_run_id, root_task_id, parent_task_id, node_kind,
-           review_policy, claim_policy, required_capabilities_json, task_revision, attempt,
+           review_policy, claim_policy, required_capabilities_json, required_skills_json,
+           atomicity_hint, task_revision, attempt,
            max_attempts, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.taskId, record.teamId, record.managementRunId, record.rootTaskId ?? null,
             record.parentTaskId ?? null, record.nodeKind, record.reviewPolicy, record.claimPolicy,
-            json(record.requiredCapabilities), record.taskRevision, record.attempt, record.maxAttempts,
+            json(record.requiredCapabilities), record.requiredSkills ? json(record.requiredSkills) : null,
+            record.atomicityHint ?? null, record.taskRevision, record.attempt, record.maxAttempts,
             record.createdAt, record.updatedAt);
         return record;
       },
@@ -41,11 +43,13 @@ export function createSqliteTaskCoordinationRepositories(
         const record = input.record;
         const result = db.prepare(`UPDATE task_coordinations SET
           management_run_id = ?, root_task_id = ?, parent_task_id = ?, node_kind = ?,
-          review_policy = ?, claim_policy = ?, required_capabilities_json = ?, task_revision = ?,
+          review_policy = ?, claim_policy = ?, required_capabilities_json = ?, required_skills_json = ?,
+          atomicity_hint = ?, task_revision = ?,
           attempt = ?, max_attempts = ?, updated_at = ?
           WHERE task_id = ? AND task_revision = ?`)
           .run(record.managementRunId, record.rootTaskId ?? null, record.parentTaskId ?? null,
             record.nodeKind, record.reviewPolicy, record.claimPolicy, json(record.requiredCapabilities),
+            record.requiredSkills ? json(record.requiredSkills) : null, record.atomicityHint ?? null,
             record.taskRevision, record.attempt, record.maxAttempts, record.updatedAt, record.taskId,
             input.expectedTaskRevision);
         return changes(result) === 1 ? record : null;
@@ -358,6 +362,9 @@ function mapCoordination(value: unknown): TaskCoordinationRecord | null {
     reviewPolicy: text(value, 'review_policy') as TaskCoordinationRecord['reviewPolicy'],
     claimPolicy: text(value, 'claim_policy') as TaskCoordinationRecord['claimPolicy'],
     requiredCapabilities: parse<string[]>(text(value, 'required_capabilities_json')),
+    requiredSkills: nullableText(value, 'required_skills_json')
+      ? parse<string[]>(text(value, 'required_skills_json')) : [],
+    atomicityHint: nullableText(value, 'atomicity_hint') as TaskCoordinationRecord['atomicityHint'],
     taskRevision: number(value, 'task_revision'), attempt: number(value, 'attempt'),
     maxAttempts: number(value, 'max_attempts'),
     createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'),

@@ -123,7 +123,6 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0034_agent_memory_projections.sql');
   applyMigration(db, 'team/0035_team_agent_memory_opt_ins.sql');
   applyMigration(db, 'team/0036_task_offers.sql');
-  applyMigration(db, 'team/0037_channel_coordination_decisions_memory_attribution.sql');
   if (sqliteTableExists(db, 'artifacts')) {
     applyMigration(db, 'team/0037_artifact_sources.sql');
   }
@@ -156,8 +155,10 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
       JOIN artifacts a ON a.id = r.artifact_id
       WHERE a.message_id IS NOT NULL;`);
   }
+  applyMigration(db, 'team/0041_channel_coordination_decisions_memory_attribution.sql');
+  applyMigration(db, 'team/0042_task_coordination_skills_atomicity.sql');
   if (sqliteTableExists(db, 'channels')) {
-    applyMigration(db, 'team/0041_channel_revision.sql');
+    applyMigration(db, 'team/0043_channel_revision.sql');
   }
 }
 

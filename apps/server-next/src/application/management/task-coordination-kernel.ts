@@ -7,9 +7,12 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import {
   authorizeTaskRevision,
+  evaluateSkillCoverageUnion,
   evaluateSubtaskAcceptance,
   evaluateTaskDag,
+  evaluateTaskDecomposability,
   evaluateTaskRevisionChange,
+  type ExecutableSubtaskCoverageResult,
 } from '../../../../../packages/domain/src/index.js';
 import type { TaskRecord } from '../repositories.js';
 import type { ManagementEventRecord } from '../management-repositories.js';
@@ -67,6 +70,13 @@ export interface CreateRootCoordinationInput extends TaskCoordinationCommandInpu
 
 export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
   readonly parentTaskId: string;
+  /**
+   * AC#4：被拆 parent Task 在语义/安全/事务上是否可拆分（create_subtasks 输入，parent 级）。
+   * 未提供视为 decomposable；atomic 的工作由拆解 gate 拒绝（TASK_NOT_DECOMPOSABLE，ADR 0021）。
+   */
+  readonly atomicityHint?: 'atomic' | 'decomposable';
+  /** AC#2 allocatability 真实结果（可选,未提供时 stub fully_allocatable）。由外部 eligibility 服务传入。#805 */
+  readonly allocatability?: ExecutableSubtaskCoverageResult;
   readonly subtasks: readonly {
     readonly taskId: string;
     readonly clientKey: string;
@@ -75,6 +85,7 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
     readonly claimPolicy: 'open' | 'targeted';
     readonly targetAgentId?: string;
     readonly requiredCapabilities: readonly string[];
+    readonly requiredSkills?: readonly string[];
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
@@ -219,6 +230,30 @@ export function createTaskCoordinationKernel(
         const parentTask = await requireTask(repositories, input.parentTaskId);
         const parent = await requireCoordinationForRun(repositories, input.parentTaskId, run.id);
         const rootTaskId = parent.rootTaskId ?? parent.taskId;
+        // ── #798 拆解 gate（AC#1 子 skills 联合覆盖根 + AC#4 可拆分性）──
+        // rootRequiredSkills：parent 的 requiredSkills（若非空），else requiredCapabilities 兼任兜底（ADR 0018）。
+        const rootRequiredSkills = parent.requiredSkills && parent.requiredSkills.length > 0
+          ? parent.requiredSkills
+          : parent.requiredCapabilities;
+        // subtaskRequiredSkills：各 draft 的 requiredSkills（若非空），else requiredCapabilities 兜底。
+        const subtaskRequiredSkills = input.subtasks.map((draft) =>
+          draft.requiredSkills && draft.requiredSkills.length > 0 ? draft.requiredSkills : draft.requiredCapabilities);
+        const coverage = evaluateSkillCoverageUnion({ rootRequiredSkills, subtaskRequiredSkills });
+        // allocatability 使用外部 eligibility 服务结果（#805）；未提供时 stub fully_allocatable（#798 向后兼容）。
+        const allocatability = input.allocatability ?? { kind: 'fully_allocatable' as const };
+        const decomposability = evaluateTaskDecomposability({
+          atomicityHint: input.atomicityHint ?? 'decomposable',
+          coverage,
+          allocatability,
+        });
+        if (decomposability.kind === 'not_decomposable') conflict('TASK_NOT_DECOMPOSABLE');
+        if (decomposability.kind === 'needs_user_adjustment') {
+          conflict('TASK_NEEDS_USER_ADJUSTMENT', {
+            reason: decomposability.reason,
+            uncoveredSkills: decomposability.uncoveredSkills ?? [],
+            unallocatableSubtasks: decomposability.unallocatableSubtasks ?? [],
+          });
+        }
         const tasks: TaskRecord[] = [];
         for (const [index, draft] of input.subtasks.entries()) {
           const assigneeId = draft.claimPolicy === 'targeted' ? draft.targetAgentId : undefined;
@@ -237,6 +272,8 @@ export function createTaskCoordinationKernel(
             schemaVersion: 1, taskId: task.id, teamId: run.teamId, managementRunId: run.id,
             rootTaskId, parentTaskId: parent.taskId, nodeKind: 'subtask', reviewPolicy: 'manager',
             claimPolicy: draft.claimPolicy, requiredCapabilities: [...draft.requiredCapabilities],
+            requiredSkills: draft.requiredSkills ? [...draft.requiredSkills] : [],
+            atomicityHint: input.atomicityHint ?? 'decomposable',
             taskRevision: task.revision, attempt: 1, maxAttempts: draft.maxAttempts,
             createdAt: now, updatedAt: now,
           };
@@ -1287,4 +1324,4 @@ function requiresHumanIntervention(reasonCode: string): boolean {
     .some((token) => codeValue.includes(token));
 }
 function code(value: string): string { return value.toUpperCase().replaceAll('-', '_'); }
-function conflict(codeValue: string): never { throw new ManagementConflictError(codeValue); }
+function conflict(codeValue: string, detail?: unknown): never { throw new ManagementConflictError(codeValue, detail); }

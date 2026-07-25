@@ -8,8 +8,11 @@ import {
   AGENT_SOURCES,
   AGENT_STATUSES,
   isErrorCode,
+  isSafeArtifactInlinePreviewMimeType,
   makeFailure,
   makeSuccess,
+  normalizeArtifactMimeType,
+  supportsArtifactPreviewDerivativeMimeType,
   type Ack,
   type AgentDto,
   type ArtifactDto,
@@ -56,6 +59,16 @@ import {
 } from '../src/index';
 
 describe('first-slice contract result shape', () => {
+  test('keeps artifact inline and derivative MIME policies explicit', () => {
+    expect(normalizeArtifactMimeType('Text/Plain; charset=utf-8')).toBe('text/plain');
+    expect(isSafeArtifactInlinePreviewMimeType('video/mp4')).toBe(true);
+    expect(isSafeArtifactInlinePreviewMimeType('video/x-unknown')).toBe(false);
+    expect(isSafeArtifactInlinePreviewMimeType('image/svg+xml')).toBe(false);
+    expect(supportsArtifactPreviewDerivativeMimeType('image/svg+xml')).toBe(true);
+    expect(supportsArtifactPreviewDerivativeMimeType('image/avif')).toBe(true);
+    expect(supportsArtifactPreviewDerivativeMimeType('text/plain')).toBe(false);
+  });
+
   test('creates success and failure acknowledgements with stable error codes', () => {
     const success = makeSuccess({ token: 'token-1' });
     const failure = makeFailure('FORBIDDEN', 'Not a team member');

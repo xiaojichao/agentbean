@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Download, X } from 'lucide-react';
+import { normalizeArtifactMimeType } from '@agentbean/contracts';
 import type { Artifact } from '@/lib/schema';
 
 export interface ArtifactViewerProps {
@@ -101,9 +102,11 @@ export function isMarkdownArtifact(artifact: Artifact): boolean {
 
 export function isInlineTextArtifact(artifact: Artifact): boolean {
   const name = artifact.filename.toLowerCase();
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
   return isMarkdownArtifact(artifact)
-    || artifact.mimeType.startsWith('text/')
-    || artifact.mimeType === 'application/json'
+    || mimeType === 'text/plain'
+    || mimeType === 'text/csv'
+    || mimeType === 'application/json'
     || name.endsWith('.txt')
     || name.endsWith('.json')
     || name.endsWith('.csv');
@@ -120,10 +123,12 @@ export function formatArtifactTextPreview(artifact: Artifact, text: string): str
 
 export function artifactKind(artifact: Artifact): { previewLabel: string; documentLabel: string } {
   const name = artifact.filename.toLowerCase();
+  const mimeType = normalizeArtifactMimeType(artifact.mimeType);
   if (isMarkdownArtifact(artifact)) return { previewLabel: 'Markdown 预览', documentLabel: 'Markdown 文档' };
-  if (artifact.mimeType.startsWith('text/') || name.endsWith('.txt')) return { previewLabel: '文本预览', documentLabel: '文本文件' };
-  if (artifact.mimeType === 'application/pdf' || name.endsWith('.pdf')) return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
-  if (name.endsWith('.json') || artifact.mimeType === 'application/json') return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
+  if (mimeType === 'text/plain' || name.endsWith('.txt')) return { previewLabel: '文本预览', documentLabel: '文本文件' };
+  if (mimeType === 'text/csv' || name.endsWith('.csv')) return { previewLabel: 'CSV 预览', documentLabel: 'CSV 文件' };
+  if (mimeType === 'application/pdf' || name.endsWith('.pdf')) return { previewLabel: 'PDF 预览', documentLabel: 'PDF 文件' };
+  if (name.endsWith('.json') || mimeType === 'application/json') return { previewLabel: 'JSON 预览', documentLabel: 'JSON 文件' };
   return { previewLabel: '文件预览', documentLabel: '附件文件' };
 }
 
@@ -133,4 +138,15 @@ export function formatFileSize(bytes: number): string {
   const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / (1024 ** exponent);
   return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
+}
+
+export function formatVideoDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '';
+  const totalSeconds = Math.round(durationMs / 1000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes);
+  const ss = String(seconds).padStart(2, '0');
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }

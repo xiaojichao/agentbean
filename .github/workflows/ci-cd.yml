@@ -74,16 +74,9 @@ jobs:
             exit 0
           fi
 
-          # Fetch both branches explicitly
-          git fetch origin main
           git fetch origin "${{ github.base_ref }}"
-
-          # Try to find merge-base, fall back to comparing with origin base ref
-          MERGE_BASE=$(git merge-base origin/main HEAD 2>/dev/null || git rev-parse "origin/${{ github.base_ref }}")
-
-          # Compare files changed between merge-base and HEAD
-          changed_files="$(git diff --name-only "$MERGE_BASE" HEAD)"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agent[...]
+          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-pr-merge-readiness(\.test)?|claim-github-issue(\.test)?|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-phase-2-task-dag-boundary(\.test)?|check-phase-3-memory-boundary(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/(specs|plans)/|^README\.md$|^\.nvmrc$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
 
           if [ -n "$next_changed_files" ]; then
             echo "should_validate=true" >> "$GITHUB_OUTPUT"

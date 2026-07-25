@@ -2,7 +2,11 @@ import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { basename, join } from 'node:path';
-import type { ArtifactPreviewDto, ArtifactPreviewStatus } from '../../../../packages/contracts/src/index.js';
+import {
+  supportsArtifactPreviewDerivativeMimeType,
+  type ArtifactPreviewDto,
+  type ArtifactPreviewStatus,
+} from '../../../../packages/contracts/src/index.js';
 
 const MAX_ATTEMPTS = 3;
 const DEFAULT_LEASE_MS = 30_000;
@@ -82,11 +86,17 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
   constructor(
     private readonly command = process.env.AGENTBEAN_PREVIEW_PROCESSOR ?? 'ffmpeg',
     private readonly timeoutMs = DEFAULT_PROCESS_TIMEOUT_MS,
+    private readonly proberCommand = process.env.AGENTBEAN_PREVIEW_PROBER ?? 'ffprobe',
+    private readonly pdfCommand = process.env.AGENTBEAN_PREVIEW_PDF_PROCESSOR ?? 'pdftoppm',
   ) {}
 
   async process(input: { inputPath: string; outputPath: string; mimeType: string }) {
     const mimeType = input.mimeType.toLowerCase();
     if (!supportsArtifactPreviewMime(mimeType)) throw new UnsupportedPreviewError(mimeType);
+    if (mimeType === 'application/pdf') {
+      await this.processPdf(input);
+      return {};
+    }
     const args = processorArgs(input, mimeType);
     try {
       await runCommand(this.command, args, this.timeoutMs);
@@ -94,20 +104,75 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
       if (mimeType.startsWith('audio/')) throw new UnsupportedPreviewError(mimeType);
       throw error;
     }
-    return {};
+    if (!mimeType.startsWith('video/')) return {};
+    const durationMs = await this.probeDurationMs(input.inputPath);
+    return durationMs === undefined ? {} : { durationMs };
+  }
+
+  // 时长是增强元数据：探测失败（无 ffprobe、容器无时长、流损坏）只丢弃该字段，
+  // 不影响已经生成的首帧 derivative。
+  private async probeDurationMs(inputPath: string): Promise<number | undefined> {
+    try {
+      const output = await runCommand(this.proberCommand, [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        inputPath,
+      ], this.timeoutMs);
+      const seconds = Number.parseFloat(output.trim());
+      if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+      return Math.round(seconds * 1000);
+    } catch {
+      return undefined;
+    }
+  }
+
+  // PDF adapter 选型（#800）：poppler 的 pdftoppm 渲染首页为 PNG，再复用既有 ffmpeg
+  // 命令（AGENTBEAN_PREVIEW_PROCESSOR）压成受限 WebP。理由：Node 24 仅作子进程调用、
+  // 无原生绑定；macOS（brew poppler）与主流 Linux 发行版（poppler-utils）均可安装；
+  // 只渲染首页且 -scale-to 限尺寸，配合既有超时/输入输出字节上限约束资源；以子进程
+  // 方式使用，GPL 不传染服务代码。ffmpeg 自身无法解码 PDF，mutool 生产镜像可得性差。
+  private async processPdf(input: { inputPath: string; outputPath: string }) {
+    const pagePrefix = `${input.outputPath}.page`;
+    const pagePng = `${pagePrefix}.png`;
+    try {
+      await runCommand(this.pdfCommand, [
+        '-f', '1', '-l', '1', '-singlefile', '-scale-to', '800', '-png',
+        input.inputPath, pagePrefix,
+      ], this.timeoutMs);
+    } catch (error) {
+      const spawnCode = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (spawnCode === 'ENOENT' || spawnCode === 'EACCES') {
+        // adapter 缺失或不可执行是部署事实而非输入问题：标为 unsupported
+        // （明确错误码、不重试），卡片按既有语义降级，原文件预览/下载不受影响。
+        throw new UnsupportedPreviewError('application/pdf', 'PREVIEW_PDF_ADAPTER_MISSING');
+      }
+      throw error;
+    }
+    try {
+      // 页图→WebP 与图片走同一条受限管线，参数集中维护在 processorArgs
+      await runCommand(this.command, processorArgs(
+        { inputPath: pagePng, outputPath: input.outputPath },
+        'image/png',
+      ), this.timeoutMs);
+    } finally {
+      await unlink(pagePng).catch(() => undefined);
+    }
   }
 }
 
 export class UnsupportedPreviewError extends Error {
-  constructor(mimeType: string) {
+  constructor(
+    mimeType: string,
+    readonly code: string = 'PREVIEW_UNSUPPORTED',
+  ) {
     super(`Preview is unsupported for ${mimeType}`);
     this.name = 'UnsupportedPreviewError';
   }
 }
 
 export function supportsArtifactPreviewMime(mimeType: string): boolean {
-  const mediaType = mimeType.split(';', 1)[0]?.trim().toLowerCase() ?? '';
-  return /^(image\/(jpeg|png|webp|gif|svg\+xml)|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp4|wav|ogg)|application\/pdf)$/.test(mediaType);
+  return supportsArtifactPreviewDerivativeMimeType(mimeType);
 }
 
 function processorArgs(
@@ -122,8 +187,9 @@ function processorArgs(
 }
 
 function runCommand(command: string, args: string[], timeoutMs: number) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
     let error = '';
     let settled = false;
     const timeout = setTimeout(() => {
@@ -132,6 +198,9 @@ function runCommand(command: string, args: string[], timeoutMs: number) {
       settled = true;
       reject(new Error('PREVIEW_PROCESSOR_TIMEOUT'));
     }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      output = `${output}${String(chunk)}`.slice(-4000);
+    });
     child.stderr.on('data', (chunk) => {
       error = `${error}${String(chunk)}`.slice(-1000);
     });
@@ -145,7 +214,7 @@ function runCommand(command: string, args: string[], timeoutMs: number) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      code === 0 ? resolve() : reject(new Error(error || `PREVIEW_PROCESSOR_EXIT_${code}`));
+      code === 0 ? resolve(output) : reject(new Error(error || `PREVIEW_PROCESSOR_EXIT_${code}`));
     });
   });
 }
@@ -233,7 +302,7 @@ export function createArtifactPreviewService(options: ArtifactPreviewServiceOpti
 }
 
 function previewErrorCode(error: unknown): string {
-  if (error instanceof UnsupportedPreviewError) return 'PREVIEW_UNSUPPORTED';
+  if (error instanceof UnsupportedPreviewError) return error.code;
   if (!(error instanceof Error)) return 'PREVIEW_PROCESSING_FAILED';
   if (/^[A-Z][A-Z0-9_]+$/.test(error.message)) return error.message;
   return 'PREVIEW_PROCESSING_FAILED';

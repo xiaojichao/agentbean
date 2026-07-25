@@ -17,6 +17,20 @@ Server 通过环境变量独立控制以下能力。未配置时保留当前兼�
 
 只允许使用 `true/false`、`on/off`、`yes/no` 或 `1/0`。配置解析失败时 Server 必须拒绝启动。
 
+## Preview processor 外部依赖
+
+derivative 由子进程生成，Server 以命令方式调用、不链接任何原生库：
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `AGENTBEAN_PREVIEW_PROCESSOR` | `ffmpeg` | 图片/视频首帧/音频封面/PDF 页图的 WebP 压缩。部署镜像必须使用带 WebP 编码器（libwebp 或原生 webp encoder）的 ffmpeg 构建 |
+| `AGENTBEAN_PREVIEW_PROBER` | `ffprobe` | 视频时长探测（#799）。探测失败只缺省时长字段，不影响首帧 derivative |
+| `AGENTBEAN_PREVIEW_PDF_PROCESSOR` | `pdftoppm` | PDF 首页渲染为 PNG（poppler）。macOS 开发装 `poppler`，Linux 生产装 `poppler-utils` |
+
+PDF adapter 选型记录（#800）：选 poppler `pdftoppm` 而非 mutool——Node 24 仅子进程调用无原生绑定；macOS 与主流 Linux 发行版均可得；只渲染首页并 `-scale-to` 限尺寸，配合既有超时与输入/输出字节上限约束资源；子进程使用方式下 GPL 不传染服务代码。ffmpeg 自身无法解码 PDF。
+
+缺失或不可执行的后果按既有降级语义处理，不会阻断原文件预览/下载：ffmpeg 缺 WebP 编码器时 derivative job 有限重试后 failed；pdftoppm 缺失时 PDF job 直接标记 `unsupported`（错误码 `PREVIEW_PDF_ADAPTER_MISSING`，不重试）。排查时先看 preview job 错误码，再确认对应二进制在 Server 容器 PATH 中。
+
 ## 启用顺序
 
 1. 先部署 schema、兼容读路径和 `PREVIEW_WORKER=true`，确认旧消息附件与旧下载 URL 可用。

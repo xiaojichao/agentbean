@@ -783,7 +783,10 @@ export function createTaskClaimProtocolClient(input: {
       // 不能因此拖垮既有 Dispatch 与 Manager WorkerHost。
       if (!deviceId) return;
       await protocol.start({ deviceId }, {
-        canAcceptOffer: () => true,
+        // #712 切片 C-2b-ii：替代旧 canAcceptOffer:()=>true 无条件隐式 acquire（AC#7）。
+        // 过渡默认 accepted——经 task-claim:respond 显式接受（新路径），legacy 无持久化
+        // offer 时 offerHandler 自动回退旧 acquire（兼容）。真实 Agent 评估决策属后续产品切片。
+        decideOfferResponse: () => ({ kind: 'accepted' }),
         async onClaimed() {
           // Task 6 only establishes claim authority. Invocation/Dispatch starts in Task 8.
         },
