@@ -1011,6 +1011,11 @@ export async function exerciseWebUiChannelsBusinessSmoke({
       timeoutMs,
     );
     await page.click('[data-smoke="channel-archive-open"]');
+    await page.waitForFunction(
+      `document.querySelector('[data-smoke="channel-confirm-archive"]') !== null`,
+      'channel archive preflight completes and confirm button appears',
+      timeoutMs,
+    );
     await page.click('[data-smoke="channel-confirm-archive"]');
     await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
 
