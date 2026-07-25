@@ -458,7 +458,11 @@ describe('server-next first-slice use cases', () => {
       channelId: 'channel-archived',
       body: 'archived roadmap note',
     });
-    await app.archiveChannel({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-archived' });
+    // 两步归档：preflight → confirm
+    const preflight = await app.archiveChannel({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-archived' });
+    expect(preflight.ok).toBe(true);
+    const token = (preflight as any).preflight?.confirmationToken;
+    await app.archiveChannel({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-archived', confirmationToken: token });
 
     await expect(app.searchMessages({ userId: 'user-1', teamId: 'team-1', query: 'roadmap' })).resolves.toMatchObject({
       ok: true,
@@ -927,14 +931,25 @@ describe('server-next first-slice use cases', () => {
       error: 'FORBIDDEN',
     });
 
-    // Archive: creator can archive
-    await expect(app.archiveChannel({
+    // Archive: creator can archive（两步：preflight → confirm）
+    const preflightResult = await app.archiveChannel({
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-archive',
-    })).resolves.toMatchObject({
+    });
+    expect(preflightResult).toMatchObject({
       ok: true,
-      channel: { id: 'channel-archive', archivedAt: 400 },
+      preflight: { channelId: 'channel-archive' },
+    });
+    const confirmResult = await app.archiveChannel({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-archive',
+      confirmationToken: (preflightResult as any).preflight.confirmationToken,
+    });
+    expect(confirmResult).toMatchObject({
+      ok: true,
+      confirmation: { channel: { id: 'channel-archive', archivedAt: 400 } },
     });
 
     // Archived channel excluded from listForUser

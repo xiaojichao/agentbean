@@ -372,6 +372,47 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     const decisionId = deps.ids.nextId();
     const isSideEffect = PI_COORDINATION_SIDE_EFFECT_INTENTS.has(parsed.intent);
     return deps.unitOfWork.run(async (transaction) => {
+      // 归档频道拒绝产生任何副作用（#721 AC#5）
+      const jobChannel = await transaction.channels.getById(job.channelId);
+      if (jobChannel && jobChannel.archivedAt != null) {
+        const decision: ChannelCoordinationDecisionRecord = {
+          id: decisionId,
+          jobId: job.id,
+          teamId: job.teamId,
+          channelId: job.channelId,
+          messageId: job.messageId,
+          outcome: 'resolved',
+          intent: parsed.intent,
+          reasonCode: parsed.reasonCode,
+          replyText: null,
+          usage,
+          pinnedModel: job.activeModel,
+          responseModel,
+          diagnosticCode: null,
+          attempt,
+          systemMessageId: null,
+          gateStatus: 'blocked',
+          riskLevel: ctx.riskLevel,
+          objective: null,
+          targetAgentId: null,
+          linkedTaskId: null,
+          blockingReason: 'CHANNEL_ARCHIVED',
+          supersededByDecisionId: null,
+          memoryAttribution: ctx.memoryAttribution,
+          idempotencyKey: `decision:${job.id}`,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await transaction.decisions.create(decision);
+        await transaction.jobs.updateState({
+          jobId: job.id,
+          status: 'completed',
+          attempt,
+          nextRetryAt: null,
+          updatedAt: now,
+        });
+        return { kind: 'resolved', decision };
+      }
       let linkedTaskId: ID | null = null;
       // #709 task_followup 证据关联可覆盖门禁裁决（仅收紧 applied/suggested→blocked，从不放松）。
       let effectiveVerdict: CoordinationGateVerdict = verdict;

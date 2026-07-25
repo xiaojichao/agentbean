@@ -127,6 +127,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0037_artifact_sources.sql');
   }
   applyMigration(db, 'team/0038_channel_documents.sql');
+  if (sqliteTableExists(db, 'channels')) {
+    applyMigration(db, 'team/0039_channel_revision.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -395,6 +398,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         jobs: channelCoordination.jobs,
         decisions: channelCoordination.decisions,
         tasks: repositories.tasks,
+        channels: repositories.channels,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -407,6 +411,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           dispatches: repositories.dispatches,
           coordination: taskCoordination,
           management: managementRepositories,
+          channels: repositories.channels,
         })),
     ),
     memory,
@@ -827,8 +832,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         teamDb
           .prepare(
             `INSERT INTO channels (
-              id, team_id, kind, name, description, visibility, created_by, created_at, archived_at, dm_target_agent_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              id, team_id, kind, name, description, visibility, created_by, created_at, archived_at, dm_target_agent_id, revision
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             channel.id,
@@ -841,6 +846,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             channel.createdAt,
             null,
             channel.dmTargetAgentId ?? null,
+            0,
           );
         for (const userId of channel.humanMemberIds) {
           teamDb
@@ -992,7 +998,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         teamDb
           .prepare(
             `UPDATE channels
-             SET name = ?, description = ?, visibility = ?
+             SET name = ?, description = ?, visibility = ?, revision = revision + 1
              WHERE id = ?`,
           )
           .run(updated.name, updated.title ?? null, updated.visibility, updated.id);
@@ -2580,6 +2586,7 @@ function mapChannel(db: SqliteDatabase, row: unknown): ChannelRecord | null {
     createdBy: sqliteNullableText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),
     archivedAt: sqliteNullableNumber(row, 'archived_at'),
+    revision: sqliteNumber(row, 'revision'),
     humanMemberIds: db
       .prepare('SELECT user_id FROM channel_human_members WHERE channel_id = ? ORDER BY joined_at')
       .all(id)

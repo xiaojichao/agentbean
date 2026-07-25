@@ -1,11 +1,12 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type SaveChannelDocumentInput, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
@@ -133,7 +134,7 @@ export interface ServerNextUseCases {
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
-  archiveChannel(input: ArchiveChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
+  archiveChannel(input: ArchiveChannelInput): Promise<Ack<{ channel: ChannelDto } | { preflight: ChannelArchivePreflightDto } | { confirmation: ChannelArchiveConfirmationDto }>>;
   deleteChannel(input: DeleteChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
   listDirectMessages(input: ListDirectMessagesInput): Promise<Ack<{ dms: DmChannelDto[] }>>;
@@ -771,6 +772,7 @@ export interface ArchiveChannelInput {
   userId: string;
   teamId: string;
   channelId: string;
+  confirmationToken?: string;
 }
 
 export interface DeleteChannelInput {
@@ -965,6 +967,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
+  const ARCHIVE_CONFIRMATION_TTL_MS = 10 * 60 * 1000;
+  function signArchiveToken(payloadBase64: string): string {
+    return createHmac('sha256', sessionSecret).update(payloadBase64).digest('base64url');
+  }
+  function verifyArchiveToken(payloadBase64: string, signature: string): boolean {
+    try {
+      const expected = createHmac('sha256', sessionSecret).update(payloadBase64).digest('base64url');
+      return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+    } catch {
+      return false;
+    }
+  }
   const artifactContentStore = input.artifactContentStore;
   const resolveArtifactPreview = input.resolveArtifactPreview;
   const onArtifactCommitted = input.onArtifactCommitted;
@@ -2882,14 +2896,136 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Only channel creator can archive');
       }
       const now = clock.now();
-      const archived = await repositories.channels.archive({
-        channelId: channel.id,
-        timestamp: now,
-      });
-      if (!archived) {
-        return makeFailure('NOT_FOUND', 'Channel not found');
+      const channelRevision = channel.revision ?? 0;
+
+      // ---- preflight：展示非终态工作并签发确认 token ----
+      if (!archiveInput.confirmationToken) {
+        const works = await collectArchiveWorks({
+          tasks: repositories.tasks,
+          dispatches: repositories.dispatches,
+          management: repositories.management,
+          coordination: repositories.taskCoordination,
+        }, archiveInput.teamId, archiveInput.channelId);
+        const preflight = evaluateArchivePreflight({
+          channel: { id: channel.id, revision: channelRevision, archivedAt: channel.archivedAt ?? null },
+          userId: archiveInput.userId,
+          teamId: archiveInput.teamId,
+          now,
+          tokenExpiresInMs: ARCHIVE_CONFIRMATION_TTL_MS,
+          sign: signArchiveToken,
+          works,
+        });
+        if (preflight.kind === 'error') {
+          return makeFailure('FORBIDDEN', 'Channel is already archived');
+        }
+        return makeSuccess({ preflight });
       }
-      return makeSuccess({ channel: archived });
+
+      // ---- confirm：校验 token 后同一事务内原子归档 ----
+      const confirmation = evaluateArchiveConfirmation({
+        channel: { id: channel.id, revision: channelRevision, archivedAt: channel.archivedAt ?? null },
+        userId: archiveInput.userId,
+        teamId: archiveInput.teamId,
+        now,
+        token: archiveInput.confirmationToken,
+        verifySignature: verifyArchiveToken,
+        canArchive: canApplyChannelUpdate(channel, archiveInput.userId, {}),
+      });
+      if (confirmation.kind === 'error') {
+        const errorMessages: Record<typeof confirmation.reason, string> = {
+          invalid_token: 'Invalid confirmation token',
+          token_expired: 'Confirmation token expired',
+          channel_revision_changed: 'Channel was modified after preflight',
+          already_archived: 'Channel is already archived',
+          forbidden: 'Only channel creator can archive',
+          user_mismatch: 'Confirmation token was issued for a different user',
+          team_mismatch: 'Confirmation token was issued for a different team',
+          channel_mismatch: 'Confirmation token was issued for a different channel',
+        };
+        return makeFailure('VALIDATION_ERROR', errorMessages[confirmation.reason]);
+      }
+
+      return repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        const txChannel = await transaction.channels.getById(archiveInput.channelId);
+        if (!txChannel || txChannel.teamId !== archiveInput.teamId) {
+          throw new Error('CHANNEL_NOT_FOUND');
+        }
+        if (txChannel.archivedAt != null) {
+          throw new Error('ALREADY_ARCHIVED');
+        }
+        if ((txChannel.revision ?? 0) !== confirmation.payload.channelRevision) {
+          throw new Error('CHANNEL_REVISION_CHANGED');
+        }
+
+        const works = await collectArchiveWorks(transaction, archiveInput.teamId, archiveInput.channelId);
+
+        // 1. 取消非终态 Task（closed 为 Task 系统的终态/取消语义）
+        for (const task of works.tasks) {
+          const updated = await transaction.tasks.update({
+            taskId: task.id,
+            changes: { status: 'closed', updatedAt: now },
+          });
+          if (!updated) throw new Error(`TASK_CLOSE_FAILED:${task.id}`);
+        }
+
+        // 2. 撤销 active Claim/Lease
+        for (const lease of works.leases) {
+          const updated = await transaction.coordination.claimLeases.update({
+            id: lease.id,
+            expectedStatus: 'active',
+            status: 'released',
+            heartbeatAt: lease.heartbeatAt,
+            expiresAt: lease.expiresAt,
+            releasedAt: now,
+          });
+          if (!updated) throw new Error(`CLAIM_RELEASE_FAILED:${lease.id}`);
+        }
+
+        // 3. 失效 open Offer
+        for (const offer of works.offers) {
+          const updated = await transaction.coordination.offers.updateStatus({
+            id: offer.id,
+            expectedStatus: 'open',
+            status: 'invalidated',
+            response: null,
+            now,
+          });
+          if (!updated) throw new Error(`OFFER_INVALIDATE_FAILED:${offer.id}`);
+        }
+
+        // 4. 取消非终态 Invocation/Dispatch
+        const cancelledInvocationIds: ID[] = [];
+        for (const dispatch of works.dispatches) {
+          const updated = await transaction.dispatches.markCancelled({
+            dispatchId: dispatch.id,
+            completedAt: now,
+          });
+          if (!updated) throw new Error(`DISPATCH_CANCEL_FAILED:${dispatch.id}`);
+          // 反向查找关联 invocation（若存在）用于返回值展示
+          const attempts = await transaction.management.dispatchAttempts.list(dispatch.id);
+          if (attempts.length > 0) {
+            cancelledInvocationIds.push(attempts[0]!.invocationId);
+          }
+        }
+
+        // 5. 写 archivedAt
+        const archived = await transaction.channels.archive({
+          channelId: channel.id,
+          timestamp: now,
+        });
+        if (!archived) throw new Error('CHANNEL_ARCHIVE_FAILED');
+
+        return makeSuccess({
+          confirmation: {
+            channel: archived,
+            cancelledTaskIds: works.tasks.map((task) => task.id),
+            releasedClaimIds: works.leases.map((lease) => lease.id),
+            invalidatedOfferIds: works.offers.map((offer) => offer.id),
+            cancelledInvocationIds: [...new Set(cancelledInvocationIds)],
+            pendingReviewTaskIds: works.pendingReviews.map((task) => task.id),
+          },
+        });
+      });
     },
 
     async deleteChannel(deleteInput) {
@@ -7323,6 +7459,55 @@ function safeEqual(left: string, right: string): boolean {
 
 function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
+}
+
+type ArchiveWorkRepositories = Pick<ServerNextRepositories, 'tasks' | 'dispatches' | 'management'> & {
+  coordination: TaskCoordinationRepositories;
+};
+
+async function collectArchiveWorks(
+  deps: ArchiveWorkRepositories,
+  teamId: string,
+  channelId: string,
+) {
+  const tasks = await deps.tasks.list({ teamId, channelIds: [channelId], includeGlobal: false });
+  const pendingReviews = tasks.filter((task) => task.status === 'in_review');
+  const activeTasks = tasks.filter((task) =>
+    task.status !== 'done' && task.status !== 'closed' && task.status !== 'in_review',
+  );
+
+  const activeLeases: TaskClaimLeaseRecord[] = [];
+  const openOffers: TaskOfferRecord[] = [];
+  const taskLeases: TaskClaimLeaseRecord[] = await deps.coordination.claimLeases.listActive();
+  for (const task of activeTasks) {
+    const lease = taskLeases.find((l) => l.taskId === task.id);
+    if (lease) activeLeases.push(lease);
+
+    const taskOffers: TaskOfferRecord[] = await deps.coordination.offers.listByTask(task.id);
+    openOffers.push(...taskOffers.filter((offer) => offer.status === 'open'));
+  }
+
+  const channelDispatches = (await deps.dispatches.listByTeam(teamId))
+    .filter((dispatch) => dispatch.channelId === channelId && isPendingDispatchStatus(dispatch.status));
+
+  const invocations: { id: ID; title?: string; status: string }[] = [];
+  for (const dispatch of channelDispatches) {
+    const attempts = await deps.management.dispatchAttempts.list(dispatch.id);
+    const attempt = attempts[0];
+    if (attempt) {
+      invocations.push({ id: attempt.invocationId, status: dispatch.status });
+    }
+  }
+
+  return {
+    tasks: activeTasks.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+    invocations,
+    claims: activeLeases.map((lease) => ({ id: lease.id, status: lease.status })),
+    leases: activeLeases,
+    offers: openOffers.map((offer) => ({ id: offer.id, status: offer.status })),
+    pendingReviews: pendingReviews.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+    dispatches: channelDispatches,
+  };
 }
 
 function isCompletableDispatchStatus(status: DispatchDto['status']): boolean {

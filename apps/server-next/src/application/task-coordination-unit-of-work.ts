@@ -1,6 +1,7 @@
 import type { ManagementRepositories } from './management-repositories.js';
 import type {
   ArtifactRepository,
+  ChannelRepository,
   DispatchRepository,
   MessageRepository,
   TaskRepository,
@@ -16,6 +17,7 @@ export interface TaskCoordinationTransactionRepositories {
   readonly dispatches: DispatchRepository;
   readonly coordination: TaskCoordinationRepositories;
   readonly management: ManagementRepositories;
+  readonly channels: ChannelRepository;
 }
 
 export interface TaskCoordinationUnitOfWork {
