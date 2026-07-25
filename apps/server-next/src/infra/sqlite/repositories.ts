@@ -35,6 +35,7 @@ import {
   type ManagementMemoryTransactionRepositories,
 } from '../../application/management-memory-unit-of-work.js';
 import { createSqliteMemoryRepositories } from './memory-repositories.js';
+import { createSqliteExperiencePackRepositories } from './experience-pack-repositories.js';
 import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js';
 import { createSqliteSystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
@@ -160,6 +161,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'channels')) {
     applyMigration(db, 'team/0043_channel_revision.sql');
   }
+  applyMigration(db, 'team/0044_experience_packs.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2588,6 +2590,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return !!row;
       },
     },
+    experiencePack: createSqliteExperiencePackRepositories(teamDb),
     revocations: {
       async find({ teamId, machineId, profileId }) {
         const row = globalDb

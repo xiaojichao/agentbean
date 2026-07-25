@@ -24,6 +24,7 @@ import { createCollaborativeMemoryService, type MemoryView } from './collaborati
 import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
 import { createMemoryGovernanceService } from './memory-governance-service.js';
 import { createFormalMemoryService } from './formal-memory-service.js';
+import { createExperiencePackService } from './experience-pack-service.js';
 import { createSystemUserMemoryService } from './system-user-memory-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
@@ -50,6 +51,17 @@ import type {
   PublicPiHealthDto,
   PublishPiProviderCardResult,
   RunPiProviderTestResult,
+} from '../../../../packages/contracts/src/index.js';
+
+import type {
+  ApproveExperiencePackInput,
+  AttachExperiencePackToChannelInput,
+  ChannelExperienceAttachmentDto,
+  CreateExperiencePackDraftInput,
+  DetachExperiencePackFromChannelInput,
+  ExperiencePackDto,
+  MarkExperiencePackSourceInvalidInput,
+  WithdrawExperiencePackInput,
 } from '../../../../packages/contracts/src/index.js';
 
 export interface ServerNextClock {
@@ -286,6 +298,16 @@ export interface ServerNextUseCases {
   reviseUserMemory(input: { userId: string; memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<Ack<{ memory: UserMemoryDto }>>;
   deactivateUserMemory(input: { userId: string; memoryId: string; changeReason: string }): Promise<Ack<{ memory: UserMemoryDto }>>;
   deleteUserMemory(input: { userId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ deleted: true }>>;
+  // #722 Experience Pack
+  createExperiencePackDraft(input: CreateExperiencePackDraftInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
+  approveExperiencePack(input: ApproveExperiencePackInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
+  withdrawExperiencePack(input: WithdrawExperiencePackInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
+  markExperiencePackSourceInvalid(input: MarkExperiencePackSourceInvalidInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
+  listExperiencePacks(input: { teamId: ID; userId: ID; status?: string }): Promise<Ack<{ packs: readonly ExperiencePackDto[] }>>;
+  getExperiencePack(input: { teamId: ID; userId: ID; packId: ID }): Promise<Ack<{ pack: ExperiencePackDto }>>;
+  attachExperiencePackToChannel(input: AttachExperiencePackToChannelInput): Promise<Ack<{ attachment: ChannelExperienceAttachmentDto }>>;
+  detachExperiencePackFromChannel(input: DetachExperiencePackFromChannelInput): Promise<Ack<{ detached: true }>>;
+
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
 
@@ -1086,6 +1108,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   });
   const memoryGovernance = createMemoryGovernanceService({ repositories, clock });
   const formalMemory = createFormalMemoryService({ repositories, collaborativeMemory, clock });
+  const experiencePack = createExperiencePackService({ repositories, clock, ids });
   const systemUserMemory = createSystemUserMemoryService({ repositories, clock });
   const piProvider = createPiProviderService({
     repositories: repositories.piProvider,
@@ -1132,6 +1155,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     repositories,
     formalMemory,
     agentMemoryProjection,
+    experiencePack,
     clock,
     limit: 6,
   });
@@ -5878,6 +5902,82 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     },
 
+    // ── #722 Experience Pack ────────────────────────────────────────────
+
+    async createExperiencePackDraft(input) {
+      try {
+        const pack = await experiencePack.createDraft(input);
+        return makeSuccess({ pack });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async approveExperiencePack(input) {
+      try {
+        const pack = await experiencePack.approve(input);
+        return makeSuccess({ pack });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async withdrawExperiencePack(input) {
+      try {
+        const pack = await experiencePack.withdraw(input);
+        return makeSuccess({ pack });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async markExperiencePackSourceInvalid(input) {
+      try {
+        const pack = await experiencePack.markSourceInvalid(input);
+        return makeSuccess({ pack });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async listExperiencePacks(input) {
+      try {
+        const status = input.status as ExperiencePackDto['status'] | undefined;
+        const packs = await experiencePack.listByTeam({ teamId: input.teamId, status });
+        return makeSuccess({ packs });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async getExperiencePack(input) {
+      try {
+        const pack = await experiencePack.getById({ teamId: input.teamId, packId: input.packId });
+        if (!pack) return makeFailure('NOT_FOUND', 'Experience Pack not found');
+        return makeSuccess({ pack });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async attachExperiencePackToChannel(input) {
+      try {
+        const attachment = await experiencePack.attachToChannel(input);
+        return makeSuccess({ attachment });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async detachExperiencePackFromChannel(input) {
+      try {
+        await experiencePack.detachFromChannel(input);
+        return makeSuccess({ detached: true });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
     async deleteTeam(deleteInput) {
       const actorRole = await repositories.teams.getMemberRole(deleteInput.teamId, deleteInput.userId);
       if (actorRole !== 'owner') {
@@ -9492,6 +9592,56 @@ function systemUserMemoryErrorAck(error: unknown): Ack<never> | undefined {
     case 'SYSTEM_KNOWLEDGE_ALREADY_SUPERSEDED':
     case 'USER_MEMORY_ALREADY_SUPERSEDED':
       return makeFailure('CONFLICT', 'Memory already superseded; refresh and retry');
+    default:
+      return undefined;
+  }
+}
+
+function experiencePackErrorAck(error: unknown): Ack<never> | undefined {
+  if (!(error instanceof Error)) return undefined;
+  const msg = error.message;
+  if (msg.startsWith('EXPERIENCE_PACK_DRAFT_INVALID:')) {
+    return makeFailure('VALIDATION_ERROR', `Draft invalid: ${msg.slice('EXPERIENCE_PACK_DRAFT_INVALID:'.length)}`);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_APPROVE:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_APPROVE:'.length);
+    if (reason === 'not_draft') return makeFailure('CONFLICT', 'Only draft packs can be approved');
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to approve');
+    return makeFailure('CONFLICT', reason);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_WITHDRAW:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_WITHDRAW:'.length);
+    if (reason === 'not_withdrawable') return makeFailure('CONFLICT', 'Pack cannot be withdrawn in its current status');
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to withdraw');
+    return makeFailure('CONFLICT', reason);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_SOURCE_INVALID:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_SOURCE_INVALID:'.length);
+    if (reason === 'not_approved') return makeFailure('CONFLICT', 'Only approved packs can be marked source-invalid');
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission');
+    if (reason === 'reason_empty') return makeFailure('VALIDATION_ERROR', 'Reason is required');
+    return makeFailure('CONFLICT', reason);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_ATTACH:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_ATTACH:'.length);
+    if (reason === 'pack_not_approved') return makeFailure('CONFLICT', 'Only approved packs can be attached');
+    if (reason === 'channel_archived') return makeFailure('CONFLICT', 'Cannot attach to archived channel');
+    if (reason === 'cross_team') return makeFailure('FORBIDDEN', 'Pack and channel must be in same team');
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to attach');
+    return makeFailure('CONFLICT', reason);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_DETACH:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_DETACH:'.length);
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to detach');
+    return makeFailure('CONFLICT', reason);
+  }
+  switch (msg) {
+    case 'EXPERIENCE_PACK_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Experience Pack not found');
+    case 'CHANNEL_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Channel not found');
+    case 'EXPERIENCE_PACK_CONCURRENT_MODIFICATION':
+      return makeFailure('CONFLICT', 'Pack was modified concurrently; refresh and retry');
     default:
       return undefined;
   }

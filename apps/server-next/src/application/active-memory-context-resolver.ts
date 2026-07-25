@@ -14,6 +14,7 @@ import { assembleActiveMemoryContext, renderActiveMemorySection, scoreMemoryRele
 
 import type { AgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createCollaborativeMemorySearchService } from './collaborative-memory-search-service.js';
+import type { ExperiencePackService } from './experience-pack-service.js';
 import type { FormalMemoryService } from './formal-memory-service.js';
 import type { ServerNextRepositories } from './repositories.js';
 import { canReadMemoryScope, createServerMemorySearchPermissions } from './server-memory-permissions.js';
@@ -35,6 +36,7 @@ export interface ActiveMemoryContextResolverDeps {
   readonly repositories: ServerNextRepositories;
   readonly formalMemory: FormalMemoryService;
   readonly agentMemoryProjection: AgentMemoryProjectionService;
+  readonly experiencePack: ExperiencePackService;
   readonly clock: { now(): number };
   /** 最小 context 上限（AC#1「少量」）。 */
   readonly limit: number;
@@ -117,6 +119,22 @@ function toProjectionCandidate(proj: AgentMemoryProjectionConsumptionDto): Activ
     scopeVisible: true,
     allSourcesAvailable: true,
     // projection 按需检索、不全量注入（AC#4）；不参与跨来源 ranking，分数固定 0。
+    relevanceScore: 0,
+  };
+}
+
+function toExperiencePackCandidate(pack: { id: string; title: string; summary?: string; conclusions?: string }): ActiveMemoryCandidate {
+  const content = [pack.title, pack.summary, pack.conclusions].filter(Boolean).join('\n');
+  return {
+    id: pack.id,
+    kind: 'semantic' as MemoryKind,
+    scopeType: 'team' as MemoryScopeType,
+    content,
+    status: 'active',
+    provenance: { source: 'experience_pack', packId: pack.id },
+    selectionReason: 'linked_experience_pack',
+    scopeVisible: true,
+    allSourcesAvailable: true,
     relevanceScore: 0,
   };
 }
@@ -244,6 +262,21 @@ export function createActiveMemoryContextResolver(deps: ActiveMemoryContextResol
       });
       for (const proj of projectionResult.projections) {
         candidates.push(toProjectionCandidate(proj));
+      }
+    }
+
+    // ── 5. Linked Experience Packs（当前频道关联的已批准 Pack，#722）──
+    if (channel && channel.archivedAt == null) {
+      try {
+        const linkedPacks = await deps.experiencePack.listApprovedForChannel({
+          teamId: input.teamId,
+          channelId: input.channelId,
+        });
+        for (const pack of linkedPacks) {
+          candidates.push(toExperiencePackCandidate(pack));
+        }
+      } catch {
+        // 非关键路径：experience_pack 来源不可用时静默跳过。
       }
     }
 

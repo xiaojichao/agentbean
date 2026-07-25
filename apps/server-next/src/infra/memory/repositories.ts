@@ -42,6 +42,7 @@ import {
   restoreMemoryRepositoryMemoryState,
 } from './memory-repositories.js';
 import { createInMemoryPiProviderPersistence } from './pi-provider-repositories.js';
+import { createMemoryExperiencePackRepositories } from './experience-pack-repositories.js';
 import { createInMemorySystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createInMemoryAgentExposurePersistence } from './agent-exposure-repositories.js';
 import { createInMemoryAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
@@ -1580,6 +1581,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return pinnedMessages.has(messageId);
       },
     },
+    experiencePack: createMemoryExperiencePackRepositories(),
   };
   return repositories;
 }

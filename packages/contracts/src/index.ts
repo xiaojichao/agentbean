@@ -28,3 +28,4 @@ export * from './agent-exposure.js';
 export * from './agent-memory-projection.js';
 export * from './reliability.js';
 export * from './active-memory-context.js';
+export * from './experience-pack.js';
