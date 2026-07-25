@@ -20,6 +20,7 @@ import type {
   MemorySourceRefDto,
   MemorySourceVisibility,
 } from '../../../../../packages/contracts/src/index.js';
+import type { ExecutableSubtaskCoverageResult } from '../../../../../packages/domain/src/index.js';
 import type { MessageRecord, ServerNextRepositories } from '../repositories.js';
 import type { ManagementRunRecord } from '../management-repositories.js';
 import type { MemoryCapsuleRefRecord } from '../memory-repositories.js';
@@ -254,17 +255,27 @@ export function createPhase2ManagementToolHandlers(input: {
   readonly kernel: TaskCoordinationKernel;
   readonly acceptanceService: SubtaskAcceptanceService;
   readonly onTaskPublished?: (taskId: string) => Promise<void> | void;
+  /** #805 eligibility 服务（可选,未提供时 allocatability stub,向后兼容 #798）。 */
+  readonly eligibilityService?: (parentTaskId: string, subtasks: readonly {
+    clientKey: string; requiredCapabilities: readonly string[]; requiredSkills?: readonly string[];
+  }[]) => Promise<ExecutableSubtaskCoverageResult>;
 }): Phase2ToolHandlers {
-  const { kernel } = input;
+  const { kernel, eligibilityService } = input;
   return {
     'tasks.create_subtasks': async (request) => {
+      const drafts = request.input.subtasks.map((draft) => ({
+        ...draft,
+        taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
+      }));
+      const allocatability = eligibilityService
+        ? await eligibilityService(request.input.parentTaskId, drafts).catch(() => undefined)
+        : undefined;
       const created = await kernel.createSubtasks({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         parentTaskId: request.input.parentTaskId,
-        subtasks: request.input.subtasks.map((draft) => ({
-          ...draft,
-          taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
-        })),
+        atomicityHint: request.input.atomicityHint,
+        allocatability,
+        subtasks: drafts,
       });
       return { taskIds: created.taskIds, taskGraphRevision: created.taskGraphRevision };
     },
