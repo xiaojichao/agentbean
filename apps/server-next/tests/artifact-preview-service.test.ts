@@ -98,6 +98,8 @@ describe('artifact preview service', () => {
   });
 });
 
+const FFMPEG_OK_STUB = '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n';
+
 describe('command artifact preview processor（#799 视频时长）', () => {
   test('propagates processor-reported durationMs to the public preview DTO', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
@@ -124,7 +126,7 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     await writeFile(source, 'source');
     const output = join(root, 'out.webp');
     const processor = new CommandArtifactPreviewProcessor(
-      await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
       5_000,
       await makeStubCommand(root, 'ffprobe-ok', '#!/bin/sh\necho "42.350000"\n'),
     );
@@ -139,7 +141,7 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     await writeFile(source, 'source');
     const output = join(root, 'out.webp');
     const processor = new CommandArtifactPreviewProcessor(
-      await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
       5_000,
       await makeStubCommand(root, 'ffprobe-fail', '#!/bin/sh\nexit 1\n'),
     );
@@ -155,7 +157,7 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     const output = join(root, 'out.webp');
     const probeLog = join(root, 'probe.log');
     const processor = new CommandArtifactPreviewProcessor(
-      await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
       5_000,
       await makeStubCommand(root, 'ffprobe-log', `#!/bin/sh\necho called >> "${probeLog}"\necho "1.0"\n`),
     );

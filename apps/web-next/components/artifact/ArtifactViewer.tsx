@@ -146,7 +146,7 @@ export function formatVideoDuration(durationMs: number): string {
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
   const hours = Math.floor(totalSeconds / 3600);
-  const mm = String(minutes).padStart(hours > 0 ? 2 : 1, '0');
+  const mm = hours > 0 ? String(minutes).padStart(2, '0') : String(minutes);
   const ss = String(seconds).padStart(2, '0');
-  return hours > 0 ? `${hours}:${mm}:${ss}` : `${minutes}:${ss}`;
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
 }
