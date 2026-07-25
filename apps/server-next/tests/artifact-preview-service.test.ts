@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
+  CommandArtifactPreviewProcessor,
   createArtifactPreviewService,
   InMemoryArtifactPreviewRepository,
   supportsArtifactPreviewMime,
@@ -96,3 +97,78 @@ describe('artifact preview service', () => {
     expect(await restartedWorker.get('a4')).toMatchObject({ status: 'ready' });
   });
 });
+
+const FFMPEG_OK_STUB = '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n';
+
+describe('command artifact preview processor（#799 视频时长）', () => {
+  test('propagates processor-reported durationMs to the public preview DTO', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'clip.mp4');
+    await writeFile(source, 'source');
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      processor: {
+        async process({ outputPath }) {
+          await mkdir(join(outputPath, '..'), { recursive: true });
+          await writeFile(outputPath, 'webp');
+          return { durationMs: 42_350 };
+        },
+      },
+    });
+    await service.enqueue({ artifactId: 'v1', teamId: 't1', inputPath: source, mimeType: 'video/mp4' });
+    await service.runOnce();
+    expect(await service.get('v1')).toMatchObject({ status: 'ready', durationMs: 42_350 });
+  });
+
+  test('extracts video duration through the prober after producing the first frame', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'clip.mp4');
+    await writeFile(source, 'source');
+    const output = join(root, 'out.webp');
+    const processor = new CommandArtifactPreviewProcessor(
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+      5_000,
+      await makeStubCommand(root, 'ffprobe-ok', '#!/bin/sh\necho "42.350000"\n'),
+    );
+    await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'video/mp4' }))
+      .resolves.toEqual({ durationMs: 42_350 });
+    expect((await stat(output)).size).toBeGreaterThan(0);
+  });
+
+  test('drops only the duration field when the prober fails, keeping the derivative', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'clip.mp4');
+    await writeFile(source, 'source');
+    const output = join(root, 'out.webp');
+    const processor = new CommandArtifactPreviewProcessor(
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+      5_000,
+      await makeStubCommand(root, 'ffprobe-fail', '#!/bin/sh\nexit 1\n'),
+    );
+    await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'video/mp4' }))
+      .resolves.toEqual({});
+    expect((await stat(output)).size).toBeGreaterThan(0);
+  });
+
+  test('does not probe non-video derivatives', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'cover.png');
+    await writeFile(source, 'source');
+    const output = join(root, 'out.webp');
+    const probeLog = join(root, 'probe.log');
+    const processor = new CommandArtifactPreviewProcessor(
+      await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+      5_000,
+      await makeStubCommand(root, 'ffprobe-log', `#!/bin/sh\necho called >> "${probeLog}"\necho "1.0"\n`),
+    );
+    await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'image/png' }))
+      .resolves.toEqual({});
+    await expect(stat(probeLog)).rejects.toThrow();
+  });
+});
+
+async function makeStubCommand(dir: string, name: string, body: string): Promise<string> {
+  const path = join(dir, name);
+  await writeFile(path, body, { mode: 0o755 });
+  return path;
+}

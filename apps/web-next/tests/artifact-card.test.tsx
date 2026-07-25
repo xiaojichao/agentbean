@@ -180,3 +180,74 @@ describe('ArtifactCard', () => {
     expect(screen.getByLabelText('正在生成预览')).toBeTruthy();
   });
 });
+
+describe('ArtifactCard 视频时长（#799）', () => {
+  test('shows the formatted duration badge on a video card with derivative metadata', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          filename: 'demo.mp4',
+          mimeType: 'video/mp4',
+          preview: { status: 'ready', url: '/preview-derivative', durationMs: 42_350 },
+        }}
+        previewUrl="/preview"
+        thumbnailUrl="/preview-derivative"
+      />,
+    );
+
+    expect(screen.getByText('0:42')).toBeTruthy();
+  });
+
+  test('formats durations beyond one hour as h:mm:ss', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          filename: 'long.mp4',
+          mimeType: 'video/mp4',
+          preview: { status: 'ready', url: '/preview-derivative', durationMs: 3_723_000 },
+        }}
+        previewUrl="/preview"
+        thumbnailUrl="/preview-derivative"
+      />,
+    );
+
+    expect(screen.getByText('1:02:03')).toBeTruthy();
+  });
+
+  test('renders no duration badge when the derivative has no duration metadata', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          filename: 'demo.mp4',
+          mimeType: 'video/mp4',
+          preview: { status: 'ready', url: '/preview-derivative' },
+        }}
+        previewUrl="/preview"
+        thumbnailUrl="/preview-derivative"
+      />,
+    );
+
+    expect(document.querySelector('img[src="/preview-derivative"]')).toBeTruthy();
+    expect(screen.queryByText(/\d+:\d{2}/)).toBeNull();
+  });
+
+  test('does not show a duration badge on non-video cards', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          filename: 'design.png',
+          mimeType: 'image/png',
+          preview: { status: 'ready', url: '/preview-derivative', durationMs: 42_350 },
+        }}
+        previewUrl="/preview"
+        thumbnailUrl="/preview-derivative"
+      />,
+    );
+
+    expect(screen.queryByText('0:42')).toBeNull();
+  });
+});
