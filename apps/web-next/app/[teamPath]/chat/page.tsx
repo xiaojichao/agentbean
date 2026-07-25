@@ -921,12 +921,17 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   };
 
-  const handleArchiveChannel = async (channelId: string) => {
-    const res = await channelEvents().archive(channelId, currentTeamId);
-    if (!res.ok) return res;
-    const fallback = channels.find((channel) => channel.id !== channelId);
-    if (fallback) router.push(`/${np}/channel/${fallback.id}`);
-    else router.push(`/${np}/chat`);
+  const handleArchiveChannel = async (channelId: string, confirmationToken?: string) => {
+    const res = await channelEvents().archive(channelId, currentTeamId, confirmationToken);
+    if (confirmationToken) {
+      // confirm: close dialog on success
+      if (!res.ok) return res;
+      const fallback = channels.find((channel) => channel.id !== channelId);
+      if (fallback) router.push(`/${np}/channel/${fallback.id}`);
+      else router.push(`/${np}/chat`);
+      return res;
+    }
+    // preflight: return result so dialog can display it
     return res;
   };
 
@@ -2223,7 +2228,7 @@ function ChannelEditDialog({
   teamId: string;
   onClose: () => void;
   onSaved: () => void;
-  onArchive: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
+  onArchive: (channelId: string, confirmationToken?: string) => Promise<{ ok: boolean; preflight?: import('@agentbean/contracts').ChannelArchivePreflightDto; confirmation?: import('@agentbean/contracts').ChannelArchiveConfirmationDto; error?: string }>;
   onDelete: (channelId: string) => Promise<{ ok: boolean; error?: string }>;
   isDefaultChannel: boolean;
 }) {
@@ -2233,6 +2238,7 @@ function ChannelEditDialog({
   const [saving, setSaving] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'archive' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [archivePreflight, setArchivePreflight] = useState<import('@agentbean/contracts').ChannelArchivePreflightDto | null>(null);
 
   const handleSave = async () => {
     if (!isDefaultChannel && !name.trim()) return;
@@ -2253,18 +2259,63 @@ function ChannelEditDialog({
     onSaved();
   };
 
-  const runDestructiveAction = async () => {
-    if (!confirmAction) return;
+  const handleArchiveClick = async () => {
+    setConfirmAction('archive');
     setSaving(true);
     setError(null);
-    const res = confirmAction === 'archive' ? await onArchive(channel.id) : await onDelete(channel.id);
+    const res = await onArchive(channel.id);
     setSaving(false);
     if (!res.ok) {
-      setError(res.error ?? '操作失败');
+      setError(res.error ?? '预检归档失败');
+      setConfirmAction(null);
+      return;
+    }
+    if (res.preflight) {
+      setArchivePreflight(res.preflight);
+    }
+  };
+
+  const handleArchiveConfirm = async () => {
+    if (!archivePreflight) return;
+    setSaving(true);
+    setError(null);
+    const res = await onArchive(channel.id, archivePreflight.confirmationToken);
+    setSaving(false);
+    if (!res.ok) {
+      setError(res.error ?? '归档操作失败');
       return;
     }
     onSaved();
   };
+
+  const runDestructiveAction = async () => {
+    if (!confirmAction) return;
+    if (confirmAction === 'delete') {
+      setSaving(true);
+      setError(null);
+      const res = await onDelete(channel.id);
+      setSaving(false);
+      if (!res.ok) {
+        setError(res.error ?? '操作失败');
+        return;
+      }
+      onSaved();
+    }
+  };
+
+  const cancelConfirm = () => {
+    setConfirmAction(null);
+    setArchivePreflight(null);
+  };
+
+  const workspaceItems = [
+    ...(archivePreflight?.items.filter(i => i.kind === 'task') ?? []).map(i => `任务: ${i.title ?? i.id} (${i.status})`),
+    ...(archivePreflight?.items.filter(i => i.kind === 'offer') ?? []).map(i => `待响应 Offer`),
+    ...(archivePreflight?.items.filter(i => i.kind === 'claim') ?? []).map(i => `活跃 Claim`),
+    ...(archivePreflight?.items.filter(i => i.kind === 'lease') ?? []).map(i => `活跃 Lease`),
+    ...(archivePreflight?.items.filter(i => i.kind === 'invocation') ?? []).map(i => `进行中的调用`),
+    ...(archivePreflight?.items.filter(i => i.kind === 'pending_review') ?? []).map(i => `待审核: ${i.title ?? i.id}`),
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" data-smoke="channel-edit-dialog" data-channel-id={channel.id}>
@@ -2299,7 +2350,7 @@ function ChannelEditDialog({
         <div className="mt-5 flex items-center justify-between border-t border-neutral-100 pt-4">
           {!isDefaultChannel && (
             <div className="flex gap-2">
-              <button onClick={() => setConfirmAction('archive')} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50" data-smoke="channel-archive-open">归档频道</button>
+              <button onClick={handleArchiveClick} disabled={saving} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 disabled:opacity-50" data-smoke="channel-archive-open">归档频道</button>
               <button onClick={() => setConfirmAction('delete')} className="rounded-md border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50" data-smoke="channel-delete-open">删除频道</button>
             </div>
           )}
@@ -2312,11 +2363,41 @@ function ChannelEditDialog({
         </div>
         {confirmAction && (
           <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-            <div className="text-xs font-medium text-amber-900">{confirmAction === 'archive' ? '确认归档这个频道？' : '确认永久删除这个频道？'}</div>
-            <div className="mt-2 flex gap-2">
-              <button onClick={() => setConfirmAction(null)} className="rounded-md border border-amber-200 bg-white px-2.5 py-1 text-xs text-amber-700">取消</button>
-              <button onClick={runDestructiveAction} disabled={saving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50" data-smoke={`channel-confirm-${confirmAction}`}>确认</button>
-            </div>
+            {confirmAction === 'archive' ? (
+              archivePreflight ? (
+                <>
+                  <div className="text-xs font-medium text-amber-900 mb-2">
+                    归档预检完成，此频道存在以下未完成工作，确认后将被自动取消：
+                  </div>
+                  {workspaceItems.length > 0 ? (
+                    <div className="mb-2 max-h-[120px] overflow-y-auto text-xs text-amber-800 space-y-1">
+                      {workspaceItems.map((item, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <AlertCircle size={12} className="shrink-0" />
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mb-2 text-xs text-green-700">没有进行中的工作，可以直接归档。</div>
+                  )}
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={cancelConfirm} className="rounded-md border border-amber-200 bg-white px-2.5 py-1 text-xs text-amber-700">取消</button>
+                    <button onClick={handleArchiveConfirm} disabled={saving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50" data-smoke="channel-confirm-archive">确认归档</button>
+                  </div>
+                </>
+              ) : (
+                <div className="text-xs text-amber-700">正在获取归档预检...</div>
+              )
+            ) : (
+              <>
+                <div className="text-xs font-medium text-amber-900">确认永久删除这个频道？</div>
+                <div className="mt-2 flex gap-2">
+                  <button onClick={() => setConfirmAction(null)} className="rounded-md border border-amber-200 bg-white px-2.5 py-1 text-xs text-amber-700">取消</button>
+                  <button onClick={runDestructiveAction} disabled={saving} className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50" data-smoke="channel-confirm-delete">确认</button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

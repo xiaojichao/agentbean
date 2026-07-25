@@ -259,6 +259,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             jobs: channelCoordination.jobs,
             decisions: channelCoordination.decisions,
             tasks: repositories.tasks,
+            channels: repositories.channels,
           });
         } catch (error) {
           messages.clear();
@@ -288,6 +289,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             dispatches: repositories.dispatches,
             coordination: taskCoordination,
             management: managementRepositories,
+            channels: repositories.channels,
           });
         } catch (error) {
           tasks.clear();
