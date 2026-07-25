@@ -10,6 +10,7 @@ import type { PiProviderRepositories, PiProviderUnitOfWork } from './pi-provider
 import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent-exposure-repositories.js';
 import type { SystemKnowledgeRepository, UserMemoryRepository } from './system-user-memory-repositories.js';
 import type { AgentMemoryProjectionRepositories, AgentMemoryProjectionUnitOfWork } from './agent-memory-projection-repositories.js';
+import type { ExperiencePackRepositories } from './experience-pack-repositories.js';
 import type {
   ChannelCoordinationRepositories,
   ChannelCoordinationUnitOfWork,
@@ -435,6 +436,7 @@ export interface ServerNextRepositories {
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;
   pinnedMessages: PinnedMessageRepository;
+  experiencePack: ExperiencePackRepositories;
 }
 
 export interface ReactionRecord {

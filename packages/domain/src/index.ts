@@ -38,3 +38,4 @@ export * from './task-decomposition-policy.js';
 export * from './task-followup-binding.js';
 export * from './reliability-policy.js';
 export * from './operation-restriction-policy.js';
+export * from './experience-pack-policy.js';

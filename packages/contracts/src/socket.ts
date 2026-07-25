@@ -73,6 +73,17 @@ export const WEB_EVENTS = {
     deactivate: 'user-memory:deactivate',
     delete: 'user-memory:delete',
   },
+  /** #722 Reusable Experience Pack；Team 作用域，Owner/Admin 管理。 */
+  experiencePack: {
+    createDraft: 'experience-pack:create-draft',
+    approve: 'experience-pack:approve',
+    withdraw: 'experience-pack:withdraw',
+    markSourceInvalid: 'experience-pack:mark-source-invalid',
+    listByTeam: 'experience-pack:list-by-team',
+    getById: 'experience-pack:get-by-id',
+    attachToChannel: 'experience-pack:attach-to-channel',
+    detachFromChannel: 'experience-pack:detach-from-channel',
+  },
   /** #710 Team Agent Exposure 管理；Agent owner 发布/撤回，Team Owner/Admin 收紧。 */
   agentExposure: {
     createDraft: 'agent-exposure:create-draft',
