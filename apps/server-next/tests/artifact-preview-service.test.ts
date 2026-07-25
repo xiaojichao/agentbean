@@ -1,4 +1,4 @@
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -164,6 +164,123 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'image/png' }))
       .resolves.toEqual({});
     await expect(stat(probeLog)).rejects.toThrow();
+  });
+});
+
+describe('command artifact preview processor（#800 PDF 首页缩略图）', () => {
+  test('renders the first PDF page through the pdf adapter and reuses the ffmpeg webp pipeline', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const output = join(root, 'out.webp');
+    const calls = join(root, 'calls.log');
+    const processor = new CommandArtifactPreviewProcessor(
+      await makeStubCommand(root, 'ffmpeg-ok', `#!/bin/sh\necho "ffmpeg $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n`),
+      5_000,
+      undefined,
+      await makeStubCommand(root, 'pdftoppm-ok', `#!/bin/sh\necho "pdftoppm $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "\${out}.png"\n`),
+    );
+    await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'application/pdf' }))
+      .resolves.toEqual({});
+    expect((await stat(output)).size).toBeGreaterThan(0);
+    const log = String(await readFile(calls));
+    expect(log).toContain('pdftoppm');
+    expect(log).toContain('ffmpeg');
+    await expect(stat(`${output}.page.png`)).rejects.toThrow();
+  });
+
+  test('ready PDF derivative flows through the standard preview DTO used by cards and folder mosaics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+        5_000,
+        undefined,
+        await makeStubCommand(root, 'pdftoppm-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "${out}.png"\n'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p1', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    expect(await service.get('p1')).toMatchObject({
+      status: 'ready',
+      url: '/api/teams/t1/artifacts/p1/preview-derivative',
+    });
+  });
+
+  test('marks the job unsupported with an explicit code and no retry when the pdf adapter is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+        5_000,
+        undefined,
+        join(root, 'pdftoppm-not-installed'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p2', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    const job = await repository.get('p2');
+    expect(job?.status).toBe('unsupported');
+    expect(job?.errorCode).toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.attempts).toBe(1);
+    expect(await service.runOnce()).toBe(false);
+    expect(await stat(source)).toBeTruthy();
+  });
+
+  test('treats an unexecutable pdf adapter (EACCES) the same as a missing one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const notExecutable = await makeStubCommand(root, 'pdftoppm-no-exec', '#!/bin/sh\nexit 0\n');
+    await chmod(notExecutable, 0o644);
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+        5_000,
+        undefined,
+        notExecutable,
+      ),
+    });
+    await service.enqueue({ artifactId: 'p4', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    const job = await repository.get('p4');
+    expect(job?.status).toBe('unsupported');
+    expect(job?.errorCode).toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.attempts).toBe(1);
+  });
+
+  test('treats a malformed PDF as a bounded processing failure, not as unsupported', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'broken.pdf');
+    await writeFile(source, 'not-a-pdf');
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
+        5_000,
+        undefined,
+        await makeStubCommand(root, 'pdftoppm-fail', '#!/bin/sh\necho "Syntax Error: broken" >&2\nexit 1\n'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p3', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce(); await service.runOnce(); await service.runOnce();
+    const job = await repository.get('p3');
+    expect(job?.status).toBe('failed');
+    expect(job?.errorCode).not.toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.errorCode).not.toBe('PREVIEW_UNSUPPORTED');
   });
 });
 
