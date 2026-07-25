@@ -33,6 +33,14 @@ export const EXPERIENCE_PACK_SOURCE_KINDS = [
 ] as const;
 export type ExperiencePackSourceKind = (typeof EXPERIENCE_PACK_SOURCE_KINDS)[number];
 
+/** #723: Attachment 三态生命周期。 */
+export const ATTACHMENT_STATUSES = [
+  'pending',
+  'attached',
+  'revoked',
+] as const;
+export type AttachmentStatus = (typeof ATTACHMENT_STATUSES)[number];
+
 // ── DTO ──────────────────────────────────────────────────────────────────────
 
 export interface ExperiencePackDto {
@@ -81,8 +89,17 @@ export interface ChannelExperienceAttachmentDto {
   readonly packId: ID;
   readonly channelId: ID;
   readonly teamId: ID;
-  readonly attachedByUserId: ID;
-  readonly attachedAt: UnixMs;
+  /** #723: attachment 生命周期状态。 */
+  readonly status: AttachmentStatus;
+  /** 推荐者（PI 或用户）。 */
+  readonly recommendedByUserId: ID;
+  readonly recommendedAt: UnixMs;
+  /** 确认者（目标频道成员）。 */
+  readonly confirmedByUserId?: ID;
+  readonly confirmedAt?: UnixMs;
+  /** 撤销者。 */
+  readonly revokedByUserId?: ID;
+  readonly revokedAt?: UnixMs;
 }
 
 // ── 命令输入 ──────────────────────────────────────────────────────────────────
@@ -126,14 +143,24 @@ export interface MarkExperiencePackSourceInvalidInput {
   readonly reason: string;
 }
 
-export interface AttachExperiencePackToChannelInput {
+/** #723: PI 或用户推荐已批准 Pack 到目标频道（创建 pending attachment）。 */
+export interface RecommendExperiencePackToChannelInput {
   readonly teamId: ID;
   readonly actorId: ID;
   readonly packId: ID;
   readonly channelId: ID;
 }
 
-export interface DetachExperiencePackFromChannelInput {
+/** #723: 目标频道成员确认 pending attachment → attached。 */
+export interface ConfirmExperiencePackAttachmentInput {
+  readonly teamId: ID;
+  readonly actorId: ID;
+  readonly packId: ID;
+  readonly channelId: ID;
+}
+
+/** #723: 频道成员或 Team Admin 撤销 attachment → revoked（保留审计记录）。 */
+export interface RevokeExperiencePackAttachmentInput {
   readonly teamId: ID;
   readonly actorId: ID;
   readonly packId: ID;

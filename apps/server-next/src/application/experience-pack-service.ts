@@ -4,31 +4,34 @@ import type {
   ID,
 } from '../../../../packages/contracts/src/index.js';
 import type {
+  ConfirmExperiencePackAttachmentInput,
   CreateExperiencePackDraftInput,
   ApproveExperiencePackInput,
+  RecommendExperiencePackToChannelInput,
+  RevokeExperiencePackAttachmentInput,
   WithdrawExperiencePackInput,
   MarkExperiencePackSourceInvalidInput,
-  AttachExperiencePackToChannelInput,
-  DetachExperiencePackFromChannelInput,
 } from '../../../../packages/contracts/src/index.js';
 import {
   evaluateExperiencePackApproval,
-  evaluateExperiencePackAttachment,
-  evaluateExperiencePackDetachment,
+  evaluateExperiencePackConfirmation,
+  evaluateExperiencePackRecommendation,
+  evaluateExperiencePackRevocation,
   evaluateExperiencePackSourceValidity,
   evaluateExperiencePackWithdrawal,
   validateExperiencePackDraft,
 } from '../../../../packages/domain/src/index.js';
 import type {
+  ChannelExperienceAttachmentRecord,
   ExperiencePackRecord,
   ExperiencePackSourceRecord,
 } from './experience-pack-repositories.js';
 import type { ServerNextRepositories } from './repositories.js';
 
 /**
- * Experience Pack 产品服务层（issue #722）。
+ * Experience Pack 产品服务层（issue #722 + #723）。
  *
- * 负责 Pack 生命周期：创建 draft → 审批 → 来源失效/撤回，以及频道关联。
+ * 负责 Pack 生命周期：创建 draft → 审批 → 来源失效/撤回，以及频道推荐/确认/撤销。
  * 业务门控委托给 domain `experience-pack-policy` 纯函数；本层只做数据组装与仓库调度。
  */
 
@@ -38,11 +41,15 @@ export interface ExperiencePackService {
   withdraw(input: WithdrawExperiencePackInput): Promise<ExperiencePackDto>;
   markSourceInvalid(input: MarkExperiencePackSourceInvalidInput): Promise<ExperiencePackDto>;
   listByTeam(input: { teamId: ID; status?: 'draft' | 'approved' | 'source_invalid' | 'withdrawn' }): Promise<readonly ExperiencePackDto[]>;
-  /** 列出可关联到活跃频道的已批准 Pack（AC#5：draft 不可搜索）。 */
+  /** 列出关联到频道的 attached Pack（#723：pending/revoked 不返回）。 */
   listApprovedForChannel(input: { teamId: ID; channelId: ID }): Promise<readonly ExperiencePackDto[]>;
   getById(input: { teamId: ID; packId: ID }): Promise<ExperiencePackDto | null>;
-  attachToChannel(input: AttachExperiencePackToChannelInput): Promise<ChannelExperienceAttachmentDto>;
-  detachFromChannel(input: DetachExperiencePackFromChannelInput): Promise<void>;
+  /** #723：PI 或用户推荐 → 创建 pending attachment。 */
+  recommendToChannel(input: RecommendExperiencePackToChannelInput): Promise<ChannelExperienceAttachmentDto>;
+  /** #723：频道成员确认 pending → attached。 */
+  confirmAttachment(input: ConfirmExperiencePackAttachmentInput): Promise<ChannelExperienceAttachmentDto>;
+  /** #723：频道成员或 Admin 撤销 attached → revoked（保留审计记录）。 */
+  revokeAttachment(input: RevokeExperiencePackAttachmentInput): Promise<ChannelExperienceAttachmentDto>;
 }
 
 export function createExperiencePackService(input: {
@@ -213,7 +220,7 @@ export function createExperiencePackService(input: {
       return record ? toDto(record) : null;
     },
 
-    async attachToChannel(input) {
+    async recommendToChannel(input) {
       const pack = await repositories.experiencePack.packs.getById({
         teamId: input.teamId,
         id: input.packId,
@@ -223,59 +230,135 @@ export function createExperiencePackService(input: {
       const channel = await repositories.channels.getById(input.channelId);
       if (!channel) throw new Error('CHANNEL_NOT_FOUND');
 
-      const canManage = await checkCanManageTeam(repositories, input.teamId, input.actorId);
-      const decision = evaluateExperiencePackAttachment({
+      const decision = evaluateExperiencePackRecommendation({
         pack: { status: pack.status, teamId: pack.teamId },
         channel: { teamId: channel.teamId, archivedAt: channel.archivedAt ?? null },
         actorId: input.actorId,
-        canManageChannel: canManage,
       });
       if (decision.kind === 'error') {
-        throw new Error(`EXPERIENCE_PACK_ATTACH:${decision.reason}`);
+        throw new Error(`EXPERIENCE_PACK_RECOMMEND:${decision.reason}`);
       }
 
-      // 幂等：已存在的 attachment 直接返回
+      const now = clock.now();
+      // 幂等：检查已存在的 attachment
       const existing = await repositories.experiencePack.attachments.getByPackAndChannel({
         teamId: input.teamId,
         packId: input.packId,
         channelId: input.channelId,
       });
-      if (existing) return toAttachmentDto(existing);
+      if (existing) {
+        if (existing.status === 'pending') return toAttachmentDto(existing);
+        if (existing.status === 'attached') return toAttachmentDto(existing);
+        // revoked → revive to pending
+        if (existing.status === 'revoked') {
+          const revived = await repositories.experiencePack.attachments.updateStatus({
+            teamId: input.teamId,
+            packId: input.packId,
+            channelId: input.channelId,
+            status: 'pending',
+            expectedStatus: 'revoked',
+          });
+          if (!revived) throw new Error('EXPERIENCE_PACK_CONCURRENT_MODIFICATION');
+          return toAttachmentDto(revived);
+        }
+      }
 
-      const now = clock.now();
       const record = {
         id: ids.nextId(),
         packId: input.packId,
         channelId: input.channelId,
         teamId: input.teamId,
-        attachedByUserId: input.actorId,
-        attachedAt: now,
+        status: 'pending' as const,
+        recommendedByUserId: input.actorId,
+        recommendedAt: now,
+        confirmedByUserId: undefined as string | undefined,
+        confirmedAt: undefined as number | undefined,
+        revokedByUserId: undefined as string | undefined,
+        revokedAt: undefined as number | undefined,
       };
       await repositories.experiencePack.attachments.create(record);
       return toAttachmentDto(record);
     },
 
-    async detachFromChannel(input) {
-      const existing = await repositories.experiencePack.attachments.getByPackAndChannel({
+    async confirmAttachment(input) {
+      const attachment = await repositories.experiencePack.attachments.getByPackAndChannel({
         teamId: input.teamId,
         packId: input.packId,
         channelId: input.channelId,
       });
-      if (!existing) return; // 幂等
+      if (!attachment) throw new Error('EXPERIENCE_PACK_ATTACHMENT_NOT_FOUND');
 
-      const canManage = await checkCanManageTeam(repositories, input.teamId, input.actorId);
-      const decision = evaluateExperiencePackDetachment({
-        actorId: input.actorId,
-        canManageTeam: canManage,
+      // 运行时复验：pack 仍需 approved
+      const pack = await repositories.experiencePack.packs.getById({
+        teamId: input.teamId,
+        id: input.packId,
       });
-      if (decision.kind === 'error') {
-        throw new Error(`EXPERIENCE_PACK_DETACH:${decision.reason}`);
+      if (!pack || pack.status !== 'approved') {
+        throw new Error('EXPERIENCE_PACK_CONFIRM:pack_not_approved');
       }
 
-      await repositories.experiencePack.attachments.delete({
-        teamId: input.teamId,
-        id: existing.id,
+      const channel = await repositories.channels.getById(input.channelId);
+      const isChannelMember = channel ? channel.humanMemberIds.includes(input.actorId) : false;
+
+      const decision = evaluateExperiencePackConfirmation({
+        attachment: { status: attachment.status },
+        actorId: input.actorId,
+        isChannelMember,
       });
+      if (decision.kind === 'error') {
+        throw new Error(`EXPERIENCE_PACK_CONFIRM:${decision.reason}`);
+      }
+
+      const now = clock.now();
+      const updated = await repositories.experiencePack.attachments.updateStatus({
+        teamId: input.teamId,
+        packId: input.packId,
+        channelId: input.channelId,
+        status: 'attached',
+        confirmedByUserId: input.actorId,
+        confirmedAt: now,
+        expectedStatus: 'pending',
+      });
+      if (!updated) throw new Error('EXPERIENCE_PACK_CONCURRENT_MODIFICATION');
+
+      return toAttachmentDto(updated);
+    },
+
+    async revokeAttachment(input) {
+      const attachment = await repositories.experiencePack.attachments.getByPackAndChannel({
+        teamId: input.teamId,
+        packId: input.packId,
+        channelId: input.channelId,
+      });
+      if (!attachment) throw new Error('EXPERIENCE_PACK_ATTACHMENT_NOT_FOUND');
+
+      // 频道成员 或 Team Admin 均可撤销
+      const channel = await repositories.channels.getById(input.channelId);
+      const isChannelMember = channel ? channel.humanMemberIds.includes(input.actorId) : false;
+      const canManage = await checkCanManageTeam(repositories, input.teamId, input.actorId);
+
+      const decision = evaluateExperiencePackRevocation({
+        attachment: { status: attachment.status },
+        actorId: input.actorId,
+        canRevoke: isChannelMember || canManage,
+      });
+      if (decision.kind === 'error') {
+        throw new Error(`EXPERIENCE_PACK_REVOKE:${decision.reason}`);
+      }
+
+      const now = clock.now();
+      const updated = await repositories.experiencePack.attachments.updateStatus({
+        teamId: input.teamId,
+        packId: input.packId,
+        channelId: input.channelId,
+        status: 'revoked',
+        revokedByUserId: input.actorId,
+        revokedAt: now,
+        expectedStatus: attachment.status,
+      });
+      if (!updated) throw new Error('EXPERIENCE_PACK_CONCURRENT_MODIFICATION');
+
+      return toAttachmentDto(updated);
     },
   };
 }
@@ -303,21 +386,19 @@ function toDto(record: ExperiencePackRecord): ExperiencePackDto {
   };
 }
 
-function toAttachmentDto(record: {
-  id: string;
-  packId: string;
-  channelId: string;
-  teamId: string;
-  attachedByUserId: string;
-  attachedAt: number;
-}): ChannelExperienceAttachmentDto {
+function toAttachmentDto(record: ChannelExperienceAttachmentRecord): ChannelExperienceAttachmentDto {
   return {
     id: record.id,
     packId: record.packId,
     channelId: record.channelId,
     teamId: record.teamId,
-    attachedByUserId: record.attachedByUserId,
-    attachedAt: record.attachedAt,
+    status: record.status,
+    recommendedByUserId: record.recommendedByUserId,
+    recommendedAt: record.recommendedAt,
+    confirmedByUserId: record.confirmedByUserId,
+    confirmedAt: record.confirmedAt,
+    revokedByUserId: record.revokedByUserId,
+    revokedAt: record.revokedAt,
   };
 }
 

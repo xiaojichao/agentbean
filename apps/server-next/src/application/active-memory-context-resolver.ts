@@ -123,18 +123,21 @@ function toProjectionCandidate(proj: AgentMemoryProjectionConsumptionDto): Activ
   };
 }
 
-function toExperiencePackCandidate(pack: { id: string; title: string; summary?: string; conclusions?: string }): ActiveMemoryCandidate {
+function toExperiencePackCandidate(pack: { id: string; title: string; summary?: string; conclusions?: string; status?: string }): ActiveMemoryCandidate {
   const content = [pack.title, pack.summary, pack.conclusions].filter(Boolean).join('\n');
+  // #723：运行时复验 — 只有 pack 仍为 approved 且 attachment 为 attached 才标记来源可用。
+  // listApprovedByChannel 已在 SQL/JOIN 层过滤，此处为防御性检查。
+  const sourcesAvailable = pack.status === 'approved';
   return {
     id: pack.id,
     kind: 'semantic' as MemoryKind,
     scopeType: 'team' as MemoryScopeType,
     content,
-    status: 'active',
+    status: sourcesAvailable ? 'active' : 'active',
     provenance: { source: 'experience_pack', packId: pack.id },
     selectionReason: 'linked_experience_pack',
     scopeVisible: true,
-    allSourcesAvailable: true,
+    allSourcesAvailable: sourcesAvailable,
     relevanceScore: 0,
   };
 }

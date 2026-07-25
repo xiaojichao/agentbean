@@ -1,4 +1,5 @@
 import type {
+  AttachmentStatus,
   ExperiencePackSourceKind,
   ExperiencePackStatus,
   ID,
@@ -47,14 +48,21 @@ export interface ExperiencePackSourceRecord {
   readonly createdAt: UnixMs;
 }
 
-/** channel_experience_attachments 行。 */
+/** channel_experience_attachments 行（#723：三态生命周期）。 */
 export interface ChannelExperienceAttachmentRecord {
   readonly id: ID;
   readonly packId: ID;
   readonly channelId: ID;
   readonly teamId: ID;
-  readonly attachedByUserId: ID;
-  readonly attachedAt: UnixMs;
+  /** #723：pending → attached → revoked。 */
+  readonly status: AttachmentStatus;
+  /** 推荐者（PI 或用户）。 */
+  readonly recommendedByUserId: ID;
+  readonly recommendedAt: UnixMs;
+  readonly confirmedByUserId?: ID;
+  readonly confirmedAt?: UnixMs;
+  readonly revokedByUserId?: ID;
+  readonly revokedAt?: UnixMs;
 }
 
 // ── 仓库接口 ──────────────────────────────────────────────────────────────────
@@ -93,7 +101,18 @@ export interface ChannelExperienceAttachmentRepository {
   }): Promise<ChannelExperienceAttachmentRecord | null>;
   listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelExperienceAttachmentRecord[]>;
   listByPack(input: { teamId: ID; packId: ID }): Promise<ChannelExperienceAttachmentRecord[]>;
-  delete(input: { teamId: ID; id: ID }): Promise<void>;
+  /** #723：乐观状态迁移（expectedStatus 防并发）。返回 null 表示并发冲突。 */
+  updateStatus(input: {
+    teamId: ID;
+    packId: ID;
+    channelId: ID;
+    status: AttachmentStatus;
+    confirmedByUserId?: ID;
+    confirmedAt?: UnixMs;
+    revokedByUserId?: ID;
+    revokedAt?: UnixMs;
+    expectedStatus: AttachmentStatus;
+  }): Promise<ChannelExperienceAttachmentRecord | null>;
 }
 
 export interface ExperiencePackRepositories {

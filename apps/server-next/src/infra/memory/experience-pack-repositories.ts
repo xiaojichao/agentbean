@@ -39,7 +39,7 @@ export function createMemoryExperiencePackRepositories(): ExperiencePackReposito
       async listApprovedByChannel(input) {
         const packIds = new Set(
           [...attachments.values()]
-            .filter((r) => r.teamId === input.teamId && r.channelId === input.channelId)
+            .filter((r) => r.teamId === input.teamId && r.channelId === input.channelId && r.status === 'attached')
             .map((r) => r.packId),
         );
         return [...packs.values()]
@@ -85,18 +85,28 @@ export function createMemoryExperiencePackRepositories(): ExperiencePackReposito
       async listByChannel(input) {
         return [...attachments.values()]
           .filter((r) => r.teamId === input.teamId && r.channelId === input.channelId)
-          .sort((a, b) => b.attachedAt - a.attachedAt);
+          .sort((a, b) => b.recommendedAt - a.recommendedAt);
       },
       async listByPack(input) {
         return [...attachments.values()]
           .filter((r) => r.teamId === input.teamId && r.packId === input.packId)
-          .sort((a, b) => b.attachedAt - a.attachedAt);
+          .sort((a, b) => b.recommendedAt - a.recommendedAt);
       },
-      async delete(input) {
-        const found = [...attachments.entries()].find(
-          ([, r]) => r.teamId === input.teamId && r.id === input.id,
+      async updateStatus(input) {
+        const found = [...attachments.values()].find(
+          (r) => r.teamId === input.teamId && r.packId === input.packId && r.channelId === input.channelId,
         );
-        if (found) attachments.delete(found[0]);
+        if (!found || found.status !== input.expectedStatus) return null;
+        const updated: ChannelExperienceAttachmentRecord = {
+          ...found,
+          status: input.status,
+          confirmedByUserId: input.confirmedByUserId ?? found.confirmedByUserId,
+          confirmedAt: input.confirmedAt ?? found.confirmedAt,
+          revokedByUserId: input.revokedByUserId ?? found.revokedByUserId,
+          revokedAt: input.revokedAt ?? found.revokedAt,
+        };
+        attachments.set(found.id, updated);
+        return updated;
       },
     },
   };

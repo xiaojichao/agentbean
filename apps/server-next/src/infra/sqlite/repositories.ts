@@ -162,6 +162,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0043_channel_revision.sql');
   }
   applyMigration(db, 'team/0044_experience_packs.sql');
+  applyMigration(db, 'team/0045_attachment_status.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

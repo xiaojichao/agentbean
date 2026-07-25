@@ -24,7 +24,6 @@ function makeHarness(repositories: ServerNextRepositories): Harness {
 async function setupTeam(harness: Harness, teamId = 'team-1', userId = 'user-1') {
   const { repositories, clock } = harness;
   const now = clock.now();
-  // 创建用户（SQLite 有 FK 约束）
   await repositories.users.create({
     id: userId,
     username: userId,
@@ -49,7 +48,13 @@ async function setupTeam(harness: Harness, teamId = 'team-1', userId = 'user-1')
   return { teamId, userId };
 }
 
-async function setupChannel(harness: Harness, teamId: string, channelId = 'ch-1', archived = false) {
+async function setupChannel(
+  harness: Harness,
+  teamId: string,
+  channelId = 'ch-1',
+  archived = false,
+  humanMemberIds: string[] = [],
+) {
   const { repositories, clock } = harness;
   const now = clock.now();
   const channel = await repositories.channels.create({
@@ -58,7 +63,7 @@ async function setupChannel(harness: Harness, teamId: string, channelId = 'ch-1'
     name: 'test-channel',
     title: 'Test Channel',
     visibility: 'team',
-    humanMemberIds: [],
+    humanMemberIds,
     agentMemberIds: [],
     createdAt: now,
     updatedAt: now,
@@ -85,7 +90,7 @@ describe('experience-pack-service', () => {
   describe('createDraft', () => {
     test('AC#1: creates draft from archived channel', async () => {
       const { teamId } = await setupTeam(h);
-      await setupChannel(h, teamId, 'ch-1', true); // archived
+      await setupChannel(h, teamId, 'ch-1', true);
 
       const pack = await h.service.createDraft({
         teamId,
@@ -126,7 +131,7 @@ describe('experience-pack-service', () => {
 
     test('AC#1: rejects draft for unarchived channel', async () => {
       const { teamId } = await setupTeam(h);
-      await setupChannel(h, teamId, 'ch-1', false); // not archived
+      await setupChannel(h, teamId, 'ch-1', false);
 
       await expect(h.service.createDraft({
         teamId,
@@ -149,7 +154,7 @@ describe('experience-pack-service', () => {
     });
   });
 
-  // ── approve（AC#3：第一次确认）─────────────────────────────────────────
+  // ── approve ─────────────────────────────────────────────────────────
 
   describe('approve', () => {
     test('AC#3: draft → approved by team admin', async () => {
@@ -195,7 +200,6 @@ describe('experience-pack-service', () => {
     test('AC#3: rejects approve by non-admin member', async () => {
       const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
       await setupChannel(h, teamId, 'ch-1', true);
-      // add a regular member
       await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
 
       const draft = await h.service.createDraft({
@@ -213,7 +217,7 @@ describe('experience-pack-service', () => {
     });
   });
 
-  // ── withdraw（AC#7）─────────────────────────────────────────────────────
+  // ── withdraw ─────────────────────────────────────────────────────────
 
   describe('withdraw', () => {
     test('AC#7: approved → withdrawn', async () => {
@@ -255,7 +259,7 @@ describe('experience-pack-service', () => {
     });
   });
 
-  // ── markSourceInvalid（AC#6）────────────────────────────────────────────
+  // ── markSourceInvalid ─────────────────────────────────────────────────
 
   describe('markSourceInvalid', () => {
     test('AC#6: approved → source_invalid with reason', async () => {
@@ -301,10 +305,10 @@ describe('experience-pack-service', () => {
     });
   });
 
-  // ── attachToChannel / detachFromChannel（第二次确认）───────────────────
+  // ── recommendToChannel（#723：创建 pending attachment）──────────────────
 
-  describe('channel attachment', () => {
-    test('attaches approved pack to active channel', async () => {
+  describe('recommendToChannel', () => {
+    test('PI recommends approved pack to active channel → pending', async () => {
       const { teamId } = await setupTeam(h);
       await setupChannel(h, teamId, 'ch-1', true); // source (archived)
       await setupChannel(h, teamId, 'ch-2', false); // target (active)
@@ -312,22 +316,287 @@ describe('experience-pack-service', () => {
       const draft = await h.service.createDraft({
         teamId,
         actorId: 'user-1',
-        title: 'Attachable',
+        title: 'Recommending Pack',
         sourceChannelId: 'ch-1',
       });
       await h.service.approve({ teamId, actorId: 'user-1', packId: draft.id });
 
-      const attachment = await h.service.attachToChannel({
+      const attachment = await h.service.recommendToChannel({
         teamId,
         actorId: 'user-1',
         packId: draft.id,
         channelId: 'ch-2',
       });
+      expect(attachment.status).toBe('pending');
       expect(attachment.packId).toBe(draft.id);
       expect(attachment.channelId).toBe('ch-2');
+      expect(attachment.recommendedByUserId).toBe('user-1');
+      expect(attachment.confirmedByUserId).toBeUndefined();
     });
 
-    test('AC#5: draft pack not returned in listApprovedForChannel', async () => {
+    test('rejects recommendation to archived channel', async () => {
+      const { teamId } = await setupTeam(h);
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', true); // target is archived
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'user-1',
+        title: 'Archived Target',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'user-1', packId: draft.id });
+
+      await expect(h.service.recommendToChannel({
+        teamId,
+        actorId: 'user-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      })).rejects.toThrow('EXPERIENCE_PACK_RECOMMEND');
+    });
+
+    test('rejects recommendation of non-approved pack', async () => {
+      const { teamId } = await setupTeam(h);
+      await setupChannel(h, teamId, 'ch-source', true); // archived source for draft
+      await setupChannel(h, teamId, 'ch-target', false); // active target
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'user-1',
+        title: 'Not Approved',
+        sourceChannelId: 'ch-source',
+      });
+      // never approved — still draft
+
+      await expect(h.service.recommendToChannel({
+        teamId,
+        actorId: 'user-1',
+        packId: draft.id,
+        channelId: 'ch-target',
+      })).rejects.toThrow('EXPERIENCE_PACK_RECOMMEND');
+    });
+  });
+
+  // ── confirmAttachment（#723：pending → attached）────────────────────────
+
+  describe('confirmAttachment', () => {
+    test('channel member confirms pending → attached', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true); // source
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']); // target with member
+
+      // add member-1 to team so channel membership resolves
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Ready to Confirm',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      const confirmed = await h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      expect(confirmed.status).toBe('attached');
+      expect(confirmed.confirmedByUserId).toBe('member-1');
+      expect(confirmed.confirmedAt).toBeTruthy();
+    });
+
+    test('rejects confirm by non-channel-member', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false, []); // no members
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Member Only',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      await expect(h.service.confirmAttachment({
+        teamId,
+        actorId: 'outsider',
+        packId: draft.id,
+        channelId: 'ch-2',
+      })).rejects.toThrow('EXPERIENCE_PACK_CONFIRM');
+    });
+
+    test('rejects confirm of already attached', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']);
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Already Attached',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      await h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      // second confirm should fail
+      await expect(h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      })).rejects.toThrow('EXPERIENCE_PACK_CONFIRM');
+    });
+  });
+
+  // ── revokeAttachment（#723：attached → revoked）─────────────────────────
+
+  describe('revokeAttachment', () => {
+    test('channel member revokes attached → revoked', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']);
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Revocable',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      await h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      const revoked = await h.service.revokeAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      expect(revoked.status).toBe('revoked');
+      expect(revoked.revokedByUserId).toBe('member-1');
+      expect(revoked.revokedAt).toBeTruthy();
+    });
+
+    test('revoked attachment not listed in listApprovedForChannel', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']);
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Excluded After Revoke',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      await h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      // Before revoke → visible
+      let packs = await h.service.listApprovedForChannel({ teamId, channelId: 'ch-2' });
+      expect(packs).toHaveLength(1);
+
+      await h.service.revokeAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      // After revoke → not visible
+      packs = await h.service.listApprovedForChannel({ teamId, channelId: 'ch-2' });
+      expect(packs).toHaveLength(0);
+    });
+
+    test('rejects revoke by non-member + non-admin', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']);
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Protected',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.recommendToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+      await h.service.confirmAttachment({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      await expect(h.service.revokeAttachment({
+        teamId,
+        actorId: 'outsider',
+        packId: draft.id,
+        channelId: 'ch-2',
+      })).rejects.toThrow('EXPERIENCE_PACK_REVOKE');
+    });
+  });
+
+  // ── listApprovedForChannel ─────────────────────────────────────────────
+
+  describe('listApprovedForChannel', () => {
+    test('AC#5: draft pack not returned', async () => {
       const { teamId } = await setupTeam(h);
       await setupChannel(h, teamId, 'ch-1', true);
 
@@ -338,126 +607,49 @@ describe('experience-pack-service', () => {
         sourceChannelId: 'ch-1',
       });
 
-      const packs = await h.service.listApprovedForChannel({
-        teamId,
-        channelId: 'ch-1',
-      });
+      const packs = await h.service.listApprovedForChannel({ teamId, channelId: 'ch-1' });
       expect(packs).toHaveLength(0);
       expect(packs.find((p) => p.id === draft.id)).toBeUndefined();
     });
 
-    test('approved pack returned in listApprovedForChannel after attachment', async () => {
-      const { teamId } = await setupTeam(h);
-      await setupChannel(h, teamId, 'ch-1', true);
-      await setupChannel(h, teamId, 'ch-2', false);
-
-      const draft = await h.service.createDraft({
-        teamId,
-        actorId: 'user-1',
-        title: 'Linked Pack',
-        sourceChannelId: 'ch-1',
-      });
-      await h.service.approve({ teamId, actorId: 'user-1', packId: draft.id });
-      await h.service.attachToChannel({
-        teamId,
-        actorId: 'user-1',
-        packId: draft.id,
-        channelId: 'ch-2',
-      });
-
-      const packs = await h.service.listApprovedForChannel({
-        teamId,
-        channelId: 'ch-2',
-      });
-      expect(packs).toHaveLength(1);
-      expect(packs[0]!.id).toBe(draft.id);
-    });
-
-    test('detaches pack from channel', async () => {
-      const { teamId } = await setupTeam(h);
-      await setupChannel(h, teamId, 'ch-1', true);
-      await setupChannel(h, teamId, 'ch-2', false);
-
-      const draft = await h.service.createDraft({
-        teamId,
-        actorId: 'user-1',
-        title: 'Detachable',
-        sourceChannelId: 'ch-1',
-      });
-      await h.service.approve({ teamId, actorId: 'user-1', packId: draft.id });
-      await h.service.attachToChannel({
-        teamId,
-        actorId: 'user-1',
-        packId: draft.id,
-        channelId: 'ch-2',
-      });
-
-      // Detach
-      await h.service.detachFromChannel({
-        teamId,
-        actorId: 'user-1',
-        packId: draft.id,
-        channelId: 'ch-2',
-      });
-
-      const packs = await h.service.listApprovedForChannel({
-        teamId,
-        channelId: 'ch-2',
-      });
-      expect(packs).toHaveLength(0);
-    });
-
-    test('rejects detach by non-admin member', async () => {
+    test('pending attachment not returned until confirmed', async () => {
       const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
       await setupChannel(h, teamId, 'ch-1', true);
-      await setupChannel(h, teamId, 'ch-2', false);
-      // add a regular member
+      await setupChannel(h, teamId, 'ch-2', false, ['member-1']);
       await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
 
       const draft = await h.service.createDraft({
         teamId,
         actorId: 'admin-user',
-        title: 'Protected Pack',
+        title: 'Pending Test',
         sourceChannelId: 'ch-1',
       });
       await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
-      await h.service.attachToChannel({
+      await h.service.recommendToChannel({
         teamId,
         actorId: 'admin-user',
         packId: draft.id,
         channelId: 'ch-2',
       });
 
-      await expect(h.service.detachFromChannel({
+      // pending → not returned
+      let packs = await h.service.listApprovedForChannel({ teamId, channelId: 'ch-2' });
+      expect(packs).toHaveLength(0);
+
+      // confirm → now returned
+      await h.service.confirmAttachment({
         teamId,
         actorId: 'member-1',
         packId: draft.id,
         channelId: 'ch-2',
-      })).rejects.toThrow('EXPERIENCE_PACK_DETACH');
-    });
-
-    test('rejects attach of draft to channel', async () => {
-      const { teamId } = await setupTeam(h);
-      await setupChannel(h, teamId, 'ch-1', true);
-      await setupChannel(h, teamId, 'ch-2', false);
-
-      const draft = await h.service.createDraft({
-        teamId,
-        actorId: 'user-1',
-        title: 'Not Ready',
-        sourceChannelId: 'ch-1',
       });
-
-      await expect(h.service.attachToChannel({
-        teamId,
-        actorId: 'user-1',
-        packId: draft.id,
-        channelId: 'ch-2',
-      })).rejects.toThrow('EXPERIENCE_PACK_ATTACH');
+      packs = await h.service.listApprovedForChannel({ teamId, channelId: 'ch-2' });
+      expect(packs).toHaveLength(1);
+      expect(packs[0]!.id).toBe(draft.id);
     });
   });
 
-  // ── listByTeam ──────────────────────────────────────────────────────────
+  // ── listByTeam ─────────────────────────────────────────────────────────
 
   describe('listByTeam', () => {
     test('lists packs by status', async () => {
