@@ -87,11 +87,16 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
     private readonly command = process.env.AGENTBEAN_PREVIEW_PROCESSOR ?? 'ffmpeg',
     private readonly timeoutMs = DEFAULT_PROCESS_TIMEOUT_MS,
     private readonly proberCommand = process.env.AGENTBEAN_PREVIEW_PROBER ?? 'ffprobe',
+    private readonly pdfCommand = process.env.AGENTBEAN_PREVIEW_PDF_PROCESSOR ?? 'pdftoppm',
   ) {}
 
   async process(input: { inputPath: string; outputPath: string; mimeType: string }) {
     const mimeType = input.mimeType.toLowerCase();
     if (!supportsArtifactPreviewMime(mimeType)) throw new UnsupportedPreviewError(mimeType);
+    if (mimeType === 'application/pdf') {
+      await this.processPdf(input);
+      return {};
+    }
     const args = processorArgs(input, mimeType);
     try {
       await runCommand(this.command, args, this.timeoutMs);
@@ -121,10 +126,47 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
       return undefined;
     }
   }
+
+  // PDF adapter 选型（#800）：poppler 的 pdftoppm 渲染首页为 PNG，再复用既有 ffmpeg
+  // 命令（AGENTBEAN_PREVIEW_PROCESSOR）压成受限 WebP。理由：Node 24 仅作子进程调用、
+  // 无原生绑定；macOS（brew poppler）与主流 Linux 发行版（poppler-utils）均可安装；
+  // 只渲染首页且 -scale-to 限尺寸，配合既有超时/输入输出字节上限约束资源；以子进程
+  // 方式使用，GPL 不传染服务代码。ffmpeg 自身无法解码 PDF，mutool 生产镜像可得性差。
+  private async processPdf(input: { inputPath: string; outputPath: string }) {
+    const pagePrefix = `${input.outputPath}.page`;
+    const pagePng = `${pagePrefix}.png`;
+    try {
+      await runCommand(this.pdfCommand, [
+        '-f', '1', '-l', '1', '-singlefile', '-scale-to', '800', '-png',
+        input.inputPath, pagePrefix,
+      ], this.timeoutMs);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        // adapter 缺失是部署事实而非输入问题：标为 unsupported（明确错误码、不重试），
+        // 卡片按既有语义降级，原文件预览/下载不受影响。
+        throw new UnsupportedPreviewError('application/pdf', 'PREVIEW_PDF_ADAPTER_MISSING');
+      }
+      throw error;
+    }
+    try {
+      await runCommand(this.command, [
+        '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
+        '-max_alloc', '134217728', '-max_pixels', '40000000',
+        '-y', '-i', pagePng,
+        '-frames:v', '1', '-vf', 'scale=800:800:force_original_aspect_ratio=decrease',
+        '-f', 'webp', input.outputPath,
+      ], this.timeoutMs);
+    } finally {
+      await unlink(pagePng).catch(() => undefined);
+    }
+  }
 }
 
 export class UnsupportedPreviewError extends Error {
-  constructor(mimeType: string) {
+  constructor(
+    mimeType: string,
+    readonly code: string = 'PREVIEW_UNSUPPORTED',
+  ) {
     super(`Preview is unsupported for ${mimeType}`);
     this.name = 'UnsupportedPreviewError';
   }
@@ -261,7 +303,7 @@ export function createArtifactPreviewService(options: ArtifactPreviewServiceOpti
 }
 
 function previewErrorCode(error: unknown): string {
-  if (error instanceof UnsupportedPreviewError) return 'PREVIEW_UNSUPPORTED';
+  if (error instanceof UnsupportedPreviewError) return error.code;
   if (!(error instanceof Error)) return 'PREVIEW_PROCESSING_FAILED';
   if (/^[A-Z][A-Z0-9_]+$/.test(error.message)) return error.message;
   return 'PREVIEW_PROCESSING_FAILED';

@@ -1,4 +1,4 @@
-import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,6 +98,7 @@ describe('artifact preview service', () => {
   });
 });
 
+<<<<<<< ours
 const FFMPEG_OK_STUB = '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n';
 
 describe('command artifact preview processor（#799 视频时长）', () => {
@@ -164,6 +165,95 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'image/png' }))
       .resolves.toEqual({});
     await expect(stat(probeLog)).rejects.toThrow();
+=======
+describe('command artifact preview processor（#800 PDF 首页缩略图）', () => {
+  test('renders the first PDF page through the pdf adapter and reuses the ffmpeg webp pipeline', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const output = join(root, 'out.webp');
+    const calls = join(root, 'calls.log');
+    const processor = new CommandArtifactPreviewProcessor(
+      await makeStubCommand(root, 'ffmpeg-ok', `#!/bin/sh\necho "ffmpeg $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n`),
+      5_000,
+      await makeStubCommand(root, 'pdftoppm-ok', `#!/bin/sh\necho "pdftoppm $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "\${out}.png"\n`),
+    );
+    await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'application/pdf' }))
+      .resolves.toEqual({});
+    expect((await stat(output)).size).toBeGreaterThan(0);
+    const log = String(await readFile(calls));
+    expect(log).toContain('pdftoppm');
+    expect(log).toContain('ffmpeg');
+    // 中间 PNG 已清理
+    await expect(stat(`${output}.page.png`)).rejects.toThrow();
+  });
+
+  test('ready PDF derivative flows through the standard preview DTO used by cards and folder mosaics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        5_000,
+        await makeStubCommand(root, 'pdftoppm-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "${out}.png"\n'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p1', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    expect(await service.get('p1')).toMatchObject({
+      status: 'ready',
+      url: '/api/teams/t1/artifacts/p1/preview-derivative',
+    });
+  });
+
+  test('marks the job unsupported with an explicit code and no retry when the pdf adapter is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        5_000,
+        join(root, 'pdftoppm-not-installed'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p2', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    const job = await repository.get('p2');
+    expect(job?.status).toBe('unsupported');
+    expect(job?.errorCode).toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.attempts).toBe(1);
+    // 不进入重试：再次 runOnce 不再认领该 job
+    expect(await service.runOnce()).toBe(false);
+    expect(await stat(source)).toBeTruthy();
+  });
+
+  test('treats a malformed PDF as a bounded processing failure, not as unsupported', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'broken.pdf');
+    await writeFile(source, 'not-a-pdf');
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        5_000,
+        await makeStubCommand(root, 'pdftoppm-fail', '#!/bin/sh\necho "Syntax Error: broken" >&2\nexit 1\n'),
+      ),
+    });
+    await service.enqueue({ artifactId: 'p3', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce(); await service.runOnce(); await service.runOnce();
+    const job = await repository.get('p3');
+    expect(job?.status).toBe('failed');
+    expect(job?.errorCode).not.toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.errorCode).not.toBe('PREVIEW_UNSUPPORTED');
+>>>>>>> theirs
   });
 });
 
