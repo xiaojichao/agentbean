@@ -549,7 +549,7 @@ export interface ChannelEvents {
   addMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   removeAgent(channelId: string, agentId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   removeMember(channelId: string, userId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
-  archive(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
+  archive(channelId: string, teamId?: string, confirmationToken?: string): Promise<{ ok: boolean; channel?: ChannelSummary; preflight?: import('@agentbean/contracts').ChannelArchivePreflightDto; confirmation?: import('@agentbean/contracts').ChannelArchiveConfirmationDto; error?: string }>;
   delete(channelId: string, teamId?: string): Promise<{ ok: boolean; channel?: ChannelSummary; error?: string }>;
   searchMessages(query: string, limit?: number, channelId?: string): Promise<{ ok: boolean; messages?: ChatMessage[]; error?: string }>;
   listFiles(channelId: string, cursor?: string, pageSize?: number, path?: string, role?: ArtifactRole | 'all'): Promise<{ ok: boolean; files?: ChannelFilesResultDto['files']; directories?: ChannelFilesResultDto['directories']; nextCursor?: string; path?: string; error?: string }>;
@@ -571,7 +571,7 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     addMember(channelId, userId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.addMember, { channelId, memberUserId: userId, ...(teamId ? { teamId } : {}) }); },
     removeAgent(channelId, agentId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeAgent, { channelId, agentId, ...(teamId ? { teamId } : {}) }); },
     removeMember(channelId, userId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.removeMember, { channelId, memberUserId: userId, ...(teamId ? { teamId } : {}) }); },
-    archive(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.archive, { channelId, ...(teamId ? { teamId } : {}) }); },
+    archive(channelId, teamId, confirmationToken) { return emitWithTimeout(socket, WEB_EVENTS.channel.archive, { channelId, ...(teamId ? { teamId } : {}), ...(confirmationToken ? { confirmationToken } : {}) }); },
     delete(channelId, teamId) { return emitWithTimeout(socket, WEB_EVENTS.channel.delete, { channelId, ...(teamId ? { teamId } : {}) }); },
     searchMessages(query, limit, channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.message.search, { query, limit, ...(channelId ? { channelId } : {}) });

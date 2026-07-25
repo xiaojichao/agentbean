@@ -17,6 +17,7 @@ export interface ChannelDto {
   createdAt: UnixMs;
   updatedAt?: UnixMs;
   archivedAt?: UnixMs | null;
+  revision?: number;
 }
 
 export interface CreateChannelCommandDto {
@@ -88,4 +89,51 @@ export interface SnapshotDmCommandDto {
   teamId: ID;
   channelId: ID;
   limit?: number;
+}
+
+export type ChannelArchiveWorkKind =
+  | 'task'
+  | 'invocation'
+  | 'claim'
+  | 'lease'
+  | 'offer'
+  | 'pending_review';
+
+export interface ChannelArchivePreflightItemDto {
+  kind: ChannelArchiveWorkKind;
+  id: ID;
+  title?: string;
+  status: string;
+}
+
+export interface ChannelArchivePreflightDto {
+  channelId: ID;
+  channelRevision: number;
+  confirmationToken: string;
+  expiresAt: UnixMs;
+  summary: {
+    tasks: number;
+    invocations: number;
+    claims: number;
+    leases: number;
+    offers: number;
+    pendingReviews: number;
+  };
+  items: ChannelArchivePreflightItemDto[];
+}
+
+export interface ChannelArchiveConfirmationDto {
+  channel: ChannelDto;
+  cancelledTaskIds: ID[];
+  releasedClaimIds: ID[];
+  invalidatedOfferIds: ID[];
+  cancelledInvocationIds: ID[];
+  pendingReviewTaskIds: ID[];
+}
+
+export interface ChannelArchiveCommandDto {
+  userId: ID;
+  teamId: ID;
+  channelId: ID;
+  confirmationToken?: string;
 }
