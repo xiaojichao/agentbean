@@ -98,7 +98,6 @@ describe('artifact preview service', () => {
   });
 });
 
-<<<<<<< ours
 const FFMPEG_OK_STUB = '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n';
 
 describe('command artifact preview processor（#799 视频时长）', () => {
@@ -165,7 +164,9 @@ describe('command artifact preview processor（#799 视频时长）', () => {
     await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'image/png' }))
       .resolves.toEqual({});
     await expect(stat(probeLog)).rejects.toThrow();
-=======
+  });
+});
+
 describe('command artifact preview processor（#800 PDF 首页缩略图）', () => {
   test('renders the first PDF page through the pdf adapter and reuses the ffmpeg webp pipeline', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
@@ -176,6 +177,7 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     const processor = new CommandArtifactPreviewProcessor(
       await makeStubCommand(root, 'ffmpeg-ok', `#!/bin/sh\necho "ffmpeg $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n`),
       5_000,
+      undefined,
       await makeStubCommand(root, 'pdftoppm-ok', `#!/bin/sh\necho "pdftoppm $@" >> "${calls}"\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "\${out}.png"\n`),
     );
     await expect(processor.process({ inputPath: source, outputPath: output, mimeType: 'application/pdf' }))
@@ -184,7 +186,6 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     const log = String(await readFile(calls));
     expect(log).toContain('pdftoppm');
     expect(log).toContain('ffmpeg');
-    // 中间 PNG 已清理
     await expect(stat(`${output}.page.png`)).rejects.toThrow();
   });
 
@@ -195,8 +196,9 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     const service = createArtifactPreviewService({
       outputDir: join(root, 'derivatives'),
       processor: new CommandArtifactPreviewProcessor(
-        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
         5_000,
+        undefined,
         await makeStubCommand(root, 'pdftoppm-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho png > "${out}.png"\n'),
       ),
     });
@@ -217,8 +219,9 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
       outputDir: join(root, 'derivatives'),
       repository,
       processor: new CommandArtifactPreviewProcessor(
-        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
         5_000,
+        undefined,
         join(root, 'pdftoppm-not-installed'),
       ),
     });
@@ -228,7 +231,6 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     expect(job?.status).toBe('unsupported');
     expect(job?.errorCode).toBe('PREVIEW_PDF_ADAPTER_MISSING');
     expect(job?.attempts).toBe(1);
-    // 不进入重试：再次 runOnce 不再认领该 job
     expect(await service.runOnce()).toBe(false);
     expect(await stat(source)).toBeTruthy();
   });
@@ -244,8 +246,9 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
       outputDir: join(root, 'derivatives'),
       repository,
       processor: new CommandArtifactPreviewProcessor(
-        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
         5_000,
+        undefined,
         notExecutable,
       ),
     });
@@ -266,8 +269,9 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
       outputDir: join(root, 'derivatives'),
       repository,
       processor: new CommandArtifactPreviewProcessor(
-        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        await makeStubCommand(root, 'ffmpeg-ok', FFMPEG_OK_STUB),
         5_000,
+        undefined,
         await makeStubCommand(root, 'pdftoppm-fail', '#!/bin/sh\necho "Syntax Error: broken" >&2\nexit 1\n'),
       ),
     });
@@ -277,7 +281,6 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     expect(job?.status).toBe('failed');
     expect(job?.errorCode).not.toBe('PREVIEW_PDF_ADAPTER_MISSING');
     expect(job?.errorCode).not.toBe('PREVIEW_UNSUPPORTED');
->>>>>>> theirs
   });
 });
 
