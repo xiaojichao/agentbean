@@ -195,23 +195,21 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
     }): Promise<ManagementRoutingResult> {
       let policy = await policyForTeam(input.teamId);
       // #724: 旧 management_policies 未配置（默认 direct）时桥接新 piPolicy。
-      // placement 决策树：
-      // - 有 target + clientMessageId → device placement（Phase 1-3 管理路由，避开 L288 guard）
-      // - 其他（无 target 或无 clientMessageId）→ managed placement
-      //   - 无 clientMessageId → L288 guard → direct（安全回退，如普通 chat）
-      //   - 无 target → 正常 managed placement（Phase 4 server worker）
+      // 仅在消息携带 clientMessageId（客户端显式意图）时桥接；否则保持 direct。
+      // placement 决策：
+      // - 有 target → device placement（Phase 1-3 管理路由，避开 L288 guard）
+      // - 无 target → managed placement（Phase 4 server worker）
       // maxManagementPhase 由 rootTaskId 驱动。
       if (policy.mode === 'direct') {
         const piPolicy = await repositories.teamPiPolicy.getOrDefault(input.teamId);
-        if (piPolicy.autoCoordinationEnabled) {
+        if (piPolicy.autoCoordinationEnabled && input.clientMessageId?.trim()) {
           const hasRootTask = !!input.rootTaskId?.trim();
           const hasTarget = !!input.targetAgentId;
-          const hasClientMsgId = !!input.clientMessageId?.trim();
           policy = {
             ...policy,
             mode: 'managed' as ManagementMode,
             maxManagementPhase: (hasRootTask ? 3 : 1) as 1 | 2 | 3,
-            placementPolicy: (hasTarget && hasClientMsgId)
+            placementPolicy: hasTarget
               ? DEFAULT_PLACEMENT_POLICY
               : { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false },
           };
