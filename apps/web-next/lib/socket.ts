@@ -1,7 +1,7 @@
 'use client';
 import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
-import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto } from '@agentbean/contracts';
+import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
   assertArtifactUploadWithinLimit,
@@ -9,6 +9,7 @@ import {
   artifactUploadProxyUrl as buildArtifactUploadProxyUrl,
   artifactUploadUrl as buildArtifactUploadUrl,
 } from './artifact-upload';
+import { clearChannelDocumentDrafts } from './channel-document-drafts';
 
 const configuredUrl = process.env.NEXT_PUBLIC_AGENT_BEAN_SERVER_URL;
 const TOKEN_STORAGE_KEY = 'agentbean.token';
@@ -49,6 +50,7 @@ export function setStoredDeviceToken(deviceToken: string): void {
 
 export function clearStoredAuth(): void {
   if (typeof window === 'undefined') return;
+  clearChannelDocumentDrafts(window.localStorage);
   window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   window.localStorage.removeItem(DEVICE_TOKEN_STORAGE_KEY);
   window.localStorage.removeItem(DEVICE_ID_STORAGE_KEY);
@@ -557,7 +559,10 @@ export interface ChannelEvents {
   listDocuments(channelId: string): Promise<{ ok: boolean; documents?: ChannelDocumentDto[]; error?: string }>;
   getDocument(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
   listDocumentRevisions(channelId: string, documentId: string): Promise<{ ok: boolean; document?: ChannelDocumentRevisionsResultDto['document']; revisions?: ChannelDocumentRevisionsResultDto['revisions']; error?: string }>;
-  saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  deriveDocument(channelId: string, sourceArtifactId: string, content: string, filename: string, targetDocumentId?: string, targetBaseRevisionId?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string; message?: string }>;
+  saveDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename?: string, idempotencyKey?: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  restoreDocument(channelId: string, documentId: string, revisionId: string, baseRevisionId: string, idempotencyKey: string): Promise<{ ok: boolean; document?: ChannelDocumentResultDto['document']; error?: string }>;
+  publishDocument(channelId: string, documentId: string, baseRevisionId: string, content: string, filename: string, idempotencyKey: string): Promise<{ ok: boolean; document?: PublishChannelDocumentResultDto['document']; message?: MessageDto; error?: string }>;
 }
 
 export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
@@ -585,7 +590,16 @@ export function channelEvents(socket: Socket = getWebSocket()): ChannelEvents {
     listDocuments(channelId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.list, { channelId }); },
     getDocument(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.get, { channelId, documentId }); },
     listDocumentRevisions(channelId, documentId) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.revisions, { channelId, documentId }); },
-    saveDocument(channelId, documentId, baseRevisionId, content, filename) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}) }); },
+    deriveDocument(channelId, sourceArtifactId, content, filename, targetDocumentId, targetBaseRevisionId) {
+      return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.derive, {
+        channelId, sourceArtifactId, content, filename,
+        ...(targetDocumentId ? { targetDocumentId } : {}),
+        ...(targetBaseRevisionId ? { targetBaseRevisionId } : {}),
+      });
+    },
+    saveDocument(channelId, documentId, baseRevisionId, content, filename, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.save, { channelId, documentId, baseRevisionId, content, ...(filename ? { filename } : {}), ...(idempotencyKey ? { idempotencyKey } : {}) }); },
+    restoreDocument(channelId, documentId, revisionId, baseRevisionId, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.restore, { channelId, documentId, revisionId, baseRevisionId, idempotencyKey }); },
+    publishDocument(channelId, documentId, baseRevisionId, content, filename, idempotencyKey) { return emitWithTimeout(socket, WEB_EVENTS.channelDocuments.publish, { channelId, documentId, baseRevisionId, content, filename, idempotencyKey }); },
   };
 }
 

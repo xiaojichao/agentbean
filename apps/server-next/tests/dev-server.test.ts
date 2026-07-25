@@ -7,6 +7,7 @@ import { AGENT_EVENTS, WEB_EVENTS, makeSuccess, type DispatchDto } from '../../.
 import { createInMemoryServerNext } from '../src/index';
 import type { ServerNextUseCases } from '../src/application/usecases';
 import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
+import { applyTeamMigrations } from '../src/infra/sqlite/repositories';
 
 type SocketIoServerConstructor = ConstructorParameters<typeof startServerNextDevServer>[0] extends { Server?: infer T }
   ? NonNullable<T>
@@ -305,6 +306,17 @@ describe('server-next dev server entry', () => {
       ok: true,
       service: 'agentbean-next-server',
     });
+    await expect(fetch(`${server.baseUrl}/metricsz`).then((response) => response.json())).resolves.toEqual({
+      ok: true,
+      channelFiles: {
+        indexShadowComparisons: 0,
+        indexShadowMismatches: 0,
+        indexShadowMissing: 0,
+        indexShadowUnexpected: 0,
+        indexShadowChanged: 0,
+        rangeResponses: 0,
+      },
+    });
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="channel-create-form"');
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('channel:create');
@@ -406,6 +418,68 @@ describe('server-next dev server entry', () => {
       user: { username: 'shaw' },
       currentTeam: { name: 'AgentBean' },
     });
+  });
+
+  test('SQLite 启动后在后台分批回填历史频道文件', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-backfill-'));
+    const teamDbPath = join(dataDir, 'team.sqlite');
+    const setupDb = new Database(teamDbPath);
+    try {
+      applyTeamMigrations(setupDb);
+      setupDb.prepare(`INSERT INTO channels (
+        id, team_id, kind, name, visibility, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        'channel-1', 'team-1', 'channel', 'general', 'public', 'user-1', 1,
+      );
+      setupDb.prepare(`INSERT INTO messages (
+        id, team_id, channel_id, sender_kind, sender_id, body, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        'message-1', 'team-1', 'channel-1', 'human', 'user-1', 'legacy', 50,
+      );
+      setupDb.prepare(`INSERT INTO artifacts (
+        id, team_id, channel_id, message_id, uploader_id, filename, mime_type,
+        size_bytes, storage_path, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        'artifact-1', 'team-1', 'channel-1', 'message-1', 'user-1', 'legacy.md',
+        'text/markdown', 5, 'artifacts/team-1/artifact-1/legacy.md', 100,
+      );
+    } finally {
+      setupDb.close();
+    }
+
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'sqlite',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: false,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: true,
+          indexShadowCompare: false,
+        },
+      },
+    });
+    cleanups.push(() => server.close());
+
+    const observer = new Database(teamDbPath);
+    try {
+      await eventually(() => {
+        expect(observer.prepare(
+          'SELECT current_revision_id FROM channel_documents WHERE id = ?',
+        ).get('channel-document:artifact-1')).toEqual({
+          current_revision_id: 'channel-document:artifact-1:revision:1',
+        });
+      }, 100);
+    } finally {
+      observer.close();
+    }
   });
 
   test('reconciles persisted online devices to offline on SQLite startup', async () => {
@@ -744,7 +818,21 @@ describe('server-next dev server entry', () => {
     } as unknown as ServerNextUseCases;
     const server = await startServerNextDevServer({
       app, Server,
-      config: { host: '127.0.0.1', port: 0, storage: 'memory', dataDir, sessionSecret: 'test-secret' },
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: true,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: false,
+          indexShadowCompare: false,
+        },
+      },
     });
     cleanups.push(() => server.close());
 
@@ -762,6 +850,33 @@ describe('server-next dev server entry', () => {
     });
     expect(invalid.status).toBe(416);
     expect(invalid.headers.get('content-range')).toBe('bytes */10');
+
+    const compatibilityServer = await startServerNextDevServer({
+      app, Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir,
+        sessionSecret: 'test-secret',
+        channelFileRollout: {
+          fileBrowser: true,
+          streaming: false,
+          previewWorker: true,
+          markdownEditing: false,
+          historyBackfill: false,
+          indexShadowCompare: false,
+        },
+      },
+    });
+    cleanups.push(() => compatibilityServer.close());
+    const full = await fetch(`${compatibilityServer.baseUrl}/api/teams/team-1/artifacts/artifact-range/preview?token=token-1`, {
+      headers: { Range: 'bytes=2-5' },
+    });
+    expect(full.status).toBe(200);
+    expect(full.headers.get('accept-ranges')).toBeNull();
+    expect(full.headers.get('content-range')).toBeNull();
+    await expect(full.text()).resolves.toBe('0123456789');
   });
 
   test('forces active artifact preview content to download', async () => {

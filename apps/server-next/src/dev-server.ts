@@ -42,6 +42,7 @@ import {
   type SqliteDatabase,
 } from './infra/sqlite/repositories.js';
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
+import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { DEFAULT_ARTIFACT_MAX_BYTES, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -105,6 +106,7 @@ export interface ServerNextDevServerHandle {
 interface AppWithCleanup {
   app: ServerNextUseCases;
   artifactPreviewService?: ArtifactPreviewService;
+  channelFileBackfill?: NonNullable<ReturnType<typeof createChannelFileBackfillIfSupported>>;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
@@ -264,6 +266,14 @@ export async function startServerNextDevServer(
         response.end(JSON.stringify({ ok: true, service: 'agentbean-next-server' }));
         return;
       }
+      if (url.pathname === '/metricsz') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: true,
+          channelFiles: config.channelFileMetrics?.snapshot(),
+        }));
+        return;
+      }
       if (await handleAgentWorkspaceHttp({ app, config, request, response, url })) {
         return;
       }
@@ -324,6 +334,18 @@ export async function startServerNextDevServer(
       void appWithCleanup.artifactPreviewService?.runOnce().catch(() => undefined);
     }, 250)
     : undefined;
+  const channelFileBackfillInterval = appWithCleanup.channelFileBackfill
+    ? setInterval(() => {
+      try {
+        const result = appWithCleanup.channelFileBackfill?.runBatch();
+        if (result?.completed && channelFileBackfillInterval) {
+          clearInterval(channelFileBackfillInterval);
+        }
+      } catch {
+        // 保留当前批次游标，下一轮从同一位置安全重试。
+      }
+    }, 100)
+    : undefined;
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   return {
@@ -338,6 +360,9 @@ export async function startServerNextDevServer(
       }
       if (previewWorkerInterval) {
         clearInterval(previewWorkerInterval);
+      }
+      if (channelFileBackfillInterval) {
+        clearInterval(channelFileBackfillInterval);
       }
       await coordinationScheduler?.stop();
       stopVersionRefresh();
@@ -836,7 +861,10 @@ async function handleArtifactRead(
     input.response.end(body);
     return;
   }
-  const range = parseArtifactRange(input.request.headers.range, fileSize);
+  const streamingEnabled = input.config.channelFileRollout?.streaming ?? false;
+  const range = streamingEnabled
+    ? parseArtifactRange(input.request.headers.range, fileSize)
+    : { kind: 'full' as const };
   if (range.kind === 'partial') {
     input.config.channelFileMetrics?.increment('rangeResponses');
   }
@@ -855,7 +883,7 @@ async function handleArtifactRead(
     'content-type': result.artifact.mimeType,
     'content-length': String(contentLength),
     'content-disposition': buildContentDisposition(disposition, result.artifact.filename),
-    'accept-ranges': 'bytes',
+    ...(streamingEnabled ? { 'accept-ranges': 'bytes' } : {}),
     ...(range.kind === 'partial' ? { 'content-range': `bytes ${start}-${end}/${fileSize}` } : {}),
   });
   if (contentLength === 0) {
@@ -1575,6 +1603,12 @@ function createDefaultApp(
         repository: createSqliteArtifactPreviewRepository(teamDb),
       })
     : undefined;
+  const channelFileBackfill = channelFileRollout.historyBackfill
+    ? createChannelFileBackfillIfSupported({
+        db: teamDb,
+        dataDir: config.dataDir,
+      })
+    : undefined;
   // PRD §6：清理 channel_agent_members 中被 0009 删除的 executor-hosted agent 留下的孤儿行。
   // 必须在两个迁移都跑完后、且 globalDbPath 已知时执行（详见函数注释）。
   cleanupOrphanedChannelMembers(join(config.dataDir, 'global.sqlite'), teamDb);
@@ -1607,6 +1641,7 @@ function createDefaultApp(
       messageIngestionMode,
     }),
     artifactPreviewService,
+    channelFileBackfill,
     managementWorkerScheduler: management.scheduler,
     serverWorkerScheduler: management.serverScheduler,
     taskClaimBroker,
@@ -1932,6 +1967,23 @@ function createFileArtifactContentStore(dataDir: string): ArtifactContentStore {
         storagePath: relativeStoragePath,
         sizeBytes: input.content.length,
         sha256: createHash('sha256').update(input.content).digest('hex'),
+      };
+    },
+    async copyContent(input) {
+      if (!input.sourceStoragePath) {
+        throw new Error('Source artifact has no stored content');
+      }
+      const sourcePath = join(dataDir, input.sourceStoragePath);
+      const content = readFileSync(sourcePath);
+      const filename = sanitizeFilename(input.filename);
+      const relativeStoragePath = join('artifacts', input.teamId, input.artifactId, filename);
+      const absoluteDir = join(dataDir, 'artifacts', input.teamId, input.artifactId);
+      mkdirSync(absoluteDir, { recursive: true });
+      writeFileSync(join(absoluteDir, filename), content);
+      return {
+        storagePath: relativeStoragePath,
+        sizeBytes: content.length,
+        sha256: createHash('sha256').update(content).digest('hex'),
       };
     },
     async deleteContent(input) {

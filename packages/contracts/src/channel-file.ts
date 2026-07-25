@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { ArtifactDto, ArtifactRole } from './artifact.js';
+import type { ChannelDocumentSourceDto } from './channel-document.js';
 
 export interface ChannelFileSourceDto {
   messageId?: ID;
@@ -17,6 +18,9 @@ export interface ChannelFileEntryDto {
   source: ChannelFileSourceDto;
   logicalPath?: string;
   role?: ArtifactRole;
+  documentId?: ID;
+  documentRevision?: number;
+  documentSource?: ChannelDocumentSourceDto;
 }
 
 export interface ListChannelFilesInput {

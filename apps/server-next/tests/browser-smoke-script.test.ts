@@ -1113,6 +1113,45 @@ describe('AgentBean Next browser smoke script', () => {
     expect(calls.filter((call) => call[0] === 'evaluateJson')).toHaveLength(1);
   });
 
+  test('uploads a channel file through the App Router chat before opening the file library', async () => {
+    const { exerciseWebUiChannelFilesBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const page = {
+      async setFileInputFiles(selector: string, files: unknown) {
+        calls.push(['setFileInputFiles', { selector, files }]);
+      },
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson(expression: string) {
+        calls.push(['evaluateJson', expression]);
+        return {
+          filename: 'webui-channel-files-artifact-smoke.md',
+          downloadStatus: 200,
+          downloadBody: '# WebUI channel file smoke\n',
+        };
+      },
+    };
+
+    await expect(exerciseWebUiChannelFilesBrowserSmoke({
+      page,
+      suffix: 'artifact-smoke',
+      timeoutMs: 1000,
+    })).resolves.toMatchObject({
+      filename: 'webui-channel-files-artifact-smoke.md',
+      downloadStatus: 200,
+    });
+    expect(calls[0]?.[0]).toBe('setFileInputFiles');
+    expect(calls).toContainEqual(['click', '[data-smoke="chat-message-send"]']);
+    expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
+  });
+
   test('exercises thread reply click, indicator, and nested render in the browser', async () => {
     const { exerciseThreadBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
