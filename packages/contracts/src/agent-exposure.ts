@@ -412,6 +412,23 @@ export const TASK_OFFER_INVALIDATION_REASON_CODE = {
 export type TaskOfferInvalidationReasonCode =
   (typeof TASK_OFFER_INVALIDATION_REASON_CODE)[keyof typeof TASK_OFFER_INVALIDATION_REASON_CODE];
 
+/**
+ * #712 切片 C-3：Task DAG 视图消费的 Offer 投影（AC#7 展示 Offer 状态和 Agent 响应）。
+ * 刻意只含 Task 视图需要的公开字段——不含 objective/inputs/deliverables（大字段在每节点压缩
+ * DAG 视图体积）、不含 teamId/taskRevision/manifestRevision（fence 不暴露给成员）。
+ * response 内联最新响应（null = 尚未响应）；Task 视图据此展示"Agent-1 rejected · busy"等。
+ */
+export interface TaskOfferProjectionDto {
+  readonly id: ID;
+  readonly taskId: ID;
+  readonly agentId: ID;
+  readonly status: TaskOfferStatus;
+  readonly hardSpecified: boolean;
+  readonly offerExpiresAt: UnixMs;
+  readonly response: TaskOfferResponseRecordDto | null;
+  readonly createdAt: UnixMs;
+}
+
 // ── #713 Claim relinquishment / authority revocation / manifest commitment gate ──
 //
 // 产品边界（ADR 0025 / 切片 C 交付项 #6）：Agent 明确接受 Task 形成独立履约承诺后，Manifest
