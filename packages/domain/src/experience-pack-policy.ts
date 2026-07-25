@@ -72,7 +72,7 @@ export interface EvaluateExperiencePackApprovalSuccess {
 
 export interface EvaluateExperiencePackApprovalError {
   readonly kind: 'error';
-  readonly reason: 'not_draft' | 'forbidden' | 'team_mismatch';
+  readonly reason: 'not_draft' | 'forbidden';
 }
 
 export type EvaluateExperiencePackApprovalOutput =
@@ -83,7 +83,7 @@ export type EvaluateExperiencePackApprovalOutput =
 export function evaluateExperiencePackApproval(
   input: EvaluateExperiencePackApprovalInput,
 ): EvaluateExperiencePackApprovalOutput {
-  if (input.pack.status !== 'draft') {
+  if (!VALID_TRANSITIONS[input.pack.status].includes('approved')) {
     return { kind: 'error', reason: 'not_draft' };
   }
   if (!input.canManageTeam) {
@@ -122,7 +122,7 @@ export type EvaluateExperiencePackSourceValidityOutput =
 export function evaluateExperiencePackSourceValidity(
   input: EvaluateExperiencePackSourceValidityInput,
 ): EvaluateExperiencePackSourceValidityOutput {
-  if (input.pack.status !== 'approved') {
+  if (!VALID_TRANSITIONS[input.pack.status].includes('source_invalid')) {
     return { kind: 'error', reason: 'not_approved' };
   }
   if (!input.canManageTeam) {
@@ -228,4 +228,35 @@ export function evaluateExperiencePackAttachment(
     return { kind: 'error', reason: 'forbidden' };
   }
   return { kind: 'attachable' };
+}
+
+// ── 频道解绑门控 ──────────────────────────────────────────────────────────────
+
+export interface EvaluateExperiencePackDetachmentInput {
+  readonly actorId: string;
+  /** actor 是否是 Team Owner/Admin。 */
+  readonly canManageTeam: boolean;
+}
+
+export interface EvaluateExperiencePackDetachmentSuccess {
+  readonly kind: 'detachable';
+}
+
+export interface EvaluateExperiencePackDetachmentError {
+  readonly kind: 'error';
+  readonly reason: 'forbidden';
+}
+
+export type EvaluateExperiencePackDetachmentOutput =
+  | EvaluateExperiencePackDetachmentSuccess
+  | EvaluateExperiencePackDetachmentError;
+
+/** 频道解绑门控：仅 Team Owner/Admin 可解绑。 */
+export function evaluateExperiencePackDetachment(
+  input: EvaluateExperiencePackDetachmentInput,
+): EvaluateExperiencePackDetachmentOutput {
+  if (!input.canManageTeam) {
+    return { kind: 'error', reason: 'forbidden' };
+  }
+  return { kind: 'detachable' };
 }

@@ -14,6 +14,7 @@ import type {
 import {
   evaluateExperiencePackApproval,
   evaluateExperiencePackAttachment,
+  evaluateExperiencePackDetachment,
   evaluateExperiencePackSourceValidity,
   evaluateExperiencePackWithdrawal,
   validateExperiencePackDraft,
@@ -199,23 +200,12 @@ export function createExperiencePackService(input: {
     },
 
     async listApprovedForChannel(input) {
-      // 取该频道关联的所有 attachment → 筛出 approved pack
-      const attachments = await repositories.experiencePack.attachments.listByChannel({
+      // AC#5：单次 JOIN 查询，只返回 approved 状态；draft/source_invalid/withdrawn 不出现
+      const records = await repositories.experiencePack.packs.listApprovedByChannel({
         teamId: input.teamId,
         channelId: input.channelId,
       });
-      const dtos: ExperiencePackDto[] = [];
-      for (const att of attachments) {
-        const pack = await repositories.experiencePack.packs.getById({
-          teamId: input.teamId,
-          id: att.packId,
-        });
-        // AC#5：只返回 approved 状态；draft/source_invalid/withdrawn 不出现
-        if (pack && pack.status === 'approved') {
-          dtos.push(toDto(pack));
-        }
-      }
-      return dtos;
+      return records.map(toDto);
     },
 
     async getById(input) {
@@ -272,6 +262,15 @@ export function createExperiencePackService(input: {
         channelId: input.channelId,
       });
       if (!existing) return; // 幂等
+
+      const canManage = await checkCanManageTeam(repositories, input.teamId, input.actorId);
+      const decision = evaluateExperiencePackDetachment({
+        actorId: input.actorId,
+        canManageTeam: canManage,
+      });
+      if (decision.kind === 'error') {
+        throw new Error(`EXPERIENCE_PACK_DETACH:${decision.reason}`);
+      }
 
       await repositories.experiencePack.attachments.delete({
         teamId: input.teamId,

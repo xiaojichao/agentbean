@@ -65,6 +65,8 @@ export interface ExperiencePackRepository {
   listByTeam(input: { teamId: ID; status?: ExperiencePackStatus }): Promise<ExperiencePackRecord[]>;
   /** 按来源频道列出（用于归档后建议 Pack draft）。 */
   listBySourceChannel(input: { teamId: ID; sourceChannelId: ID }): Promise<ExperiencePackRecord[]>;
+  /** 列出关联到频道的已批准 Pack（JOIN 查询避免 N+1）。 */
+  listApprovedByChannel(input: { teamId: ID; channelId: ID }): Promise<ExperiencePackRecord[]>;
   /** 状态迁移（乐观锁：expectedUpdatedAt）。 */
   updateStatus(input: {
     teamId: ID;

@@ -146,6 +146,16 @@ export function createSqliteExperiencePackRepositories(db: SqliteDatabase): Expe
           'SELECT * FROM experience_packs WHERE team_id = ? AND source_channel_id = ? ORDER BY updated_at DESC, id',
         ).all(input.teamId, input.sourceChannelId).map(mapPackRowRequired);
       },
+      async listApprovedByChannel(input) {
+        return db.prepare(
+          `SELECT ep.* FROM experience_packs ep
+           INNER JOIN channel_experience_attachments cea
+             ON cea.pack_id = ep.id AND cea.team_id = ep.team_id
+           WHERE cea.team_id = ? AND cea.channel_id = ?
+             AND ep.status = 'approved'
+           ORDER BY ep.updated_at DESC, ep.id`,
+        ).all(input.teamId, input.channelId).map(mapPackRowRequired);
+      },
       async updateStatus(input) {
         const current = mapPackRow(
           db.prepare('SELECT * FROM experience_packs WHERE team_id = ? AND id = ?')

@@ -36,6 +36,16 @@ export function createMemoryExperiencePackRepositories(): ExperiencePackReposito
           .filter((r) => r.teamId === input.teamId && r.sourceChannelId === input.sourceChannelId)
           .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1));
       },
+      async listApprovedByChannel(input) {
+        const packIds = new Set(
+          [...attachments.values()]
+            .filter((r) => r.teamId === input.teamId && r.channelId === input.channelId)
+            .map((r) => r.packId),
+        );
+        return [...packs.values()]
+          .filter((r) => r.teamId === input.teamId && r.status === 'approved' && packIds.has(r.id))
+          .sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : 1));
+      },
       async updateStatus(input) {
         const record = packs.get(input.id);
         if (!record || record.teamId !== input.teamId || record.updatedAt !== input.expectedUpdatedAt) return null;

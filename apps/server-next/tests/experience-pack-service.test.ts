@@ -407,6 +407,35 @@ describe('experience-pack-service', () => {
       expect(packs).toHaveLength(0);
     });
 
+    test('rejects detach by non-admin member', async () => {
+      const { teamId } = await setupTeam(h, 'team-1', 'admin-user');
+      await setupChannel(h, teamId, 'ch-1', true);
+      await setupChannel(h, teamId, 'ch-2', false);
+      // add a regular member
+      await h.repositories.teams.addMember({ teamId, userId: 'member-1', role: 'member', at: h.clock.now() });
+
+      const draft = await h.service.createDraft({
+        teamId,
+        actorId: 'admin-user',
+        title: 'Protected Pack',
+        sourceChannelId: 'ch-1',
+      });
+      await h.service.approve({ teamId, actorId: 'admin-user', packId: draft.id });
+      await h.service.attachToChannel({
+        teamId,
+        actorId: 'admin-user',
+        packId: draft.id,
+        channelId: 'ch-2',
+      });
+
+      await expect(h.service.detachFromChannel({
+        teamId,
+        actorId: 'member-1',
+        packId: draft.id,
+        channelId: 'ch-2',
+      })).rejects.toThrow('EXPERIENCE_PACK_DETACH');
+    });
+
     test('rejects attach of draft to channel', async () => {
       const { teamId } = await setupTeam(h);
       await setupChannel(h, teamId, 'ch-1', true);

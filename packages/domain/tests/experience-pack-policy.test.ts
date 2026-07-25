@@ -3,11 +3,13 @@ import { describe, expect, test } from 'vitest';
 import {
   evaluateExperiencePackApproval,
   evaluateExperiencePackAttachment,
+  evaluateExperiencePackDetachment,
   evaluateExperiencePackSourceValidity,
   evaluateExperiencePackWithdrawal,
   validateExperiencePackDraft,
   type EvaluateExperiencePackApprovalInput,
   type EvaluateExperiencePackAttachmentInput,
+  type EvaluateExperiencePackDetachmentInput,
   type EvaluateExperiencePackSourceValidityInput,
   type EvaluateExperiencePackWithdrawalInput,
 } from '../src/experience-pack-policy.js';
@@ -216,6 +218,30 @@ describe('evaluateExperiencePackAttachment', () => {
 
   test('rejects non-admin actor', () => {
     expect(evaluateExperiencePackAttachment(makeInput({ canManageChannel: false })))
+      .toEqual({ kind: 'error', reason: 'forbidden' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// evaluateExperiencePackDetachment（频道解绑门控）
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('evaluateExperiencePackDetachment', () => {
+  function makeInput(over: Partial<EvaluateExperiencePackDetachmentInput> = {}): EvaluateExperiencePackDetachmentInput {
+    return {
+      actorId: 'user-1',
+      canManageTeam: true,
+      ...over,
+    };
+  }
+
+  test('allows detachment by team admin', () => {
+    const result = evaluateExperiencePackDetachment(makeInput());
+    expect(result.kind).toBe('detachable');
+  });
+
+  test('rejects non-admin actor', () => {
+    expect(evaluateExperiencePackDetachment(makeInput({ canManageTeam: false })))
       .toEqual({ kind: 'error', reason: 'forbidden' });
   });
 });

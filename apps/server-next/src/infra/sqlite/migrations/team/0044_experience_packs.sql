@@ -17,7 +17,8 @@ CREATE TABLE experience_packs (
   created_by_user_id TEXT,
   source_invalid_reason TEXT,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  UNIQUE (id, team_id)
 );
 
 CREATE INDEX experience_packs_team_status_idx
@@ -36,8 +37,8 @@ CREATE TABLE experience_pack_sources (
   source_scope_ref TEXT NOT NULL CHECK (length(source_scope_ref) > 0),
   created_at INTEGER NOT NULL,
   PRIMARY KEY (pack_id, source_kind, source_id),
-  FOREIGN KEY (pack_id, team_id)
-    REFERENCES experience_packs(id, team_id) ON DELETE CASCADE
+  FOREIGN KEY (pack_id)
+    REFERENCES experience_packs(id) ON DELETE CASCADE
 );
 
 CREATE INDEX experience_pack_sources_pack_idx
@@ -51,8 +52,8 @@ CREATE TABLE channel_experience_attachments (
   team_id TEXT NOT NULL,
   attached_by_user_id TEXT NOT NULL,
   attached_at INTEGER NOT NULL,
-  FOREIGN KEY (pack_id, team_id)
-    REFERENCES experience_packs(id, team_id) ON DELETE CASCADE,
+  FOREIGN KEY (pack_id)
+    REFERENCES experience_packs(id) ON DELETE CASCADE,
   UNIQUE (pack_id, channel_id)
 );
 

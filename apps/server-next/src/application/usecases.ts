@@ -9630,6 +9630,11 @@ function experiencePackErrorAck(error: unknown): Ack<never> | undefined {
     if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to attach');
     return makeFailure('CONFLICT', reason);
   }
+  if (msg.startsWith('EXPERIENCE_PACK_DETACH:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_DETACH:'.length);
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to detach');
+    return makeFailure('CONFLICT', reason);
+  }
   switch (msg) {
     case 'EXPERIENCE_PACK_NOT_FOUND':
       return makeFailure('NOT_FOUND', 'Experience Pack not found');
