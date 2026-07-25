@@ -478,6 +478,23 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('publishForClaim 传 allocation targeted(同值)→保留 targeted 不被强转 open(#807)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createGraphHarness(fixture.repositories);
+      const published = await harness.kernel.publishForClaim({
+        authority: harness.authority, idempotencyKey: 'alloc-publish', taskId: 'task-b',
+        expectedTaskRevision: 1,
+        allocation: { claimPolicy: 'targeted', targetAgentId: 'agent-2' },
+      });
+      expect(published).toMatchObject({ status: 'todo' });
+      const coord = await fixture.repositories.taskCoordination.coordinations.getByTaskId('task-b');
+      expect(coord?.claimPolicy).toBe('targeted');
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 function rootInput(authority: Authority) {
