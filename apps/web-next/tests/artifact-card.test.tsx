@@ -28,7 +28,10 @@ describe('ArtifactCard', () => {
       />,
     );
 
-    expect(document.querySelector('img')).toBeNull();
+    // Safe raster images must still show a card thumbnail from the authenticated
+    // original preview URL when no derivative thumbnail is ready yet.
+    expect(document.querySelector('img')?.getAttribute('src'))
+      .toBe('https://example.test/artifacts/image/preview');
     const [preview] = screen.getAllByRole('button', { name: '预览图片' });
     expect(screen.getByRole('link', { name: '下载图片' }).getAttribute('href'))
       .toBe('https://example.test/artifacts/image/download');
@@ -42,10 +45,40 @@ describe('ArtifactCard', () => {
     expect(document.activeElement).toBe(preview);
   });
 
+  test('prefers a ready derivative thumbnail over the original preview URL for images', () => {
+    render(
+      <ArtifactCard
+        artifact={{
+          ...imageArtifact,
+          preview: { status: 'ready', url: '/api/teams/team-1/artifacts/artifact-image/preview-derivative' },
+        }}
+        previewUrl="https://example.test/artifacts/image/preview?token=session"
+        thumbnailUrl="https://example.test/artifacts/image/preview-derivative?token=session"
+      />,
+    );
+
+    expect(document.querySelector('img')?.getAttribute('src'))
+      .toBe('https://example.test/artifacts/image/preview-derivative?token=session');
+  });
+
+  test('never falls back to the original SVG bytes on the card surface', () => {
+    render(
+      <ArtifactCard
+        artifact={{ ...imageArtifact, filename: 'diagram.svg', mimeType: 'image/svg+xml' }}
+        previewUrl="https://example.test/artifacts/svg/preview?token=session"
+      />,
+    );
+
+    expect(document.querySelector('img')).toBeNull();
+  });
+
   test('restores focus to the preview action that actually opened the viewer', () => {
     render(<ArtifactCard artifact={imageArtifact} previewUrl="https://example.test/artifacts/image/preview" />);
 
-    const previewAction = screen.getByRole('button', { name: '预览图片' });
+    // Image surface + action chip both expose the same accessible name when a
+    // card thumbnail is present; open via the action chip and restore focus there.
+    const previewActions = screen.getAllByRole('button', { name: '预览图片' });
+    const previewAction = previewActions[previewActions.length - 1]!;
     previewAction.focus();
     fireEvent.click(previewAction);
     fireEvent.keyDown(window, { key: 'Escape' });
