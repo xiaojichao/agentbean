@@ -147,8 +147,44 @@ describe('Task Claim Broker', () => {
   });
 });
 
-describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 Offer）', () => {
-  test('从 task/coordination/criteria/manifest 派生并持久化完整 TaskOffer（过渡派生）', async () => {
+describe('Task Offer prepareOffers 持久化（#712 切片 C-2b-ii server：manifest 持久化 + legacy 兼容）', () => {
+  test('manifest-having 候选持久化完整 TaskOffer，wire offerId = 持久化 record.id', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+
+    const wireOffers = await harness.broker.prepareOffers('task-a');
+    expect(wireOffers).toHaveLength(1);
+    const persisted = await harness.repositories.taskCoordination.offers.getById(wireOffers[0]!.offerId);
+    expect(persisted).toMatchObject({
+      id: wireOffers[0]!.offerId, taskId: 'task-a', agentId: 'agent-1',
+      status: 'open', manifestRevision: 1, response: null,
+      objective: { requiredCapabilities: ['code-review'], objective: 'objective a' },
+    });
+  });
+
+  test('legacy 候选（agent.skills 但无 manifest）不持久化，仅内存 wire offer（旧 acquire 兼容）', async () => {
+    const harness = await createHarness();
+    // legacy：有 agent.skills（fallback 资格）但无 active manifest
+    await harness.repositories.agents.upsert({
+      id: 'legacy', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'legacy',
+      adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status: 'online',
+      deviceId: 'device-1',
+      skills: [{ name: 'code-review', description: 'x', scope: 'user', sourcePath: '/x', adapterKind: 'codex' }],
+    });
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['legacy'], updatedAt: 10 } });
+
+    const wireOffers = await harness.broker.prepareOffers('task-a');
+    expect(wireOffers).toHaveLength(1);
+    // 内存 wire offer 存在（旧 acquire 可用），但无持久化 record（legacy 无法用 respond fence）
+    await expect(harness.repositories.taskCoordination.offers.getById(wireOffers[0]!.offerId))
+      .resolves.toBeNull();
+  });
+});
+
+describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 Offer）', () => {  test('从 task/coordination/criteria/manifest 派生并持久化完整 TaskOffer（过渡派生）', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
     await harness.repositories.channels.update({ channelId: 'channel-1',
