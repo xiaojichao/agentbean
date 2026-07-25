@@ -1639,11 +1639,29 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
     policyChanged = true;
 
     const title = `WebUI Phase 2 DAG ${suffix}`;
+    // #724：桥接对"无 target 的 rooted 消息"只会给 managed placement（server worker pool），
+    // 而本 smoke 注册的是 device worker。@mention 一个 device 上的 agent 让桥接落到
+    // device placement（有 target → DEFAULT_PLACEMENT_POLICY），与 main 上的原语义一致。
+    const agentName = `WebUIPhase2${suffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      env: { AGENTBEAN_WEBUI_PHASE2_SMOKE: '1' },
+    }, timeoutMs);
+    const phase2AgentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!phase2AgentId) {
+      throw new Error(`Phase 2 browser smoke could not create a device agent: ${formatAck(agentAck)}`);
+    }
+
+    const body = `@${agentName} ${title}`;
     const sent = await emitAck(webSocket, WEB_EVENTS.message.send, {
       userId: session.user.id,
       teamId: session.team.id,
       channelId: session.channel.id,
-      body: title,
+      body,
       asTask: true,
       clientMessageId: `webui-phase2-task-dag-business-flow-${suffix}`,
     }, timeoutMs);
@@ -1652,7 +1670,8 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
     }
 
     return {
-      title,
+      // task.title 取自完整消息 body（含 @mention 前缀），UI 精确匹配须用同一值。
+      title: body,
       async close() {
         await restorePolicy();
         daemon.socket.disconnect?.();
