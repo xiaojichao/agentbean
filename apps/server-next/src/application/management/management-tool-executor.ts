@@ -259,8 +259,10 @@ export function createPhase2ManagementToolHandlers(input: {
   readonly eligibilityService?: (parentTaskId: string, subtasks: readonly {
     clientKey: string; requiredCapabilities: readonly string[]; requiredSkills?: readonly string[];
   }[]) => Promise<ExecutableSubtaskCoverageResult>;
+  /** #807 allocation 服务:可选,解析任务 published 时的 claimPolicy/targetAgentId。 */
+  readonly allocationService?: (taskId: string) => Promise<{ claimPolicy: 'targeted' | 'open'; targetAgentId?: string } | null>;
 }): Phase2ToolHandlers {
-  const { kernel, eligibilityService } = input;
+  const { kernel, eligibilityService, allocationService } = input;
   return {
     'tasks.create_subtasks': async (request) => {
       const drafts = request.input.subtasks.map((draft) => ({
@@ -288,9 +290,13 @@ export function createPhase2ManagementToolHandlers(input: {
         taskGraphRevision: added.taskGraphRevision };
     },
     'tasks.publish_for_claim': async (request) => {
+      const allocation = allocationService
+        ? await allocationService(request.input.taskId).catch(() => null)
+        : null;
       const published = await kernel.publishForClaim({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         ...request.input,
+        ...(allocation ? { allocation } : {}),
       });
       await input.onTaskPublished?.(published.taskId);
       return { taskId: published.taskId, taskRevision: published.taskRevision, status: 'todo' };

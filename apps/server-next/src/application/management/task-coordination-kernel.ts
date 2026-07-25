@@ -397,6 +397,8 @@ export function createTaskCoordinationKernel(
 
     async publishForClaim(input: TaskCoordinationCommandInput & {
       taskId: string; expectedTaskRevision: number;
+      /** #807 allocation:executor handler 传的 claimPolicy/targetAgentId 覆写(可选,默认强转 open 向后兼容)。 */
+      readonly allocation?: { readonly claimPolicy: 'targeted' | 'open'; readonly targetAgentId?: string };
     }) {
       return unitOfWork.run(async (repositories) => {
         const now = clock.now();
@@ -423,10 +425,17 @@ export function createTaskCoordinationKernel(
         let currentCoordination = coordination;
         let baseKey = input.idempotencyKey;
         let taskGraphRevision = 0;
-        if (coordination.claimPolicy !== 'open' || task.assigneeId !== undefined) {
+        // #807 allocation:如果 executor handler 传了 allocation,且 claimPolicy 与当前不同,覆写;
+        // 否则(不传或同值→覆盖)保留历史强转 open 行为(向后兼容).
+        const allocatedPolicy = input.allocation?.claimPolicy;
+        const needsRevision = allocatedPolicy
+          ? allocatedPolicy !== coordination.claimPolicy
+          : (coordination.claimPolicy !== 'open' || task.assigneeId !== undefined);
+        if (needsRevision) {
+          const claimPolicy = allocatedPolicy ?? 'open';
           const revised = await reviseInTransaction(repositories, run, task, coordination, {
             objective: objectiveOf(task), acceptanceCriteria: currentCriteria, dependencyTaskIds,
-            claimPolicy: 'open', requiredCapabilities: coordination.requiredCapabilities,
+            claimPolicy, requiredCapabilities: coordination.requiredCapabilities,
             maxAttempts: coordination.maxAttempts,
           }, now);
           const revisionEvent = await appendRevisionEvent(repositories, run.id,
