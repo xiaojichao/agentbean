@@ -41,7 +41,7 @@ const WEB_EVENTS = {
     list: 'members:list',
   },
   message: { send: 'message:send' },
-  managementPolicy: { get: 'management-policy:get', update: 'management-policy:update' },
+  piPolicy: { get: 'pi-policy:get', update: 'pi-policy:update' },
   team: {
     create: 'team:create',
     switch: 'team:switch',
@@ -1590,15 +1590,13 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
     timeoutMs,
   });
   let policyChanged = false;
-  let originalPolicy;
+  let originalAutoCoordination;
   const restorePolicy = async () => {
-    if (!policyChanged || !originalPolicy) return;
-    await emitAck(webSocket, WEB_EVENTS.managementPolicy.update, {
+    if (!policyChanged || originalAutoCoordination === undefined) return;
+    await emitAck(webSocket, WEB_EVENTS.piPolicy.update, {
       userId: session.user.id,
       teamId: session.team.id,
-      mode: originalPolicy.mode,
-      maxManagementPhase: originalPolicy.maxManagementPhase,
-      placementPolicy: originalPolicy.placementPolicy,
+      autoCoordinationEnabled: originalAutoCoordination,
     }, timeoutMs).catch(() => undefined);
     policyChanged = false;
   };
@@ -1612,7 +1610,7 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
       profileId: 'browser-smoke',
       runtimeVersion: '0.1.0',
       supportedProtocolVersions: [1, 2],
-      supportedPhases: [1, 2],
+      supportedPhases: [1, 2, 3],
       credentialStatus: 'production_ready',
       providerId: 'browser-smoke',
       modelId: 'browser-smoke',
@@ -1622,29 +1620,21 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
       throw new Error(`Phase 2 browser smoke could not register a V2 worker: ${formatAck(workerAck)}`);
     }
 
-    const currentPolicy = await emitAck(webSocket, WEB_EVENTS.managementPolicy.get, {
+    const currentPolicy = await emitAck(webSocket, WEB_EVENTS.piPolicy.get, {
       userId: session.user.id,
       teamId: session.team.id,
     }, timeoutMs);
-    if (currentPolicy?.ok !== true || !currentPolicy.policy) {
-      throw new Error(`Phase 2 browser smoke could not read the current policy: ${formatAck(currentPolicy)}`);
+    if (currentPolicy?.ok !== true) {
+      throw new Error(`Phase 2 browser smoke could not read the current piPolicy: ${formatAck(currentPolicy)}`);
     }
-    originalPolicy = currentPolicy.policy;
-    const placementPolicy = {
-      placement: 'device',
-      allowedDeviceIds: [daemon.deviceId],
-      allowServerContext: false,
-      requireLocalModelCredentials: true,
-    };
-    const policyAck = await emitAck(webSocket, WEB_EVENTS.managementPolicy.update, {
+    originalAutoCoordination = currentPolicy.autoCoordinationEnabled;
+    const policyAck = await emitAck(webSocket, WEB_EVENTS.piPolicy.update, {
       userId: session.user.id,
       teamId: session.team.id,
-      mode: 'managed',
-      maxManagementPhase: 2,
-      placementPolicy,
+      autoCoordinationEnabled: true,
     }, timeoutMs);
     if (policyAck?.ok !== true) {
-      throw new Error(`Phase 2 browser smoke could not enable managed policy: ${formatAck(policyAck)}`);
+      throw new Error(`Phase 2 browser smoke could not enable pi auto-coordination: ${formatAck(policyAck)}`);
     }
     policyChanged = true;
 
@@ -1657,7 +1647,7 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
       asTask: true,
       clientMessageId: `webui-phase2-task-dag-business-flow-${suffix}`,
     }, timeoutMs);
-    if (sent?.ok !== true || typeof sent.task?.id !== 'string' || sent.management?.managementPhase !== 2) {
+    if (sent?.ok !== true || typeof sent.task?.id !== 'string' || sent.management?.kind !== 'managed') {
       throw new Error(`Phase 2 browser smoke did not create a managed root task: ${formatAck(sent)}`);
     }
 
