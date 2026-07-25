@@ -456,6 +456,28 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('拆解 gate:传真实 allocatability(unallocatable)→TASK_NEEDS_USER_ADJUSTMENT(#805)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await expect(harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'gate-s1',
+        parentTaskId: 'root-task',
+        allocatability: { kind: 'unallocatable_subtasks_present',
+          unallocatableSubtasks: [{ subtaskKey: 'a', cause: 'no_qualified_candidate' }] },
+        subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [],
+            requiredSkills: ['research'],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+        ] })).rejects.toMatchObject<Partial<ManagementConflictError>>({
+          code: 'TASK_NEEDS_USER_ADJUSTMENT',
+          detail: expect.objectContaining({ unallocatableSubtasks: [{ subtaskKey: 'a', cause: 'no_qualified_candidate' }] }),
+        });
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 function rootInput(authority: Authority) {

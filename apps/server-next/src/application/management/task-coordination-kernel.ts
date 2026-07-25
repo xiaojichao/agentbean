@@ -12,6 +12,7 @@ import {
   evaluateTaskDag,
   evaluateTaskDecomposability,
   evaluateTaskRevisionChange,
+  type ExecutableSubtaskCoverageResult,
 } from '../../../../../packages/domain/src/index.js';
 import type { TaskRecord } from '../repositories.js';
 import type { ManagementEventRecord } from '../management-repositories.js';
@@ -74,6 +75,8 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
    * 未提供视为 decomposable；atomic 的工作由拆解 gate 拒绝（TASK_NOT_DECOMPOSABLE，ADR 0021）。
    */
   readonly atomicityHint?: 'atomic' | 'decomposable';
+  /** AC#2 allocatability 真实结果（可选,未提供时 stub fully_allocatable）。由外部 eligibility 服务传入。#805 */
+  readonly allocatability?: ExecutableSubtaskCoverageResult;
   readonly subtasks: readonly {
     readonly taskId: string;
     readonly clientKey: string;
@@ -236,12 +239,12 @@ export function createTaskCoordinationKernel(
         const subtaskRequiredSkills = input.subtasks.map((draft) =>
           draft.requiredSkills && draft.requiredSkills.length > 0 ? draft.requiredSkills : draft.requiredCapabilities);
         const coverage = evaluateSkillCoverageUnion({ rootRequiredSkills, subtaskRequiredSkills });
-        // allocatability 用 fully_allocatable stub（本切片不接 eligibility；后续切片接
-        // evaluateExecutableSubtaskCoverage 后把 stub 换成真实结果，gate 签名不变）。
+        // allocatability 使用外部 eligibility 服务结果（#805）；未提供时 stub fully_allocatable（#798 向后兼容）。
+        const allocatability = input.allocatability ?? { kind: 'fully_allocatable' as const };
         const decomposability = evaluateTaskDecomposability({
           atomicityHint: input.atomicityHint ?? 'decomposable',
           coverage,
-          allocatability: { kind: 'fully_allocatable' },
+          allocatability,
         });
         if (decomposability.kind === 'not_decomposable') conflict('TASK_NOT_DECOMPOSABLE');
         if (decomposability.kind === 'needs_user_adjustment') {
