@@ -447,23 +447,16 @@ async function createPhase4Harness(tuning: { queueTimeoutMs?: number; leaseTtlMs
       return createFakeServerWorker(socket);
     },
     async optIntoManagedPlacement(socket, teamId, userId) {
-      const ack = await socket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
-        userId, teamId, mode: 'managed', maxManagementPhase: 2,
-        placementPolicy: {
-          placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false,
-        },
+      const ack = await socket.emitWithAck(WEB_EVENTS.piPolicy.update, {
+        userId, teamId, autoCoordinationEnabled: true,
       }) as { ok: boolean };
-      if (!ack.ok) throw new Error(`managementPolicy.update failed: ${JSON.stringify(ack)}`);
+      if (!ack.ok) throw new Error(`piPolicy.update failed: ${JSON.stringify(ack)}`);
     },
     async optIntoAutoPlacement(socket, teamId, userId, allowedDeviceIds) {
-      const ack = await socket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
-        userId, teamId, mode: 'managed', maxManagementPhase: 2,
-        placementPolicy: {
-          placement: 'auto', allowedDeviceIds,
-          allowServerContext: true, requireLocalModelCredentials: true,
-        },
+      const ack = await socket.emitWithAck(WEB_EVENTS.piPolicy.update, {
+        userId, teamId, autoCoordinationEnabled: true,
       }) as { ok: boolean };
-      if (!ack.ok) throw new Error(`managementPolicy.update(auto) failed: ${JSON.stringify(ack)}`);
+      if (!ack.ok) throw new Error(`piPolicy.update(auto) failed: ${JSON.stringify(ack)}`);
     },
     async sendRootedMessage(socket, { userId, teamId, channelId, key }) {
       // body 以 @未知名开头,使 routeMessage 落到 unknown-mention(no-dispatch):

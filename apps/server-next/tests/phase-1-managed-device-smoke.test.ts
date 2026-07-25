@@ -158,18 +158,12 @@ describe('Phase 1 managed 真实 Device smoke', () => {
       await withTimeout(deviceService.stop(), 2_000, 'DEVICE_SERVICE_STOP_TIMEOUT').catch(() => undefined);
     });
 
-    const updatedPolicy = await withTimeout(webSocket.emitWithAck(WEB_EVENTS.managementPolicy.update, {
+    const updatedPolicy = await withTimeout(webSocket.emitWithAck(WEB_EVENTS.piPolicy.update, {
       userId,
       teamId,
-      mode: 'managed',
-      placementPolicy: {
-        placement: 'device',
-        allowedDeviceIds: [deviceId],
-        allowServerContext: false,
-        requireLocalModelCredentials: true,
-      },
-    }), 3_000, 'MANAGEMENT_POLICY_UPDATE_TIMEOUT');
-    expect(updatedPolicy).toMatchObject({ ok: true, policy: { mode: 'managed' } });
+      autoCoordinationEnabled: true,
+    }), 3_000, 'PI_POLICY_UPDATE_TIMEOUT');
+    expect(updatedPolicy).toMatchObject({ ok: true, autoCoordinationEnabled: true });
     const channelMessages: Array<{ senderKind: string; senderId: string; body: string }> = [];
     web.onChannelMessage((message) => channelMessages.push(message));
     await web.subscribeChannels({ userId, teamId }, () => undefined);

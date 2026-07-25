@@ -53,11 +53,12 @@ describe('Phase 1 management routing', () => {
     })).resolves.toMatchObject({ ok: true, policy: { mode: 'direct' } });
   });
 
-  test('defaults to direct without management side effects', async () => {
+  test('defaults to managed via piPolicy bridge for new teams (#724)', async () => {
     const harness = await createHarness();
+    // #724: 新 Team 默认 autoCoordinationEnabled=true，桥接到 managed 路由
     const result = await harness.router.route(request());
-    expect(result).toEqual({ kind: 'direct', mode: 'direct' });
-    expect(await harness.repositories.management.reservations.getByRequestKey({ teamId: 'team-1', requestKey: 'team-1:user-1:client-1' })).toBeNull();
+    expect(result).toMatchObject({ kind: 'managed', managementPhase: 1 });
+    expect(await harness.repositories.management.reservations.getByRequestKey({ teamId: 'team-1', requestKey: 'team-1:user-1:client-1' })).not.toBeNull();
   });
 
   test('shadow keeps direct routing and uses an isolated request namespace', async () => {
