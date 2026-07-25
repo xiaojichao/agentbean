@@ -452,11 +452,28 @@ async function createPhase4Harness(tuning: { queueTimeoutMs?: number; leaseTtlMs
       }) as { ok: boolean };
       if (!ack.ok) throw new Error(`piPolicy.update failed: ${JSON.stringify(ack)}`);
     },
-    async optIntoAutoPlacement(socket, teamId, userId, allowedDeviceIds) {
-      const ack = await socket.emitWithAck(WEB_EVENTS.piPolicy.update, {
-        userId, teamId, autoCoordinationEnabled: true,
-      }) as { ok: boolean };
-      if (!ack.ok) throw new Error(`piPolicy.update(auto) failed: ${JSON.stringify(ack)}`);
+    async optIntoAutoPlacement(_socket, teamId, _userId, allowedDeviceIds) {
+      // #724: managementPolicy.update socket 事件已移除，auto placement 不再经 socket 配置；
+      // 该策略仅剩系统管理员内部入口（AC#5），这里直写 team_management_policies 模拟之。
+      // 消息流仍走 socket 端到端，保持 auto probe → 冻结 → 审计的断言不变。
+      const db = openTeamDatabase(dataDir);
+      try {
+        db.prepare(`INSERT INTO team_management_policies
+          (team_id, mode, max_management_phase, placement_policy_json, budget_overrides_json, updated_by, updated_at)
+          VALUES (?, 'managed', 2, ?, NULL, '_system', ?)
+          ON CONFLICT(team_id) DO UPDATE SET mode=excluded.mode,
+            max_management_phase=excluded.max_management_phase,
+            placement_policy_json=excluded.placement_policy_json,
+            updated_by=excluded.updated_by, updated_at=excluded.updated_at`)
+          .run(teamId, JSON.stringify({
+            placement: 'auto',
+            allowedDeviceIds,
+            allowServerContext: true,
+            requireLocalModelCredentials: true,
+          }), Date.now());
+      } finally {
+        db.close();
+      }
     },
     async sendRootedMessage(socket, { userId, teamId, channelId, key }) {
       // body 以 @未知名开头,使 routeMessage 落到 unknown-mention(no-dispatch):
