@@ -1,6 +1,6 @@
 'use client';
 
-import type { TaskDagNodeViewDto, TaskDagResultRefDto, TaskDagViewDto } from '@agentbean/contracts';
+import type { TaskDagNodeViewDto, TaskDagResultRefDto, TaskDagViewDto, TaskOfferStatus } from '@agentbean/contracts';
 import { CheckCircle2, CircleDashed, GitBranch, UserRound } from 'lucide-react';
 import { formatTaskDagUsage, orderedTaskDagNodes } from '@/lib/task-dag';
 
@@ -10,6 +10,29 @@ const STATUS_LABELS: Record<TaskDagNodeViewDto['task']['status'], string> = {
   in_review: '待审核',
   done: '已完成',
   closed: '已关闭',
+};
+
+// #712 切片 C-3：Offer 状态中文标签 + 配色（AC#7 Task 视图渲染）
+const OFFER_STATUS_LABEL: Record<TaskOfferStatus, string> = {
+  open: '待响应',
+  accepted: '已接受',
+  rejected: '已拒绝',
+  needs_info: '需补充',
+  counter_proposed: '已协商',
+  expired: '已过期',
+  invalidated: '已失效',
+  overtaken: '已抢占',
+};
+
+const OFFER_STATUS_CLASS: Record<TaskOfferStatus, string> = {
+  open: 'bg-neutral-100 text-neutral-600',
+  accepted: 'bg-emerald-100 text-emerald-700',
+  rejected: 'bg-rose-100 text-rose-700',
+  needs_info: 'bg-sky-100 text-sky-700',
+  counter_proposed: 'bg-amber-100 text-amber-700',
+  expired: 'bg-gray-100 text-gray-500',
+  invalidated: 'bg-gray-100 text-gray-500',
+  overtaken: 'bg-gray-100 text-gray-500',
 };
 
 export function TaskDagPanel({ dag, teamPath }: { dag: TaskDagViewDto; teamPath: string }) {
@@ -89,6 +112,23 @@ function TaskDagNode({ node, teamPath }: { node: TaskDagNodeViewDto; teamPath: s
         <div className="mt-2 flex items-center gap-1 text-[10px] text-neutral-600">
           <UserRound size={11} />
           {node.claim?.agentId ?? node.task.assigneeId} · {node.claim?.status ?? 'assigned'}
+        </div>
+      )}
+      {/* #712 切片 C-3：Offer 状态与 Agent 响应（AC#7 Task 视图） */}
+      {(node.offers?.length ?? 0) > 0 && (
+        <div className="mt-2 space-y-1">
+          {node.offers!.map((offer) => (
+            <div key={offer.id} className="flex items-center gap-1.5 text-[10px]">
+              {offer.hardSpecified && <span className="rounded bg-amber-100 px-1 text-amber-700" title="显式点名">@</span>}
+              <span className="font-medium text-neutral-600">{offer.agentId}</span>
+              <span className={`rounded px-1 font-medium ${OFFER_STATUS_CLASS[offer.status]}`}>{OFFER_STATUS_LABEL[offer.status]}</span>
+              {offer.response && (
+                <span className="text-neutral-400 truncate">
+                  {offer.response.kind !== 'accepted' && offer.response.detail ? `· ${offer.response.detail}` : ''}
+                </span>
+              )}
+            </div>
+          ))}
         </div>
       )}
       {node.canonicalAcceptance && (

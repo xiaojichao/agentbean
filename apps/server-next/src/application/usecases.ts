@@ -3820,6 +3820,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             { kind: 'invocation' as const, id: latestDelivery.invocationId },
             ...evidenceSnapshots.map((snapshot) => ({ kind: snapshot.kind, id: snapshot.sourceId })),
           ] : [],
+          // #712 切片 C-3：该 task 的 PI Offer 及 Agent 响应（AC#7 Task 视图）
+          offers: (await repositories.taskCoordination.offers.listByTask(task.id)).map((offer) => ({
+            id: offer.id,
+            taskId: offer.taskId,
+            agentId: offer.agentId,
+            status: offer.status,
+            hardSpecified: offer.hardSpecified,
+            offerExpiresAt: offer.offerExpiresAt,
+            response: offer.response,
+            createdAt: offer.createdAt,
+          })),
         };
       }));
       // #709 root task 的不可变 revision 历史（旧→新），供 Task 视图展示变更原因（AC7）。

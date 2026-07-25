@@ -2,6 +2,7 @@ import type { ID, UnixMs } from './common.js';
 import type { TaskDto } from './task.js';
 import type { AgentHandoffTraceDto } from './collaboration.js';
 import type { ManagementBudgetDto } from './management.js';
+import type { TaskOfferProjectionDto } from './agent-exposure.js';
 
 export type EvidenceKind = 'message' | 'artifact' | 'workspace-run' | 'invocation' | 'task';
 
@@ -111,6 +112,8 @@ export interface TaskDagNodeViewDto {
     readonly decidedAt: UnixMs;
   };
   readonly resultRefs: readonly TaskDagResultRefDto[];
+  /** #712 切片 C-3：该 task 上 PI 发布的 Offer 及 Agent 响应（AC#7 展示）。为空 = 未发 Offer。 */
+  readonly offers?: readonly TaskOfferProjectionDto[];
 }
 
 export interface TaskDagViewDto {
