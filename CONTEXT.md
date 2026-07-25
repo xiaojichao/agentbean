@@ -463,3 +463,53 @@ _Avoid_: second runtime、server shell、remote Device。
 
 Server Worker 满载时，ManagedRun 最多等待 5 分钟；期间无可用 Worker 则失败并明确告知用户，不无限排队。
 _Avoid_: infinite queue、silent drop。
+
+## Project document bundle
+
+一次 Agent 运行或项目阶段交付中形成的一组固定 Markdown 文档，用户可以整体引用、展开后多选引用，也可以引用其中单个文档；首版不把图片、PDF 或其他非 Markdown 文件纳入可编辑文档包语义。
+_Avoid_: 普通附件列表、文件夹、一次消息里的所有文件、混合媒体包、用户长期维护的文件夹。
+
+## Project document output batch
+
+一次 Agent 修改或阶段交付中新产生的 Markdown 文档集合；新增文档进入新的输出批次或作为独立文档，不改变早先文档包的固定成员关系。
+_Avoid_: 回填原文档包、动态扩展历史整包、把新增文件伪装成旧包成员。
+
+## Project document selection
+
+用户在项目文档包或文件库中明确选中的文档引用集合；它可以是整包、包内多选或单个文档，但发送给 Agent 时必须落到稳定文档或修订引用。
+_Avoid_: “刚才那堆文档”、消息内自然语言指代、修改文档包成员。
+
+## Project document revision
+
+项目 Markdown 文档的一次可追溯内容版本，既可以来自 Agent 产出，也可以来自用户在预览编辑器中的人工修改；Agent 修改和人工修改都会直接成为该文档的当前 Server 修订，后续 Agent 交互必须以它为基准。
+_Avoid_: 覆盖原文件、候选修订默认门禁、临时草稿、只存在于浏览器的编辑内容、本地来源文件作为协作权威。
+
+## Project document revision conflict
+
+用户保存 Markdown 预览编辑时，如果基准修订已经被其他用户或 Agent 更新，保存必须失败并要求基于当前最新修订合并，不能静默覆盖。
+_Avoid_: last-write-wins、隐藏覆盖、用旧预览覆盖最新内容。
+
+## Project document baseline
+
+一次发送给 Agent 或交给后续阶段使用的项目文档基准，由被引用文档的当前 Server 修订组成；整包引用不强制确认，但必须让用户能看到每个文档当前修订的来源和时间。
+_Avoid_: 原始工作目录文件、浏览器草稿、旧消息附件。
+
+## Project document input set
+
+系统把整包或多选文档交给 Agent 时，由当前 Server 修订物化出的一组受控临时 Markdown 输入文件和 manifest；Agent 不应只从 prompt 里的整包正文理解文档关系。
+_Avoid_: prompt-only 文档包、拼接整包正文、无 manifest 的临时目录。
+
+## Project document manifest identity
+
+文档输入和输出回收时使用的稳定身份，至少包含文档 ID、基准修订 ID 和临时输入路径；文件名和相对路径只能辅助展示，不能决定文档身份。
+_Avoid_: 按文件名匹配、按目录推断业务角色、路径即身份。
+
+## Project document modification output
+
+Agent 基于整包或多选文档修改时，只为实际改动的 Markdown 文档产生新的当前 Server 修订；未改动文档继续保持原当前修订。
+_Avoid_: 整包重写、未改动文档产生空修订、用重新输出替代变更记录。
+
+## Local document sync
+
+把 Server 上的项目文档当前修订显式写回用户设备上的某个受控本地位置；首版不自动执行，只能作为未来的用户显式动作或导出能力。
+_Avoid_: 默认回写原文件、保存即同步、把本地文件作为最新协作内容。
