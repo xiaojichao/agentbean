@@ -18,6 +18,28 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-25] - 2026-07-25
+### Changed
+- 补充 Markdown 文档包设计
+- 收缩旧 PI 设置并切换新协调路径（close #724）
+- 实现 #723 目标频道确认并关联 Experience Pack — 三态 Attachment 生命周期
+- 实现 Reusable Experience Pack（close #722）
+- 实现 #811 prepareOffers fan-out：targeted 时仅向 targetAgent 发 1 个 offer（PI server 接线 4）
+- 实现 Offer 状态与 Agent 响应 Web 投影（#712 切片 C-3，AC#7 Task 视图）
+- 【PI MVP 21】Channel Archive Gate 事务性收尾（close #721）
+- 实现 #807 allocation 接线：decideOfferAllocationPolicy 接 publishForClaim（PI server 接线 3）
+- 实现 #805 eligibility 服务：allocatability stub→真实 evaluateExecutableSubtaskCoverage（PI server 接线 2）
+- 实现 PDF 首页缩略图 processor adapter（#800）
+- 实现 daemon Task Offer 显式响应切换（#712 切片 C-2b-ii，AC#7 daemon 侧）
+- 实现 #798 拆解 gate：子 Task skills 联合覆盖根 + 可拆分性校验（PI server 接线 1）
+- 实现视频卡片时长显示（#799）
+- 实现最小 Active Memory Context 与来源解释（#720 PI MVP 切片 D）
+- 记录 2026-07-24 每日更新日志
+### Fixed
+- browser smoke 归档频道等待 preflight 完成后再点击确认按钮
+### Security
+- 修复文件缩略图鉴权与安全图片回退（#770 回归）
+
 ## [Daily 2026-07-24] - 2026-07-24
 ### Added
 - 补齐 #781 频道文件库灰度验收与生产保护
