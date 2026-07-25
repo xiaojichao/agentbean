@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile, stat } from 'node:fs/promises';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -231,6 +231,30 @@ describe('command artifact preview processor（#800 PDF 首页缩略图）', () 
     // 不进入重试：再次 runOnce 不再认领该 job
     expect(await service.runOnce()).toBe(false);
     expect(await stat(source)).toBeTruthy();
+  });
+
+  test('treats an unexecutable pdf adapter (EACCES) the same as a missing one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agentbean-preview-'));
+    const source = join(root, 'doc.pdf');
+    await writeFile(source, 'pdf');
+    const notExecutable = await makeStubCommand(root, 'pdftoppm-no-exec', '#!/bin/sh\nexit 0\n');
+    await chmod(notExecutable, 0o644);
+    const repository = new InMemoryArtifactPreviewRepository();
+    const service = createArtifactPreviewService({
+      outputDir: join(root, 'derivatives'),
+      repository,
+      processor: new CommandArtifactPreviewProcessor(
+        await makeStubCommand(root, 'ffmpeg-ok', '#!/bin/sh\nout=""\nfor a in "$@"; do out="$a"; done\necho webp > "$out"\n'),
+        5_000,
+        notExecutable,
+      ),
+    });
+    await service.enqueue({ artifactId: 'p4', teamId: 't1', inputPath: source, mimeType: 'application/pdf' });
+    await service.runOnce();
+    const job = await repository.get('p4');
+    expect(job?.status).toBe('unsupported');
+    expect(job?.errorCode).toBe('PREVIEW_PDF_ADAPTER_MISSING');
+    expect(job?.attempts).toBe(1);
   });
 
   test('treats a malformed PDF as a bounded processing failure, not as unsupported', async () => {

@@ -141,21 +141,20 @@ export class CommandArtifactPreviewProcessor implements ArtifactPreviewProcessor
         input.inputPath, pagePrefix,
       ], this.timeoutMs);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
-        // adapter 缺失是部署事实而非输入问题：标为 unsupported（明确错误码、不重试），
-        // 卡片按既有语义降级，原文件预览/下载不受影响。
+      const spawnCode = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (spawnCode === 'ENOENT' || spawnCode === 'EACCES') {
+        // adapter 缺失或不可执行是部署事实而非输入问题：标为 unsupported
+        // （明确错误码、不重试），卡片按既有语义降级，原文件预览/下载不受影响。
         throw new UnsupportedPreviewError('application/pdf', 'PREVIEW_PDF_ADAPTER_MISSING');
       }
       throw error;
     }
     try {
-      await runCommand(this.command, [
-        '-nostdin', '-hide_banner', '-loglevel', 'error', '-threads', '1',
-        '-max_alloc', '134217728', '-max_pixels', '40000000',
-        '-y', '-i', pagePng,
-        '-frames:v', '1', '-vf', 'scale=800:800:force_original_aspect_ratio=decrease',
-        '-f', 'webp', input.outputPath,
-      ], this.timeoutMs);
+      // 页图→WebP 与图片走同一条受限管线，参数集中维护在 processorArgs
+      await runCommand(this.command, processorArgs(
+        { inputPath: pagePng, outputPath: input.outputPath },
+        'image/png',
+      ), this.timeoutMs);
     } finally {
       await unlink(pagePng).catch(() => undefined);
     }
