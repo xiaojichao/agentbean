@@ -55,12 +55,13 @@ import type {
 
 import type {
   ApproveExperiencePackInput,
-  AttachExperiencePackToChannelInput,
   ChannelExperienceAttachmentDto,
+  ConfirmExperiencePackAttachmentInput,
   CreateExperiencePackDraftInput,
-  DetachExperiencePackFromChannelInput,
   ExperiencePackDto,
   MarkExperiencePackSourceInvalidInput,
+  RecommendExperiencePackToChannelInput,
+  RevokeExperiencePackAttachmentInput,
   WithdrawExperiencePackInput,
 } from '../../../../packages/contracts/src/index.js';
 
@@ -298,15 +299,16 @@ export interface ServerNextUseCases {
   reviseUserMemory(input: { userId: string; memoryId: string; content: string; summary?: string; changeReason: string; validUntil?: number }): Promise<Ack<{ memory: UserMemoryDto }>>;
   deactivateUserMemory(input: { userId: string; memoryId: string; changeReason: string }): Promise<Ack<{ memory: UserMemoryDto }>>;
   deleteUserMemory(input: { userId: string; memoryId: string; changeReason?: string }): Promise<Ack<{ deleted: true }>>;
-  // #722 Experience Pack
+  // #722+#723 Experience Pack
   createExperiencePackDraft(input: CreateExperiencePackDraftInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
   approveExperiencePack(input: ApproveExperiencePackInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
   withdrawExperiencePack(input: WithdrawExperiencePackInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
   markExperiencePackSourceInvalid(input: MarkExperiencePackSourceInvalidInput): Promise<Ack<{ pack: ExperiencePackDto }>>;
   listExperiencePacks(input: { teamId: ID; userId: ID; status?: string }): Promise<Ack<{ packs: readonly ExperiencePackDto[] }>>;
   getExperiencePack(input: { teamId: ID; userId: ID; packId: ID }): Promise<Ack<{ pack: ExperiencePackDto }>>;
-  attachExperiencePackToChannel(input: AttachExperiencePackToChannelInput): Promise<Ack<{ attachment: ChannelExperienceAttachmentDto }>>;
-  detachExperiencePackFromChannel(input: DetachExperiencePackFromChannelInput): Promise<Ack<{ detached: true }>>;
+  recommendExperiencePackToChannel(input: RecommendExperiencePackToChannelInput): Promise<Ack<{ attachment: ChannelExperienceAttachmentDto }>>;
+  confirmExperiencePackAttachment(input: ConfirmExperiencePackAttachmentInput): Promise<Ack<{ attachment: ChannelExperienceAttachmentDto }>>;
+  revokeExperiencePackAttachment(input: RevokeExperiencePackAttachmentInput): Promise<Ack<{ attachment: ChannelExperienceAttachmentDto }>>;
 
   deleteTeam(input: DeleteTeamInput): Promise<Ack<{ fallbackTeam: { id: string; name: string; path: string } | null }>>;
 }
@@ -5960,19 +5962,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     },
 
-    async attachExperiencePackToChannel(input) {
+    async recommendExperiencePackToChannel(input) {
       try {
-        const attachment = await experiencePack.attachToChannel(input);
+        const attachment = await experiencePack.recommendToChannel(input);
         return makeSuccess({ attachment });
       } catch (error) {
         return experiencePackErrorAck(error) ?? rethrow(error);
       }
     },
 
-    async detachExperiencePackFromChannel(input) {
+    async confirmExperiencePackAttachment(input) {
       try {
-        await experiencePack.detachFromChannel(input);
-        return makeSuccess({ detached: true });
+        const attachment = await experiencePack.confirmAttachment(input);
+        return makeSuccess({ attachment });
+      } catch (error) {
+        return experiencePackErrorAck(error) ?? rethrow(error);
+      }
+    },
+
+    async revokeExperiencePackAttachment(input) {
+      try {
+        const attachment = await experiencePack.revokeAttachment(input);
+        return makeSuccess({ attachment });
       } catch (error) {
         return experiencePackErrorAck(error) ?? rethrow(error);
       }
@@ -9622,22 +9633,31 @@ function experiencePackErrorAck(error: unknown): Ack<never> | undefined {
     if (reason === 'reason_empty') return makeFailure('VALIDATION_ERROR', 'Reason is required');
     return makeFailure('CONFLICT', reason);
   }
-  if (msg.startsWith('EXPERIENCE_PACK_ATTACH:')) {
-    const reason = msg.slice('EXPERIENCE_PACK_ATTACH:'.length);
-    if (reason === 'pack_not_approved') return makeFailure('CONFLICT', 'Only approved packs can be attached');
-    if (reason === 'channel_archived') return makeFailure('CONFLICT', 'Cannot attach to archived channel');
+  if (msg.startsWith('EXPERIENCE_PACK_RECOMMEND:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_RECOMMEND:'.length);
+    if (reason === 'pack_not_approved') return makeFailure('CONFLICT', 'Only approved packs can be recommended');
+    if (reason === 'channel_archived') return makeFailure('CONFLICT', 'Cannot recommend to archived channel');
     if (reason === 'cross_team') return makeFailure('FORBIDDEN', 'Pack and channel must be in same team');
-    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to attach');
     return makeFailure('CONFLICT', reason);
   }
-  if (msg.startsWith('EXPERIENCE_PACK_DETACH:')) {
-    const reason = msg.slice('EXPERIENCE_PACK_DETACH:'.length);
-    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to detach');
+  if (msg.startsWith('EXPERIENCE_PACK_CONFIRM:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_CONFIRM:'.length);
+    if (reason === 'not_pending') return makeFailure('CONFLICT', 'Attachment is not in pending state');
+    if (reason === 'not_channel_member') return makeFailure('FORBIDDEN', 'Only channel members can confirm');
+    if (reason === 'pack_not_approved') return makeFailure('CONFLICT', 'Pack is no longer approved');
+    return makeFailure('CONFLICT', reason);
+  }
+  if (msg.startsWith('EXPERIENCE_PACK_REVOKE:')) {
+    const reason = msg.slice('EXPERIENCE_PACK_REVOKE:'.length);
+    if (reason === 'not_revokable') return makeFailure('CONFLICT', 'Attachment cannot be revoked in its current status');
+    if (reason === 'forbidden') return makeFailure('FORBIDDEN', 'No permission to revoke');
     return makeFailure('CONFLICT', reason);
   }
   switch (msg) {
     case 'EXPERIENCE_PACK_NOT_FOUND':
       return makeFailure('NOT_FOUND', 'Experience Pack not found');
+    case 'EXPERIENCE_PACK_ATTACHMENT_NOT_FOUND':
+      return makeFailure('NOT_FOUND', 'Channel attachment not found');
     case 'CHANNEL_NOT_FOUND':
       return makeFailure('NOT_FOUND', 'Channel not found');
     case 'EXPERIENCE_PACK_CONCURRENT_MODIFICATION':

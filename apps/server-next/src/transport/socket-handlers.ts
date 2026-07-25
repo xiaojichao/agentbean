@@ -590,15 +590,16 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.memory.projectionListRevisions, app, 'listAgentMemoryProjectionRevisions', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.projectionUpsertOptIn, app, 'upsertTeamAgentMemoryOptIn', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.projectionGetConsumable, app, 'getConsumableAgentMemoryProjections', undefined, memoryBindOptions);
-  // #722 Experience Pack
+  // #722+#723 Experience Pack
   bind(socket, WEB_EVENTS.experiencePack.createDraft, app, 'createExperiencePackDraft', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.experiencePack.approve, app, 'approveExperiencePack', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.experiencePack.withdraw, app, 'withdrawExperiencePack', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.experiencePack.markSourceInvalid, app, 'markExperiencePackSourceInvalid', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.experiencePack.listByTeam, app, 'listExperiencePacks', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.experiencePack.getById, app, 'getExperiencePack', undefined, memoryBindOptions);
-  bind(socket, WEB_EVENTS.experiencePack.attachToChannel, app, 'attachExperiencePackToChannel', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
-  bind(socket, WEB_EVENTS.experiencePack.detachFromChannel, app, 'detachExperiencePackFromChannel', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.experiencePack.recommendToChannel, app, 'recommendExperiencePackToChannel', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.experiencePack.confirmAttachment, app, 'confirmExperiencePackAttachment', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
+  bind(socket, WEB_EVENTS.experiencePack.revokeAttachment, app, 'revokeExperiencePackAttachment', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.dispatch.cancel, app, 'cancelDispatch', async (_payload, result) => {
     if (!isDispatchAck(result)) {
       return;

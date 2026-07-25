@@ -2,14 +2,16 @@ import { describe, expect, test } from 'vitest';
 
 import {
   evaluateExperiencePackApproval,
-  evaluateExperiencePackAttachment,
-  evaluateExperiencePackDetachment,
+  evaluateExperiencePackConfirmation,
+  evaluateExperiencePackRecommendation,
+  evaluateExperiencePackRevocation,
   evaluateExperiencePackSourceValidity,
   evaluateExperiencePackWithdrawal,
   validateExperiencePackDraft,
   type EvaluateExperiencePackApprovalInput,
-  type EvaluateExperiencePackAttachmentInput,
-  type EvaluateExperiencePackDetachmentInput,
+  type EvaluateExperiencePackConfirmationInput,
+  type EvaluateExperiencePackRecommendationInput,
+  type EvaluateExperiencePackRevocationInput,
   type EvaluateExperiencePackSourceValidityInput,
   type EvaluateExperiencePackWithdrawalInput,
 } from '../src/experience-pack-policy.js';
@@ -175,73 +177,115 @@ describe('evaluateExperiencePackWithdrawal', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// evaluateExperiencePackAttachment（ADR 0006：频道关联门控）
+// evaluateExperiencePackRecommendation（#723：推荐门控）
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('evaluateExperiencePackAttachment', () => {
-  function makeInput(over: Partial<EvaluateExperiencePackAttachmentInput> = {}): EvaluateExperiencePackAttachmentInput {
+describe('evaluateExperiencePackRecommendation', () => {
+  function makeInput(over: Partial<EvaluateExperiencePackRecommendationInput> = {}): EvaluateExperiencePackRecommendationInput {
     return {
       pack: approvedPack(),
       channel: { teamId: 'team-1', archivedAt: null },
       actorId: 'user-1',
-      canManageChannel: true,
       ...over,
     };
   }
 
-  test('approved pack attachable to active channel in same team', () => {
-    const result = evaluateExperiencePackAttachment(makeInput());
-    expect(result.kind).toBe('attachable');
+  test('approved pack recommendable to active channel in same team', () => {
+    const result = evaluateExperiencePackRecommendation(makeInput());
+    expect(result.kind).toBe('recommendable');
   });
 
   test('rejects non-approved pack', () => {
-    expect(evaluateExperiencePackAttachment(makeInput({ pack: draftPack() })))
+    expect(evaluateExperiencePackRecommendation(makeInput({ pack: draftPack() })))
       .toEqual({ kind: 'error', reason: 'pack_not_approved' });
-    expect(evaluateExperiencePackAttachment(makeInput({ pack: sourceInvalidPack() })))
+    expect(evaluateExperiencePackRecommendation(makeInput({ pack: sourceInvalidPack() })))
       .toEqual({ kind: 'error', reason: 'pack_not_approved' });
-    expect(evaluateExperiencePackAttachment(makeInput({ pack: withdrawnPack() })))
+    expect(evaluateExperiencePackRecommendation(makeInput({ pack: withdrawnPack() })))
       .toEqual({ kind: 'error', reason: 'pack_not_approved' });
   });
 
   test('rejects archived channel', () => {
-    expect(evaluateExperiencePackAttachment(makeInput({
+    expect(evaluateExperiencePackRecommendation(makeInput({
       channel: { teamId: 'team-1', archivedAt: 1234 },
     }))).toEqual({ kind: 'error', reason: 'channel_archived' });
   });
 
-  test('rejects cross-team attachment', () => {
-    expect(evaluateExperiencePackAttachment(makeInput({
+  test('rejects cross-team recommendation', () => {
+    expect(evaluateExperiencePackRecommendation(makeInput({
       pack: approvedPack({ teamId: 'team-2' }),
       channel: { teamId: 'team-1', archivedAt: null },
     }))).toEqual({ kind: 'error', reason: 'cross_team' });
   });
-
-  test('rejects non-admin actor', () => {
-    expect(evaluateExperiencePackAttachment(makeInput({ canManageChannel: false })))
-      .toEqual({ kind: 'error', reason: 'forbidden' });
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// evaluateExperiencePackDetachment（频道解绑门控）
+// evaluateExperiencePackConfirmation（#723：确认门控）
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe('evaluateExperiencePackDetachment', () => {
-  function makeInput(over: Partial<EvaluateExperiencePackDetachmentInput> = {}): EvaluateExperiencePackDetachmentInput {
+describe('evaluateExperiencePackConfirmation', () => {
+  function makeInput(over: Partial<EvaluateExperiencePackConfirmationInput> = {}): EvaluateExperiencePackConfirmationInput {
     return {
+      attachment: { status: 'pending' },
       actorId: 'user-1',
-      canManageTeam: true,
+      isChannelMember: true,
       ...over,
     };
   }
 
-  test('allows detachment by team admin', () => {
-    const result = evaluateExperiencePackDetachment(makeInput());
-    expect(result.kind).toBe('detachable');
+  test('pending + channel member → confirmed', () => {
+    const result = evaluateExperiencePackConfirmation(makeInput());
+    expect(result.kind).toBe('confirmed');
   });
 
-  test('rejects non-admin actor', () => {
-    expect(evaluateExperiencePackDetachment(makeInput({ canManageTeam: false })))
+  test('rejects non-pending attachment', () => {
+    expect(evaluateExperiencePackConfirmation(makeInput({
+      attachment: { status: 'attached' },
+    }))).toEqual({ kind: 'error', reason: 'not_pending' });
+    expect(evaluateExperiencePackConfirmation(makeInput({
+      attachment: { status: 'revoked' },
+    }))).toEqual({ kind: 'error', reason: 'not_pending' });
+  });
+
+  test('rejects non-channel-member', () => {
+    expect(evaluateExperiencePackConfirmation(makeInput({ isChannelMember: false })))
+      .toEqual({ kind: 'error', reason: 'not_channel_member' });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// evaluateExperiencePackRevocation（#723：撤销门控）
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('evaluateExperiencePackRevocation', () => {
+  function makeInput(over: Partial<EvaluateExperiencePackRevocationInput> = {}): EvaluateExperiencePackRevocationInput {
+    return {
+      attachment: { status: 'attached' },
+      actorId: 'user-1',
+      canRevoke: true,
+      ...over,
+    };
+  }
+
+  test('attached → revoked by authorized user', () => {
+    const result = evaluateExperiencePackRevocation(makeInput());
+    expect(result.kind).toBe('revocable');
+  });
+
+  test('pending → revoked by authorized user', () => {
+    const result = evaluateExperiencePackRevocation(makeInput({
+      attachment: { status: 'pending' },
+    }));
+    expect(result.kind).toBe('revocable');
+  });
+
+  test('rejects already revoked attachment', () => {
+    expect(evaluateExperiencePackRevocation(makeInput({
+      attachment: { status: 'revoked' },
+    }))).toEqual({ kind: 'error', reason: 'not_revokable' });
+  });
+
+  test('rejects unauthorized actor', () => {
+    expect(evaluateExperiencePackRevocation(makeInput({ canRevoke: false })))
       .toEqual({ kind: 'error', reason: 'forbidden' });
   });
 });

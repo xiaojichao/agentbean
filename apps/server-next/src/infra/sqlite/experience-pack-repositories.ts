@@ -37,6 +37,14 @@ function number(value: unknown, key: string): number {
   return v;
 }
 
+function optionalNumber(value: unknown, key: string): number | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v = (value as Record<string, unknown>)[key];
+  if (v === null || v === undefined) return undefined;
+  if (typeof v !== 'number') throw new Error(`Expected number for key "${key}", got ${typeof v}`);
+  return v;
+}
+
 // ── 行映射（value: unknown 签名，与 memory-repositories.ts 一致）────────────────
 
 function mapPackRow(value: unknown): ExperiencePackRecord | null {
@@ -93,8 +101,13 @@ function mapAttachmentRow(value: unknown): ChannelExperienceAttachmentRecord | n
     packId: text(value, 'pack_id'),
     channelId: text(value, 'channel_id'),
     teamId: text(value, 'team_id'),
-    attachedByUserId: text(value, 'attached_by_user_id'),
-    attachedAt: number(value, 'attached_at'),
+    status: text(value, 'status') as ChannelExperienceAttachmentRecord['status'],
+    recommendedByUserId: text(value, 'recommended_by_user_id'),
+    recommendedAt: number(value, 'recommended_at'),
+    confirmedByUserId: optionalText(value, 'confirmed_by_user_id'),
+    confirmedAt: optionalNumber(value, 'confirmed_at'),
+    revokedByUserId: optionalText(value, 'revoked_by_user_id'),
+    revokedAt: optionalNumber(value, 'revoked_at'),
   };
 }
 
@@ -153,6 +166,7 @@ export function createSqliteExperiencePackRepositories(db: SqliteDatabase): Expe
              ON cea.pack_id = ep.id AND cea.team_id = ep.team_id
            WHERE cea.team_id = ? AND cea.channel_id = ?
              AND ep.status = 'approved'
+             AND cea.status = 'attached'
            ORDER BY ep.updated_at DESC, ep.id`,
         ).all(input.teamId, input.channelId).map(mapPackRowRequired);
       },
@@ -206,10 +220,15 @@ export function createSqliteExperiencePackRepositories(db: SqliteDatabase): Expe
     attachments: {
       async create(record) {
         db.prepare(`INSERT INTO channel_experience_attachments
-          (id, pack_id, channel_id, team_id, attached_by_user_id, attached_at)
-          VALUES (?, ?, ?, ?, ?, ?)`)
+          (id, pack_id, channel_id, team_id, status,
+           recommended_by_user_id, recommended_at,
+           confirmed_by_user_id, confirmed_at,
+           revoked_by_user_id, revoked_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.packId, record.channelId, record.teamId,
-            record.attachedByUserId, record.attachedAt);
+            record.status, record.recommendedByUserId, record.recommendedAt,
+            record.confirmedByUserId ?? null, record.confirmedAt ?? null,
+            record.revokedByUserId ?? null, record.revokedAt ?? null);
         return record;
       },
       async getByPackAndChannel(input) {
@@ -221,18 +240,48 @@ export function createSqliteExperiencePackRepositories(db: SqliteDatabase): Expe
       },
       async listByChannel(input) {
         return db.prepare(
-          'SELECT * FROM channel_experience_attachments WHERE team_id = ? AND channel_id = ? ORDER BY attached_at DESC',
+          'SELECT * FROM channel_experience_attachments WHERE team_id = ? AND channel_id = ? ORDER BY recommended_at DESC',
         ).all(input.teamId, input.channelId).map(mapAttachmentRowRequired);
       },
       async listByPack(input) {
         return db.prepare(
-          'SELECT * FROM channel_experience_attachments WHERE team_id = ? AND pack_id = ? ORDER BY attached_at DESC',
+          'SELECT * FROM channel_experience_attachments WHERE team_id = ? AND pack_id = ? ORDER BY recommended_at DESC',
         ).all(input.teamId, input.packId).map(mapAttachmentRowRequired);
       },
-      async delete(input) {
-        db.prepare(
-          'DELETE FROM channel_experience_attachments WHERE team_id = ? AND id = ?',
-        ).run(input.teamId, input.id);
+      async updateStatus(input) {
+        const current = mapAttachmentRow(
+          db.prepare(
+            'SELECT * FROM channel_experience_attachments WHERE team_id = ? AND pack_id = ? AND channel_id = ?',
+          ).get(input.teamId, input.packId, input.channelId),
+        );
+        if (!current || current.status !== input.expectedStatus) return null;
+        const changes = (result: unknown): number =>
+          typeof result === 'object' && result !== null ? (result as Record<string, unknown>).changes as number ?? 0 : 0;
+        const result = db.prepare(
+          `UPDATE channel_experience_attachments SET
+             status = ?,
+             confirmed_by_user_id = ?,
+             confirmed_at = ?,
+             revoked_by_user_id = ?,
+             revoked_at = ?
+           WHERE team_id = ? AND pack_id = ? AND channel_id = ? AND status = ?`,
+        ).run(
+          input.status,
+          input.confirmedByUserId ?? null,
+          input.confirmedAt ?? null,
+          input.revokedByUserId ?? null,
+          input.revokedAt ?? null,
+          input.teamId, input.packId, input.channelId,
+          input.expectedStatus,
+        );
+        return changes(result) === 0 ? null : {
+          ...current,
+          status: input.status,
+          confirmedByUserId: input.confirmedByUserId ?? current.confirmedByUserId,
+          confirmedAt: input.confirmedAt ?? current.confirmedAt,
+          revokedByUserId: input.revokedByUserId ?? current.revokedByUserId,
+          revokedAt: input.revokedAt ?? current.revokedAt,
+        };
       },
     },
   };

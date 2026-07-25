@@ -1,23 +1,31 @@
-import type { ExperiencePackStatus } from '@agentbean/contracts';
+import type { AttachmentStatus, ExperiencePackStatus } from '@agentbean/contracts';
 
 /**
- * Experience Pack 生命周期策略（issue #722）。
+ * Experience Pack 生命周期策略（issue #722 + #723）。
  *
  * 纯函数，无 I/O——遵循 `channel-archive-policy.ts` 模式。所有状态迁移在此集中校验；
  * server 侧在调用 repository 之前调本模块做门控。
  *
- * 生命周期：draft → approved → source_invalid | withdrawn
- * - draft → approved：用户第一次确认（AC#3）
- * - approved → source_invalid：来源删除/权限撤销/被证错误（AC#6）
- * - approved|source_invalid → withdrawn：用户撤回（AC#7）
+ * Pack 生命周期：draft → approved → source_invalid | withdrawn
+ * Attachment 生命周期：pending → attached → revoked（#723）
+ * - pending：PI 或用户推荐，等待目标频道成员确认
+ * - attached：频道成员确认后生效，进入 Active Memory Context
+ * - revoked：用户撤销，保留审计记录
  */
 
-/** 合法的单步状态迁移。 */
+/** 合法的 Pack 单步状态迁移。 */
 const VALID_TRANSITIONS: Record<ExperiencePackStatus, readonly ExperiencePackStatus[]> = {
   draft: ['approved'],
   approved: ['source_invalid', 'withdrawn'],
   source_invalid: ['withdrawn'],
   withdrawn: [],
+};
+
+/** 合法的 Attachment 单步状态迁移（#723）。 */
+const ATTACHMENT_TRANSITIONS: Record<AttachmentStatus, readonly AttachmentStatus[]> = {
+  pending: ['attached', 'revoked'],
+  attached: ['revoked'],
+  revoked: ['pending'], // revive：已撤销的可被重新推荐
 };
 
 // ── 校验输入 ──────────────────────────────────────────────────────────────────
@@ -172,9 +180,9 @@ export function evaluateExperiencePackWithdrawal(
   return { kind: 'withdrawn' };
 }
 
-// ── 频道关联门控（第二次确认的前置校验）───────────────────────────────────────
+// ── 频道推荐门控（#723：PI 推荐 approved Pack 到目标频道）───────────────────────
 
-export interface EvaluateExperiencePackAttachmentInput {
+export interface EvaluateExperiencePackRecommendationInput {
   readonly pack: {
     readonly status: ExperiencePackStatus;
     readonly teamId: string;
@@ -184,37 +192,34 @@ export interface EvaluateExperiencePackAttachmentInput {
     readonly archivedAt: number | null;
   };
   readonly actorId: string;
-  /** actor 是否有权管理目标频道。 */
-  readonly canManageChannel: boolean;
 }
 
-export interface EvaluateExperiencePackAttachmentSuccess {
-  readonly kind: 'attachable';
+export interface EvaluateExperiencePackRecommendationSuccess {
+  readonly kind: 'recommendable';
 }
 
-export interface EvaluateExperiencePackAttachmentError {
+export interface EvaluateExperiencePackRecommendationError {
   readonly kind: 'error';
   readonly reason:
     | 'pack_not_approved'
     | 'channel_archived'
-    | 'cross_team'
-    | 'forbidden';
+    | 'cross_team';
 }
 
-export type EvaluateExperiencePackAttachmentOutput =
-  | EvaluateExperiencePackAttachmentSuccess
-  | EvaluateExperiencePackAttachmentError;
+export type EvaluateExperiencePackRecommendationOutput =
+  | EvaluateExperiencePackRecommendationSuccess
+  | EvaluateExperiencePackRecommendationError;
 
 /**
- * 频道关联门控（第二次确认的前置校验，ADR 0006）。
+ * 频道推荐门控（#723：第一次确认后 PI 可推荐）。
  * - Pack 必须已批准
- * - 目标频道不能是跨 Team
+ * - 目标频道不能跨 Team
  * - 目标频道不能已归档
- * - actor 必须有频道管理权限
+ * - 不再要求 admin 权限（PI 也可推荐）
  */
-export function evaluateExperiencePackAttachment(
-  input: EvaluateExperiencePackAttachmentInput,
-): EvaluateExperiencePackAttachmentOutput {
+export function evaluateExperiencePackRecommendation(
+  input: EvaluateExperiencePackRecommendationInput,
+): EvaluateExperiencePackRecommendationOutput {
   if (input.pack.status !== 'approved') {
     return { kind: 'error', reason: 'pack_not_approved' };
   }
@@ -224,39 +229,78 @@ export function evaluateExperiencePackAttachment(
   if (input.channel.archivedAt != null) {
     return { kind: 'error', reason: 'channel_archived' };
   }
-  if (!input.canManageChannel) {
-    return { kind: 'error', reason: 'forbidden' };
-  }
-  return { kind: 'attachable' };
+  return { kind: 'recommendable' };
 }
 
-// ── 频道解绑门控 ──────────────────────────────────────────────────────────────
+// ── 确认门控（#723：pending → attached）─────────────────────────────────────────
 
-export interface EvaluateExperiencePackDetachmentInput {
+export interface EvaluateExperiencePackConfirmationInput {
+  readonly attachment: {
+    readonly status: AttachmentStatus;
+  };
   readonly actorId: string;
-  /** actor 是否是 Team Owner/Admin。 */
-  readonly canManageTeam: boolean;
+  readonly isChannelMember: boolean;
 }
 
-export interface EvaluateExperiencePackDetachmentSuccess {
-  readonly kind: 'detachable';
+export interface EvaluateExperiencePackConfirmationSuccess {
+  readonly kind: 'confirmed';
 }
 
-export interface EvaluateExperiencePackDetachmentError {
+export interface EvaluateExperiencePackConfirmationError {
   readonly kind: 'error';
-  readonly reason: 'forbidden';
+  readonly reason: 'not_pending' | 'not_channel_member';
 }
 
-export type EvaluateExperiencePackDetachmentOutput =
-  | EvaluateExperiencePackDetachmentSuccess
-  | EvaluateExperiencePackDetachmentError;
+export type EvaluateExperiencePackConfirmationOutput =
+  | EvaluateExperiencePackConfirmationSuccess
+  | EvaluateExperiencePackConfirmationError;
 
-/** 频道解绑门控：仅 Team Owner/Admin 可解绑。 */
-export function evaluateExperiencePackDetachment(
-  input: EvaluateExperiencePackDetachmentInput,
-): EvaluateExperiencePackDetachmentOutput {
-  if (!input.canManageTeam) {
+/** #723：pending → attached 状态迁移门控（频道成员确认）。 */
+export function evaluateExperiencePackConfirmation(
+  input: EvaluateExperiencePackConfirmationInput,
+): EvaluateExperiencePackConfirmationOutput {
+  if (!ATTACHMENT_TRANSITIONS[input.attachment.status].includes('attached')) {
+    return { kind: 'error', reason: 'not_pending' };
+  }
+  if (!input.isChannelMember) {
+    return { kind: 'error', reason: 'not_channel_member' };
+  }
+  return { kind: 'confirmed' };
+}
+
+// ── 撤销门控（#723：attached | pending → revoked）───────────────────────────────
+
+export interface EvaluateExperiencePackRevocationInput {
+  readonly attachment: {
+    readonly status: AttachmentStatus;
+  };
+  readonly actorId: string;
+  /** 频道成员或 Team Admin 均可撤销。 */
+  readonly canRevoke: boolean;
+}
+
+export interface EvaluateExperiencePackRevocationSuccess {
+  readonly kind: 'revocable';
+}
+
+export interface EvaluateExperiencePackRevocationError {
+  readonly kind: 'error';
+  readonly reason: 'not_revokable' | 'forbidden';
+}
+
+export type EvaluateExperiencePackRevocationOutput =
+  | EvaluateExperiencePackRevocationSuccess
+  | EvaluateExperiencePackRevocationError;
+
+/** #723：attached | pending → revoked 状态迁移门控。 */
+export function evaluateExperiencePackRevocation(
+  input: EvaluateExperiencePackRevocationInput,
+): EvaluateExperiencePackRevocationOutput {
+  if (!ATTACHMENT_TRANSITIONS[input.attachment.status].includes('revoked')) {
+    return { kind: 'error', reason: 'not_revokable' };
+  }
+  if (!input.canRevoke) {
     return { kind: 'error', reason: 'forbidden' };
   }
-  return { kind: 'detachable' };
+  return { kind: 'revocable' };
 }
