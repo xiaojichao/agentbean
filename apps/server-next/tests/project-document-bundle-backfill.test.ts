@@ -404,6 +404,24 @@ describe('#830 保守回填历史 Markdown 文档包', () => {
     expect(applied.report.reasons).toEqual(dryRun.report.reasons);
   });
 
+  test('私有频道找不到可见的建包身份时，dry-run 与 apply 都保持未分组', async () => {
+    await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
+    await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
+    teamDb.prepare(
+      'DELETE FROM channel_human_members WHERE channel_id = ? AND user_id = ?',
+    ).run('channel-1', 'owner-1');
+
+    const dryRun = await createBackfill({ mode: 'dry_run' }).runBatch();
+    const applied = await createBackfill().runBatch();
+
+    expect(dryRun.report).toMatchObject({
+      backfillable: 0, skipped: 1, reasons: { actor_unavailable: 1 },
+    });
+    expect(applied.report).toMatchObject({
+      backfillable: 0, created: 0, skipped: 1, reasons: { actor_unavailable: 1 },
+    });
+  });
+
   test('重复运行幂等：既有 Bundle 只被计为 existing，不再新建', async () => {
     await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
     await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
@@ -489,6 +507,31 @@ describe('#830 保守回填历史 Markdown 文档包', () => {
     expect(recovered).toMatchObject({ processed: 1, completed: true });
     // 出错的候选被重新裁决并覆盖掉 failed，run-1 不会被二次建包。
     expect(recovered.report).toMatchObject({ candidates: 2, created: 1, skipped: 1, failed: 0 });
+    expect(await listBundles()).toHaveLength(1);
+  });
+
+  test('建包写冲突记录为失败且不推进游标，下一批可恢复', async () => {
+    await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
+    await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
+    const originalCreate = repositories.projectDocumentBundles.create;
+    let conflict = true;
+    repositories.projectDocumentBundles.create = async (input) => (
+      conflict ? { kind: 'document_scope_conflict' } : originalCreate(input)
+    );
+    const backfill = createBackfill();
+
+    const failing = await backfill.runBatch();
+    expect(failing).toMatchObject({ processed: 0, completed: false });
+    expect(failing.report).toMatchObject({
+      candidates: 1, failed: 1, skipped: 0, reasons: { write_conflict: 1 },
+    });
+
+    conflict = false;
+    const recovered = await backfill.runBatch();
+    expect(recovered).toMatchObject({ processed: 1, completed: true });
+    expect(recovered.report).toMatchObject({
+      candidates: 1, created: 1, failed: 0, reasons: {},
+    });
     expect(await listBundles()).toHaveLength(1);
   });
 

@@ -118,11 +118,17 @@ export function createProjectDocumentBundleBackfill(
     teamId: string,
     channelId: string,
     channelCreatedBy: string | undefined,
+    channelVisibility: 'public' | 'private',
+    channelHumanMemberIds: readonly string[],
   ): Promise<string | undefined> {
     const profile = await repositories.channelProjects.getProfile({ teamId, channelId });
     const team = await repositories.teams.getById(teamId);
     for (const candidate of [channelCreatedBy, profile?.projectLeadId, team?.ownerId]) {
-      if (candidate && await repositories.teams.isMember(teamId, candidate)) return candidate;
+      if (candidate
+        && await repositories.teams.isMember(teamId, candidate)
+        && (channelVisibility === 'public' || channelHumanMemberIds.includes(candidate))) {
+        return candidate;
+      }
     }
     return undefined;
   }
@@ -175,7 +181,13 @@ export function createProjectDocumentBundleBackfill(
       };
     }
 
-    const actorId = await resolveBackfillActor(run.teamId, run.channelId, channel.createdBy);
+    const actorId = await resolveBackfillActor(
+      run.teamId,
+      run.channelId,
+      channel.createdBy,
+      channel.visibility,
+      channel.humanMemberIds,
+    );
     if (!actorId) {
       return { outcome: 'skipped', reasonCode: 'actor_unavailable', memberCount: 0 };
     }
@@ -231,9 +243,11 @@ export function createProjectDocumentBundleBackfill(
     if (!created.ok) {
       // 预检与写入之间状态可能改变（并发编辑、归档、Task revision 推进）。
       // 用例的 details.reason 是权威归因，不去解析 message 反推。
+      const reasonCode = bundleFailureReasonCode(created.details);
       return {
-        outcome: 'skipped',
-        reasonCode: bundleFailureReasonCode(created.details),
+        // 写冲突是可恢复失败，不能把它当成最终 skipped 后推进游标。
+        outcome: reasonCode === 'write_conflict' ? 'failed' : 'skipped',
+        reasonCode,
         memberCount: 0,
       };
     }
@@ -291,6 +305,11 @@ export function createProjectDocumentBundleBackfill(
         ...(decision.bundleId ? { bundleId: decision.bundleId } : {}),
         decidedAt: clock.now(),
       });
+      if (decision.outcome === 'failed') {
+        // 可恢复失败留在当前游标之后，下一批覆盖 failed 为最终裁决。
+        exhausted = false;
+        break;
+      }
       cursor = { runCreatedAt: run.createdAt, runId: run.runId };
       processed += 1;
     }

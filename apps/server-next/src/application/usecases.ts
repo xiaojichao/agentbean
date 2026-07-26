@@ -9186,10 +9186,6 @@ function normalizeUniqueTextItems(value: unknown): string[] {
 }
 
 /**
- * #825：从 Workspace Run 解析 Bundle 来源。Invocation 经 dispatch attempt 反查；
- * 若该 Invocation 绑定的 Task revision/attempt 已被取代，说明来源已陈旧，拒绝建包。
- */
-/**
  * #830：把建包失败的语义原因塞进 FailureAck.details。
  *
  * 调用方（尤其是回填）需要区分「内部 Invocation」「陈旧 Invocation」「成员不可见」
@@ -9209,6 +9205,10 @@ function bundleFailure(
   return makeFailure(error, message, details as unknown as Record<string, unknown>);
 }
 
+/**
+ * #825：从 Workspace Run 解析 Bundle 来源。Invocation 经 dispatch attempt 反查；
+ * 若该 Invocation 绑定的 Task revision/attempt 已被取代，说明来源已陈旧，拒绝建包。
+ */
 export async function resolveProjectDocumentBundleSource(
   repositories: ServerNextRepositories,
   run: WorkspaceRunRecord,
