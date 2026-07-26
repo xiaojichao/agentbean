@@ -29,7 +29,7 @@ import { createSystemUserMemoryService } from './system-user-memory-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
-import { createPiProviderService } from './pi-provider-service.js';
+import { createPiProviderService, getEmergencyStopActive } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
@@ -239,6 +239,10 @@ export interface ServerNextUseCases {
   setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
   getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
   getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
+  /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */
+  setEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
+  /** #699 US 84：读取 PI 紧急停止状态。 */
+  getEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
   /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
@@ -3242,7 +3246,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const outcome = await repositories.piProviderUnitOfWork.run(async (piRepositories) => {
         const active = await piRepositories.activeModel.get();
         const revision = active ? await piRepositories.revisions.getById(active.revisionId) : null;
-        const activeModel = active && revision?.status === 'published' && revision.cardId === active.cardId
+        // #699 US 84：紧急停止时模型视为 unavailable，阻止新 Job 调度。
+        const emergencyStopped = getEmergencyStopActive();
+        const activeModel = !emergencyStopped && active && revision?.status === 'published' && revision.cardId === active.cardId
           ? {
               availability: 'available' as const,
               cardId: active.cardId,
@@ -5505,6 +5511,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async getPublicPiHealth(input) {
       return piProvider.getPublicHealth(input);
+    },
+
+    // #699 US 84：紧急停止
+    async setEmergencyStop(input) {
+      return piProvider.setEmergencyStop(input);
+    },
+
+    async getEmergencyStop(_input) {
+      return piProvider.getEmergencyStop();
     },
 
     async getMemoryGovernanceSnapshot(memoryInput) {
