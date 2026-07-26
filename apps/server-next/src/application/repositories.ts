@@ -11,7 +11,7 @@ import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent
 import type { SystemKnowledgeRepository, UserMemoryRepository } from './system-user-memory-repositories.js';
 import type { AgentMemoryProjectionRepositories, AgentMemoryProjectionUnitOfWork } from './agent-memory-projection-repositories.js';
 import type { ExperiencePackRepositories } from './experience-pack-repositories.js';
-import type { ChannelProjectRepository } from './project-repositories.js';
+import type { ChannelProjectRepository, ProjectDocumentBundleRepository } from './project-repositories.js';
 import type {
   ChannelCoordinationRepositories,
   ChannelCoordinationUnitOfWork,
@@ -439,6 +439,7 @@ export interface ServerNextRepositories {
   pinnedMessages: PinnedMessageRepository;
   experiencePack: ExperiencePackRepositories;
   channelProjects: ChannelProjectRepository;
+  projectDocumentBundles: ProjectDocumentBundleRepository;
 }
 
 export interface ReactionRecord {

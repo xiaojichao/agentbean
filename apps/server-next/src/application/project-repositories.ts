@@ -2,6 +2,7 @@ import type {
   ChannelProjectOverviewDto,
   ID,
   ProjectArtifactLineageRefDto,
+  ProjectDocumentBundleSourceDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 
@@ -157,4 +158,60 @@ export interface ChannelProjectRepository {
     version: ProjectArtifactVersionRecord;
     mutation: ProjectArtifactMutationRecord;
   }): Promise<PromoteArtifactToProjectVersionResult>;
+}
+
+/** #825：Bundle 本体。成员另存，创建后不可变。 */
+export interface ProjectDocumentBundleRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  name: string;
+  source: ProjectDocumentBundleSourceDto;
+  memberCount: number;
+  createdBy: ID;
+  createdAt: UnixMs;
+}
+
+/** 加入包时冻结的成员事实；当前 revision 由读取时从 ChannelDocument 投影，不落这张表。 */
+export interface ProjectDocumentBundleMemberRecord {
+  bundleId: ID;
+  position: number;
+  documentId: ID;
+  initialRevisionId: ID;
+  initialRevisionNumber: number;
+  initialFilename: string;
+}
+
+export interface ProjectDocumentBundleMutationRecord {
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  bundleId: ID;
+  createdAt: UnixMs;
+}
+
+export type CreateProjectDocumentBundleResult =
+  | { kind: 'created' | 'replayed'; mutation: ProjectDocumentBundleMutationRecord }
+  | { kind: 'document_scope_conflict' }
+  | { kind: 'idempotency_conflict' };
+
+/**
+ * 刻意只暴露读与一次性 create：没有 addMember / removeMember / replaceMembers，
+ * 因此「后续新增 Markdown 不回填旧 Bundle」是接口层的结构性保证，而不是运行时约定。
+ */
+export interface ProjectDocumentBundleRepository {
+  list(input: { teamId: ID; channelId: ID }): Promise<ProjectDocumentBundleRecord[]>;
+  getById(input: { teamId: ID; channelId: ID; bundleId: ID }): Promise<ProjectDocumentBundleRecord | null>;
+  listMembers(input: { bundleId: ID }): Promise<ProjectDocumentBundleMemberRecord[]>;
+  getMutation(input: {
+    teamId: ID;
+    channelId: ID;
+    idempotencyKey: string;
+  }): Promise<ProjectDocumentBundleMutationRecord | null>;
+  create(input: {
+    bundle: ProjectDocumentBundleRecord;
+    members: ProjectDocumentBundleMemberRecord[];
+    mutation: ProjectDocumentBundleMutationRecord;
+  }): Promise<CreateProjectDocumentBundleResult>;
 }

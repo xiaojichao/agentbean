@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -24,6 +24,7 @@ import { createClientMessageId, messageSendFailureText } from '@/lib/message-sen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft } from '@/components/ChannelProjectOverview';
 import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
+import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -293,6 +294,8 @@ export default function ChatPage() {
   // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
   const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('files');
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
+  const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
+  const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
   const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
@@ -470,16 +473,24 @@ export default function ChatPage() {
   }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
   // #823 逻辑产物视图按需拉取 Server 投影；没有项目数据的频道保持空投影，不影响普通文件视图。
+  // #825 文档包与文件列表分开取，Bundle 读失败不牵连既有文件库渲染。
   useEffect(() => {
     let active = true;
     setProjectArtifactLibrary(null);
     setChannelProjectOverview(null);
+    setProjectDocumentBundles([]);
+    setProjectDocumentBundlesArchived(false);
     if (tab !== 'files' || !activeChannel || conn !== 'open') return () => { active = false; };
     void projectEvents().artifactCollections(activeChannel).then((result) => {
       if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
     });
     void projectEvents().overview(activeChannel).then((result) => {
       if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
+    });
+    void projectEvents().documentBundles(activeChannel).then((result) => {
+      if (!active) return;
+      setProjectDocumentBundles(result.ok ? result.bundles ?? [] : []);
+      setProjectDocumentBundlesArchived(result.ok ? Boolean(result.archived) : false);
     });
     return () => { active = false; };
   }, [activeChannel, conn, tab]);
@@ -488,6 +499,17 @@ export default function ChatPage() {
     if (!activeChannel) return;
     return projectEvents().onArtifactsUpdated(activeChannel, setProjectArtifactLibrary);
   }, [activeChannel]);
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    return projectEvents().onDocumentBundlesUpdated(activeChannel, setProjectDocumentBundles);
+  }, [activeChannel]);
+
+  const loadProjectDocumentBundleDetail = useCallback(async (bundleId: string) => {
+    if (!activeChannel || conn !== 'open') return null;
+    const result = await projectEvents().documentBundle({ channelId: activeChannel, bundleId });
+    return result.ok && result.bundle ? result.bundle : null;
+  }, [activeChannel, conn]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -2124,6 +2146,9 @@ export default function ChatPage() {
                 }}
                 onLoadMore={() => void loadChannelFiles(false)}
                 onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
+                documentBundles={projectDocumentBundles}
+                documentBundlesArchived={projectDocumentBundlesArchived}
+                onLoadDocumentBundleDetail={loadProjectDocumentBundleDetail}
                 agents={agents}
                 humanProfiles={humanProfiles}
                 channelMembers={channelMembers}
@@ -3055,6 +3080,9 @@ function ConversationFiles({
   onOpenRoot,
   onLoadMore,
   onEditArtifact,
+  documentBundles,
+  documentBundlesArchived,
+  onLoadDocumentBundleDetail,
   agents,
   humanProfiles,
   channelMembers,
@@ -3073,6 +3101,9 @@ function ConversationFiles({
   onOpenRoot: () => void;
   onLoadMore: () => void;
   onEditArtifact: (artifact: Artifact, documentId?: string) => void;
+  documentBundles: ProjectDocumentBundleDto[];
+  documentBundlesArchived: boolean;
+  onLoadDocumentBundleDetail: (bundleId: string) => Promise<ProjectDocumentBundleDetailDto | null>;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   channelMembers: ChannelMemberEntry[];
@@ -3092,6 +3123,11 @@ function ConversationFiles({
           <option value="intermediate">中间产物</option>
         </select>
       </div>
+      <ProjectDocumentBundleList
+        bundles={documentBundles}
+        archived={documentBundlesArchived}
+        onLoadDetail={onLoadDocumentBundleDetail}
+      />
       {path && (
         <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
           <button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>

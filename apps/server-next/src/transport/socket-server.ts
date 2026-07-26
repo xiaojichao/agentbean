@@ -547,6 +547,26 @@ export function attachServerNextNamespaces(
           }
         }
       },
+      async afterProjectDocumentBundleMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        const channelId = payloadChannelId(payload);
+        if (!teamId || !channelId) return;
+        // 每个订阅者各自复验可见性：广播只承载 Server 投影，不复用创建者的读取结果。
+        for (const subscriber of webSubscribers) {
+          if (subscriber.channels?.teamId !== teamId) continue;
+          const userId = await resolveSubscriberUserId(subscriber, app);
+          if (!userId) continue;
+          const bundles = await app.listProjectDocumentBundles({ userId, teamId, channelId });
+          if (bundles.ok) {
+            subscriber.socket.emit?.(WEB_EVENTS.project.documentBundlesUpdated, {
+              channelId,
+              bundles: bundles.bundles,
+              archived: bundles.archived,
+            });
+          }
+        }
+      },
       afterMemberMutation(payload, result) {
         if (!isSuccessAck(result)) return;
         const teamId = payloadTeamId(payload);
