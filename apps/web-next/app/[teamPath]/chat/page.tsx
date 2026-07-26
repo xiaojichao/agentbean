@@ -3041,10 +3041,9 @@ function DirectoryPreview({ previews }: { previews: string[] }) {
   }
   return (
     <div className="grid aspect-video grid-cols-2 grid-rows-2 gap-px overflow-hidden bg-neutral-200">
-      {previews.slice(0, 4).map((preview) => {
-        const src = artifactUrl(preview);
-        return src ? <img key={preview} src={src} alt="" className="h-full w-full object-cover" /> : null;
-      })}
+      {previews.slice(0, 4).map((preview) => (
+        <img key={preview} src={preview} alt="" className="h-full w-full object-cover" />
+      ))}
     </div>
   );
 }
@@ -5140,9 +5139,7 @@ function ChatArtifactPreview({ artifact, teamId, onEdit }: { artifact: Artifact;
     <ArtifactCard
       artifact={artifact}
       previewUrl={artifact.sizeBytes > 10 * 1024 * 1024 && isMarkdownArtifact(artifact) ? null : previewUrl}
-      thumbnailUrl={artifact.preview?.status === 'ready' && artifact.preview.url
-        ? artifactUrl(artifact.preview.url)
-        : null}
+      thumbnailUrl={artifact.preview?.status === 'ready' ? artifact.preview.url : null}
       downloadUrl={downloadUrl}
       renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
         ? <MarkdownMessage body={content} />

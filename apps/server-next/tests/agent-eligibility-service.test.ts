@@ -109,18 +109,8 @@ describe('resolveDecompositionAllocatability', () => {
         resolveCandidates: async () => ({
           taskId: 'root', taskRevision: 1, taskAttempt: 1,
           candidates: [
-            {
-              agentId: 'agent-1',
-              eligible: false,
-              missingCapabilities: ['root-codegen'],
-              diagnosticCodes: ['CAPABILITY_MISSING'],
-            },
-            {
-              agentId: 'agent-2',
-              eligible: false,
-              missingCapabilities: ['root-research'],
-              diagnosticCodes: ['CAPABILITY_MISSING'],
-            },
+            { agentId: 'agent-1', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
+            { agentId: 'agent-2', eligible: true, missingCapabilities: [], diagnosticCodes: [] },
           ],
           ancestorAgentIds: [],
         }),

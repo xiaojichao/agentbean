@@ -261,19 +261,19 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
   async function activeModelHealth(repositories: PiProviderRepositories): Promise<PublicPiHealthDto> {
     const active = await repositories.activeModel.get();
-    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' };
     const revision = await repositories.revisions.getById(active.revisionId);
     if (!revision || revision.status !== 'published' || revision.cardId !== active.cardId) {
-      return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+      return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     }
     const card = await repositories.cards.getById(active.cardId);
-    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     const credential = await resolveApiKey(repositories, card.credentialRef);
-    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
     const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
     const test = await repositories.tests.getLatestByConfigSummary({ cardId: card.id, configSummary: summary });
     if (!test || test.status !== 'passed' || test.configSummary !== summary) {
-      return { status: 'degraded', diagnosticCode: 'PI_DEGRADED' };
+      return { status: 'degraded', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' };
     }
     return { status: 'normal', diagnosticCode: null };
   }

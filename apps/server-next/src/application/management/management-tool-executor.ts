@@ -260,10 +260,7 @@ export function createPhase2ManagementToolHandlers(input: {
     clientKey: string; requiredCapabilities: readonly string[]; requiredSkills?: readonly string[];
   }[]) => Promise<ExecutableSubtaskCoverageResult>;
   /** #807 allocation 服务:可选,解析任务 published 时的 claimPolicy/targetAgentId。 */
-  readonly allocationService?: (taskId: string) => Promise<{
-    claimPolicy: 'targeted' | 'open';
-    targetAgentId?: string;
-  }>;
+  readonly allocationService?: (taskId: string) => Promise<{ claimPolicy: 'targeted' | 'open'; targetAgentId?: string } | null>;
 }): Phase2ToolHandlers {
   const { kernel, eligibilityService, allocationService } = input;
   return {
@@ -273,7 +270,7 @@ export function createPhase2ManagementToolHandlers(input: {
         taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
       }));
       const allocatability = eligibilityService
-        ? await eligibilityService(request.input.parentTaskId, drafts)
+        ? await eligibilityService(request.input.parentTaskId, drafts).catch(() => undefined)
         : undefined;
       const created = await kernel.createSubtasks({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
@@ -294,8 +291,8 @@ export function createPhase2ManagementToolHandlers(input: {
     },
     'tasks.publish_for_claim': async (request) => {
       const allocation = allocationService
-        ? await allocationService(request.input.taskId)
-        : undefined;
+        ? await allocationService(request.input.taskId).catch(() => null)
+        : null;
       const published = await kernel.publishForClaim({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         ...request.input,
