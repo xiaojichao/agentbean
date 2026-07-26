@@ -524,6 +524,50 @@ describe('Phase 4 auto placement routing（#647）', () => {
       diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'],
     });
   });
+
+  // #836：route() 会在 routeRequest() 返回之后**再读一次**存储策略（policyForTeam 无缓存），
+  // 而 #724 桥接回退就以这第二次读为准。两次读取之间横跨 probeAutoPlacement、
+  // createOrResumeRun（barrier 本身）、审计写入与冻结侧 preflight——全是真实 await 点。
+  // 若所有者在这个窗口里把策略翻回 direct，第二次读到 direct，此时唯一阻止「run 已建却还
+  // 发 direct Dispatch」（双投递）的就是 crossedBarrier 门控。
+  // 上面 #657 那条测试拿到的 crossedBarrier 存储 mode 仍是 managed，第二次读就提前 return 了，
+  // 所以删掉门控它依然绿——这条测试补的正是那个变异不敏感的缺口。
+  test('#836 barrier 窗口内策略被翻回 direct：post-barrier unavailable 不得降级成 direct', async () => {
+    const probe = vi.fn()
+      .mockResolvedValueOnce({ deviceAvailable: true, serverAvailable: true })
+      .mockResolvedValueOnce({ deviceAvailable: false, serverAvailable: true });
+    const harness = await createHarness({ autoProbe: probe });
+    await harness.router.updatePolicy(autoPolicy());
+
+    const first = await harness.router.route(rootedRequest());
+    if (first.kind !== 'managed') throw new Error('managed expected');
+    const runA = (await harness.repositories.management.runs.getById(first.managementRunId))!;
+
+    vi.spyOn(harness.repositories.management.reservations, 'getByRequestKey').mockResolvedValueOnce(null);
+    vi.spyOn(harness.kernel, 'createOrResumeRun').mockResolvedValue({ run: runA, disposition: 'existing' });
+    (harness.gateway.preflightPhase2 as ReturnType<typeof vi.fn>).mockImplementation(
+      async ({ placementPolicy }) => {
+        // device 分支只在冻结侧重 preflight 时命中，即 barrier 已越过之后：
+        // 在这里翻策略，精确模拟 barrier 窗口内的所有者改配置。
+        if (placementPolicy.placement !== 'managed') {
+          await harness.router.updatePolicy({ userId: 'user-1', teamId: 'team-1', mode: 'direct' });
+          return { preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true } };
+        }
+        return {
+          preflight: { workerAvailable: true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true },
+          profileId: 'profile-server',
+        };
+      });
+
+    await expect(harness.router.route(rootedRequest())).resolves.toEqual({
+      kind: 'unavailable', mode: 'managed',
+      crossedBarrier: true,
+      diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'],
+    });
+    // 前提确认：包装层的第二次读确实看到 direct，回退分支真的被触达过。
+    await expect(harness.repositories.management.policies.get('team-1'))
+      .resolves.toMatchObject({ mode: 'direct' });
+  });
 });
 
 describe('Phase 4 Team 预算配置（#648）', () => {

@@ -355,10 +355,10 @@ test('passes when runtime/package and future management boundaries are present',
   });
 });
 
-// #836：桥接回退的两道门控。门控 (1) crossedBarrier 今天在桥接路径上不可达
-// （桥接只设 device/managed placement，两个 crossedBarrier 产生点都由 autoPlacement 门控），
-// 已经用变异测试证实：删掉它 server-next 全套 1201 测试仍全绿。所以只有这些结构性负向
-// fixture 能守住它——删掉任一门控都必须红。
+// #836：桥接回退的两道门控。语义由 apps/server-next/tests/management-routing.test.ts 的
+// '#836 barrier 窗口内策略被翻回 direct' 行为回归钉死（route() 会二次读存储策略，两次读分歧时
+// crossedBarrier 是唯一阻止双投递的门控）。这里的结构性 fixture 补的是另一层：门控被删或被
+// 重排（direct 回退提到门控之上）时必须红，不依赖是否有测试恰好覆盖到那条路径。
 test('fails closed when the #724 bridge fallback drops the post-barrier guard', () => {
   withFixture((root) => {
     scaffoldRuntimeSlice(root);
@@ -393,6 +393,28 @@ test('fails closed when the route() wrapper disappears entirely', () => {
   withFixture((root) => {
     scaffoldRuntimeSlice(root);
     scaffoldFutureBoundaries(root, { routeWrapper: '// route wrapper removed' });
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /P1_BRIDGED_FALLBACK_GUARD_INVALID/);
+  });
+});
+
+// 重排变异：两道门控都还在，但 direct 回退被提到它们之前——纯「存在性」断言会漏网。
+test('fails closed when the direct fallback is hoisted above both guards', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldFutureBoundaries(root, {
+      routeWrapper: [
+        '    async route(input: RouteRequestInput): Promise<ManagementRoutingResult> {',
+        '      const result = await routeRequest(input);',
+        "      if (result.kind === 'unavailable') return { kind: 'direct', mode: 'direct' };",
+        "      if (result.kind !== 'unavailable' || result.crossedBarrier) return result;",
+        '      const stored = await policyForTeam(input.teamId);',
+        "      if (stored.mode !== 'direct') return result;",
+        '      return result;',
+        '    },',
+      ].join('\n'),
+    });
     const result = runChecker(root);
     assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
     assert.match(result.stderr, /P1_BRIDGED_FALLBACK_GUARD_INVALID/);
