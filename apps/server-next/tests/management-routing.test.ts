@@ -61,6 +61,51 @@ describe('Phase 1 management routing', () => {
     expect(await harness.repositories.management.reservations.getByRequestKey({ teamId: 'team-1', requestKey: 'team-1:user-1:client-1' })).not.toBeNull();
   });
 
+  test('#724 桥接的团队在 preflight 红时永不阻断发送：Phase 1 与 Phase 3 都回退 direct', async () => {
+    // 生产复现：daemon 只有 env 变量凭证（credentialStatus=test_only），
+    // 桥接使用的 DEFAULT_PLACEMENT_POLICY.requireLocalModelCredentials=true
+    // → credentialAvailable=false。桥接是自动升级（团队从未显式开启 managed），
+    // 因此不能让消息发送失败。
+    const harness = await createHarness({ credentialAvailable: false });
+
+    // 无 rootTask 的 @mention → Phase 1（single-agent）
+    await expect(harness.router.route(request())).resolves.toEqual({ kind: 'direct', mode: 'direct' });
+
+    // 任务型 @mention（usecases 自动建 Task）→ 桥接抬到 Phase 3，同一红 preflight
+    await expect(harness.router.route({ ...request(), rootTaskId: 'root-task-1' }))
+      .resolves.toEqual({ kind: 'direct', mode: 'direct' });
+
+    // 两条路径都不得越过 barrier
+    await expect(harness.repositories.management.reservations.getByRequestKey({
+      teamId: 'team-1', requestKey: 'team-1:user-1:client-1',
+    })).resolves.toBeNull();
+    expect(harness.gateway.schedule).not.toHaveBeenCalled();
+  });
+
+  test('#724 桥接 + preflight 红：任务型 @mention 端到端仍然投递 Dispatch', async () => {
+    const harness = await createHarness({ credentialAvailable: false });
+    // 「写一篇」命中 shouldAutoCreateTaskThread → rootTaskId 存在 → 桥接 Phase 3
+    const result = await harness.app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+      body: '@agent 帮我写一篇周报', clientMessageId: 'bridge-red-phase3',
+      connectedAgentDeviceIds: ['device-1'], dispatchClaimDeviceIds: ['device-1'],
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      management: { kind: 'direct', mode: 'direct' },
+      dispatches: [{ agentId: 'agent-1' }],
+    });
+  });
+
+  test('显式配置 managed 的团队保持 fail closed（桥接回退不得外溢）', async () => {
+    const harness = await createHarness({ credentialAvailable: false });
+    await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 });
+    await expect(harness.router.route({ ...request(), rootTaskId: 'root-task-1' })).resolves.toMatchObject({
+      kind: 'unavailable',
+      diagnostics: ['MANAGEMENT_PHASE_2_PREFLIGHT_CREDENTIALAVAILABLE_MISSING'],
+    });
+  });
+
   test('shadow keeps direct routing and uses an isolated request namespace', async () => {
     const harness = await createHarness();
     await harness.router.updatePolicy({ userId: 'user-1', teamId: 'team-1', mode: 'shadow' });
@@ -428,6 +473,8 @@ describe('Phase 4 auto placement routing（#647）', () => {
 
     await expect(harness.router.route(rootedRequest())).resolves.toEqual({
       kind: 'unavailable', mode: 'managed',
+      // run 已建 → barrier 已越过：标记禁止任何上层（含 #724 桥接回退）降级成 direct
+      crossedBarrier: true,
       diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'],
     });
   });
@@ -539,6 +586,9 @@ async function createHarness(overrides: Partial<{
   workerAvailable: boolean;
   phase2WorkerAvailable: boolean;
   phase3WorkerAvailable: boolean;
+  // 所有 phase 的 preflight 共用：模拟 daemon 只有 env 变量凭证（test_only）而
+  // placementPolicy.requireLocalModelCredentials=true 时的 credentialAvailable=false。
+  credentialAvailable: boolean;
   autoProbe: { deviceAvailable: boolean; serverAvailable: boolean } | undefined | ReturnType<typeof vi.fn>;
 }> = {}) {
   const repositories = createInMemoryRepositories();
@@ -557,14 +607,14 @@ async function createHarness(overrides: Partial<{
   await repositories.channels.create({ id: 'channel-1', teamId: 'team-1', kind: 'channel', name: 'all', visibility: 'public', createdBy: 'user-1', createdAt: 1, humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'] });
   const kernel = createManagementKernel({ repositories: repositories.management, unitOfWork: repositories.managementUnitOfWork, clock, ids });
   const gateway = {
-    preflight: vi.fn(async () => ({ workerAvailable: overrides.workerAvailable ?? true, credentialAvailable: true, placementAllowed: true, budgetAvailable: true, targetAvailable: true })),
+    preflight: vi.fn(async () => ({ workerAvailable: overrides.workerAvailable ?? true, credentialAvailable: overrides.credentialAvailable ?? true, placementAllowed: true, budgetAvailable: true, targetAvailable: true })),
     preflightPhase2: vi.fn(async () => ({
-      preflight: { workerAvailable: overrides.phase2WorkerAvailable ?? true, credentialAvailable: true,
+      preflight: { workerAvailable: overrides.phase2WorkerAvailable ?? true, credentialAvailable: overrides.credentialAvailable ?? true,
         placementAllowed: true, budgetAvailable: true, targetAvailable: true },
       profileId: 'profile-1',
     })),
     preflightPhase3: vi.fn(async () => ({
-      preflight: { workerAvailable: overrides.phase3WorkerAvailable ?? true, credentialAvailable: true,
+      preflight: { workerAvailable: overrides.phase3WorkerAvailable ?? true, credentialAvailable: overrides.credentialAvailable ?? true,
         placementAllowed: true, budgetAvailable: true, targetAvailable: true },
       profileId: 'profile-1',
     })),
