@@ -17,7 +17,7 @@
 | AC7 重启/重放幂等 | `pi-acceptance/ac7-idempotent-replay.test.ts`：关闭并用同一 SQLite 重启 Server，重放同一 Job；`task-claim-broker.test.ts` 验证同一 Offer 重复接受仅生成一个 Claim；`management-tool-executor.test.ts` 验证并发重放同一 Memory 写命令只执行一次副作用 | Decision/Task/系统消息、Offer/Claim、Memory 写入三层幂等 Green | CI URL：待回填 |
 | AC8 测试、build、migration/FK | Node 24 下目标 Vitest、`build:server-next`；最终 `npm run test:ci` 与 `npm run build:packages` | 本地全量 Green（Node 24.18.0） | CI URL：待回填 |
 | AC9 main CI/CD 与生产 smoke | 合并后 main CI/CD、Railway 生产部署、strict cutover audit、public entry smoke 与 business smoke | Green | [main CI/CD](https://github.com/xiaojichao/agentbean/actions/runs/30183371318) |
-| AC10 darwin-arm64/x64 | `pi-sea-compatibility.yml` 在 GitHub `macos-15` 与 `macos-15-intel` runner 分别验证 arm64/x64 SEA 构建、启动与 fail-closed 聚合判定；边界见同目录 compatibility runbook | Green；x64 是 CI 兼容目标，不构成 Intel Device 产品支持 | [四平台 SEA 与聚合判定](https://github.com/xiaojichao/agentbean/actions/runs/30183371319) |
+| AC10 darwin-arm64/x64 | `pi-sea-compatibility.yml` 在 GitHub `macos-14` 与 `macos-15-intel` runner 分别验证 arm64/x64 SEA 构建、启动与 fail-closed 聚合判定；边界见同目录 compatibility runbook | Green；x64 是 CI 兼容目标，不构成 Intel Device 产品支持 | [四平台 SEA 与聚合判定](https://github.com/xiaojichao/agentbean/actions/runs/30183371319) |
 | AC11 公开状态、Token unknown、无秘密 | 公开健康码仅 `PI_UNAVAILABLE/PI_DEGRADED`；Token usage 缺失继续使用 unknown/null 语义 | 本地代码与既有测试覆盖；CI 待证 | CI URL：待回填 |
 
 ## 2. 本次修复
