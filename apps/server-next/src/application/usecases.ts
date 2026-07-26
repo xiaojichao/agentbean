@@ -43,6 +43,8 @@ import type {
   CreateProjectStageEdgeInput,
   CreateProjectStageInput,
   DeleteProjectStageEdgeInput,
+  ErrorCode,
+  FailureAck,
   GetChannelProjectOverviewInput,
   GetProjectDocumentBundleInput,
   ListProjectArtifactCollectionsInput,
@@ -53,6 +55,8 @@ import type {
   ProjectArtifactVersionDto,
   ProjectDocumentBundleDetailDto,
   ProjectDocumentBundleDto,
+  ProjectDocumentBundleFailureDetailsDto,
+  ProjectDocumentBundleFailureReason,
   ProjectDocumentBundleListResultDto,
   ProjectDocumentBundleMemberViewDto,
   ProjectDocumentBundleResultDto,
@@ -4686,29 +4690,31 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async createProjectDocumentBundle(bundleInput) {
       if (!(await repositories.teams.isMember(bundleInput.teamId, bundleInput.userId))) {
-        return makeFailure('FORBIDDEN', 'User is not a team member');
+        return bundleFailure('FORBIDDEN', 'User is not a team member', 'not_team_member');
       }
       const access = await ensureUserCanViewChannel(repositories, bundleInput);
       if (!access.ok) return access;
       const { channel } = access;
       const idempotencyKey = normalizeOptionalText(bundleInput.idempotencyKey);
       if (!idempotencyKey) {
-        return makeFailure('VALIDATION_ERROR', 'idempotencyKey is required');
+        return bundleFailure('VALIDATION_ERROR', 'idempotencyKey is required', 'invalid_request');
       }
       const name = normalizeOptionalText(bundleInput.name);
       if (!name) {
-        return makeFailure('VALIDATION_ERROR', 'Bundle name is required');
+        return bundleFailure('VALIDATION_ERROR', 'Bundle name is required', 'invalid_request');
       }
       const workspaceRunId = normalizeOptionalId(bundleInput.workspaceRunId);
       if (!workspaceRunId) {
-        return makeFailure('VALIDATION_ERROR', 'workspaceRunId is required');
+        return bundleFailure('VALIDATION_ERROR', 'workspaceRunId is required', 'invalid_request');
       }
       // 保留调用方给定的顺序，只在同一 documentId 重复出现时由 domain 判为 duplicate。
       const documentIds = Array.isArray(bundleInput.documentIds)
         ? bundleInput.documentIds.map((id) => normalizeOptionalId(id)).filter((id): id is string => Boolean(id))
         : [];
       if (documentIds.length === 0) {
-        return makeFailure('VALIDATION_ERROR', 'At least one Markdown document is required');
+        return bundleFailure(
+          'VALIDATION_ERROR', 'At least one Markdown document is required', 'invalid_request',
+        );
       }
       const requestFingerprint = createHash('sha256')
         .update(JSON.stringify({
@@ -4726,14 +4732,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (existingMutation) {
         if (existingMutation.requestFingerprint !== requestFingerprint) {
-          return makeFailure('CONFLICT', 'idempotencyKey was already used for a different bundle');
+          return bundleFailure(
+            'CONFLICT', 'idempotencyKey was already used for a different bundle', 'idempotency_conflict',
+          );
         }
         const replayedRecord = await repositories.projectDocumentBundles.getById({
           teamId: bundleInput.teamId,
           channelId: bundleInput.channelId,
           bundleId: existingMutation.bundleId,
         });
-        if (!replayedRecord) return makeFailure('NOT_FOUND', 'Document bundle not found');
+        if (!replayedRecord) {
+          return bundleFailure('NOT_FOUND', 'Document bundle not found', 'bundle_unavailable');
+        }
         return makeSuccess({
           bundle: await toProjectDocumentBundleDetailDto(repositories, replayedRecord),
           archived: channel.archivedAt != null,
@@ -4741,7 +4751,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
       if (channel.archivedAt != null) {
-        return makeFailure('CONFLICT', 'Archived channels are read-only');
+        return bundleFailure('CONFLICT', 'Archived channels are read-only', 'channel_archived');
       }
       const actorRole = await repositories.teams.getMemberRole(bundleInput.teamId, bundleInput.userId);
       const profile = await repositories.channelProjects.getProfile({
@@ -4752,7 +4762,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         && profile?.projectLeadId !== bundleInput.userId
         && actorRole !== 'owner'
         && actorRole !== 'admin') {
-        return makeFailure('FORBIDDEN', 'User cannot create document bundles in this channel');
+        return bundleFailure(
+          'FORBIDDEN', 'User cannot create document bundles in this channel', 'actor_not_authorized',
+        );
       }
 
       const run = await repositories.workspaceRuns.getForTeam({
@@ -4760,10 +4772,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         runId: workspaceRunId,
       });
       if (!run || run.channelId !== bundleInput.channelId) {
-        return makeFailure('NOT_FOUND', 'Workspace Run not found in this Team and Channel');
+        return bundleFailure(
+          'NOT_FOUND', 'Workspace Run not found in this Team and Channel', 'run_unavailable',
+        );
       }
       if (!(await isPublicWorkspaceRun(repositories, run))) {
-        return makeFailure('FORBIDDEN', 'Workspace Run output is not publicly visible in this channel');
+        return bundleFailure(
+          'FORBIDDEN',
+          'Workspace Run output is not publicly visible in this channel',
+          'run_not_public',
+        );
       }
       const source = await resolveProjectDocumentBundleSource(repositories, run);
       if (!source.ok) return source;
@@ -4783,9 +4801,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         candidates.push(candidate);
       }
       if (unresolved.length > 0) {
-        return makeFailure(
+        const rejections = unresolved.map((documentId) => ({ documentId, code: 'not_found' as const }));
+        return bundleFailure(
           'NOT_FOUND',
-          `Document bundle members are unavailable: ${describeBundleRejections(unresolved.map((documentId) => ({ documentId, code: 'not_found' as const })))}`,
+          `Document bundle members are unavailable: ${describeBundleRejections(rejections)}`,
+          'members_unavailable',
+          rejections,
         );
       }
       const composition = evaluateBundleComposition(candidates, {
@@ -4794,9 +4815,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         workspaceRunId,
       });
       if (composition.rejections.length > 0) {
-        return makeFailure(
+        return bundleFailure(
           'VALIDATION_ERROR',
           `Document bundle members are ineligible: ${describeBundleRejections(composition.rejections)}`,
+          'members_ineligible',
+          composition.rejections,
         );
       }
 
@@ -4834,17 +4857,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         },
       });
       if (result.kind === 'idempotency_conflict') {
-        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different bundle');
+        return bundleFailure(
+          'CONFLICT', 'idempotencyKey was already used for a different bundle', 'idempotency_conflict',
+        );
       }
       if (result.kind === 'document_scope_conflict') {
-        return makeFailure('CONFLICT', 'A member document changed scope or revision; refresh and retry');
+        return bundleFailure(
+          'CONFLICT',
+          'A member document changed scope or revision; refresh and retry',
+          'member_scope_conflict',
+        );
       }
       const committed = await repositories.projectDocumentBundles.getById({
         teamId: bundleInput.teamId,
         channelId: bundleInput.channelId,
         bundleId: result.mutation.bundleId,
       });
-      if (!committed) return makeFailure('NOT_FOUND', 'Document bundle not found');
+      if (!committed) {
+        return bundleFailure('NOT_FOUND', 'Document bundle not found', 'bundle_unavailable');
+      }
       return makeSuccess({
         bundle: await toProjectDocumentBundleDetailDto(repositories, committed),
         archived: false,
@@ -7082,7 +7113,12 @@ async function getAuthorizedWorkspaceRun(
   return { ok: true, workspaceRun };
 }
 
-async function isPublicWorkspaceRun(
+/**
+ * #830 导出：回填要在 dry-run 下给出与 apply 完全一致的裁决，就必须用**同一段**
+ * 可见性/来源判定，而不是另写一份 SQL 复刻。导出只读判定函数是让两条路径共享真相的
+ * 最小代价；写入路径依旧只有 createProjectDocumentBundle 一个入口。
+ */
+export async function isPublicWorkspaceRun(
   repositories: ServerNextRepositories,
   run: WorkspaceRunRecord,
 ): Promise<boolean> {
@@ -9150,10 +9186,30 @@ function normalizeUniqueTextItems(value: unknown): string[] {
 }
 
 /**
+ * #830：把建包失败的语义原因塞进 FailureAck.details。
+ *
+ * 调用方（尤其是回填）需要区分「内部 Invocation」「陈旧 Invocation」「成员不可见」
+ * 这些同属 FORBIDDEN/CONFLICT 的不同事实；靠解析人类可读 message 反推是脆的，
+ * 原因码才是稳定契约。message 保持原样，不影响既有断言。
+ */
+function bundleFailure(
+  error: ErrorCode,
+  message: string,
+  reason: ProjectDocumentBundleFailureReason,
+  rejections?: readonly { documentId: string; code: ProjectDocumentBundleMemberRejectionCode }[],
+): FailureAck {
+  const details: ProjectDocumentBundleFailureDetailsDto = {
+    reason,
+    ...(rejections?.length ? { rejections: rejections.map(({ documentId, code }) => ({ documentId, code })) } : {}),
+  };
+  return makeFailure(error, message, details as unknown as Record<string, unknown>);
+}
+
+/**
  * #825：从 Workspace Run 解析 Bundle 来源。Invocation 经 dispatch attempt 反查；
  * 若该 Invocation 绑定的 Task revision/attempt 已被取代，说明来源已陈旧，拒绝建包。
  */
-async function resolveProjectDocumentBundleSource(
+export async function resolveProjectDocumentBundleSource(
   repositories: ServerNextRepositories,
   run: WorkspaceRunRecord,
 ): Promise<Ack<{ source: ProjectDocumentBundleSourceDto }>> {
@@ -9165,10 +9221,18 @@ async function resolveProjectDocumentBundleSource(
   if (taskContext) {
     const task = await repositories.tasks.getById(taskContext.taskId);
     if (!task || task.teamId !== run.teamId || task.channelId !== run.channelId) {
-      return makeFailure('NOT_FOUND', 'Invocation Task is unavailable in this Team and Channel');
+      return bundleFailure(
+        'NOT_FOUND',
+        'Invocation Task is unavailable in this Team and Channel',
+        'invocation_task_unavailable',
+      );
     }
     if (task.revision !== taskContext.taskRevision) {
-      return makeFailure('CONFLICT', 'Invocation is stale: its Task revision has been superseded');
+      return bundleFailure(
+        'CONFLICT',
+        'Invocation is stale: its Task revision has been superseded',
+        'invocation_stale',
+      );
     }
   }
   const dispatch = await repositories.dispatches.getById(run.dispatchId);
@@ -9191,7 +9255,12 @@ async function resolveProjectDocumentBundleSource(
  * 把一个 documentId 装配为成员候选。这里只负责取数与可见性复验，
  * 是否够格由 domain 的 evaluateBundleComposition 裁决 —— 判定规则不在此分叉。
  */
-async function loadProjectDocumentBundleCandidate(
+/**
+ * #830 导出：回填要在 dry-run 下给出与 apply 完全一致的裁决，就必须用**同一段**
+ * 可见性/来源判定，而不是另写一份 SQL 复刻。导出只读判定函数是让两条路径共享真相的
+ * 最小代价；写入路径依旧只有 createProjectDocumentBundle 一个入口。
+ */
+export async function loadProjectDocumentBundleCandidate(
   repositories: ServerNextRepositories,
   input: { teamId: string; channelId: string; documentId: string },
 ): Promise<ProjectDocumentBundleMemberCandidate | null> {

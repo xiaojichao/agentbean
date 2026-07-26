@@ -44,6 +44,8 @@ import {
 } from './infra/sqlite/repositories.js';
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
 import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
+import { createProjectDocumentBundleBackfill } from './application/project-document-bundle-backfill.js';
+import { parseProjectDocumentRolloutConfig, type ProjectDocumentRolloutConfig } from './application/project-document-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -62,6 +64,7 @@ export interface ServerNextDevConfig {
   webEntry?: 'preview' | 'app';
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
+  projectDocumentRollout?: ProjectDocumentRolloutConfig;
   maxArtifactBytes?: number;
   serverWorker?: {
     workerPoolId: string;
@@ -108,6 +111,7 @@ interface AppWithCleanup {
   app: ServerNextUseCases;
   artifactPreviewService?: ArtifactPreviewService;
   channelFileBackfill?: NonNullable<ReturnType<typeof createChannelFileBackfillIfSupported>>;
+  projectDocumentBundleBackfill?: ReturnType<typeof createProjectDocumentBundleBackfill>;
   managementWorkerScheduler?: DeviceWorkerScheduler;
   serverWorkerScheduler?: ServerWorkerScheduler;
   taskClaimBroker?: TaskClaimBroker;
@@ -248,10 +252,13 @@ export async function startServerNextDevServer(
         return;
       }
       if (url.pathname === '/metricsz') {
+        // #830 报告只含计数与原因码，不含正文、文件名或设备路径，可安全随指标暴露。
+        const documentBundleBackfill = await appWithCleanup.projectDocumentBundleBackfill?.snapshot();
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({
           ok: true,
           channelFiles: config.channelFileMetrics?.snapshot(),
+          ...(documentBundleBackfill ? { documentBundleBackfill } : {}),
         }));
         return;
       }
@@ -327,6 +334,26 @@ export async function startServerNextDevServer(
       }
     }, 100)
     : undefined;
+  // #830：与 channelFileBackfill 同样的分批节奏。裁决过程本身可暂停/恢复 —— 游标只推进到
+  // 连续成功的最后一个候选，进程随时停掉都能从同一位置续跑。
+  let projectDocumentBundleBackfillRunning = false;
+  const projectDocumentBundleBackfillInterval = appWithCleanup.projectDocumentBundleBackfill
+    ? setInterval(() => {
+      if (projectDocumentBundleBackfillRunning) return;
+      projectDocumentBundleBackfillRunning = true;
+      void appWithCleanup.projectDocumentBundleBackfill?.runBatch()
+        .then((result) => {
+          if (result.completed && projectDocumentBundleBackfillInterval) {
+            clearInterval(projectDocumentBundleBackfillInterval);
+          }
+        })
+        // 批次内已逐候选记过 failed，这里只保证定时器不被未捕获拒绝打断。
+        .catch(() => undefined)
+        .finally(() => {
+          projectDocumentBundleBackfillRunning = false;
+        });
+    }, 250)
+    : undefined;
   const address = httpServer.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
   return {
@@ -344,6 +371,9 @@ export async function startServerNextDevServer(
       }
       if (channelFileBackfillInterval) {
         clearInterval(channelFileBackfillInterval);
+      }
+      if (projectDocumentBundleBackfillInterval) {
+        clearInterval(projectDocumentBundleBackfillInterval);
       }
       await coordinationScheduler?.stop();
       stopVersionRefresh();
@@ -1525,6 +1555,7 @@ function createDefaultApp(
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
   const channelFileMetrics = config.channelFileMetrics ?? createChannelFileMetrics();
+  const projectDocumentRollout = config.projectDocumentRollout ?? parseProjectDocumentRolloutConfig();
   if (config.storage === 'memory') {
     const artifactPreviewService = channelFileRollout.previewWorker
       ? createArtifactPreviewService({ outputDir: join(config.dataDir, 'artifact-previews') })
@@ -1542,23 +1573,27 @@ function createDefaultApp(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
     );
+    const app = createServerNextUseCases({
+      repositories,
+      clock,
+      ids,
+      sessionSecret: config.sessionSecret,
+      artifactContentStore,
+      channelFileRollout,
+      channelFileMetrics,
+      ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
+      managementRouter: management.router,
+      managementKernel: management.kernel,
+      taskCoordinationKernel: management.taskCoordinationKernel,
+      serverCapsuleRuntimeContextResolver,
+      messageIngestionMode,
+    });
     return {
-      app: createServerNextUseCases({
-        repositories,
-        clock,
-        ids,
-        sessionSecret: config.sessionSecret,
-        artifactContentStore,
-        channelFileRollout,
-        channelFileMetrics,
-        ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
-        managementRouter: management.router,
-        managementKernel: management.kernel,
-        taskCoordinationKernel: management.taskCoordinationKernel,
-        serverCapsuleRuntimeContextResolver,
-        messageIngestionMode,
-      }),
+      app,
       artifactPreviewService,
+      projectDocumentBundleBackfill: createProjectDocumentBundleBackfillIfEnabled({
+        repositories, app, clock, rollout: projectDocumentRollout,
+      }),
       managementWorkerScheduler: management.scheduler,
       serverWorkerScheduler: management.serverScheduler,
       taskClaimBroker,
@@ -1605,24 +1640,28 @@ function createDefaultApp(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
   );
+  const app = createServerNextUseCases({
+    repositories,
+    clock,
+    ids,
+    sessionSecret: config.sessionSecret,
+    artifactContentStore,
+    channelFileRollout,
+    channelFileMetrics,
+    ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
+    managementRouter: management.router,
+    managementKernel: management.kernel,
+    taskCoordinationKernel: management.taskCoordinationKernel,
+    serverCapsuleRuntimeContextResolver,
+    messageIngestionMode,
+  });
   return {
-    app: createServerNextUseCases({
-      repositories,
-      clock,
-      ids,
-      sessionSecret: config.sessionSecret,
-      artifactContentStore,
-      channelFileRollout,
-      channelFileMetrics,
-      ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
-      managementRouter: management.router,
-      managementKernel: management.kernel,
-      taskCoordinationKernel: management.taskCoordinationKernel,
-      serverCapsuleRuntimeContextResolver,
-      messageIngestionMode,
-    }),
+    app,
     artifactPreviewService,
     channelFileBackfill,
+    projectDocumentBundleBackfill: createProjectDocumentBundleBackfillIfEnabled({
+      repositories, app, clock, rollout: projectDocumentRollout,
+    }),
     managementWorkerScheduler: management.scheduler,
     serverWorkerScheduler: management.serverScheduler,
     taskClaimBroker,
@@ -1636,6 +1675,25 @@ function createDefaultApp(
       teamDb.close();
     },
   };
+}
+
+/**
+ * #830：开关关闭时返回 undefined —— 回填的存在与否完全不影响既有 Bundle 读路径与
+ * #770 文件库，因此关闭它只是「不再产生新的裁决」，没有任何回退动作。
+ */
+function createProjectDocumentBundleBackfillIfEnabled(input: {
+  repositories: ServerNextRepositories;
+  app: ServerNextUseCases;
+  clock: { now(): number };
+  rollout: ProjectDocumentRolloutConfig;
+}) {
+  if (!input.rollout.bundleBackfill) return undefined;
+  return createProjectDocumentBundleBackfill({
+    repositories: input.repositories,
+    app: input.app,
+    clock: input.clock,
+    mode: input.rollout.bundleBackfillDryRun ? 'dry_run' : 'apply',
+  });
 }
 
 function artifactPreviewBindings(
