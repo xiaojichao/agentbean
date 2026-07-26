@@ -354,15 +354,15 @@ export interface SubmitProjectArtifactReviewInput {
   /** 受审版本；Server 据此解析所属集合与 Stage 语境。 */
   versionId: ID;
   decision: ProjectArtifactReviewDecision;
+  /** 审核意见必须非空，确保决定具备可追溯语境。 */
   comment: string;
-  /** 可选依据引用；Server 复验每一条的可见性与作用域。 */
-  basis?: ProjectArtifactReviewBasisRefDto[];
+  /** 至少一条依据引用；Server 复验每一条的可见性与作用域。 */
+  basis: ProjectArtifactReviewBasisRefDto[];
 }
 
 /**
  * #824 PI Manager 代表用户最终化时携带的上下文。
- * 缺省表示已认证的人类本人在操作 —— Web socket 端点只对已认证人类开放，
- * 因此本字段永远不能被用来「降级」成人类，只能用来声明更严格的 Manager 路径。
+ * 仅供受信的 Server Manager 入口注入；人类 Web socket 会移除此字段。
  */
 export interface ProjectArtifactManagerFinalizationContextDto {
   managementRunId: ID;

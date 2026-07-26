@@ -259,6 +259,30 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
     })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
   });
 
+  test('审核必须记录非空意见与至少一条可见依据', async () => {
+    const version = successVersion(await promoteFirst());
+    await expect(app.submitArtifactReview({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'review-empty-comment',
+      versionId: version.id,
+      decision: 'approved',
+      comment: '  ',
+      basis: [{ kind: 'message', refId: 'message-artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.submitArtifactReview({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'review-empty-basis',
+      versionId: version.id,
+      decision: 'approved',
+      comment: '审核通过',
+      basis: [],
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+  });
+
   test('归档频道拒绝新审核，但归档前的相同请求仍可回放', async () => {
     const version = successVersion(await promoteFirst());
     await review({ versionId: version.id, idempotencyKey: 'review-before-archive' });
@@ -353,6 +377,34 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
     });
   });
 
+  test('并发切换最终版时 revision fence 只允许一个提交成功', async () => {
+    const first = await promoteFirst();
+    const collectionId = successCollection(first).id;
+    const firstVersion = successVersion(first);
+    const secondVersion = successVersion(await promoteSecond(collectionId, 1));
+    await review({ versionId: firstVersion.id, idempotencyKey: 'review-concurrent-1' });
+    await review({ versionId: secondVersion.id, idempotencyKey: 'review-concurrent-2' });
+
+    const results = await Promise.all([
+      finalize({
+        collectionId,
+        versionId: firstVersion.id,
+        expectedCollectionRevision: 2,
+        idempotencyKey: 'finalize-concurrent-1',
+      }),
+      finalize({
+        collectionId,
+        versionId: secondVersion.id,
+        expectedCollectionRevision: 2,
+        idempotencyKey: 'finalize-concurrent-2',
+      }),
+    ]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      expect.objectContaining({ ok: false, error: 'CONFLICT' }),
+    ]);
+  });
+
   test('未审核、最新 rejected 或 changes_requested 的版本不能最终化', async () => {
     const promoted = await promoteFirst();
     const collection = successCollection(promoted);
@@ -414,6 +466,23 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
     })).resolves.toMatchObject({ ok: true, collection: { finalVersionId: version.id } });
   });
 
+  test('产物审核与最终化不建立第二套 Task 状态', async () => {
+    const promoted = await promoteFirst();
+    const collection = successCollection(promoted);
+    const version = successVersion(promoted);
+    await review({ versionId: version.id, idempotencyKey: 'review-task-state' });
+    await finalize({
+      collectionId: collection.id,
+      versionId: version.id,
+      expectedCollectionRevision: 1,
+      idempotencyKey: 'finalize-task-state',
+    });
+    await expect(repositories.tasks.getById('task-1')).resolves.toMatchObject({
+      id: 'task-1',
+      status: 'todo',
+    });
+  });
+
   test('陈旧 revision 与无决定权成员的最终化都被拒绝', async () => {
     const promoted = await promoteFirst();
     const collection = successCollection(promoted);
@@ -471,6 +540,25 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
     const collection = successCollection(promoted);
     const version = successVersion(promoted);
     await review({ versionId: version.id, idempotencyKey: 'review-1' });
+    await repositories.management.runs.create({
+      schemaVersion: 1,
+      id: 'management-run-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      rootMessageId: 'message-artifact-1',
+      initiatedByUserId: 'owner-1',
+      mode: 'managed',
+      status: 'running',
+      placementPolicy: {
+        placement: 'device',
+        allowServerContext: false,
+        requireLocalModelCredentials: true,
+      },
+      checkpointRevision: 0,
+      budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
+      createdAt: now,
+      updatedAt: now,
+    });
     await expect(app.setArtifactFinalVersion({
       userId: 'owner-1',
       teamId: 'team-1',

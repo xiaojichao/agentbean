@@ -23,7 +23,12 @@ import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
-import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
+import {
+  ProjectArtifactLibrary,
+  type PromoteArtifactDraft,
+  type SetArtifactFinalVersionDraft,
+  type SubmitArtifactReviewDraft,
+} from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
@@ -683,6 +688,19 @@ export default function ChatPage() {
   const activeChannelObj = channels.find((c) => c.id === activeChannel);
   const activeName = activeChannelObj?.name ?? '';
   const activeDm = dms.find((d) => d.id === activeChannel);
+  const currentHumanMember = channelMembers.find(
+    (member) => member.kind === 'human' && member.id === currentUser?.id,
+  );
+  const canDecideProjectArtifacts = Boolean(
+    currentUser?.id
+    && channelProjectOverview
+    && (
+      currentHumanMember?.role === 'owner'
+      || currentHumanMember?.role === 'admin'
+      || channelProjectOverview.profile.projectLeadId === currentUser.id
+      || channelProjectOverview.stages.some((stage) => stage.reviewerIds.includes(currentUser.id))
+    ),
+  );
 
   // #823 提升只提交 Server 需要的显式事实；文件名、目录与 mime 不参与集合判定。
   const promoteChannelArtifact = useCallback(async (draft: PromoteArtifactDraft): Promise<string | null> => {
@@ -697,6 +715,38 @@ export default function ChatPage() {
     });
     if (!result.ok || !result.library) {
       return result.message ?? '提升逻辑产物版本失败，请刷新后重试';
+    }
+    setProjectArtifactLibrary(result.library);
+    return null;
+  }, [activeChannel]);
+
+  const reviewChannelArtifact = useCallback(async (
+    draft: SubmitArtifactReviewDraft,
+  ): Promise<string | null> => {
+    if (!activeChannel) return '请先选择一个频道';
+    const result = await projectEvents().submitArtifactReview({
+      channelId: activeChannel,
+      idempotencyKey: nextProjectArtifactMutationKey('project-artifact-review'),
+      ...draft,
+    });
+    if (!result.ok || !result.library) {
+      return result.message ?? '提交产物审核失败，请刷新后重试';
+    }
+    setProjectArtifactLibrary(result.library);
+    return null;
+  }, [activeChannel]);
+
+  const finalizeChannelArtifact = useCallback(async (
+    draft: SetArtifactFinalVersionDraft,
+  ): Promise<string | null> => {
+    if (!activeChannel) return '请先选择一个频道';
+    const result = await projectEvents().setArtifactFinalVersion({
+      channelId: activeChannel,
+      idempotencyKey: nextProjectArtifactMutationKey('project-artifact-finalization'),
+      ...draft,
+    });
+    if (!result.ok || !result.library) {
+      return result.message ?? '设置最终版失败，请刷新后重试';
     }
     setProjectArtifactLibrary(result.library);
     return null;
@@ -2119,7 +2169,10 @@ export default function ChatPage() {
                   ...(file.logicalPath ? { logicalPath: file.logicalPath } : {}),
                 }))}
                 canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
+                canDecide={canDecideProjectArtifacts}
                 onPromote={promoteChannelArtifact}
+                onReview={reviewChannelArtifact}
+                onFinalize={finalizeChannelArtifact}
               />
             ) : (
               <ConversationFiles
@@ -2738,6 +2791,7 @@ function ConversationTasks({
   const [assigneeId, setAssigneeId] = useState(defaultAssigneeId ?? '');
   const [saving, setSaving] = useState(false);
   const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
+  const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const projectTaskVersion = tasks
     .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
     .sort()
@@ -2750,13 +2804,22 @@ function ConversationTasks({
   useEffect(() => {
     let active = true;
     setProjectOverview(undefined);
-    void projectEvents().overview(channelId).then((result) => {
-      if (active && result.ok) setProjectOverview(result.overview ?? null);
+    void Promise.all([
+      projectEvents().overview(channelId),
+      projectEvents().artifactCollections(channelId),
+    ]).then(([overviewResult, artifactResult]) => {
+      if (!active) return;
+      if (overviewResult.ok) setProjectOverview(overviewResult.overview ?? null);
+      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
     });
     return () => { active = false; };
   }, [channelId, projectTaskVersion]);
 
   useEffect(() => projectEvents().onUpdated(channelId, setProjectOverview), [channelId]);
+  useEffect(
+    () => projectEvents().onArtifactsUpdated(channelId, setProjectArtifactLibrary),
+    [channelId],
+  );
 
   const filteredTasks = tasks.filter((task) => {
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
@@ -2926,6 +2989,7 @@ function ConversationTasks({
           tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
           participants={participants}
           currentUserId={currentUserId}
+          artifactLibrary={projectArtifactLibrary}
           onCreate={createInitialProjectStage}
           onCreateEdge={createProjectStageEdge}
           onDeleteEdge={deleteProjectStageEdge}
@@ -5919,4 +5983,10 @@ function PinnedView({ pinnedMessages, onUnpin, onJump, humanProfiles }: { pinned
       </div>
     </div>
   );
+}
+
+function nextProjectArtifactMutationKey(prefix: string): string {
+  return typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${prefix}-${Date.now()}`;
 }

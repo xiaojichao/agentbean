@@ -1173,6 +1173,14 @@ describe('server-next socket handlers', () => {
       versionId: 'version-1',
       expectedCollectionRevision: 2,
       idempotencyKey: 'final-key',
+      manager: {
+        managementRunId: 'run-spoofed',
+        humanConfirmation: {
+          kind: 'message',
+          refId: 'message-owner',
+          confirmedBy: 'owner-1',
+        },
+      },
     });
     expect(setArtifactFinalVersion).toHaveBeenCalledWith({
       userId: 'user-session',

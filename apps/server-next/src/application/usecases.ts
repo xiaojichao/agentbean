@@ -4699,15 +4699,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('VALIDATION_ERROR', 'Unsupported project artifact review decision');
       }
       const basisInput = Array.isArray(projectInput.basis) ? projectInput.basis : [];
-      if (basisInput.some((ref) =>
+      if (basisInput.length === 0 || basisInput.some((ref) =>
         !ref || !isProjectArtifactReviewBasisKind(ref.kind) || !normalizeOptionalId(ref.refId))) {
-        return makeFailure('VALIDATION_ERROR', 'Review basis entries require a supported kind and refId');
+        return makeFailure(
+          'VALIDATION_ERROR',
+          'At least one review basis entry with a supported kind and refId is required',
+        );
       }
       const basis: ProjectArtifactReviewBasisRefDto[] = basisInput.map((ref) => ({
         kind: ref.kind,
         refId: normalizeOptionalId(ref.refId) as string,
       }));
       const comment = typeof projectInput.comment === 'string' ? projectInput.comment.trim() : '';
+      if (!comment) {
+        return makeFailure('VALIDATION_ERROR', 'Review comment is required');
+      }
       const versions = await repositories.channelProjects.listArtifactVersions({
         teamId: projectInput.teamId,
         channelId: projectInput.channelId,
@@ -4921,6 +4927,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           || !confirmationRefId
           || !confirmedBy) {
           return makeFailure('VALIDATION_ERROR', 'Manager finalization requires a message confirmation');
+        }
+        const managementRun = await repositories.management.runs.getById(managementRunId);
+        if (!managementRun
+          || managementRun.teamId !== projectInput.teamId
+          || managementRun.channelId !== projectInput.channelId
+          || managementRun.rootMessageId !== confirmationRefId
+          || managementRun.initiatedByUserId !== confirmedBy) {
+          return makeFailure(
+            'FORBIDDEN',
+            'Manager finalization run is invalid, out of scope, or not bound to the confirmer',
+          );
         }
         const message = await repositories.messages.getById(confirmationRefId);
         if (!message

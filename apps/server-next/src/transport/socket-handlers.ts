@@ -438,6 +438,8 @@ export function registerWebSocketHandlers(
     options.afterProjectArtifactMutation?.(payload, result), {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
+    // `manager` 只能由受信 Server Manager 入口注入，不能接受 Web 客户端自报身份。
+    augmentInput: withoutManagerContext,
   });
   bind(socket, WEB_EVENTS.project.documentBundles, app, 'listProjectDocumentBundles', undefined, {
     authenticatedUser: options.authenticatedUser,
@@ -948,6 +950,12 @@ function withStringArrayPayload(payload: unknown, key: string, values: Array<str
     return payload;
   }
   return { ...payload, [key]: strings };
+}
+
+function withoutManagerContext(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const { manager: _manager, ...humanInput } = payload as Record<string, unknown>;
+  return humanInput;
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

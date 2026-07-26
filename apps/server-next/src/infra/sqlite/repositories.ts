@@ -188,7 +188,11 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0050_project_document_bundles.sql');
   applyMigration(db, 'team/0051_project_stage_edges.sql');
-  applyMigration(db, 'team/0053_project_artifact_reviews.sql');
+  // 0053 依赖 0049 的逻辑产物表；缺少 artifacts 的历史库会跳过 0049，
+  // 因而必须沿用相同门禁，避免旧库升级在不存在的表上执行 ALTER。
+  if (sqliteTableExists(db, 'project_artifact_collections')) {
+    applyMigration(db, 'team/0053_project_artifact_reviews.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
