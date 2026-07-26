@@ -342,6 +342,36 @@ describe('server-next dev server entry', () => {
     });
   });
 
+  test('memory storage 开启文档包回填时会在 metricsz 暴露 dry-run 报告', async () => {
+    const server = await startServerNextDevServer({
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+        projectDocumentRollout: {
+          bundleBackfill: true,
+          bundleBackfillDryRun: true,
+        },
+      },
+    });
+    cleanups.push(() => server.close());
+
+    await expect.poll(
+      async () => fetch(`${server.baseUrl}/metricsz`).then((response) => response.json()),
+    ).toMatchObject({
+      ok: true,
+      documentBundleBackfill: {
+        mode: 'dry_run',
+        completed: true,
+        candidates: 0,
+        created: 0,
+      },
+    });
+  });
+
   test('serves the web-next app as root web entry while keeping preview available', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,

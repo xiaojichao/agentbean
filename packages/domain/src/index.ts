@@ -44,3 +44,4 @@ export * from './project-stage-policy.js';
 export * from './project-artifact-policy.js';
 export * from './project-document-bundle-policy.js';
 export * from './project-reference-policy.js';
+export * from './project-document-bundle-backfill-policy.js';

@@ -81,6 +81,65 @@ export interface CreateProjectDocumentBundleInput extends ListProjectDocumentBun
   documentIds: readonly ID[];
 }
 
+/**
+ * #830：建包失败的结构化原因。放进 FailureAck.details 后，调用方（回填、Web）
+ * 不必解析人类可读 message 就能精确归因 —— 回填的原因码统计正是建立在它之上。
+ */
+export type ProjectDocumentBundleFailureReason =
+  | 'not_team_member'
+  | 'invalid_request'
+  | 'idempotency_conflict'
+  | 'channel_archived'
+  | 'actor_not_authorized'
+  | 'run_unavailable'
+  | 'run_not_public'
+  | 'invocation_task_unavailable'
+  | 'invocation_stale'
+  | 'members_unavailable'
+  | 'members_ineligible'
+  | 'member_scope_conflict'
+  | 'bundle_unavailable';
+
+/** 逐成员原因码。code 在合同层是不透明字符串，权威取值由 domain 成员资格策略给出。 */
+export interface ProjectDocumentBundleMemberRejectionDto {
+  readonly documentId: ID;
+  readonly code: string;
+}
+
+export interface ProjectDocumentBundleFailureDetailsDto {
+  readonly reason: ProjectDocumentBundleFailureReason;
+  readonly rejections?: readonly ProjectDocumentBundleMemberRejectionDto[];
+}
+
+/** dry_run 只裁决并记录，不写任何 Bundle；apply 才落库。 */
+export type ProjectDocumentBundleBackfillMode = 'dry_run' | 'apply';
+
+/**
+ * #830 回填报告。只含计数与稳定原因码 —— 不含正文、文件名、相对路径或设备绝对路径，
+ * 因此可以安全地随运维指标端点一起暴露。
+ */
+export interface ProjectDocumentBundleBackfillReportDto {
+  readonly mode: ProjectDocumentBundleBackfillMode;
+  /** 全部候选 Run 已裁决完毕。 */
+  readonly completed: boolean;
+  /** 已裁决的候选 Run 总数。 */
+  readonly candidates: number;
+  /** 证明可以成包的 Run 数；dry_run 下即「将会创建」。 */
+  readonly backfillable: number;
+  /** 实际写入的 Bundle 数；dry_run 恒为 0。 */
+  readonly created: number;
+  /** 已有 Bundle（人工创建或前一轮回填），本轮不改动。 */
+  readonly existing: number;
+  /** 来源事实矛盾或成员集不可证，保持未分组。 */
+  readonly ambiguous: number;
+  /** 有明确、非歧义原因被排除。 */
+  readonly skipped: number;
+  /** 未预期错误；这些候选会在后续批次重试。 */
+  readonly failed: number;
+  /** 原因码直方图。 */
+  readonly reasons: Readonly<Record<string, number>>;
+}
+
 export interface ProjectDocumentBundleListResultDto {
   readonly bundles: readonly ProjectDocumentBundleDto[];
   readonly archived: boolean;

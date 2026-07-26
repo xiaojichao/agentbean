@@ -57,6 +57,9 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactMutationRecord,
   ProjectArtifactVersionRecord,
+  ProjectDocumentBundleBackfillCandidateRunRecord,
+  ProjectDocumentBundleBackfillOutcomeRecord,
+  ProjectDocumentBundleBackfillProgressRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
@@ -119,6 +122,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectReferenceSelections = new Map<string, ProjectReferenceSelectionRecord>();
   const projectReferenceItems = new Map<string, ProjectReferenceItemRecord>();
   const projectReferenceSetMutations = new Map<string, ProjectReferenceSetMutationRecord>();
+  const projectDocumentBundleBackfillProgress
+    = new Map<string, ProjectDocumentBundleBackfillProgressRecord>();
+  const projectDocumentBundleBackfillOutcomes
+    = new Map<string, ProjectDocumentBundleBackfillOutcomeRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
@@ -2023,6 +2030,110 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const item of input.items) projectReferenceItems.set(item.id, { ...item });
         projectReferenceSetMutations.set(mutationKey, { ...input.mutation });
         return { kind: 'created', mutation: { ...input.mutation } };
+      },
+    },
+    projectDocumentBundleBackfill: {
+      async getProgress(input) {
+        return projectDocumentBundleBackfillProgress.get(`${input.backfillId}:${input.mode}`) ?? null;
+      },
+      async saveProgress(input) {
+        // 复制一份再存：外泄共享可变引用会让调用方的后续改动悄悄写进「已持久化」的状态。
+        projectDocumentBundleBackfillProgress.set(`${input.backfillId}:${input.mode}`, {
+          ...input,
+          ...(input.cursor ? { cursor: { ...input.cursor } } : {}),
+        });
+      },
+      async listCandidateRuns(input) {
+        const candidatesByRun = new Map<string, ProjectDocumentBundleBackfillCandidateRunRecord>();
+        for (const document of channelDocuments.values()) {
+          for (const revision of channelDocumentRevisions.values()) {
+            if (revision.documentId !== document.id) continue;
+            const runId = revision.derivationSource?.workspaceRunId;
+            if (!runId) continue;
+            const key = `${document.teamId}:${runId}`;
+            const run = workspaceRuns.get(runId);
+            const candidate = run?.teamId === document.teamId
+              ? {
+                runId: run.id,
+                teamId: run.teamId,
+                channelId: run.channelId,
+                createdAt: run.createdAt,
+              }
+              : {
+                runId,
+                teamId: document.teamId,
+                channelId: document.channelId,
+                createdAt: document.createdAt,
+              };
+            const existing = candidatesByRun.get(key);
+            if (!existing
+              || candidate.createdAt < existing.createdAt
+              || (candidate.createdAt === existing.createdAt
+                && candidate.channelId.localeCompare(existing.channelId) < 0)) {
+              candidatesByRun.set(key, candidate);
+            }
+          }
+        }
+        const candidates = Array.from(candidatesByRun.values())
+          .sort((left, right) => left.createdAt - right.createdAt
+            || left.runId.localeCompare(right.runId));
+        const after = input.cursor;
+        return candidates
+          .filter((run) => !after
+            || run.createdAt > after.runCreatedAt
+            || (run.createdAt === after.runCreatedAt && run.runId > after.runId))
+          .slice(0, input.limit);
+      },
+      async listRunDocumentFacts(input) {
+        return Array.from(channelDocuments.values())
+          .filter((document) => document.teamId === input.teamId)
+          .map((document) => {
+            const revisions = Array.from(channelDocumentRevisions.values())
+              .filter((revision) => revision.documentId === document.id);
+            const derivedEver = revisions.some(
+              (revision) => revision.derivationSource?.workspaceRunId === input.workspaceRunId,
+            );
+            if (!derivedEver) return null;
+            const current = channelDocumentRevisions.get(document.currentRevisionId);
+            return {
+              documentId: document.id,
+              channelId: document.channelId,
+              createdAt: document.createdAt,
+              // derivationSource 会被后续 revision 继承，因此还要求 source === 'run'，
+              // 与 SQLite 实现保持同一语义。
+              derivesFromRunNow: current?.derivationSource?.workspaceRunId === input.workspaceRunId
+                && current?.source === 'run',
+            };
+          })
+          .filter((fact): fact is NonNullable<typeof fact> => fact !== null)
+          .sort((left, right) => left.createdAt - right.createdAt
+            || left.documentId.localeCompare(right.documentId));
+      },
+      async findBundleIdForRun(input) {
+        return Array.from(projectDocumentBundles.values())
+          .filter((bundle) => bundle.teamId === input.teamId
+            && bundle.channelId === input.channelId
+            && bundle.source.workspaceRunId === input.workspaceRunId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))[0]?.id
+          ?? null;
+      },
+      async recordOutcome(input) {
+        projectDocumentBundleBackfillOutcomes.set(
+          `${input.backfillId}:${input.mode}:${input.workspaceRunId}`,
+          { ...input },
+        );
+      },
+      async summarize(input) {
+        const outcomes = {
+          created: 0, would_create: 0, existing: 0, ambiguous: 0, skipped: 0, failed: 0,
+        };
+        const reasons: Record<string, number> = {};
+        for (const record of projectDocumentBundleBackfillOutcomes.values()) {
+          if (record.backfillId !== input.backfillId || record.mode !== input.mode) continue;
+          outcomes[record.outcome] += 1;
+          if (record.reasonCode) reasons[record.reasonCode] = (reasons[record.reasonCode] ?? 0) + 1;
+        }
+        return { outcomes, reasons };
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),
