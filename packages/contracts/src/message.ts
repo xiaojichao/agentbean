@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { ArtifactDto, WorkspaceRunDto } from './artifact.js';
 import type { DispatchStatus } from './dispatch.js';
+import type { ProjectReferenceSetDto } from './project-reference.js';
 
 export type SenderKind = 'human' | 'agent' | 'system';
 export type RouteReason = 'MENTION' | 'DIRECT' | 'CHANNEL_DEFAULT' | 'MANUAL';
@@ -44,6 +45,7 @@ export interface MessageDto {
   meta?: MessageMetaDto;
   artifacts?: ArtifactDto[];
   workspaceRun?: WorkspaceRunDto;
+  referenceSet?: ProjectReferenceSetDto;
   reactionCounts?: Record<string, number>;
   saved?: boolean;
   /**

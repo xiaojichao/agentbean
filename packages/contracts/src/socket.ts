@@ -198,6 +198,9 @@ export const WEB_EVENTS = {
     documentBundle: 'project:document-bundle',
     createDocumentBundle: 'project:create-document-bundle',
     documentBundlesUpdated: 'project:document-bundles-updated',
+    resolveReferences: 'project:resolve-references',
+    resolveReferenceOrdinal: 'project:resolve-reference-ordinal',
+    referencesUpdated: 'project:references-updated',
   },
   dm: {
     start: 'dm:start',

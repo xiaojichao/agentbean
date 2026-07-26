@@ -9,6 +9,7 @@ import type {
   ProjectArtifactReviewBasisRefDto,
   ProjectArtifactReviewDecision,
   ProjectArtifactVersionDto,
+  ProjectReferenceSelectionRequestDto,
 } from '@agentbean/contracts';
 
 export interface PromotableArtifactOption {
@@ -56,6 +57,8 @@ export function ProjectArtifactLibrary({
   canPromote,
   canDecideVersion,
   onPromote,
+  referenceSelections = [],
+  onReferenceSelection,
   onReview,
   onFinalize,
 }: {
@@ -65,6 +68,8 @@ export function ProjectArtifactLibrary({
   canPromote: boolean;
   canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
+  referenceSelections?: readonly ProjectReferenceSelectionRequestDto[];
+  onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
 }) {
@@ -122,6 +127,8 @@ export function ProjectArtifactLibrary({
             <CollectionCard
               key={collection.id}
               collection={collection}
+              referenceSelections={referenceSelections}
+              onReferenceSelection={onReferenceSelection}
               canDecideVersion={archived ? undefined : canDecideVersion}
               onReview={onReview}
               onFinalize={onFinalize}
@@ -135,6 +142,8 @@ export function ProjectArtifactLibrary({
 
 function CollectionCard({
   collection,
+  referenceSelections,
+  onReferenceSelection,
   canDecideVersion,
   onReview,
   onFinalize,
@@ -143,6 +152,8 @@ function CollectionCard({
   canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
+  referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
+  onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
 }) {
   const currentVersion = collection.versions.find((version) => version.id === collection.currentVersionId);
   const history = [...collection.versions].sort((left, right) => right.versionNumber - left.versionNumber);
@@ -191,6 +202,29 @@ function CollectionCard({
                 <span className="truncate text-neutral-600">{version.artifact.filename}</span>
                 {version.id === collection.currentVersionId && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">当前</span>
+                )}
+                {onReferenceSelection && (
+                  <button
+                    type="button"
+                    data-smoke="project-reference-artifact-version"
+                    onClick={() => {
+                      const selected = referenceSelections.some((selection) =>
+                        selection.kind === 'artifact_version' && selection.versionId === version.id);
+                      onReferenceSelection(selected
+                        ? null
+                        : {
+                          kind: 'artifact_version',
+                          collectionId: collection.id,
+                          versionId: version.id,
+                        }, version.id);
+                    }}
+                    className="ml-auto border border-neutral-300 bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 hover:border-neutral-900"
+                  >
+                    {referenceSelections.some((selection) =>
+                      selection.kind === 'artifact_version' && selection.versionId === version.id)
+                      ? '已引用'
+                      : '引用此版'}
+                    </button>
                 )}
                 {version.id === collection.finalVersionId && (
                   <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-800">最终</span>

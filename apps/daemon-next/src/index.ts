@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -217,10 +217,29 @@ export interface DispatchRequestPayload {
   managementInvocationId?: string;
   managementContext?: DispatchManagementContextDto;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
+  projectReferenceSets?: readonly ProjectReferenceSetDto[];
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
   customAgent?: DaemonCustomAgent | null;
+}
+
+export function appendProjectReferenceContext(
+  prompt: string,
+  referenceSets: readonly ProjectReferenceSetDto[] | undefined,
+): string {
+  if (!referenceSets?.length) return prompt;
+  const lines = referenceSets.flatMap((set) => set.selections.flatMap((selection) =>
+    selection.items.map((item) => item.kind === 'document_revision'
+      ? `- 文档 ${JSON.stringify(item.filename)}：documentId=${item.documentId} revisionId=${item.revisionId} revision=${item.revisionNumber}`
+      : `- 逻辑产物 ${JSON.stringify(item.filename)}：collectionId=${item.collectionId} versionId=${item.versionId} version=${item.versionNumber} artifactId=${item.artifactId}`)));
+  if (lines.length === 0) return prompt;
+  return [
+    prompt,
+    '## 项目引用（发送时冻结）',
+    '以下身份与版本是本次执行的权威输入，不得替换为当前版或最终版。对应内容已作为输入附件提供时，请读取附件。',
+    ...lines,
+  ].join('\n\n');
 }
 
 export type AgentEnvResolver = (envRef: { agentId: string; teamId: string }) => Promise<Record<string, string>>;
@@ -282,6 +301,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
+  const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let acceptingDispatches = false;
@@ -362,7 +382,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         rememberRecoveryCwds(cwds);
         void recoverPersistedWorkspaceRuns(outbox, Array.from(knownRecoveryCwds));
       };
-      rememberRecoveryCwds(latestSnapshot.agents.map((agent) => agent.cwd));
+      rememberRecoveryCwds([
+        ...latestSnapshot.agents.map((agent) => agent.cwd),
+        attachmentWorkspaceRoot,
+      ]);
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -503,9 +526,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
-          // Per-run workspace + input attachments (only when customAgent.cwd is set).
-          const workspace = request.customAgent?.cwd
-            ? prepareWorkspaceRun(request.customAgent.cwd, request.id)
+          request.prompt = appendProjectReferenceContext(
+            request.prompt,
+            request.projectReferenceSets,
+          );
+
+          // 未配置 agent cwd 时仍以 daemon home 作为受控 workspace 根目录，
+          // 保证普通附件和冻结引用内容都能下载并通过绝对路径暴露给执行器。
+          const explicitWorkspaceCwd = request.customAgent?.cwd;
+          const workspaceRoot = explicitWorkspaceCwd
+            ?? (request.attachments?.length ? attachmentWorkspaceRoot : undefined);
+          const workspace = workspaceRoot
+            ? prepareWorkspaceRun(workspaceRoot, request.id)
             : undefined;
           if (workspace && request.attachments?.length && device.token) {
             const downloaded = await downloadAttachments(
@@ -553,7 +585,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             && (workspace || generatedImageDirs.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
-              ...(workspace ? { outputDir: workspace.outputDir, cwd: workspace.cwd } : {}),
+              ...(workspace ? {
+                outputDir: workspace.outputDir,
+                ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
+              } : {}),
               extraOutputDirs: generatedImageDirs,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,

@@ -567,6 +567,23 @@ export function attachServerNextNamespaces(
           }
         }
       },
+      async afterProjectReferencesUpdated(_payload, result) {
+        if (!isSuccessAck(result) || !result || typeof result !== 'object') return;
+        const referenceSet = (result as { referenceSet?: unknown }).referenceSet;
+        const teamId = resultMessageTeamId(result);
+        const channelId = resultChannelId(result);
+        if (!referenceSet || !teamId || !channelId) return;
+        for (const subscriber of webSubscribers) {
+          if (subscriber.channels?.teamId !== teamId) continue;
+          const channels = await app.listChannels(subscriber.channels);
+          if (channels.ok && channels.channels.some((channel) => channel.id === channelId)) {
+            subscriber.socket.emit?.(WEB_EVENTS.project.referencesUpdated, {
+              channelId,
+              referenceSet,
+            });
+          }
+        }
+      },
       afterMemberMutation(payload, result) {
         if (!isSuccessAck(result)) return;
         const teamId = payloadTeamId(payload);
@@ -1624,6 +1641,11 @@ function resultMessages(result: unknown): Array<{ channelId: string; teamId?: st
 function resultMessageTeamId(result: unknown): string | null {
   const message = resultMessage(result);
   return typeof message?.teamId === 'string' ? message.teamId : null;
+}
+
+function resultChannelId(result: unknown): string | null {
+  const message = resultMessage(result);
+  return typeof message?.channelId === 'string' ? message.channelId : null;
 }
 
 function isMessageSendResult(result: unknown): boolean {

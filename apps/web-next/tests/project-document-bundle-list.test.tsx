@@ -136,3 +136,57 @@ describe('#825 文件库文档包区块', () => {
     expect(onLoadDetail).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('#826 composer 项目引用选择', () => {
+  test('引用整包时携带当前 expected revisions', async () => {
+    const onSelectionChange = vi.fn();
+    render(
+      <ProjectDocumentBundleList
+        bundles={[BUNDLE]}
+        archived={false}
+        onLoadDetail={vi.fn().mockResolvedValue(DETAIL)}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('引用整包'));
+    await waitFor(() => expect(onSelectionChange).toHaveBeenCalledWith({
+      kind: 'bundle_all',
+      bundleId: 'bundle-1',
+      expectedRevisions: [
+        { documentId: 'document-plan', revisionId: 'revision-plan-2' },
+        { documentId: 'document-spec', revisionId: 'revision-spec-1' },
+      ],
+    }, 'bundle-1'));
+  });
+
+  test('展开后可多选成员并生成 bundle_subset', async () => {
+    const onSelectionChange = vi.fn();
+    render(
+      <ProjectDocumentBundleList
+        bundles={[BUNDLE]}
+        archived={false}
+        onLoadDetail={vi.fn().mockResolvedValue(DETAIL)}
+        selections={[{
+          kind: 'bundle_all',
+          bundleId: 'bundle-1',
+          expectedRevisions: [
+            { documentId: 'document-plan', revisionId: 'revision-plan-2' },
+            { documentId: 'document-spec', revisionId: 'revision-spec-1' },
+          ],
+        }]}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('发布文档包'));
+    const toggles = await screen.findAllByRole('button', { pressed: true });
+    fireEvent.click(toggles[0]!);
+    expect(onSelectionChange).toHaveBeenCalledWith({
+      kind: 'bundle_subset',
+      bundleId: 'bundle-1',
+      documentIds: ['document-spec'],
+      expectedRevisions: [{ documentId: 'document-spec', revisionId: 'revision-spec-1' }],
+    }, 'bundle-1');
+  });
+});

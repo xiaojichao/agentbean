@@ -11,6 +11,7 @@ import type {
   ListChannelMembersCommandDto,
   MessageDto,
   MessageMetaDto,
+  ProjectReferenceSelectionRequestDto,
   RuntimeDto,
   UpdateChannelCommandDto,
   CreateJoinLinkCommandDto,
@@ -63,6 +64,7 @@ export interface SendMessageInput {
   artifactIds?: string[];
   clientMessageId?: string;
   meta?: MessageMetaDto;
+  selections?: ProjectReferenceSelectionRequestDto[];
 }
 
 export interface SubscribeInput {

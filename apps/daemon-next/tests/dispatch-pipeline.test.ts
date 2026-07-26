@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
-import { createDaemonProtocolClient } from '../src/index';
+import { appendProjectReferenceContext, createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
 import { createLocalMemoryStore } from '../src/memory/local-memory-store';
 import { persistWorkspaceRunManifest, persistWorkspaceRunResponse, prepareWorkspaceRun } from '../src/workspace-run';
@@ -189,6 +189,81 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(manifest.collaborationProposals).toMatchObject([
       { sourceInvocationId: 'invocation-live', toAgentId: 'agent-2', kind: 'consult' },
     ]);
+  });
+
+  test('未配置 cwd 时也下载冻结引用附件并向执行器暴露路径', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reference-home-')));
+    const harness = createFakeSocket();
+    let executedPrompt = '';
+    const fetchedUrls: string[] = [];
+    writeFileSync(join(homeDir, 'private.md'), 'must-not-upload');
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      homeDir,
+      fetch: async (input) => {
+        fetchedUrls.push(String(input));
+        return new Response('frozen-revision-content', { status: 200 });
+      },
+      executor: async (request) => {
+        executedPrompt = request.prompt;
+        return {
+          body: 'done',
+          workspaceRun: { status: 'succeeded', startedAt: 1, completedAt: 2 },
+        };
+      },
+    });
+    await client.start();
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-reference-no-cwd',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: '执行引用任务',
+      attachments: [{ id: 'artifact-revision-3', name: 'plan.md' }],
+      customAgent: { adapterKind: 'codex', command: 'echo' },
+      projectReferenceSets: [{
+        id: 'set-1',
+        contractVersion: 1,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        createdBy: 'user-1',
+        createdAt: 1,
+        selections: [{
+          id: 'selection-1',
+          position: 0,
+          sourceKind: 'document',
+          createdAt: 1,
+          items: [{
+            kind: 'document_revision',
+            documentId: 'document-1',
+            revisionId: 'revision-3',
+            revisionNumber: 3,
+            filename: 'plan.md',
+          }],
+        }],
+      }],
+    });
+    const inputPath = join(
+      homeDir,
+      '.agentbean',
+      'attachment-workspaces',
+      '.agentbean',
+      'runs',
+      'dispatch-reference-no-cwd',
+      'inputs',
+      'artifact-revision-3-plan.md',
+    );
+    expect(readFileSync(inputPath, 'utf8')).toBe('frozen-revision-content');
+    expect(executedPrompt).toContain('revisionId=revision-3');
+    expect(executedPrompt).toContain(inputPath);
+    expect(fetchedUrls.some((url) => url.includes('/artifacts/upload'))).toBe(false);
   });
 
   test('returns stable skipped-file diagnostics in the Run result', async () => {
@@ -425,6 +500,40 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
           (e) => e.event === AGENT_EVENTS.dispatch.result && (e.payload as { dispatchId?: string }).dispatchId === 'disp-1',
         ),
       ).toBe(true);
+    });
+  });
+
+  test('start 会恢复无 cwd 附件 workspace 中未上报的结果', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-fallback-recover-home-')));
+    const fallbackRoot = join(homeDir, '.agentbean', 'attachment-workspaces');
+    const workspace = prepareWorkspaceRun(fallbackRoot, 'dispatch-fallback-recover');
+    persistWorkspaceRunResponse(workspace, 'recovered fallback reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'dispatch-fallback-recover',
+      agentId: 'agent-1',
+      channelId: 'channel-1',
+      status: 'succeeded',
+      cwd: fallbackRoot,
+      startedAt: 1,
+      completedAt: 2,
+      files: [],
+    });
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      homeDir,
+      executor: async () => ({ body: 'must not execute' }),
+    });
+    await client.start();
+    await vi.waitFor(() => {
+      expect(harness.emits.some((event) =>
+        event.event === AGENT_EVENTS.dispatch.result
+        && (event.payload as { dispatchId?: string }).dispatchId === 'dispatch-fallback-recover'))
+        .toBe(true);
     });
   });
 
@@ -691,5 +800,33 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
 
     await expect(client.start()).rejects.toThrow('socket has been disconnected');
+  });
+
+  test('将冻结的 revision/version 身份注入 Agent prompt', () => {
+    const prompt = appendProjectReferenceContext('执行任务', [{
+      id: 'set-1',
+      contractVersion: 1,
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      createdBy: 'user-1',
+      createdAt: 1,
+      selections: [{
+        id: 'selection-1',
+        position: 0,
+        sourceKind: 'document',
+        createdAt: 1,
+        items: [{
+          kind: 'document_revision',
+          documentId: 'document-1',
+          revisionId: 'revision-3',
+          revisionNumber: 3,
+          filename: 'plan.md',
+        }],
+      }],
+    }]);
+    expect(prompt).toContain('## 项目引用（发送时冻结）');
+    expect(prompt).toContain('documentId=document-1 revisionId=revision-3 revision=3');
+    expect(prompt).toContain('不得替换为当前版或最终版');
   });
 });
