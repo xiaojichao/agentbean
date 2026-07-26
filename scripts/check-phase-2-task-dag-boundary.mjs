@@ -132,8 +132,11 @@ const rolloutMarkers = [
   'preflightPhase2', 'MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED', 'allowDirectFallbackBeforeBarrier: false',
   'TaskDagViewDto', 'TaskDagPanel', 'acceptTaskDagSnapshot',
 ];
+// 用捕获缩进 + 反向引用按缩进配对花括号框出 Phase 2 分支：块内嵌套的 `}` 缩进更深，
+// 懒量词必然停在同缩进的块尾。不要写死绝对缩进——route() 体抽成独立函数一类的重构
+// 会整块平移缩进，写死缩进会让护栏在不变量仍成立时误报（#836）。
 const phase2RouteBlock = managementRouter.match(
-  /if \(policy\.maxManagementPhase === 2\) \{[\s\S]*?\n      \}\n\n      const diagnostics:/,
+  /^( *)if \(policy\.maxManagementPhase === 2\) \{\n[\s\S]*?\n\1\}$/m,
 )?.[0] ?? '';
 if (!rolloutMarkers.slice(0, 2).every((marker) => rolloutMigration.includes(marker))
   || !rolloutMarkers.slice(2, 4).every((marker) => managementRouter.includes(marker))
