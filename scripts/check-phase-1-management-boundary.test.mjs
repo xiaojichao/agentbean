@@ -53,22 +53,37 @@ function scaffoldRuntimeSlice(root, options = {}) {
   ].join('\n'));
 }
 
-function scaffoldFutureBoundaries(root) {
+function scaffoldFutureBoundaries(root, options = {}) {
   scaffoldWorkerContracts(root);
   scaffoldManagementPersistence(root);
   scaffoldServerKernel(root);
   scaffoldInvocationGateway(root);
   scaffoldWorkerTransport(root);
   scaffoldDeviceWorkerHost(root);
-  scaffoldManagementRouting(root);
+  scaffoldManagementRouting(root, options);
   write(root, 'apps/server-next/tests/managed-single-agent.test.ts', '// scaffolded\n');
   write(root, 'apps/daemon-next/tests/managed-single-agent.test.ts', '// scaffolded\n');
 }
 
-function scaffoldManagementRouting(root) {
+// #836：合成 router 必须带一个真实形状的 route() 包装层，因为 checker 用按缩进配对的
+// 结构性断言校验桥接回退的两道门控（crossedBarrier + 存储 mode === 'direct'）。
+// 改这里的缩进或块尾形状会同时影响 checker 的框选，两边必须一起动。
+const ROUTE_WRAPPER_BLOCK = [
+  '    async route(input: RouteRequestInput): Promise<ManagementRoutingResult> {',
+  '      const result = await routeRequest(input);',
+  "      if (result.kind !== 'unavailable' || result.crossedBarrier) return result;",
+  '      const stored = await policyForTeam(input.teamId);',
+  "      if (stored.mode !== 'direct') return result;",
+  "      return { kind: 'direct', mode: 'direct' };",
+  '    },',
+].join('\n');
+
+function scaffoldManagementRouting(root, options = {}) {
   write(root, 'apps/server-next/src/application/management/management-router.ts', [
     'createManagementRouter', 'getPolicy', 'updatePolicy', 'evaluateManagementRoute',
     'createOrResumeRun', 'shadowRequestKey', 'allowDirectFallbackBeforeBarrier: false',
+    "  | { kind: 'unavailable'; mode: 'managed'; diagnostics: readonly string[]; crossedBarrier?: true };",
+    options.routeWrapper ?? ROUTE_WRAPPER_BLOCK,
   ].join('\n'));
   write(root, 'apps/server-next/src/application/usecases.ts', [
     'invocationGateway.completeAttempt', 'managedAttempt', 'managementRouter.route', "management.kind !== 'managed'",
@@ -337,6 +352,50 @@ test('passes when runtime/package and future management boundaries are present',
     scaffoldFutureBoundaries(root);
     const result = runChecker(root);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  });
+});
+
+// #836：桥接回退的两道门控。门控 (1) crossedBarrier 今天在桥接路径上不可达
+// （桥接只设 device/managed placement，两个 crossedBarrier 产生点都由 autoPlacement 门控），
+// 已经用变异测试证实：删掉它 server-next 全套 1201 测试仍全绿。所以只有这些结构性负向
+// fixture 能守住它——删掉任一门控都必须红。
+test('fails closed when the #724 bridge fallback drops the post-barrier guard', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldFutureBoundaries(root, {
+      routeWrapper: ROUTE_WRAPPER_BLOCK.replace(
+        "if (result.kind !== 'unavailable' || result.crossedBarrier) return result;",
+        "if (result.kind !== 'unavailable') return result;",
+      ),
+    });
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /P1_BRIDGED_FALLBACK_GUARD_INVALID/);
+  });
+});
+
+test('fails closed when the #724 bridge fallback stops checking the stored direct mode', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldFutureBoundaries(root, {
+      routeWrapper: ROUTE_WRAPPER_BLOCK.replace(
+        "      if (stored.mode !== 'direct') return result;\n",
+        '',
+      ),
+    });
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /P1_BRIDGED_FALLBACK_GUARD_INVALID/);
+  });
+});
+
+test('fails closed when the route() wrapper disappears entirely', () => {
+  withFixture((root) => {
+    scaffoldRuntimeSlice(root);
+    scaffoldFutureBoundaries(root, { routeWrapper: '// route wrapper removed' });
+    const result = runChecker(root);
+    assert.equal(result.status, 2, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /P1_BRIDGED_FALLBACK_GUARD_INVALID/);
   });
 });
 

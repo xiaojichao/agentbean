@@ -315,6 +315,27 @@ if (!managementRoutingPresent) {
 
 console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision isolation, managed reservation barrier, policy authorization, and PI auto-coordination settings control are present; semantic readiness is verified by server/web tests');
 
+// #836：#724 桥接是自动升级——团队从未显式把 mode 切到 managed，所以 barrier 前的 unavailable
+// 回落 direct 才不会让消息发送失败。该回退必须同时受两道门控约束，缺任何一道都是静默降级：
+//   (1) result.crossedBarrier —— run 已创建之后绝不回退，否则 barrier 后仍产生 direct Dispatch；
+//   (2) 存储策略 mode === 'direct' —— 显式配置 managed 的团队保持 fail closed，回退不得外溢。
+// 门控 (1) 今天在桥接路径上不可达（桥接只设 device/managed placement，crossedBarrier 的两个
+// 产生点都由 autoPlacement 门控），因此没有任何行为测试能覆盖它——只有结构性断言能防止它被删掉
+// 而在未来某个 barrier 越过点变得可达时留下静默降级的坑。
+// 按缩进配对框出 route() 包装层，不写死绝对缩进（#836 phase-2 护栏因写死缩进被纯重构误报过）。
+const routeWrapperBlock = managementRouter.match(/^( *)async route\([\s\S]*?\n\1\},$/m)?.[0] ?? '';
+const bridgedFallbackGuarded = routeWrapperBlock.includes('crossedBarrier')
+  && /mode !== 'direct'/.test(routeWrapperBlock)
+  && /kind: 'direct'/.test(routeWrapperBlock)
+  && managementRouter.includes('crossedBarrier?: true');
+
+if (!bridgedFallbackGuarded) {
+  console.error('P1_BRIDGED_FALLBACK_GUARD_INVALID: the #724 bridge fallback must stay gated on crossedBarrier and a stored direct mode inside route()');
+  process.exit(2);
+}
+
+console.log('P1_BRIDGED_FALLBACK_GUARD_PRESENT: #724 bridge fallback is gated on the post-barrier marker and a stored direct mode; explicitly managed Teams stay fail closed');
+
 const singleAgentBoundaries = [
   'apps/server-next/tests/managed-single-agent.test.ts',
   'apps/daemon-next/tests/managed-single-agent.test.ts',
