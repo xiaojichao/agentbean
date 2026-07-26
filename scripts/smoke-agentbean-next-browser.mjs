@@ -2168,13 +2168,11 @@ export async function exerciseWebUiMembersBusinessSmoke({
     }
     await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'member', timeoutMs });
 
-    await waitForWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-promote-admin"]', timeoutMs });
-    await page.click('[data-smoke="member-role-promote-admin"]');
+    await clickWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-promote-admin"]', timeoutMs });
     await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'admin', timeoutMs });
     await waitForWebUiHumanMemberItem({ page, userId: targetUserId, role: 'admin', timeoutMs });
 
-    await waitForWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-demote-member"]', timeoutMs });
-    await page.click('[data-smoke="member-role-demote-member"]');
+    await clickWebUiHumanMemberAction({ page, selector: '[data-smoke="member-role-demote-member"]', timeoutMs });
     await waitForWebUiHumanMemberDetail({ page, userId: targetUserId, role: 'member', timeoutMs });
     await waitForWebUiHumanMemberItem({ page, userId: targetUserId, role: 'member', timeoutMs });
 
@@ -2222,17 +2220,36 @@ async function waitForWebUiHumanMemberDetail({ page, userId, role, timeoutMs }) 
   );
 }
 
-async function waitForWebUiHumanMemberAction({ page, selector, timeoutMs }) {
-  await page.waitForFunction(
-    `
-    (() => {
-      const button = document.querySelector(${JSON.stringify(selector)});
-      return Boolean(button) && !button.disabled;
-    })()
-    `,
-    `human member action "${selector}" to become clickable`,
-    timeoutMs,
-  );
+// #853：等待命中与随后的 click 之间隔着一个 CDP 往返，元素可能正好在这个窗口里消失
+// （客户端路由切换让组件重挂载、丢一帧详情就是实例之一）。分开写 waitForFunction + page.click
+// 是 check-then-act：wait 成功了，click 才发现元素已经不在，抛的是 `Missing clickable`
+// 而不是等待超时——于是失败看起来像「按钮从未出现」，把排查引向「等待条件不对/超时太短」，
+// 而真相是「等到了又消失」。把两步合成一个可重试的原子操作：只要 click 是因为元素消失而失败，
+// 就回到等待重试，直到超时。其它错误立即上抛，不掩盖真实故障。
+async function clickWebUiHumanMemberAction({ page, selector, timeoutMs }) {
+  const deadline = Date.now() + timeoutMs;
+  let lastMissingError;
+  while (Date.now() < deadline) {
+    await page.waitForFunction(
+      `
+      (() => {
+        const button = document.querySelector(${JSON.stringify(selector)});
+        return Boolean(button) && !button.disabled;
+      })()
+      `,
+      `human member action "${selector}" to become clickable`,
+      deadline - Date.now(),
+    );
+    try {
+      await page.click(selector);
+      return;
+    } catch (error) {
+      const message = String(error?.message ?? '');
+      if (!message.includes('Missing clickable')) throw error;
+      lastMissingError = error;
+    }
+  }
+  throw lastMissingError ?? new Error(`Timed out clicking human member action "${selector}"`);
 }
 
 export async function exerciseWebUiDevicesBusinessSmoke({

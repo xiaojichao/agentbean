@@ -58,7 +58,14 @@ export default function MembersPage() {
   const applyHumansSnapshot = useAgentBeanStore((s) => s.applyHumansSnapshot);
   const upsertHuman = useAgentBeanStore((s) => s.upsertHuman);
   const removeHuman = useAgentBeanStore((s) => s.removeHuman);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // #853：选中项以路由为真相源，不再是 useState + passive effect 补回。
+  // /[teamPath]/human/[userId] 与 /[teamPath]/agent/[agentId] 各是独立 route segment
+  // （两个 page 都只是 `return <MembersPage />`），所以从列表跳到详情会让本组件
+  // 卸载重挂载、所有 useState 归零。此前 selectedId 初值恒为 null，要等 passive effect
+  // 从路由参数补回，于是「新路由已 commit」到「effect 再 commit」之间存在一帧
+  // EmptyState —— 详情整棵子树（含各 data-smoke 按钮）不在 DOM。派生值在第一帧就正确。
+  // optimisticSelectedId 只服务「点击后、导航落地前」这段，保住点击的即时高亮。
+  const [optimisticSelectedId, setOptimisticSelectedId] = useState<string | null>(null);
   const [tab, setTab] = useState<AgentMemberTab>('profile');
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [humansExpanded, setHumansExpanded] = useState(true);
@@ -68,6 +75,9 @@ export default function MembersPage() {
   const routeTeamId = teams.find((team) => team.path === routeTeamPath || team.id === routeTeamPath)?.id;
   const memberTeamId = routeTeamId ?? (routeTeamPath === 'default' ? currentTeamId : '');
   const routeTab = searchParams.get('agentTab') as AgentMemberTab | null;
+  const routeSelectedId = routeAgentId ?? (routeUserId ? `user:${routeUserId}` : null);
+  // 路由优先：重挂载后第一帧即为正确值。乐观值只在还停留在列表路由时生效。
+  const selectedId = routeSelectedId ?? optimisticSelectedId;
 
   useEffect(() => {
     if (conn !== 'open' || !memberTeamId) return;
@@ -84,16 +94,13 @@ export default function MembersPage() {
 
   const agentList = useAgentBeanStore((s) => s.visibleAgents);
 
+  // selectedId 已由路由派生，这里只同步 tab —— tab 仍需是 state，因为用户能在详情页切换它。
   useEffect(() => {
     if (routeAgentId) {
-      setSelectedId(routeAgentId);
       setTab(TABS.some((t) => t.id === routeTab) ? routeTab! : 'profile');
       return;
     }
-    if (routeUserId) {
-      setSelectedId(`user:${routeUserId}`);
-      setTab('profile');
-    }
+    if (routeUserId) setTab('profile');
   }, [routeAgentId, routeUserId, routeTab]);
 
   const selectedAgent = agentList.find((a) => a.id === selectedId);
@@ -145,7 +152,7 @@ export default function MembersPage() {
                     </div>
                     <div className="space-y-0.5">
                       {group.agents.map((agent) => (
-                        <button key={agent.id} onClick={() => { setSelectedId(agent.id); setTab('profile'); router.push(`/${np}/agent/${agent.id}?agentTab=profile`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
+                        <button key={agent.id} onClick={() => { setOptimisticSelectedId(agent.id); setTab('profile'); router.push(`/${np}/agent/${agent.id}?agentTab=profile`); }} className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === agent.id ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}>
                           <Bot size={15} className="shrink-0 text-amber-600" />
                           <div className="min-w-0 flex-1">
                             <div className="flex min-w-0 items-center gap-1.5">
@@ -176,7 +183,7 @@ export default function MembersPage() {
                 {humans.map((h) => (
                   <button
                     key={h.userId}
-                    onClick={() => { setSelectedId(`user:${h.userId}`); router.push(`/${np}/human/${h.userId}`); }}
+                    onClick={() => { setOptimisticSelectedId(`user:${h.userId}`); router.push(`/${np}/human/${h.userId}`); }}
                     className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left ${selectedId === `user:${h.userId}` ? 'bg-pink-100' : 'hover:bg-neutral-100'}`}
                     data-smoke="human-member-item"
                     data-user-id={h.userId}
@@ -225,7 +232,11 @@ export default function MembersPage() {
               onUpdated={(next) => {
                 if ((next as any)._removed) {
                   removeHuman(next.userId);
-                  setSelectedId(null);
+                  setOptimisticSelectedId(null);
+                  // selectedId 现在派生于路由，只清乐观值回不到空态：当前 URL 仍是
+                  // /human/<已被移除的成员>。必须真的离开该路由，否则详情区会卡在
+                  // 「selectedId 有值但 selectedHuman 已不存在」的空白态。
+                  router.push(`/${np}/members`);
                 } else {
                   upsertHuman(next);
                 }
