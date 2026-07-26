@@ -135,13 +135,13 @@ _Avoid_: Device-only coordination、Team placement 选择、Device Agent 被移�
 
 ## Supported user device platform
 
-AgentBean 当前对用户设备能力作出的平台承诺，仅包括 macOS，并同时覆盖 Apple Silicon arm64 与 Intel x64。Device Service、Agent 扫描与执行、本地文件访问、原生选择器、安装和升级不再为 Windows/Linux 新增实现或发布保证；现有跨平台代码可保留但不构成产品能力。Server 与 Web 继续运行在 Railway/Vercel 的云端环境，不受该终端平台限制。
-_Avoid_: 仅 arm64、Rosetta 作为正式兼容、Server 必须运行在 macOS、Windows/Linux Device 承诺。
+AgentBean 当前对用户设备能力作出的完整平台承诺，仅包括 Apple Silicon arm64 上的 macOS。Device Service、Agent 扫描与执行、本地文件访问、原生选择器、安装和升级不为 Intel macOS 或 Windows/Linux 提供发布保证；现有跨架构代码可保留但不构成产品能力。Server 与 Web 继续运行在 Railway/Vercel 的云端环境，不受该终端平台限制。
+_Avoid_: macOS 等于所有 Mac 架构、x64 CI 等于 Intel Device 支持、Server 必须运行在 macOS、Windows/Linux Device 承诺。
 
-## Supported macOS architectures
+## darwin-x64 compatibility target
 
-AgentBean 用户设备首版必须原生支持 `darwin-arm64` 与 `darwin-x64`。两种架构都需要对应的可安装产物、签名/公证流程和真实启动及 Device 能力验证；不能用 arm64 单架构结论外推 Intel，也不能只要求 Intel 用户通过 Rosetta 运行。
-_Avoid_: arm64-only、未经验证的 universal binary、Rosetta-only。
+AgentBean 对 Intel macOS 保留的非产品支持边界，只承诺在 GitHub Intel runner 上验证 `darwin-x64` 构建、SEA 启动和 fail-closed 平台判定。它不包含 Device Service、本地 Agent、文件和 Workspace、安装升级或签名公证保证；这些能力在 Intel 上属于未验证的 best-effort 行为。
+_Avoid_: 受支持的 Intel 用户设备、原生 Intel 真机验收、Rosetta 证据、用 x64 CI 外推完整 Device 能力。
 
 ## Active PI Model
 

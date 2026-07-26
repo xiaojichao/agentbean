@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0056
 ---
 
 # macOS 支持同时包括 Apple Silicon 与 Intel
