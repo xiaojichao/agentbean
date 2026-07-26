@@ -319,14 +319,20 @@ console.log('P1_MANAGEMENT_ROUTING_PRESENT: direct baseline, shadow decision iso
 // 回落 direct 才不会让消息发送失败。该回退必须同时受两道门控约束，缺任何一道都是静默降级：
 //   (1) result.crossedBarrier —— run 已创建之后绝不回退，否则 barrier 后仍产生 direct Dispatch；
 //   (2) 存储策略 mode === 'direct' —— 显式配置 managed 的团队保持 fail closed，回退不得外溢。
-// 门控 (1) 今天在桥接路径上不可达（桥接只设 device/managed placement，crossedBarrier 的两个
-// 产生点都由 autoPlacement 门控），因此没有任何行为测试能覆盖它——只有结构性断言能防止它被删掉
-// 而在未来某个 barrier 越过点变得可达时留下静默降级的坑。
-// 按缩进配对框出 route() 包装层，不写死绝对缩进（#836 phase-2 护栏因写死缩进被纯重构误报过）。
+// 门控 (1) 为何 load-bearing：route() 在 routeRequest() 返回之后**再读一次**存储策略
+// （policyForTeam 无缓存），桥接回退以这第二次读为准。两次读取之间横跨 probeAutoPlacement、
+// createOrResumeRun（barrier 本身）、审计写入与冻结侧 preflight——全是真实 await 点。两次读
+// 分歧时（读1=managed+auto 让 barrier 站点活跃，读2=direct），crossedBarrier 是唯一阻止
+// 「run 已建却还发 direct Dispatch」双投递的东西。行为回归见
+// apps/server-next/tests/management-routing.test.ts 的 '#836 barrier 窗口内策略被翻回 direct'。
+// 断言顺序而非仅存在：两道门控都必须出现在 direct 回退之前，否则把回退提到门控之上的重排
+// 变异会漏网。按缩进配对框出 route() 包装层，不写死绝对缩进（#836 phase-2 护栏因写死缩进
+// 被纯重构误报过）。门控极性（!== / ===）交给行为测试判定，结构断言不猜语义。
 const routeWrapperBlock = managementRouter.match(/^( *)async route\([\s\S]*?\n\1\},$/m)?.[0] ?? '';
-const bridgedFallbackGuarded = routeWrapperBlock.includes('crossedBarrier')
-  && /mode !== 'direct'/.test(routeWrapperBlock)
-  && /kind: 'direct'/.test(routeWrapperBlock)
+const directFallbackAt = routeWrapperBlock.indexOf("return { kind: 'direct'");
+const beforeDirectFallback = directFallbackAt > 0 ? routeWrapperBlock.slice(0, directFallbackAt) : '';
+const bridgedFallbackGuarded = beforeDirectFallback.includes('crossedBarrier')
+  && /mode\s*[!=]==\s*'direct'/.test(beforeDirectFallback)
   && managementRouter.includes('crossedBarrier?: true');
 
 if (!bridgedFallbackGuarded) {
