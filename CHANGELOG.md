@@ -18,6 +18,40 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-26] - 2026-07-26
+### Added
+- 补齐 PI 工具 schema 的 Skill 字段：模型此前无法产出 required/preferredSkills
+- 添加 Experience Pack Web UI 组件（close #699）
+- 补齐 PI 供给身份的全角色验收
+### Changed
+- boundary 负向 fixture 拷贝跳过 worktree 与构建产物
+- 配置阶段依赖并阻止未满足输入的执行 (#822)
+- 接线 #807 AC#2 allocation 服务：PI 显式指派不再在 publish 时被清空
+- 把一次 Markdown 输出展示为固定文档包 (#825)
+- artifact actions 升到 Node 24 运行时（v4 → upload@v7 / download@v8）
+- 实现将现有 Artifact 提升为逻辑产物版本 (#823)
+- 创建首个项目阶段并展示频道项目总览
+- 更正 arm64 SEA 验收 runner
+- 收敛 Intel x64 为 CI 兼容目标
+- 排除不可用的任务候选
+- 同步 Intel macOS SEA 聚合契约
+- 切换可用的 GitHub Intel macOS Runner
+- 完成 PI Agent MVP 全链路验收
+- 记录 2026-07-25 每日更新日志
+### Fixed
+- 成员选中项派生于路由，修 #853 promote 按钮偶发消失
+- 锁住 #724 桥接回退的两道门控（#836 后续）
+- browser smoke artifact 上传取消时不再继续执行（#837 同源清理）
+- 管理策略不再外泄共享可变引用（#836 后续）
+- 新增 migration 静态注册 CI 守卫，防止孤儿 migration 复现
+- Phase 1 management preflight 失败时回退到 direct dispatch
+- phase-0 PI 护栏跳过 .claude 下的嵌套 worktree
+- SEA 工作流取消时不再被涂成失败
+- 修复 0047 孤儿 migration：preferred Skills 随 Task coordination 持久化
+- 补全 #699 剩余缺口（US 9+29+55+74+84）
+- #724 post-merge 清理与回归修复
+- 修复无合格候选时的任务误发布
+
 ## [Daily 2026-07-24] - 2026-07-24
 ### Added
 - 补齐 #781 频道文件库灰度验收与生产保护
