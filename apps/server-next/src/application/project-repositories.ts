@@ -42,6 +42,7 @@ export interface ChannelProjectMutationRecord {
 export type CreateInitialProjectStageResult =
   | { kind: 'created' | 'replayed'; mutation: ChannelProjectMutationRecord }
   | { kind: 'revision_conflict' }
+  | { kind: 'task_scope_conflict' }
   | { kind: 'idempotency_conflict' };
 
 export interface ChannelProjectRepository {

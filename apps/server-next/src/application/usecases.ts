@@ -4044,6 +4044,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (result.kind === 'revision_conflict') {
         return makeFailure('CONFLICT', 'Project revision is stale; refresh and retry');
       }
+      if (result.kind === 'task_scope_conflict') {
+        return makeFailure('CONFLICT', 'Tracked Task changed scope or revision; refresh and retry');
+      }
       return makeSuccess({
         overview: result.mutation.resultOverview,
         replayed: result.kind === 'replayed',

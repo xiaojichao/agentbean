@@ -2649,6 +2649,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           if (actualRevision !== input.expectedRevision || existingProfile) {
             return { kind: 'revision_conflict' as const };
           }
+          const currentTask = teamDb.prepare(
+            `SELECT 1 FROM tasks
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?
+               AND superseded_by_revision IS NULL`,
+          ).get(
+            input.stage.taskId,
+            input.stage.teamId,
+            input.stage.channelId,
+            input.stage.taskRevision,
+          );
+          if (!currentTask) {
+            return { kind: 'task_scope_conflict' as const };
+          }
 
           teamDb.prepare(
             `INSERT INTO channel_project_profiles (

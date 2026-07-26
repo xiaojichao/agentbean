@@ -1631,6 +1631,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (actualRevision !== input.expectedRevision || existingProfile) {
           return { kind: 'revision_conflict' };
         }
+        const currentTask = tasks.get(input.stage.taskId);
+        if (!currentTask
+          || currentTask.teamId !== input.stage.teamId
+          || currentTask.channelId !== input.stage.channelId
+          || currentTask.revision !== input.stage.taskRevision) {
+          return { kind: 'task_scope_conflict' };
+        }
         channelProjectProfiles.set(scopeKey, input.profile);
         projectStages.set(input.stage.id, input.stage);
         channelProjectMutations.set(mutationKey, input.mutation);

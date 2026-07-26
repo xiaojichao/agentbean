@@ -8,6 +8,7 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories.js';
+import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 type DatabaseWithClose = SqliteDatabase & { close(): void };
 type DatabaseConstructor = new (filename: string) => DatabaseWithClose;
@@ -389,6 +390,115 @@ describe('频道项目首个 Stage 总览', () => {
         }],
       },
     });
+  });
+
+  test('内存仓库在原子提交点拒绝已迁出频道的 Task', async () => {
+    const repositories = createInMemoryRepositories();
+    await repositories.users.create({
+      id: 'owner-1',
+      username: 'owner',
+      passwordHash: 'hash',
+      role: 'user',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repositories.users.create({
+      id: 'reviewer-1',
+      username: 'reviewer',
+      passwordHash: 'hash',
+      role: 'user',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await repositories.teams.create({
+      id: 'team-1',
+      name: '项目团队',
+      path: 'project-team-memory',
+      visibility: 'private',
+      ownerId: 'owner-1',
+      createdAt: now,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'owner-1',
+      username: 'owner',
+      role: 'owner',
+      joinedAt: now,
+    });
+    await repositories.teams.addMember({
+      teamId: 'team-1',
+      userId: 'reviewer-1',
+      username: 'reviewer',
+      role: 'member',
+      joinedAt: now,
+    });
+    await repositories.channels.create({
+      id: 'channel-1',
+      teamId: 'team-1',
+      kind: 'channel',
+      name: 'launch',
+      visibility: 'private',
+      createdBy: 'owner-1',
+      humanMemberIds: ['owner-1', 'reviewer-1'],
+      agentMemberIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      revision: 1,
+    });
+    await repositories.tasks.create({
+      id: 'task-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      title: '完成发布方案',
+      status: 'todo',
+      creatorId: 'owner-1',
+      assigneeId: 'owner-1',
+      tags: [],
+      sortOrder: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const createInitialStage = repositories.channelProjects.createInitialStage;
+    repositories.channelProjects.createInitialStage = async (input) => {
+      await repositories.tasks.update({
+        taskId: input.stage.taskId,
+        changes: { channelId: 'channel-2', updatedAt: ++now },
+      });
+      return createInitialStage(input);
+    };
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => ++now },
+      ids: { nextId: () => `project-id-${++id}` },
+      messageIngestionMode: 'legacy',
+    });
+
+    await expect(app.createInitialProjectStage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'memory-race',
+      projectLeadId: 'owner-1',
+      defaultReviewerIds: ['reviewer-1'],
+      stage: {
+        name: '发布准备',
+        goal: '形成发布方案',
+        ownerId: 'owner-1',
+        reviewerIds: ['reviewer-1'],
+        acceptanceCriteria: ['发布步骤完整'],
+        taskId: 'task-1',
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: expect.stringContaining('changed scope or revision'),
+    });
+    await expect(repositories.channelProjects.getProfile({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toBeNull();
   });
 
   test('拒绝跨频道或不存在的 Task，归档后总览可读但写入被拒绝', async () => {
