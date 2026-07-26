@@ -195,6 +195,8 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reference-home-')));
     const harness = createFakeSocket();
     let executedPrompt = '';
+    const fetchedUrls: string[] = [];
+    writeFileSync(join(homeDir, 'private.md'), 'must-not-upload');
     const client = createDaemonProtocolClient({
       socket: harness.socket,
       device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
@@ -202,10 +204,16 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       agents: [],
       serverUrl: 'http://server.test',
       homeDir,
-      fetch: async () => new Response('frozen-revision-content', { status: 200 }),
+      fetch: async (input) => {
+        fetchedUrls.push(String(input));
+        return new Response('frozen-revision-content', { status: 200 });
+      },
       executor: async (request) => {
         executedPrompt = request.prompt;
-        return { body: 'done' };
+        return {
+          body: 'done',
+          workspaceRun: { status: 'succeeded', startedAt: 1, completedAt: 2 },
+        };
       },
     });
     await client.start();
@@ -245,6 +253,8 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const inputPath = join(
       homeDir,
       '.agentbean',
+      'attachment-workspaces',
+      '.agentbean',
       'runs',
       'dispatch-reference-no-cwd',
       'inputs',
@@ -253,6 +263,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(readFileSync(inputPath, 'utf8')).toBe('frozen-revision-content');
     expect(executedPrompt).toContain('revisionId=revision-3');
     expect(executedPrompt).toContain(inputPath);
+    expect(fetchedUrls.some((url) => url.includes('/artifacts/upload'))).toBe(false);
   });
 
   test('returns stable skipped-file diagnostics in the Run result', async () => {
@@ -489,6 +500,40 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
           (e) => e.event === AGENT_EVENTS.dispatch.result && (e.payload as { dispatchId?: string }).dispatchId === 'disp-1',
         ),
       ).toBe(true);
+    });
+  });
+
+  test('start 会恢复无 cwd 附件 workspace 中未上报的结果', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-fallback-recover-home-')));
+    const fallbackRoot = join(homeDir, '.agentbean', 'attachment-workspaces');
+    const workspace = prepareWorkspaceRun(fallbackRoot, 'dispatch-fallback-recover');
+    persistWorkspaceRunResponse(workspace, 'recovered fallback reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'dispatch-fallback-recover',
+      agentId: 'agent-1',
+      channelId: 'channel-1',
+      status: 'succeeded',
+      cwd: fallbackRoot,
+      startedAt: 1,
+      completedAt: 2,
+      files: [],
+    });
+    const harness = createFakeSocket();
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      homeDir,
+      executor: async () => ({ body: 'must not execute' }),
+    });
+    await client.start();
+    await vi.waitFor(() => {
+      expect(harness.emits.some((event) =>
+        event.event === AGENT_EVENTS.dispatch.result
+        && (event.payload as { dispatchId?: string }).dispatchId === 'dispatch-fallback-recover'))
+        .toBe(true);
     });
   });
 

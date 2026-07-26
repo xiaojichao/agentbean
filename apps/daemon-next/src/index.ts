@@ -301,6 +301,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
+  const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let acceptingDispatches = false;
@@ -381,7 +382,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         rememberRecoveryCwds(cwds);
         void recoverPersistedWorkspaceRuns(outbox, Array.from(knownRecoveryCwds));
       };
-      rememberRecoveryCwds(latestSnapshot.agents.map((agent) => agent.cwd));
+      rememberRecoveryCwds([
+        ...latestSnapshot.agents.map((agent) => agent.cwd),
+        attachmentWorkspaceRoot,
+      ]);
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -529,8 +533,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
           // 未配置 agent cwd 时仍以 daemon home 作为受控 workspace 根目录，
           // 保证普通附件和冻结引用内容都能下载并通过绝对路径暴露给执行器。
-          const workspaceRoot = request.customAgent?.cwd
-            ?? (request.attachments?.length ? home : undefined);
+          const explicitWorkspaceCwd = request.customAgent?.cwd;
+          const workspaceRoot = explicitWorkspaceCwd
+            ?? (request.attachments?.length ? attachmentWorkspaceRoot : undefined);
           const workspace = workspaceRoot
             ? prepareWorkspaceRun(workspaceRoot, request.id)
             : undefined;
@@ -580,7 +585,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             && (workspace || generatedImageDirs.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
-              ...(workspace ? { outputDir: workspace.outputDir, cwd: workspace.cwd } : {}),
+              ...(workspace ? {
+                outputDir: workspace.outputDir,
+                ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
+              } : {}),
               extraOutputDirs: generatedImageDirs,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
