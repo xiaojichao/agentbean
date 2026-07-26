@@ -27,6 +27,7 @@ import { createManagementKernel } from './application/management/management-kern
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
+import { resolveTaskAllocation } from './application/management/task-allocation-service.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createCollaborativeMemorySearchService } from './application/collaborative-memory-search-service.js';
 import { createMemoryCapsuleService } from './application/memory-capsule-service.js';
@@ -1535,11 +1536,12 @@ function createDefaultApp(
       repositories, ids,
     );
     const serverWorker = createDefaultServerWorker(config, clock, ids);
+    // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
+    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     const management = createDefaultManagementRuntime(
-      repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
+      repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
     );
-    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1597,11 +1599,12 @@ function createDefaultApp(
     repositories, ids,
   );
   const serverWorker = createDefaultServerWorker(config, clock, ids);
+  // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
+  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   const management = createDefaultManagementRuntime(
-    repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
+    repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
   );
-  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1705,6 +1708,7 @@ function createDefaultManagementRuntime(
   clock: { now(): number },
   ids: { nextId(): string },
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
+  taskClaimBroker: TaskClaimBroker,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
 ) {
@@ -1765,6 +1769,11 @@ function createDefaultManagementRuntime(
     phase2Handlers: {
       ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
         acceptanceService: subtaskAcceptanceService,
+        // #807 AC#2：publish_for_claim 用真实 allocation 决策取代 kernel 的强转 open 兜底，
+        // 使 PI 显式指派的子 Task 不再在发布瞬间被改成 open 并清空 assigneeId。
+        allocationService: (taskId) => resolveTaskAllocation({
+          taskId, broker: taskClaimBroker, repositories,
+        }),
         onTaskPublished: async (taskId) => {
           if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
           await taskClaimEmitter(taskId);
