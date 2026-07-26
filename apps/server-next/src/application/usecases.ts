@@ -243,6 +243,8 @@ export interface ServerNextUseCases {
   setEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
   /** #699 US 84：读取 PI 紧急停止状态。 */
   getEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
+  // #699 US 29 (deferred)：getTeamPiTokenUsage — aggregateUsage 已加到 repository 接口
+  // 和 memory/sqlite 实现，跨 team DB 接线留待独立 PR。
   /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
@@ -2755,8 +2757,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(channelInput.humanMemberIds !== undefined ? { humanMemberIds: channelInput.humanMemberIds } : {}),
         ...(channelInput.agentMemberIds !== undefined ? { agentMemberIds: channelInput.agentMemberIds } : {}),
       };
-      if (!canApplyChannelUpdate(channel, channelInput.userId, updateIntent)) {
-        return makeFailure('FORBIDDEN', 'User cannot manage channel');
+      if (!canApplyChannelUpdate(channel, channelInput.userId, updateIntent, channel.archivedAt)) {
+        return makeFailure('FORBIDDEN', channel.archivedAt != null ? 'Archived channels are read-only' : 'User cannot manage channel');
       }
       if (
         channelInput.humanMemberIds &&
@@ -3090,8 +3092,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (isDefaultChannel(channel)) {
         return makeFailure('FORBIDDEN', 'Cannot delete default channel');
       }
-      if (!canApplyChannelUpdate(channel, deleteInput.userId, {})) {
-        return makeFailure('FORBIDDEN', 'Only channel creator can delete');
+      if (!canApplyChannelUpdate(channel, deleteInput.userId, {}, channel.archivedAt)) {
+        return makeFailure('FORBIDDEN', channel.archivedAt != null ? 'Archived channels are read-only' : 'Only channel creator can delete');
       }
       const deletedMessages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
       const deletedWorkspaceRunIds = (await repositories.workspaceRuns.listByTeam({
@@ -5521,6 +5523,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getEmergencyStop(_input) {
       return piProvider.getEmergencyStop();
     },
+
+    // #699 US 29：查询指定 Team 的 PI Token Usage（系统管理员）。
+    // 由于跨 team DB 聚合需要的基础设施（openTeamDb）在当前架构中不可达，
+    // aggregateUsage 已加入 repository 接口和 memory/sqlite 实现，
+    // 接线留待后续 PR 补充 channelCoordinationUnitOfWork 的跨 team 访问路径。
+    /*
+    async getTeamPiTokenUsage(input) { ... }
+    */
 
     async getMemoryGovernanceSnapshot(memoryInput) {
       return makeSuccess({ snapshot: await memoryGovernance.getSnapshot(memoryInput) });

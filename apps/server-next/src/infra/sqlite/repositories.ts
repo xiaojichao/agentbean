@@ -393,6 +393,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           'SELECT * FROM channel_coordination_decisions WHERE id = ?',
         ).get(prior.id));
       },
+
+      async aggregateUsage(since) {
+        const sql = since !== undefined
+          ? `SELECT COALESCE(SUM(input_tokens), 0) AS totalInput, COALESCE(SUM(output_tokens), 0) AS totalOutput, COUNT(*) AS cnt FROM channel_coordination_decisions WHERE created_at >= ?`
+          : `SELECT COALESCE(SUM(input_tokens), 0) AS totalInput, COALESCE(SUM(output_tokens), 0) AS totalOutput, COUNT(*) AS cnt FROM channel_coordination_decisions`;
+        const params = since !== undefined ? [since] : [];
+        const row = teamDb.prepare(sql).get(...params) as { totalInput: number; totalOutput: number; cnt: number } | undefined;
+        return { totalInputTokens: row?.totalInput ?? 0, totalOutputTokens: row?.totalOutput ?? 0, totalDecisions: row?.cnt ?? 0 };
+      },
     },
   };
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
