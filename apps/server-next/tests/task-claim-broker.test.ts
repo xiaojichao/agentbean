@@ -271,6 +271,31 @@ describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 
       .resolves.toMatchObject({ assigneeId: 'agent-1' });
   });
 
+  test('无显式指派 + 唯一合格候选 → open 修订为 targeted 并写入 assigneeId（#807 AC）', async () => {
+    // 回归防线：kernel 若只覆写 claimPolicy 而不落 allocation.targetAgentId，
+    // 会产出「targeted 且无 assignee」的非法状态，publish 直接抛
+    // TASK_REVISION_INVALID_SEMANTIC_STATE —— 这会打断所有恰好只有 1 个合格候选的普通任务。
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // harness 的 task-a 是 open + 无 assignee，此处只有 agent-1 一个合格候选
+    const allocation = await resolveTaskAllocation({
+      taskId: 'task-a', broker: harness.broker, repositories: harness.repositories,
+    });
+    expect(allocation).toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-1' });
+
+    const before = await harness.repositories.tasks.getById('task-a');
+    await expect(harness.coordination.publishForClaim({ authority: harness.authority,
+      idempotencyKey: 'publish-single', taskId: 'task-a', expectedTaskRevision: before!.revision,
+      ...(allocation ? { allocation } : {}) })).resolves.toMatchObject({ status: 'todo' });
+
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ claimPolicy: 'targeted' });
+    await expect(harness.repositories.tasks.getById('task-a'))
+      .resolves.toMatchObject({ assigneeId: 'agent-1' });
+  });
+
   test('hardSpecified=true 透传（显式 @Agent，AC#8 仅元数据）', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);

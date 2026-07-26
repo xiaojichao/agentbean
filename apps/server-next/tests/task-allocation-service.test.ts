@@ -53,6 +53,17 @@ describe('resolveTaskAllocation（#807 AC#2 allocation 接线）', () => {
     }))).resolves.toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-2' });
   });
 
+  test('显式指派时 broker 抛错也不丢指派（executor 的 catch 会把异常压成 null → 强转 open）', async () => {
+    // 显式指派路径不查候选，故不引入 broker 的失败面。若改成依赖 broker，
+    // 任何 IO 抖动都会让 allocation 变 null → kernel 兜底清空 assigneeId → 静默改派。
+    const base = deps({ claimPolicy: 'targeted', assigneeId: 'agent-2', eligibleAgentIds: ['agent-2'] });
+    await expect(resolveTaskAllocation({
+      ...base,
+      broker: { resolveCandidates: async () => { throw new Error('SQLITE_BUSY'); } },
+    } as unknown as Parameters<typeof resolveTaskAllocation>[0]))
+      .resolves.toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-2' });
+  });
+
   test('无显式指派 + 多个合格候选 → open，保持既有 fan-out（负载数据缺失不伪造排序）', async () => {
     // loadUncertain=true 如实反映 reliability/load 无持久化，故不把任务定向派给字典序第一者。
     await expect(resolveTaskAllocation(deps({
