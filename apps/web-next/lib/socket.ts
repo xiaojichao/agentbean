@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -890,6 +890,22 @@ export interface ProjectEvents {
     error?: string;
     message?: string;
   }>;
+  submitArtifactReview(payload: Omit<SubmitProjectArtifactReviewInput, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    library?: ProjectArtifactLibraryDto;
+    review?: ProjectArtifactReviewDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
+  setArtifactFinalVersion(payload: Omit<SetProjectArtifactFinalVersionInput, 'userId' | 'teamId' | 'manager'>): Promise<{
+    ok: boolean;
+    library?: ProjectArtifactLibraryDto;
+    finalization?: ProjectArtifactFinalizationDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
   onArtifactsUpdated(channelId: string, handler: (library: ProjectArtifactLibraryDto | null) => void): () => void;
   /** #825 按一次 Agent 输出读取固定成员的 Markdown 文档包。 */
   documentBundles(channelId: string): Promise<{
@@ -948,6 +964,12 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     promoteArtifact(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.promoteArtifact, payload);
+    },
+    submitArtifactReview(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.submitArtifactReview, payload);
+    },
+    setArtifactFinalVersion(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.setArtifactFinalVersion, payload);
     },
     onArtifactsUpdated(channelId, handler) {
       const listener = (payload: { channelId?: string; library?: ProjectArtifactLibraryDto | null }) => {

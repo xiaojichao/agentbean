@@ -53,7 +53,10 @@ import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
   ProjectArtifactCollectionRecord,
+  ProjectArtifactDecisionMutationRecord,
+  ProjectArtifactFinalizationRecord,
   ProjectArtifactMutationRecord,
+  ProjectArtifactReviewRecord,
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleBackfillSummary,
   ProjectDocumentBundleMemberRecord,
@@ -197,7 +200,12 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0050_project_document_bundles.sql');
   applyMigration(db, 'team/0051_project_stage_edges.sql');
   applyMigration(db, 'team/0052_project_document_bundle_backfill.sql');
-  applyMigration(db, 'team/0053_project_reference_sets.sql');
+  // 0053 依赖 0049 的逻辑产物表；缺少 artifacts 的历史库会跳过 0049，
+  // 因而必须沿用相同门禁，避免旧库升级在不存在的表上执行 ALTER。
+  if (sqliteTableExists(db, 'project_artifact_collections')) {
+    applyMigration(db, 'team/0053_project_artifact_reviews.sql');
+  }
+  applyMigration(db, 'team/0054_project_reference_sets.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -3140,6 +3148,240 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         });
         return transaction.immediate ? transaction.immediate() : transaction();
       },
+      async listArtifactReviews(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_artifact_reviews
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectArtifactReview)
+          .filter((review): review is ProjectArtifactReviewRecord => review !== null);
+      },
+      async listArtifactFinalizations(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_artifact_finalizations
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectArtifactFinalization)
+          .filter((record): record is ProjectArtifactFinalizationRecord => record !== null);
+      },
+      async getArtifactDecisionMutation(input) {
+        return mapProjectArtifactDecisionMutation(teamDb.prepare(
+          `SELECT * FROM project_artifact_decision_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.channelId, input.idempotencyKey));
+      },
+      async appendArtifactReview(input) {
+        const transaction = teamDb.transaction(() => {
+          const existingMutation = mapProjectArtifactDecisionMutation(teamDb.prepare(
+            `SELECT * FROM project_artifact_decision_mutations
+             WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+          ).get(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+          ));
+          if (existingMutation) {
+            if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+              || existingMutation.kind !== 'review'
+              || !existingMutation.reviewId) {
+              return { kind: 'idempotency_conflict' as const };
+            }
+            const review = mapProjectArtifactReview(teamDb.prepare(
+              `SELECT * FROM project_artifact_reviews
+               WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(
+              existingMutation.reviewId,
+              input.mutation.teamId,
+              input.mutation.channelId,
+            ));
+            return review
+              ? { kind: 'replayed' as const, review }
+              : { kind: 'idempotency_conflict' as const };
+          }
+
+          const version = teamDb.prepare(
+            `SELECT stage_id FROM project_artifact_versions
+             WHERE id = ? AND collection_id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(
+            input.review.versionId,
+            input.review.collectionId,
+            input.review.teamId,
+            input.review.channelId,
+          );
+          if (!version || sqliteText(version, 'stage_id') !== input.review.stageId) {
+            return { kind: 'version_scope_conflict' as const };
+          }
+          const stage = teamDb.prepare(
+            `SELECT 1 FROM project_stages
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(input.review.stageId, input.review.teamId, input.review.channelId);
+          if (!stage) return { kind: 'version_scope_conflict' as const };
+
+          teamDb.prepare(
+            `INSERT INTO project_artifact_reviews (
+              id, team_id, channel_id, collection_id, version_id, stage_id,
+              decision, comment, basis_json, reviewed_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.review.id,
+            input.review.teamId,
+            input.review.channelId,
+            input.review.collectionId,
+            input.review.versionId,
+            input.review.stageId,
+            input.review.decision,
+            input.review.comment,
+            JSON.stringify(input.review.basis),
+            input.review.reviewedBy,
+            input.review.createdAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO project_artifact_decision_mutations (
+              team_id, channel_id, idempotency_key, request_fingerprint, kind,
+              collection_id, version_id, review_id, finalization_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+            input.mutation.requestFingerprint,
+            input.mutation.kind,
+            input.mutation.collectionId,
+            input.mutation.versionId,
+            input.mutation.reviewId ?? null,
+            input.mutation.finalizationId ?? null,
+            input.mutation.createdAt,
+          );
+          return { kind: 'created' as const, review: input.review };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
+      async setArtifactFinalVersion(input) {
+        const transaction = teamDb.transaction(() => {
+          const existingMutation = mapProjectArtifactDecisionMutation(teamDb.prepare(
+            `SELECT * FROM project_artifact_decision_mutations
+             WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+          ).get(input.teamId, input.channelId, input.mutation.idempotencyKey));
+          if (existingMutation) {
+            if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+              || existingMutation.kind !== 'finalization'
+              || !existingMutation.finalizationId) {
+              return { kind: 'idempotency_conflict' as const };
+            }
+            const finalization = mapProjectArtifactFinalization(teamDb.prepare(
+              `SELECT * FROM project_artifact_finalizations
+               WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(existingMutation.finalizationId, input.teamId, input.channelId));
+            const collection = mapProjectArtifactCollection(teamDb.prepare(
+              `SELECT * FROM project_artifact_collections
+               WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(existingMutation.collectionId, input.teamId, input.channelId));
+            return finalization && collection
+              ? { kind: 'replayed' as const, collection, finalization }
+              : { kind: 'idempotency_conflict' as const };
+          }
+
+          const collection = mapProjectArtifactCollection(teamDb.prepare(
+            `SELECT * FROM project_artifact_collections
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(input.collectionId, input.teamId, input.channelId));
+          if (!collection || collection.revision !== input.expectedCollectionRevision) {
+            return { kind: 'collection_revision_conflict' as const };
+          }
+          const version = teamDb.prepare(
+            `SELECT 1 FROM project_artifact_versions
+             WHERE id = ? AND collection_id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(
+            input.finalization.versionId,
+            input.collectionId,
+            input.teamId,
+            input.channelId,
+          );
+          if (!version) return { kind: 'version_scope_conflict' as const };
+
+          const latestReview = mapProjectArtifactReview(teamDb.prepare(
+            `SELECT * FROM project_artifact_reviews
+             WHERE version_id = ? AND team_id = ? AND channel_id = ?
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+          ).get(input.finalization.versionId, input.teamId, input.channelId));
+          if (!latestReview
+            || latestReview.id !== input.finalization.basisReviewId
+            || latestReview.decision !== 'approved') {
+            return { kind: 'review_basis_conflict' as const };
+          }
+
+          const changed = sqliteChanges(teamDb.prepare(
+            `UPDATE project_artifact_collections
+             SET final_version_id = ?, revision = ?, updated_at = ?
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?`,
+          ).run(
+            input.finalization.versionId,
+            input.nextRevision,
+            input.updatedAt,
+            input.collectionId,
+            input.teamId,
+            input.channelId,
+            input.expectedCollectionRevision,
+          ));
+          if (changed !== 1) return { kind: 'collection_revision_conflict' as const };
+
+          teamDb.prepare(
+            `INSERT INTO project_artifact_finalizations (
+              id, team_id, channel_id, collection_id, version_id, previous_version_id,
+              basis_review_id, actor_kind, finalized_by, management_run_id,
+              human_confirmation_kind, human_confirmation_ref_id, human_confirmation_by,
+              reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.finalization.id,
+            input.finalization.teamId,
+            input.finalization.channelId,
+            input.finalization.collectionId,
+            input.finalization.versionId,
+            input.finalization.previousVersionId ?? null,
+            input.finalization.basisReviewId,
+            input.finalization.actorKind,
+            input.finalization.finalizedBy,
+            input.finalization.managementRunId ?? null,
+            input.finalization.humanConfirmation?.kind ?? null,
+            input.finalization.humanConfirmation?.refId ?? null,
+            input.finalization.humanConfirmation?.confirmedBy ?? null,
+            input.finalization.reason ?? null,
+            input.finalization.createdAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO project_artifact_decision_mutations (
+              team_id, channel_id, idempotency_key, request_fingerprint, kind,
+              collection_id, version_id, review_id, finalization_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+            input.mutation.requestFingerprint,
+            input.mutation.kind,
+            input.mutation.collectionId,
+            input.mutation.versionId,
+            input.mutation.reviewId ?? null,
+            input.mutation.finalizationId ?? null,
+            input.mutation.createdAt,
+          );
+          const updatedCollection = mapProjectArtifactCollection(teamDb.prepare(
+            `SELECT * FROM project_artifact_collections
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(input.collectionId, input.teamId, input.channelId));
+          if (!updatedCollection) return { kind: 'collection_revision_conflict' as const };
+          return {
+            kind: 'finalized' as const,
+            collection: updatedCollection,
+            finalization: input.finalization,
+          };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
     },
     projectDocumentBundles: {
       async list(input) {
@@ -4130,6 +4372,7 @@ function mapChannelProjectMutation(row: unknown): ChannelProjectMutationRecord |
 
 function mapProjectArtifactCollection(row: unknown): ProjectArtifactCollectionRecord | null {
   if (!row) return null;
+  const finalVersionId = sqliteNullableText(row, 'final_version_id');
   return {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
@@ -4138,6 +4381,7 @@ function mapProjectArtifactCollection(row: unknown): ProjectArtifactCollectionRe
     kind: sqliteText(row, 'kind'),
     revision: sqliteNumber(row, 'revision'),
     currentVersionId: sqliteText(row, 'current_version_id'),
+    ...(finalVersionId === undefined ? {} : { finalVersionId }),
     versionCount: sqliteNumber(row, 'version_count'),
     createdBy: sqliteText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),
@@ -4346,6 +4590,29 @@ function mapProjectReferenceSet(
   };
 }
 
+function mapProjectArtifactReview(row: unknown): ProjectArtifactReviewRecord | null {
+  if (!row) return null;
+  const decision = sqliteText(row, 'decision');
+  if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested') {
+    throw new Error('Project artifact review decision is invalid');
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    collectionId: sqliteText(row, 'collection_id'),
+    versionId: sqliteText(row, 'version_id'),
+    stageId: sqliteText(row, 'stage_id'),
+    decision,
+    comment: sqliteText(row, 'comment'),
+    basis: parseJsonValue<ProjectArtifactReviewRecord['basis']>(
+      sqliteNullableText(row, 'basis_json'),
+    ) ?? [],
+    reviewedBy: sqliteText(row, 'reviewed_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
 function mapProjectReferenceSelection(row: unknown): ProjectReferenceSelectionRecord | null {
   if (!row) return null;
   return {
@@ -4382,6 +4649,41 @@ function mapProjectReferenceItem(row: unknown): ProjectReferenceItemRecord | nul
   };
 }
 
+function mapProjectArtifactFinalization(row: unknown): ProjectArtifactFinalizationRecord | null {
+  if (!row) return null;
+  const actorKind = sqliteText(row, 'actor_kind');
+  if (actorKind !== 'human' && actorKind !== 'pi_manager') {
+    throw new Error('Project artifact finalization actor kind is invalid');
+  }
+  const previousVersionId = sqliteNullableText(row, 'previous_version_id');
+  const managementRunId = sqliteNullableText(row, 'management_run_id');
+  const confirmationKind = sqliteNullableText(row, 'human_confirmation_kind');
+  const confirmationRefId = sqliteNullableText(row, 'human_confirmation_ref_id');
+  const confirmationBy = sqliteNullableText(row, 'human_confirmation_by');
+  const reason = sqliteNullableText(row, 'reason');
+  const humanConfirmation: ProjectArtifactFinalizationRecord['humanConfirmation'] =
+    confirmationKind === 'message'
+    && confirmationRefId !== undefined
+    && confirmationBy !== undefined
+      ? { kind: 'message', refId: confirmationRefId, confirmedBy: confirmationBy }
+    : undefined;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    collectionId: sqliteText(row, 'collection_id'),
+    versionId: sqliteText(row, 'version_id'),
+    ...(previousVersionId === undefined ? {} : { previousVersionId }),
+    basisReviewId: sqliteText(row, 'basis_review_id'),
+    actorKind,
+    finalizedBy: sqliteText(row, 'finalized_by'),
+    ...(managementRunId === undefined ? {} : { managementRunId }),
+    ...(humanConfirmation === undefined ? {} : { humanConfirmation }),
+    ...(reason === undefined ? {} : { reason }),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
 function mapProjectReferenceSetMutation(row: unknown): ProjectReferenceSetMutationRecord | null {
   if (!row) return null;
   return {
@@ -4390,6 +4692,30 @@ function mapProjectReferenceSetMutation(row: unknown): ProjectReferenceSetMutati
     idempotencyKey: sqliteText(row, 'idempotency_key'),
     requestFingerprint: sqliteText(row, 'request_fingerprint'),
     referenceSetId: sqliteText(row, 'reference_set_id'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectArtifactDecisionMutation(
+  row: unknown,
+): ProjectArtifactDecisionMutationRecord | null {
+  if (!row) return null;
+  const kind = sqliteText(row, 'kind');
+  if (kind !== 'review' && kind !== 'finalization') {
+    throw new Error('Project artifact decision mutation kind is invalid');
+  }
+  const reviewId = sqliteNullableText(row, 'review_id');
+  const finalizationId = sqliteNullableText(row, 'finalization_id');
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    kind,
+    collectionId: sqliteText(row, 'collection_id'),
+    versionId: sqliteText(row, 'version_id'),
+    ...(reviewId === undefined ? {} : { reviewId }),
+    ...(finalizationId === undefined ? {} : { finalizationId }),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }

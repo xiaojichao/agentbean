@@ -200,6 +200,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.deleteStageEdge,
       WEB_EVENTS.project.artifactCollections,
       WEB_EVENTS.project.promoteArtifact,
+      WEB_EVENTS.project.submitArtifactReview,
+      WEB_EVENTS.project.setArtifactFinalVersion,
       WEB_EVENTS.project.documentBundles,
       WEB_EVENTS.project.documentBundle,
       WEB_EVENTS.project.createDocumentBundle,
@@ -1098,10 +1100,16 @@ describe('server-next socket handlers', () => {
     });
   });
 
-  test('#823 产物提升使用 Socket authenticated identity 并忽略伪造 userId', async () => {
+  test('#823/#824 产物写入使用 Socket authenticated identity 并忽略伪造 userId', async () => {
     const unauthenticatedSocket = new FakeSocket();
     const promoteArtifactToProjectVersion = vi.fn(async (payload) => makeSuccess({ payload }));
-    const app = { promoteArtifactToProjectVersion } as unknown as ServerNextUseCases;
+    const submitArtifactReview = vi.fn(async (payload) => makeSuccess({ payload }));
+    const setArtifactFinalVersion = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = {
+      promoteArtifactToProjectVersion,
+      submitArtifactReview,
+      setArtifactFinalVersion,
+    } as unknown as ServerNextUseCases;
     registerWebSocketHandlers(unauthenticatedSocket, app, {
       authenticatedUser: async () => ({
         hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
@@ -1113,12 +1121,20 @@ describe('server-next socket handlers', () => {
       artifactId: 'artifact-1',
     })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
     expect(promoteArtifactToProjectVersion).not.toHaveBeenCalled();
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.project.submitArtifactReview, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      versionId: 'version-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(submitArtifactReview).not.toHaveBeenCalled();
 
     const authenticatedSocket = new FakeSocket();
+    const afterProjectArtifactMutation = vi.fn();
     registerWebSocketHandlers(authenticatedSocket, app, {
       authenticatedUser: async () => ({
         hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null,
       }),
+      afterProjectArtifactMutation,
     });
     await authenticatedSocket.trigger(WEB_EVENTS.project.promoteArtifact, {
       userId: 'user-spoofed',
@@ -1136,6 +1152,49 @@ describe('server-next socket handlers', () => {
       stageId: 'stage-1',
       idempotencyKey: 'key-1',
     });
+    await authenticatedSocket.trigger(WEB_EVENTS.project.submitArtifactReview, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      versionId: 'version-1',
+      decision: 'approved',
+      idempotencyKey: 'review-key',
+    });
+    expect(submitArtifactReview).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: null,
+      channelId: 'channel-1',
+      versionId: 'version-1',
+      decision: 'approved',
+      idempotencyKey: 'review-key',
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.project.setArtifactFinalVersion, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      collectionId: 'collection-1',
+      versionId: 'version-1',
+      expectedCollectionRevision: 2,
+      idempotencyKey: 'final-key',
+      manager: {
+        managementRunId: 'run-spoofed',
+        humanConfirmation: {
+          kind: 'message',
+          refId: 'message-owner',
+          confirmedBy: 'owner-1',
+        },
+      },
+    });
+    expect(setArtifactFinalVersion).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: null,
+      channelId: 'channel-1',
+      collectionId: 'collection-1',
+      versionId: 'version-1',
+      expectedCollectionRevision: 2,
+      idempotencyKey: 'final-key',
+    });
+    expect(afterProjectArtifactMutation).toHaveBeenCalledTimes(3);
   });
 
   test('文档包读写都用 Socket authenticated identity 并忽略伪造 userId', async () => {
@@ -1387,6 +1446,8 @@ describe('server-next socket handlers', () => {
     // #823 Agent/Daemon 通道不暴露项目产物写入端点：产物事实只能由已认证人类会话写入。
     expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.promoteArtifact);
     expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.artifactCollections);
+    expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.submitArtifactReview);
+    expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.setArtifactFinalVersion);
 
     await socket.trigger(AGENT_EVENTS.device.hello, {
       teamId: 'team-1',

@@ -2,7 +2,7 @@
 
 import { AlertCircle, CheckCircle2, ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { ChannelProjectOverviewDto } from '@agentbean/contracts';
+import type { ChannelProjectOverviewDto, ProjectArtifactLibraryDto } from '@agentbean/contracts';
 
 export interface ProjectTaskOption {
   id: string;
@@ -40,6 +40,7 @@ export function ChannelProjectOverview({
   tasks,
   participants,
   currentUserId,
+  artifactLibrary,
   onCreate,
   onCreateEdge,
   onDeleteEdge,
@@ -48,6 +49,7 @@ export function ChannelProjectOverview({
   tasks: ProjectTaskOption[];
   participants: ProjectParticipantOption[];
   currentUserId?: string;
+  artifactLibrary?: ProjectArtifactLibraryDto | null;
   onCreate: (draft: InitialProjectStageDraft) => Promise<string | null>;
   onCreateEdge?: (draft: ProjectStageEdgeDraft) => Promise<string | null>;
   onDeleteEdge?: (edgeId: string) => Promise<string | null>;
@@ -158,6 +160,7 @@ export function ChannelProjectOverview({
                   依赖或必需输入未满足，暂不能启动执行
                 </div>
               )}
+              <StageArtifactSummary stageId={stage.id} library={artifactLibrary} />
               <details className="mt-2 text-xs text-neutral-500">
                 <summary className="flex cursor-pointer list-none items-center gap-1">
                   <ChevronDown size={12} />
@@ -285,6 +288,41 @@ export function ChannelProjectOverview({
       </button>
     </form>
   );
+}
+
+function StageArtifactSummary({
+  stageId,
+  library,
+}: {
+  stageId: string;
+  library?: ProjectArtifactLibraryDto | null;
+}) {
+  const entries = (library?.collections ?? []).flatMap((collection) =>
+    collection.versions
+      .filter((version) => version.source.stageId === stageId)
+      .map((version) => ({ collection, version })));
+  if (entries.length === 0) return null;
+  return (
+    <details className="mt-2 text-xs text-neutral-500">
+      <summary className="cursor-pointer">阶段产物（{entries.length}）</summary>
+      <ul className="mt-1 space-y-1">
+        {entries.map(({ collection, version }) => (
+          <li key={version.id} className="rounded bg-neutral-50 px-2 py-1 text-[11px] text-neutral-700">
+            {collection.name} · v{version.versionNumber} · {reviewStateLabel(version.reviewState)}
+            {version.id === collection.currentVersionId ? ' · 当前版' : ''}
+            {version.id === collection.finalVersionId ? ' · 最终版' : ''}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function reviewStateLabel(state: ProjectArtifactLibraryDto['collections'][number]['versions'][number]['reviewState']): string {
+  if (state === 'approved') return '已通过';
+  if (state === 'rejected') return '已拒绝';
+  if (state === 'changes_requested') return '需修改';
+  return '待审核';
 }
 
 /** #822 阶段依赖图：展示既有边并提供增删入口；归档频道只读。 */

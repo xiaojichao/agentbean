@@ -1,7 +1,11 @@
 import type {
   ChannelProjectOverviewDto,
   ID,
+  ProjectArtifactFinalizationActorKind,
+  ProjectArtifactHumanConfirmationRefDto,
   ProjectArtifactLineageRefDto,
+  ProjectArtifactReviewBasisRefDto,
+  ProjectArtifactReviewDecision,
   ProjectDocumentBundleBackfillMode,
   ProjectDocumentBundleSourceDto,
   ProjectStageEdgeSemantics,
@@ -98,6 +102,8 @@ export interface ProjectArtifactCollectionRecord {
   kind: string;
   revision: number;
   currentVersionId: ID;
+  /** #824 唯一最终版指针；尚未最终化时为 undefined。 */
+  finalVersionId?: ID;
   versionCount: number;
   createdBy: ID;
   createdAt: UnixMs;
@@ -149,6 +155,69 @@ export type PromoteArtifactToProjectVersionResult =
   | { kind: 'stage_scope_conflict' }
   | { kind: 'task_scope_conflict' }
   | { kind: 'artifact_promoted_to_other_collection' }
+  | { kind: 'idempotency_conflict' };
+
+/** #824 append-only 审核记录。没有对应的 update/delete 接口，写入后不可改写。 */
+export interface ProjectArtifactReviewRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  collectionId: ID;
+  versionId: ID;
+  stageId: ID;
+  decision: ProjectArtifactReviewDecision;
+  comment: string;
+  basis: ProjectArtifactReviewBasisRefDto[];
+  reviewedBy: ID;
+  createdAt: UnixMs;
+}
+
+/** #824 append-only 最终版切换审计。 */
+export interface ProjectArtifactFinalizationRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  collectionId: ID;
+  versionId: ID;
+  previousVersionId?: ID;
+  basisReviewId: ID;
+  actorKind: ProjectArtifactFinalizationActorKind;
+  finalizedBy: ID;
+  managementRunId?: ID;
+  humanConfirmation?: ProjectArtifactHumanConfirmationRefDto;
+  reason?: string;
+  createdAt: UnixMs;
+}
+
+/** 审核与最终化共用同一个幂等命名空间：同 key 不同命令必须 fail closed。 */
+export interface ProjectArtifactDecisionMutationRecord {
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  kind: 'review' | 'finalization';
+  collectionId: ID;
+  versionId: ID;
+  reviewId?: ID;
+  finalizationId?: ID;
+  createdAt: UnixMs;
+}
+
+export type AppendProjectArtifactReviewResult =
+  | { kind: 'created' | 'replayed'; review: ProjectArtifactReviewRecord }
+  | { kind: 'version_scope_conflict' }
+  | { kind: 'idempotency_conflict' };
+
+export type SetProjectArtifactFinalVersionResult =
+  | {
+    kind: 'finalized' | 'replayed';
+    collection: ProjectArtifactCollectionRecord;
+    finalization: ProjectArtifactFinalizationRecord;
+  }
+  | { kind: 'collection_revision_conflict' }
+  | { kind: 'version_scope_conflict' }
+  /** 事务内复核发现目标版本最新一条审核已不是提交时那条 approved。 */
+  | { kind: 'review_basis_conflict' }
   | { kind: 'idempotency_conflict' };
 
 export interface ChannelProjectRepository {
@@ -224,6 +293,36 @@ export interface ChannelProjectRepository {
     version: ProjectArtifactVersionRecord;
     mutation: ProjectArtifactMutationRecord;
   }): Promise<PromoteArtifactToProjectVersionResult>;
+  /**
+   * #824 审核与最终化的读写。刻意只有 list/append/setFinal 三类：
+   * 没有 updateReview / deleteReview / clearFinalVersion，
+   * 因此「审核只追加不覆盖」「旧最终化历史保持可读」是接口层的结构性保证。
+   */
+  listArtifactReviews(input: { teamId: ID; channelId: ID }): Promise<ProjectArtifactReviewRecord[]>;
+  listArtifactFinalizations(input: { teamId: ID; channelId: ID }): Promise<ProjectArtifactFinalizationRecord[]>;
+  getArtifactDecisionMutation(input: {
+    teamId: ID;
+    channelId: ID;
+    idempotencyKey: string;
+  }): Promise<ProjectArtifactDecisionMutationRecord | null>;
+  appendArtifactReview(input: {
+    review: ProjectArtifactReviewRecord;
+    mutation: ProjectArtifactDecisionMutationRecord;
+  }): Promise<AppendProjectArtifactReviewResult>;
+  /**
+   * 原子切换最终版：同一提交点复核幂等键、集合 revision fence、版本作用域，
+   * 并复核「目标版本最新一条审核仍是提交时那条 approved」，再写审计并推进指针。
+   */
+  setArtifactFinalVersion(input: {
+    teamId: ID;
+    channelId: ID;
+    collectionId: ID;
+    expectedCollectionRevision: number;
+    nextRevision: number;
+    updatedAt: UnixMs;
+    finalization: ProjectArtifactFinalizationRecord;
+    mutation: ProjectArtifactDecisionMutationRecord;
+  }): Promise<SetProjectArtifactFinalVersionResult>;
 }
 
 /** #825：Bundle 本体。成员另存，创建后不可变。 */

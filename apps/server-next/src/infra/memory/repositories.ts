@@ -55,7 +55,10 @@ import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
   ProjectArtifactCollectionRecord,
+  ProjectArtifactDecisionMutationRecord,
+  ProjectArtifactFinalizationRecord,
   ProjectArtifactMutationRecord,
+  ProjectArtifactReviewRecord,
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleBackfillCandidateRunRecord,
   ProjectDocumentBundleBackfillOutcomeRecord,
@@ -115,6 +118,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectArtifactCollections = new Map<string, ProjectArtifactCollectionRecord>();
   const projectArtifactVersions = new Map<string, ProjectArtifactVersionRecord>();
   const projectArtifactMutations = new Map<string, ProjectArtifactMutationRecord>();
+  const projectArtifactReviews = new Map<string, ProjectArtifactReviewRecord>();
+  const projectArtifactFinalizations = new Map<string, ProjectArtifactFinalizationRecord>();
+  const projectArtifactDecisionMutations = new Map<string, ProjectArtifactDecisionMutationRecord>();
   const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
   const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
   const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
@@ -1940,6 +1946,109 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         projectArtifactVersions.set(input.version.id, input.version);
         projectArtifactMutations.set(mutationKey, input.mutation);
         return { kind: 'created', collection: input.collection, version: input.version };
+      },
+      async listArtifactReviews(input) {
+        return Array.from(projectArtifactReviews.values())
+          .filter((review) =>
+            review.teamId === input.teamId && review.channelId === input.channelId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async listArtifactFinalizations(input) {
+        return Array.from(projectArtifactFinalizations.values())
+          .filter((record) =>
+            record.teamId === input.teamId && record.channelId === input.channelId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async getArtifactDecisionMutation(input) {
+        return projectArtifactDecisionMutations.get(
+          `${input.teamId}:${input.channelId}:${input.idempotencyKey}`,
+        ) ?? null;
+      },
+      async appendArtifactReview(input) {
+        const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
+        const existingMutation = projectArtifactDecisionMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+            || existingMutation.kind !== 'review'
+            || !existingMutation.reviewId) {
+            return { kind: 'idempotency_conflict' };
+          }
+          const review = projectArtifactReviews.get(existingMutation.reviewId);
+          return review
+            ? { kind: 'replayed', review }
+            : { kind: 'idempotency_conflict' };
+        }
+        const version = projectArtifactVersions.get(input.review.versionId);
+        const stage = projectStages.get(input.review.stageId);
+        if (!version
+          || version.teamId !== input.review.teamId
+          || version.channelId !== input.review.channelId
+          || version.collectionId !== input.review.collectionId
+          || version.stageId !== input.review.stageId
+          || !stage
+          || stage.teamId !== input.review.teamId
+          || stage.channelId !== input.review.channelId) {
+          return { kind: 'version_scope_conflict' };
+        }
+        projectArtifactReviews.set(input.review.id, input.review);
+        projectArtifactDecisionMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', review: input.review };
+      },
+      async setArtifactFinalVersion(input) {
+        const mutationKey = `${input.teamId}:${input.channelId}:${input.mutation.idempotencyKey}`;
+        const existingMutation = projectArtifactDecisionMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+            || existingMutation.kind !== 'finalization'
+            || !existingMutation.finalizationId) {
+            return { kind: 'idempotency_conflict' };
+          }
+          const finalization = projectArtifactFinalizations.get(existingMutation.finalizationId);
+          const collection = projectArtifactCollections.get(existingMutation.collectionId);
+          return finalization && collection
+            ? { kind: 'replayed', collection, finalization }
+            : { kind: 'idempotency_conflict' };
+        }
+        const collection = projectArtifactCollections.get(input.collectionId);
+        if (!collection
+          || collection.teamId !== input.teamId
+          || collection.channelId !== input.channelId
+          || collection.revision !== input.expectedCollectionRevision) {
+          return { kind: 'collection_revision_conflict' };
+        }
+        const version = projectArtifactVersions.get(input.finalization.versionId);
+        if (!version
+          || version.teamId !== input.teamId
+          || version.channelId !== input.channelId
+          || version.collectionId !== input.collectionId) {
+          return { kind: 'version_scope_conflict' };
+        }
+        const latestReview = Array.from(projectArtifactReviews.values())
+          .filter((review) =>
+            review.teamId === input.teamId
+            && review.channelId === input.channelId
+            && review.versionId === input.finalization.versionId)
+          .sort((left, right) =>
+            right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+        if (!latestReview
+          || latestReview.id !== input.finalization.basisReviewId
+          || latestReview.decision !== 'approved') {
+          return { kind: 'review_basis_conflict' };
+        }
+        const updatedCollection: ProjectArtifactCollectionRecord = {
+          ...collection,
+          finalVersionId: input.finalization.versionId,
+          revision: input.nextRevision,
+          updatedAt: input.updatedAt,
+        };
+        projectArtifactCollections.set(collection.id, updatedCollection);
+        projectArtifactFinalizations.set(input.finalization.id, input.finalization);
+        projectArtifactDecisionMutations.set(mutationKey, input.mutation);
+        return {
+          kind: 'finalized',
+          collection: updatedCollection,
+          finalization: input.finalization,
+        };
       },
     },
     projectDocumentBundles: {

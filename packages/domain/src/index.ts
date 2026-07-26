@@ -42,6 +42,7 @@ export * from './experience-pack-policy.js';
 export * from './project-stage-edge-policy.js';
 export * from './project-stage-policy.js';
 export * from './project-artifact-policy.js';
+export * from './project-artifact-review-policy.js';
 export * from './project-document-bundle-policy.js';
 export * from './project-reference-policy.js';
 export * from './project-document-bundle-backfill-policy.js';
