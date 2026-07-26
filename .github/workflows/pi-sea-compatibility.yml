@@ -94,7 +94,7 @@ jobs:
 
       - name: Upload platform verdict
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pi-sea-verdict-${{ matrix.verdict_os }}-${{ matrix.arch }}
           path: artifacts/pi-sea-verdict/verdict.json
@@ -119,7 +119,7 @@ jobs:
 
       - name: Download platform verdicts
         if: ${{ !cancelled() }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: pi-sea-verdict-*
           path: artifacts/pi-sea-platform-verdicts
@@ -130,7 +130,7 @@ jobs:
 
       - name: Upload aggregate verdict
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pi-sea-aggregate-verdict
           path: artifacts/pi-sea-aggregate/verdict.json

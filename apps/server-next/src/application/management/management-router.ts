@@ -19,11 +19,23 @@ import type { createManagementKernel } from './management-kernel.js';
 
 type ManagementKernel = ReturnType<typeof createManagementKernel>;
 
-const DEFAULT_PLACEMENT_POLICY: ManagerPlacementPolicyDto = {
-  placement: 'device',
-  allowServerContext: false,
-  requireLocalModelCredentials: true,
-};
+/**
+ * 默认 placement 只以工厂形态存在，不留模块级共享对象。
+ *
+ * 这里原本是一个 const 对象，policyForTeam 兜底与 #724 桥接都按引用把它递给调用方。
+ * DTO 的 readonly 只在编译期成立，调用方一次 `policy.placementPolicy.placement = 'auto'`
+ * 就改写了全进程共享值：此后 #724 桥接（有 target 时本该恒为 device）会落进 auto 解析，
+ * 让一个根本没有存储策略行的请求走到 resolveAutoPlacement 与 crossedBarrier 返回点。
+ * 工厂每次返回新对象——没有共享对象可改，「桥接绝不选 auto」才是结构性保证，
+ * 而不是「碰巧没人去改」的约定。
+ */
+function defaultPlacementPolicy(): ManagerPlacementPolicyDto {
+  return {
+    placement: 'device',
+    allowServerContext: false,
+    requireLocalModelCredentials: true,
+  };
+}
 
 const PHASE_1_BUDGET: ManagementBudgetDto = {
   maxSubtasks: 1,
@@ -127,13 +139,18 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
     });
   }
 
+  // 读路径的唯一出口：无论策略来自仓储还是兜底默认值，出手的都是调用方独占的新对象。
+  // 仓储实现可以按引用存取（内存版就是），所以直接把 get() 的结果递出去等于把仓储里的
+  // 活对象交给调用方——改它就是改存储行。#836 的桥接回退恰恰要在 routeRequest 之后
+  // 再读一次 stored.mode 来判断团队是否显式选了 managed，读到被污染的行会静默改判。
   async function policyForTeam(teamId: string): Promise<ManagementPolicyRecord> {
-    return (await repositories.management.policies.get(teamId)) ?? {
+    const stored = await repositories.management.policies.get(teamId);
+    return stored ? detachPolicy(stored) : {
       schemaVersion: 2,
       teamId,
       mode: 'direct',
       maxManagementPhase: 1,
-      placementPolicy: DEFAULT_PLACEMENT_POLICY,
+      placementPolicy: defaultPlacementPolicy(),
       updatedBy: '',
       updatedAt: 0,
     };
@@ -161,7 +178,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         return { ok: false as const, error: 'VALIDATION_ERROR' };
       }
       const currentPolicy = await policyForTeam(input.teamId);
-      const placementPolicy = normalizePlacementPolicy(input.placementPolicy ?? DEFAULT_PLACEMENT_POLICY);
+      const placementPolicy = normalizePlacementPolicy(input.placementPolicy ?? defaultPlacementPolicy());
       if (!placementPolicy) return { ok: false as const, error: 'VALIDATION_ERROR' };
       // #648 预算覆盖：传入即整体钳制（非法 → VALIDATION_ERROR 不留半个覆盖）；未传保留既有。
       let budgetOverrides = currentPolicy.budgetOverrides;
@@ -193,7 +210,8 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         updatedBy: input.userId,
         updatedAt: clock.now(),
       });
-      return { ok: true as const, policy, canManage: true as const };
+      // upsert 的返回值在按引用存取的仓储实现里就是刚落库的那个对象，同样要脱钩再出手。
+      return { ok: true as const, policy: detachPolicy(policy), canManage: true as const };
     },
 
     async route(input: RouteRequestInput): Promise<ManagementRoutingResult> {
@@ -244,7 +262,7 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
           mode: 'managed' as ManagementMode,
           maxManagementPhase: (hasRootTask ? 3 : 1) as 1 | 2 | 3,
           placementPolicy: hasTarget
-            ? DEFAULT_PLACEMENT_POLICY
+            ? defaultPlacementPolicy()
             : { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false },
         };
       }
@@ -559,6 +577,23 @@ function unavailablePreflight(): ManagementPreflight {
 
 function isManagementMode(value: unknown): value is ManagementMode {
   return value === 'direct' || value === 'shadow' || value === 'managed';
+}
+
+/**
+ * 把策略记录与「别处仍持有的那个对象」彻底脱钩，供读路径出手。
+ *
+ * 用深拷贝而非逐字段挑选：ManagementPolicyRecord 后续加字段时，逐字段版本会静默漏拷
+ * （新字段悄悄退化成共享引用，正是本次要根除的那类 bug），深拷贝不会。策略记录全是
+ * JSON 形态数据（字符串/数字/布尔/数组），structuredClone 可安全处理；daemon-next 的
+ * local-memory-store / management-durable-outbox 在边界上也是这个写法。
+ *
+ * 与 normalizePlacementPolicy 的分工：那个是写路径的**校验型**生产者，形状不合法就返回
+ * null（managed 带 allowedDeviceIds、未知 placement 等）。读路径不能消费 null 语义——
+ * 已落库的行不该在读取时被判死，所以读路径用这个纯结构拷贝，不做校验。两者加上
+ * defaultPlacementPolicy() 共三个生产者，共同点是**都只产出新对象**，谁都不外泄共享引用。
+ */
+function detachPolicy(record: ManagementPolicyRecord): ManagementPolicyRecord {
+  return structuredClone(record);
 }
 
 function normalizePlacementPolicy(value: ManagerPlacementPolicyDto): ManagerPlacementPolicyDto | null {

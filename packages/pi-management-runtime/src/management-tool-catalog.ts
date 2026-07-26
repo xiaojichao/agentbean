@@ -159,8 +159,14 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
     deadlineAt: Type.Optional(Type.Integer({ minimum: 0 })),
   }, { additionalProperties: false });
   if (name === 'tasks.create_subtasks') {
+    // requiredSkills/preferredSkills/atomicityHint 为契约已声明、server 已消费的可选输入
+    // （Phase2SubtaskDraftV1 + Phase2ManagementWorkerToolInputMapV1）。因本对象是
+    // additionalProperties:false，未在此声明的字段模型无法产出 —— 缺声明会让 #711 硬过滤、
+    // #715 coverage、#725 preferred 排序与 #798 拆解 gate 在生产上恒收不到输入。
     return Type.Object({
       parentTaskId: id(),
+      // AC#4（#798）：parent 级可拆分性提示；缺省 decomposable。
+      atomicityHint: Type.Optional(Type.Union([Type.Literal('atomic'), Type.Literal('decomposable')])),
       subtasks: Type.Array(Type.Object({
         clientKey: id(),
         title: id(),
@@ -168,6 +174,10 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
         claimPolicy: Type.Union([Type.Literal('open'), Type.Literal('targeted')]),
         targetAgentId: Type.Optional(id()),
         requiredCapabilities: Type.Array(id()),
+        // #711 AC#1：硬门槛 Skill，须由候选 Agent 的 active Exposure Manifest 公开声明。
+        requiredSkills: Type.Optional(Type.Array(id())),
+        // #711 AC#3：偏好 Skill，仅在合格候选间排序，永不改变资格判定。
+        preferredSkills: Type.Optional(Type.Array(id())),
         acceptanceCriteria: Type.Array(criterion),
         maxAttempts: Type.Integer({ minimum: 1 }),
       }, { additionalProperties: false }), { minItems: 1, maxItems: 8 }),

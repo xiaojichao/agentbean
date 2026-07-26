@@ -63,7 +63,7 @@ describe('Phase 1 management routing', () => {
 
   test('#724 桥接的团队在 preflight 红时永不阻断发送：Phase 1 与 Phase 3 都回退 direct', async () => {
     // 生产复现：daemon 只有 env 变量凭证（credentialStatus=test_only），
-    // 桥接使用的 DEFAULT_PLACEMENT_POLICY.requireLocalModelCredentials=true
+    // 桥接使用的默认 placement（defaultPlacementPolicy()）requireLocalModelCredentials=true
     // → credentialAvailable=false。桥接是自动升级（团队从未显式开启 managed），
     // 因此不能让消息发送失败。
     const harness = await createHarness({ credentialAvailable: false });
@@ -100,6 +100,52 @@ describe('Phase 1 management routing', () => {
   test('显式配置 managed 的团队保持 fail closed（桥接回退不得外溢）', async () => {
     const harness = await createHarness({ credentialAvailable: false });
     await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 });
+    await expect(harness.router.route({ ...request(), rootTaskId: 'root-task-1' })).resolves.toMatchObject({
+      kind: 'unavailable',
+      diagnostics: ['MANAGEMENT_PHASE_2_PREFLIGHT_CREDENTIALAVAILABLE_MISSING'],
+    });
+  });
+
+  test('getPolicy 递出的是调用方独占副本：改它不影响后续读取，也翻不动 #724 桥接的 device placement', async () => {
+    const harness = await createHarness();
+    const first = await harness.router.getPolicy({ userId: 'user-1', teamId: 'team-1' });
+    if (!first.ok) throw new Error('policy expected');
+    expect(first.policy.placementPolicy.placement).toBe('device');
+
+    // DTO 上的 readonly 只在编译期成立。这里模拟运行时改写：曾经这个对象就是模块级
+    // 共享的默认 placement 常量，改一次就污染全进程，此后「有 target 的 #724 桥接恒为
+    // device」会被翻成 auto——一个连存储策略行都没有的请求会走到 auto 解析。
+    const leaked = first.policy as { mode: string; placementPolicy: { placement: string } };
+    leaked.placementPolicy.placement = 'auto';
+    leaked.mode = 'managed';
+
+    await expect(harness.router.getPolicy({ userId: 'user-1', teamId: 'team-1' }))
+      .resolves.toMatchObject({ ok: true, policy: { mode: 'direct', placementPolicy: { placement: 'device' } } });
+
+    const routed = await harness.router.route(request());
+    expect(routed).toMatchObject({ kind: 'managed', managementPhase: 1 });
+    // 桥接从不解析 auto：probe 一次都不该被问到，冻结进 run 的也必须是 device。
+    expect(harness.gateway.probeAutoPlacement).not.toHaveBeenCalled();
+    if (routed.kind !== 'managed') throw new Error('managed route expected');
+    await expect(harness.repositories.management.runs.getById(routed.managementRunId))
+      .resolves.toMatchObject({ placementPolicy: { placement: 'device' } });
+  });
+
+  test('策略记录不与存储行共享引用：改返回值既不改存储，也翻不动 #836 回退门控', async () => {
+    const harness = await createHarness({ credentialAvailable: false });
+    const updated = await harness.router.updatePolicy({ ...managedPolicy(), maxManagementPhase: 3 });
+    if (!updated.ok) throw new Error('policy expected');
+
+    // 深层可变字段（数组）同样要脱钩——浅拷贝会漏掉它。
+    (updated.policy.placementPolicy.allowedDeviceIds as string[]).push('device-not-in-team');
+    // 把显式 managed 的团队改写成 direct：若返回值与存储行共享引用，#836 的
+    // 「stored.mode === 'direct' 才回退」门控会被打穿，fail closed 团队被静默降级成 direct。
+    (updated.policy as { mode: string }).mode = 'direct';
+
+    await expect(harness.router.getPolicy({ userId: 'user-1', teamId: 'team-1' })).resolves.toMatchObject({
+      ok: true,
+      policy: { mode: 'managed', placementPolicy: { placement: 'device', allowedDeviceIds: ['device-1'] } },
+    });
     await expect(harness.router.route({ ...request(), rootTaskId: 'root-task-1' })).resolves.toMatchObject({
       kind: 'unavailable',
       diagnostics: ['MANAGEMENT_PHASE_2_PREFLIGHT_CREDENTIALAVAILABLE_MISSING'],

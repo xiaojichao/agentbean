@@ -57,6 +57,9 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactMutationRecord,
   ProjectArtifactVersionRecord,
+  ProjectDocumentBundleMemberRecord,
+  ProjectDocumentBundleMutationRecord,
+  ProjectDocumentBundleRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -103,6 +106,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectArtifactCollections = new Map<string, ProjectArtifactCollectionRecord>();
   const projectArtifactVersions = new Map<string, ProjectArtifactVersionRecord>();
   const projectArtifactMutations = new Map<string, ProjectArtifactMutationRecord>();
+  const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
+  const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
+  const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
@@ -711,6 +717,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           return null;
         }
         channels.delete(input.channelId);
+        // 与 SQLite 的 channels ON DELETE CASCADE 对齐，避免两套仓储语义分叉。
+        for (const [bundleId, bundle] of projectDocumentBundles) {
+          if (bundle.channelId !== input.channelId) continue;
+          projectDocumentBundles.delete(bundleId);
+          projectDocumentBundleMembers.delete(bundleId);
+        }
+        for (const [mutationKey, mutation] of projectDocumentBundleMutations) {
+          if (mutation.channelId === input.channelId) projectDocumentBundleMutations.delete(mutationKey);
+        }
         return channel;
       },
     },
@@ -1417,6 +1432,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const [operationKey, operation] of channelDocumentOperations) {
           if (documentIds.has(operation.documentId)) channelDocumentOperations.delete(operationKey);
         }
+        // 与 SQLite 的 ON DELETE CASCADE 对齐：Bundle 是文档的只读投影，
+        // 文档消失时成员行随之消失，绝不反过来阻塞文档删除。
+        for (const [bundleId, members] of projectDocumentBundleMembers) {
+          const remaining = members.filter((member) => !documentIds.has(member.documentId));
+          if (remaining.length === members.length) continue;
+          projectDocumentBundleMembers.set(bundleId, remaining);
+        }
       },
     },
     workspaceRuns: {
@@ -1751,6 +1773,52 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         projectArtifactVersions.set(input.version.id, input.version);
         projectArtifactMutations.set(mutationKey, input.mutation);
         return { kind: 'created', collection: input.collection, version: input.version };
+      },
+    },
+    projectDocumentBundles: {
+      async list(input) {
+        return Array.from(projectDocumentBundles.values())
+          .filter((bundle) => bundle.teamId === input.teamId && bundle.channelId === input.channelId)
+          .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+      },
+      async getById(input) {
+        const bundle = projectDocumentBundles.get(input.bundleId);
+        if (!bundle || bundle.teamId !== input.teamId || bundle.channelId !== input.channelId) return null;
+        return bundle;
+      },
+      async listMembers(input) {
+        return (projectDocumentBundleMembers.get(input.bundleId) ?? [])
+          .slice()
+          .sort((left, right) => left.position - right.position);
+      },
+      async getMutation(input) {
+        return projectDocumentBundleMutations.get(
+          `${input.teamId}:${input.channelId}:${input.idempotencyKey}`,
+        ) ?? null;
+      },
+      async create(input) {
+        const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
+        const existingMutation = projectDocumentBundleMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          return { kind: 'replayed', mutation: existingMutation };
+        }
+        // 原子提交点复核成员：应用层预检与写入之间，文档可能被移出频道或产生新 revision。
+        for (const member of input.members) {
+          const document = channelDocuments.get(member.documentId);
+          if (!document
+            || document.teamId !== input.bundle.teamId
+            || document.channelId !== input.bundle.channelId
+            || document.currentRevisionId !== member.initialRevisionId) {
+            return { kind: 'document_scope_conflict' };
+          }
+        }
+        projectDocumentBundles.set(input.bundle.id, input.bundle);
+        projectDocumentBundleMembers.set(input.bundle.id, input.members.slice());
+        projectDocumentBundleMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', mutation: input.mutation };
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),

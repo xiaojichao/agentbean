@@ -197,6 +197,9 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.createInitialStage,
       WEB_EVENTS.project.artifactCollections,
       WEB_EVENTS.project.promoteArtifact,
+      WEB_EVENTS.project.documentBundles,
+      WEB_EVENTS.project.documentBundle,
+      WEB_EVENTS.project.createDocumentBundle,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,
@@ -1127,6 +1130,54 @@ describe('server-next socket handlers', () => {
       artifactId: 'artifact-1',
       stageId: 'stage-1',
       idempotencyKey: 'key-1',
+    });
+  });
+
+  test('文档包读写都用 Socket authenticated identity 并忽略伪造 userId', async () => {
+    const unauthenticatedSocket = new FakeSocket();
+    const createProjectDocumentBundle = vi.fn(async (payload) => makeSuccess({ payload }));
+    const listProjectDocumentBundles = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = {
+      createProjectDocumentBundle,
+      listProjectDocumentBundles,
+    } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(unauthenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
+      }),
+    });
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.project.createDocumentBundle, {
+      userId: 'user-spoofed', channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.project.documentBundles, {
+      userId: 'user-spoofed', channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(createProjectDocumentBundle).not.toHaveBeenCalled();
+    expect(listProjectDocumentBundles).not.toHaveBeenCalled();
+
+    const authenticatedSocket = new FakeSocket();
+    registerWebSocketHandlers(authenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null,
+      }),
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.project.createDocumentBundle, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      idempotencyKey: 'key-1',
+      name: '发布文档包',
+      workspaceRunId: 'run-1',
+      documentIds: ['document-1'],
+    });
+    expect(createProjectDocumentBundle).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: null,
+      channelId: 'channel-1',
+      idempotencyKey: 'key-1',
+      name: '发布文档包',
+      workspaceRunId: 'run-1',
+      documentIds: ['document-1'],
     });
   });
 

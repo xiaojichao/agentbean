@@ -507,6 +507,78 @@ describe('management tool boundary', () => {
     await session.dispose();
   });
 
+  it('exposes requiredSkills/preferredSkills/atomicityHint on the create_subtasks schema', () => {
+    // 该对象是 additionalProperties:false —— 未在 schema 声明的字段模型无法产出。
+    // 契约（Phase2SubtaskDraftV1 + 输入根级 atomicityHint）与 server 早已消费这三个字段，
+    // 缺声明会让 #711 硬过滤 / #715 coverage / #725 preferred 排序 / #798 拆解 gate 恒收不到输入。
+    const [tool] = createManagementToolCatalog({
+      toolNames: ['tasks.create_subtasks'],
+      mode: 'managed',
+      sessionContext: phase2SessionInput('schema').context,
+      executor: async () => ({ text: 'ok' }),
+    });
+    const schema = tool?.parameters as unknown as {
+      properties: {
+        atomicityHint?: unknown;
+        subtasks: { items: { properties: Record<string, unknown>; additionalProperties: boolean } };
+      };
+    };
+    const draft = schema.properties.subtasks.items;
+    expect(draft.additionalProperties).toBe(false);
+    expect(Object.keys(draft.properties)).toEqual(expect.arrayContaining(['requiredSkills', 'preferredSkills']));
+    expect(schema.properties.atomicityHint).toBeDefined();
+  });
+
+  it('passes create_subtasks Skill inputs through to the executor unchanged', async () => {
+    const calls: Array<{ name: string; input: unknown }> = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'phase-2-skill-input',
+        async respond(_request, state) {
+          if (state.callCount === 1) {
+            return modelResponse([{
+              type: 'toolCall',
+              id: 'call-phase-2-skills',
+              name: 'tasks.create_subtasks',
+              arguments: {
+                parentTaskId: 'task-root',
+                atomicityHint: 'decomposable',
+                subtasks: [{
+                  clientKey: 'a',
+                  title: 'A',
+                  claimPolicy: 'open',
+                  requiredCapabilities: ['code-review'],
+                  requiredSkills: ['rust'],
+                  preferredSkills: ['typescript'],
+                  acceptanceCriteria: [{ id: 'ca', description: 'A done', evidenceRequired: false }],
+                  maxAttempts: 1,
+                }],
+              },
+            }], 'tool_use');
+          }
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async (call) => {
+        calls.push({ name: call.name, input: call.input });
+        return { text: 'created' };
+      },
+    }).createSession(phase2SessionInput('skill-input'));
+
+    await session.prompt({ text: 'decompose' });
+    await session.waitForIdle();
+    // 未被 schema 或 parsePhase2TaskToolInputV1 拒绝，且三个字段原样到达 executor
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      name: 'tasks.create_subtasks',
+      input: {
+        atomicityHint: 'decomposable',
+        subtasks: [{ requiredSkills: ['rust'], preferredSkills: ['typescript'] }],
+      },
+    });
+    await session.dispose();
+  });
+
   it('passes versioned effect and phase metadata to the injected executor', async () => {
     const calls: Array<{ name: string; metadata: unknown }> = [];
     const requests: import('../src/index.js').ManagementModelRequest[] = [];

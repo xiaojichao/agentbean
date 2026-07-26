@@ -136,6 +136,7 @@ export interface WebSocketHandlerOptions {
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectArtifactMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterProjectDocumentBundleMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
@@ -409,6 +410,19 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.project.promoteArtifact, app, 'promoteArtifactToProjectVersion', (payload, result) =>
     options.afterProjectArtifactMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.documentBundles, app, 'listProjectDocumentBundles', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.documentBundle, app, 'getProjectDocumentBundle', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.createDocumentBundle, app, 'createProjectDocumentBundle', (payload, result) =>
+    options.afterProjectDocumentBundleMutation?.(payload, result), {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
