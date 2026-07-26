@@ -86,6 +86,12 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
     readonly targetAgentId?: string;
     readonly requiredCapabilities: readonly string[];
     readonly requiredSkills?: readonly string[];
+    /**
+     * #711 AC#1/AC#3：偏好 Skill,仅参与合格候选间排序,永不改变资格判定
+     * （故不进入 evaluateSkillCoverageUnion 拆解 gate）。持久化到 task_coordinations
+     * 供 broker publishOffer 写入 offer objective（#725 F3）。
+     */
+    readonly preferredSkills?: readonly string[];
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
@@ -273,6 +279,7 @@ export function createTaskCoordinationKernel(
             rootTaskId, parentTaskId: parent.taskId, nodeKind: 'subtask', reviewPolicy: 'manager',
             claimPolicy: draft.claimPolicy, requiredCapabilities: [...draft.requiredCapabilities],
             requiredSkills: draft.requiredSkills ? [...draft.requiredSkills] : [],
+            preferredSkills: draft.preferredSkills ? [...draft.preferredSkills] : [],
             atomicityHint: input.atomicityHint ?? 'decomposable',
             taskRevision: task.revision, attempt: 1, maxAttempts: draft.maxAttempts,
             createdAt: now, updatedAt: now,

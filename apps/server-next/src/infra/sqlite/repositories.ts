@@ -169,6 +169,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0044_experience_packs.sql');
   applyMigration(db, 'team/0045_attachment_status.sql');
   applyMigration(db, 'team/0046_migrate_old_pi_policy.sql');
+  applyMigration(db, 'team/0047_task_coordination_preferred_skills.sql');
   applyMigration(db, 'team/0048_channel_project_stages.sql');
 }
 

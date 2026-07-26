@@ -495,6 +495,37 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('preferredSkills 随 coordination 持久化,不传 → [],revise 后保留(#725 F3)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      // preferredSkills 仅参与合格候选间排序,不进入 evaluateSkillCoverageUnion 拆解 gate:
+      // task-a 只靠 requiredCapabilities 兜底覆盖(root 空)即可通过,preferredSkills 不影响判定。
+      await harness.kernel.createSubtasks({ authority: harness.authority, idempotencyKey: 'preferred-s1',
+        parentTaskId: 'root-task', subtasks: [
+          { taskId: 'task-a', clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: ['research'],
+            preferredSkills: ['rust', 'typescript'],
+            acceptanceCriteria: [{ id: 'ca', description: 'A', evidenceRequired: false }], maxAttempts: 1 },
+          { taskId: 'task-b', clientKey: 'b', title: 'B', claimPolicy: 'open', requiredCapabilities: ['research'],
+            acceptanceCriteria: [{ id: 'cb', description: 'B', evidenceRequired: false }], maxAttempts: 1 },
+        ] });
+      // INSERT + SELECT：声明的 preferred Skills 原样落库并读回
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+        .resolves.toMatchObject({ preferredSkills: ['rust', 'typescript'] });
+      // 未声明 → []（与 requiredSkills 同款向后兼容语义,既有行读回空而非 undefined）
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-b'))
+        .resolves.toMatchObject({ preferredSkills: [] });
+      // UPDATE：addDependency 触发 reviseTask → coordinations.update,preferred Skills 不得被清空
+      await harness.kernel.addDependency({ authority: harness.authority, idempotencyKey: 'preferred-dep',
+        taskId: 'task-a', dependencyTaskId: 'task-b', expectedTaskRevision: 1 });
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+        .resolves.toMatchObject({ taskRevision: 2, preferredSkills: ['rust', 'typescript'] });
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 function rootInput(authority: Authority) {

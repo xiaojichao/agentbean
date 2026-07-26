@@ -216,6 +216,28 @@ describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 
       .resolves.toMatchObject({ id: offer.id, status: 'open', agentId: 'agent-1' });
   });
 
+  test('coordination.preferredSkills 进入 offer objective（#725 F3 排序输入）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // harness 的 task-a 未声明 preferredSkills（对照组 []）；task-c 声明后须一路到达 objective。
+    await harness.coordination.createSubtasks({ authority: harness.authority,
+      idempotencyKey: 'subtasks-preferred', parentTaskId: 'root-task',
+      subtasks: [{ taskId: 'task-c', clientKey: 'c', title: 'Task C', description: 'objective c',
+        claimPolicy: 'open', requiredCapabilities: ['code-review'], preferredSkills: ['rust'],
+        acceptanceCriteria: [{ id: 'criterion-c', description: 'C accepted', evidenceRequired: false }],
+        maxAttempts: 3 }] });
+
+    const offer = await harness.broker.publishOffer({
+      taskId: 'task-c', agentId: 'agent-1', offerTtlMs: 20, hardSpecified: false,
+    });
+
+    expect(offer.objective.preferredSkills).toEqual(['rust']);
+    const persisted = await harness.repositories.taskCoordination.offers.getById(offer.id);
+    expect(persisted?.objective.preferredSkills).toEqual(['rust']);
+  });
+
   test('hardSpecified=true 透传（显式 @Agent，AC#8 仅元数据）', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
