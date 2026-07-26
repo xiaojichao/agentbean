@@ -93,11 +93,11 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
     cleanups.push(async () => authenticatedWebSocket.disconnect());
 
     const deviceA = await registerDeviceAndAgent({
-      socket: agentSocketA, web, teamId, userId, machineId: 'phase2-device-a',
+      socket: agentSocketA, ownerSocket: webSocket, web, teamId, userId, machineId: 'phase2-device-a',
       agentName: 'Agent A', skillName: 'phase2-agent-a',
     });
     const deviceB = await registerDeviceAndAgent({
-      socket: agentSocketB, web, teamId, userId, machineId: 'phase2-device-b',
+      socket: agentSocketB, ownerSocket: webSocket, web, teamId, userId, machineId: 'phase2-device-b',
       agentName: 'Agent B', skillName: 'phase2-agent-b',
     });
     const agentIds = [deviceA.agentId, deviceB.agentId];
@@ -578,6 +578,7 @@ function createDispatchClient(input: {
 
 async function registerDeviceAndAgent(input: {
   socket: ClientSocket;
+  ownerSocket: ClientSocket;
   web: ReturnType<typeof createWebSocketClient>;
   teamId: string;
   userId: string;
@@ -604,6 +605,25 @@ async function registerDeviceAndAgent(input: {
   }) as { agent: { id: string } };
   await reportAgentSkill(input.socket, input.teamId, hello.device.id, created.agent.id,
     input.agentName, input.skillName);
+  const draft = await input.ownerSocket.emitWithAck(WEB_EVENTS.agentExposure.createDraft, {
+    userId: input.userId,
+    teamId: input.teamId,
+    agentId: created.agent.id,
+    capabilities: [{ name: input.skillName, description: `${input.agentName} smoke capability` }],
+    skills: [{ name: input.skillName, description: `${input.agentName} smoke skill` }],
+    availability: { status: 'available' },
+  }) as { ok: boolean; manifest?: { id: string } };
+  if (!draft.ok || !draft.manifest) {
+    throw new Error(`SMOKE_AGENT_EXPOSURE_DRAFT_FAILED:${JSON.stringify(draft)}`);
+  }
+  const published = await input.ownerSocket.emitWithAck(WEB_EVENTS.agentExposure.publish, {
+    userId: input.userId,
+    teamId: input.teamId,
+    manifestId: draft.manifest.id,
+  }) as { ok: boolean };
+  if (!published.ok) {
+    throw new Error(`SMOKE_AGENT_EXPOSURE_PUBLISH_FAILED:${JSON.stringify(published)}`);
+  }
   return { deviceId: hello.device.id, agentId: created.agent.id };
 }
 

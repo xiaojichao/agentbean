@@ -22,7 +22,9 @@ import {
 describe('Device Service migration', () => {
   test('reports an idle in-place plan through the stable JSON CLI', async () => {
     const output: string[] = [];
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migration-plan-'));
     const status = await inspectDeviceMigration({
+      baseDir,
       readOwner: async () => 'legacy-daemon',
       listLegacy: async () => [],
     });

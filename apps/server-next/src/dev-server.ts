@@ -27,6 +27,7 @@ import { createManagementKernel } from './application/management/management-kern
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
+import { resolveDecompositionAllocatability } from './application/management/agent-eligibility-service.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createCollaborativeMemorySearchService } from './application/collaborative-memory-search-service.js';
 import { createMemoryCapsuleService } from './application/memory-capsule-service.js';
@@ -45,7 +46,8 @@ import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-p
 import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type AgentExposureActiveProjectionDto, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { decideOfferAllocationPolicy, rankQualifiedCandidates } from '../../../packages/domain/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -84,6 +86,11 @@ export interface StartServerNextDevServerInput {
   taskClaimBroker?: TaskClaimBroker;
   serverWorkerPool?: ServerWorkerPool;
   serverWorkerAuthToken?: string;
+  /** 注入 app 时透传生产装配的 emitter 绑定（缺省则无 dispatch/offer 推送）。 */
+  bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
+  bindTaskClaimEmitter?(emit: (taskId: string) => Promise<void>): void;
+  /** 注入 app 时透传生产装配的清理（如关闭 SQLite 连接）。 */
+  onClose?: () => Promise<void>;
   config?: ServerNextDevConfig;
   Server?: SocketIoServerConstructor;
   Database?: BetterSqlite3Constructor;
@@ -103,7 +110,7 @@ export interface ServerNextDevServerHandle {
   close(): Promise<void>;
 }
 
-interface AppWithCleanup {
+export interface AppWithCleanup {
   app: ServerNextUseCases;
   artifactPreviewService?: ArtifactPreviewService;
   channelFileBackfill?: NonNullable<ReturnType<typeof createChannelFileBackfillIfSupported>>;
@@ -219,8 +226,12 @@ export async function startServerNextDevServer(
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
-      serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
-      close: async () => undefined }
+      serverWorkerAuthToken: input.serverWorkerAuthToken,
+      ...(input.bindManagementDispatchEmitter
+        ? { bindManagementDispatchEmitter: input.bindManagementDispatchEmitter } : {}),
+      ...(input.bindTaskClaimEmitter ? { bindTaskClaimEmitter: input.bindTaskClaimEmitter } : {}),
+      reconcileDisconnectedDevicesOnStart: false,
+      close: input.onClose ?? (async () => undefined) }
     : createDefaultApp(config, input.Database, input.messageIngestionMode);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
@@ -1516,7 +1527,11 @@ function findWebNextDir(): string {
   throw new Error('web-next app directory not found');
 }
 
-function createDefaultApp(
+/**
+ * 生产装配工厂（导出供全链路验收测试复用同一装配，而非复刻接线）。
+ * 返回的 app/scheduler/broker 引用可直接驱动 runCoordinationCycle、publish 等入口。
+ */
+export function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
   messageIngestionMode: 'legacy' | 'durable-job' = 'legacy',
@@ -1535,11 +1550,12 @@ function createDefaultApp(
       repositories, ids,
     );
     const serverWorker = createDefaultServerWorker(config, clock, ids);
+    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     const management = createDefaultManagementRuntime(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
+      taskClaimBroker,
     );
-    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     return {
       app: createServerNextUseCases({
         repositories,
@@ -1597,11 +1613,12 @@ function createDefaultApp(
     repositories, ids,
   );
   const serverWorker = createDefaultServerWorker(config, clock, ids);
+  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   const management = createDefaultManagementRuntime(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
+    taskClaimBroker,
   );
-  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   return {
     app: createServerNextUseCases({
       repositories,
@@ -1707,6 +1724,7 @@ function createDefaultManagementRuntime(
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
+  taskClaimBroker?: TaskClaimBroker,
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
   let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
@@ -1748,6 +1766,102 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const resolveActiveExposure = async (
+    teamId: string,
+    agentId: string,
+    now: number,
+  ): Promise<AgentExposureActiveProjectionDto | null> => {
+    const active = await repositories.agentExposure.manifests.getActiveByTeamAgent(teamId, agentId);
+    if (!active) return null;
+    if (active.validUntil !== null && active.validUntil <= now) {
+      await repositories.agentExposure.manifests.setStatus({ id: active.id, status: 'expired', now });
+      return null;
+    }
+    const restriction = await repositories.agentExposure.restrictions.getByTeamAgent(teamId, agentId);
+    const disabledCapabilities = new Set(
+      restriction?.manifestId === active.id
+        ? restriction.disabledCapabilities.map((name) => name.toLowerCase())
+        : [],
+    );
+    const disabledSkills = new Set(
+      restriction?.manifestId === active.id
+        ? restriction.disabledSkills.map((name) => name.toLowerCase())
+        : [],
+    );
+    return {
+      manifestId: active.id,
+      agentId: active.agentId,
+      revision: active.revision,
+      capabilities: active.capabilities.filter(
+        (capability) => !disabledCapabilities.has(capability.name.toLowerCase()),
+      ),
+      skills: active.skills.filter((skill) => !disabledSkills.has(skill.name.toLowerCase())),
+      constraints: active.constraints,
+      availability: active.availability,
+      validUntil: active.validUntil,
+    };
+  };
+  const eligibilityService = taskClaimBroker
+    ? async (parentTaskId: string, subtasks: readonly {
+        clientKey: string;
+        requiredCapabilities: readonly string[];
+        requiredSkills?: readonly string[];
+      }[]) => {
+        const parent = await repositories.tasks.getById(parentTaskId);
+        if (!parent) throw new Error('TASK_NOT_FOUND');
+        return resolveDecompositionAllocatability({
+          parentTaskId,
+          subtaskSkillReqs: subtasks,
+          teamId: parent.teamId,
+          broker: taskClaimBroker,
+          resolveManifest: resolveActiveExposure,
+          clock,
+        });
+      }
+    : undefined;
+  const allocationService = taskClaimBroker
+    ? async (taskId: string) => {
+        const [task, coordination, resolution] = await Promise.all([
+          repositories.tasks.getById(taskId),
+          repositories.taskCoordination.coordinations.getByTaskId(taskId),
+          taskClaimBroker.resolveCandidates(taskId),
+        ]);
+        if (!task || !coordination) return null;
+        const candidates = [];
+        for (const candidate of resolution.candidates) {
+          if (!candidate.eligible) continue;
+          const exposure = await resolveActiveExposure(task.teamId, candidate.agentId, clock.now());
+          if (!exposure) continue;
+          candidates.push({
+            agentId: candidate.agentId,
+            exposedSkills: exposure.skills.map((skill) => skill.name),
+            available: exposure.availability.status === 'available',
+          });
+        }
+        const ranked = rankQualifiedCandidates(candidates, coordination.preferredSkills ?? []);
+        const preferred = new Set((coordination.preferredSkills ?? []).map((name) => name.toLowerCase()));
+        const rankKey = (candidate: typeof ranked[number]) => [
+          candidate.exposedSkills.filter((name) => preferred.has(name.toLowerCase())).length,
+          candidate.available ? 1 : 0,
+        ] as const;
+        const firstKey = ranked[0] ? rankKey(ranked[0]) : null;
+        const secondKey = ranked[1] ? rankKey(ranked[1]) : null;
+        const decision = decideOfferAllocationPolicy({
+          ...(coordination.claimPolicy === 'targeted' && task.assigneeId
+            ? { hardSpecifiedAgentId: task.assigneeId }
+            : {}),
+          rankedQualifiedAgentIds: ranked.map((candidate) => candidate.agentId),
+          topCandidatesTied: Boolean(
+            firstKey && secondKey && firstKey[0] === secondKey[0] && firstKey[1] === secondKey[1],
+          ),
+          loadUncertain: false,
+        });
+        if (decision.kind === 'not_decidable') return null;
+        return decision.kind === 'open'
+          ? { claimPolicy: 'open' as const }
+          : { claimPolicy: 'targeted' as const, targetAgentId: decision.targetAgentId };
+      }
+    : undefined;
   const executeManagementTool = createManagementToolExecutor({
     kernel,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
@@ -1765,6 +1879,8 @@ function createDefaultManagementRuntime(
     phase2Handlers: {
       ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
         acceptanceService: subtaskAcceptanceService,
+        ...(eligibilityService ? { eligibilityService } : {}),
+        ...(allocationService ? { allocationService } : {}),
         onTaskPublished: async (taskId) => {
           if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
           await taskClaimEmitter(taskId);

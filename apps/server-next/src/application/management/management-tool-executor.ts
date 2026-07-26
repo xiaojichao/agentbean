@@ -270,7 +270,7 @@ export function createPhase2ManagementToolHandlers(input: {
         taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
       }));
       const allocatability = eligibilityService
-        ? await eligibilityService(request.input.parentTaskId, drafts).catch(() => undefined)
+        ? await eligibilityService(request.input.parentTaskId, drafts)
         : undefined;
       const created = await kernel.createSubtasks({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
@@ -291,7 +291,7 @@ export function createPhase2ManagementToolHandlers(input: {
     },
     'tasks.publish_for_claim': async (request) => {
       const allocation = allocationService
-        ? await allocationService(request.input.taskId).catch(() => null)
+        ? await allocationService(request.input.taskId)
         : null;
       const published = await kernel.publishForClaim({
         authority: authority(request), idempotencyKey: request.idempotencyKey,

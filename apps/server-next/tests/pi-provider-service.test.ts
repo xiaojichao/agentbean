@@ -188,7 +188,7 @@ describe('pi provider service', () => {
     await seedUsers(repos);
     await expect(service.getPublicHealth({ userId: 'member-1' })).resolves.toEqual({
       ok: true,
-      health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+      health: { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' },
     });
 
     const created = await service.createCard(validCreate());
@@ -201,7 +201,7 @@ describe('pi provider service', () => {
 
     const health = await service.getPublicHealth({ userId: 'member-1' });
     expect(health).toEqual({ ok: true, health: { status: 'normal', diagnosticCode: null } });
-    expect(JSON.stringify(health)).not.toMatch(/openai|gpt-4|credential|apiKey/i);
+    expect(JSON.stringify(health)).not.toMatch(/provider|model|endpoint|credential|baseUrl|apiKey|openai|gpt-4/i);
   });
 
   test('system admin can create a draft card from preset without leaking secrets', async () => {
