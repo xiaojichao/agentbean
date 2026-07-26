@@ -27,11 +27,7 @@ export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null,
   const videoDurationLabel = videoArtifact && artifact.preview?.durationMs
     ? formatVideoDuration(artifact.preview.durationMs)
     : '';
-  // Prefer a ready derivative (required for SVG/AVIF). Safe raster MIME types may fall
-  // back to the authenticated original preview URL so cards still show after #770.
-  const cardImageUrl = imageArtifact
-    ? (thumbnailUrl ?? (isSafeArtifactInlinePreviewMimeType(artifact.mimeType) ? previewUrl : null))
-    : null;
+  const cardImageUrl = imageArtifact ? thumbnailUrl : null;
   const labels = imageArtifact
     ? { preview: '预览图片', download: '下载图片' }
     : { preview: '预览文件', download: '下载文件' };

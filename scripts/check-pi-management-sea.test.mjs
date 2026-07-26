@@ -64,16 +64,15 @@ test('pending verdict is fail-closed and contains no runtime data', () => {
 });
 
 test('aggregator reports compatible only when every expected platform is uniquely Green', () => {
-  const macArm64 = { ...compatibleLinux, os: 'macos', arch: 'arm64' };
-  const macX64 = { ...compatibleLinux, os: 'macos', arch: 'x64' };
+  const mac = { ...compatibleLinux, os: 'macos', arch: 'arm64' };
   const windows = { ...compatibleLinux, os: 'windows' };
   assert.deepEqual(
-    aggregatePiSeaVerdicts([compatibleLinux, macArm64, macX64, windows]),
+    aggregatePiSeaVerdicts([compatibleLinux, mac, windows]),
     {
       schemaVersion: 1,
       status: 'compatible',
-      expectedPlatforms: ['linux:x64', 'macos:arm64', 'macos:x64', 'windows:x64'],
-      verdicts: [compatibleLinux, macArm64, macX64, windows],
+      expectedPlatforms: ['linux:x64', 'macos:arm64', 'windows:x64'],
+      verdicts: [compatibleLinux, mac, windows],
       diagnosticCodes: [],
     },
   );
@@ -85,8 +84,8 @@ test('aggregator writes a blocked verdict for missing, duplicate, invalid, or bl
   ] };
   const result = aggregatePiSeaVerdicts([blocked, compatibleLinux, { malformed: true }]);
   assert.equal(result.status, 'blocked-for-phase5');
-  assert.deepEqual(result.expectedPlatforms, ['linux:x64', 'macos:arm64', 'macos:x64', 'windows:x64']);
-  assert.equal(result.verdicts.length, 4);
+  assert.deepEqual(result.expectedPlatforms, ['linux:x64', 'macos:arm64', 'windows:x64']);
+  assert.equal(result.verdicts.length, 3);
   assert.deepEqual(result.diagnosticCodes, [
     'SEA_DUPLICATE_PLATFORM_VERDICT',
     'SEA_INVALID_PLATFORM_VERDICT',
@@ -99,7 +98,6 @@ test('aggregator blocks otherwise-valid verdicts for an unexpected platform', ()
   const result = aggregatePiSeaVerdicts([
     compatibleLinux,
     { ...compatibleLinux, os: 'macos', arch: 'arm64' },
-    { ...compatibleLinux, os: 'macos', arch: 'x64' },
     { ...compatibleLinux, os: 'windows' },
     unexpected,
   ]);
@@ -125,13 +123,12 @@ test('root compatibility consumer fails a valid blocked verdict', () => {
   }
 });
 
-test('workflow runs native four-platform SEA jobs and always aggregates real verdict artifacts', () => {
+test('workflow runs native three-platform SEA jobs and always aggregates real verdict artifacts', () => {
   const workflow = readFileSync('.github/workflows/pi-sea-compatibility.yml', 'utf8');
   for (const required of [
     'node-version: 24.18.0',
     'runner: ubuntu-latest',
     'runner: macos-14',
-    'runner: macos-15-intel',
     'runner: windows-latest',
     'verdict_os: linux',
     'verdict_os: macos',
