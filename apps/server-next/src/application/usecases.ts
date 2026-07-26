@@ -29,7 +29,7 @@ import { createSystemUserMemoryService } from './system-user-memory-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
-import { createPiProviderService } from './pi-provider-service.js';
+import { createPiProviderService, getEmergencyStopActive } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
@@ -239,6 +239,12 @@ export interface ServerNextUseCases {
   setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
   getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
   getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
+  /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */
+  setEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
+  /** #699 US 84：读取 PI 紧急停止状态。 */
+  getEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
+  /** #699 US 29：查询当前 Team 的 PI Token Usage。since 为可选时间戳（ms）。 */
+  getTeamPiTokenUsage(input: unknown): Promise<Ack<{ totalInputTokens: number; totalOutputTokens: number; totalDecisions: number }>>;
   /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
@@ -2751,8 +2757,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(channelInput.humanMemberIds !== undefined ? { humanMemberIds: channelInput.humanMemberIds } : {}),
         ...(channelInput.agentMemberIds !== undefined ? { agentMemberIds: channelInput.agentMemberIds } : {}),
       };
-      if (!canApplyChannelUpdate(channel, channelInput.userId, updateIntent)) {
-        return makeFailure('FORBIDDEN', 'User cannot manage channel');
+      if (!canApplyChannelUpdate(channel, channelInput.userId, updateIntent, channel.archivedAt)) {
+        return makeFailure('FORBIDDEN', channel.archivedAt != null ? 'Archived channels are read-only' : 'User cannot manage channel');
       }
       if (
         channelInput.humanMemberIds &&
@@ -3086,8 +3092,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (isDefaultChannel(channel)) {
         return makeFailure('FORBIDDEN', 'Cannot delete default channel');
       }
-      if (!canApplyChannelUpdate(channel, deleteInput.userId, {})) {
-        return makeFailure('FORBIDDEN', 'Only channel creator can delete');
+      if (!canApplyChannelUpdate(channel, deleteInput.userId, {}, channel.archivedAt)) {
+        return makeFailure('FORBIDDEN', channel.archivedAt != null ? 'Archived channels are read-only' : 'Only channel creator can delete');
       }
       const deletedMessages = await repositories.messages.listByChannel(channel.id, Number.MAX_SAFE_INTEGER);
       const deletedWorkspaceRunIds = (await repositories.workspaceRuns.listByTeam({
@@ -3242,7 +3248,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const outcome = await repositories.piProviderUnitOfWork.run(async (piRepositories) => {
         const active = await piRepositories.activeModel.get();
         const revision = active ? await piRepositories.revisions.getById(active.revisionId) : null;
-        const activeModel = active && revision?.status === 'published' && revision.cardId === active.cardId
+        // #699 US 84：紧急停止时模型视为 unavailable，阻止新 Job 调度。
+        const emergencyStopped = getEmergencyStopActive();
+        const activeModel = !emergencyStopped && active && revision?.status === 'published' && revision.cardId === active.cardId
           ? {
               availability: 'available' as const,
               cardId: active.cardId,
@@ -5505,6 +5513,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async getPublicPiHealth(input) {
       return piProvider.getPublicHealth(input);
+    },
+
+    // #699 US 84：紧急停止
+    async setEmergencyStop(input) {
+      return piProvider.setEmergencyStop(input);
+    },
+
+    async getEmergencyStop(_input) {
+      return piProvider.getEmergencyStop();
+    },
+
+    // #699 US 29：查询当前 Team 的 PI Token Usage。
+    async getTeamPiTokenUsage(input) {
+      const raw = input as Record<string, unknown> | null | undefined;
+      const since = typeof raw?.since === 'number' ? raw.since : undefined;
+      return repositories.channelCoordinationUnitOfWork.run(async (tx) => {
+        const usage = await tx.decisions.aggregateUsage(since);
+        return makeSuccess(usage);
+      });
     },
 
     async getMemoryGovernanceSnapshot(memoryInput) {

@@ -194,6 +194,19 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         channelCoordinationDecisions.set(prior.id, updated);
         return updated;
       },
+
+      async aggregateUsage(since) {
+        let totalInput = 0;
+        let totalOutput = 0;
+        let count = 0;
+        for (const d of channelCoordinationDecisions.values()) {
+          if (since !== undefined && d.createdAt < since) continue;
+          if (d.usage.inputTokens != null) totalInput += d.usage.inputTokens;
+          if (d.usage.outputTokens != null) totalOutput += d.usage.outputTokens;
+          count++;
+        }
+        return { totalInputTokens: totalInput, totalOutputTokens: totalOutput, totalDecisions: count };
+      },
     },
   };
 

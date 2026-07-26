@@ -67,6 +67,14 @@ export interface PiProviderServiceDependencies {
   readonly fetch?: typeof fetch;
 }
 
+// #699 US 84：PI 紧急停止开关（模块级变量，Server 重启自动恢复为正常）。
+// sendMessage 在 enqueue coordination job 前检查此标志，true 时 Job 标记为 cancelled。
+let emergencyStopActiveFlag = false;
+
+export function getEmergencyStopActive(): boolean {
+  return emergencyStopActiveFlag;
+}
+
 export function createPiProviderService(deps: PiProviderServiceDependencies) {
   const resolveKey = deps.resolveSecretKey ?? (() => resolvePiSecretKey());
   const fetchFn = deps.fetch ?? fetch;
@@ -839,6 +847,10 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
+    // #699 US 26 (deferred)：系统的 DB 已用 ON DELETE RESTRICT 阻止删除正在使用的
+    // Card。应用层 deleteCard API 因需要跨 8+ 文件变更（repository 接口/实现、
+    // socket handler、contract DTO、domain parse 函数），留作后续独立 PR。
+
     async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; health: PublicPiHealthDto }>> {
       const parsed = parseGetActivePiModelRequest(raw);
       if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
@@ -897,6 +909,21 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
           modelId: revision.config.modelId,
         };
       });
+    },
+
+    /** #699 US 84：设置 PI 紧急停止。仅在内存生效，重启后自动恢复。返回当前状态。 */
+    async setEmergencyStop(raw: unknown): Promise<Ack<{ emergencyStopActive: boolean }>> {
+      const input = raw as Record<string, unknown> | null | undefined;
+      if (!input || typeof input.userId !== 'string') return makeFailure('VALIDATION_ERROR', 'userId required');
+      const admin = await requireSystemAdmin(input.userId);
+      if (!admin.ok) return admin;
+      emergencyStopActiveFlag = Boolean(input.active);
+      return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
+    },
+
+    /** #699 US 84：读取 PI 紧急停止状态。无需鉴权（公开健康信息一部分）。 */
+    async getEmergencyStop(): Promise<Ack<{ emergencyStopActive: boolean }>> {
+      return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
     },
   };
 }

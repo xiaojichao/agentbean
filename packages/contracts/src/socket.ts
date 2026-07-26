@@ -51,6 +51,13 @@ export const WEB_EVENTS = {
     setActiveModel: 'pi-provider:set-active-model',
     getActiveModel: 'pi-provider:get-active-model',
     getPublicHealth: 'pi-provider:get-public-health',
+    /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */
+    setEmergencyStop: 'pi-provider:set-emergency-stop',
+    getEmergencyStop: 'pi-provider:get-emergency-stop',
+  },
+  /** #699 US 29：PI Token Usage 查询（per-team）。 */
+  piUsage: {
+    getTeamUsage: 'pi-usage:get-team-usage',
   },
   /** 系统作用域 System Knowledge；仅系统管理员可访问（#717）。 */
   systemKnowledge: {

@@ -51,7 +51,10 @@ export function canApplyChannelUpdate(
   channel: ChannelControlInput,
   actorUserId: string,
   update: ChannelUpdateIntent,
+  archivedAt?: number | null,
 ): boolean {
+  // #699 US 74：归档频道拒绝任何元数据修改。
+  if (archivedAt != null) return false;
   if (!channel.createdBy || channel.createdBy !== actorUserId) {
     return false;
   }

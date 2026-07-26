@@ -481,6 +481,9 @@ export interface PiProviderEvents {
   getActiveModel(): Promise<{ ok: boolean; activeModel?: ActivePiModelDto | null; history?: ActivePiModelDto[]; health?: PublicPiHealthDto; error?: string; message?: string }>;
   getPublicHealth(): Promise<{ ok: boolean; health?: PublicPiHealthDto; error?: string; message?: string }>;
   setActiveModel(revisionId: string): Promise<{ ok: boolean; activeModel?: ActivePiModelDto; error?: string; message?: string }>;
+  /** #699 US 84：系统管理员紧急停止/恢复 PI。 */
+  setEmergencyStop(active: boolean): Promise<{ ok: boolean; emergencyStopActive?: boolean; error?: string; message?: string }>;
+  getEmergencyStop(): Promise<{ ok: boolean; emergencyStopActive?: boolean; error?: string; message?: string }>;
 }
 
 export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEvents {
@@ -498,6 +501,17 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
     getActiveModel() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getActiveModel, {}); },
     getPublicHealth() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getPublicHealth, {}); },
     setActiveModel(revisionId) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.setActiveModel, { revisionId }); },
+    setEmergencyStop(active: boolean) { return emitWithTimeout(socket, WEB_EVENTS.piProvider.setEmergencyStop, { active }); },
+    getEmergencyStop() { return emitWithTimeout(socket, WEB_EVENTS.piProvider.getEmergencyStop, {}); },
+  };
+}
+
+/** #699 US 29：PI Token Usage socket 客户端。 */
+export function piUsageEvents(socket: Socket = getWebSocket()) {
+  return {
+    getTeamUsage(since?: number): Promise<{ ok: boolean; totalInputTokens?: number; totalOutputTokens?: number; totalDecisions?: number; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.piUsage.getTeamUsage, { since });
+    },
   };
 }
 
