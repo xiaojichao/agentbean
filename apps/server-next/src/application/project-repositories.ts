@@ -1,4 +1,9 @@
-import type { ChannelProjectOverviewDto, ID, UnixMs } from '../../../../packages/contracts/src/index.js';
+import type {
+  ChannelProjectOverviewDto,
+  ID,
+  ProjectArtifactLineageRefDto,
+  UnixMs,
+} from '../../../../packages/contracts/src/index.js';
 
 export interface ChannelProjectProfileRecord {
   id: ID;
@@ -45,6 +50,67 @@ export type CreateInitialProjectStageResult =
   | { kind: 'task_scope_conflict' }
   | { kind: 'idempotency_conflict' };
 
+export interface ProjectArtifactCollectionRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  name: string;
+  kind: string;
+  revision: number;
+  currentVersionId: ID;
+  versionCount: number;
+  createdBy: ID;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export interface ProjectArtifactVersionRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  collectionId: ID;
+  versionNumber: number;
+  artifactId: ID;
+  stageId: ID;
+  taskId: ID;
+  taskRevision: number;
+  sourceMessageId?: ID;
+  sourceWorkspaceRunId?: ID;
+  sourceInvocationId?: ID;
+  lineage: ProjectArtifactLineageRefDto[];
+  promotedBy: ID;
+  createdAt: UnixMs;
+}
+
+export interface ProjectArtifactMutationRecord {
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  collectionId: ID;
+  versionId: ID;
+  createdAt: UnixMs;
+}
+
+/**
+ * #823 提升结果。`replayed` 覆盖两条幂等路径：相同 idempotencyKey 重放，
+ * 以及同一 Artifact 已有版本时的自然幂等。
+ */
+export type PromoteArtifactToProjectVersionResult =
+  | {
+    kind: 'created' | 'replayed';
+    collection: ProjectArtifactCollectionRecord;
+    version: ProjectArtifactVersionRecord;
+  }
+  | { kind: 'collection_revision_conflict' }
+  | { kind: 'collection_scope_conflict' }
+  | { kind: 'collection_name_conflict' }
+  | { kind: 'artifact_scope_conflict' }
+  | { kind: 'stage_scope_conflict' }
+  | { kind: 'task_scope_conflict' }
+  | { kind: 'artifact_promoted_to_other_collection' }
+  | { kind: 'idempotency_conflict' };
+
 export interface ChannelProjectRepository {
   getProfile(input: { teamId: ID; channelId: ID }): Promise<ChannelProjectProfileRecord | null>;
   listStages(input: { teamId: ID; channelId: ID }): Promise<ProjectStageRecord[]>;
@@ -59,4 +125,36 @@ export interface ChannelProjectRepository {
     stage: ProjectStageRecord;
     mutation: ChannelProjectMutationRecord;
   }): Promise<CreateInitialProjectStageResult>;
+  listArtifactCollections(input: { teamId: ID; channelId: ID }): Promise<ProjectArtifactCollectionRecord[]>;
+  getArtifactCollection(input: {
+    teamId: ID;
+    channelId: ID;
+    collectionId: ID;
+  }): Promise<ProjectArtifactCollectionRecord | null>;
+  listArtifactVersions(input: { teamId: ID; channelId: ID }): Promise<ProjectArtifactVersionRecord[]>;
+  getArtifactVersionByArtifact(input: {
+    teamId: ID;
+    channelId: ID;
+    artifactId: ID;
+  }): Promise<ProjectArtifactVersionRecord | null>;
+  getArtifactMutation(input: {
+    teamId: ID;
+    channelId: ID;
+    idempotencyKey: string;
+  }): Promise<ProjectArtifactMutationRecord | null>;
+  /**
+   * 原子提升：在同一提交点复核幂等键、集合 revision fence、Artifact/Stage 作用域，
+   * 再写入版本并推进 current version 指针与集合 revision。
+   */
+  promoteArtifact(input: {
+    teamId: ID;
+    channelId: ID;
+    /** 追加到既有集合时的 revision fence；创建新集合时为 undefined。 */
+    expectedCollectionRevision?: number;
+    collection: ProjectArtifactCollectionRecord;
+    /** true 表示本次写入创建新集合，false 表示向既有集合追加版本。 */
+    createsCollection: boolean;
+    version: ProjectArtifactVersionRecord;
+    mutation: ProjectArtifactMutationRecord;
+  }): Promise<PromoteArtifactToProjectVersionResult>;
 }

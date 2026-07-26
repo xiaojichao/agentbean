@@ -47,6 +47,9 @@ import {
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
+  ProjectArtifactCollectionRecord,
+  ProjectArtifactMutationRecord,
+  ProjectArtifactVersionRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -170,6 +173,10 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0045_attachment_status.sql');
   applyMigration(db, 'team/0046_migrate_old_pi_policy.sql');
   applyMigration(db, 'team/0048_channel_project_stages.sql');
+  // 逻辑产物版本建立在不可变 Artifact 之上；缺少 artifacts 表的历史库沿用既有跳过约定。
+  if (sqliteTableExists(db, 'artifacts')) {
+    applyMigration(db, 'team/0049_project_artifact_collections.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2718,6 +2725,188 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         });
         return transaction.immediate ? transaction.immediate() : transaction();
       },
+      async listArtifactCollections(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_artifact_collections
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectArtifactCollection)
+          .filter((collection): collection is ProjectArtifactCollectionRecord => collection !== null);
+      },
+      async getArtifactCollection(input) {
+        return mapProjectArtifactCollection(teamDb.prepare(
+          `SELECT * FROM project_artifact_collections
+           WHERE id = ? AND team_id = ? AND channel_id = ?`,
+        ).get(input.collectionId, input.teamId, input.channelId));
+      },
+      async listArtifactVersions(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_artifact_versions
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY version_number ASC, id ASC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectArtifactVersion)
+          .filter((version): version is ProjectArtifactVersionRecord => version !== null);
+      },
+      async getArtifactVersionByArtifact(input) {
+        return mapProjectArtifactVersion(teamDb.prepare(
+          `SELECT * FROM project_artifact_versions
+           WHERE team_id = ? AND channel_id = ? AND artifact_id = ?`,
+        ).get(input.teamId, input.channelId, input.artifactId));
+      },
+      async getArtifactMutation(input) {
+        return mapProjectArtifactMutation(teamDb.prepare(
+          `SELECT * FROM project_artifact_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.channelId, input.idempotencyKey));
+      },
+      async promoteArtifact(input) {
+        const transaction = teamDb.transaction(() => {
+          const existingMutation = mapProjectArtifactMutation(teamDb.prepare(
+            `SELECT * FROM project_artifact_mutations
+             WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+          ).get(input.teamId, input.channelId, input.mutation.idempotencyKey));
+          if (existingMutation) {
+            if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+              return { kind: 'idempotency_conflict' as const };
+            }
+            const collection = mapProjectArtifactCollection(teamDb.prepare(
+              'SELECT * FROM project_artifact_collections WHERE id = ?',
+            ).get(existingMutation.collectionId));
+            const version = mapProjectArtifactVersion(teamDb.prepare(
+              'SELECT * FROM project_artifact_versions WHERE id = ?',
+            ).get(existingMutation.versionId));
+            if (!collection || !version) return { kind: 'idempotency_conflict' as const };
+            return { kind: 'replayed' as const, collection, version };
+          }
+
+          // 自然幂等：同一 Artifact 在同一频道至多一个版本。
+          const promotedVersion = mapProjectArtifactVersion(teamDb.prepare(
+            `SELECT * FROM project_artifact_versions
+             WHERE team_id = ? AND channel_id = ? AND artifact_id = ?`,
+          ).get(input.teamId, input.channelId, input.version.artifactId));
+          if (promotedVersion) {
+            if (!input.createsCollection && input.collection.id !== promotedVersion.collectionId) {
+              return { kind: 'artifact_promoted_to_other_collection' as const };
+            }
+            const collection = mapProjectArtifactCollection(teamDb.prepare(
+              'SELECT * FROM project_artifact_collections WHERE id = ?',
+            ).get(promotedVersion.collectionId));
+            if (!collection) return { kind: 'collection_scope_conflict' as const };
+            return { kind: 'replayed' as const, collection, version: promotedVersion };
+          }
+
+          const artifactRow = teamDb.prepare(
+            'SELECT 1 FROM artifacts WHERE id = ? AND team_id = ? AND channel_id = ?',
+          ).get(input.version.artifactId, input.teamId, input.channelId);
+          if (!artifactRow) return { kind: 'artifact_scope_conflict' as const };
+          const stageRow = teamDb.prepare(
+            `SELECT 1 FROM project_stages
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND task_id = ?`,
+          ).get(
+            input.version.stageId,
+            input.teamId,
+            input.channelId,
+            input.version.taskId,
+          );
+          if (!stageRow) return { kind: 'stage_scope_conflict' as const };
+          // 版本必须落在 Task 的当前 revision 上：陈旧 revision 的结果不得污染新任务。
+          const currentTaskRow = teamDb.prepare(
+            `SELECT 1 FROM tasks
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?
+               AND superseded_by_revision IS NULL`,
+          ).get(
+            input.version.taskId,
+            input.teamId,
+            input.channelId,
+            input.version.taskRevision,
+          );
+          if (!currentTaskRow) return { kind: 'task_scope_conflict' as const };
+
+          if (input.createsCollection) {
+            const nameTaken = teamDb.prepare(
+              `SELECT 1 FROM project_artifact_collections
+               WHERE team_id = ? AND channel_id = ? AND name = ?`,
+            ).get(input.teamId, input.channelId, input.collection.name);
+            if (nameTaken) return { kind: 'collection_name_conflict' as const };
+            teamDb.prepare(
+              `INSERT INTO project_artifact_collections (
+                id, team_id, channel_id, name, kind, revision, current_version_id,
+                version_count, created_by, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              input.collection.id,
+              input.collection.teamId,
+              input.collection.channelId,
+              input.collection.name,
+              input.collection.kind,
+              input.collection.revision,
+              input.collection.currentVersionId,
+              input.collection.versionCount,
+              input.collection.createdBy,
+              input.collection.createdAt,
+              input.collection.updatedAt,
+            );
+          } else {
+            const updated = sqliteChanges(teamDb.prepare(
+              `UPDATE project_artifact_collections
+               SET revision = ?, current_version_id = ?, version_count = ?, updated_at = ?
+               WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?`,
+            ).run(
+              input.collection.revision,
+              input.collection.currentVersionId,
+              input.collection.versionCount,
+              input.collection.updatedAt,
+              input.collection.id,
+              input.teamId,
+              input.channelId,
+              input.expectedCollectionRevision,
+            ));
+            if (updated !== 1) return { kind: 'collection_revision_conflict' as const };
+          }
+
+          teamDb.prepare(
+            `INSERT INTO project_artifact_versions (
+              id, team_id, channel_id, collection_id, version_number, artifact_id,
+              stage_id, task_id, task_revision, source_message_id, source_workspace_run_id,
+              source_invocation_id, lineage_json, promoted_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.version.id,
+            input.version.teamId,
+            input.version.channelId,
+            input.version.collectionId,
+            input.version.versionNumber,
+            input.version.artifactId,
+            input.version.stageId,
+            input.version.taskId,
+            input.version.taskRevision,
+            input.version.sourceMessageId ?? null,
+            input.version.sourceWorkspaceRunId ?? null,
+            input.version.sourceInvocationId ?? null,
+            JSON.stringify(input.version.lineage),
+            input.version.promotedBy,
+            input.version.createdAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO project_artifact_mutations (
+              team_id, channel_id, idempotency_key, request_fingerprint,
+              collection_id, version_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+            input.mutation.requestFingerprint,
+            input.mutation.collectionId,
+            input.mutation.versionId,
+            input.mutation.createdAt,
+          );
+          return { kind: 'created' as const, collection: input.collection, version: input.version };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
     },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
     revocations: {
@@ -3316,6 +3505,62 @@ function mapChannelProjectMutation(row: unknown): ChannelProjectMutationRecord |
     stageId: sqliteText(row, 'stage_id'),
     resultRevision: sqliteNumber(row, 'result_revision'),
     resultOverview,
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectArtifactCollection(row: unknown): ProjectArtifactCollectionRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    name: sqliteText(row, 'name'),
+    kind: sqliteText(row, 'kind'),
+    revision: sqliteNumber(row, 'revision'),
+    currentVersionId: sqliteText(row, 'current_version_id'),
+    versionCount: sqliteNumber(row, 'version_count'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+function mapProjectArtifactVersion(row: unknown): ProjectArtifactVersionRecord | null {
+  if (!row) return null;
+  const sourceMessageId = sqliteNullableText(row, 'source_message_id');
+  const sourceWorkspaceRunId = sqliteNullableText(row, 'source_workspace_run_id');
+  const sourceInvocationId = sqliteNullableText(row, 'source_invocation_id');
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    collectionId: sqliteText(row, 'collection_id'),
+    versionNumber: sqliteNumber(row, 'version_number'),
+    artifactId: sqliteText(row, 'artifact_id'),
+    stageId: sqliteText(row, 'stage_id'),
+    taskId: sqliteText(row, 'task_id'),
+    taskRevision: sqliteNumber(row, 'task_revision'),
+    ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
+    ...(sourceWorkspaceRunId === undefined ? {} : { sourceWorkspaceRunId }),
+    ...(sourceInvocationId === undefined ? {} : { sourceInvocationId }),
+    lineage: parseJsonValue<ProjectArtifactVersionRecord['lineage']>(
+      sqliteNullableText(row, 'lineage_json'),
+    ) ?? [],
+    promotedBy: sqliteText(row, 'promoted_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectArtifactMutation(row: unknown): ProjectArtifactMutationRecord | null {
+  if (!row) return null;
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    collectionId: sqliteText(row, 'collection_id'),
+    versionId: sqliteText(row, 'version_id'),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }

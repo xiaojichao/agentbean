@@ -40,3 +40,4 @@ export * from './reliability-policy.js';
 export * from './operation-restriction-policy.js';
 export * from './experience-pack-policy.js';
 export * from './project-stage-policy.js';
+export * from './project-artifact-policy.js';

@@ -529,6 +529,24 @@ export function attachServerNextNamespaces(
           }
         }
       },
+      async afterProjectArtifactMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        const channelId = payloadChannelId(payload);
+        if (!teamId || !channelId) return;
+        for (const subscriber of webSubscribers) {
+          if (subscriber.channels?.teamId !== teamId) continue;
+          const userId = await resolveSubscriberUserId(subscriber, app);
+          if (!userId) continue;
+          const library = await app.listProjectArtifactCollections({ userId, teamId, channelId });
+          if (library.ok) {
+            subscriber.socket.emit?.(WEB_EVENTS.project.artifactsUpdated, {
+              channelId,
+              library: library.library,
+            });
+          }
+        }
+      },
       afterMemberMutation(payload, result) {
         if (!isSuccessAck(result)) return;
         const teamId = payloadTeamId(payload);

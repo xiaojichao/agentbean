@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -23,6 +23,7 @@ import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft } from '@/components/ChannelProjectOverview';
+import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -289,6 +290,10 @@ export default function ChatPage() {
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
+  // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
+  const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('files');
+  const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
+  const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
@@ -464,6 +469,26 @@ export default function ChatPage() {
     if (tab === 'files') void loadChannelFiles(true);
   }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
+  // #823 逻辑产物视图按需拉取 Server 投影；没有项目数据的频道保持空投影，不影响普通文件视图。
+  useEffect(() => {
+    let active = true;
+    setProjectArtifactLibrary(null);
+    setChannelProjectOverview(null);
+    if (tab !== 'files' || !activeChannel || conn !== 'open') return () => { active = false; };
+    void projectEvents().artifactCollections(activeChannel).then((result) => {
+      if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
+    });
+    void projectEvents().overview(activeChannel).then((result) => {
+      if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
+    });
+    return () => { active = false; };
+  }, [activeChannel, conn, tab]);
+
+  useEffect(() => {
+    if (!activeChannel) return;
+    return projectEvents().onArtifactsUpdated(activeChannel, setProjectArtifactLibrary);
+  }, [activeChannel]);
+
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
   // 用 incoming 覆盖现有 meta），使旧消息 @提及跟随改名、且保持可点击。
@@ -636,6 +661,24 @@ export default function ChatPage() {
   const activeChannelObj = channels.find((c) => c.id === activeChannel);
   const activeName = activeChannelObj?.name ?? '';
   const activeDm = dms.find((d) => d.id === activeChannel);
+
+  // #823 提升只提交 Server 需要的显式事实；文件名、目录与 mime 不参与集合判定。
+  const promoteChannelArtifact = useCallback(async (draft: PromoteArtifactDraft): Promise<string | null> => {
+    if (!activeChannel) return '请先选择一个频道';
+    const idempotencyKey = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `project-artifact-${Date.now()}`;
+    const result = await projectEvents().promoteArtifact({
+      channelId: activeChannel,
+      idempotencyKey,
+      ...draft,
+    });
+    if (!result.ok || !result.library) {
+      return result.message ?? '提升逻辑产物版本失败，请刷新后重试';
+    }
+    setProjectArtifactLibrary(result.library);
+    return null;
+  }, [activeChannel]);
 
   const openMarkdownDocumentEditor = useCallback(async (artifact: Artifact, documentId?: string) => {
     if (!activeChannel || !isMarkdownArtifact(artifact)) return;
@@ -2026,35 +2069,68 @@ export default function ChatPage() {
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
           )
         ) : (
-            <ConversationFiles
-            files={channelFiles}
-            loading={channelFilesLoading}
-            hasMore={Boolean(channelFilesCursor)}
-            searchQuery={channelFilesQuery}
-            onSearchQuery={setChannelFilesQuery}
-            role={channelFilesRole}
-            onRole={setChannelFilesRole}
-            path={channelFilesPath}
-            directories={channelFileDirectories}
-            onOpenDirectory={(path) => {
-              const params = new URLSearchParams(searchParams.toString());
-              params.set('chatTab', 'files');
-              params.set('filePath', path);
-              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-            }}
-            onOpenRoot={() => {
-              const params = new URLSearchParams(searchParams.toString());
-              params.set('chatTab', 'files');
-              params.delete('filePath');
-              router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-            }}
-            onLoadMore={() => void loadChannelFiles(false)}
-            onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
-            agents={agents}
-            humanProfiles={humanProfiles}
-            channelMembers={channelMembers}
-            onJump={jumpToMessage}
-          />
+          <div className="flex min-h-0 flex-1 flex-col">
+            {channelProjectOverview && (
+              <div className="flex shrink-0 items-center gap-1 border-b border-neutral-200 px-4 py-2">
+                {([['files', '文件'], ['artifacts', '逻辑产物']] as const).map(([view, label]) => (
+                  <button
+                    key={view}
+                    type="button"
+                    data-smoke={`channel-files-view-${view}`}
+                    onClick={() => setChannelFilesView(view)}
+                    className={`h-7 rounded-md px-2.5 text-xs font-medium ${channelFilesView === view
+                      ? 'bg-neutral-900 text-white'
+                      : 'text-neutral-600 hover:bg-neutral-100'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {channelProjectOverview && channelFilesView === 'artifacts' ? (
+              <ProjectArtifactLibrary
+                library={projectArtifactLibrary}
+                stages={channelProjectOverview.stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+                promotableArtifacts={channelFiles.map((file) => ({
+                  id: file.artifact.id,
+                  filename: file.artifact.filename,
+                  ...(file.logicalPath ? { logicalPath: file.logicalPath } : {}),
+                }))}
+                canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
+                onPromote={promoteChannelArtifact}
+              />
+            ) : (
+              <ConversationFiles
+                files={channelFiles}
+                loading={channelFilesLoading}
+                hasMore={Boolean(channelFilesCursor)}
+                searchQuery={channelFilesQuery}
+                onSearchQuery={setChannelFilesQuery}
+                role={channelFilesRole}
+                onRole={setChannelFilesRole}
+                path={channelFilesPath}
+                directories={channelFileDirectories}
+                onOpenDirectory={(path) => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set('chatTab', 'files');
+                  params.set('filePath', path);
+                  router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+                }}
+                onOpenRoot={() => {
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set('chatTab', 'files');
+                  params.delete('filePath');
+                  router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+                }}
+                onLoadMore={() => void loadChannelFiles(false)}
+                onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
+                agents={agents}
+                humanProfiles={humanProfiles}
+                channelMembers={channelMembers}
+                onJump={jumpToMessage}
+              />
+            )}
+          </div>
         )}
         </>
       )}

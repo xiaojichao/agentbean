@@ -54,6 +54,9 @@ import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord } 
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
+  ProjectArtifactCollectionRecord,
+  ProjectArtifactMutationRecord,
+  ProjectArtifactVersionRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -97,6 +100,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
   const channelProjectMutations = new Map<string, ChannelProjectMutationRecord>();
+  const projectArtifactCollections = new Map<string, ProjectArtifactCollectionRecord>();
+  const projectArtifactVersions = new Map<string, ProjectArtifactVersionRecord>();
+  const projectArtifactMutations = new Map<string, ProjectArtifactMutationRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
@@ -1643,6 +1649,108 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         projectStages.set(input.stage.id, input.stage);
         channelProjectMutations.set(mutationKey, input.mutation);
         return { kind: 'created', mutation: input.mutation };
+      },
+      async listArtifactCollections(input) {
+        return Array.from(projectArtifactCollections.values())
+          .filter((collection) => collection.teamId === input.teamId && collection.channelId === input.channelId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async getArtifactCollection(input) {
+        const collection = projectArtifactCollections.get(input.collectionId);
+        if (!collection || collection.teamId !== input.teamId || collection.channelId !== input.channelId) {
+          return null;
+        }
+        return collection;
+      },
+      async listArtifactVersions(input) {
+        return Array.from(projectArtifactVersions.values())
+          .filter((version) => version.teamId === input.teamId && version.channelId === input.channelId)
+          .sort((left, right) => left.versionNumber - right.versionNumber || left.id.localeCompare(right.id));
+      },
+      async getArtifactVersionByArtifact(input) {
+        return Array.from(projectArtifactVersions.values()).find((version) =>
+          version.teamId === input.teamId
+          && version.channelId === input.channelId
+          && version.artifactId === input.artifactId) ?? null;
+      },
+      async getArtifactMutation(input) {
+        return projectArtifactMutations.get(
+          `${input.teamId}:${input.channelId}:${input.idempotencyKey}`,
+        ) ?? null;
+      },
+      async promoteArtifact(input) {
+        const scopeKey = `${input.teamId}:${input.channelId}`;
+        const mutationKey = `${scopeKey}:${input.mutation.idempotencyKey}`;
+        const existingMutation = projectArtifactMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          const collection = projectArtifactCollections.get(existingMutation.collectionId);
+          const version = projectArtifactVersions.get(existingMutation.versionId);
+          if (!collection || !version) return { kind: 'idempotency_conflict' };
+          return { kind: 'replayed', collection, version };
+        }
+        // 自然幂等：同一 Artifact 在同一频道至多一个版本。
+        const promotedVersion = Array.from(projectArtifactVersions.values()).find((version) =>
+          version.teamId === input.teamId
+          && version.channelId === input.channelId
+          && version.artifactId === input.version.artifactId);
+        if (promotedVersion) {
+          const collection = projectArtifactCollections.get(promotedVersion.collectionId);
+          if (!collection) return { kind: 'collection_scope_conflict' };
+          if (!input.createsCollection && input.collection.id !== promotedVersion.collectionId) {
+            return { kind: 'artifact_promoted_to_other_collection' };
+          }
+          return { kind: 'replayed', collection, version: promotedVersion };
+        }
+        const artifact = artifacts.get(input.version.artifactId);
+        if (!artifact || artifact.teamId !== input.teamId || artifact.channelId !== input.channelId) {
+          return { kind: 'artifact_scope_conflict' };
+        }
+        const stage = projectStages.get(input.version.stageId);
+        if (!stage
+          || stage.teamId !== input.teamId
+          || stage.channelId !== input.channelId
+          || stage.taskId !== input.version.taskId) {
+          return { kind: 'stage_scope_conflict' };
+        }
+        // 版本必须落在 Task 的当前 revision 上：陈旧 revision 的结果不得污染新任务。
+        const currentTask = tasks.get(`${input.version.taskId}#${input.version.taskRevision}`);
+        if (!currentTask
+          || currentTask.supersededByRevision !== null
+          || currentTask.teamId !== input.teamId
+          || currentTask.channelId !== input.channelId) {
+          return { kind: 'task_scope_conflict' };
+        }
+        if (input.createsCollection) {
+          if (projectArtifactCollections.has(input.collection.id)) {
+            return { kind: 'collection_scope_conflict' };
+          }
+          const nameTaken = Array.from(projectArtifactCollections.values()).some((collection) =>
+            collection.teamId === input.teamId
+            && collection.channelId === input.channelId
+            && collection.name === input.collection.name);
+          if (nameTaken) return { kind: 'collection_name_conflict' };
+        } else {
+          const existingCollection = projectArtifactCollections.get(input.collection.id);
+          if (!existingCollection
+            || existingCollection.teamId !== input.teamId
+            || existingCollection.channelId !== input.channelId) {
+            return { kind: 'collection_scope_conflict' };
+          }
+          if (existingCollection.revision !== input.expectedCollectionRevision) {
+            return { kind: 'collection_revision_conflict' };
+          }
+          const versionNumberTaken = Array.from(projectArtifactVersions.values()).some((version) =>
+            version.collectionId === input.collection.id
+            && version.versionNumber === input.version.versionNumber);
+          if (versionNumberTaken) return { kind: 'collection_revision_conflict' };
+        }
+        projectArtifactCollections.set(input.collection.id, input.collection);
+        projectArtifactVersions.set(input.version.id, input.version);
+        projectArtifactMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', collection: input.collection, version: input.version };
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),

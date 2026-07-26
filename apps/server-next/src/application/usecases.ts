@@ -11,7 +11,11 @@ import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRu
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord } from './repositories.js';
-import type { ProjectStageRecord } from './project-repositories.js';
+import type {
+  ProjectArtifactCollectionRecord,
+  ProjectArtifactVersionRecord,
+  ProjectStageRecord,
+} from './project-repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -31,8 +35,21 @@ import type {
   ChannelProjectOverviewDto,
   CreateInitialProjectStageInput,
   GetChannelProjectOverviewInput,
+  ListProjectArtifactCollectionsInput,
+  ProjectArtifactCollectionDto,
+  ProjectArtifactLibraryDto,
+  ProjectArtifactLineageRefDto,
+  ProjectArtifactVersionDto,
+  PromoteArtifactToProjectVersionInput,
 } from '../../../../packages/contracts/src/index.js';
-import { projectStageTaskProjection } from '../../../../packages/domain/src/index.js';
+import {
+  evaluateArtifactPromotion,
+  evaluateProjectArtifactLineage,
+  isProjectArtifactLineageKind,
+  projectStageTaskProjection,
+  type ProjectArtifactLineageCandidate,
+  type ProjectArtifactPromotionRejectionCode,
+} from '../../../../packages/domain/src/index.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -191,6 +208,17 @@ export interface ServerNextUseCases {
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
+    replayed: boolean;
+  }>>;
+  /** #823 按逻辑产物集合读取当前版、历史、来源与 lineage。 */
+  listProjectArtifactCollections(input: ListProjectArtifactCollectionsInput & { userId: string }): Promise<Ack<{
+    library: ProjectArtifactLibraryDto;
+  }>>;
+  /** #823 将频道中已有且可见的不可变 Artifact 显式提升为逻辑产物版本。 */
+  promoteArtifactToProjectVersion(input: PromoteArtifactToProjectVersionInput & { userId: string }): Promise<Ack<{
+    library: ProjectArtifactLibraryDto;
+    collection: ProjectArtifactCollectionDto;
+    version: ProjectArtifactVersionDto;
     replayed: boolean;
   }>>;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
@@ -4051,6 +4079,305 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         overview: result.mutation.resultOverview,
         replayed: result.kind === 'replayed',
       });
+    },
+
+    async listProjectArtifactCollections(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      return makeSuccess({
+        library: await buildProjectArtifactLibrary(repositories, access.channel),
+      });
+    },
+
+    async promoteArtifactToProjectVersion(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      const { channel } = access;
+      if (channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'Project artifacts require a regular channel');
+      }
+      const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
+        ? projectInput.idempotencyKey.trim()
+        : '';
+      if (!idempotencyKey) {
+        return makeFailure('VALIDATION_ERROR', 'idempotencyKey is required');
+      }
+      const artifactId = normalizeOptionalId(projectInput.artifactId);
+      const stageId = normalizeOptionalId(projectInput.stageId);
+      if (!artifactId || !stageId) {
+        return makeFailure('VALIDATION_ERROR', 'artifactId and stageId are required');
+      }
+      const requestedCollectionId = normalizeOptionalId(projectInput.collectionId);
+      const collectionName = normalizeOptionalText(projectInput.collection?.name);
+      const collectionKind = normalizeOptionalText(projectInput.collection?.kind);
+      const sourceInvocationId = normalizeOptionalId(projectInput.sourceInvocationId);
+      if (requestedCollectionId) {
+        if (!Number.isSafeInteger(projectInput.expectedCollectionRevision)
+          || (projectInput.expectedCollectionRevision ?? 0) < 1) {
+          return makeFailure('VALIDATION_ERROR', 'expectedCollectionRevision must be a positive integer');
+        }
+      } else if (!collectionName || !collectionKind) {
+        // 集合的稳定身份与业务类型必须显式声明，绝不从文件名、目录、mime 或 pathKind 推断。
+        return makeFailure('VALIDATION_ERROR', 'A new logical artifact collection requires an explicit name and kind');
+      }
+      const lineageInput = Array.isArray(projectInput.lineage) ? projectInput.lineage : [];
+      if (lineageInput.some((ref) => !ref || !isProjectArtifactLineageKind(ref.kind) || !normalizeOptionalId(ref.refId))) {
+        return makeFailure('VALIDATION_ERROR', 'lineage entries require a supported kind and refId');
+      }
+      const normalizedLineage: ProjectArtifactLineageRefDto[] = lineageInput.map((ref) => ({
+        kind: ref.kind,
+        refId: normalizeOptionalId(ref.refId) as string,
+      }));
+      const normalizedRequest = {
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        artifactId,
+        stageId,
+        ...(requestedCollectionId
+          ? {
+            collectionId: requestedCollectionId,
+            expectedCollectionRevision: projectInput.expectedCollectionRevision,
+          }
+          : { collection: { name: collectionName, kind: collectionKind } }),
+        lineage: normalizedLineage,
+        ...(sourceInvocationId ? { sourceInvocationId } : {}),
+      };
+      const requestFingerprint = createHash('sha256')
+        .update(JSON.stringify(normalizedRequest))
+        .digest('hex');
+      const existingMutation = await repositories.channelProjects.getArtifactMutation({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+      });
+      if (existingMutation) {
+        if (existingMutation.requestFingerprint !== requestFingerprint) {
+          return makeFailure('CONFLICT', 'idempotencyKey was already used for a different project artifact mutation');
+        }
+        const replayed = await projectArtifactPromotionResult(repositories, channel, {
+          collectionId: existingMutation.collectionId,
+          versionId: existingMutation.versionId,
+        });
+        if (!replayed) {
+          return makeFailure('CONFLICT', 'Recorded project artifact mutation result is no longer available');
+        }
+        return makeSuccess({ ...replayed, replayed: true });
+      }
+      // 归档频道保持集合与版本可读，但拒绝提升与新增版本。
+      if (channel.archivedAt != null) {
+        return makeFailure('CONFLICT', 'Archived channels are read-only');
+      }
+      const profile = await repositories.channelProjects.getProfile({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      if (!profile) {
+        return makeFailure('NOT_FOUND', 'Channel project profile not found');
+      }
+      const actorRole = await repositories.teams.getMemberRole(projectInput.teamId, projectInput.userId);
+      if (profile.projectLeadId !== projectInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+        return makeFailure('FORBIDDEN', 'Only the project lead or a Team owner/admin can promote project artifacts');
+      }
+      const artifact = await repositories.artifacts.getForTeam({
+        teamId: projectInput.teamId,
+        artifactId,
+      });
+      if (!artifact
+        || artifact.channelId !== projectInput.channelId
+        || isWorkspaceRunLogArtifact(artifact)
+        || !(await isPublicChannelFileArtifact(repositories, artifact))) {
+        return makeFailure('NOT_FOUND', 'Artifact is not visible in this Team and Channel');
+      }
+      const stages = await repositories.channelProjects.listStages({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const stage = stages.find((candidate) => candidate.id === stageId);
+      if (!stage) {
+        return makeFailure('NOT_FOUND', 'Project Stage not found in this Team and Channel');
+      }
+      const task = await repositories.tasks.getById(stage.taskId);
+      if (!task || task.teamId !== projectInput.teamId || task.channelId !== projectInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Stage Tracked Task not found in this Team and Channel');
+      }
+      if (sourceInvocationId) {
+        const invocation = await repositories.management.invocations.getById(sourceInvocationId);
+        if (!invocation
+          || invocation.intent.teamId !== projectInput.teamId
+          || invocation.intent.channelId !== projectInput.channelId) {
+          return makeFailure('NOT_FOUND', 'Source Invocation is not visible in this Team and Channel');
+        }
+        const taskContext = invocation.intent.taskContext;
+        if (taskContext
+          && (taskContext.taskId !== task.id || taskContext.taskRevision !== task.revision)) {
+          // 旧 Task revision 的 Agent 结果不得污染当前任务的项目产物。
+          return makeFailure('CONFLICT', 'Source Invocation targets a stale Task revision');
+        }
+      }
+      const lineageCandidates: ProjectArtifactLineageCandidate[] = [];
+      for (const ref of normalizedLineage) {
+        lineageCandidates.push({
+          ...ref,
+          scope: await resolveProjectArtifactLineageScope(repositories, projectInput, ref),
+        });
+      }
+      const lineageEvaluation = evaluateProjectArtifactLineage({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        promotedArtifactId: artifactId,
+        candidates: lineageCandidates,
+      });
+      if (!lineageEvaluation.ok) {
+        return makeFailure(
+          lineageEvaluation.reasonCode === 'lineage_out_of_scope' ? 'NOT_FOUND' : 'VALIDATION_ERROR',
+          `Project artifact lineage rejected: ${lineageEvaluation.reasonCode}`,
+        );
+      }
+      const collections = await repositories.channelProjects.listArtifactCollections({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const targetCollection = requestedCollectionId
+        ? collections.find((candidate) => candidate.id === requestedCollectionId) ?? null
+        : null;
+      const existingVersionForArtifact = await repositories.channelProjects.getArtifactVersionByArtifact({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        artifactId,
+      });
+      const decision = evaluateArtifactPromotion({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        ...(requestedCollectionId
+          ? {
+            requestedCollectionId,
+            expectedCollectionRevision: projectInput.expectedCollectionRevision,
+          }
+          : {}),
+        ...(collectionName ? { requestedCollectionName: collectionName } : {}),
+        targetCollection: targetCollection === null ? null : {
+          id: targetCollection.id,
+          teamId: targetCollection.teamId,
+          channelId: targetCollection.channelId,
+          name: targetCollection.name,
+          revision: targetCollection.revision,
+          versionCount: targetCollection.versionCount,
+        },
+        existingCollectionNames: collections.map((candidate) => candidate.name),
+        existingVersionForArtifact: existingVersionForArtifact === null ? null : {
+          id: existingVersionForArtifact.id,
+          collectionId: existingVersionForArtifact.collectionId,
+        },
+      });
+      if (decision.kind === 'rejected') {
+        return projectArtifactPromotionFailure(decision.reasonCode);
+      }
+      if (decision.kind === 'replay_existing_version') {
+        const replayed = await projectArtifactPromotionResult(repositories, channel, {
+          collectionId: decision.collectionId,
+          versionId: decision.versionId,
+        });
+        if (!replayed) return makeFailure('NOT_FOUND', 'Promoted project artifact version not found');
+        return makeSuccess({ ...replayed, replayed: true });
+      }
+
+      const now = clock.now();
+      const versionId = ids.nextId();
+      const collectionId = decision.kind === 'create_collection' ? ids.nextId() : decision.collectionId;
+      const collectionRecord: ProjectArtifactCollectionRecord = decision.kind === 'create_collection'
+        ? {
+          id: collectionId,
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+          name: collectionName as string,
+          kind: collectionKind as string,
+          revision: decision.collectionRevision,
+          currentVersionId: versionId,
+          versionCount: decision.versionNumber,
+          createdBy: projectInput.userId,
+          createdAt: now,
+          updatedAt: now,
+        }
+        : {
+          ...(targetCollection as ProjectArtifactCollectionRecord),
+          revision: decision.collectionRevision,
+          currentVersionId: versionId,
+          versionCount: decision.versionNumber,
+          updatedAt: now,
+        };
+      const versionRecord: ProjectArtifactVersionRecord = {
+        id: versionId,
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        collectionId,
+        versionNumber: decision.versionNumber,
+        artifactId,
+        stageId: stage.id,
+        taskId: task.id,
+        taskRevision: task.revision,
+        // 来源消息与 Workspace Run 取自 Artifact 自身的持久化事实，不接受客户端提交。
+        ...(artifact.messageId === undefined ? {} : { sourceMessageId: artifact.messageId }),
+        ...(artifact.workspaceRunId === undefined ? {} : { sourceWorkspaceRunId: artifact.workspaceRunId }),
+        ...(sourceInvocationId ? { sourceInvocationId } : {}),
+        lineage: lineageEvaluation.lineage,
+        promotedBy: projectInput.userId,
+        createdAt: now,
+      };
+      const result = await repositories.channelProjects.promoteArtifact({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        ...(decision.kind === 'append_version'
+          ? { expectedCollectionRevision: projectInput.expectedCollectionRevision }
+          : {}),
+        collection: collectionRecord,
+        createsCollection: decision.kind === 'create_collection',
+        version: versionRecord,
+        mutation: {
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+          idempotencyKey,
+          requestFingerprint,
+          collectionId,
+          versionId,
+          createdAt: now,
+        },
+      });
+      if (result.kind === 'idempotency_conflict') {
+        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different project artifact mutation');
+      }
+      if (result.kind === 'collection_revision_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact collection revision is stale; refresh and retry');
+      }
+      if (result.kind === 'collection_name_conflict') {
+        return makeFailure('CONFLICT', 'A logical artifact collection with this name already exists');
+      }
+      if (result.kind === 'collection_scope_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact collection changed scope; refresh and retry');
+      }
+      if (result.kind === 'artifact_scope_conflict') {
+        return makeFailure('CONFLICT', 'Artifact changed scope; refresh and retry');
+      }
+      if (result.kind === 'stage_scope_conflict') {
+        return makeFailure('CONFLICT', 'Project Stage changed scope; refresh and retry');
+      }
+      if (result.kind === 'task_scope_conflict') {
+        return makeFailure('CONFLICT', 'Stage Tracked Task changed scope or revision; refresh and retry');
+      }
+      if (result.kind === 'artifact_promoted_to_other_collection') {
+        return makeFailure('CONFLICT', 'Artifact is already promoted into another logical artifact collection');
+      }
+      const projection = await projectArtifactPromotionResult(repositories, channel, {
+        collectionId: result.collection.id,
+        versionId: result.version.id,
+      });
+      if (!projection) return makeFailure('NOT_FOUND', 'Promoted project artifact version not found');
+      return makeSuccess({ ...projection, replayed: result.kind === 'replayed' });
     },
 
     async getTaskDag(taskInput) {
@@ -8376,6 +8703,128 @@ async function buildChannelProjectOverview(
     stages,
     archived: channel.archivedAt != null,
   };
+}
+
+/**
+ * #823 按逻辑产物投影文件库：集合携带 current version 指针与完整版本历史，
+ * 版本携带 Stage/Task、消息、Workspace Run、Invocation、Artifact 与 lineage 来源。
+ */
+async function buildProjectArtifactLibrary(
+  repositories: ServerNextRepositories,
+  channel: ChannelRecord,
+): Promise<ProjectArtifactLibraryDto> {
+  const scope = { teamId: channel.teamId, channelId: channel.id };
+  const collections = await repositories.channelProjects.listArtifactCollections(scope);
+  const versions = await repositories.channelProjects.listArtifactVersions(scope);
+  const versionsByCollection = new Map<string, ProjectArtifactVersionDto[]>();
+  for (const version of versions) {
+    const artifact = await repositories.artifacts.getForTeam({
+      teamId: channel.teamId,
+      artifactId: version.artifactId,
+    });
+    if (!artifact || artifact.channelId !== channel.id) {
+      throw new Error(`Project artifact version ${version.id} references an unavailable scoped Artifact`);
+    }
+    const bucket = versionsByCollection.get(version.collectionId) ?? [];
+    bucket.push(projectArtifactVersionDto(version, artifact));
+    versionsByCollection.set(version.collectionId, bucket);
+  }
+  return {
+    collections: collections.map((collection) => ({
+      id: collection.id,
+      teamId: collection.teamId,
+      channelId: collection.channelId,
+      name: collection.name,
+      kind: collection.kind,
+      revision: collection.revision,
+      currentVersionId: collection.currentVersionId,
+      versions: (versionsByCollection.get(collection.id) ?? [])
+        .sort((left, right) => left.versionNumber - right.versionNumber),
+      createdBy: collection.createdBy,
+      createdAt: collection.createdAt,
+      updatedAt: collection.updatedAt,
+    })),
+    archived: channel.archivedAt != null,
+  };
+}
+
+function projectArtifactVersionDto(
+  version: ProjectArtifactVersionRecord,
+  artifact: ArtifactRecord,
+): ProjectArtifactVersionDto {
+  return {
+    id: version.id,
+    teamId: version.teamId,
+    channelId: version.channelId,
+    collectionId: version.collectionId,
+    versionNumber: version.versionNumber,
+    artifact: toArtifactDto(artifact),
+    source: {
+      stageId: version.stageId,
+      taskId: version.taskId,
+      taskRevision: version.taskRevision,
+      ...(version.sourceMessageId === undefined ? {} : { messageId: version.sourceMessageId }),
+      ...(version.sourceWorkspaceRunId === undefined ? {} : { workspaceRunId: version.sourceWorkspaceRunId }),
+      ...(version.sourceInvocationId === undefined ? {} : { invocationId: version.sourceInvocationId }),
+    },
+    lineage: version.lineage,
+    promotedBy: version.promotedBy,
+    createdAt: version.createdAt,
+  };
+}
+
+async function projectArtifactPromotionResult(
+  repositories: ServerNextRepositories,
+  channel: ChannelRecord,
+  refs: { collectionId: string; versionId: string },
+): Promise<{
+  library: ProjectArtifactLibraryDto;
+  collection: ProjectArtifactCollectionDto;
+  version: ProjectArtifactVersionDto;
+} | null> {
+  const library = await buildProjectArtifactLibrary(repositories, channel);
+  const collection = library.collections.find((candidate) => candidate.id === refs.collectionId);
+  const version = collection?.versions.find((candidate) => candidate.id === refs.versionId);
+  if (!collection || !version) return null;
+  return { library, collection, version };
+}
+
+async function resolveProjectArtifactLineageScope(
+  repositories: ServerNextRepositories,
+  scope: { teamId: string; channelId: string },
+  ref: ProjectArtifactLineageRefDto,
+): Promise<{ teamId: string; channelId: string } | null> {
+  if (ref.kind === 'project_version') {
+    const versions = await repositories.channelProjects.listArtifactVersions(scope);
+    const version = versions.find((candidate) => candidate.id === ref.refId);
+    return version ? { teamId: version.teamId, channelId: version.channelId } : null;
+  }
+  const artifact = await repositories.artifacts.getForTeam({
+    teamId: scope.teamId,
+    artifactId: ref.refId,
+  });
+  if (!artifact || isWorkspaceRunLogArtifact(artifact)) return null;
+  if (!(await isPublicChannelFileArtifact(repositories, artifact))) return null;
+  return { teamId: artifact.teamId, channelId: artifact.channelId };
+}
+
+function projectArtifactPromotionFailure(
+  reasonCode: ProjectArtifactPromotionRejectionCode,
+): ReturnType<typeof makeFailure> {
+  switch (reasonCode) {
+    case 'collection_not_found':
+      return makeFailure('NOT_FOUND', 'Logical artifact collection not found in this Team and Channel');
+    case 'collection_out_of_scope':
+      return makeFailure('NOT_FOUND', 'Logical artifact collection not found in this Team and Channel');
+    case 'collection_revision_stale':
+      return makeFailure('CONFLICT', 'Project artifact collection revision is stale; refresh and retry');
+    case 'collection_name_conflict':
+      return makeFailure('CONFLICT', 'A logical artifact collection with this name already exists');
+    case 'artifact_promoted_to_other_collection':
+      return makeFailure('CONFLICT', 'Artifact is already promoted into another logical artifact collection');
+    default:
+      return makeFailure('VALIDATION_ERROR', 'Ambiguous logical artifact collection target');
+  }
 }
 
 async function projectStageDto(

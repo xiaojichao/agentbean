@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -869,6 +869,23 @@ export interface ProjectEvents {
     message?: string;
   }>;
   onUpdated(channelId: string, handler: (overview: ChannelProjectOverviewDto | null) => void): () => void;
+  /** #823 按逻辑产物读取当前版、历史、来源与 lineage。 */
+  artifactCollections(channelId: string): Promise<{
+    ok: boolean;
+    library?: ProjectArtifactLibraryDto;
+    error?: string;
+    message?: string;
+  }>;
+  promoteArtifact(payload: Omit<PromoteArtifactToProjectVersionInput, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    library?: ProjectArtifactLibraryDto;
+    collection?: ProjectArtifactCollectionDto;
+    version?: ProjectArtifactVersionDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
+  onArtifactsUpdated(channelId: string, handler: (library: ProjectArtifactLibraryDto | null) => void): () => void;
 }
 
 export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
@@ -885,6 +902,19 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
       };
       socket.on(WEB_EVENTS.project.updated, listener);
       return () => { socket.off(WEB_EVENTS.project.updated, listener); };
+    },
+    artifactCollections(channelId) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.artifactCollections, { channelId });
+    },
+    promoteArtifact(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.promoteArtifact, payload);
+    },
+    onArtifactsUpdated(channelId, handler) {
+      const listener = (payload: { channelId?: string; library?: ProjectArtifactLibraryDto | null }) => {
+        if (payload.channelId === channelId) handler(payload.library ?? null);
+      };
+      socket.on(WEB_EVENTS.project.artifactsUpdated, listener);
+      return () => { socket.off(WEB_EVENTS.project.artifactsUpdated, listener); };
     },
   };
 }
