@@ -25,6 +25,7 @@ import {
   type OfferValidity,
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
 } from '../../../../../packages/domain/src/index.js';
+import { resolveProjectStageExecutionGate } from '../project-stage-execution-gate.js';
 import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
@@ -45,6 +46,8 @@ export type TaskClaimCandidateDiagnosticCode =
   | 'TASK_CHANNEL_FORBIDDEN'
   | 'DEPENDENCY_NOT_READY'
   | 'DEPENDENCY_CHANNEL_FORBIDDEN'
+  /** #822：绑定项目阶段的 Task 仍有未满足的 Stage 依赖或缺失的必需输入。 */
+  | 'PROJECT_STAGE_BLOCKED'
   | 'ANCESTOR_AGENT_LOOP'
   | 'TARGET_AGENT_MISMATCH';
 
@@ -208,6 +211,8 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
     }
     const ancestorAgentIds = await collectAncestorAgentIds(taskId, input.repositories, input.clock.now());
+    // #822 AC#5：项目阶段门禁与 Agent 无关，对全部候选统一生效。
+    const projectStageGate = await resolveProjectStageExecutionGate(input.repositories, task);
     const candidates: TaskClaimCandidateDiagnostic[] = [];
     for (const agent of agents) {
       const diagnostics: TaskClaimCandidateDiagnosticCode[] = [];
@@ -229,6 +234,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (dependencyTasks.some((dependency) => !dependency || dependency.status !== 'done')) {
         diagnostics.push('DEPENDENCY_NOT_READY');
       }
+      if (projectStageGate.blocked) diagnostics.push('PROJECT_STAGE_BLOCKED');
       if (dependencyTasks.some((dependency) => dependency?.channelId &&
         (!dependencyChannels.get(dependency.channelId) ||
           !channelAllowsAgent(dependencyChannels.get(dependency.channelId), agent.id)))) {

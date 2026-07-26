@@ -53,6 +53,8 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectStageEdgeMutationResult,
+  ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -182,6 +184,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0049_project_artifact_collections.sql');
   }
   applyMigration(db, 'team/0050_project_document_bundles.sql');
+  applyMigration(db, 'team/0051_project_stage_edges.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2730,6 +2733,209 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         });
         return transaction.immediate ? transaction.immediate() : transaction();
       },
+      async listEdges(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_stage_edges
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectStageEdge)
+          .filter((edge): edge is ProjectStageEdgeRecord => edge !== null);
+      },
+      async createStage(input) {
+        const transaction = teamDb.transaction(() => {
+          const guard = guardProjectStageEdgeMutation(teamDb, {
+            teamId: input.stage.teamId,
+            channelId: input.stage.channelId,
+            idempotencyKey: input.mutation.idempotencyKey,
+            requestFingerprint: input.mutation.requestFingerprint,
+            expectedRevision: input.expectedRevision,
+          });
+          if (guard.kind !== 'proceed') return guard.result;
+
+          const currentTask = teamDb.prepare(
+            `SELECT 1 FROM tasks
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?
+               AND superseded_by_revision IS NULL`,
+          ).get(
+            input.stage.taskId,
+            input.stage.teamId,
+            input.stage.channelId,
+            input.stage.taskRevision,
+          );
+          if (!currentTask) return { kind: 'task_scope_conflict' as const };
+          const duplicate = teamDb.prepare(
+            `SELECT 1 FROM project_stages
+             WHERE team_id = ? AND channel_id = ? AND task_id = ?`,
+          ).get(input.stage.teamId, input.stage.channelId, input.stage.taskId);
+          if (duplicate) return { kind: 'duplicate_edge' as const };
+
+          teamDb.prepare(
+            `INSERT INTO project_stages (
+              id, team_id, channel_id, task_id, task_revision, name, goal, owner_id,
+              reviewer_ids_json, acceptance_criteria_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.stage.id,
+            input.stage.teamId,
+            input.stage.channelId,
+            input.stage.taskId,
+            input.stage.taskRevision,
+            input.stage.name,
+            input.stage.goal,
+            input.stage.ownerId,
+            JSON.stringify(input.stage.reviewerIds),
+            JSON.stringify(input.stage.acceptanceCriteria),
+            input.stage.createdAt,
+            input.stage.updatedAt,
+          );
+          bumpChannelProjectProfileRevision(teamDb, {
+            teamId: input.stage.teamId,
+            channelId: input.stage.channelId,
+            nextRevision: input.nextRevision,
+            updatedAt: input.updatedAt,
+          });
+          insertChannelProjectMutation(teamDb, input.mutation);
+          return { kind: 'created' as const, mutation: input.mutation };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
+      async createStageEdge(input) {
+        const transaction = teamDb.transaction(() => {
+          const guard = guardProjectStageEdgeMutation(teamDb, {
+            teamId: input.edge.teamId,
+            channelId: input.edge.channelId,
+            idempotencyKey: input.mutation.idempotencyKey,
+            requestFingerprint: input.mutation.requestFingerprint,
+            expectedRevision: input.expectedRevision,
+          });
+          if (guard.kind !== 'proceed') return guard.result;
+
+          for (const stageId of [input.edge.upstreamStageId, input.edge.downstreamStageId]) {
+            const stage = teamDb.prepare(
+              `SELECT 1 FROM project_stages
+               WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(stageId, input.edge.teamId, input.edge.channelId);
+            if (!stage) return { kind: 'stage_scope_conflict' as const };
+          }
+          const taskFences: [string, number][] = [
+            [input.edge.upstreamTaskId, input.edge.upstreamTaskRevision],
+            [input.edge.downstreamTaskId, input.edge.downstreamTaskRevision],
+          ];
+          for (const [taskId, taskRevision] of taskFences) {
+            const currentTask = teamDb.prepare(
+              `SELECT 1 FROM tasks
+               WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?
+                 AND superseded_by_revision IS NULL`,
+            ).get(taskId, input.edge.teamId, input.edge.channelId, taskRevision);
+            if (!currentTask) return { kind: 'task_scope_conflict' as const };
+          }
+          const duplicate = teamDb.prepare(
+            `SELECT 1 FROM project_stage_edges
+             WHERE team_id = ? AND channel_id = ?
+               AND upstream_stage_id = ? AND downstream_stage_id = ?`,
+          ).get(
+            input.edge.teamId,
+            input.edge.channelId,
+            input.edge.upstreamStageId,
+            input.edge.downstreamStageId,
+          );
+          if (duplicate) return { kind: 'duplicate_edge' as const };
+
+          // AC#2：只有当上下游 Task 都拥有 canonical coordination 行时，
+          // canonical task_dependencies 才能接纳这条依赖；此时必须在同一事务内成对写入。
+          //
+          // 只有本次真正插入的依赖行才标记 mirrored：若 canonical 依赖已由 PI 分解写入，
+          // 我们不认领它的所有权，删除本边时也就不会销毁不属于自己的依赖事实。
+          const mirrored = projectStageEdgeCanMirrorTaskDependency(
+            teamDb,
+            input.edge.upstreamTaskId,
+            input.edge.downstreamTaskId,
+          ) && !teamDb.prepare(
+            'SELECT 1 FROM task_dependencies WHERE task_id = ? AND dependency_task_id = ?',
+          ).get(input.edge.downstreamTaskId, input.edge.upstreamTaskId);
+          teamDb.prepare(
+            `INSERT INTO project_stage_edges (
+              id, team_id, channel_id, upstream_stage_id, downstream_stage_id,
+              upstream_task_id, upstream_task_revision, downstream_task_id, downstream_task_revision,
+              semantics, required_inputs_json, mirrored_task_dependency,
+              created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.edge.id,
+            input.edge.teamId,
+            input.edge.channelId,
+            input.edge.upstreamStageId,
+            input.edge.downstreamStageId,
+            input.edge.upstreamTaskId,
+            input.edge.upstreamTaskRevision,
+            input.edge.downstreamTaskId,
+            input.edge.downstreamTaskRevision,
+            input.edge.semantics,
+            JSON.stringify(input.edge.requiredInputs),
+            mirrored ? 1 : 0,
+            input.edge.createdBy,
+            input.edge.createdAt,
+            input.edge.updatedAt,
+          );
+          if (mirrored) {
+            teamDb.prepare(
+              `INSERT INTO task_dependencies (task_id, dependency_task_id, task_revision)
+               VALUES (?, ?, ?)`,
+            ).run(
+              input.edge.downstreamTaskId,
+              input.edge.upstreamTaskId,
+              input.edge.downstreamTaskRevision,
+            );
+          }
+          bumpChannelProjectProfileRevision(teamDb, {
+            teamId: input.edge.teamId,
+            channelId: input.edge.channelId,
+            nextRevision: input.nextRevision,
+            updatedAt: input.updatedAt,
+          });
+          insertChannelProjectMutation(teamDb, input.mutation);
+          return { kind: 'created' as const, mutation: input.mutation };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
+      async deleteStageEdge(input) {
+        const transaction = teamDb.transaction(() => {
+          const guard = guardProjectStageEdgeMutation(teamDb, {
+            teamId: input.teamId,
+            channelId: input.channelId,
+            idempotencyKey: input.mutation.idempotencyKey,
+            requestFingerprint: input.mutation.requestFingerprint,
+            expectedRevision: input.expectedRevision,
+          });
+          if (guard.kind !== 'proceed') return guard.result;
+
+          const edge = mapProjectStageEdge(teamDb.prepare(
+            `SELECT * FROM project_stage_edges
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(input.edgeId, input.teamId, input.channelId));
+          if (!edge) return { kind: 'edge_not_found' as const };
+
+          teamDb.prepare(
+            `DELETE FROM project_stage_edges
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).run(input.edgeId, input.teamId, input.channelId);
+          if (edge.mirroredTaskDependency) {
+            teamDb.prepare(
+              'DELETE FROM task_dependencies WHERE task_id = ? AND dependency_task_id = ?',
+            ).run(edge.downstreamTaskId, edge.upstreamTaskId);
+          }
+          bumpChannelProjectProfileRevision(teamDb, {
+            teamId: input.teamId,
+            channelId: input.channelId,
+            nextRevision: input.nextRevision,
+            updatedAt: input.updatedAt,
+          });
+          insertChannelProjectMutation(teamDb, input.mutation);
+          return { kind: 'deleted' as const, mutation: input.mutation };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
       async listArtifactCollections(input) {
         return teamDb.prepare(
           `SELECT * FROM project_artifact_collections
@@ -3606,6 +3812,112 @@ function mapProjectStage(row: unknown): ProjectStageRecord | null {
     ownerId: sqliteText(row, 'owner_id'),
     reviewerIds: parseJsonArray(sqliteNullableText(row, 'reviewer_ids_json')) ?? [],
     acceptanceCriteria: parseJsonArray(sqliteNullableText(row, 'acceptance_criteria_json')) ?? [],
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+/**
+ * #822 Stage edge mutation 的事务前置守卫：幂等复放与 profile revision fence。
+ * 三个写入路径共享同一实现，避免创建与删除的门禁语义漂移。
+ */
+function guardProjectStageEdgeMutation(
+  db: SqliteDatabase,
+  input: {
+    teamId: string;
+    channelId: string;
+    idempotencyKey: string;
+    requestFingerprint: string;
+    expectedRevision: number;
+  },
+): { kind: 'proceed' } | { kind: 'settled'; result: ProjectStageEdgeMutationResult } {
+  const existingMutation = mapChannelProjectMutation(db.prepare(
+    `SELECT * FROM channel_project_mutations
+     WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+  ).get(input.teamId, input.channelId, input.idempotencyKey));
+  if (existingMutation) {
+    if (existingMutation.requestFingerprint !== input.requestFingerprint) {
+      return { kind: 'settled', result: { kind: 'idempotency_conflict' } };
+    }
+    return { kind: 'settled', result: { kind: 'replayed', mutation: existingMutation } };
+  }
+  const profile = mapChannelProjectProfile(db.prepare(
+    `SELECT * FROM channel_project_profiles
+     WHERE team_id = ? AND channel_id = ?`,
+  ).get(input.teamId, input.channelId));
+  if (!profile || profile.revision !== input.expectedRevision) {
+    return { kind: 'settled', result: { kind: 'revision_conflict' } };
+  }
+  return { kind: 'proceed' };
+}
+
+/** canonical `task_dependencies` 只接纳拥有 coordination 行的 Task。 */
+function projectStageEdgeCanMirrorTaskDependency(
+  db: SqliteDatabase,
+  upstreamTaskId: string,
+  downstreamTaskId: string,
+): boolean {
+  const rows = db.prepare(
+    'SELECT task_id FROM task_coordinations WHERE task_id IN (?, ?)',
+  ).all(upstreamTaskId, downstreamTaskId);
+  return rows.length === 2;
+}
+
+function bumpChannelProjectProfileRevision(
+  db: SqliteDatabase,
+  input: { teamId: string; channelId: string; nextRevision: number; updatedAt: number },
+): void {
+  db.prepare(
+    `UPDATE channel_project_profiles
+     SET revision = ?, updated_at = ?
+     WHERE team_id = ? AND channel_id = ?`,
+  ).run(input.nextRevision, input.updatedAt, input.teamId, input.channelId);
+}
+
+function insertChannelProjectMutation(
+  db: SqliteDatabase,
+  mutation: ChannelProjectMutationRecord,
+): void {
+  db.prepare(
+    `INSERT INTO channel_project_mutations (
+      team_id, channel_id, idempotency_key, request_fingerprint,
+      profile_id, stage_id, result_revision, result_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    mutation.teamId,
+    mutation.channelId,
+    mutation.idempotencyKey,
+    mutation.requestFingerprint,
+    mutation.profileId,
+    mutation.stageId,
+    mutation.resultRevision,
+    JSON.stringify(mutation.resultOverview),
+    mutation.createdAt,
+  );
+}
+
+function mapProjectStageEdge(row: unknown): ProjectStageEdgeRecord | null {
+  if (!row) return null;
+  const semantics = sqliteText(row, 'semantics');
+  if (semantics !== 'blocks_start' && semantics !== 'provides_context') {
+    throw new Error('Project Stage edge semantics is invalid');
+  }
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    upstreamStageId: sqliteText(row, 'upstream_stage_id'),
+    downstreamStageId: sqliteText(row, 'downstream_stage_id'),
+    upstreamTaskId: sqliteText(row, 'upstream_task_id'),
+    upstreamTaskRevision: sqliteNumber(row, 'upstream_task_revision'),
+    downstreamTaskId: sqliteText(row, 'downstream_task_id'),
+    downstreamTaskRevision: sqliteNumber(row, 'downstream_task_revision'),
+    semantics,
+    requiredInputs: parseJsonValue<ProjectStageEdgeRecord['requiredInputs']>(
+      sqliteNullableText(row, 'required_inputs_json'),
+    ) ?? [],
+    mirroredTaskDependency: sqliteNumber(row, 'mirrored_task_dependency') === 1,
+    createdBy: sqliteText(row, 'created_by'),
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
   };

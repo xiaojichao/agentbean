@@ -12,10 +12,13 @@ import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord } from './repositories.js';
 import type {
+  ChannelProjectProfileRecord,
   ProjectArtifactCollectionRecord,
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleRecord,
+  ProjectStageEdgeMutationResult,
+  ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from './project-repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
@@ -37,6 +40,9 @@ import type {
   ChannelProjectOverviewDto,
   CreateInitialProjectStageInput,
   CreateProjectDocumentBundleInput,
+  CreateProjectStageEdgeInput,
+  CreateProjectStageInput,
+  DeleteProjectStageEdgeInput,
   GetChannelProjectOverviewInput,
   GetProjectDocumentBundleInput,
   ListProjectArtifactCollectionsInput,
@@ -51,12 +57,17 @@ import type {
   ProjectDocumentBundleMemberViewDto,
   ProjectDocumentBundleResultDto,
   ProjectDocumentBundleSourceDto,
+  ProjectStageBlockingReasonDto,
+  ProjectStageEdgeDto,
+  ProjectStageMissingRequiredInputDto,
   PromoteArtifactToProjectVersionInput,
 } from '../../../../packages/contracts/src/index.js';
 import {
   evaluateArtifactPromotion,
   evaluateBundleComposition,
   evaluateProjectArtifactLineage,
+  evaluateProjectStageEdgeCreation,
+  evaluateProjectStageExecutionGate,
   isProjectArtifactLineageKind,
   projectStageTaskProjection,
   type ProjectArtifactLineageCandidate,
@@ -64,6 +75,11 @@ import {
   type ProjectDocumentBundleMemberCandidate,
   type ProjectDocumentBundleMemberRejectionCode,
 } from '../../../../packages/domain/src/index.js';
+import {
+  buildProjectStageUpstreamEdgeFacts,
+  resolveProjectStageReviewDecision,
+  type ProjectStageFacts,
+} from './project-stage-execution-gate.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -221,6 +237,18 @@ export interface ServerNextUseCases {
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
+    overview: ChannelProjectOverviewDto;
+    replayed: boolean;
+  }>>;
+  createProjectStage(input: CreateProjectStageInput & { userId: string }): Promise<Ack<{
+    overview: ChannelProjectOverviewDto;
+    replayed: boolean;
+  }>>;
+  createProjectStageEdge(input: CreateProjectStageEdgeInput & { userId: string }): Promise<Ack<{
+    overview: ChannelProjectOverviewDto;
+    replayed: boolean;
+  }>>;
+  deleteProjectStageEdge(input: DeleteProjectStageEdgeInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
     replayed: boolean;
   }>>;
@@ -4068,11 +4096,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         createdAt: now,
         updatedAt: now,
       };
-      const initialOverview: ChannelProjectOverviewDto = {
+      const initialOverview: ChannelProjectOverviewDto = await projectChannelProjectOverview(
+        repositories,
+        channel,
         profile,
-        stages: [await projectStageDto(repositories, stage, task)],
-        archived: false,
-      };
+        [stage],
+        [],
+      );
       const result = await repositories.channelProjects.createInitialStage({
         expectedRevision: projectInput.expectedRevision,
         profile,
@@ -4102,6 +4132,222 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         overview: result.mutation.resultOverview,
         replayed: result.kind === 'replayed',
       });
+    },
+
+    async createProjectStage(stageInput) {
+      const stageName = normalizeOptionalText(stageInput.stage?.name);
+      const stageGoal = normalizeOptionalText(stageInput.stage?.goal);
+      const stageOwnerId = normalizeOptionalId(stageInput.stage?.ownerId);
+      const reviewerIds = normalizeUniqueTextItems(stageInput.stage?.reviewerIds);
+      const acceptanceCriteria = normalizeUniqueTextItems(stageInput.stage?.acceptanceCriteria);
+      const taskId = normalizeOptionalId(stageInput.stage?.taskId);
+      if (!stageName || !stageGoal || !stageOwnerId || reviewerIds.length === 0
+        || !taskId || acceptanceCriteria.length === 0) {
+        return makeFailure('VALIDATION_ERROR', 'Stage fields, Task, reviewers and acceptance criteria are required');
+      }
+      const prepared = await prepareProjectStageEdgeMutation(repositories, stageInput, {
+        stage: { name: stageName, goal: stageGoal, ownerId: stageOwnerId, reviewerIds, acceptanceCriteria, taskId },
+      });
+      if (!prepared.ok) return prepared.settled;
+      const { channel, profile, stages, edges, idempotencyKey, requestFingerprint } = prepared;
+      const humanActorMembership = await Promise.all(reviewerIds.map(async (actorId) =>
+        (await repositories.teams.isMember(stageInput.teamId, actorId))
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(actorId))));
+      if (humanActorMembership.some((isMember) => !isMember)) {
+        return makeFailure('FORBIDDEN', 'Reviewers must be channel members');
+      }
+      const ownerIsHuman = (await repositories.teams.isMember(stageInput.teamId, stageOwnerId))
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(stageOwnerId));
+      if (!ownerIsHuman && !channel.agentMemberIds.includes(stageOwnerId)) {
+        return makeFailure('FORBIDDEN', 'Stage owner must be a channel member');
+      }
+      const task = await repositories.tasks.getById(taskId);
+      if (!task || task.teamId !== stageInput.teamId || task.channelId !== stageInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Tracked Task not found in this Team and Channel');
+      }
+      const now = clock.now();
+      const stage: ProjectStageRecord = {
+        id: ids.nextId(),
+        teamId: stageInput.teamId,
+        channelId: stageInput.channelId,
+        taskId,
+        taskRevision: task.revision,
+        name: stageName,
+        goal: stageGoal,
+        ownerId: stageOwnerId,
+        reviewerIds,
+        acceptanceCriteria,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const nextRevision = profile.revision + 1;
+      const resultOverview = await projectChannelProjectOverview(
+        repositories,
+        channel,
+        { ...profile, revision: nextRevision, updatedAt: now },
+        [...stages, stage],
+        edges,
+      );
+      const result = await repositories.channelProjects.createStage({
+        expectedRevision: stageInput.expectedRevision,
+        nextRevision,
+        updatedAt: now,
+        stage,
+        mutation: {
+          teamId: stageInput.teamId,
+          channelId: stageInput.channelId,
+          idempotencyKey,
+          requestFingerprint,
+          profileId: profile.id,
+          stageId: stage.id,
+          resultRevision: nextRevision,
+          resultOverview,
+          createdAt: now,
+        },
+      });
+      if (result.kind === 'duplicate_edge') {
+        return makeFailure('CONFLICT', 'This Tracked Task already has a project Stage');
+      }
+      return projectStageEdgeMutationAck(result);
+    },
+
+    async createProjectStageEdge(edgeInput) {
+      if (edgeInput.semantics !== 'blocks_start' && edgeInput.semantics !== 'provides_context') {
+        return makeFailure('VALIDATION_ERROR', 'semantics must be blocks_start or provides_context');
+      }
+      if (!Number.isSafeInteger(edgeInput.expectedUpstreamTaskRevision)
+        || edgeInput.expectedUpstreamTaskRevision < 1
+        || !Number.isSafeInteger(edgeInput.expectedDownstreamTaskRevision)
+        || edgeInput.expectedDownstreamTaskRevision < 1) {
+        return makeFailure('VALIDATION_ERROR', 'Expected Task revisions must be positive integers');
+      }
+      const prepared = await prepareProjectStageEdgeMutation(repositories, edgeInput, {
+        upstreamStageId: normalizeOptionalId(edgeInput.upstreamStageId),
+        downstreamStageId: normalizeOptionalId(edgeInput.downstreamStageId),
+        semantics: edgeInput.semantics,
+        requiredInputs: normalizeProjectStageRequiredInputs(edgeInput.requiredInputs),
+        expectedUpstreamTaskRevision: edgeInput.expectedUpstreamTaskRevision,
+        expectedDownstreamTaskRevision: edgeInput.expectedDownstreamTaskRevision,
+      });
+      if (!prepared.ok) return prepared.settled;
+      const { channel, profile, stages, edges, idempotencyKey, requestFingerprint, normalized } = prepared;
+      const upstreamStage = stages.find((stage) => stage.id === normalized.upstreamStageId);
+      const downstreamStage = stages.find((stage) => stage.id === normalized.downstreamStageId);
+      const decision = evaluateProjectStageEdgeCreation({
+        teamId: edgeInput.teamId,
+        channelId: edgeInput.channelId,
+        upstream: upstreamStage
+          ? {
+            stageId: upstreamStage.id,
+            teamId: upstreamStage.teamId,
+            channelId: upstreamStage.channelId,
+            taskId: upstreamStage.taskId,
+          }
+          : null,
+        downstream: downstreamStage
+          ? {
+            stageId: downstreamStage.id,
+            teamId: downstreamStage.teamId,
+            channelId: downstreamStage.channelId,
+            taskId: downstreamStage.taskId,
+          }
+          : null,
+        existingEdges: edges,
+        requiredInputs: normalized.requiredInputs,
+      });
+      if (decision.kind === 'rejected') {
+        return projectStageEdgeRejection(decision.reason);
+      }
+      if (!upstreamStage || !downstreamStage) {
+        return makeFailure('NOT_FOUND', 'Project Stage not found in this Channel');
+      }
+      if (upstreamStage.taskRevision !== normalized.expectedUpstreamTaskRevision
+        || downstreamStage.taskRevision !== normalized.expectedDownstreamTaskRevision) {
+        return makeFailure('CONFLICT', 'Stage or Task revision is stale; refresh and retry');
+      }
+      const now = clock.now();
+      const edge: ProjectStageEdgeRecord = {
+        id: ids.nextId(),
+        teamId: edgeInput.teamId,
+        channelId: edgeInput.channelId,
+        upstreamStageId: upstreamStage.id,
+        downstreamStageId: downstreamStage.id,
+        upstreamTaskId: upstreamStage.taskId,
+        upstreamTaskRevision: upstreamStage.taskRevision,
+        downstreamTaskId: downstreamStage.taskId,
+        downstreamTaskRevision: downstreamStage.taskRevision,
+        semantics: normalized.semantics,
+        requiredInputs: normalized.requiredInputs,
+        mirroredTaskDependency: false,
+        createdBy: edgeInput.userId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const nextRevision = profile.revision + 1;
+      const resultOverview = await projectChannelProjectOverview(
+        repositories,
+        channel,
+        { ...profile, revision: nextRevision, updatedAt: now },
+        stages,
+        [...edges, edge],
+      );
+      const result = await repositories.channelProjects.createStageEdge({
+        expectedRevision: edgeInput.expectedRevision,
+        nextRevision,
+        updatedAt: now,
+        edge,
+        mutation: {
+          teamId: edgeInput.teamId,
+          channelId: edgeInput.channelId,
+          idempotencyKey,
+          requestFingerprint,
+          profileId: profile.id,
+          stageId: downstreamStage.id,
+          resultRevision: nextRevision,
+          resultOverview,
+          createdAt: now,
+        },
+      });
+      return projectStageEdgeMutationAck(result);
+    },
+
+    async deleteProjectStageEdge(edgeInput) {
+      const prepared = await prepareProjectStageEdgeMutation(repositories, edgeInput, {
+        edgeId: normalizeOptionalId(edgeInput.edgeId),
+      });
+      if (!prepared.ok) return prepared.settled;
+      const { channel, profile, stages, edges, idempotencyKey, requestFingerprint, normalized } = prepared;
+      const edge = edges.find((candidate) => candidate.id === normalized.edgeId);
+      if (!edge) return makeFailure('NOT_FOUND', 'Project Stage edge not found in this Channel');
+      const now = clock.now();
+      const nextRevision = profile.revision + 1;
+      const resultOverview = await projectChannelProjectOverview(
+        repositories,
+        channel,
+        { ...profile, revision: nextRevision, updatedAt: now },
+        stages,
+        edges.filter((candidate) => candidate.id !== edge.id),
+      );
+      const result = await repositories.channelProjects.deleteStageEdge({
+        teamId: edgeInput.teamId,
+        channelId: edgeInput.channelId,
+        edgeId: edge.id,
+        expectedRevision: edgeInput.expectedRevision,
+        nextRevision,
+        updatedAt: now,
+        mutation: {
+          teamId: edgeInput.teamId,
+          channelId: edgeInput.channelId,
+          idempotencyKey,
+          requestFingerprint,
+          profileId: profile.id,
+          stageId: edge.downstreamStageId,
+          resultRevision: nextRevision,
+          resultOverview,
+          createdAt: now,
+        },
+      });
+      return projectStageEdgeMutationAck(result);
     },
 
     async listProjectArtifactCollections(projectInput) {
@@ -9065,6 +9311,181 @@ async function projectDocumentBundleMemberCurrent(
   };
 }
 
+type ProjectStageEdgeMutationAck = Ack<{
+  overview: ChannelProjectOverviewDto;
+  replayed: boolean;
+}>;
+
+interface ProjectStageEdgeMutationContext<N> {
+  ok: true;
+  channel: ChannelRecord;
+  profile: ChannelProjectProfileRecord;
+  stages: ProjectStageRecord[];
+  edges: ProjectStageEdgeRecord[];
+  idempotencyKey: string;
+  requestFingerprint: string;
+  normalized: N;
+}
+
+/**
+ * #822 只做去空白与结构规整，**不修正 kind**。
+ * 未知 kind 必须原样传给 domain 由 evaluateProjectStageEdgeCreation fail closed 拒绝，
+ * 否则静默强转会让非法规则伪装成合法产物输入。
+ */
+export function normalizeProjectStageRequiredInputs(
+  value: unknown,
+): { key: string; kind: 'artifact' | 'document'; label: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => {
+    const rule = entry as { key?: unknown; kind?: unknown; label?: unknown } | null;
+    return {
+      key: typeof rule?.key === 'string' ? rule.key.trim() : '',
+      kind: rule?.kind as 'artifact' | 'document',
+      label: typeof rule?.label === 'string' ? rule.label.trim() : '',
+    };
+  });
+}
+
+function projectStageEdgeRejection(
+  reason:
+    | 'unknown_stage'
+    | 'self_dependency'
+    | 'cross_team'
+    | 'cross_channel'
+    | 'invalid_required_input'
+    | 'duplicate_edge'
+    | 'cycle',
+): ProjectStageEdgeMutationAck {
+  switch (reason) {
+    case 'unknown_stage':
+      return makeFailure('NOT_FOUND', 'Project Stage not found in this Channel');
+    case 'self_dependency':
+      return makeFailure('VALIDATION_ERROR', 'A Stage cannot depend on itself');
+    case 'cross_team':
+    case 'cross_channel':
+      return makeFailure('FORBIDDEN', 'Stage dependencies must stay in the same Team and Channel');
+    case 'invalid_required_input':
+      return makeFailure('VALIDATION_ERROR', 'Required input rules must have a unique key, a label and a known kind');
+    case 'duplicate_edge':
+      return makeFailure('CONFLICT', 'This Stage dependency already exists');
+    case 'cycle':
+      return makeFailure('VALIDATION_ERROR', 'Stage dependencies must stay acyclic');
+  }
+}
+
+function projectStageEdgeMutationAck(
+  result: ProjectStageEdgeMutationResult,
+): ProjectStageEdgeMutationAck {
+  switch (result.kind) {
+    case 'created':
+    case 'deleted':
+    case 'replayed':
+      return makeSuccess({
+        overview: result.mutation.resultOverview,
+        replayed: result.kind === 'replayed',
+      });
+    case 'idempotency_conflict':
+      return makeFailure('CONFLICT', 'idempotencyKey was already used for a different project mutation');
+    case 'revision_conflict':
+      return makeFailure('CONFLICT', 'Project revision is stale; refresh and retry');
+    case 'task_scope_conflict':
+      return makeFailure('CONFLICT', 'Tracked Task changed scope or revision; refresh and retry');
+    case 'stage_scope_conflict':
+      return makeFailure('NOT_FOUND', 'Project Stage not found in this Channel');
+    case 'duplicate_edge':
+      return makeFailure('CONFLICT', 'This Stage dependency already exists');
+    case 'edge_not_found':
+      return makeFailure('NOT_FOUND', 'Project Stage edge not found in this Channel');
+  }
+}
+
+/**
+ * #822 Stage edge 写操作的共享前置校验。
+ *
+ * 与 #821 保持一致的判定顺序：幂等复放在归档门禁之前，
+ * 因此归档前完成的写入重试仍返回原结果，而新的写入一律被归档拒绝。
+ */
+async function prepareProjectStageEdgeMutation<N extends Record<string, unknown>>(
+  repositories: ServerNextRepositories,
+  input: {
+    userId: string;
+    teamId: string;
+    channelId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  },
+  normalized: N,
+): Promise<ProjectStageEdgeMutationContext<N> | { ok: false; settled: ProjectStageEdgeMutationAck }> {
+  const settle = (settled: ProjectStageEdgeMutationAck) => ({ ok: false as const, settled });
+  if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+    return settle(makeFailure('FORBIDDEN', 'User is not a team member'));
+  }
+  const access = await ensureUserCanViewChannel(repositories, input);
+  if (!access.ok) return settle(access as ProjectStageEdgeMutationAck);
+  const { channel } = access;
+  if (channel.kind !== 'channel') {
+    return settle(makeFailure('VALIDATION_ERROR', 'Project stages require a regular channel'));
+  }
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    return settle(makeFailure('VALIDATION_ERROR', 'expectedRevision must be a positive integer'));
+  }
+  const idempotencyKey = typeof input.idempotencyKey === 'string' ? input.idempotencyKey.trim() : '';
+  if (!idempotencyKey) {
+    return settle(makeFailure('VALIDATION_ERROR', 'idempotencyKey is required'));
+  }
+  const requestFingerprint = createHash('sha256')
+    .update(JSON.stringify({
+      teamId: input.teamId,
+      channelId: input.channelId,
+      expectedRevision: input.expectedRevision,
+      ...normalized,
+    }))
+    .digest('hex');
+  const existingMutation = await repositories.channelProjects.getMutation({
+    teamId: input.teamId,
+    channelId: input.channelId,
+    idempotencyKey,
+  });
+  if (existingMutation) {
+    if (existingMutation.requestFingerprint !== requestFingerprint) {
+      return settle(makeFailure('CONFLICT', 'idempotencyKey was already used for a different project mutation'));
+    }
+    return settle(makeSuccess({ overview: existingMutation.resultOverview, replayed: true }));
+  }
+  if (channel.archivedAt != null) {
+    return settle(makeFailure('CONFLICT', 'Archived channels are read-only'));
+  }
+  const profile = await repositories.channelProjects.getProfile({
+    teamId: input.teamId,
+    channelId: input.channelId,
+  });
+  if (!profile) {
+    return settle(makeFailure('NOT_FOUND', 'Channel project profile not found'));
+  }
+  const actorRole = await repositories.teams.getMemberRole(input.teamId, input.userId);
+  const authorized = profile.projectLeadId === input.userId
+    || channel.createdBy === input.userId
+    || actorRole === 'owner'
+    || actorRole === 'admin';
+  if (!authorized) {
+    return settle(makeFailure('FORBIDDEN', 'User cannot configure this channel project'));
+  }
+  const [stages, edges] = await Promise.all([
+    repositories.channelProjects.listStages({ teamId: input.teamId, channelId: input.channelId }),
+    repositories.channelProjects.listEdges({ teamId: input.teamId, channelId: input.channelId }),
+  ]);
+  return {
+    ok: true,
+    channel,
+    profile,
+    stages,
+    edges,
+    idempotencyKey,
+    requestFingerprint,
+    normalized,
+  };
+}
+
 async function buildChannelProjectOverview(
   repositories: ServerNextRepositories,
   channel: ChannelRecord,
@@ -9074,22 +9495,65 @@ async function buildChannelProjectOverview(
     channelId: channel.id,
   });
   if (!profile) return null;
-  const records = await repositories.channelProjects.listStages({
-    teamId: channel.teamId,
-    channelId: channel.id,
-  });
-  const stages: ChannelProjectOverviewDto['stages'] = [];
-  for (const record of records) {
+  const [records, edges] = await Promise.all([
+    repositories.channelProjects.listStages({ teamId: channel.teamId, channelId: channel.id }),
+    repositories.channelProjects.listEdges({ teamId: channel.teamId, channelId: channel.id }),
+  ]);
+  return projectChannelProjectOverview(repositories, channel, profile, records, edges);
+}
+
+/**
+ * #822 从权威记录投影频道项目总览。
+ *
+ * `edgeRecords` 可以由调用方替换成 mutation 之后的期望边集，
+ * 这样创建/删除 Stage edge 的结果快照与后续读取共用同一套投影逻辑。
+ */
+async function projectChannelProjectOverview(
+  repositories: ServerNextRepositories,
+  channel: ChannelRecord,
+  profile: ChannelProjectProfileRecord,
+  stageRecords: readonly ProjectStageRecord[],
+  edgeRecords: readonly ProjectStageEdgeRecord[],
+): Promise<ChannelProjectOverviewDto> {
+  const stageFacts = new Map<string, ProjectStageFacts>();
+  for (const record of stageRecords) {
     const task = await repositories.tasks.getById(record.taskId);
     if (!task || task.teamId !== channel.teamId || task.channelId !== channel.id) {
       throw new Error(`Project Stage ${record.id} references an unavailable scoped Task`);
     }
-    stages.push(await projectStageDto(repositories, record, task));
+    stageFacts.set(record.id, {
+      record,
+      task,
+      reviewDecision: await resolveProjectStageReviewDecision(repositories, task),
+    });
+  }
+  const stages: ChannelProjectOverviewDto['stages'] = [];
+  for (const record of stageRecords) {
+    const facts = stageFacts.get(record.id) as ProjectStageFacts;
+    stages.push(await projectStageDto(repositories, facts, stageFacts, edgeRecords));
   }
   return {
     profile,
     stages,
+    edges: edgeRecords.map(projectStageEdgeDto),
     archived: channel.archivedAt != null,
+  };
+}
+
+function projectStageEdgeDto(record: ProjectStageEdgeRecord): ProjectStageEdgeDto {
+  return {
+    id: record.id,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    upstreamStageId: record.upstreamStageId,
+    downstreamStageId: record.downstreamStageId,
+    upstreamTaskId: record.upstreamTaskId,
+    downstreamTaskId: record.downstreamTaskId,
+    semantics: record.semantics,
+    requiredInputs: record.requiredInputs,
+    createdBy: record.createdBy,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
   };
 }
 
@@ -9217,31 +9681,76 @@ function projectArtifactPromotionFailure(
 
 async function projectStageDto(
   repositories: ServerNextRepositories,
-  record: ProjectStageRecord,
-  task: TaskRecord,
+  facts: ProjectStageFacts,
+  stageFacts: ReadonlyMap<string, ProjectStageFacts>,
+  edgeRecords: readonly ProjectStageEdgeRecord[],
 ): Promise<ChannelProjectOverviewDto['stages'][number]> {
+  const { record, task } = facts;
+  const inboundEdges = edgeRecords.filter((edge) => edge.downstreamStageId === record.id);
+  const upstreamEdgeFacts = await buildProjectStageUpstreamEdgeFacts(
+    repositories,
+    inboundEdges,
+    async (stageId) => stageFacts.get(stageId),
+  );
+  const gate = evaluateProjectStageExecutionGate({ upstreamEdges: upstreamEdgeFacts });
+  const gateBlocks = gate.kind === 'blocked' ? gate.blocks : [];
+
   const dependencyRecords = await repositories.taskCoordination.dependencies.list(task.id);
-  const dependencies = await Promise.all(dependencyRecords.map(async (dependency) => {
+  const rawDependencies = await Promise.all(dependencyRecords.map(async (dependency) => {
     const dependencyTask = await repositories.tasks.getById(dependency.dependencyTaskId);
     if (!dependencyTask || dependencyTask.teamId !== task.teamId || dependencyTask.channelId !== task.channelId) {
       throw new Error(`Task ${task.id} has an unavailable scoped dependency`);
     }
     return { taskId: dependencyTask.id, status: dependencyTask.status };
   }));
-  const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
-  const deliveries = await repositories.taskCoordination.deliveries.listByTask(task.id);
-  const latestDelivery = [...deliveries].reverse().find((delivery) =>
-    delivery.taskRevision === task.revision
-    && (coordination === null || delivery.taskAttempt === coordination.attempt));
-  const acceptance = latestDelivery
-    ? await repositories.taskCoordination.acceptances.getCanonicalByDelivery(latestDelivery.id)
-    : null;
+  // Stage edge 覆盖的依赖由边派生原因表达，避免同一依赖事实出现两条阻塞原因。
+  const edgeCoveredTaskIds = new Set(inboundEdges
+    .filter((edge) => edge.semantics === 'blocks_start')
+    .map((edge) => edge.upstreamTaskId));
+  const dependencies = [...rawDependencies];
+  for (const edgeFacts of upstreamEdgeFacts) {
+    if (edgeFacts.semantics !== 'blocks_start') continue;
+    if (dependencies.some((dependency) => dependency.taskId === edgeFacts.upstreamTaskId)) continue;
+    dependencies.push({
+      taskId: edgeFacts.upstreamTaskId,
+      status: edgeFacts.upstreamTaskStatus,
+    });
+  }
   const projection = projectStageTaskProjection({
     taskId: task.id,
     taskStatus: task.status,
     dependencies,
-    reviewDecision: acceptance?.decision,
+    reviewDecision: facts.reviewDecision,
   });
+  const blockingReasons: ProjectStageBlockingReasonDto[] = [
+    ...projection.blockingReasons.filter((reason) => reason.code !== 'dependency_incomplete'
+      || !reason.dependencyTaskId
+      || !edgeCoveredTaskIds.has(reason.dependencyTaskId)),
+    ...gateBlocks.map((block) => ({
+      code: block.code,
+      taskId: task.id,
+      dependencyTaskId: block.upstreamTaskId,
+      edgeId: block.edgeId,
+      upstreamStageId: block.upstreamStageId,
+      ...(block.requiredInputKey === undefined ? {} : { requiredInputKey: block.requiredInputKey }),
+    })),
+  ];
+  const missingRequiredInputs: ProjectStageMissingRequiredInputDto[] = [];
+  for (const block of gateBlocks) {
+    if (block.code !== 'required_input_missing' || block.requiredInputKey === undefined) continue;
+    const edge = inboundEdges.find((candidate) => candidate.id === block.edgeId);
+    const rule = edge?.requiredInputs.find((candidate) => candidate.key === block.requiredInputKey);
+    if (!rule) continue;
+    missingRequiredInputs.push({
+      edgeId: block.edgeId,
+      upstreamStageId: block.upstreamStageId,
+      key: rule.key,
+      kind: rule.kind,
+      label: rule.label,
+    });
+  }
+  const dependenciesSatisfied = !gateBlocks.some((block) =>
+    block.code === 'stage_dependency_incomplete' || block.code === 'stage_dependency_unaccepted');
   const taskDto: TaskDto = {
     id: task.id,
     teamId: task.teamId,
@@ -9266,8 +9775,13 @@ async function projectStageDto(
     reviewerIds: record.reviewerIds,
     acceptanceCriteria: record.acceptanceCriteria,
     task: taskDto,
+    taskRevision: record.taskRevision,
     aggregateStatus: projection.aggregateStatus,
-    blockingReasons: projection.blockingReasons,
+    blockingReasons,
+    upstreamStageIds: inboundEdges.map((edge) => edge.upstreamStageId),
+    dependenciesSatisfied,
+    missingRequiredInputs,
+    executionAllowed: gate.kind === 'allowed',
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
