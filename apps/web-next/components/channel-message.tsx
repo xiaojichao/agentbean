@@ -22,10 +22,7 @@ function artifactUrl(path: string): string {
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const downloadUrl = artifact.downloadUrl ? artifactUrl(artifact.downloadUrl) : undefined;
   const previewUrl = artifact.previewUrl ? artifactUrl(artifact.previewUrl) : undefined;
-  const thumbnailUrl = artifact.preview?.status === 'ready' && artifact.preview.url
-    ? artifactUrl(artifact.preview.url)
-    : undefined;
-  return <ArtifactCard artifact={artifact} previewUrl={previewUrl} thumbnailUrl={thumbnailUrl} downloadUrl={downloadUrl} imagePrimaryAction="download" />;
+  return <ArtifactCard artifact={artifact} previewUrl={previewUrl} downloadUrl={downloadUrl} imagePrimaryAction="download" />;
 }
 
 function agentFailureDisplayBody(body: string): string {
@@ -56,9 +53,25 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     const tone = meta?.kind === 'reply-fail' || meta?.kind === 'no-online'
       ? 'border-red-500/40 text-red-700 bg-red-50'
       : 'border-amber-500/40 text-amber-700 bg-amber-50';
+    // #699 US 55：follow-up 候选 Task 列表供用户选择确认。
+    const coordination = meta?.coordination as Record<string, unknown> | undefined;
+    const followupCandidates = coordination?.followupCandidateTaskIds as readonly string[] | undefined;
     return (
       <div className={`mx-auto my-1 max-w-prose rounded border px-2 py-1 text-center text-xs ${tone}`}>
         {msg.body}
+        {followupCandidates && followupCandidates.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap justify-center gap-1.5">
+            {followupCandidates.map((taskId) => (
+              <a
+                key={taskId}
+                href={`/teams/${msg.teamId}/tasks/${taskId}`}
+                className="inline-block rounded bg-white/60 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-white"
+              >
+                查看 Task
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     );
   }

@@ -95,6 +95,12 @@ export interface ChannelCoordinatorDependencies {
   readonly modelResolver: CoordinatorModelResolver;
   /** #720 Active Memory Context 解析器（AC#8 共享接缝）。 */
   readonly memoryContextResolver: ActiveMemoryContextResolver;
+  /** #699 US 9：检查显式 @Agent 是否覆盖了 requiredSkills。缺失时发送 skill-gap 系统消息。 */
+  readonly skillCoverageChecker?: (input: {
+    teamId: ID;
+    agentId: ID;
+    requiredSkills: readonly string[];
+  }) => Promise<{ covered: boolean; missingSkills: readonly string[] }>;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
   readonly fetch?: typeof fetch;
@@ -239,21 +245,24 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
   }
 
   /** 目标异常分类（统一 body/action 判别，AC#5 三分）。null = 无目标异常。 */
-  type TargetAnomaly = 'out_of_scope' | 'unavailable' | 'unresolvable';
+  /** 目标异常分类（AC#5 三分 + #699 US 9 skill_gap 技能缺口）。null = 无目标异常。 */
+  type TargetAnomaly = 'out_of_scope' | 'unavailable' | 'unresolvable' | 'skill_gap';
 
   /** 视为「不可用」的状态：PI 在消息中请求用户决定，但不阻止硬目标建 Task（约束 3）。 */
   function isAgentUnavailable(status: AgentStatus | null): boolean {
     return status === 'offline' || status === 'connecting' || status === 'error';
   }
 
-  /** 把目标上下文分类为单一异常种类（agent_request 专属；其余意图返回 null）。 */
+  /** 把目标上下文 + 技能缺口分类为单一异常种类（agent_request 专属；其余意图返回 null）。 */
   function classifyTargetAnomaly(
     target: CoordinationTargetContext | null,
     intent: PiCoordinationIntent,
+    skillGap?: { missingSkills: readonly string[] } | null,
   ): TargetAnomaly | null {
     if (intent !== 'agent_request' || !target) return null;
     if (target.agentId === null && target.needsScopedTarget) return 'unresolvable';
     if (target.agentId !== null && !target.scopeValid) return 'out_of_scope';
+    if (skillGap && skillGap.missingSkills.length > 0) return 'skill_gap';
     if (isAgentUnavailable(target.status)) return 'unavailable';
     return null;
   }
@@ -263,10 +272,11 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
     verdict: CoordinationGateVerdict,
     target: CoordinationTargetContext | null,
+    skillGap?: { missingSkills: readonly string[] } | null,
   ): string | null {
     const objective = parsed.objective ?? '';
     const name = target?.name ?? '未指定';
-    const anomaly = classifyTargetAnomaly(target, parsed.intent);
+    const anomaly = classifyTargetAnomaly(target, parsed.intent, skillGap);
     // 归档/无权限：不发系统消息（无面向用户的内容可说）。
     if (
       verdict.status === 'blocked' &&
@@ -276,12 +286,16 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       return null;
     }
     if (verdict.status === 'blocked') {
-      // 目标异常都请求用户决定（AC#5）：无法确认 → 指定；不在作用域 → 加入/改派/取消。
+      // 目标异常都请求用户决定（AC#5）。
       if (anomaly === 'unresolvable') {
         return `无法确认目标 Agent「${name}」，已拦截：${objective}。请指定目标 Agent 或取消。`;
       }
       if (anomaly === 'out_of_scope') {
         return `目标 Agent「${name}」不在当前频道或作用域，已拦截：${objective}。请将其加入频道、改派或取消。`;
+      }
+      if (anomaly === 'skill_gap') {
+        const missing = skillGap?.missingSkills?.join('、') ?? '';
+        return `目标 Agent「${name}」未声明所需技能：${missing}。已拦截：${objective}。请确认目标 Agent 选择、补充授权或取消。`;
       }
       // 高风险等其他 blocked。
       return `已拦截（需确认或目标已失效）：${objective}`;
@@ -310,17 +324,18 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     }
   }
 
-  /** 把门禁裁决 + 目标异常映射为可操作场景（AC#5），供 web 渲染决策点；null = 普通通知。 */
+  /** 把门禁裁决 + 目标异常 + 技能缺口映射为可操作场景（AC#5+#699 US 9），供 web 渲染决策点；null = 普通通知。 */
   function pickCoordinationAction(
     parsed: Extract<CoordinationParseResult, { kind: 'resolved' }>,
     verdict: CoordinationGateVerdict,
     target: CoordinationTargetContext | null,
+    skillGap?: { missingSkills: readonly string[] } | null,
   ): CoordinationSystemMessageAction | null {
-    const anomaly = classifyTargetAnomaly(target, parsed.intent);
+    const anomaly = classifyTargetAnomaly(target, parsed.intent, skillGap);
     if (verdict.status === 'suggested') return 'confirm_suggested';
     if (verdict.status === 'blocked') {
       // 目标异常（不可见/无法确认）→ 请求用户指定有效目标（AC#5）。
-      if (anomaly === 'unresolvable' || anomaly === 'out_of_scope') return 'specify_target';
+      if (anomaly === 'unresolvable' || anomaly === 'out_of_scope' || anomaly === 'skill_gap') return 'specify_target';
       return 'confirm_high_risk';
     }
     if (anomaly === 'unavailable') return 'confirm_offline_target';
@@ -483,7 +498,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         }
       }
 
-      // 组装系统消息正文 + 可操作场景（目标三分：不可见/离线/无法确认, AC#5）。
+      // 组装系统消息正文 + 可操作场景（AC#5 三分 + #699 US 9 技能缺口）。
       const targetCtx: CoordinationTargetContext = {
         agentId: ctx.targetAgentId,
         name: ctx.targetAgentName,
@@ -491,8 +506,27 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         needsScopedTarget: ctx.needsScopedTarget,
         scopeValid: ctx.targetScopeValid,
       };
-      const messageBody = coordinationSystemMessageBody(parsed, effectiveVerdict, targetCtx);
-      const action = effectiveAction ?? pickCoordinationAction(parsed, effectiveVerdict, targetCtx);
+
+      // #699 US 9：显式 @Agent 时检查技能覆盖。缺失技能 → skill_gap 通知用户。
+      let skillGap: { missingSkills: readonly string[] } | null = null;
+      if (parsed.intent === 'agent_request' && ctx.targetAgentId && deps.skillCoverageChecker) {
+        try {
+          const requiredSkills = (parsed as Record<string, unknown>).requiredSkills as readonly string[] | undefined;
+          if (requiredSkills && requiredSkills.length > 0) {
+            const coverage = await deps.skillCoverageChecker({
+              teamId: job.teamId,
+              agentId: ctx.targetAgentId,
+              requiredSkills,
+            });
+            if (!coverage.covered) skillGap = { missingSkills: coverage.missingSkills };
+          }
+        } catch {
+          skillGap = null; // 检查失败不阻塞协调
+        }
+      }
+
+      const messageBody = coordinationSystemMessageBody(parsed, effectiveVerdict, targetCtx, skillGap);
+      const action = effectiveAction ?? pickCoordinationAction(parsed, effectiveVerdict, targetCtx, skillGap);
 
       // 构建完整 meta（含 taskId + 目标信息 + action）；绝不携带 provider/model 身份（AC#4）。
       const coordinationMeta: CoordinationSystemMessageMeta = {

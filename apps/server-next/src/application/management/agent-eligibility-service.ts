@@ -49,13 +49,7 @@ export async function resolveDecompositionAllocatability(
     const skillReq = input.subtaskSkillReqs[i];
     if (!skillReq) continue;
     const candidates = candidateLists[i] ?? [];
-    // parent Task 的硬门槛允许由多个子 Task 联合覆盖。broker 在 parent 上给出的
-    // CAPABILITY_MISSING 不能预先淘汰候选；这里只保留没有连接/可见性/频道等基础阻塞的 Agent，
-    // 再用每个子 Task 自己的 required Capability/Skill 重新判定。
-    const eligible = candidates.filter((candidate) =>
-      candidate.eligible ||
-      (candidate.diagnosticCodes.length > 0 &&
-        candidate.diagnosticCodes.every((code) => code === 'CAPABILITY_MISSING')));
+    const eligible = candidates.filter((c) => c.eligible);
     const states: { state: AgentEligibilityState }[] = [];
     for (const candidate of eligible) {
       const projection = await input.resolveManifest(input.teamId, candidate.agentId, now);

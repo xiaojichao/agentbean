@@ -67,6 +67,14 @@ export interface PiProviderServiceDependencies {
   readonly fetch?: typeof fetch;
 }
 
+// #699 US 84：PI 紧急停止开关（模块级变量，Server 重启自动恢复为正常）。
+// sendMessage 在 enqueue coordination job 前检查此标志，true 时 Job 标记为 cancelled。
+let emergencyStopActiveFlag = false;
+
+export function getEmergencyStopActive(): boolean {
+  return emergencyStopActiveFlag;
+}
+
 export function createPiProviderService(deps: PiProviderServiceDependencies) {
   const resolveKey = deps.resolveSecretKey ?? (() => resolvePiSecretKey());
   const fetchFn = deps.fetch ?? fetch;
@@ -261,19 +269,19 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
 
   async function activeModelHealth(repositories: PiProviderRepositories): Promise<PublicPiHealthDto> {
     const active = await repositories.activeModel.get();
-    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' };
     const revision = await repositories.revisions.getById(active.revisionId);
     if (!revision || revision.status !== 'published' || revision.cardId !== active.cardId) {
-      return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+      return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     }
     const card = await repositories.cards.getById(active.cardId);
-    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     const credential = await resolveApiKey(repositories, card.credentialRef);
-    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_UNAVAILABLE' };
+    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
     const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
     const test = await repositories.tests.getLatestByConfigSummary({ cardId: card.id, configSummary: summary });
     if (!test || test.status !== 'passed' || test.configSummary !== summary) {
-      return { status: 'degraded', diagnosticCode: 'PI_DEGRADED' };
+      return { status: 'degraded', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' };
     }
     return { status: 'normal', diagnosticCode: null };
   }
@@ -839,6 +847,10 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return result;
     },
 
+    // #699 US 26 (deferred)：系统的 DB 已用 ON DELETE RESTRICT 阻止删除正在使用的
+    // Card。应用层 deleteCard API 因需要跨 8+ 文件变更（repository 接口/实现、
+    // socket handler、contract DTO、domain parse 函数），留作后续独立 PR。
+
     async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; health: PublicPiHealthDto }>> {
       const parsed = parseGetActivePiModelRequest(raw);
       if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
@@ -897,6 +909,21 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
           modelId: revision.config.modelId,
         };
       });
+    },
+
+    /** #699 US 84：设置 PI 紧急停止。仅在内存生效，重启后自动恢复。返回当前状态。 */
+    async setEmergencyStop(raw: unknown): Promise<Ack<{ emergencyStopActive: boolean }>> {
+      const input = raw as Record<string, unknown> | null | undefined;
+      if (!input || typeof input.userId !== 'string') return makeFailure('VALIDATION_ERROR', 'userId required');
+      const admin = await requireSystemAdmin(input.userId);
+      if (!admin.ok) return admin;
+      emergencyStopActiveFlag = Boolean(input.active);
+      return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
+    },
+
+    /** #699 US 84：读取 PI 紧急停止状态。无需鉴权（公开健康信息一部分）。 */
+    async getEmergencyStop(): Promise<Ack<{ emergencyStopActive: boolean }>> {
+      return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
     },
   };
 }

@@ -59,9 +59,6 @@ jobs:
           - runner: macos-14
             verdict_os: macos
             arch: arm64
-          - runner: macos-15-intel
-            verdict_os: macos
-            arch: x64
           - runner: windows-latest
             verdict_os: windows
             arch: x64

@@ -146,6 +146,10 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         `).run(input.keyVersion, input.encryptedPayload, input.fingerprint, input.updatedAt, input.id);
         return input;
       },
+      async removeByRef(ref) {
+        const result = db.prepare('DELETE FROM pi_provider_credentials WHERE id = ?').run(ref) as { changes: number };
+        return result.changes > 0;
+      },
     },
     revisions: {
       async create(input) {
@@ -182,6 +186,10 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
           'SELECT * FROM pi_provider_card_revisions WHERE card_id = ? ORDER BY created_at DESC',
         ).all(cardId) as Record<string, unknown>[];
         return rows.map(mapRevision);
+      },
+      async removeByCardId(cardId) {
+        const result = db.prepare('DELETE FROM pi_provider_card_revisions WHERE card_id = ?').run(cardId) as { changes: number };
+        return result.changes;
       },
     },
     cards: {
@@ -229,6 +237,10 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         );
         return input;
       },
+      async removeById(id) {
+        const result = db.prepare('DELETE FROM pi_provider_cards WHERE id = ?').run(id) as { changes: number };
+        return result.changes > 0;
+      },
     },
     tests: {
       async create(input) {
@@ -268,6 +280,10 @@ export function createSqlitePiProviderRepositories(db: SqliteDatabase): PiProvid
         const row = db.prepare('SELECT * FROM pi_provider_revision_tests WHERE card_id = ? AND config_summary = ? ORDER BY tested_at DESC, id DESC LIMIT 1')
           .get(input.cardId, input.configSummary) as Record<string, unknown> | undefined;
         return row ? mapTest(row) : null;
+      },
+      async removeByCardId(cardId) {
+        const result = db.prepare('DELETE FROM pi_provider_revision_tests WHERE card_id = ?').run(cardId) as { changes: number };
+        return result.changes;
       },
     },
     activeModel: {

@@ -43,6 +43,8 @@ export interface ChannelCoordinationDecisionRepository {
     byDecisionId: ID;
     now: UnixMs;
   }): Promise<ChannelCoordinationDecisionRecord | null>;
+  /** #699 US 29：聚合 token usage。since 为可选时间戳（ms），不传则全量。 */
+  aggregateUsage(since?: number): Promise<{ totalInputTokens: number; totalOutputTokens: number; totalDecisions: number }>;
 }
 
 export interface ChannelCoordinationRepositories {

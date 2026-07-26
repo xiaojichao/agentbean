@@ -43,7 +43,7 @@ MVP 上线后必须同时满足以下结果，否则只能算技术预备，不�
 - 费用、人民币单价、账单、预算、Token 配额；只记录 Provider 返回的 Token Usage。
 - Device-only PI coordination；MVP 只有 Server-hosted Channel Coordinator。
 - Anthropic Messages、OpenAI Responses、Gemini、Bedrock、OAuth、任意 Header/Body、Shell 或环境变量插值。
-- Intel macOS 与 Windows/Linux 用户 Device 支持；完整用户 Device 能力只承诺原生 `darwin-arm64`。`darwin-x64` 仅保留构建、SEA 启动和平台判定兼容目标。
+- Windows/Linux 用户 Device 支持；用户 Device 只承诺原生 `darwin-arm64` 与 `darwin-x64`。
 - PI 安装、复制、启停、更新或探测 Agent 内部 Skill。
 - 跨 Team 业务记忆、自学习 AgentBean 全局业务记忆、知识图谱和复杂自动冲突合并。
 - 多个 Team 自动化开关、Team Phase 选择或 Team placement 选择。
@@ -308,7 +308,7 @@ MVP 最终端到端矩阵至少覆盖：
 9. 频道归档取消全部非终态工作并冻结 Channel Memory。
 10. Experience Pack 未完成两次确认时不能在目标频道生效。
 11. 新协调链路重启恢复与幂等重放不重复创建 Task、Offer、Claim 或系统消息。
-12. Device 执行回归在原生 `darwin-arm64` 发布验证中通过；`darwin-x64` 在 GitHub Intel runner 上通过构建、SEA 启动和平台判定。
+12. Device 执行回归在原生 `darwin-arm64` 与 `darwin-x64` 发布验证中均通过。
 
 ## 10. 第一编码切片建议
 

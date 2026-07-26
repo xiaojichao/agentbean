@@ -169,7 +169,6 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0044_experience_packs.sql');
   applyMigration(db, 'team/0045_attachment_status.sql');
   applyMigration(db, 'team/0046_migrate_old_pi_policy.sql');
-  applyMigration(db, 'team/0047_task_coordination_preferred_skills.sql');
   applyMigration(db, 'team/0048_channel_project_stages.sql');
 }
 
@@ -398,6 +397,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapChannelCoordinationDecision(teamDb.prepare(
           'SELECT * FROM channel_coordination_decisions WHERE id = ?',
         ).get(prior.id));
+      },
+
+      async aggregateUsage(since) {
+        const sql = since !== undefined
+          ? `SELECT COALESCE(SUM(input_tokens), 0) AS totalInput, COALESCE(SUM(output_tokens), 0) AS totalOutput, COUNT(*) AS cnt FROM channel_coordination_decisions WHERE created_at >= ?`
+          : `SELECT COALESCE(SUM(input_tokens), 0) AS totalInput, COALESCE(SUM(output_tokens), 0) AS totalOutput, COUNT(*) AS cnt FROM channel_coordination_decisions`;
+        const params = since !== undefined ? [since] : [];
+        const row = teamDb.prepare(sql).get(...params) as { totalInput: number; totalOutput: number; cnt: number } | undefined;
+        return { totalInputTokens: row?.totalInput ?? 0, totalOutputTokens: row?.totalOutput ?? 0, totalDecisions: row?.cnt ?? 0 };
       },
     },
   };

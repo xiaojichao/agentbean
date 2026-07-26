@@ -47,6 +47,12 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         credentials.set(input.id, input);
         return input;
       },
+      async removeByRef(ref) {
+        for (const [id, cred] of credentials) {
+          if (cred.id === ref || id === ref) { credentials.delete(id); return true; }
+        }
+        return false;
+      },
     },
     revisions: {
       async create(input) {
@@ -61,6 +67,11 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         return Array.from(revisions.values())
           .filter((revision) => revision.cardId === cardId)
           .sort((left, right) => right.createdAt - left.createdAt);
+      },
+      async removeByCardId(cardId) {
+        let count = 0;
+        for (const [id, rev] of revisions) { if (rev.cardId === cardId) { revisions.delete(id); count++; } }
+        return count;
       },
     },
     cards: {
@@ -86,6 +97,7 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         });
         return input;
       },
+      async removeById(id) { return cards.delete(id); },
     },
     tests: {
       async create(input) {
@@ -102,6 +114,11 @@ export function createInMemoryPiProviderPersistence(): InMemoryPiProviderPersist
         return Array.from(tests.values())
           .filter((item) => item.cardId === input.cardId && item.configSummary === input.configSummary)
           .sort((left, right) => right.testedAt - left.testedAt)[0] ?? null;
+      },
+      async removeByCardId(cardId) {
+        let count = 0;
+        for (const [id, test] of tests) { if (test.cardId === cardId) { tests.delete(id); count++; } }
+        return count;
       },
     },
     activeModel: {

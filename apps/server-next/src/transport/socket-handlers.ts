@@ -260,6 +260,9 @@ export function registerWebSocketHandlers(
     bind(socket, WEB_EVENTS.piProvider.setActiveModel, app, 'setActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getActiveModel, app, 'getActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getPublicHealth, app, 'getPublicPiHealth', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.setEmergencyStop, app, 'setEmergencyStop', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piProvider.getEmergencyStop, app, 'getEmergencyStop', undefined, piProviderBindOptions);
+    bind(socket, WEB_EVENTS.piUsage.getTeamUsage, app, 'getTeamPiTokenUsage', undefined, { authenticatedUser: options.authenticatedUser });
   }
   // #710 Team Agent Exposure：team 作用域，使用 authenticatedUser 防止 client 伪造 userId。
   bind(socket, WEB_EVENTS.agentExposure.createDraft, app, 'createAgentExposureDraft', undefined, { authenticatedUser: options.authenticatedUser });

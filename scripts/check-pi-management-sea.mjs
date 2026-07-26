@@ -6,12 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 export const PI_SEA_NODE_VERSION = '24.18.0';
 export const PI_SEA_VERSION = '0.80.6';
-export const PI_SEA_EXPECTED_PLATFORMS = [
-  'linux:x64',
-  'macos:arm64',
-  'macos:x64',
-  'windows:x64',
-];
+export const PI_SEA_EXPECTED_PLATFORMS = ['linux:x64', 'macos:arm64', 'windows:x64'];
 export const PI_SEA_REQUIRED_COMPATIBLE_CHECKS = [
   'runner-platform',
   'node-version',
