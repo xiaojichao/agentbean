@@ -189,6 +189,10 @@ export const WEB_EVENTS = {
     artifactCollections: 'project:artifact-collections',
     promoteArtifact: 'project:promote-artifact',
     artifactsUpdated: 'project:artifacts-updated',
+    documentBundles: 'project:document-bundles',
+    documentBundle: 'project:document-bundle',
+    createDocumentBundle: 'project:create-document-bundle',
+    documentBundlesUpdated: 'project:document-bundles-updated',
   },
   dm: {
     start: 'dm:start',

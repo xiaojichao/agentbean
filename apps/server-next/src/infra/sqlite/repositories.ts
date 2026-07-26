@@ -50,6 +50,9 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactMutationRecord,
   ProjectArtifactVersionRecord,
+  ProjectDocumentBundleMemberRecord,
+  ProjectDocumentBundleMutationRecord,
+  ProjectDocumentBundleRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -178,6 +181,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'artifacts')) {
     applyMigration(db, 'team/0049_project_artifact_collections.sql');
   }
+  applyMigration(db, 'team/0050_project_document_bundles.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2909,6 +2913,122 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return transaction.immediate ? transaction.immediate() : transaction();
       },
     },
+    projectDocumentBundles: {
+      async list(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_document_bundles
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at DESC, id DESC`,
+        ).all(input.teamId, input.channelId)
+          .map(mapProjectDocumentBundle)
+          .filter((bundle): bundle is ProjectDocumentBundleRecord => bundle !== null);
+      },
+      async getById(input) {
+        return mapProjectDocumentBundle(teamDb.prepare(
+          `SELECT * FROM project_document_bundles
+           WHERE id = ? AND team_id = ? AND channel_id = ?`,
+        ).get(input.bundleId, input.teamId, input.channelId));
+      },
+      async listMembers(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_document_bundle_members
+           WHERE bundle_id = ?
+           ORDER BY position ASC`,
+        ).all(input.bundleId)
+          .map(mapProjectDocumentBundleMember)
+          .filter((member): member is ProjectDocumentBundleMemberRecord => member !== null);
+      },
+      async getMutation(input) {
+        return mapProjectDocumentBundleMutation(teamDb.prepare(
+          `SELECT * FROM project_document_bundle_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.channelId, input.idempotencyKey));
+      },
+      async create(input) {
+        const transaction = teamDb.transaction(() => {
+          const existingMutation = mapProjectDocumentBundleMutation(teamDb.prepare(
+            `SELECT * FROM project_document_bundle_mutations
+             WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+          ).get(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+          ));
+          if (existingMutation) {
+            if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+              return { kind: 'idempotency_conflict' as const };
+            }
+            return { kind: 'replayed' as const, mutation: existingMutation };
+          }
+          // 原子提交点复核成员作用域与 revision：预检之后文档可能被移动或产生新 revision。
+          for (const member of input.members) {
+            const document = teamDb.prepare(
+              `SELECT 1 FROM channel_documents
+               WHERE id = ? AND team_id = ? AND channel_id = ? AND current_revision_id = ?`,
+            ).get(
+              member.documentId,
+              input.bundle.teamId,
+              input.bundle.channelId,
+              member.initialRevisionId,
+            );
+            if (!document) {
+              return { kind: 'document_scope_conflict' as const };
+            }
+          }
+          teamDb.prepare(
+            `INSERT INTO project_document_bundles (
+              id, team_id, channel_id, name, source_kind, source_workspace_run_id,
+              source_agent_id, source_invocation_id, source_task_id, source_message_id,
+              source_json, member_count, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.bundle.id,
+            input.bundle.teamId,
+            input.bundle.channelId,
+            input.bundle.name,
+            input.bundle.source.kind,
+            input.bundle.source.workspaceRunId,
+            input.bundle.source.agentId,
+            input.bundle.source.invocationId ?? null,
+            input.bundle.source.taskId ?? null,
+            input.bundle.source.messageId ?? null,
+            JSON.stringify(input.bundle.source),
+            input.bundle.memberCount,
+            input.bundle.createdBy,
+            input.bundle.createdAt,
+          );
+          for (const member of input.members) {
+            teamDb.prepare(
+              `INSERT INTO project_document_bundle_members (
+                bundle_id, position, document_id, initial_revision_id,
+                initial_revision_number, initial_filename
+              ) VALUES (?, ?, ?, ?, ?, ?)`,
+            ).run(
+              member.bundleId,
+              member.position,
+              member.documentId,
+              member.initialRevisionId,
+              member.initialRevisionNumber,
+              member.initialFilename,
+            );
+          }
+          teamDb.prepare(
+            `INSERT INTO project_document_bundle_mutations (
+              team_id, channel_id, idempotency_key, request_fingerprint, bundle_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+            input.mutation.requestFingerprint,
+            input.mutation.bundleId,
+            input.mutation.createdAt,
+          );
+          return { kind: 'created' as const, mutation: input.mutation };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
+    },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
     revocations: {
       async find({ teamId, machineId, profileId }) {
@@ -3562,6 +3682,48 @@ function mapProjectArtifactMutation(row: unknown): ProjectArtifactMutationRecord
     requestFingerprint: sqliteText(row, 'request_fingerprint'),
     collectionId: sqliteText(row, 'collection_id'),
     versionId: sqliteText(row, 'version_id'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectDocumentBundle(row: unknown): ProjectDocumentBundleRecord | null {
+  if (!row) return null;
+  const source = parseJsonValue<ProjectDocumentBundleRecord['source']>(
+    sqliteNullableText(row, 'source_json'),
+  );
+  if (!source) throw new Error('Project document bundle source is invalid');
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    name: sqliteText(row, 'name'),
+    source,
+    memberCount: sqliteNumber(row, 'member_count'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectDocumentBundleMember(row: unknown): ProjectDocumentBundleMemberRecord | null {
+  if (!row) return null;
+  return {
+    bundleId: sqliteText(row, 'bundle_id'),
+    position: sqliteNumber(row, 'position'),
+    documentId: sqliteText(row, 'document_id'),
+    initialRevisionId: sqliteText(row, 'initial_revision_id'),
+    initialRevisionNumber: sqliteNumber(row, 'initial_revision_number'),
+    initialFilename: sqliteText(row, 'initial_filename'),
+  };
+}
+
+function mapProjectDocumentBundleMutation(row: unknown): ProjectDocumentBundleMutationRecord | null {
+  if (!row) return null;
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    bundleId: sqliteText(row, 'bundle_id'),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }

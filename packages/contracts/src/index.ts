@@ -30,3 +30,4 @@ export * from './reliability.js';
 export * from './active-memory-context.js';
 export * from './experience-pack.js';
 export * from './project.js';
+export * from './project-document-bundle.js';
