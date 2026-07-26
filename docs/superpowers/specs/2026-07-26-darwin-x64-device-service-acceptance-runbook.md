@@ -22,7 +22,7 @@ Green 要求：
 
 ## 2. CI 预证据
 
-`.github/workflows/pi-sea-compatibility.yml` 的 `macos-13 / x64` matrix 必须通过并上传：
+`.github/workflows/pi-sea-compatibility.yml` 的 `macos-15-intel / x64` matrix 必须通过并上传：
 
 - `pi-sea-verdict-macos-x64/verdict.json`；
 - aggregate verdict；

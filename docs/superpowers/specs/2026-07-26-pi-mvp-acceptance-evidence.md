@@ -17,7 +17,7 @@
 | AC7 重启/重放幂等 | `pi-acceptance/ac7-idempotent-replay.test.ts`：关闭并用同一 SQLite 重启 Server，重放同一 Job；`task-claim-broker.test.ts` 验证同一 Offer 重复接受仅生成一个 Claim；`management-tool-executor.test.ts` 验证并发重放同一 Memory 写命令只执行一次副作用 | Decision/Task/系统消息、Offer/Claim、Memory 写入三层幂等 Green | CI URL：待回填 |
 | AC8 测试、build、migration/FK | Node 24 下目标 Vitest、`build:server-next`；最终 `npm run test:ci` 与 `npm run build:packages` | 本地全量 Green（Node 24.18.0） | CI URL：待回填 |
 | AC9 main CI/CD 与生产 smoke | 只能在合并后从 main 真实状态采集 | Pending | Railway：待回填；Vercel：待回填；smoke：待回填 |
-| AC10 darwin-arm64/x64 | `pi-sea-compatibility.yml` 增加 `macos-13 / x64`；x64 真机步骤见同目录 runbook | CI/真机 Pending，不以 Rosetta 代替 | arm64 URL：待回填；x64 URL：待回填 |
+| AC10 darwin-arm64/x64 | `pi-sea-compatibility.yml` 增加 `macos-15-intel / x64`；x64 真机步骤见同目录 runbook | CI/真机 Pending，不以 Rosetta 代替 | arm64 URL：待回填；x64 URL：待回填 |
 | AC11 公开状态、Token unknown、无秘密 | 公开健康码仅 `PI_UNAVAILABLE/PI_DEGRADED`；Token usage 缺失继续使用 unknown/null 语义 | 本地代码与既有测试覆盖；CI 待证 | CI URL：待回填 |
 
 ## 2. 本次修复
@@ -33,7 +33,7 @@
 
 - 高风险动作的 `blocked` 是 MVP 终态；#725 不创建 `confirm_high_risk` 或 `confirm_suggested` 消费入口。
 - AC9 必须合并后回填 main CI/CD、Railway/Vercel 与生产 smoke；分支本地结果不能冒充部署证据。
-- AC10 的 `macos-13 / x64` CI 是预证据；正式 Intel 支持仍需要原生 Intel macOS 真机记录。
+- AC10 的 `macos-15-intel / x64` CI 是预证据；正式 Intel 支持仍需要原生 Intel macOS 真机记录。
 - 公开证据只允许公开 PI 状态和脱敏对象 ID；Provider、Model、Endpoint、Credential、业务 prompt 与切换历史不得进入本文或 CI artifact。
 
 ## 4. 最终验证记录
