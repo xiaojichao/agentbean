@@ -149,12 +149,14 @@ test('fails closed when the Phase 2 rollout preflight stops being fail closed', 
     });
     const path = join(fixture, 'apps/server-next/src/application/management/management-router.ts');
     const source = readFileSync(path, 'utf8');
-    const phase2Start = source.indexOf('if (policy.maxManagementPhase === 2) {');
-    const phase2End = source.indexOf('\n      const diagnostics:', phase2Start);
-    assert.ok(phase2Start >= 0 && phase2End > phase2Start);
-    writeFileSync(path, source.slice(0, phase2Start)
-      + source.slice(phase2Start, phase2End).replace("requestShape: 'multi-agent'", "requestShape: 'single-agent'")
-      + source.slice(phase2End));
+    // 与 checker 同一套按缩进配对的框选逻辑；不要写死绝对缩进，否则 router 重构平移
+    // 缩进后这里会框到块首，变异退化成空操作，负向测试变成侥幸通过（#836）。
+    const phase2Block = source.match(/^( *)if \(policy\.maxManagementPhase === 2\) \{\n[\s\S]*?\n\1\}$/m)?.[0];
+    assert.ok(phase2Block, 'Phase 2 route block not found');
+    const mutated = phase2Block.replace("requestShape: 'multi-agent'", "requestShape: 'single-agent'");
+    assert.notEqual(mutated, phase2Block, 'Phase 2 requestShape marker not found in the block');
+    // 用函数形式的替换值，避免块内出现 `$` 时被当成替换模式解释。
+    writeFileSync(path, source.replace(phase2Block, () => mutated));
     const result = run(fixture);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /P2_ROLLOUT_WEB_BOUNDARY_INVALID/);

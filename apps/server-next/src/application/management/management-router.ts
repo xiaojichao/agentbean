@@ -79,7 +79,20 @@ export type ManagementRoutingResult =
       managementPhase: 1 | 2 | 3;
       schedulingDiagnostic?: string;
     }
-  | { kind: 'unavailable'; mode: 'managed'; diagnostics: readonly string[] };
+  // crossedBarrier：run 已创建之后才判定的不可用（#657 冻结侧重 preflight）。
+  // 这类结果绝不能被任何调用方降级成 direct——barrier 后不得再产生 direct Dispatch。
+  | { kind: 'unavailable'; mode: 'managed'; diagnostics: readonly string[]; crossedBarrier?: true };
+
+export interface RouteRequestInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  rootMessageId: string;
+  rootTaskId?: string;
+  clientMessageId?: string;
+  body: string;
+  targetAgentId?: string;
+}
 
 export interface ManagementRouterDependencies {
   repositories: ServerNextRepositories;
@@ -183,310 +196,15 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       return { ok: true as const, policy, canManage: true as const };
     },
 
-    async route(input: {
-      userId: string;
-      teamId: string;
-      channelId: string;
-      rootMessageId: string;
-      rootTaskId?: string;
-      clientMessageId?: string;
-      body: string;
-      targetAgentId?: string;
-    }): Promise<ManagementRoutingResult> {
-      let policy = await policyForTeam(input.teamId);
-      // #724: 旧 management_policies 未配置（默认 direct）时桥接新 piPolicy。
-      // 仅在消息携带 clientMessageId（客户端显式意图）时桥接；否则保持 direct。
-      // placement 决策：
-      // - 有 target → device placement（Phase 1-3 管理路由，避开 L288 guard）
-      // - 无 target → managed placement（Phase 4 server worker）
-      // maxManagementPhase 由 rootTaskId 驱动。
-      if (policy.mode === 'direct') {
-        const piPolicy = await repositories.teamPiPolicy.getOrDefault(input.teamId);
-        if (piPolicy.autoCoordinationEnabled && input.clientMessageId?.trim()) {
-          const hasRootTask = !!input.rootTaskId?.trim();
-          const hasTarget = !!input.targetAgentId;
-          policy = {
-            ...policy,
-            mode: 'managed' as ManagementMode,
-            maxManagementPhase: (hasRootTask ? 3 : 1) as 1 | 2 | 3,
-            placementPolicy: hasTarget
-              ? DEFAULT_PLACEMENT_POLICY
-              : { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false },
-          };
-        }
-      }
-      if (policy.mode === 'direct') return { kind: 'direct', mode: 'direct' };
-
-      const target = input.targetAgentId
-        ? await repositories.agents.getById(input.targetAgentId)
-        : null;
-      if (policy.mode === 'shadow') {
-        const shadowRequestKey = `shadow:${requestKey(input)}`;
-        return {
-          kind: 'direct',
-          mode: 'shadow',
-          shadowRequestKey,
-        };
-      }
-
-      // Phase 2/3 orchestration is rooted in a Task. A plain channel @mention
-      // without a Task remains the established direct Agent message path; it
-      // must not enter the rooted management preflight and fail validation.
-      if (policy.maxManagementPhase >= 2 && target && !input.rootTaskId?.trim()) {
-        return { kind: 'direct', mode: 'direct' };
-      }
-
-      // #647 auto placement：建 run 前解析一次，resolved placement 替换 policy 值并随 run 冻结；
-      // 之后守卫、preflight、createOrResumeRun、恢复与审计全部消费 resolved 值，不再感知 auto。
-      let placementPolicy = policy.placementPolicy;
-      let autoPlacement: AutoPlacementResolutionDto | undefined;
-      if (placementPolicy.placement === 'auto') {
-        // 幂等重放（requestKey 已有 reservation）跳过解析：解析只发生一次，
-        // probe 状态漂移不改变已有 run。但下行守卫/preflight/schedule 必须消费
-        // 冻结值而非 auto 原值——用 reservation 取出 run 的 placementPolicy 替换。
-        const existingReservation = await repositories.management.reservations.getByRequestKey({
-          teamId: input.teamId,
-          requestKey: requestKey(input),
-        });
-        if (existingReservation) {
-          const existingRun = await repositories.management.runs.getById(existingReservation.managementRunId);
-          if (existingRun) {
-            placementPolicy = existingRun.placementPolicy;
-          }
-        } else {
-          const probe = await dependencies.gateway?.probeAutoPlacement?.({
-            teamId: input.teamId,
-            placementPolicy,
-            managementPhase: policy.maxManagementPhase,
-          }) ?? { deviceAvailable: false, serverAvailable: false };
-          const resolution = resolveAutoPlacement({
-            allowServerContext: placementPolicy.allowServerContext,
-            deviceAvailable: probe.deviceAvailable,
-            serverAvailable: probe.serverAvailable,
-          });
-          if (!resolution.ok) {
-            return {
-              kind: 'unavailable',
-              mode: 'managed',
-              diagnostics: [`AUTO_PLACEMENT_${resolution.reasonCode.toUpperCase().replace(/-/g, '_')}`],
-            };
-          }
-          autoPlacement = { resolvedPlacement: resolution.placement, reasonCode: resolution.reasonCode };
-          const preferred = {
-            ...(placementPolicy.preferredProvider ? { preferredProvider: placementPolicy.preferredProvider } : {}),
-            ...(placementPolicy.preferredModel ? { preferredModel: placementPolicy.preferredModel } : {}),
-          };
-          placementPolicy = resolution.placement === 'managed'
-            // 与 normalizePlacementPolicy 的 managed 约束形状一致。
-            ? { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false, ...preferred }
-            : { placement: 'device',
-                ...(placementPolicy.allowedDeviceIds?.length ? { allowedDeviceIds: placementPolicy.allowedDeviceIds } : {}),
-                allowServerContext: placementPolicy.allowServerContext,
-                requireLocalModelCredentials: placementPolicy.requireLocalModelCredentials,
-                ...preferred };
-        }
-      }
-
-      if (placementPolicy.placement === 'managed'
-        && (!input.rootTaskId?.trim() || target)) {
-        return { kind: 'direct', mode: 'direct' };
-      }
-
-      if (policy.maxManagementPhase === 3) {
-        const diagnostics: string[] = [];
-        if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
-        if (!input.rootTaskId?.trim()) diagnostics.push('MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED');
-        if (diagnostics.length > 0 || !input.rootTaskId) {
-          return { kind: 'unavailable', mode: 'managed', diagnostics };
-        }
-        const phase3 = await dependencies.gateway?.preflightPhase3?.({
-          teamId: input.teamId,
-          target,
-          placementPolicy,
-        }) ?? { preflight: unavailablePreflight() };
-        const decision = evaluateManagementRoute({
-          requestId: requestKey(input),
-          mode: 'managed',
-          requestShape: 'multi-agent',
-          allowDirectFallbackBeforeBarrier: false,
-          preflight: phase3.preflight,
-          barrier: { idempotencyReserved: false, persistedEffects: [] },
-        });
-        if (decision.kind !== 'managed-preflight-passed' || !phase3.profileId) {
-          return {
-            kind: 'unavailable',
-            mode: 'managed',
-            diagnostics: decision.kind === 'unavailable'
-              ? decision.missingPreflight.map((item) => `MANAGEMENT_PHASE_2_PREFLIGHT_${item.toUpperCase()}_MISSING`)
-              : ['MANAGEMENT_PHASE_2_WORKER_PROFILE_UNAVAILABLE'],
-          };
-        }
-        const created = await kernel.createOrResumeRun({
-          teamId: input.teamId,
-          initiatedByUserId: input.userId,
-          channelId: input.channelId,
-          rootTaskId: input.rootTaskId,
-          rootMessageId: input.rootMessageId,
-          ...(target ? { frozenTarget: {
-            agentId: target.id,
-            kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
-          } } : {}),
-          requestKey: requestKey(input),
-          requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
-            channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 3 }),
-          placementPolicy,
-          budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
-          managementPhase: 3,
-          ...(autoPlacement ? { autoPlacement } : {}),
-        });
-        await recordAutoPlacementAudit(input, created, autoPlacement);
-        // #657 并发首建：本地新 resolve 但拿到 existing run（对方先建）且冻结值不同向时，
-        // 必须按冻结值重做 preflight——否则 schedule 按冻结值分流会拿错 profileId。
-        let profileId3 = phase3.profileId;
-        if (autoPlacement && created.disposition === 'existing'
-          && created.run.placementPolicy.placement !== placementPolicy.placement) {
-          const frozen = await dependencies.gateway?.preflightPhase3?.({
-            teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
-          });
-          // 拿不到冻结侧 profileId 时 fail closed（不拿本地解析的错配值）；
-          // run 由先建方的 schedule 或后续 resume 推进。
-          if (!frozen?.profileId) {
-            return { kind: 'unavailable', mode: 'managed',
-              diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
-          }
-          profileId3 = frozen.profileId;
-        }
-        return {
-          kind: 'managed', mode: 'managed', managementPhase: 3,
-          managementRunId: created.run.id, profileId: profileId3,
-          disposition: created.disposition,
-        };
-      }
-
-      if (policy.maxManagementPhase === 2) {
-        const diagnostics: string[] = [];
-        if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
-        if (!input.rootTaskId?.trim()) diagnostics.push('MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED');
-        if (diagnostics.length > 0 || !input.rootTaskId) {
-          return { kind: 'unavailable', mode: 'managed', diagnostics };
-        }
-        const phase2 = await dependencies.gateway?.preflightPhase2?.({
-          teamId: input.teamId,
-          target,
-          placementPolicy,
-        }) ?? { preflight: unavailablePreflight() };
-        const decision = evaluateManagementRoute({
-          requestId: requestKey(input),
-          mode: 'managed',
-          requestShape: 'multi-agent',
-          allowDirectFallbackBeforeBarrier: false,
-          preflight: phase2.preflight,
-          barrier: { idempotencyReserved: false, persistedEffects: [] },
-        });
-        if (decision.kind !== 'managed-preflight-passed' || !phase2.profileId) {
-          return {
-            kind: 'unavailable',
-            mode: 'managed',
-            diagnostics: decision.kind === 'unavailable'
-              ? decision.missingPreflight.map((item) => `MANAGEMENT_PHASE_2_PREFLIGHT_${item.toUpperCase()}_MISSING`)
-              : ['MANAGEMENT_PHASE_2_WORKER_PROFILE_UNAVAILABLE'],
-          };
-        }
-        const created = await kernel.createOrResumeRun({
-          teamId: input.teamId,
-          initiatedByUserId: input.userId,
-          channelId: input.channelId,
-          rootTaskId: input.rootTaskId,
-          rootMessageId: input.rootMessageId,
-          ...(target ? { frozenTarget: {
-            agentId: target.id,
-            kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
-          } } : {}),
-          requestKey: requestKey(input),
-          requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
-            channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 2 }),
-          placementPolicy,
-          budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
-          managementPhase: 2,
-          ...(autoPlacement ? { autoPlacement } : {}),
-        });
-        await recordAutoPlacementAudit(input, created, autoPlacement);
-        // #657 并发首建：同 phase 3 分支的冻结值重算。
-        let profileId2 = phase2.profileId;
-        if (autoPlacement && created.disposition === 'existing'
-          && created.run.placementPolicy.placement !== placementPolicy.placement) {
-          const frozen = await dependencies.gateway?.preflightPhase2?.({
-            teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
-          });
-          if (!frozen?.profileId) {
-            return { kind: 'unavailable', mode: 'managed',
-              diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
-          }
-          profileId2 = frozen.profileId;
-        }
-        return {
-          kind: 'managed', mode: 'managed', managementPhase: 2,
-          managementRunId: created.run.id, profileId: profileId2,
-          disposition: created.disposition,
-        };
-      }
-
-      const diagnostics: string[] = [];
-      if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
-      if (!target) diagnostics.push('MANAGEMENT_EXPLICIT_TARGET_REQUIRED');
-      const device = target?.deviceId ? await repositories.devices.getById(target.deviceId) : null;
-      if (!device?.profileId) diagnostics.push('MANAGEMENT_TARGET_PROFILE_UNAVAILABLE');
-      if (diagnostics.length > 0 || !target || !device?.profileId) {
-        return { kind: 'unavailable', mode: 'managed', diagnostics };
-      }
-
-      const gateway = dependencies.gateway;
-      const preflight = gateway
-        ? await gateway.preflight({ teamId: input.teamId, target, placementPolicy })
-        : unavailablePreflight();
-      const decision = evaluateManagementRoute({
-        requestId: requestKey(input),
-        mode: 'managed',
-        requestShape: 'single-agent',
-        allowDirectFallbackBeforeBarrier: false,
-        preflight,
-        barrier: { idempotencyReserved: false, persistedEffects: [] },
-      });
-      if (decision.kind !== 'managed-preflight-passed') {
-        return {
-          kind: 'unavailable',
-          mode: 'managed',
-          diagnostics: decision.kind === 'unavailable'
-            ? decision.missingPreflight.map((item) => `MANAGEMENT_PREFLIGHT_${item.toUpperCase()}_MISSING`)
-            : ['MANAGEMENT_ROUTE_UNAVAILABLE'],
-        };
-      }
-
-      const created = await kernel.createOrResumeRun({
-        teamId: input.teamId,
-        initiatedByUserId: input.userId,
-        channelId: input.channelId,
-        ...(input.rootTaskId ? { rootTaskId: input.rootTaskId } : {}),
-        rootMessageId: input.rootMessageId,
-        frozenTarget: {
-          agentId: target.id,
-          kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
-        },
-        requestKey: requestKey(input),
-        requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
-        placementPolicy,
-        budget: mergeManagementBudget(PHASE_1_BUDGET, policy.budgetOverrides),
-        ...(autoPlacement ? { autoPlacement } : {}),
-      });
-      await recordAutoPlacementAudit(input, created, autoPlacement);
-      return {
-        kind: 'managed',
-        mode: 'managed',
-        managementPhase: 1,
-        managementRunId: created.run.id,
-        profileId: device.profileId,
-        disposition: created.disposition,
-      };
+    async route(input: RouteRequestInput): Promise<ManagementRoutingResult> {
+      const result = await routeRequest(input);
+      // #836：#724 桥接是自动升级——团队从未显式把 mode 切到 managed。桥接路径下
+      // barrier 前的任何 unavailable 都不能让消息发送失败，必须回落到团队原本的默认
+      // 路径 direct。显式配置 managed 的团队保持 fail closed，barrier 后也绝不回退。
+      if (result.kind !== 'unavailable' || result.crossedBarrier) return result;
+      const stored = await policyForTeam(input.teamId);
+      if (stored.mode !== 'direct') return result;
+      return { kind: 'direct', mode: 'direct' };
     },
 
     async scheduleManaged(input: Extract<ManagementRoutingResult, { kind: 'managed' }>) {
@@ -507,6 +225,308 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
       await persistShadowDecision({ shadowRequestKey: input.shadowRequestKey, body: input.body, target });
     },
   };
+
+  async function routeRequest(input: RouteRequestInput): Promise<ManagementRoutingResult> {
+    let policy = await policyForTeam(input.teamId);
+    // #724: 旧 management_policies 未配置（默认 direct）时桥接新 piPolicy。
+    // 仅在消息携带 clientMessageId（客户端显式意图）时桥接；否则保持 direct。
+    // placement 决策：
+    // - 有 target → device placement（Phase 1-3 管理路由，避开 L288 guard）
+    // - 无 target → managed placement（Phase 4 server worker）
+    // maxManagementPhase 由 rootTaskId 驱动。
+    if (policy.mode === 'direct') {
+      const piPolicy = await repositories.teamPiPolicy.getOrDefault(input.teamId);
+      if (piPolicy.autoCoordinationEnabled && input.clientMessageId?.trim()) {
+        const hasRootTask = !!input.rootTaskId?.trim();
+        const hasTarget = !!input.targetAgentId;
+        policy = {
+          ...policy,
+          mode: 'managed' as ManagementMode,
+          maxManagementPhase: (hasRootTask ? 3 : 1) as 1 | 2 | 3,
+          placementPolicy: hasTarget
+            ? DEFAULT_PLACEMENT_POLICY
+            : { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false },
+        };
+      }
+    }
+    if (policy.mode === 'direct') return { kind: 'direct', mode: 'direct' };
+
+    const target = input.targetAgentId
+      ? await repositories.agents.getById(input.targetAgentId)
+      : null;
+    if (policy.mode === 'shadow') {
+      const shadowRequestKey = `shadow:${requestKey(input)}`;
+      return {
+        kind: 'direct',
+        mode: 'shadow',
+        shadowRequestKey,
+      };
+    }
+
+    // Phase 2/3 orchestration is rooted in a Task. A plain channel @mention
+    // without a Task remains the established direct Agent message path; it
+    // must not enter the rooted management preflight and fail validation.
+    if (policy.maxManagementPhase >= 2 && target && !input.rootTaskId?.trim()) {
+      return { kind: 'direct', mode: 'direct' };
+    }
+
+    // #647 auto placement：建 run 前解析一次，resolved placement 替换 policy 值并随 run 冻结；
+    // 之后守卫、preflight、createOrResumeRun、恢复与审计全部消费 resolved 值，不再感知 auto。
+    let placementPolicy = policy.placementPolicy;
+    let autoPlacement: AutoPlacementResolutionDto | undefined;
+    if (placementPolicy.placement === 'auto') {
+      // 幂等重放（requestKey 已有 reservation）跳过解析：解析只发生一次，
+      // probe 状态漂移不改变已有 run。但下行守卫/preflight/schedule 必须消费
+      // 冻结值而非 auto 原值——用 reservation 取出 run 的 placementPolicy 替换。
+      const existingReservation = await repositories.management.reservations.getByRequestKey({
+        teamId: input.teamId,
+        requestKey: requestKey(input),
+      });
+      if (existingReservation) {
+        const existingRun = await repositories.management.runs.getById(existingReservation.managementRunId);
+        if (existingRun) {
+          placementPolicy = existingRun.placementPolicy;
+        }
+      } else {
+        const probe = await dependencies.gateway?.probeAutoPlacement?.({
+          teamId: input.teamId,
+          placementPolicy,
+          managementPhase: policy.maxManagementPhase,
+        }) ?? { deviceAvailable: false, serverAvailable: false };
+        const resolution = resolveAutoPlacement({
+          allowServerContext: placementPolicy.allowServerContext,
+          deviceAvailable: probe.deviceAvailable,
+          serverAvailable: probe.serverAvailable,
+        });
+        if (!resolution.ok) {
+          return {
+            kind: 'unavailable',
+            mode: 'managed',
+            diagnostics: [`AUTO_PLACEMENT_${resolution.reasonCode.toUpperCase().replace(/-/g, '_')}`],
+          };
+        }
+        autoPlacement = { resolvedPlacement: resolution.placement, reasonCode: resolution.reasonCode };
+        const preferred = {
+          ...(placementPolicy.preferredProvider ? { preferredProvider: placementPolicy.preferredProvider } : {}),
+          ...(placementPolicy.preferredModel ? { preferredModel: placementPolicy.preferredModel } : {}),
+        };
+        placementPolicy = resolution.placement === 'managed'
+          // 与 normalizePlacementPolicy 的 managed 约束形状一致。
+          ? { placement: 'managed', allowServerContext: true, requireLocalModelCredentials: false, ...preferred }
+          : { placement: 'device',
+              ...(placementPolicy.allowedDeviceIds?.length ? { allowedDeviceIds: placementPolicy.allowedDeviceIds } : {}),
+              allowServerContext: placementPolicy.allowServerContext,
+              requireLocalModelCredentials: placementPolicy.requireLocalModelCredentials,
+              ...preferred };
+      }
+    }
+
+    if (placementPolicy.placement === 'managed'
+      && (!input.rootTaskId?.trim() || target)) {
+      return { kind: 'direct', mode: 'direct' };
+    }
+
+    if (policy.maxManagementPhase === 3) {
+      const diagnostics: string[] = [];
+      if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
+      if (!input.rootTaskId?.trim()) diagnostics.push('MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED');
+      if (diagnostics.length > 0 || !input.rootTaskId) {
+        return { kind: 'unavailable', mode: 'managed', diagnostics };
+      }
+      const phase3 = await dependencies.gateway?.preflightPhase3?.({
+        teamId: input.teamId,
+        target,
+        placementPolicy,
+      }) ?? { preflight: unavailablePreflight() };
+      const decision = evaluateManagementRoute({
+        requestId: requestKey(input),
+        mode: 'managed',
+        requestShape: 'multi-agent',
+        allowDirectFallbackBeforeBarrier: false,
+        preflight: phase3.preflight,
+        barrier: { idempotencyReserved: false, persistedEffects: [] },
+      });
+      if (decision.kind !== 'managed-preflight-passed' || !phase3.profileId) {
+        return {
+          kind: 'unavailable',
+          mode: 'managed',
+          diagnostics: decision.kind === 'unavailable'
+            ? decision.missingPreflight.map((item) => `MANAGEMENT_PHASE_2_PREFLIGHT_${item.toUpperCase()}_MISSING`)
+            : ['MANAGEMENT_PHASE_2_WORKER_PROFILE_UNAVAILABLE'],
+        };
+      }
+      const created = await kernel.createOrResumeRun({
+        teamId: input.teamId,
+        initiatedByUserId: input.userId,
+        channelId: input.channelId,
+        rootTaskId: input.rootTaskId,
+        rootMessageId: input.rootMessageId,
+        ...(target ? { frozenTarget: {
+          agentId: target.id,
+          kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
+        } } : {}),
+        requestKey: requestKey(input),
+        requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
+          channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 3 }),
+        placementPolicy,
+        budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
+        managementPhase: 3,
+        ...(autoPlacement ? { autoPlacement } : {}),
+      });
+      await recordAutoPlacementAudit(input, created, autoPlacement);
+      // #657 并发首建：本地新 resolve 但拿到 existing run（对方先建）且冻结值不同向时，
+      // 必须按冻结值重做 preflight——否则 schedule 按冻结值分流会拿错 profileId。
+      let profileId3 = phase3.profileId;
+      if (autoPlacement && created.disposition === 'existing'
+        && created.run.placementPolicy.placement !== placementPolicy.placement) {
+        const frozen = await dependencies.gateway?.preflightPhase3?.({
+          teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
+        });
+        // 拿不到冻结侧 profileId 时 fail closed（不拿本地解析的错配值）；
+        // run 由先建方的 schedule 或后续 resume 推进。
+        if (!frozen?.profileId) {
+          // run 已创建（barrier 已越过）：标记 crossedBarrier，禁止上层降级成 direct。
+          return { kind: 'unavailable', mode: 'managed', crossedBarrier: true,
+            diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
+        }
+        profileId3 = frozen.profileId;
+      }
+      return {
+        kind: 'managed', mode: 'managed', managementPhase: 3,
+        managementRunId: created.run.id, profileId: profileId3,
+        disposition: created.disposition,
+      };
+    }
+
+    if (policy.maxManagementPhase === 2) {
+      const diagnostics: string[] = [];
+      if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
+      if (!input.rootTaskId?.trim()) diagnostics.push('MANAGEMENT_PHASE_2_ROOT_TASK_REQUIRED');
+      if (diagnostics.length > 0 || !input.rootTaskId) {
+        return { kind: 'unavailable', mode: 'managed', diagnostics };
+      }
+      const phase2 = await dependencies.gateway?.preflightPhase2?.({
+        teamId: input.teamId,
+        target,
+        placementPolicy,
+      }) ?? { preflight: unavailablePreflight() };
+      const decision = evaluateManagementRoute({
+        requestId: requestKey(input),
+        mode: 'managed',
+        requestShape: 'multi-agent',
+        allowDirectFallbackBeforeBarrier: false,
+        preflight: phase2.preflight,
+        barrier: { idempotencyReserved: false, persistedEffects: [] },
+      });
+      if (decision.kind !== 'managed-preflight-passed' || !phase2.profileId) {
+        return {
+          kind: 'unavailable',
+          mode: 'managed',
+          diagnostics: decision.kind === 'unavailable'
+            ? decision.missingPreflight.map((item) => `MANAGEMENT_PHASE_2_PREFLIGHT_${item.toUpperCase()}_MISSING`)
+            : ['MANAGEMENT_PHASE_2_WORKER_PROFILE_UNAVAILABLE'],
+        };
+      }
+      const created = await kernel.createOrResumeRun({
+        teamId: input.teamId,
+        initiatedByUserId: input.userId,
+        channelId: input.channelId,
+        rootTaskId: input.rootTaskId,
+        rootMessageId: input.rootMessageId,
+        ...(target ? { frozenTarget: {
+          agentId: target.id,
+          kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
+        } } : {}),
+        requestKey: requestKey(input),
+        requestHash: hash({ body: input.body, targetAgentId: target?.id ?? null,
+          channelId: input.channelId, rootTaskId: input.rootTaskId, managementPhase: 2 }),
+        placementPolicy,
+        budget: mergeManagementBudget(PHASE_2_BUDGET, policy.budgetOverrides),
+        managementPhase: 2,
+        ...(autoPlacement ? { autoPlacement } : {}),
+      });
+      await recordAutoPlacementAudit(input, created, autoPlacement);
+      // #657 并发首建：同 phase 3 分支的冻结值重算。
+      let profileId2 = phase2.profileId;
+      if (autoPlacement && created.disposition === 'existing'
+        && created.run.placementPolicy.placement !== placementPolicy.placement) {
+        const frozen = await dependencies.gateway?.preflightPhase2?.({
+          teamId: input.teamId, target, placementPolicy: created.run.placementPolicy,
+        });
+        if (!frozen?.profileId) {
+          // run 已创建（barrier 已越过）：标记 crossedBarrier，禁止上层降级成 direct。
+          return { kind: 'unavailable', mode: 'managed', crossedBarrier: true,
+            diagnostics: ['AUTO_PLACEMENT_FROZEN_PREFLIGHT_UNAVAILABLE'] };
+        }
+        profileId2 = frozen.profileId;
+      }
+      return {
+        kind: 'managed', mode: 'managed', managementPhase: 2,
+        managementRunId: created.run.id, profileId: profileId2,
+        disposition: created.disposition,
+      };
+    }
+
+    const diagnostics: string[] = [];
+    if (!input.clientMessageId?.trim()) diagnostics.push('MANAGEMENT_CLIENT_MESSAGE_ID_REQUIRED');
+    if (!target) diagnostics.push('MANAGEMENT_EXPLICIT_TARGET_REQUIRED');
+    const device = target?.deviceId ? await repositories.devices.getById(target.deviceId) : null;
+    if (!device?.profileId) diagnostics.push('MANAGEMENT_TARGET_PROFILE_UNAVAILABLE');
+    if (diagnostics.length > 0 || !target || !device?.profileId) {
+      return { kind: 'unavailable', mode: 'managed', diagnostics };
+    }
+
+    const gateway = dependencies.gateway;
+    const preflight = gateway
+      ? await gateway.preflight({ teamId: input.teamId, target, placementPolicy })
+      : unavailablePreflight();
+    const decision = evaluateManagementRoute({
+      requestId: requestKey(input),
+      mode: 'managed',
+      requestShape: 'single-agent',
+      allowDirectFallbackBeforeBarrier: true,
+      preflight,
+      barrier: { idempotencyReserved: false, persistedEffects: [] },
+    });
+    if (decision.kind !== 'managed-preflight-passed') {
+      if (decision.kind === 'direct') {
+        return { kind: 'direct', mode: 'direct' };
+      }
+      return {
+        kind: 'unavailable',
+        mode: 'managed',
+        diagnostics: decision.kind === 'unavailable'
+          ? decision.missingPreflight.map((item) => `MANAGEMENT_PREFLIGHT_${item.toUpperCase()}_MISSING`)
+          : ['MANAGEMENT_ROUTE_UNAVAILABLE'],
+      };
+    }
+
+    const created = await kernel.createOrResumeRun({
+      teamId: input.teamId,
+      initiatedByUserId: input.userId,
+      channelId: input.channelId,
+      ...(input.rootTaskId ? { rootTaskId: input.rootTaskId } : {}),
+      rootMessageId: input.rootMessageId,
+      frozenTarget: {
+        agentId: target.id,
+        kind: target.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom',
+      },
+      requestKey: requestKey(input),
+      requestHash: hash({ body: input.body, targetAgentId: target.id, channelId: input.channelId }),
+      placementPolicy,
+      budget: mergeManagementBudget(PHASE_1_BUDGET, policy.budgetOverrides),
+      ...(autoPlacement ? { autoPlacement } : {}),
+    });
+    await recordAutoPlacementAudit(input, created, autoPlacement);
+    return {
+      kind: 'managed',
+      mode: 'managed',
+      managementPhase: 1,
+      managementRunId: created.run.id,
+      profileId: device.profileId,
+      disposition: created.disposition,
+    };
+  }
 
   async function persistShadowDecision(input: { shadowRequestKey: string; body: string; target: AgentRecord | null }) {
     if (await repositories.management.shadowDecisions.getByRequestKey(input.shadowRequestKey)) return;
