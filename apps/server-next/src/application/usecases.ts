@@ -243,8 +243,8 @@ export interface ServerNextUseCases {
   setEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
   /** #699 US 84：读取 PI 紧急停止状态。 */
   getEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
-  // #699 US 29 (deferred)：getTeamPiTokenUsage — aggregateUsage 已加到 repository 接口
-  // 和 memory/sqlite 实现，跨 team DB 接线留待独立 PR。
+  /** #699 US 29：查询当前 Team 的 PI Token Usage。since 为可选时间戳（ms）。 */
+  getTeamPiTokenUsage(input: unknown): Promise<Ack<{ totalInputTokens: number; totalOutputTokens: number; totalDecisions: number }>>;
   /** Team PI 自动协调开关（#707）。任意成员可读；返回仅 autoCoordinationEnabled（AC#1）。 */
   getPiPolicy(input: { teamId: string; userId: string }): Promise<Ack<{ autoCoordinationEnabled: boolean }>>;
   /** 更新 Team PI 自动协调开关；仅 Owner/Admin（AC#2）。 */
@@ -5524,13 +5524,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return piProvider.getEmergencyStop();
     },
 
-    // #699 US 29：查询指定 Team 的 PI Token Usage（系统管理员）。
-    // 由于跨 team DB 聚合需要的基础设施（openTeamDb）在当前架构中不可达，
-    // aggregateUsage 已加入 repository 接口和 memory/sqlite 实现，
-    // 接线留待后续 PR 补充 channelCoordinationUnitOfWork 的跨 team 访问路径。
-    /*
-    async getTeamPiTokenUsage(input) { ... }
-    */
+    // #699 US 29：查询当前 Team 的 PI Token Usage。
+    async getTeamPiTokenUsage(input) {
+      const raw = input as Record<string, unknown> | null | undefined;
+      const since = typeof raw?.since === 'number' ? raw.since : undefined;
+      return repositories.channelCoordinationUnitOfWork.run(async (tx) => {
+        const usage = await tx.decisions.aggregateUsage(since);
+        return makeSuccess(usage);
+      });
+    },
 
     async getMemoryGovernanceSnapshot(memoryInput) {
       return makeSuccess({ snapshot: await memoryGovernance.getSnapshot(memoryInput) });

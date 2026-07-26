@@ -71,22 +71,30 @@ export interface PiProviderRepositories {
     create(input: PiProviderCredentialRecord): Promise<PiProviderCredentialRecord>;
     getById(id: string): Promise<PiProviderCredentialRecord | null>;
     update(input: PiProviderCredentialRecord): Promise<PiProviderCredentialRecord>;
+    /** #699 US 26：按 credential ref 删除。 */
+    removeByRef(ref: string): Promise<boolean>;
   };
   readonly revisions: {
     create(input: PiProviderCardRevisionRecord): Promise<PiProviderCardRevisionRecord>;
     getById(id: string): Promise<PiProviderCardRevisionRecord | null>;
     listByCard(cardId: string): Promise<PiProviderCardRevisionRecord[]>;
+    /** #699 US 26：按 card 删除全部 revision。 */
+    removeByCardId(cardId: string): Promise<number>;
   };
   readonly cards: {
     create(input: PiProviderCardRecord): Promise<PiProviderCardRecord>;
     getById(id: string): Promise<PiProviderCardRecord | null>;
     list(): Promise<PiProviderCardRecord[]>;
     update(input: PiProviderCardRecord): Promise<PiProviderCardRecord>;
+    /** #699 US 26：删除 card。 */
+    removeById(id: string): Promise<boolean>;
   };
   readonly tests: {
     create(input: PiProviderRevisionTestRecord): Promise<PiProviderRevisionTestRecord>;
     getLatestByCard(cardId: string): Promise<PiProviderRevisionTestRecord | null>;
     getLatestByConfigSummary(input: { cardId: string; configSummary: string }): Promise<PiProviderRevisionTestRecord | null>;
+    /** #699 US 26：按 card 删除全部 test。 */
+    removeByCardId(cardId: string): Promise<number>;
   };
   readonly activeModel: {
     get(): Promise<ActivePiModelRecord | null>;

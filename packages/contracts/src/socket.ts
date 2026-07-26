@@ -55,6 +55,10 @@ export const WEB_EVENTS = {
     setEmergencyStop: 'pi-provider:set-emergency-stop',
     getEmergencyStop: 'pi-provider:get-emergency-stop',
   },
+  /** #699 US 29：PI Token Usage 查询（per-team）。 */
+  piUsage: {
+    getTeamUsage: 'pi-usage:get-team-usage',
+  },
   /** 系统作用域 System Knowledge；仅系统管理员可访问（#717）。 */
   systemKnowledge: {
     list: 'system-knowledge:list',

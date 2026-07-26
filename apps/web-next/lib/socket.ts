@@ -506,6 +506,15 @@ export function piProviderEvents(socket: Socket = getWebSocket()): PiProviderEve
   };
 }
 
+/** #699 US 29：PI Token Usage socket 客户端。 */
+export function piUsageEvents(socket: Socket = getWebSocket()) {
+  return {
+    getTeamUsage(since?: number): Promise<{ ok: boolean; totalInputTokens?: number; totalOutputTokens?: number; totalDecisions?: number; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.piUsage.getTeamUsage, { since });
+    },
+  };
+}
+
 export interface SystemKnowledgeEvents {
   list(): Promise<any>;
   detail(memoryId: string): Promise<any>;
