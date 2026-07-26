@@ -175,6 +175,11 @@ export const WEB_EVENTS = {
     restore: 'channel-documents:restore',
     publish: 'channel-documents:publish',
   },
+  project: {
+    overview: 'project:overview',
+    createInitialStage: 'project:create-initial-stage',
+    updated: 'project:updated',
+  },
   dm: {
     start: 'dm:start',
     list: 'dm:list',

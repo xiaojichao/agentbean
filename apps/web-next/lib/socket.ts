@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -841,6 +841,36 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.task.snapshot, handler);
       return () => { socket.off(WEB_EVENTS.task.snapshot, handler); };
+    },
+  };
+}
+
+export interface ProjectEvents {
+  overview(channelId: string): Promise<{ ok: boolean; overview?: ChannelProjectOverviewDto | null; error?: string; message?: string }>;
+  createInitialStage(payload: Omit<CreateInitialProjectStageInput, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    overview?: ChannelProjectOverviewDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
+  onUpdated(channelId: string, handler: (overview: ChannelProjectOverviewDto | null) => void): () => void;
+}
+
+export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
+  return {
+    overview(channelId) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.overview, { channelId });
+    },
+    createInitialStage(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.createInitialStage, payload);
+    },
+    onUpdated(channelId, handler) {
+      const listener = (payload: { channelId?: string; overview?: ChannelProjectOverviewDto | null }) => {
+        if (payload.channelId === channelId) handler(payload.overview ?? null);
+      };
+      socket.on(WEB_EVENTS.project.updated, listener);
+      return () => { socket.off(WEB_EVENTS.project.updated, listener); };
     },
   };
 }

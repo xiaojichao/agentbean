@@ -51,6 +51,11 @@ import {
   type ChannelCoordinationRepositories,
 } from '../../application/channel-coordination-unit-of-work.js';
 import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord } from '../../../../../packages/contracts/src/index.js';
+import type {
+  ChannelProjectMutationRecord,
+  ChannelProjectProfileRecord,
+  ProjectStageRecord,
+} from '../../application/project-repositories.js';
 
 export function createInMemoryRepositories(): ServerNextRepositories {
   const management = createInMemoryManagementPersistence();
@@ -89,6 +94,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const channelDocumentOperations = new Map<string, ChannelDocumentOperationRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
   const tasks = new Map<string, TaskRecord>();
+  const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
+  const projectStages = new Map<string, ProjectStageRecord>();
+  const channelProjectMutations = new Map<string, ChannelProjectMutationRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
@@ -1579,6 +1587,41 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async isPinned(messageId) {
         return pinnedMessages.has(messageId);
+      },
+    },
+    channelProjects: {
+      async getProfile(input) {
+        return channelProjectProfiles.get(`${input.teamId}:${input.channelId}`) ?? null;
+      },
+      async listStages(input) {
+        return Array.from(projectStages.values())
+          .filter((stage) => stage.teamId === input.teamId && stage.channelId === input.channelId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async getMutation(input) {
+        return channelProjectMutations.get(
+          `${input.teamId}:${input.channelId}:${input.idempotencyKey}`,
+        ) ?? null;
+      },
+      async createInitialStage(input) {
+        const scopeKey = `${input.profile.teamId}:${input.profile.channelId}`;
+        const mutationKey = `${scopeKey}:${input.mutation.idempotencyKey}`;
+        const existingMutation = channelProjectMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          return { kind: 'replayed', mutation: existingMutation };
+        }
+        const existingProfile = channelProjectProfiles.get(scopeKey);
+        const actualRevision = existingProfile?.revision ?? 0;
+        if (actualRevision !== input.expectedRevision || existingProfile) {
+          return { kind: 'revision_conflict' };
+        }
+        channelProjectProfiles.set(scopeKey, input.profile);
+        projectStages.set(input.stage.id, input.stage);
+        channelProjectMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', mutation: input.mutation };
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),
