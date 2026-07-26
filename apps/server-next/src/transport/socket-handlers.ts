@@ -134,6 +134,7 @@ export interface WebSocketHandlerOptions {
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
@@ -391,6 +392,15 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.channelDocuments.publish, app, 'publishChannelDocument', async (payload, result) => {
     await options.afterMessageSend?.(payload, result);
   }, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.project.overview, app, 'getChannelProjectOverview', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.createInitialStage, app, 'createInitialProjectStage', (payload, result) =>
+    options.afterProjectMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
       const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));

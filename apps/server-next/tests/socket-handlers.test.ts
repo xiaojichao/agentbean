@@ -68,6 +68,8 @@ describe('server-next socket handlers', () => {
       cancelDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
       cancelChannelDispatches: vi.fn(async (payload) => makeSuccess({ dispatches: [], payload })),
       listTasks: vi.fn(async (payload) => makeSuccess({ payload })),
+      getChannelProjectOverview: vi.fn(async (payload) => makeSuccess({ payload })),
+      createInitialProjectStage: vi.fn(async (payload) => makeSuccess({ payload })),
       createTask: vi.fn(async (payload) => makeSuccess({ payload })),
       getTaskDag: vi.fn(async (payload) => makeSuccess({ payload })),
       updateTask: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -191,6 +193,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channelDocuments.save,
       WEB_EVENTS.channelDocuments.restore,
       WEB_EVENTS.channelDocuments.publish,
+      WEB_EVENTS.project.overview,
+      WEB_EVENTS.project.createInitialStage,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,
@@ -1044,6 +1048,43 @@ describe('server-next socket handlers', () => {
       teamId: 'team-session',
       currentDeviceId: 'device-local',
       cardId: 'card-1',
+    });
+  });
+
+  test('项目 mutation 使用 Socket authenticated identity 并忽略伪造 userId', async () => {
+    const unauthenticatedSocket = new FakeSocket();
+    const createInitialProjectStage = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { createInitialProjectStage } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(unauthenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
+      }),
+    });
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.project.createInitialStage, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(createInitialProjectStage).not.toHaveBeenCalled();
+
+    const authenticatedSocket = new FakeSocket();
+    registerWebSocketHandlers(authenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null,
+      }),
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.project.createInitialStage, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'key-1',
+    });
+    expect(createInitialProjectStage).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: null,
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'key-1',
     });
   });
 

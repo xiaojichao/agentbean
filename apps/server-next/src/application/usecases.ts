@@ -10,7 +10,8 @@ import {
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { ProjectStageRecord } from './project-repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -26,6 +27,12 @@ import { createMemoryGovernanceService } from './memory-governance-service.js';
 import { createFormalMemoryService } from './formal-memory-service.js';
 import { createExperiencePackService } from './experience-pack-service.js';
 import { createSystemUserMemoryService } from './system-user-memory-service.js';
+import type {
+  ChannelProjectOverviewDto,
+  CreateInitialProjectStageInput,
+  GetChannelProjectOverviewInput,
+} from '../../../../packages/contracts/src/index.js';
+import { projectStageTaskProjection } from '../../../../packages/domain/src/index.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -181,6 +188,11 @@ export interface ServerNextUseCases {
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
+  getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
+  createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
+    overview: ChannelProjectOverviewDto;
+    replayed: boolean;
+  }>>;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
@@ -3883,6 +3895,164 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async getChannelProjectOverview(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      const overview = await buildChannelProjectOverview(repositories, access.channel);
+      return makeSuccess({ overview });
+    },
+
+    async createInitialProjectStage(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      const { channel } = access;
+      if (channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'Project stages require a regular channel');
+      }
+      if (!Number.isSafeInteger(projectInput.expectedRevision) || projectInput.expectedRevision < 0) {
+        return makeFailure('VALIDATION_ERROR', 'expectedRevision must be a non-negative integer');
+      }
+      const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
+        ? projectInput.idempotencyKey.trim()
+        : '';
+      if (!idempotencyKey) {
+        return makeFailure('VALIDATION_ERROR', 'idempotencyKey is required');
+      }
+      const projectLeadId = normalizeOptionalId(projectInput.projectLeadId);
+      const defaultReviewerIds = normalizeUniqueTextItems(projectInput.defaultReviewerIds);
+      const stageName = normalizeOptionalText(projectInput.stage?.name);
+      const stageGoal = normalizeOptionalText(projectInput.stage?.goal);
+      const stageOwnerId = normalizeOptionalId(projectInput.stage?.ownerId);
+      const reviewerIds = normalizeUniqueTextItems(projectInput.stage?.reviewerIds);
+      const acceptanceCriteria = normalizeUniqueTextItems(projectInput.stage?.acceptanceCriteria);
+      const taskId = normalizeOptionalId(projectInput.stage?.taskId);
+      if (!projectLeadId || defaultReviewerIds.length === 0 || !stageName || !stageGoal || !stageOwnerId
+        || reviewerIds.length === 0 || !taskId || acceptanceCriteria.length === 0) {
+        return makeFailure('VALIDATION_ERROR', 'Project lead, Stage fields, Task, and acceptance criteria are required');
+      }
+      const normalizedRequest = {
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        expectedRevision: projectInput.expectedRevision,
+        projectLeadId,
+        defaultReviewerIds,
+        stage: {
+          name: stageName,
+          goal: stageGoal,
+          ownerId: stageOwnerId,
+          reviewerIds,
+          acceptanceCriteria,
+          taskId,
+        },
+      };
+      const requestFingerprint = createHash('sha256')
+        .update(JSON.stringify(normalizedRequest))
+        .digest('hex');
+      const existingMutation = await repositories.channelProjects.getMutation({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+      });
+      if (existingMutation) {
+        if (existingMutation.requestFingerprint !== requestFingerprint) {
+          return makeFailure('CONFLICT', 'idempotencyKey was already used for a different project mutation');
+        }
+        return makeSuccess({ overview: existingMutation.resultOverview, replayed: true });
+      }
+      if (channel.archivedAt != null) {
+        return makeFailure('CONFLICT', 'Archived channels are read-only');
+      }
+      const actorRole = await repositories.teams.getMemberRole(projectInput.teamId, projectInput.userId);
+      if (channel.createdBy !== projectInput.userId && actorRole !== 'owner' && actorRole !== 'admin') {
+        return makeFailure('FORBIDDEN', 'User cannot configure this channel project');
+      }
+      const humanActorIds = uniqueIds([projectLeadId, ...defaultReviewerIds, ...reviewerIds]);
+      const humanActorMembership = await Promise.all(humanActorIds.map(async (actorId) =>
+        (await repositories.teams.isMember(projectInput.teamId, actorId))
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(actorId))));
+      if (humanActorMembership.some((isMember) => !isMember)) {
+        return makeFailure('FORBIDDEN', 'Project leads and reviewers must be channel members');
+      }
+      const ownerIsHuman = (await repositories.teams.isMember(projectInput.teamId, stageOwnerId))
+        && (channel.visibility === 'public' || channel.humanMemberIds.includes(stageOwnerId));
+      if (!ownerIsHuman && !channel.agentMemberIds.includes(stageOwnerId)) {
+        return makeFailure('FORBIDDEN', 'Stage owner must be a channel member');
+      }
+      const task = await repositories.tasks.getById(taskId);
+      if (!task || task.teamId !== projectInput.teamId || task.channelId !== projectInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Tracked Task not found in this Team and Channel');
+      }
+
+      const now = clock.now();
+      const profileId = ids.nextId();
+      const stageId = ids.nextId();
+      const profile = {
+        id: profileId,
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        projectLeadId,
+        defaultReviewerIds,
+        revision: 1,
+        createdBy: projectInput.userId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const stage = {
+        id: stageId,
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        taskId,
+        taskRevision: task.revision,
+        name: stageName,
+        goal: stageGoal,
+        ownerId: stageOwnerId,
+        reviewerIds,
+        acceptanceCriteria,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const initialOverview: ChannelProjectOverviewDto = {
+        profile,
+        stages: [await projectStageDto(repositories, stage, task)],
+        archived: false,
+      };
+      const result = await repositories.channelProjects.createInitialStage({
+        expectedRevision: projectInput.expectedRevision,
+        profile,
+        stage,
+        mutation: {
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+          idempotencyKey,
+          requestFingerprint,
+          profileId,
+          stageId,
+          resultRevision: 1,
+          resultOverview: initialOverview,
+          createdAt: now,
+        },
+      });
+      if (result.kind === 'idempotency_conflict') {
+        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different project mutation');
+      }
+      if (result.kind === 'revision_conflict') {
+        return makeFailure('CONFLICT', 'Project revision is stale; refresh and retry');
+      }
+      if (result.kind === 'task_scope_conflict') {
+        return makeFailure('CONFLICT', 'Tracked Task changed scope or revision; refresh and retry');
+      }
+      return makeSuccess({
+        overview: result.mutation.resultOverview,
+        replayed: result.kind === 'replayed',
+      });
+    },
+
     async getTaskDag(taskInput) {
       if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -4114,6 +4284,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const nextChannelId = hasOwn(taskInput, 'channelId') ? normalizeOptionalId(taskInput.channelId ?? undefined) : undefined;
       const nextAssigneeId = hasOwn(taskInput, 'assigneeId') ? normalizeOptionalId(taskInput.assigneeId ?? undefined) : undefined;
+      if (hasOwn(taskInput, 'channelId')
+        && nextChannelId !== task.channelId
+        && await taskIsBoundToProjectStage(repositories, task)) {
+        return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot change channels');
+      }
       if (nextChannelId) {
         const channel = await ensureUserCanViewChannel(repositories, {
           userId: taskInput.userId,
@@ -4229,6 +4404,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = await repositories.tasks.getById(taskInput.taskId);
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (await taskIsBoundToProjectStage(repositories, task)) {
+        return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
       }
       const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
       const deletedInvocationIds = coordination
@@ -8165,6 +8343,109 @@ function normalizeTags(tags: string[] | undefined): string[] {
     return [];
   }
   return uniqueIds(tags.map((tag) => typeof tag === 'string' ? tag.trim() : '').filter(Boolean)).slice(0, 20);
+}
+
+function normalizeUniqueTextItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueIds(value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean));
+}
+
+async function buildChannelProjectOverview(
+  repositories: ServerNextRepositories,
+  channel: ChannelRecord,
+): Promise<ChannelProjectOverviewDto | null> {
+  const profile = await repositories.channelProjects.getProfile({
+    teamId: channel.teamId,
+    channelId: channel.id,
+  });
+  if (!profile) return null;
+  const records = await repositories.channelProjects.listStages({
+    teamId: channel.teamId,
+    channelId: channel.id,
+  });
+  const stages: ChannelProjectOverviewDto['stages'] = [];
+  for (const record of records) {
+    const task = await repositories.tasks.getById(record.taskId);
+    if (!task || task.teamId !== channel.teamId || task.channelId !== channel.id) {
+      throw new Error(`Project Stage ${record.id} references an unavailable scoped Task`);
+    }
+    stages.push(await projectStageDto(repositories, record, task));
+  }
+  return {
+    profile,
+    stages,
+    archived: channel.archivedAt != null,
+  };
+}
+
+async function projectStageDto(
+  repositories: ServerNextRepositories,
+  record: ProjectStageRecord,
+  task: TaskRecord,
+): Promise<ChannelProjectOverviewDto['stages'][number]> {
+  const dependencyRecords = await repositories.taskCoordination.dependencies.list(task.id);
+  const dependencies = await Promise.all(dependencyRecords.map(async (dependency) => {
+    const dependencyTask = await repositories.tasks.getById(dependency.dependencyTaskId);
+    if (!dependencyTask || dependencyTask.teamId !== task.teamId || dependencyTask.channelId !== task.channelId) {
+      throw new Error(`Task ${task.id} has an unavailable scoped dependency`);
+    }
+    return { taskId: dependencyTask.id, status: dependencyTask.status };
+  }));
+  const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+  const deliveries = await repositories.taskCoordination.deliveries.listByTask(task.id);
+  const latestDelivery = [...deliveries].reverse().find((delivery) =>
+    delivery.taskRevision === task.revision
+    && (coordination === null || delivery.taskAttempt === coordination.attempt));
+  const acceptance = latestDelivery
+    ? await repositories.taskCoordination.acceptances.getCanonicalByDelivery(latestDelivery.id)
+    : null;
+  const projection = projectStageTaskProjection({
+    taskId: task.id,
+    taskStatus: task.status,
+    dependencies,
+    reviewDecision: acceptance?.decision,
+  });
+  const taskDto: TaskDto = {
+    id: task.id,
+    teamId: task.teamId,
+    title: task.title,
+    ...(task.description === undefined ? {} : { description: task.description }),
+    status: task.status,
+    creatorId: task.creatorId,
+    ...(task.assigneeId === undefined ? {} : { assigneeId: task.assigneeId }),
+    ...(task.channelId === undefined ? {} : { channelId: task.channelId }),
+    tags: task.tags,
+    sortOrder: task.sortOrder,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+  return {
+    id: record.id,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    name: record.name,
+    goal: record.goal,
+    ownerId: record.ownerId,
+    reviewerIds: record.reviewerIds,
+    acceptanceCriteria: record.acceptanceCriteria,
+    task: taskDto,
+    aggregateStatus: projection.aggregateStatus,
+    blockingReasons: projection.blockingReasons,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+async function taskIsBoundToProjectStage(
+  repositories: ServerNextRepositories,
+  task: TaskRecord,
+): Promise<boolean> {
+  if (!task.channelId) return false;
+  const stages = await repositories.channelProjects.listStages({
+    teamId: task.teamId,
+    channelId: task.channelId,
+  });
+  return stages.some((stage) => stage.taskId === task.id);
 }
 
 async function channelForCreatorManagement(

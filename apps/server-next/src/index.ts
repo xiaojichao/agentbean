@@ -2,6 +2,7 @@ import { createServerNextUseCases, type ServerNextUseCases } from './application
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 
 export * from './application/repositories.js';
+export * from './application/project-repositories.js';
 export * from './application/memory-repositories.js';
 export * from './application/memory-unit-of-work.js';
 export * from './application/management-memory-unit-of-work.js';

@@ -511,6 +511,24 @@ export function attachServerNextNamespaces(
           if (teamId) emitMemoryChanged(webSubscribers, teamId);
         }
       },
+      async afterProjectMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        const channelId = payloadChannelId(payload);
+        if (!teamId || !channelId) return;
+        for (const subscriber of webSubscribers) {
+          if (subscriber.channels?.teamId !== teamId) continue;
+          const userId = await resolveSubscriberUserId(subscriber, app);
+          if (!userId) continue;
+          const overview = await app.getChannelProjectOverview({ userId, teamId, channelId });
+          if (overview.ok) {
+            subscriber.socket.emit?.(WEB_EVENTS.project.updated, {
+              channelId,
+              overview: overview.overview,
+            });
+          }
+        }
+      },
       afterMemberMutation(payload, result) {
         if (!isSuccessAck(result)) return;
         const teamId = payloadTeamId(payload);
@@ -1356,6 +1374,14 @@ function payloadTeamId(payload: unknown): string | null {
   }
   const teamId = (payload as { teamId?: unknown }).teamId;
   return typeof teamId === 'string' ? teamId : null;
+}
+
+function payloadChannelId(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const channelId = (payload as { channelId?: unknown }).channelId;
+  return typeof channelId === 'string' ? channelId : null;
 }
 
 function payloadBoolean(payload: unknown, key: string): boolean | null {

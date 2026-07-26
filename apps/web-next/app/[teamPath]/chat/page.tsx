@@ -3,8 +3,8 @@
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type MessageMentionDto } from '@agentbean/contracts';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -22,6 +22,7 @@ import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
+import { ChannelProjectOverview, type InitialProjectStageDraft } from '@/components/ChannelProjectOverview';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -2635,10 +2636,26 @@ function ConversationTasks({
   const [description, setDescription] = useState('');
   const [assigneeId, setAssigneeId] = useState(defaultAssigneeId ?? '');
   const [saving, setSaving] = useState(false);
+  const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
+  const projectTaskVersion = tasks
+    .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
+    .sort()
+    .join('|');
 
   useEffect(() => {
     if (showCreate) setAssigneeId(defaultAssigneeId ?? '');
   }, [defaultAssigneeId, showCreate]);
+
+  useEffect(() => {
+    let active = true;
+    setProjectOverview(undefined);
+    void projectEvents().overview(channelId).then((result) => {
+      if (active && result.ok) setProjectOverview(result.overview ?? null);
+    });
+    return () => { active = false; };
+  }, [channelId, projectTaskVersion]);
+
+  useEffect(() => projectEvents().onUpdated(channelId, setProjectOverview), [channelId]);
 
   const filteredTasks = tasks.filter((task) => {
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
@@ -2682,6 +2699,23 @@ function ConversationTasks({
   const deleteTask = async (taskId: string) => {
     onDelete(taskId);
     await taskEvents().delete(taskId);
+  };
+
+  const createInitialProjectStage = async (draft: InitialProjectStageDraft): Promise<string | null> => {
+    const idempotencyKey = typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `project-stage-${Date.now()}`;
+    const result = await projectEvents().createInitialStage({
+      channelId,
+      expectedRevision: 0,
+      idempotencyKey,
+      ...draft,
+    });
+    if (!result.ok || !result.overview) {
+      return result.message ?? '创建项目阶段失败，请刷新后重试';
+    }
+    setProjectOverview(result.overview);
+    return null;
   };
 
   const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
@@ -2740,6 +2774,16 @@ function ConversationTasks({
           </button>
         </div>
       </div>
+
+      {projectOverview !== undefined && (
+        <ChannelProjectOverview
+          overview={projectOverview}
+          tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
+          participants={participants}
+          currentUserId={currentUserId}
+          onCreate={createInitialProjectStage}
+        />
+      )}
 
       {showCreate && (
         <form onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.5fr)_180px_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">

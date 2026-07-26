@@ -44,6 +44,11 @@ import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
 } from '../../application/channel-coordination-unit-of-work.js';
+import type {
+  ChannelProjectMutationRecord,
+  ChannelProjectProfileRecord,
+  ProjectStageRecord,
+} from '../../application/project-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -54,7 +59,7 @@ export interface SqliteStatement {
 export interface SqliteDatabase {
   exec(sql: string): unknown;
   prepare(sql: string): SqliteStatement;
-  transaction<T>(fn: () => T): () => T;
+  transaction<T>(fn: () => T): (() => T) & { immediate?: () => T };
 }
 
 export interface CreateSqliteRepositoriesInput {
@@ -164,6 +169,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0044_experience_packs.sql');
   applyMigration(db, 'team/0045_attachment_status.sql');
   applyMigration(db, 'team/0046_migrate_old_pi_policy.sql');
+  applyMigration(db, 'team/0048_channel_project_stages.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2601,6 +2607,118 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return !!row;
       },
     },
+    channelProjects: {
+      async getProfile(input) {
+        return mapChannelProjectProfile(teamDb.prepare(
+          `SELECT * FROM channel_project_profiles
+           WHERE team_id = ? AND channel_id = ?`,
+        ).get(input.teamId, input.channelId));
+      },
+      async listStages(input) {
+        return teamDb.prepare(
+          `SELECT * FROM project_stages
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY created_at ASC, id ASC`,
+        ).all(input.teamId, input.channelId).map(mapProjectStage).filter((stage): stage is ProjectStageRecord => stage !== null);
+      },
+      async getMutation(input) {
+        return mapChannelProjectMutation(teamDb.prepare(
+          `SELECT * FROM channel_project_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.channelId, input.idempotencyKey));
+      },
+      async createInitialStage(input) {
+        const transaction = teamDb.transaction(() => {
+          const mutationRow = teamDb.prepare(
+            `SELECT * FROM channel_project_mutations
+             WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+          ).get(input.profile.teamId, input.profile.channelId, input.mutation.idempotencyKey);
+          const existingMutation = mapChannelProjectMutation(mutationRow);
+          if (existingMutation) {
+            if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+              return { kind: 'idempotency_conflict' as const };
+            }
+            return { kind: 'replayed' as const, mutation: existingMutation };
+          }
+
+          const existingProfile = mapChannelProjectProfile(teamDb.prepare(
+            `SELECT * FROM channel_project_profiles
+             WHERE team_id = ? AND channel_id = ?`,
+          ).get(input.profile.teamId, input.profile.channelId));
+          const actualRevision = existingProfile?.revision ?? 0;
+          if (actualRevision !== input.expectedRevision || existingProfile) {
+            return { kind: 'revision_conflict' as const };
+          }
+          const currentTask = teamDb.prepare(
+            `SELECT 1 FROM tasks
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?
+               AND superseded_by_revision IS NULL`,
+          ).get(
+            input.stage.taskId,
+            input.stage.teamId,
+            input.stage.channelId,
+            input.stage.taskRevision,
+          );
+          if (!currentTask) {
+            return { kind: 'task_scope_conflict' as const };
+          }
+
+          teamDb.prepare(
+            `INSERT INTO channel_project_profiles (
+              id, team_id, channel_id, project_lead_id, default_reviewer_ids_json,
+              revision, created_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.profile.id,
+            input.profile.teamId,
+            input.profile.channelId,
+            input.profile.projectLeadId,
+            JSON.stringify(input.profile.defaultReviewerIds),
+            input.profile.revision,
+            input.profile.createdBy,
+            input.profile.createdAt,
+            input.profile.updatedAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO project_stages (
+              id, team_id, channel_id, task_id, task_revision, name, goal, owner_id,
+              reviewer_ids_json, acceptance_criteria_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.stage.id,
+            input.stage.teamId,
+            input.stage.channelId,
+            input.stage.taskId,
+            input.stage.taskRevision,
+            input.stage.name,
+            input.stage.goal,
+            input.stage.ownerId,
+            JSON.stringify(input.stage.reviewerIds),
+            JSON.stringify(input.stage.acceptanceCriteria),
+            input.stage.createdAt,
+            input.stage.updatedAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO channel_project_mutations (
+              team_id, channel_id, idempotency_key, request_fingerprint,
+              profile_id, stage_id, result_revision, result_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.mutation.teamId,
+            input.mutation.channelId,
+            input.mutation.idempotencyKey,
+            input.mutation.requestFingerprint,
+            input.mutation.profileId,
+            input.mutation.stageId,
+            input.mutation.resultRevision,
+            JSON.stringify(input.mutation.resultOverview),
+            input.mutation.createdAt,
+          );
+          return { kind: 'created' as const, mutation: input.mutation };
+        });
+        return transaction.immediate ? transaction.immediate() : transaction();
+      },
+    },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
     revocations: {
       async find({ teamId, machineId, profileId }) {
@@ -2678,10 +2796,15 @@ function applyMigration(
 
 function resolveMigrationPath(relativePath: string): string {
   const candidates = [
-    join(fileURLToPath(new URL('migrations', import.meta.url)), relativePath),
     join(process.cwd(), 'apps/server-next/src/infra/sqlite/migrations', relativePath),
     join(process.cwd(), 'src/infra/sqlite/migrations', relativePath),
+    join(process.cwd(), '../server-next/src/infra/sqlite/migrations', relativePath),
   ];
+  try {
+    candidates.unshift(join(fileURLToPath(new URL('migrations', import.meta.url)), relativePath));
+  } catch {
+    // Some test transforms expose import.meta.url as a non-file URL; cwd candidates remain valid.
+  }
   const candidate = candidates.find((path) => existsSync(path));
   if (!candidate) {
     throw new Error(`SQLite migration not found: ${relativePath}`);
@@ -3142,6 +3265,58 @@ function mapWorkspaceRun(row: unknown): WorkspaceRunRecord | null {
     createdAt: sqliteNumber(row, 'created_at'),
     updatedAt: sqliteNumber(row, 'updated_at'),
     artifactIds: parseJsonArray(sqliteNullableText(row, 'artifact_ids_json')) ?? [],
+  };
+}
+
+function mapChannelProjectProfile(row: unknown): ChannelProjectProfileRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    projectLeadId: sqliteText(row, 'project_lead_id'),
+    defaultReviewerIds: parseJsonArray(sqliteNullableText(row, 'default_reviewer_ids_json')) ?? [],
+    revision: sqliteNumber(row, 'revision'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+function mapProjectStage(row: unknown): ProjectStageRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    taskId: sqliteText(row, 'task_id'),
+    taskRevision: sqliteNumber(row, 'task_revision'),
+    name: sqliteText(row, 'name'),
+    goal: sqliteText(row, 'goal'),
+    ownerId: sqliteText(row, 'owner_id'),
+    reviewerIds: parseJsonArray(sqliteNullableText(row, 'reviewer_ids_json')) ?? [],
+    acceptanceCriteria: parseJsonArray(sqliteNullableText(row, 'acceptance_criteria_json')) ?? [],
+    createdAt: sqliteNumber(row, 'created_at'),
+    updatedAt: sqliteNumber(row, 'updated_at'),
+  };
+}
+
+function mapChannelProjectMutation(row: unknown): ChannelProjectMutationRecord | null {
+  if (!row) return null;
+  const resultOverview = parseJsonValue<ChannelProjectMutationRecord['resultOverview']>(
+    sqliteNullableText(row, 'result_json'),
+  );
+  if (!resultOverview) throw new Error('Channel project mutation result is invalid');
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    profileId: sqliteText(row, 'profile_id'),
+    stageId: sqliteText(row, 'stage_id'),
+    resultRevision: sqliteNumber(row, 'result_revision'),
+    resultOverview,
+    createdAt: sqliteNumber(row, 'created_at'),
   };
 }
 
