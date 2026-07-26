@@ -12,9 +12,9 @@
 | AC2 required 硬过滤、coverage、显式接受 | `pi-acceptance/ac2-offer-flow.test.ts` 覆盖 required Skill 与 accept/reject；`agent-eligibility-service.test.ts` 覆盖父 Task 门槛可由两个子 Task/Agent 联合覆盖 | 硬过滤/显式响应 Green；preferred production wiring 已接入但尚无 Socket 端到端排序断言 | CI URL：待回填 |
 | AC3 自动协调关闭/高风险确认 | 既有 `channel-coordination-coordinator.test.ts` 覆盖 suggested 与 high-risk blocked | Green；MVP 将 blocked 作为终态，不新增确认消费通道 | CI URL：待回填 |
 | AC4 模型故障消息仍保存且副作用暂停 | `pi-acceptance/ac4-model-failure.test.ts` 覆盖 401、超时、非 JSON；Message=1，Task/Offer/Claim/Memory=0；无 legacy fallback 由新协调路径与旧 route 不互调的结构边界保证 | 故障保存/暂停 Green；未新增 legacy dispatch 观测断言 | CI URL：待回填 |
-| AC5 Team 角色不见供给身份 | `pi-acceptance/ac5-no-credential-leak.test.ts` 扫 member 的公开健康、PI policy、Team 列表、频道历史；管理事件 member 均 FORBIDDEN；Owner/Admin 与 DOM 继续依赖既有 Web/权限测试 | member Socket Green；全角色 DOM 证据需合并 CI 补充 | CI URL：待回填 |
+| AC5 Team 角色不见供给身份 | `pi-acceptance/ac5-no-credential-leak.test.ts` 以 owner/admin/member 三种 Team 角色扫描公开健康、PI policy、Team 列表、频道历史，并验证供给管理事件均 FORBIDDEN；`web-next/tests/pi-management-panel.test.ts` 验证 Team DOM 只消费公开健康投影 | 全角色 Socket/API 与 Web 静态边界 Green；浏览器 smoke 待合并 CI 补充 | CI URL：待回填 |
 | AC6 Memory scope/Candidate/Archive/Pack | 既有 memory source invalidation、candidate、formal memory、archive 与 experience pack 测试 | 既有自动化 Green；本次未新增 AC6 文件 | CI URL：待回填 |
-| AC7 重启/重放幂等 | `pi-acceptance/ac7-idempotent-replay.test.ts`：关闭并用同一 SQLite 重启 Server，重放同一 Job | Decision/Task/系统消息幂等 Green；该场景未产生 Offer/Claim/Memory，后者由各自既有幂等测试覆盖 | CI URL：待回填 |
+| AC7 重启/重放幂等 | `pi-acceptance/ac7-idempotent-replay.test.ts`：关闭并用同一 SQLite 重启 Server，重放同一 Job；`task-claim-broker.test.ts` 验证同一 Offer 重复接受仅生成一个 Claim；`management-tool-executor.test.ts` 验证并发重放同一 Memory 写命令只执行一次副作用 | Decision/Task/系统消息、Offer/Claim、Memory 写入三层幂等 Green | CI URL：待回填 |
 | AC8 测试、build、migration/FK | Node 24 下目标 Vitest、`build:server-next`；最终 `npm run test:ci` 与 `npm run build:packages` | 本地全量 Green（Node 24.18.0） | CI URL：待回填 |
 | AC9 main CI/CD 与生产 smoke | 只能在合并后从 main 真实状态采集 | Pending | Railway：待回填；Vercel：待回填；smoke：待回填 |
 | AC10 darwin-arm64/x64 | `pi-sea-compatibility.yml` 增加 `macos-13 / x64`；x64 真机步骤见同目录 runbook | CI/真机 Pending，不以 Rosetta 代替 | arm64 URL：待回填；x64 URL：待回填 |
