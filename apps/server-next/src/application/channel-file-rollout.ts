@@ -108,7 +108,7 @@ export function createChannelFileMetrics() {
   };
 }
 
-function parseBooleanFlag(key: string, raw: string | undefined, fallback: boolean): boolean {
+export function parseBooleanFlag(key: string, raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined || raw.trim() === '') return fallback;
   const normalized = raw.trim().toLowerCase();
   if (normalized === '1' || normalized === 'true' || normalized === 'on' || normalized === 'yes') return true;

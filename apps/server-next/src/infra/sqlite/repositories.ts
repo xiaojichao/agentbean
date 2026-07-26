@@ -50,6 +50,7 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactMutationRecord,
   ProjectArtifactVersionRecord,
+  ProjectDocumentBundleBackfillSummary,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
@@ -185,6 +186,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0050_project_document_bundles.sql');
   applyMigration(db, 'team/0051_project_stage_edges.sql');
+  applyMigration(db, 'team/0052_project_document_bundle_backfill.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -3233,6 +3235,152 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           return { kind: 'created' as const, mutation: input.mutation };
         });
         return transaction.immediate ? transaction.immediate() : transaction();
+      },
+    },
+    projectDocumentBundleBackfill: {
+      async getProgress(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM project_document_bundle_backfill_progress WHERE id = ?`,
+        ).get(input.backfillId);
+        if (!row) return null;
+        const runCreatedAt = sqliteNullableNumber(row, 'cursor_run_created_at');
+        const runId = sqliteNullableText(row, 'cursor_run_id');
+        return {
+          backfillId: sqliteText(row, 'id'),
+          ...(runCreatedAt !== undefined && runId !== undefined
+            ? { cursor: { runCreatedAt, runId } }
+            : {}),
+          ...(sqliteNullableNumber(row, 'completed_at') !== undefined
+            ? { completedAt: sqliteNumber(row, 'completed_at') }
+            : {}),
+          updatedAt: sqliteNumber(row, 'updated_at'),
+        };
+      },
+      async saveProgress(input) {
+        teamDb.prepare(
+          `INSERT INTO project_document_bundle_backfill_progress (
+            id, cursor_run_created_at, cursor_run_id, completed_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            cursor_run_created_at = excluded.cursor_run_created_at,
+            cursor_run_id = excluded.cursor_run_id,
+            completed_at = excluded.completed_at,
+            updated_at = excluded.updated_at`,
+        ).run(
+          input.backfillId,
+          input.cursor?.runCreatedAt ?? null,
+          input.cursor?.runId ?? null,
+          input.completedAt ?? null,
+          input.updatedAt,
+        );
+      },
+      async listCandidateRuns(input) {
+        // 候选 = 「本频道内至少有一份文档的当前 revision 派生自它」的 Run。
+        // EXISTS 按 Run 自身频道限定；跨频道声称同一 Run 的文档留给 listRunDocumentFacts
+        // 去发现，那是歧义信号，不该让 Run 干脆不进入候选。
+        const select = `SELECT r.id AS run_id, r.team_id, r.channel_id, r.created_at
+          FROM workspace_runs r
+          WHERE EXISTS (
+            SELECT 1 FROM channel_documents d
+            JOIN channel_document_revisions rev ON rev.id = d.current_revision_id
+            WHERE d.team_id = r.team_id
+              AND d.channel_id = r.channel_id
+              AND rev.source_json IS NOT NULL
+              AND json_extract(rev.source_json, '$.workspaceRunId') = r.id
+          )`;
+        const rows = input.cursor
+          ? teamDb.prepare(`${select}
+              AND (r.created_at > ? OR (r.created_at = ? AND r.id > ?))
+              ORDER BY r.created_at, r.id LIMIT ?`)
+            .all(input.cursor.runCreatedAt, input.cursor.runCreatedAt, input.cursor.runId, input.limit)
+          : teamDb.prepare(`${select} ORDER BY r.created_at, r.id LIMIT ?`).all(input.limit);
+        return rows.map((row) => ({
+          runId: sqliteText(row, 'run_id'),
+          teamId: sqliteText(row, 'team_id'),
+          channelId: sqliteText(row, 'channel_id'),
+          createdAt: sqliteNumber(row, 'created_at'),
+        }));
+      },
+      async listRunDocumentFacts(input) {
+        // 按 Team（而非频道）检索：跨频道声称同一 Run 的文档必须被看见才能判为歧义。
+        // derivationSource 是**继承**的 —— 人工编辑后的 revision 仍带着原始 Run 的来源。
+        // 因此「当前 revision 仍是这次 Run 的产物」必须同时要求 source = 'run'，
+        // 否则一份被人改写过的文档会被当成 Run 的原样输出冻进包里。
+        const rows = teamDb.prepare(
+          `SELECT d.id AS document_id, d.channel_id, d.created_at,
+             MAX(CASE
+               WHEN rev.id = d.current_revision_id AND rev.source = 'run' THEN 1 ELSE 0
+             END) AS derives_now
+           FROM channel_documents d
+           JOIN channel_document_revisions rev ON rev.document_id = d.id
+           WHERE d.team_id = ?
+             AND rev.source_json IS NOT NULL
+             AND json_extract(rev.source_json, '$.workspaceRunId') = ?
+           GROUP BY d.id, d.channel_id, d.created_at
+           ORDER BY d.created_at, d.id`,
+        ).all(input.teamId, input.workspaceRunId);
+        return rows.map((row) => ({
+          documentId: sqliteText(row, 'document_id'),
+          channelId: sqliteText(row, 'channel_id'),
+          createdAt: sqliteNumber(row, 'created_at'),
+          derivesFromRunNow: sqliteNumber(row, 'derives_now') === 1,
+        }));
+      },
+      async findBundleIdForRun(input) {
+        const row = teamDb.prepare(
+          `SELECT id FROM project_document_bundles
+           WHERE team_id = ? AND channel_id = ? AND source_workspace_run_id = ?
+           ORDER BY created_at, id LIMIT 1`,
+        ).get(input.teamId, input.channelId, input.workspaceRunId);
+        return row ? sqliteText(row, 'id') : null;
+      },
+      async recordOutcome(input) {
+        // 同一 Run 重新裁决时覆盖而非追加：failed 的候选在后续批次成功后应只留最终结论。
+        teamDb.prepare(
+          `INSERT INTO project_document_bundle_backfill_outcomes (
+            backfill_id, mode, team_id, channel_id, workspace_run_id,
+            outcome, reason_code, member_count, bundle_id, decided_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(backfill_id, mode, workspace_run_id) DO UPDATE SET
+            team_id = excluded.team_id,
+            channel_id = excluded.channel_id,
+            outcome = excluded.outcome,
+            reason_code = excluded.reason_code,
+            member_count = excluded.member_count,
+            bundle_id = excluded.bundle_id,
+            decided_at = excluded.decided_at`,
+        ).run(
+          input.backfillId,
+          input.mode,
+          input.teamId,
+          input.channelId ?? null,
+          input.workspaceRunId,
+          input.outcome,
+          input.reasonCode ?? null,
+          input.memberCount,
+          input.bundleId ?? null,
+          input.decidedAt,
+        );
+      },
+      async summarize(input) {
+        const rows = teamDb.prepare(
+          `SELECT outcome, reason_code, COUNT(*) AS total
+           FROM project_document_bundle_backfill_outcomes
+           WHERE backfill_id = ? AND mode = ?
+           GROUP BY outcome, reason_code`,
+        ).all(input.backfillId, input.mode);
+        const outcomes: ProjectDocumentBundleBackfillSummary['outcomes'] = {
+          created: 0, would_create: 0, existing: 0, ambiguous: 0, skipped: 0, failed: 0,
+        };
+        const reasons: Record<string, number> = {};
+        for (const row of rows) {
+          const total = sqliteNumber(row, 'total');
+          const outcome = sqliteText(row, 'outcome') as keyof typeof outcomes;
+          if (outcome in outcomes) outcomes[outcome] += total;
+          const reasonCode = sqliteNullableText(row, 'reason_code');
+          if (reasonCode) reasons[reasonCode] = (reasons[reasonCode] ?? 0) + total;
+        }
+        return { outcomes, reasons };
       },
     },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),

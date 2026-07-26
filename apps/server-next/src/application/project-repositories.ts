@@ -2,6 +2,7 @@ import type {
   ChannelProjectOverviewDto,
   ID,
   ProjectArtifactLineageRefDto,
+  ProjectDocumentBundleBackfillMode,
   ProjectDocumentBundleSourceDto,
   ProjectStageEdgeSemantics,
   ProjectStageRequiredInputRuleDto,
@@ -278,4 +279,87 @@ export interface ProjectDocumentBundleRepository {
     members: ProjectDocumentBundleMemberRecord[];
     mutation: ProjectDocumentBundleMutationRecord;
   }): Promise<CreateProjectDocumentBundleResult>;
+}
+
+/** #830：回填游标。backfillId 让不同版本的回填策略各走各的游标，互不覆盖。 */
+export interface ProjectDocumentBundleBackfillCursor {
+  runCreatedAt: UnixMs;
+  runId: ID;
+}
+
+export interface ProjectDocumentBundleBackfillProgressRecord {
+  backfillId: string;
+  cursor?: ProjectDocumentBundleBackfillCursor;
+  completedAt?: UnixMs;
+  updatedAt: UnixMs;
+}
+
+/** 至少有一份频道文档的**当前** revision 派生自它的 Workspace Run。 */
+export interface ProjectDocumentBundleBackfillCandidateRunRecord {
+  runId: ID;
+  teamId: ID;
+  channelId: ID;
+  createdAt: UnixMs;
+}
+
+/** 曾派生自目标 Run 的频道文档；derivesFromRunNow 区分「仍是它的产物」与「已漂移」。 */
+export interface ProjectDocumentBundleBackfillDocumentFactRecord {
+  documentId: ID;
+  channelId: ID;
+  createdAt: UnixMs;
+  derivesFromRunNow: boolean;
+}
+
+export type ProjectDocumentBundleBackfillOutcomeKind =
+  | 'created'
+  | 'would_create'
+  | 'existing'
+  | 'ambiguous'
+  | 'skipped'
+  | 'failed';
+
+export interface ProjectDocumentBundleBackfillOutcomeRecord {
+  backfillId: string;
+  mode: ProjectDocumentBundleBackfillMode;
+  teamId: ID;
+  channelId?: ID;
+  workspaceRunId: ID;
+  outcome: ProjectDocumentBundleBackfillOutcomeKind;
+  reasonCode?: string;
+  memberCount: number;
+  bundleId?: ID;
+  decidedAt: UnixMs;
+}
+
+export interface ProjectDocumentBundleBackfillSummary {
+  outcomes: Record<ProjectDocumentBundleBackfillOutcomeKind, number>;
+  reasons: Record<string, number>;
+}
+
+/**
+ * 回填专用的只读发现 + 裁决记录接口。它刻意与 ProjectDocumentBundleRepository 分开：
+ * 后者「只有读与一次性 create」是 #825 的结构性保证，不能因为回填而被撑大。
+ * 本接口同样不提供任何写 Bundle 的能力 —— 回填要建包只能走既有建包用例。
+ */
+export interface ProjectDocumentBundleBackfillRepository {
+  getProgress(input: { backfillId: string }): Promise<ProjectDocumentBundleBackfillProgressRecord | null>;
+  saveProgress(input: ProjectDocumentBundleBackfillProgressRecord): Promise<void>;
+  listCandidateRuns(input: {
+    cursor?: ProjectDocumentBundleBackfillCursor;
+    limit: number;
+  }): Promise<ProjectDocumentBundleBackfillCandidateRunRecord[]>;
+  listRunDocumentFacts(input: {
+    teamId: ID;
+    workspaceRunId: ID;
+  }): Promise<ProjectDocumentBundleBackfillDocumentFactRecord[]>;
+  findBundleIdForRun(input: {
+    teamId: ID;
+    channelId: ID;
+    workspaceRunId: ID;
+  }): Promise<ID | null>;
+  recordOutcome(input: ProjectDocumentBundleBackfillOutcomeRecord): Promise<void>;
+  summarize(input: {
+    backfillId: string;
+    mode: ProjectDocumentBundleBackfillMode;
+  }): Promise<ProjectDocumentBundleBackfillSummary>;
 }
