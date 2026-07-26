@@ -448,11 +448,14 @@ export function createManagementRouter(dependencies: ManagementRouterDependencie
         requestId: requestKey(input),
         mode: 'managed',
         requestShape: 'single-agent',
-        allowDirectFallbackBeforeBarrier: false,
+        allowDirectFallbackBeforeBarrier: true,
         preflight,
         barrier: { idempotencyReserved: false, persistedEffects: [] },
       });
       if (decision.kind !== 'managed-preflight-passed') {
+        if (decision.kind === 'direct') {
+          return { kind: 'direct', mode: 'direct' };
+        }
         return {
           kind: 'unavailable',
           mode: 'managed',

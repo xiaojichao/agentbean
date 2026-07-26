@@ -112,11 +112,11 @@ describe('Phase 1 management routing', () => {
     await expect(harness.repositories.management.events.list(runId)).resolves.toHaveLength(1);
   });
 
-  test('managed fails closed when preflight is red and never schedules direct work', async () => {
+  test('managed falls back to direct when preflight is red for single-agent requests', async () => {
     const harness = await createHarness({ workerAvailable: false });
     await harness.router.updatePolicy(managedPolicy());
     await expect(harness.router.route(request())).resolves.toMatchObject({
-      kind: 'unavailable', diagnostics: ['MANAGEMENT_PREFLIGHT_WORKERAVAILABLE_MISSING'],
+      kind: 'direct', mode: 'direct',
     });
     expect(harness.gateway.schedule).not.toHaveBeenCalled();
   });
