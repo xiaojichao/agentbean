@@ -146,14 +146,20 @@ test('workflow runs native three-platform SEA jobs and always aggregates real ve
     assert.ok(workflow.includes(required), `missing workflow contract: ${required}`);
   }
   assert.equal(workflow.includes('continue-on-error'), false);
-  assert.ok(workflow.match(/if: always\(\)/g)?.length >= 4);
-  assert.doesNotMatch(workflow, /name: Build and execute PI management SEA\n\s+if: always\(\)/);
+  // Cancellation must stay a cancellation: `always()` would keep the fail-closed
+  // steps running after a concurrency cancel and repaint the run as a failure.
+  assert.equal(workflow.includes('if: always()'), false);
+  assert.ok(workflow.match(/if: \$\{\{ !cancelled\(\) \}\}/g)?.length >= 4);
+  assert.doesNotMatch(
+    workflow,
+    /name: Build and execute PI management SEA\n\s+if: (?:always\(\)|\$\{\{ !cancelled\(\) \}\})/,
+  );
   assert.match(
     workflow,
-    /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
+    /name: Consume platform verdict through root gate\r?\n\s+if: \$\{\{ !cancelled\(\) \}\}/,
   );
   assert.match(
     workflow.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'),
-    /name: Consume platform verdict through root gate\r?\n\s+if: always\(\)/,
+    /name: Consume platform verdict through root gate\r?\n\s+if: \$\{\{ !cancelled\(\) \}\}/,
   );
 });
