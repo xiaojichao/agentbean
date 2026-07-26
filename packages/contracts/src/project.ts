@@ -194,6 +194,77 @@ export interface ProjectArtifactVersionSourceDto {
   invocationId?: ID;
 }
 
+/** #824 人工审核决定。三态与 Task acceptance 无关：阶段完成仍走 canonical Task delivery/acceptance。 */
+export type ProjectArtifactReviewDecision = 'approved' | 'rejected' | 'changes_requested';
+
+/** #824 审核依据引用种类；全部由 Server 复验同 Team/Channel 作用域。 */
+export type ProjectArtifactReviewBasisKind = 'project_version' | 'artifact' | 'message';
+
+export interface ProjectArtifactReviewBasisRefDto {
+  kind: ProjectArtifactReviewBasisKind;
+  refId: ID;
+}
+
+/**
+ * #824 append-only 审核记录：一条记录就是一次不可覆盖的决定。
+ * 仓储只提供 list/append，没有 update/delete —— 「只追加不覆盖」是接口层结构性保证。
+ */
+export interface ProjectArtifactReviewDto {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  collectionId: ID;
+  /** 明确的受审版本：审核对象永远是具体版本，不是集合。 */
+  versionId: ID;
+  /** 审核语境：受审版本所属 Stage。 */
+  stageId: ID;
+  decision: ProjectArtifactReviewDecision;
+  comment: string;
+  basis: ProjectArtifactReviewBasisRefDto[];
+  reviewedBy: ID;
+  createdAt: UnixMs;
+}
+
+/**
+ * #824 版本审核状态：该版本**最新一条**审核记录的 decision；无记录为 `pending`。
+ * 取最新一条而非「曾经通过」，使「要求修改」对最终化真正具有约束力。
+ */
+export type ProjectArtifactVersionReviewState = 'pending' | ProjectArtifactReviewDecision;
+
+export type ProjectArtifactFinalizationActorKind = 'human' | 'pi_manager';
+
+/**
+ * #824 PI Manager 代表用户最终化时必须携带的人类确认引用。
+ * Server 复验：消息在同 Team/Channel、作者等于声明的确认人、且该确认人本身有最终化权限。
+ */
+export interface ProjectArtifactHumanConfirmationRefDto {
+  kind: 'message';
+  refId: ID;
+  confirmedBy: ID;
+}
+
+/** #824 每次最终版切换的 append-only 审计条目。旧版本、旧审核与旧最终化历史都不被修改。 */
+export interface ProjectArtifactFinalizationDto {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  collectionId: ID;
+  /** 本次切换后的最终版。 */
+  versionId: ID;
+  /** 切换来源：上一版最终版；首次最终化为空。 */
+  previousVersionId?: ID;
+  /** 依据的通过审核记录 id：最终化必须落在一条明确的 approved 审核上。 */
+  basisReviewId: ID;
+  actorKind: ProjectArtifactFinalizationActorKind;
+  /** 最终化归属的人类；Manager 代表操作时是被代表的用户。 */
+  finalizedBy: ID;
+  /** Manager 代表操作时的 management run 身份。 */
+  managementRunId?: ID;
+  humanConfirmation?: ProjectArtifactHumanConfirmationRefDto;
+  reason?: string;
+  createdAt: UnixMs;
+}
+
 export interface ProjectArtifactVersionDto {
   id: ID;
   teamId: ID;
@@ -205,6 +276,10 @@ export interface ProjectArtifactVersionDto {
   lineage: ProjectArtifactLineageRefDto[];
   promotedBy: ID;
   createdAt: UnixMs;
+  /** #824 该版本的完整审核历史，按时间升序；append-only。 */
+  reviews: ProjectArtifactReviewDto[];
+  /** #824 由 `reviews` 最新一条派生的审核状态。 */
+  reviewState: ProjectArtifactVersionReviewState;
 }
 
 export interface ProjectArtifactCollectionDto {
@@ -218,7 +293,14 @@ export interface ProjectArtifactCollectionDto {
   revision: number;
   /** current version 指针；集合创建时即指向首个版本。 */
   currentVersionId: ID;
+  /**
+   * #824 唯一最终版指针；尚未最终化时为空。
+   * 最终版是集合上的**指针**而不是版本状态，因此切换后旧版本仍保持自己的审核事实。
+   */
+  finalVersionId?: ID;
   versions: ProjectArtifactVersionDto[];
+  /** #824 最终版切换审计，按时间升序；append-only。 */
+  finalizations: ProjectArtifactFinalizationDto[];
   createdBy: ID;
   createdAt: UnixMs;
   updatedAt: UnixMs;
@@ -257,4 +339,46 @@ export interface PromoteArtifactToProjectVersionInput {
   lineage?: ProjectArtifactLineageRefDto[];
   /** 可选来源 Invocation；Server 复验其 Team/Channel 作用域。 */
   sourceInvocationId?: ID;
+}
+
+/**
+ * #824 对具体产物版本提交人工审核决定。
+ * 没有 `expectedVersionRevision` 之类的 fence：审核只追加，不覆盖任何既有记录，
+ * 因此并发审核天然共存，唯一需要幂等保护的是重复提交同一条决定。
+ */
+export interface SubmitProjectArtifactReviewInput {
+  userId?: ID;
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  /** 受审版本；Server 据此解析所属集合与 Stage 语境。 */
+  versionId: ID;
+  decision: ProjectArtifactReviewDecision;
+  comment: string;
+  /** 可选依据引用；Server 复验每一条的可见性与作用域。 */
+  basis?: ProjectArtifactReviewBasisRefDto[];
+}
+
+/**
+ * #824 PI Manager 代表用户最终化时携带的上下文。
+ * 缺省表示已认证的人类本人在操作 —— Web socket 端点只对已认证人类开放，
+ * 因此本字段永远不能被用来「降级」成人类，只能用来声明更严格的 Manager 路径。
+ */
+export interface ProjectArtifactManagerFinalizationContextDto {
+  managementRunId: ID;
+  humanConfirmation: ProjectArtifactHumanConfirmationRefDto;
+}
+
+export interface SetProjectArtifactFinalVersionInput {
+  userId?: ID;
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  collectionId: ID;
+  /** 集合 revision fence：并发切换中只有一个能落地。 */
+  expectedCollectionRevision: number;
+  /** 目标最终版；必须属于该集合且当前审核状态为 approved。 */
+  versionId: ID;
+  reason?: string;
+  manager?: ProjectArtifactManagerFinalizationContextDto;
 }

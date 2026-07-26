@@ -191,6 +191,8 @@ export const WEB_EVENTS = {
     updated: 'project:updated',
     artifactCollections: 'project:artifact-collections',
     promoteArtifact: 'project:promote-artifact',
+    submitArtifactReview: 'project:submit-artifact-review',
+    setArtifactFinalVersion: 'project:set-artifact-final-version',
     artifactsUpdated: 'project:artifacts-updated',
     documentBundles: 'project:document-bundles',
     documentBundle: 'project:document-bundle',

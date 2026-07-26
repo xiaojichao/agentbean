@@ -428,6 +428,17 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  // #824 审核与最终化只暴露在已认证的人类 Web 会话上；Manager 调用入口由后续切片接入。
+  bind(socket, WEB_EVENTS.project.submitArtifactReview, app, 'submitArtifactReview', (payload, result) =>
+    options.afterProjectArtifactMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.setArtifactFinalVersion, app, 'setArtifactFinalVersion', (payload, result) =>
+    options.afterProjectArtifactMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   bind(socket, WEB_EVENTS.project.documentBundles, app, 'listProjectDocumentBundles', undefined, {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
