@@ -6,7 +6,12 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type ChannelProjectOverviewDto, type ProjectArtifactLibraryDto } from '@agentbean/contracts';
 
-import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '../components/ProjectArtifactLibrary';
+import {
+  ProjectArtifactLibrary,
+  type PromoteArtifactDraft,
+  type SetArtifactFinalVersionDraft,
+  type SubmitArtifactReviewDraft,
+} from '../components/ProjectArtifactLibrary';
 import { createServerNextUseCases } from '../../server-next/src/application/usecases';
 import {
   applyGlobalMigrations,
@@ -83,6 +88,43 @@ describe('频道文件库逻辑产物视图到 SQLite', () => {
     expect(document.querySelector('[data-smoke="project-artifact-lineage"]')?.textContent).toContain('版本:');
   });
 
+  test('授权人可追加审核、设置最终版并查看完整切换记录', async () => {
+    const harness = await createHarness();
+    render(<ArtifactLibraryPage harness={harness} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '提升为逻辑产物版本' }));
+    fireEvent.change(screen.getByLabelText('逻辑产物名称'), { target: { value: '分镜脚本' } });
+    fireEvent.change(screen.getByLabelText('逻辑产物类型'), { target: { value: 'storyboard' } });
+    fireEvent.click(screen.getByRole('button', { name: '提升为版本' }));
+    await screen.findByText('分镜脚本');
+
+    fireEvent.click(screen.getByText(/历史版本/));
+    fireEvent.click(screen.getByRole('button', { name: '追加审核' }));
+    fireEvent.change(screen.getByLabelText('审核意见 v1'), { target: { value: '镜头与节奏符合验收标准' } });
+    fireEvent.click(screen.getByRole('button', { name: '提交审核' }));
+
+    expect((await screen.findAllByText('已通过')).length).toBeGreaterThan(0);
+    expect(screen.getByText(/镜头与节奏符合验收标准/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '设为最终版' }));
+    expect(await screen.findByText('最终版')).toBeTruthy();
+    expect(screen.getByText(/最终版切换记录/)).toBeTruthy();
+  });
+
+  test('无目标版本所属阶段决定权时不展示审核与最终化入口', async () => {
+    const harness = await createHarness();
+    render(<ArtifactLibraryPage harness={harness} canDecide={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '提升为逻辑产物版本' }));
+    fireEvent.change(screen.getByLabelText('逻辑产物名称'), { target: { value: '分镜脚本' } });
+    fireEvent.change(screen.getByLabelText('逻辑产物类型'), { target: { value: 'storyboard' } });
+    fireEvent.click(screen.getByRole('button', { name: '提升为版本' }));
+    await screen.findByText('分镜脚本');
+    fireEvent.click(screen.getByText(/历史版本/));
+
+    expect(screen.queryByRole('button', { name: '追加审核' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '设为最终版' })).toBeNull();
+  });
+
   test('归档频道展示逻辑产物只读投影，不提供提升入口', async () => {
     const harness = await createHarness();
     const promoted = await harness.socket.trigger(WEB_EVENTS.project.promoteArtifact, {
@@ -135,7 +177,13 @@ function collectionIdFromDom(): string {
   return collectionId;
 }
 
-function ArtifactLibraryPage({ harness }: { harness: Harness }) {
+function ArtifactLibraryPage({
+  harness,
+  canDecide = true,
+}: {
+  harness: Harness;
+  canDecide?: boolean;
+}) {
   const [library, setLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const onPromote = async (draft: PromoteArtifactDraft) => {
     const result = await harness.socket.trigger(WEB_EVENTS.project.promoteArtifact, {
@@ -144,6 +192,26 @@ function ArtifactLibraryPage({ harness }: { harness: Harness }) {
       ...draft,
     }) as { ok: boolean; library?: ProjectArtifactLibraryDto; message?: string };
     if (!result.ok || !result.library) return result.message ?? '提升失败';
+    setLibrary(result.library);
+    return null;
+  };
+  const onReview = async (draft: SubmitArtifactReviewDraft) => {
+    const result = await harness.socket.trigger(WEB_EVENTS.project.submitArtifactReview, {
+      channelId: 'channel-1',
+      idempotencyKey: `review-${draft.versionId}-${draft.decision}`,
+      ...draft,
+    }) as { ok: boolean; library?: ProjectArtifactLibraryDto; message?: string };
+    if (!result.ok || !result.library) return result.message ?? '审核失败';
+    setLibrary(result.library);
+    return null;
+  };
+  const onFinalize = async (draft: SetArtifactFinalVersionDraft) => {
+    const result = await harness.socket.trigger(WEB_EVENTS.project.setArtifactFinalVersion, {
+      channelId: 'channel-1',
+      idempotencyKey: `finalize-${draft.versionId}`,
+      ...draft,
+    }) as { ok: boolean; library?: ProjectArtifactLibraryDto; message?: string };
+    if (!result.ok || !result.library) return result.message ?? '最终化失败';
     setLibrary(result.library);
     return null;
   };
@@ -156,7 +224,10 @@ function ArtifactLibraryPage({ harness }: { harness: Harness }) {
         { id: 'artifact-2', filename: 'artifact-2.md' },
       ]}
       canPromote
+      canDecideVersion={() => canDecide}
       onPromote={onPromote}
+      onReview={onReview}
+      onFinalize={onFinalize}
     />
   );
 }

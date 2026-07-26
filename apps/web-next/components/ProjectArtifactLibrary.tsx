@@ -1,11 +1,13 @@
 'use client';
 
-import { ChevronDown, GitBranch, Layers, Plus, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, GitBranch, Layers, MessageSquare, Plus, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import type {
   ProjectArtifactCollectionDto,
   ProjectArtifactLibraryDto,
   ProjectArtifactLineageRefDto,
+  ProjectArtifactReviewBasisRefDto,
+  ProjectArtifactReviewDecision,
   ProjectArtifactVersionDto,
 } from '@agentbean/contracts';
 
@@ -29,6 +31,20 @@ export interface PromoteArtifactDraft {
   lineage?: ProjectArtifactLineageRefDto[];
 }
 
+export interface SubmitArtifactReviewDraft {
+  versionId: string;
+  decision: ProjectArtifactReviewDecision;
+  comment: string;
+  basis: ProjectArtifactReviewBasisRefDto[];
+}
+
+export interface SetArtifactFinalVersionDraft {
+  collectionId: string;
+  versionId: string;
+  expectedCollectionRevision: number;
+  reason?: string;
+}
+
 /**
  * #823 文件库的逻辑产物视图：按集合展示当前版、历史版本、来源与 lineage。
  * 普通文件视图由调用方保留，本组件只负责项目产物语义。
@@ -38,13 +54,19 @@ export function ProjectArtifactLibrary({
   stages,
   promotableArtifacts,
   canPromote,
+  canDecideVersion,
   onPromote,
+  onReview,
+  onFinalize,
 }: {
   library: ProjectArtifactLibraryDto | null;
   stages: ProjectArtifactStageOption[];
   promotableArtifacts: PromotableArtifactOption[];
   canPromote: boolean;
+  canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
+  onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
+  onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
 }) {
   const [showPromote, setShowPromote] = useState(false);
   const collections = library?.collections ?? [];
@@ -97,7 +119,13 @@ export function ProjectArtifactLibrary({
       ) : (
         <div className="space-y-2">
           {collections.map((collection) => (
-            <CollectionCard key={collection.id} collection={collection} />
+            <CollectionCard
+              key={collection.id}
+              collection={collection}
+              canDecideVersion={archived ? undefined : canDecideVersion}
+              onReview={onReview}
+              onFinalize={onFinalize}
+            />
           ))}
         </div>
       )}
@@ -105,7 +133,17 @@ export function ProjectArtifactLibrary({
   );
 }
 
-function CollectionCard({ collection }: { collection: ProjectArtifactCollectionDto }) {
+function CollectionCard({
+  collection,
+  canDecideVersion,
+  onReview,
+  onFinalize,
+}: {
+  collection: ProjectArtifactCollectionDto;
+  canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
+  onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
+  onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
+}) {
   const currentVersion = collection.versions.find((version) => version.id === collection.currentVersionId);
   const history = [...collection.versions].sort((left, right) => right.versionNumber - left.versionNumber);
   return (
@@ -127,6 +165,10 @@ function CollectionCard({ collection }: { collection: ProjectArtifactCollectionD
             <span className="rounded bg-amber-200 px-1.5 py-0.5 font-medium text-amber-900">当前版</span>
             <span className="font-medium text-neutral-900">v{currentVersion.versionNumber}</span>
             <span className="truncate text-neutral-600">{currentVersion.artifact.filename}</span>
+            <ReviewStateBadge state={currentVersion.reviewState} />
+            {currentVersion.id === collection.finalVersionId && (
+              <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">最终版</span>
+            )}
           </div>
           <VersionSource version={currentVersion} />
         </div>
@@ -150,14 +192,205 @@ function CollectionCard({ collection }: { collection: ProjectArtifactCollectionD
                 {version.id === collection.currentVersionId && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">当前</span>
                 )}
+                {version.id === collection.finalVersionId && (
+                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-800">最终</span>
+                )}
+                <ReviewStateBadge state={version.reviewState} />
               </div>
               <VersionSource version={version} />
+              <VersionDecisionPanel
+                version={version}
+                collection={collection}
+                canDecide={Boolean(canDecideVersion?.(version))}
+                onReview={onReview}
+                onFinalize={onFinalize}
+              />
             </li>
           ))}
         </ul>
       </details>
+      <FinalizationHistory collection={collection} />
     </article>
   );
+}
+
+function ReviewStateBadge({ state }: { state: ProjectArtifactVersionDto['reviewState'] }) {
+  const label = state === 'pending'
+    ? '待审核'
+    : state === 'approved'
+      ? '已通过'
+      : state === 'rejected'
+        ? '已拒绝'
+        : '需修改';
+  const color = state === 'approved'
+    ? 'bg-emerald-100 text-emerald-800'
+    : state === 'rejected'
+      ? 'bg-red-100 text-red-700'
+      : state === 'changes_requested'
+        ? 'bg-orange-100 text-orange-700'
+        : 'bg-neutral-100 text-neutral-600';
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] ${color}`}>{label}</span>;
+}
+
+function VersionDecisionPanel({
+  version,
+  collection,
+  canDecide,
+  onReview,
+  onFinalize,
+}: {
+  version: ProjectArtifactVersionDto;
+  collection: ProjectArtifactCollectionDto;
+  canDecide: boolean;
+  onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
+  onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
+}) {
+  const [showReview, setShowReview] = useState(false);
+  const [decision, setDecision] = useState<ProjectArtifactReviewDecision>('approved');
+  const [comment, setComment] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submitReview = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!onReview || !comment.trim()) return;
+    setPending(true);
+    setError(null);
+    try {
+      const nextError = await onReview({
+        versionId: version.id,
+        decision,
+        comment: comment.trim(),
+        basis: [{ kind: 'artifact', refId: version.artifact.id }],
+      });
+      if (nextError) setError(nextError);
+      else {
+        setComment('');
+        setShowReview(false);
+      }
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const finalize = async () => {
+    if (!onFinalize) return;
+    setPending(true);
+    setError(null);
+    try {
+      const nextError = await onFinalize({
+        collectionId: collection.id,
+        versionId: version.id,
+        expectedCollectionRevision: collection.revision,
+        reason: '从项目文件库确认最终版',
+      });
+      if (nextError) setError(nextError);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 border-t border-neutral-100 pt-2">
+      {version.reviews.length > 0 && (
+        <details className="text-[11px] text-neutral-600">
+          <summary className="cursor-pointer">审核历史（{version.reviews.length}）</summary>
+          <ul className="mt-1 space-y-1">
+            {version.reviews.map((review) => (
+              <li key={review.id} className="rounded bg-neutral-50 px-2 py-1">
+                <span className="font-medium">{reviewDecisionLabel(review.decision)}</span>
+                <span> · {review.comment}</span>
+                <span className="ml-1 text-neutral-400">由 {review.reviewedBy}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {canDecide && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {onReview && (
+            <button
+              type="button"
+              onClick={() => setShowReview((visible) => !visible)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 hover:text-amber-900"
+            >
+              <MessageSquare size={11} />
+              追加审核
+            </button>
+          )}
+          {onFinalize && version.reviewState === 'approved' && version.id !== collection.finalVersionId && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => { void finalize(); }}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 hover:text-emerald-900 disabled:opacity-50"
+            >
+              <CheckCircle2 size={11} />
+              设为最终版
+            </button>
+          )}
+        </div>
+      )}
+      {showReview && (
+        <form onSubmit={submitReview} className="mt-2 grid gap-2 rounded bg-amber-50 p-2">
+          <label className="text-[11px] text-neutral-600">
+            审核决定
+            <select
+              aria-label={`审核决定 v${version.versionNumber}`}
+              value={decision}
+              onChange={(event) => setDecision(event.target.value as ProjectArtifactReviewDecision)}
+              className={`${inputClass} mt-1`}
+            >
+              <option value="approved">通过</option>
+              <option value="rejected">拒绝</option>
+              <option value="changes_requested">要求修改</option>
+            </select>
+          </label>
+          <label className="text-[11px] text-neutral-600">
+            审核意见
+            <textarea
+              aria-label={`审核意见 v${version.versionNumber}`}
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              className={`${inputClass} mt-1 min-h-16 py-2`}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={pending || !comment.trim()}
+            className="h-8 justify-self-start rounded bg-neutral-900 px-3 text-[11px] font-medium text-white disabled:opacity-50"
+          >
+            {pending ? '提交中...' : '提交审核'}
+          </button>
+        </form>
+      )}
+      {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+function FinalizationHistory({ collection }: { collection: ProjectArtifactCollectionDto }) {
+  if (collection.finalizations.length === 0) return null;
+  return (
+    <details className="mt-2 border-t border-neutral-100 pt-2 text-[11px] text-neutral-600">
+      <summary className="cursor-pointer">最终版切换记录（{collection.finalizations.length}）</summary>
+      <ul className="mt-1 space-y-1">
+        {collection.finalizations.map((record) => (
+          <li key={record.id} className="rounded bg-emerald-50 px-2 py-1">
+            {record.previousVersionId ? `${record.previousVersionId} → ` : '首次设置：'}
+            {record.versionId}
+            <span className="ml-1 text-neutral-400">由 {record.finalizedBy}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function reviewDecisionLabel(decision: ProjectArtifactReviewDecision): string {
+  if (decision === 'approved') return '通过';
+  if (decision === 'rejected') return '拒绝';
+  return '要求修改';
 }
 
 function VersionSource({ version }: { version: ProjectArtifactVersionDto }) {

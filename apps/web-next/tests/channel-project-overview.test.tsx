@@ -3,7 +3,7 @@
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import type { ChannelProjectOverviewDto } from '@agentbean/contracts';
+import type { ChannelProjectOverviewDto, ProjectArtifactLibraryDto } from '@agentbean/contracts';
 
 import { ChannelProjectOverview } from '../components/ChannelProjectOverview';
 
@@ -46,6 +46,38 @@ describe('频道任务页项目总览', () => {
     expect(screen.getByText('绑定任务尚未开始')).toBeTruthy();
     expect(screen.getByText('已归档 · 只读')).toBeTruthy();
     expect(screen.getByText('审核人')).toBeTruthy();
+  });
+
+  test('#824 阶段详情展示审核状态、当前版与最终版', () => {
+    render(
+      <ChannelProjectOverview
+        overview={overview()}
+        artifactLibrary={{
+          archived: false,
+          collections: [{
+            id: 'collection-1',
+            name: '发布方案',
+            currentVersionId: 'version-1',
+            finalVersionId: 'version-1',
+            versions: [{
+              id: 'version-1',
+              source: { stageId: 'stage-1' },
+              versionNumber: 2,
+              reviewState: 'approved',
+            }],
+          }],
+        } as ProjectArtifactLibraryDto}
+        tasks={[]}
+        participants={[
+          { id: 'owner-1', name: '项目负责人', kind: 'human' },
+          { id: 'reviewer-1', name: '审核人', kind: 'human' },
+        ]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('阶段产物（1）'));
+    expect(screen.getByText('发布方案 · v2 · 已通过 · 当前版 · 最终版')).toBeTruthy();
   });
 
   test('只有显式操作后才展开首个 Stage 配置表单', () => {

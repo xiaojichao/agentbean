@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   initialChannelDocumentIds,
@@ -14,6 +14,9 @@ import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRec
 import type {
   ChannelProjectProfileRecord,
   ProjectArtifactCollectionRecord,
+  ProjectArtifactDecisionMutationRecord,
+  ProjectArtifactFinalizationRecord,
+  ProjectArtifactReviewRecord,
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleRecord,
@@ -50,8 +53,11 @@ import type {
   ListProjectArtifactCollectionsInput,
   ListProjectDocumentBundlesInput,
   ProjectArtifactCollectionDto,
+  ProjectArtifactFinalizationDto,
   ProjectArtifactLibraryDto,
   ProjectArtifactLineageRefDto,
+  ProjectArtifactReviewBasisRefDto,
+  ProjectArtifactReviewDto,
   ProjectArtifactVersionDto,
   ProjectDocumentBundleDetailDto,
   ProjectDocumentBundleDto,
@@ -65,17 +71,26 @@ import type {
   ProjectStageEdgeDto,
   ProjectStageMissingRequiredInputDto,
   PromoteArtifactToProjectVersionInput,
+  SetProjectArtifactFinalVersionInput,
+  SubmitProjectArtifactReviewInput,
 } from '../../../../packages/contracts/src/index.js';
 import {
+  deriveProjectArtifactVersionReviewState,
+  evaluateArtifactReviewAuthority,
   evaluateArtifactPromotion,
   evaluateBundleComposition,
+  evaluateProjectArtifactFinalization,
   evaluateProjectArtifactLineage,
   evaluateProjectStageEdgeCreation,
   evaluateProjectStageExecutionGate,
   isProjectArtifactLineageKind,
+  isProjectArtifactReviewBasisKind,
+  isProjectArtifactReviewDecision,
   projectStageTaskProjection,
   type ProjectArtifactLineageCandidate,
   type ProjectArtifactPromotionRejectionCode,
+  type ProjectArtifactAuthorityFacts,
+  type ProjectArtifactFinalizationRejectionCode,
   type ProjectDocumentBundleMemberCandidate,
   type ProjectDocumentBundleMemberRejectionCode,
 } from '../../../../packages/domain/src/index.js';
@@ -265,6 +280,20 @@ export interface ServerNextUseCases {
     library: ProjectArtifactLibraryDto;
     collection: ProjectArtifactCollectionDto;
     version: ProjectArtifactVersionDto;
+    replayed: boolean;
+  }>>;
+  submitArtifactReview(input: SubmitProjectArtifactReviewInput & { userId: string }): Promise<Ack<{
+    library: ProjectArtifactLibraryDto;
+    collection: ProjectArtifactCollectionDto;
+    version: ProjectArtifactVersionDto;
+    review: ProjectArtifactReviewDto;
+    replayed: boolean;
+  }>>;
+  setArtifactFinalVersion(input: SetProjectArtifactFinalVersionInput & { userId: string }): Promise<Ack<{
+    library: ProjectArtifactLibraryDto;
+    collection: ProjectArtifactCollectionDto;
+    version: ProjectArtifactVersionDto;
+    finalization: ProjectArtifactFinalizationDto;
     replayed: boolean;
   }>>;
   listProjectDocumentBundles(
@@ -4651,6 +4680,424 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!projection) return makeFailure('NOT_FOUND', 'Promoted project artifact version not found');
       return makeSuccess({ ...projection, replayed: result.kind === 'replayed' });
+    },
+
+    async submitArtifactReview(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      const { channel } = access;
+      if (channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'Project artifact reviews require a regular channel');
+      }
+      const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
+        ? projectInput.idempotencyKey.trim()
+        : '';
+      const versionId = normalizeOptionalId(projectInput.versionId);
+      if (!idempotencyKey || !versionId) {
+        return makeFailure('VALIDATION_ERROR', 'idempotencyKey and versionId are required');
+      }
+      if (!isProjectArtifactReviewDecision(projectInput.decision)) {
+        return makeFailure('VALIDATION_ERROR', 'Unsupported project artifact review decision');
+      }
+      const basisInput = Array.isArray(projectInput.basis) ? projectInput.basis : [];
+      if (basisInput.length === 0 || basisInput.some((ref) =>
+        !ref || !isProjectArtifactReviewBasisKind(ref.kind) || !normalizeOptionalId(ref.refId))) {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          'At least one review basis entry with a supported kind and refId is required',
+        );
+      }
+      const basis: ProjectArtifactReviewBasisRefDto[] = basisInput.map((ref) => ({
+        kind: ref.kind,
+        refId: normalizeOptionalId(ref.refId) as string,
+      }));
+      const comment = typeof projectInput.comment === 'string' ? projectInput.comment.trim() : '';
+      if (!comment) {
+        return makeFailure('VALIDATION_ERROR', 'Review comment is required');
+      }
+      const versions = await repositories.channelProjects.listArtifactVersions({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const version = versions.find((candidate) => candidate.id === versionId);
+      if (!version) {
+        return makeFailure('NOT_FOUND', 'Project artifact version not found in this Team and Channel');
+      }
+      const stages = await repositories.channelProjects.listStages({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const stage = stages.find((candidate) => candidate.id === version.stageId);
+      if (!stage) {
+        return makeFailure('NOT_FOUND', 'Project artifact version Stage not found in this Team and Channel');
+      }
+      for (const ref of basis) {
+        const scope = await resolveProjectArtifactLineageScope(repositories, projectInput, ref);
+        if (!scope
+          || scope.teamId !== projectInput.teamId
+          || scope.channelId !== projectInput.channelId) {
+          return makeFailure('NOT_FOUND', 'Review basis is not visible in this Team and Channel');
+        }
+      }
+      const profile = await repositories.channelProjects.getProfile({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      if (!profile) return makeFailure('NOT_FOUND', 'Channel project profile not found');
+      const actorFacts = await projectArtifactAuthorityFacts(
+        repositories,
+        projectInput.teamId,
+        projectInput.userId,
+        profile,
+        stage,
+      );
+      const authority = evaluateArtifactReviewAuthority({
+        actorKind: 'human',
+        facts: actorFacts,
+        decision: projectInput.decision,
+      });
+      if (authority.kind === 'rejected') {
+        return makeFailure('FORBIDDEN', 'User cannot review this project artifact version');
+      }
+      const requestFingerprint = createHash('sha256')
+        .update(JSON.stringify({
+          kind: 'review',
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+          versionId,
+          decision: projectInput.decision,
+          comment,
+          basis,
+        }))
+        .digest('hex');
+      const existingMutation = await repositories.channelProjects.getArtifactDecisionMutation({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+      });
+      if (existingMutation) {
+        if (existingMutation.requestFingerprint !== requestFingerprint
+          || existingMutation.kind !== 'review'
+          || !existingMutation.reviewId) {
+          return makeFailure('CONFLICT', 'idempotencyKey was already used for a different artifact decision');
+        }
+        const reviews = await repositories.channelProjects.listArtifactReviews({
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+        });
+        const review = reviews.find((candidate) => candidate.id === existingMutation.reviewId);
+        const projection = await projectArtifactPromotionResult(repositories, channel, {
+          collectionId: existingMutation.collectionId,
+          versionId: existingMutation.versionId,
+        });
+        if (!review || !projection) {
+          return makeFailure('CONFLICT', 'Recorded artifact review result is no longer available');
+        }
+        return makeSuccess({ ...projection, review: projectArtifactReviewDto(review), replayed: true });
+      }
+      if (channel.archivedAt != null) {
+        return makeFailure('CONFLICT', 'Archived channels are read-only');
+      }
+      const now = clock.now();
+      const review: ProjectArtifactReviewRecord = {
+        id: ids.nextId(),
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        collectionId: version.collectionId,
+        versionId: version.id,
+        stageId: version.stageId,
+        decision: projectInput.decision,
+        comment,
+        basis,
+        reviewedBy: projectInput.userId,
+        createdAt: now,
+      };
+      const mutation: ProjectArtifactDecisionMutationRecord = {
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+        requestFingerprint,
+        kind: 'review',
+        collectionId: version.collectionId,
+        versionId: version.id,
+        reviewId: review.id,
+        createdAt: now,
+      };
+      const result = await repositories.channelProjects.appendArtifactReview({ review, mutation });
+      if (result.kind === 'idempotency_conflict') {
+        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different artifact decision');
+      }
+      if (result.kind === 'version_scope_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact version scope changed; refresh and retry');
+      }
+      const projection = await projectArtifactPromotionResult(repositories, channel, {
+        collectionId: result.review.collectionId,
+        versionId: result.review.versionId,
+      });
+      if (!projection) return makeFailure('NOT_FOUND', 'Reviewed project artifact version not found');
+      return makeSuccess({
+        ...projection,
+        review: projectArtifactReviewDto(result.review),
+        replayed: result.kind === 'replayed',
+      });
+    },
+
+    async setArtifactFinalVersion(projectInput) {
+      if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, projectInput);
+      if (!access.ok) return access;
+      const { channel } = access;
+      if (channel.kind !== 'channel') {
+        return makeFailure('VALIDATION_ERROR', 'Project artifact finalization requires a regular channel');
+      }
+      const idempotencyKey = typeof projectInput.idempotencyKey === 'string'
+        ? projectInput.idempotencyKey.trim()
+        : '';
+      const collectionId = normalizeOptionalId(projectInput.collectionId);
+      const versionId = normalizeOptionalId(projectInput.versionId);
+      if (!idempotencyKey || !collectionId || !versionId) {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          'idempotencyKey, collectionId and versionId are required',
+        );
+      }
+      if (!Number.isSafeInteger(projectInput.expectedCollectionRevision)
+        || projectInput.expectedCollectionRevision < 1) {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          'expectedCollectionRevision must be a positive integer',
+        );
+      }
+      const reason = normalizeOptionalText(projectInput.reason);
+      const collections = await repositories.channelProjects.listArtifactCollections({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const collection = collections.find((candidate) => candidate.id === collectionId) ?? null;
+      const versions = await repositories.channelProjects.listArtifactVersions({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const version = versions.find((candidate) => candidate.id === versionId) ?? null;
+      const reviews = await repositories.channelProjects.listArtifactReviews({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const versionReviews = reviews.filter((review) => review.versionId === versionId);
+      const stages = await repositories.channelProjects.listStages({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      const stage = version
+        ? stages.find((candidate) => candidate.id === version.stageId) ?? null
+        : null;
+      const profile = await repositories.channelProjects.getProfile({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+      });
+      if (!profile) return makeFailure('NOT_FOUND', 'Channel project profile not found');
+      if (version && !stage) {
+        return makeFailure('NOT_FOUND', 'Project artifact version Stage not found in this Team and Channel');
+      }
+
+      let actorKind: 'human' | 'pi_manager' = 'human';
+      let finalizedBy = projectInput.userId;
+      let managementRunId: string | undefined;
+      let humanConfirmation: ProjectArtifactFinalizationRecord['humanConfirmation'];
+      let confirmationFacts:
+        | { confirmedBy: string; confirmerFacts: ProjectArtifactAuthorityFacts }
+        | null
+        | undefined;
+      let actorFacts = await projectArtifactAuthorityFacts(
+        repositories,
+        projectInput.teamId,
+        projectInput.userId,
+        profile,
+        stage,
+      );
+      if (projectInput.manager !== undefined) {
+        actorKind = 'pi_manager';
+        managementRunId = normalizeOptionalId(projectInput.manager.managementRunId);
+        const confirmation = projectInput.manager.humanConfirmation;
+        const confirmationRefId = normalizeOptionalId(confirmation?.refId);
+        const confirmedBy = normalizeOptionalId(confirmation?.confirmedBy);
+        if (!managementRunId
+          || confirmation?.kind !== 'message'
+          || !confirmationRefId
+          || !confirmedBy) {
+          return makeFailure('VALIDATION_ERROR', 'Manager finalization requires a message confirmation');
+        }
+        const managementRun = await repositories.management.runs.getById(managementRunId);
+        if (!managementRun
+          || managementRun.teamId !== projectInput.teamId
+          || managementRun.channelId !== projectInput.channelId
+          || managementRun.initiatedByUserId !== confirmedBy) {
+          return makeFailure(
+            'FORBIDDEN',
+            'Manager finalization run is invalid, out of scope, or not bound to the confirmer',
+          );
+        }
+        const message = await repositories.messages.getById(confirmationRefId);
+        if (!message
+          || message.teamId !== projectInput.teamId
+          || message.channelId !== projectInput.channelId
+          || message.senderKind !== 'human'
+          || message.senderId !== confirmedBy
+          || message.threadId !== managementRun.rootMessageId
+          || message.body.trim() !== projectArtifactFinalizationConfirmationText(
+            collectionId,
+            versionId,
+            projectInput.expectedCollectionRevision,
+          )) {
+          return makeFailure('FORBIDDEN', 'Manager human confirmation is invalid or out of scope');
+        }
+        humanConfirmation = { kind: 'message', refId: confirmationRefId, confirmedBy };
+        finalizedBy = confirmedBy;
+        const confirmerFacts = await projectArtifactAuthorityFacts(
+          repositories,
+          projectInput.teamId,
+          confirmedBy,
+          profile,
+          stage,
+        );
+        confirmationFacts = { confirmedBy, confirmerFacts };
+        // Manager 代表人类行使权限；Server 已复验确认消息，策略仍会再次验证确认人的权限事实。
+        actorFacts = confirmerFacts;
+      }
+      const requestFingerprint = createHash('sha256')
+        .update(JSON.stringify({
+          kind: 'finalization',
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+          collectionId,
+          versionId,
+          expectedCollectionRevision: projectInput.expectedCollectionRevision,
+          reason: reason ?? null,
+          manager: managementRunId && humanConfirmation
+            ? { managementRunId, humanConfirmation }
+            : null,
+        }))
+        .digest('hex');
+      const decision = evaluateProjectArtifactFinalization({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        actorKind,
+        actorFacts,
+        ...(confirmationFacts === undefined ? {} : { humanConfirmation: confirmationFacts }),
+        collection,
+        expectedCollectionRevision: projectInput.expectedCollectionRevision,
+        targetVersion: version
+          ? { id: version.id, collectionId: version.collectionId, reviews: versionReviews }
+          : null,
+      });
+      if (decision.kind === 'rejected') {
+        return projectArtifactFinalizationFailure(decision.reasonCode);
+      }
+      const existingMutation = await repositories.channelProjects.getArtifactDecisionMutation({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+      });
+      if (existingMutation
+        && (existingMutation.requestFingerprint !== requestFingerprint
+          || existingMutation.kind !== 'finalization'
+          || !existingMutation.finalizationId)) {
+        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different artifact decision');
+      }
+      if (decision.kind === 'replay_current_final' || existingMutation) {
+        const finalizations = await repositories.channelProjects.listArtifactFinalizations({
+          teamId: projectInput.teamId,
+          channelId: projectInput.channelId,
+        });
+        const finalization = existingMutation?.finalizationId
+          ? finalizations.find((candidate) => candidate.id === existingMutation.finalizationId)
+          : finalizations
+            .filter((candidate) =>
+              candidate.collectionId === collectionId && candidate.versionId === versionId)
+            .sort((left, right) =>
+              right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+        const projection = await projectArtifactPromotionResult(repositories, channel, {
+          collectionId,
+          versionId,
+        });
+        if (!finalization || !projection) {
+          return makeFailure('CONFLICT', 'Recorded artifact finalization result is no longer available');
+        }
+        return makeSuccess({
+          ...projection,
+          finalization: projectArtifactFinalizationDto(finalization),
+          replayed: true,
+        });
+      }
+      if (channel.archivedAt != null) {
+        return makeFailure('CONFLICT', 'Archived channels are read-only');
+      }
+      const now = clock.now();
+      const finalization: ProjectArtifactFinalizationRecord = {
+        id: ids.nextId(),
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        collectionId,
+        versionId,
+        ...(decision.previousVersionId === undefined
+          ? {}
+          : { previousVersionId: decision.previousVersionId }),
+        basisReviewId: decision.basisReviewId,
+        actorKind,
+        finalizedBy,
+        ...(managementRunId === undefined ? {} : { managementRunId }),
+        ...(humanConfirmation === undefined ? {} : { humanConfirmation }),
+        ...(reason === undefined ? {} : { reason }),
+        createdAt: now,
+      };
+      const mutation: ProjectArtifactDecisionMutationRecord = {
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        idempotencyKey,
+        requestFingerprint,
+        kind: 'finalization',
+        collectionId,
+        versionId,
+        finalizationId: finalization.id,
+        createdAt: now,
+      };
+      const result = await repositories.channelProjects.setArtifactFinalVersion({
+        teamId: projectInput.teamId,
+        channelId: projectInput.channelId,
+        collectionId,
+        expectedCollectionRevision: projectInput.expectedCollectionRevision,
+        nextRevision: decision.collectionRevision,
+        updatedAt: now,
+        finalization,
+        mutation,
+      });
+      if (result.kind === 'idempotency_conflict') {
+        return makeFailure('CONFLICT', 'idempotencyKey was already used for a different artifact decision');
+      }
+      if (result.kind === 'collection_revision_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact collection revision is stale; refresh and retry');
+      }
+      if (result.kind === 'version_scope_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact version scope changed; refresh and retry');
+      }
+      if (result.kind === 'review_basis_conflict') {
+        return makeFailure('CONFLICT', 'Project artifact review state changed; refresh and retry');
+      }
+      const projection = await projectArtifactPromotionResult(repositories, channel, {
+        collectionId: result.collection.id,
+        versionId: result.finalization.versionId,
+      });
+      if (!projection) return makeFailure('NOT_FOUND', 'Finalized project artifact version not found');
+      return makeSuccess({
+        ...projection,
+        finalization: projectArtifactFinalizationDto(result.finalization),
+        replayed: result.kind === 'replayed',
+      });
     },
 
     async listProjectDocumentBundles(bundleInput) {
@@ -9635,8 +10082,24 @@ async function buildProjectArtifactLibrary(
   channel: ChannelRecord,
 ): Promise<ProjectArtifactLibraryDto> {
   const scope = { teamId: channel.teamId, channelId: channel.id };
-  const collections = await repositories.channelProjects.listArtifactCollections(scope);
-  const versions = await repositories.channelProjects.listArtifactVersions(scope);
+  const [collections, versions, reviews, finalizations] = await Promise.all([
+    repositories.channelProjects.listArtifactCollections(scope),
+    repositories.channelProjects.listArtifactVersions(scope),
+    repositories.channelProjects.listArtifactReviews(scope),
+    repositories.channelProjects.listArtifactFinalizations(scope),
+  ]);
+  const reviewsByVersion = new Map<string, ProjectArtifactReviewRecord[]>();
+  for (const review of reviews) {
+    const bucket = reviewsByVersion.get(review.versionId) ?? [];
+    bucket.push(review);
+    reviewsByVersion.set(review.versionId, bucket);
+  }
+  const finalizationsByCollection = new Map<string, ProjectArtifactFinalizationDto[]>();
+  for (const finalization of finalizations) {
+    const bucket = finalizationsByCollection.get(finalization.collectionId) ?? [];
+    bucket.push(projectArtifactFinalizationDto(finalization));
+    finalizationsByCollection.set(finalization.collectionId, bucket);
+  }
   const versionsByCollection = new Map<string, ProjectArtifactVersionDto[]>();
   for (const version of versions) {
     const artifact = await repositories.artifacts.getForTeam({
@@ -9647,7 +10110,11 @@ async function buildProjectArtifactLibrary(
       throw new Error(`Project artifact version ${version.id} references an unavailable scoped Artifact`);
     }
     const bucket = versionsByCollection.get(version.collectionId) ?? [];
-    bucket.push(projectArtifactVersionDto(version, artifact));
+    bucket.push(projectArtifactVersionDto(
+      version,
+      artifact,
+      reviewsByVersion.get(version.id) ?? [],
+    ));
     versionsByCollection.set(version.collectionId, bucket);
   }
   return {
@@ -9659,8 +10126,10 @@ async function buildProjectArtifactLibrary(
       kind: collection.kind,
       revision: collection.revision,
       currentVersionId: collection.currentVersionId,
+      ...(collection.finalVersionId === undefined ? {} : { finalVersionId: collection.finalVersionId }),
       versions: (versionsByCollection.get(collection.id) ?? [])
         .sort((left, right) => left.versionNumber - right.versionNumber),
+      finalizations: finalizationsByCollection.get(collection.id) ?? [],
       createdBy: collection.createdBy,
       createdAt: collection.createdAt,
       updatedAt: collection.updatedAt,
@@ -9672,7 +10141,12 @@ async function buildProjectArtifactLibrary(
 function projectArtifactVersionDto(
   version: ProjectArtifactVersionRecord,
   artifact: ArtifactRecord,
+  reviews: readonly ProjectArtifactReviewRecord[],
 ): ProjectArtifactVersionDto {
+  const reviewDtos = reviews
+    .slice()
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    .map(projectArtifactReviewDto);
   return {
     id: version.id,
     teamId: version.teamId,
@@ -9691,6 +10165,44 @@ function projectArtifactVersionDto(
     lineage: version.lineage,
     promotedBy: version.promotedBy,
     createdAt: version.createdAt,
+    reviews: reviewDtos,
+    reviewState: deriveProjectArtifactVersionReviewState(reviews),
+  };
+}
+
+function projectArtifactReviewDto(record: ProjectArtifactReviewRecord): ProjectArtifactReviewDto {
+  return {
+    id: record.id,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    collectionId: record.collectionId,
+    versionId: record.versionId,
+    stageId: record.stageId,
+    decision: record.decision,
+    comment: record.comment,
+    basis: record.basis,
+    reviewedBy: record.reviewedBy,
+    createdAt: record.createdAt,
+  };
+}
+
+function projectArtifactFinalizationDto(
+  record: ProjectArtifactFinalizationRecord,
+): ProjectArtifactFinalizationDto {
+  return {
+    id: record.id,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    collectionId: record.collectionId,
+    versionId: record.versionId,
+    ...(record.previousVersionId === undefined ? {} : { previousVersionId: record.previousVersionId }),
+    basisReviewId: record.basisReviewId,
+    actorKind: record.actorKind,
+    finalizedBy: record.finalizedBy,
+    ...(record.managementRunId === undefined ? {} : { managementRunId: record.managementRunId }),
+    ...(record.humanConfirmation === undefined ? {} : { humanConfirmation: record.humanConfirmation }),
+    ...(record.reason === undefined ? {} : { reason: record.reason }),
+    createdAt: record.createdAt,
   };
 }
 
@@ -9713,12 +10225,16 @@ async function projectArtifactPromotionResult(
 async function resolveProjectArtifactLineageScope(
   repositories: ServerNextRepositories,
   scope: { teamId: string; channelId: string },
-  ref: ProjectArtifactLineageRefDto,
+  ref: ProjectArtifactLineageRefDto | ProjectArtifactReviewBasisRefDto,
 ): Promise<{ teamId: string; channelId: string } | null> {
   if (ref.kind === 'project_version') {
     const versions = await repositories.channelProjects.listArtifactVersions(scope);
     const version = versions.find((candidate) => candidate.id === ref.refId);
     return version ? { teamId: version.teamId, channelId: version.channelId } : null;
+  }
+  if (ref.kind === 'message') {
+    const message = await repositories.messages.getById(ref.refId);
+    return message ? { teamId: message.teamId, channelId: message.channelId } : null;
   }
   const artifact = await repositories.artifacts.getForTeam({
     teamId: scope.teamId,
@@ -9745,6 +10261,44 @@ function projectArtifactPromotionFailure(
       return makeFailure('CONFLICT', 'Artifact is already promoted into another logical artifact collection');
     default:
       return makeFailure('VALIDATION_ERROR', 'Ambiguous logical artifact collection target');
+  }
+}
+
+async function projectArtifactAuthorityFacts(
+  repositories: ServerNextRepositories,
+  teamId: string,
+  userId: string,
+  profile: ChannelProjectProfileRecord,
+  stage: ProjectStageRecord | null,
+): Promise<ProjectArtifactAuthorityFacts> {
+  return {
+    userId,
+    teamRole: await repositories.teams.getMemberRole(teamId, userId),
+    projectLeadId: profile.projectLeadId,
+    stageReviewerIds: stage?.reviewerIds ?? [],
+  };
+}
+
+function projectArtifactFinalizationFailure(
+  reasonCode: ProjectArtifactFinalizationRejectionCode,
+): ReturnType<typeof makeFailure> {
+  switch (reasonCode) {
+    case 'collection_not_found':
+    case 'collection_out_of_scope':
+      return makeFailure('NOT_FOUND', 'Logical artifact collection not found in this Team and Channel');
+    case 'version_not_in_collection':
+      return makeFailure('NOT_FOUND', 'Target version does not belong to this logical artifact collection');
+    case 'collection_revision_stale':
+      return makeFailure('CONFLICT', 'Project artifact collection revision is stale; refresh and retry');
+    case 'version_not_approved':
+      return makeFailure('CONFLICT', 'Target project artifact version is not currently approved');
+    case 'manager_confirmation_missing':
+      return makeFailure('VALIDATION_ERROR', 'Manager finalization requires a human confirmation');
+    case 'manager_confirmation_unauthorized':
+      return makeFailure('FORBIDDEN', 'Manager confirmation author cannot finalize this artifact version');
+    case 'actor_not_human':
+    case 'actor_not_authorized':
+      return makeFailure('FORBIDDEN', 'User cannot finalize this project artifact version');
   }
 }
 
