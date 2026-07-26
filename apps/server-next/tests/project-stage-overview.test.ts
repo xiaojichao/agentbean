@@ -234,6 +234,163 @@ describe('频道项目首个 Stage 总览', () => {
     })).resolves.toHaveLength(1);
   });
 
+  test('绑定 Stage 后拒绝移动或删除 Task，项目总览保持可读', async () => {
+    const repositories = createSqliteRepositories({ globalDb, teamDb });
+    await repositories.channels.create({
+      id: 'channel-2',
+      teamId: 'team-1',
+      kind: 'channel',
+      name: 'other',
+      visibility: 'private',
+      createdBy: 'owner-1',
+      humanMemberIds: ['owner-1'],
+      agentMemberIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      revision: 1,
+    });
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => ++now },
+      ids: { nextId: () => `project-id-${++id}` },
+      messageIngestionMode: 'legacy',
+    });
+    await expect(app.createInitialProjectStage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'initial-stage-1',
+      projectLeadId: 'owner-1',
+      defaultReviewerIds: ['reviewer-1'],
+      stage: {
+        name: '发布准备',
+        goal: '形成发布方案',
+        ownerId: 'owner-1',
+        reviewerIds: ['reviewer-1'],
+        acceptanceCriteria: ['发布步骤完整'],
+        taskId: 'task-1',
+      },
+    })).resolves.toMatchObject({ ok: true });
+
+    await expect(app.updateTask({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      channelId: 'channel-2',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: expect.stringContaining('Project Stage'),
+    });
+    await expect(repositories.tasks.update({
+      taskId: 'task-1',
+      changes: { channelId: 'channel-2', updatedAt: ++now },
+    })).rejects.toThrow(/FOREIGN KEY/);
+    await expect(app.deleteTask({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      taskId: 'task-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: expect.stringContaining('Project Stage'),
+    });
+    await expect(app.getChannelProjectOverview({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      overview: {
+        stages: [{ task: { id: 'task-1', channelId: 'channel-1' } }],
+      },
+    });
+  });
+
+  test('Task revision 后旧审核结论不再影响 Stage 聚合', async () => {
+    const repositories = createSqliteRepositories({ globalDb, teamDb });
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => ++now },
+      ids: { nextId: () => `project-id-${++id}` },
+      messageIngestionMode: 'legacy',
+    });
+    await expect(app.createInitialProjectStage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'initial-stage-1',
+      projectLeadId: 'owner-1',
+      defaultReviewerIds: ['reviewer-1'],
+      stage: {
+        name: '发布准备',
+        goal: '形成发布方案',
+        ownerId: 'owner-1',
+        reviewerIds: ['reviewer-1'],
+        acceptanceCriteria: ['发布步骤完整'],
+        taskId: 'task-1',
+      },
+    })).resolves.toMatchObject({ ok: true });
+    await expect(repositories.tasks.updateAtRevision({
+      taskId: 'task-1',
+      expectedRevision: 1,
+      nextRevision: 2,
+      reasonCode: 'TASK_REVISED',
+      changes: { status: 'in_review', updatedAt: ++now },
+    })).resolves.toMatchObject({ revision: 2 });
+
+    repositories.taskCoordination.deliveries.listByTask = async () => [{
+      schemaVersion: 1,
+      id: 'old-delivery',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      taskRevision: 1,
+      taskAttempt: 1,
+      claimLeaseId: 'old-claim',
+      invocationId: 'old-invocation',
+      idempotencyKey: 'old-delivery',
+      summary: '旧版本交付',
+      claims: [],
+      evidenceRefs: [],
+      createdAt: now,
+    }];
+    repositories.taskCoordination.acceptances.getCanonicalByDelivery = async () => ({
+      schemaVersion: 1,
+      id: 'old-acceptance',
+      teamId: 'team-1',
+      taskId: 'task-1',
+      deliveryId: 'old-delivery',
+      expectedTaskRevision: 1,
+      taskAttempt: 1,
+      claimLeaseId: 'old-claim',
+      decision: 'rejected',
+      criteriaResults: [],
+      reason: '旧版本拒绝',
+      decidedBy: 'manager',
+      decidedAt: now,
+      decisionVersion: 1,
+      canonical: true,
+    });
+
+    await expect(app.getChannelProjectOverview({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      overview: {
+        stages: [{
+          task: { id: 'task-1', status: 'in_review' },
+          aggregateStatus: 'in_review',
+          blockingReasons: [{ code: 'review_pending', taskId: 'task-1' }],
+        }],
+      },
+    });
+  });
+
   test('拒绝跨频道或不存在的 Task，归档后总览可读但写入被拒绝', async () => {
     const repositories = createSqliteRepositories({ globalDb, teamDb });
     await repositories.channels.create({

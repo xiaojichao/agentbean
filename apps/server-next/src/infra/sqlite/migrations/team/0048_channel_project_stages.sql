@@ -11,6 +11,9 @@ CREATE TABLE channel_project_profiles (
   UNIQUE (team_id, channel_id)
 );
 
+CREATE UNIQUE INDEX tasks_project_stage_scope_idx
+  ON tasks(id, team_id, revision, channel_id);
+
 CREATE TABLE project_stages (
   id TEXT PRIMARY KEY,
   team_id TEXT NOT NULL,
@@ -25,8 +28,8 @@ CREATE TABLE project_stages (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE (team_id, channel_id, task_id),
-  FOREIGN KEY (task_id, team_id, task_revision)
-    REFERENCES tasks(id, team_id, revision) ON DELETE RESTRICT
+  FOREIGN KEY (task_id, team_id, task_revision, channel_id)
+    REFERENCES tasks(id, team_id, revision, channel_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX project_stages_channel_idx

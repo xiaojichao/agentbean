@@ -4273,6 +4273,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const nextChannelId = hasOwn(taskInput, 'channelId') ? normalizeOptionalId(taskInput.channelId ?? undefined) : undefined;
       const nextAssigneeId = hasOwn(taskInput, 'assigneeId') ? normalizeOptionalId(taskInput.assigneeId ?? undefined) : undefined;
+      if (hasOwn(taskInput, 'channelId')
+        && nextChannelId !== task.channelId
+        && await taskIsBoundToProjectStage(repositories, task)) {
+        return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot change channels');
+      }
       if (nextChannelId) {
         const channel = await ensureUserCanViewChannel(repositories, {
           userId: taskInput.userId,
@@ -4388,6 +4393,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = await repositories.tasks.getById(taskInput.taskId);
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (await taskIsBoundToProjectStage(repositories, task)) {
+        return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
       }
       const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
       const deletedInvocationIds = coordination
@@ -8353,8 +8361,11 @@ async function projectStageDto(
     }
     return { taskId: dependencyTask.id, status: dependencyTask.status };
   }));
+  const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
   const deliveries = await repositories.taskCoordination.deliveries.listByTask(task.id);
-  const latestDelivery = [...deliveries].sort((left, right) => right.createdAt - left.createdAt)[0];
+  const latestDelivery = [...deliveries].reverse().find((delivery) =>
+    delivery.taskRevision === task.revision
+    && (coordination === null || delivery.taskAttempt === coordination.attempt));
   const acceptance = latestDelivery
     ? await repositories.taskCoordination.acceptances.getCanonicalByDelivery(latestDelivery.id)
     : null;
@@ -8393,6 +8404,18 @@ async function projectStageDto(
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
+}
+
+async function taskIsBoundToProjectStage(
+  repositories: ServerNextRepositories,
+  task: TaskRecord,
+): Promise<boolean> {
+  if (!task.channelId) return false;
+  const stages = await repositories.channelProjects.listStages({
+    teamId: task.teamId,
+    channelId: task.channelId,
+  });
+  return stages.some((stage) => stage.taskId === task.id);
 }
 
 async function channelForCreatorManagement(
