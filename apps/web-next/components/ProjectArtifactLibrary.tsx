@@ -7,6 +7,7 @@ import type {
   ProjectArtifactLibraryDto,
   ProjectArtifactLineageRefDto,
   ProjectArtifactVersionDto,
+  ProjectReferenceSelectionRequestDto,
 } from '@agentbean/contracts';
 
 export interface PromotableArtifactOption {
@@ -39,12 +40,16 @@ export function ProjectArtifactLibrary({
   promotableArtifacts,
   canPromote,
   onPromote,
+  referenceSelections = [],
+  onReferenceSelection,
 }: {
   library: ProjectArtifactLibraryDto | null;
   stages: ProjectArtifactStageOption[];
   promotableArtifacts: PromotableArtifactOption[];
   canPromote: boolean;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
+  referenceSelections?: readonly ProjectReferenceSelectionRequestDto[];
+  onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
 }) {
   const [showPromote, setShowPromote] = useState(false);
   const collections = library?.collections ?? [];
@@ -97,7 +102,12 @@ export function ProjectArtifactLibrary({
       ) : (
         <div className="space-y-2">
           {collections.map((collection) => (
-            <CollectionCard key={collection.id} collection={collection} />
+            <CollectionCard
+              key={collection.id}
+              collection={collection}
+              referenceSelections={referenceSelections}
+              onReferenceSelection={onReferenceSelection}
+            />
           ))}
         </div>
       )}
@@ -105,7 +115,15 @@ export function ProjectArtifactLibrary({
   );
 }
 
-function CollectionCard({ collection }: { collection: ProjectArtifactCollectionDto }) {
+function CollectionCard({
+  collection,
+  referenceSelections,
+  onReferenceSelection,
+}: {
+  collection: ProjectArtifactCollectionDto;
+  referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
+  onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
+}) {
   const currentVersion = collection.versions.find((version) => version.id === collection.currentVersionId);
   const history = [...collection.versions].sort((left, right) => right.versionNumber - left.versionNumber);
   return (
@@ -149,6 +167,29 @@ function CollectionCard({ collection }: { collection: ProjectArtifactCollectionD
                 <span className="truncate text-neutral-600">{version.artifact.filename}</span>
                 {version.id === collection.currentVersionId && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">当前</span>
+                )}
+                {onReferenceSelection && (
+                  <button
+                    type="button"
+                    data-smoke="project-reference-artifact-version"
+                    onClick={() => {
+                      const selected = referenceSelections.some((selection) =>
+                        selection.kind === 'artifact_version' && selection.versionId === version.id);
+                      onReferenceSelection(selected
+                        ? null
+                        : {
+                          kind: 'artifact_version',
+                          collectionId: collection.id,
+                          versionId: version.id,
+                        }, version.id);
+                    }}
+                    className="ml-auto border border-neutral-300 bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 hover:border-neutral-900"
+                  >
+                    {referenceSelections.some((selection) =>
+                      selection.kind === 'artifact_version' && selection.versionId === version.id)
+                      ? '已引用'
+                      : '引用此版'}
+                  </button>
                 )}
               </div>
               <VersionSource version={version} />

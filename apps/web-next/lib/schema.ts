@@ -1,3 +1,5 @@
+import type { ProjectReferenceSetDto } from '@agentbean/contracts';
+
 export type AdapterKind = 'codex' | 'claude-code' | 'openclaw' | 'hermes' | 'standalone';
 export type AgentStatus = 'connecting' | 'online' | 'busy' | 'offline' | 'error';
 export type AgentCategory = 'executor-hosted' | 'agentos-hosted';
@@ -77,6 +79,7 @@ export interface ChatMessage {
   workspaceRun?: WorkspaceRunDetail;
   dispatchStatus?: DispatchStatus;
   dispatchId?: string;
+  referenceSet?: ProjectReferenceSetDto;
   /** Server DispatchDto.error (e.g. DISPATCH_TIMEOUT / WORKSPACE_RUN_FAILED). */
   dispatchError?: string;
 }

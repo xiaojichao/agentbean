@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -25,6 +25,7 @@ import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
+import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -296,6 +297,7 @@ export default function ChatPage() {
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
+  const [projectReferenceSelections, setProjectReferenceSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
   const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
@@ -494,6 +496,10 @@ export default function ChatPage() {
     });
     return () => { active = false; };
   }, [activeChannel, conn, tab]);
+
+  useEffect(() => {
+    setProjectReferenceSelections([]);
+  }, [activeChannel]);
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -1257,7 +1263,7 @@ export default function ChatPage() {
   const sendMessage = () => {
     const artifacts = readyArtifacts(pendingAttachments);
     if (
-      (!input.trim() && artifacts.length === 0)
+      (!input.trim() && artifacts.length === 0 && projectReferenceSelections.length === 0)
       || !activeChannel
       || hasUploadingAttachments(pendingAttachments)
       || hasFailedAttachments(pendingAttachments)
@@ -1268,7 +1274,11 @@ export default function ChatPage() {
     const createTask = asTask;
     const mentions = extractMentions(body, visibleMentionMembers);
     const clientMessageId = createClientMessageId('chat');
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body: body || '附件', asTask, artifactIds, clientMessageId, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, clientMessageId,
+      body: body || (artifacts.length > 0 ? '附件' : '项目引用'), asTask, artifactIds,
+      selections: projectReferenceSelections,
+      ...(mentions.length ? { meta: { mentions } } : {}),
+    }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
         if (createTask) setTimeout(() => loadTasks(), 150);
@@ -1287,6 +1297,7 @@ export default function ChatPage() {
     setInput('');
     pendingAttachments.forEach(revokeComposerPreview);
     setPendingAttachments([]);
+    setProjectReferenceSelections([]);
     setAsTask(false);
   };
 
@@ -2026,6 +2037,33 @@ export default function ChatPage() {
                     </div>
                   )}
                   <textarea data-smoke="chat-message-input" ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 @${activeDmName}` : `发送到 #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
+                  {projectReferenceSelections.length > 0 && (
+                    <div data-smoke="project-reference-composer-chips" className="flex flex-wrap gap-1.5 px-3 pb-2">
+                      {projectReferenceSelections.map((selection, index) => {
+                        const label = selection.kind === 'bundle_all'
+                          ? `整包：${projectDocumentBundles.find((bundle) => bundle.id === selection.bundleId)?.name ?? selection.bundleId}`
+                          : selection.kind === 'bundle_subset'
+                            ? `包内 ${selection.documentIds.length} 项`
+                            : selection.kind === 'artifact_version'
+                              ? `产物版本：${selection.versionId}`
+                              : `文档：${selection.documentId}`;
+                        return (
+                          <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
+                            {label}
+                            <button
+                              type="button"
+                              aria-label={`移除${label}`}
+                              onClick={() => setProjectReferenceSelections((current) =>
+                                current.filter((_, selectionIndex) => selectionIndex !== index))}
+                              className="text-sky-500 hover:text-sky-900"
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                   {pendingAttachments.length > 0 && (
                     <AttachmentStrip
                       attachments={pendingAttachments}
@@ -2044,7 +2082,7 @@ export default function ChatPage() {
                       <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
                       <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
-                    <button data-smoke="chat-message-send" onClick={sendMessage} disabled={uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    <button data-smoke="chat-message-send" onClick={sendMessage} disabled={uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                   </div>
                 </div>
               </div>
@@ -2120,6 +2158,14 @@ export default function ChatPage() {
                 }))}
                 canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
                 onPromote={promoteChannelArtifact}
+                referenceSelections={projectReferenceSelections}
+                onReferenceSelection={(selection, versionId) => {
+                  setProjectReferenceSelections((current) => [
+                    ...current.filter((item) =>
+                      item.kind !== 'artifact_version' || item.versionId !== versionId),
+                    ...(selection ? [selection] : []),
+                  ]);
+                }}
               />
             ) : (
               <ConversationFiles
@@ -2149,6 +2195,15 @@ export default function ChatPage() {
                 documentBundles={projectDocumentBundles}
                 documentBundlesArchived={projectDocumentBundlesArchived}
                 onLoadDocumentBundleDetail={loadProjectDocumentBundleDetail}
+                referenceSelections={projectReferenceSelections}
+                onReferenceSelection={(selection, bundleId) => {
+                  setProjectReferenceSelections((current) => [
+                    ...current.filter((item) =>
+                      (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
+                      || item.bundleId !== bundleId),
+                    ...(selection ? [selection] : []),
+                  ]);
+                }}
                 agents={agents}
                 humanProfiles={humanProfiles}
                 channelMembers={channelMembers}
@@ -3129,6 +3184,8 @@ function ConversationFiles({
   documentBundles,
   documentBundlesArchived,
   onLoadDocumentBundleDetail,
+  referenceSelections,
+  onReferenceSelection,
   agents,
   humanProfiles,
   channelMembers,
@@ -3150,6 +3207,8 @@ function ConversationFiles({
   documentBundles: ProjectDocumentBundleDto[];
   documentBundlesArchived: boolean;
   onLoadDocumentBundleDetail: (bundleId: string) => Promise<ProjectDocumentBundleDetailDto | null>;
+  referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
+  onReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, bundleId: string) => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   channelMembers: ChannelMemberEntry[];
@@ -3173,6 +3232,8 @@ function ConversationFiles({
         bundles={documentBundles}
         archived={documentBundlesArchived}
         onLoadDetail={onLoadDocumentBundleDetail}
+        selections={referenceSelections}
+        onSelectionChange={onReferenceSelection}
       />
       {path && (
         <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
@@ -4519,6 +4580,9 @@ function ChatBubble({
           <div className="mt-1 text-sm italic text-neutral-400">消息已删除</div>
         ) : (
           <MarkdownMessage body={displayMessageBody(msg)} mentionMembers={messageMentionMembers} mentions={msg.meta?.mentions as MessageMentionDto[] | undefined} onOpenMention={onOpenProfile} compact={groupedWithPrevious} />
+        )}
+        {!isDeleted && !editing && msg.referenceSet && (
+          <ProjectReferenceChips referenceSet={msg.referenceSet} />
         )}
         {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (

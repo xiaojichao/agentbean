@@ -60,6 +60,10 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectReferenceItemRecord,
+  ProjectReferenceSelectionRecord,
+  ProjectReferenceSetMutationRecord,
+  ProjectReferenceSetRecord,
   ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
@@ -111,6 +115,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
   const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
   const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
+  const projectReferenceSets = new Map<string, ProjectReferenceSetRecord>();
+  const projectReferenceSelections = new Map<string, ProjectReferenceSelectionRecord>();
+  const projectReferenceItems = new Map<string, ProjectReferenceItemRecord>();
+  const projectReferenceSetMutations = new Map<string, ProjectReferenceSetMutationRecord>();
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
@@ -288,6 +296,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const jobSnapshot = new Map(channelCoordinationJobs);
         const decisionSnapshot = new Map(channelCoordinationDecisions);
         const taskSnapshot = new Map(tasks);
+        const referenceSetSnapshot = new Map(projectReferenceSets);
+        const referenceSelectionSnapshot = new Map(projectReferenceSelections);
+        const referenceItemSnapshot = new Map(projectReferenceItems);
+        const referenceMutationSnapshot = new Map(projectReferenceSetMutations);
         try {
           return await operation({
             messages: repositories.messages,
@@ -296,6 +308,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             decisions: channelCoordination.decisions,
             tasks: repositories.tasks,
             channels: repositories.channels,
+            projectReferenceSets: repositories.projectReferenceSets,
           });
         } catch (error) {
           messages.clear();
@@ -308,6 +321,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, decision] of decisionSnapshot) channelCoordinationDecisions.set(id, decision);
           tasks.clear();
           for (const [id, task] of taskSnapshot) tasks.set(id, task);
+          restoreMap(projectReferenceSets, referenceSetSnapshot);
+          restoreMap(projectReferenceSelections, referenceSelectionSnapshot);
+          restoreMap(projectReferenceItems, referenceItemSnapshot);
+          restoreMap(projectReferenceSetMutations, referenceMutationSnapshot);
           throw error;
         }
       })),
@@ -728,6 +745,24 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const [mutationKey, mutation] of projectDocumentBundleMutations) {
           if (mutation.channelId === input.channelId) projectDocumentBundleMutations.delete(mutationKey);
         }
+        const removedSetIds = new Set<string>();
+        for (const [setId, set] of projectReferenceSets) {
+          if (set.channelId !== input.channelId) continue;
+          removedSetIds.add(setId);
+          projectReferenceSets.delete(setId);
+        }
+        const removedSelectionIds = new Set<string>();
+        for (const [selectionId, selection] of projectReferenceSelections) {
+          if (!removedSetIds.has(selection.referenceSetId)) continue;
+          removedSelectionIds.add(selectionId);
+          projectReferenceSelections.delete(selectionId);
+        }
+        for (const [itemId, item] of projectReferenceItems) {
+          if (removedSelectionIds.has(item.selectionId)) projectReferenceItems.delete(itemId);
+        }
+        for (const [mutationKey, mutation] of projectReferenceSetMutations) {
+          if (mutation.channelId === input.channelId) projectReferenceSetMutations.delete(mutationKey);
+        }
         return channel;
       },
     },
@@ -1058,6 +1093,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async getById(messageId) {
         return messages.get(messageId) ?? null;
+      },
+      async getByClientMessageId(input) {
+        return Array.from(messages.values()).find((message) =>
+          message.teamId === input.teamId
+          && message.channelId === input.channelId
+          && message.meta?.clientMessageId === input.clientMessageId) ?? null;
       },
       async updateMeta(input) {
         const message = messages.get(input.messageId);
@@ -1940,6 +1981,36 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         return { kind: 'created', mutation: input.mutation };
       },
     },
+    projectReferenceSets: {
+      async getByMessageId(input) {
+        const set = Array.from(projectReferenceSets.values()).find((candidate) =>
+          candidate.teamId === input.teamId
+          && candidate.channelId === input.channelId
+          && candidate.messageId === input.messageId);
+        return set
+          ? hydrateProjectReferenceSet(set, projectReferenceSelections, projectReferenceItems)
+          : null;
+      },
+      async create(input) {
+        const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
+        const existingMutation = projectReferenceSetMutations.get(mutationKey);
+        if (existingMutation) {
+          return existingMutation.requestFingerprint === input.mutation.requestFingerprint
+            ? { kind: 'replayed', mutation: { ...existingMutation } }
+            : { kind: 'idempotency_conflict' };
+        }
+        projectReferenceSets.set(input.set.id, {
+          ...input.set,
+          selections: [],
+        });
+        for (const selection of input.selections) {
+          projectReferenceSelections.set(selection.id, { ...selection, items: [] });
+        }
+        for (const item of input.items) projectReferenceItems.set(item.id, { ...item });
+        projectReferenceSetMutations.set(mutationKey, { ...input.mutation });
+        return { kind: 'created', mutation: { ...input.mutation } };
+      },
+    },
     experiencePack: createMemoryExperiencePackRepositories(),
   };
   return repositories;
@@ -1955,4 +2026,27 @@ function isPendingDispatchStatus(status: DispatchRecord['status']): boolean {
 
 function isCompletableDispatchStatus(status: DispatchRecord['status']): boolean {
   return isPendingDispatchStatus(status) || status === 'timed_out';
+}
+
+function hydrateProjectReferenceSet(
+  set: ProjectReferenceSetRecord,
+  selectionRecords: Map<string, ProjectReferenceSelectionRecord>,
+  itemRecords: Map<string, ProjectReferenceItemRecord>,
+): ProjectReferenceSetRecord {
+  const selections = Array.from(selectionRecords.values())
+    .filter((selection) => selection.referenceSetId === set.id)
+    .sort((left, right) => left.position - right.position)
+    .map((selection) => ({
+      ...selection,
+      items: Array.from(itemRecords.values())
+        .filter((item) => item.selectionId === selection.id)
+        .sort((left, right) => left.position - right.position)
+        .map((item) => ({ ...item })),
+    }));
+  return { ...set, selections };
+}
+
+function restoreMap<K, V>(target: Map<K, V>, snapshot: Map<K, V>): void {
+  target.clear();
+  for (const [key, value] of snapshot) target.set(key, value);
 }

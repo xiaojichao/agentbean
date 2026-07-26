@@ -137,6 +137,7 @@ export interface WebSocketHandlerOptions {
   afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectArtifactMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectDocumentBundleMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterProjectReferencesUpdated?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
@@ -441,6 +442,14 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  bind(socket, WEB_EVENTS.project.resolveReferences, app, 'resolveProjectReferences', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.resolveReferenceOrdinal, app, 'resolveProjectReferenceOrdinal', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
       const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));
@@ -550,6 +559,9 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.message.send, app, 'sendMessage', async (_payload, result) => {
     await options.afterMessageSend?.(_payload, result);
+    if (isSendMessageAck(result) && result.referenceSet) {
+      await options.afterProjectReferencesUpdated?.(_payload, result);
+    }
     if (isSendMessageAck(result) && result.task) {
       await options.afterTaskMutation?.(_payload, result);
     }
@@ -1199,7 +1211,9 @@ function resetPendingDispatchRequestTimer(
   (pending.timer as { unref?: () => void }).unref?.();
 }
 
-function isSendMessageAck(result: unknown): result is SendMessageAck & { task?: unknown } {
+function isSendMessageAck(
+  result: unknown,
+): result is SendMessageAck & { task?: unknown; referenceSet?: unknown } {
   if (!result || typeof result !== 'object') {
     return false;
   }

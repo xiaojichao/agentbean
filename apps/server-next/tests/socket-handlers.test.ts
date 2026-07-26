@@ -203,6 +203,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.documentBundles,
       WEB_EVENTS.project.documentBundle,
       WEB_EVENTS.project.createDocumentBundle,
+      WEB_EVENTS.project.resolveReferences,
+      WEB_EVENTS.project.resolveReferenceOrdinal,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,

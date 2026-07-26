@@ -11,7 +11,7 @@ import type { AgentExposureRepositories, AgentExposureUnitOfWork } from './agent
 import type { SystemKnowledgeRepository, UserMemoryRepository } from './system-user-memory-repositories.js';
 import type { AgentMemoryProjectionRepositories, AgentMemoryProjectionUnitOfWork } from './agent-memory-projection-repositories.js';
 import type { ExperiencePackRepositories } from './experience-pack-repositories.js';
-import type { ChannelProjectRepository, ProjectDocumentBundleRepository } from './project-repositories.js';
+import type { ChannelProjectRepository, ProjectDocumentBundleRepository, ProjectReferenceSetRepository } from './project-repositories.js';
 import type {
   ChannelCoordinationRepositories,
   ChannelCoordinationUnitOfWork,
@@ -308,6 +308,11 @@ export interface AgentRepository {
 export interface MessageRepository {
   append(input: MessageRecord): Promise<MessageRecord>;
   getById(messageId: ID): Promise<MessageRecord | null>;
+  getByClientMessageId(input: {
+    teamId: ID;
+    channelId: ID;
+    clientMessageId: string;
+  }): Promise<MessageRecord | null>;
   updateMeta(input: { messageId: ID; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   edit(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
@@ -440,6 +445,7 @@ export interface ServerNextRepositories {
   experiencePack: ExperiencePackRepositories;
   channelProjects: ChannelProjectRepository;
   projectDocumentBundles: ProjectDocumentBundleRepository;
+  projectReferenceSets: ProjectReferenceSetRepository;
 }
 
 export interface ReactionRecord {

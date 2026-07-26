@@ -11,12 +11,27 @@ import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRu
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import {
+  PROJECT_REFERENCE_SET_CONTRACT_VERSION,
+  type ProjectReferenceFailureDetailsDto,
+  type ProjectReferenceItemDto,
+  type ProjectReferenceSelectionRequestDto,
+  type ProjectReferenceSetDto,
+  type ResolveProjectReferenceOrdinalInput,
+  type ResolveProjectReferenceOrdinalResultDto,
+  type ResolveProjectReferencesInput,
+  type ResolveProjectReferencesResultDto,
+} from '../../../../packages/contracts/src/index.js';
 import type {
   ChannelProjectProfileRecord,
   ProjectArtifactCollectionRecord,
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleRecord,
+  ProjectReferenceItemRecord,
+  ProjectReferenceSelectionRecord,
+  ProjectReferenceSetRecord,
+  ProjectReferenceSetRepository,
   ProjectStageEdgeMutationResult,
   ProjectStageEdgeRecord,
   ProjectStageRecord,
@@ -74,6 +89,14 @@ import {
   type ProjectArtifactPromotionRejectionCode,
   type ProjectDocumentBundleMemberCandidate,
   type ProjectDocumentBundleMemberRejectionCode,
+} from '../../../../packages/domain/src/index.js';
+import {
+  evaluateSelectionEligibility,
+  resolveReferenceOrdinal,
+  type ProjectReferenceArtifactVersionCandidate,
+  type ProjectReferenceBundleCandidate,
+  type ProjectReferenceDocumentCandidate,
+  type ProjectReferenceSelectionCandidate,
 } from '../../../../packages/domain/src/index.js';
 import {
   buildProjectStageUpstreamEdgeFacts,
@@ -272,6 +295,12 @@ export interface ServerNextUseCases {
   createProjectDocumentBundle(
     input: CreateProjectDocumentBundleInput & { userId: string },
   ): Promise<Ack<ProjectDocumentBundleResultDto & { replayed: boolean }>>;
+  resolveProjectReferences(
+    input: ResolveProjectReferencesInput & { userId: string },
+  ): Promise<Ack<ResolveProjectReferencesResultDto>>;
+  resolveProjectReferenceOrdinal(
+    input: ResolveProjectReferenceOrdinalInput & { userId: string },
+  ): Promise<Ack<ResolveProjectReferenceOrdinalResultDto>>;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
@@ -679,6 +708,7 @@ export interface SendMessageInput {
   connectedAgentDeviceIds?: string[];
   dispatchClaimDeviceIds?: string[];
   meta?: MessageMetaDto;
+  selections?: ProjectReferenceSelectionRequestDto[];
 }
 
 export interface SendMessageResult {
@@ -689,6 +719,7 @@ export interface SendMessageResult {
   task?: TaskDto;
   acknowledgementMessage?: MessageDto;
   management?: ManagementRoutingResult;
+  referenceSet?: ProjectReferenceSetDto;
 }
 
 export interface AcceptDispatchInput {
@@ -1302,6 +1333,37 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeFailure('FORBIDDEN', 'User cannot view channel');
     }
 
+    const referenceFingerprint = projectReferenceRequestFingerprint(messageInput);
+    if (messageInput.clientMessageId) {
+      const existing = await repositories.messages.getByClientMessageId({
+        teamId: messageInput.teamId,
+        channelId: messageInput.channelId,
+        clientMessageId: messageInput.clientMessageId,
+      });
+      if (existing) {
+        const sameRequest = existing.senderId === messageInput.userId
+          && existing.body === messageInput.body
+          && existing.meta?.projectReferenceRequestFingerprint === referenceFingerprint;
+        if (!sameRequest) {
+          return makeFailure('CONFLICT', 'Client message id was already used for a different message');
+        }
+        const [projected] = await enrichMessagesWithArtifacts(repositories, [existing]);
+        return makeSuccess({
+          message: projected ?? existing,
+          dispatches: (await repositories.dispatches.listByMessage(existing.id)).map(toDispatchDto),
+          ...(projected?.referenceSet ? { referenceSet: projected.referenceSet } : {}),
+        });
+      }
+    }
+    const frozen = await resolveAndFreezeSelections(repositories, {
+      userId: messageInput.userId,
+      teamId: messageInput.teamId,
+      channelId: messageInput.channelId,
+      channel,
+      selections: messageInput.selections ?? [],
+    });
+    if (!frozen.ok) return frozen;
+
     const now = clock.now();
     const messageId = ids.nextId();
     const threadId = messageInput.threadId ?? messageId;
@@ -1381,23 +1443,39 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         maxAttempts: 1,
       });
     }
-    const message = await repositories.messages.append({
-      id: messageId,
-      teamId: messageInput.teamId,
-      channelId: messageInput.channelId,
-      threadId,
-      senderKind: 'human',
-      senderId: messageInput.userId,
-      body: messageInput.body,
-      createdAt: now,
-      meta: {
-        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-        ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
-        ...(task ? { taskId: task.id } : {}),
-        ...(mentions.length ? { mentions } : {}),
-        routeReason: toRouteReason(route),
-      },
+    const saved = await repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
+      const message = await transaction.messages.append({
+        id: messageId,
+        teamId: messageInput.teamId,
+        channelId: messageInput.channelId,
+        threadId,
+        senderKind: 'human',
+        senderId: messageInput.userId,
+        body: messageInput.body,
+        createdAt: now,
+        meta: {
+          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+          ...(task ? { taskId: task.id } : {}),
+          ...(mentions.length ? { mentions } : {}),
+          projectReferenceRequestFingerprint: referenceFingerprint,
+          routeReason: toRouteReason(route),
+        },
+      });
+      const referenceSet = frozen.selections.length > 0
+        ? await persistFrozenProjectReferences(transaction.projectReferenceSets, {
+          ids,
+          message,
+          createdBy: messageInput.userId,
+          previews: frozen.selections,
+          idempotencyKey: messageInput.clientMessageId ?? message.id,
+          requestFingerprint: referenceFingerprint,
+          createdAt: now,
+        })
+        : undefined;
+      return { message, referenceSet };
     });
+    const { message, referenceSet } = saved;
     const releaseDispatchCoalescingLock = await acquireKeyedLock(
       dispatchCoalescingLocks,
       `${message.teamId}:${message.channelId}:${message.senderId}`,
@@ -1439,14 +1517,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       return makeSuccess({
         message: attachedArtifacts.length > 0
-          ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto) }
-          : message,
+          ? { ...message, artifacts: attachedArtifacts.map(toArtifactDto), ...(referenceSet ? { referenceSet } : {}) }
+          : { ...message, ...(referenceSet ? { referenceSet } : {}) },
         dispatches,
         route,
         ...(coalescedDispatchId ? { coalescedDispatchId } : {}),
         ...(task ? { task } : {}),
         ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
         management,
+        ...(referenceSet ? { referenceSet } : {}),
       });
     } finally {
       releaseDispatchCoalescingLock();
@@ -3332,6 +3411,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return attachmentResult;
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
+      const referenceFingerprint = projectReferenceRequestFingerprint(messageInput);
 
       const clientIdempotencyKey = messageInput.clientMessageId
         ? `client:${messageInput.teamId}:${messageInput.clientMessageId}`
@@ -3370,12 +3450,31 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               && existingMessage.channelId === messageInput.channelId
               && existingMessage.senderId === messageInput.userId
               && existingMessage.body === messageInput.body
+              && existingMessage.meta?.projectReferenceRequestFingerprint === referenceFingerprint
               && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
             if (!sameRequest) return { kind: 'conflict' as const };
             const replayArtifacts = await transaction.artifacts.listByMessage(existingMessage.id);
-            return { kind: 'saved' as const, message: existingMessage, artifacts: replayArtifacts };
+            const replayReferenceSet = await transaction.projectReferenceSets.getByMessageId({
+              teamId: existingMessage.teamId,
+              channelId: existingMessage.channelId,
+              messageId: existingMessage.id,
+            });
+            return {
+              kind: 'saved' as const,
+              message: existingMessage,
+              artifacts: replayArtifacts,
+              referenceSet: replayReferenceSet ? toProjectReferenceSetDto(replayReferenceSet) : undefined,
+            };
           }
 
+          const frozen = await resolveAndFreezeSelections(repositories, {
+            userId: messageInput.userId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            channel,
+            selections: messageInput.selections ?? [],
+          });
+          if (!frozen.ok) return { kind: 'rejected' as const, failure: frozen };
           const messageId = messageInput.messageId ?? ids.nextId();
           const jobId = ids.nextId();
           const message = await transaction.messages.append({
@@ -3392,8 +3491,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
               ...(messageInput.asTask === true ? { asTask: true } : {}),
               ...(mentions.length ? { mentions } : {}),
+              projectReferenceRequestFingerprint: referenceFingerprint,
             },
           });
+          const referenceSet = frozen.selections.length > 0
+            ? await persistFrozenProjectReferences(transaction.projectReferenceSets, {
+              ids,
+              message,
+              createdBy: messageInput.userId,
+              previews: frozen.selections,
+              idempotencyKey: messageInput.clientMessageId ?? message.id,
+              requestFingerprint: referenceFingerprint,
+              createdAt: now,
+            })
+            : undefined;
           const attachedArtifacts: ArtifactRecord[] = [];
           for (const artifact of attachmentResult.artifacts) {
             attachedArtifacts.push(await transaction.artifacts.create({ ...artifact, messageId }));
@@ -3411,22 +3522,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             createdAt: now,
             updatedAt: now,
           });
-          return { kind: 'saved' as const, message, artifacts: attachedArtifacts };
+          return { kind: 'saved' as const, message, artifacts: attachedArtifacts, referenceSet };
         });
       });
 
       if (outcome.kind === 'conflict') {
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
       }
+      if (outcome.kind === 'rejected') return outcome.failure;
 
       if (channelFileRollout.markdownEditing) {
         await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
       }
 
       const message = outcome.artifacts.length > 0
-        ? { ...outcome.message, artifacts: outcome.artifacts.map(toArtifactDto) }
-        : outcome.message;
-      return makeSuccess({ message, dispatches: [] });
+        ? {
+          ...outcome.message,
+          artifacts: outcome.artifacts.map(toArtifactDto),
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        }
+        : {
+          ...outcome.message,
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        };
+      return makeSuccess({
+        message,
+        dispatches: [],
+        ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+      });
     },
 
     async getDispatchRequest(requestInput) {
@@ -4850,6 +4973,54 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         archived: false,
         replayed: result.kind === 'replayed',
       });
+    },
+
+    async resolveProjectReferences(referenceInput) {
+      if (!(await repositories.teams.isMember(referenceInput.teamId, referenceInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, referenceInput);
+      if (!access.ok) return access;
+      return resolveAndFreezeSelections(repositories, {
+        ...referenceInput,
+        channel: access.channel,
+      });
+    },
+
+    async resolveProjectReferenceOrdinal(referenceInput) {
+      if (!(await repositories.teams.isMember(referenceInput.teamId, referenceInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, referenceInput);
+      if (!access.ok) return access;
+      const bundleMembers = [];
+      for (const bundleId of referenceInput.focusBundleIds) {
+        const bundle = await repositories.projectDocumentBundles.getById({
+          teamId: referenceInput.teamId,
+          channelId: referenceInput.channelId,
+          bundleId,
+        });
+        if (!bundle) continue;
+        const members = await repositories.projectDocumentBundles.listMembers({ bundleId });
+        for (const member of members) {
+          const document = await repositories.channelDocuments.getForTeam({
+            teamId: referenceInput.teamId,
+            channelId: referenceInput.channelId,
+            documentId: member.documentId,
+          });
+          bundleMembers.push({
+            bundleId,
+            documentId: member.documentId,
+            position: member.position + 1,
+            filename: document?.filename ?? member.initialFilename,
+          });
+        }
+      }
+      return makeSuccess(resolveReferenceOrdinal(
+        referenceInput.ordinal,
+        referenceInput.focusBundleIds,
+        bundleMembers,
+      ));
     },
 
     async getTaskDag(taskInput) {
@@ -7696,11 +7867,19 @@ async function enrichMessagesWithArtifacts(
     // 进行中的优先（让前端切频道/刷新后能恢复「正在处理」）；否则取最新一条的终态。
     const dispatches = isDeleted ? [] : await repositories.dispatches.listByMessage(message.id);
     const chosenDispatch = dispatches.find((d) => isPendingDispatchStatus(d.status)) ?? dispatches[dispatches.length - 1];
+    const referenceSet = isDeleted
+      ? null
+      : await repositories.projectReferenceSets.getByMessageId({
+        teamId: message.teamId,
+        channelId: message.channelId,
+        messageId: message.id,
+      });
     enriched.push({
       ...message,
       ...(artifacts.length > 0 ? { artifacts: artifacts.map(toArtifactDto) } : {}),
       ...(workspaceRun ? { workspaceRun } : {}),
       ...(chosenDispatch ? { dispatchStatus: chosenDispatch.status, dispatchId: chosenDispatch.id } : {}),
+      ...(referenceSet ? { referenceSet: toProjectReferenceSetDto(referenceSet) } : {}),
     });
   }
   return enriched;
@@ -9147,6 +9326,298 @@ function normalizeTags(tags: string[] | undefined): string[] {
 function normalizeUniqueTextItems(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return uniqueIds(value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean));
+}
+
+function projectReferenceRequestFingerprint(
+  input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'body' | 'selections'>,
+): string {
+  return createHash('sha256').update(JSON.stringify({
+    teamId: input.teamId,
+    channelId: input.channelId,
+    body: input.body,
+    selections: input.selections ?? [],
+  })).digest('hex');
+}
+
+async function persistFrozenProjectReferences(
+  repository: ProjectReferenceSetRepository,
+  input: {
+    ids: ServerNextIds;
+    message: MessageRecord;
+    createdBy: string;
+    previews: readonly ResolveProjectReferencesResultDto['selections'][number][];
+    idempotencyKey: string;
+    requestFingerprint: string;
+    createdAt: number;
+  },
+): Promise<ProjectReferenceSetDto> {
+  const setId = input.ids.nextId();
+  const selections: ProjectReferenceSelectionRecord[] = [];
+  const items: ProjectReferenceItemRecord[] = [];
+  for (const [selectionPosition, preview] of input.previews.entries()) {
+    const selectionId = input.ids.nextId();
+    const selectionItems: ProjectReferenceItemRecord[] = preview.items.map((item, position) => ({
+      id: input.ids.nextId(),
+      selectionId,
+      kind: item.kind,
+      position,
+      ...(item.kind === 'document_revision'
+        ? {
+          documentId: item.documentId,
+          revisionId: item.revisionId,
+          revisionNumber: item.revisionNumber,
+          filename: item.filename,
+          ...(item.bundlePosition === undefined ? {} : { bundlePosition: item.bundlePosition }),
+        }
+        : {
+          collectionId: item.collectionId,
+          versionId: item.versionId,
+          versionNumber: item.versionNumber,
+          artifactId: item.artifactId,
+          artifactFilename: item.filename,
+        }),
+      createdAt: input.createdAt,
+    }));
+    selections.push({
+      id: selectionId,
+      referenceSetId: setId,
+      sourceKind: preview.sourceKind,
+      position: selectionPosition,
+      ...(preview.bundle
+        ? {
+          bundleId: preview.bundle.bundleId,
+          bundleName: preview.bundle.name,
+          bundleMemberCount: preview.bundle.memberCount,
+        }
+        : {}),
+      createdAt: input.createdAt,
+      items: selectionItems,
+    });
+    items.push(...selectionItems);
+  }
+  const set: ProjectReferenceSetRecord = {
+    id: setId,
+    contractVersion: PROJECT_REFERENCE_SET_CONTRACT_VERSION,
+    teamId: input.message.teamId,
+    channelId: input.message.channelId,
+    messageId: input.message.id,
+    createdBy: input.createdBy,
+    createdAt: input.createdAt,
+    selections,
+  };
+  const result = await repository.create({
+    set,
+    selections,
+    items,
+    mutation: {
+      teamId: input.message.teamId,
+      channelId: input.message.channelId,
+      idempotencyKey: input.idempotencyKey,
+      requestFingerprint: input.requestFingerprint,
+      referenceSetId: setId,
+      createdAt: input.createdAt,
+    },
+  });
+  if (result.kind !== 'created') {
+    throw new Error(`Project reference set could not be atomically created: ${result.kind}`);
+  }
+  return toProjectReferenceSetDto(set);
+}
+
+function toProjectReferenceSetDto(record: ProjectReferenceSetRecord): ProjectReferenceSetDto {
+  return {
+    id: record.id,
+    contractVersion: record.contractVersion,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    messageId: record.messageId,
+    selections: record.selections.map((selection) => ({
+      id: selection.id,
+      position: selection.position,
+      sourceKind: selection.sourceKind,
+      ...(selection.bundleId && selection.bundleName && selection.bundleMemberCount !== undefined
+        ? {
+          bundle: {
+            bundleId: selection.bundleId,
+            name: selection.bundleName,
+            memberCount: selection.bundleMemberCount,
+          },
+        }
+        : {}),
+      items: selection.items.map((item): ProjectReferenceItemDto =>
+        item.kind === 'document_revision'
+          ? {
+            kind: 'document_revision',
+            documentId: item.documentId as string,
+            revisionId: item.revisionId as string,
+            revisionNumber: item.revisionNumber as number,
+            filename: item.filename as string,
+            ...(item.bundlePosition === undefined ? {} : { bundlePosition: item.bundlePosition }),
+          }
+          : {
+            kind: 'artifact_version',
+            collectionId: item.collectionId as string,
+            versionId: item.versionId as string,
+            versionNumber: item.versionNumber as number,
+            artifactId: item.artifactId as string,
+            filename: item.artifactFilename as string,
+          }),
+      createdAt: selection.createdAt,
+    })),
+    createdBy: record.createdBy,
+    createdAt: record.createdAt,
+  };
+}
+
+async function resolveAndFreezeSelections(
+  repositories: ServerNextRepositories,
+  input: {
+    userId: string;
+    teamId: string;
+    channelId: string;
+    channel: ChannelRecord;
+    selections: readonly ProjectReferenceSelectionRequestDto[];
+  },
+): Promise<Ack<ResolveProjectReferencesResultDto>> {
+  const previews = [];
+  const rejections: NonNullable<ProjectReferenceFailureDetailsDto['rejections']>[number][] = [];
+  for (const [selectionIndex, request] of input.selections.entries()) {
+    const selection = await loadProjectReferenceSelectionCandidate(repositories, input, request);
+    const verdict = evaluateSelectionEligibility(selection, {
+      teamId: input.channel.teamId,
+      channelId: input.channel.id,
+      archived: input.channel.archivedAt != null,
+      visible: input.channel.visibility !== 'private'
+        || input.channel.humanMemberIds.includes(input.userId),
+    }, {
+      teamId: input.teamId,
+      channelId: input.channelId,
+    });
+    if (!verdict.eligible) {
+      rejections.push({
+        selectionIndex,
+        ...(verdict.refId ? { refId: verdict.refId } : {}),
+        code: verdict.code,
+      });
+      continue;
+    }
+    previews.push(verdict.preview);
+  }
+  if (rejections.length > 0) {
+    return makeFailure(
+      'VALIDATION_ERROR',
+      'One or more project reference selections were rejected',
+      { reason: 'selections_rejected', rejections },
+    );
+  }
+  return makeSuccess({
+    selections: previews,
+    archived: input.channel.archivedAt != null,
+  });
+}
+
+async function loadProjectReferenceSelectionCandidate(
+  repositories: ServerNextRepositories,
+  input: { teamId: string; channelId: string },
+  request: ProjectReferenceSelectionRequestDto,
+): Promise<ProjectReferenceSelectionCandidate> {
+  if (request.kind === 'document') {
+    return {
+      request,
+      document: await loadProjectReferenceDocumentCandidate(repositories, {
+        ...input,
+        documentId: request.documentId,
+      }),
+    };
+  }
+  if (request.kind === 'artifact_version') {
+    const versions = await repositories.channelProjects.listArtifactVersions(input);
+    const version = versions.find((candidate) => candidate.id === request.versionId) ?? null;
+    let artifactVersion: ProjectReferenceArtifactVersionCandidate | null = null;
+    if (version) {
+      const artifact = await repositories.artifacts.getForTeam({
+        teamId: input.teamId,
+        artifactId: version.artifactId,
+      });
+      artifactVersion = {
+        collectionId: version.collectionId,
+        versionId: version.id,
+        versionNumber: version.versionNumber,
+        artifactId: version.artifactId,
+        filename: artifact?.filename ?? version.artifactId,
+        teamId: version.teamId,
+        channelId: version.channelId,
+        visible: Boolean(artifact)
+          && artifact!.channelId === input.channelId
+          && await isPublicChannelFileArtifact(repositories, artifact!),
+      };
+    }
+    return { request, artifactVersion };
+  }
+
+  const record = await repositories.projectDocumentBundles.getById({
+    teamId: input.teamId,
+    channelId: input.channelId,
+    bundleId: request.bundleId,
+  });
+  let bundle: ProjectReferenceBundleCandidate | null = null;
+  if (record) {
+    const members = await repositories.projectDocumentBundles.listMembers({ bundleId: record.id });
+    const resolvedMembers: ProjectReferenceDocumentCandidate[] = [];
+    let visible = true;
+    for (const member of members) {
+      const candidate = await loadProjectReferenceDocumentCandidate(repositories, {
+        ...input,
+        documentId: member.documentId,
+        bundlePosition: member.position,
+      });
+      if (!candidate) {
+        visible = false;
+        continue;
+      }
+      if (!candidate.visible) visible = false;
+      resolvedMembers.push(candidate);
+    }
+    bundle = {
+      bundleId: record.id,
+      teamId: record.teamId,
+      channelId: record.channelId,
+      name: record.name,
+      visible,
+      members: resolvedMembers,
+    };
+  }
+  return { request, bundle };
+}
+
+async function loadProjectReferenceDocumentCandidate(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: string;
+    channelId: string;
+    documentId: string;
+    bundlePosition?: number;
+  },
+): Promise<ProjectReferenceDocumentCandidate | null> {
+  const document = await repositories.channelDocuments.getForTeam(input);
+  if (!document) return null;
+  const revision = await repositories.channelDocuments.getRevision({
+    documentId: document.id,
+    revisionId: document.currentRevisionId,
+  });
+  if (!revision) return null;
+  return {
+    documentId: document.id,
+    teamId: document.teamId,
+    channelId: document.channelId,
+    revisionId: revision.id,
+    revisionNumber: revision.revision,
+    filename: document.filename,
+    visible: revision.artifact.teamId === input.teamId
+      && revision.artifact.channelId === input.channelId
+      && await isPublicChannelFileArtifact(repositories, revision.artifact),
+    ...(input.bundlePosition === undefined ? {} : { bundlePosition: input.bundlePosition }),
+  };
 }
 
 /**

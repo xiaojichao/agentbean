@@ -53,6 +53,11 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectReferenceItemRecord,
+  ProjectReferenceSelectionRecord,
+  ProjectReferenceSetMutationRecord,
+  ProjectReferenceSetRecord,
+  ProjectReferenceSetRepository,
   ProjectStageEdgeMutationResult,
   ProjectStageEdgeRecord,
   ProjectStageRecord,
@@ -185,6 +190,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0050_project_document_bundles.sql');
   applyMigration(db, 'team/0051_project_stage_edges.sql');
+  applyMigration(db, 'team/0053_project_reference_sets.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -425,6 +431,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     },
   };
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
+  const projectReferenceSets = createSqliteProjectReferenceSetRepository(teamDb);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -463,6 +470,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         decisions: channelCoordination.decisions,
         tasks: repositories.tasks,
         channels: repositories.channels,
+        projectReferenceSets,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
@@ -1637,6 +1645,13 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async getById(messageId) {
         return mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(messageId));
+      },
+      async getByClientMessageId(input) {
+        return mapMessage(teamDb.prepare(
+          `SELECT * FROM messages
+           WHERE team_id = ? AND channel_id = ? AND client_message_id = ?
+           ORDER BY created_at ASC LIMIT 1`,
+        ).get(input.teamId, input.channelId, input.clientMessageId));
       },
       async updateMeta(input) {
         const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
@@ -3235,6 +3250,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return transaction.immediate ? transaction.immediate() : transaction();
       },
     },
+    projectReferenceSets,
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
     revocations: {
       async find({ teamId, machineId, profileId }) {
@@ -3994,6 +4010,197 @@ function mapProjectArtifactMutation(row: unknown): ProjectArtifactMutationRecord
     requestFingerprint: sqliteText(row, 'request_fingerprint'),
     collectionId: sqliteText(row, 'collection_id'),
     versionId: sqliteText(row, 'version_id'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function createSqliteProjectReferenceSetRepository(
+  db: SqliteDatabase,
+): ProjectReferenceSetRepository {
+  const getById = (referenceSetId: string): ProjectReferenceSetRecord | null => {
+    const set = mapProjectReferenceSet(db.prepare(
+      'SELECT * FROM project_reference_sets WHERE id = ?',
+    ).get(referenceSetId));
+    if (!set) return null;
+    const selections = db.prepare(
+      `SELECT * FROM project_reference_selections
+       WHERE reference_set_id = ? ORDER BY position ASC`,
+    ).all(referenceSetId)
+      .map(mapProjectReferenceSelection)
+      .filter((selection): selection is ProjectReferenceSelectionRecord => selection !== null)
+      .map((selection) => ({
+        ...selection,
+        items: db.prepare(
+          `SELECT * FROM project_reference_items
+           WHERE selection_id = ? ORDER BY position ASC`,
+        ).all(selection.id)
+          .map(mapProjectReferenceItem)
+          .filter((item): item is ProjectReferenceItemRecord => item !== null),
+      }));
+    return { ...set, selections };
+  };
+
+  return {
+    async getByMessageId(input) {
+      const row = db.prepare(
+        `SELECT id FROM project_reference_sets
+         WHERE team_id = ? AND channel_id = ? AND message_id = ?
+         ORDER BY created_at ASC LIMIT 1`,
+      ).get(input.teamId, input.channelId, input.messageId);
+      return row ? getById(sqliteText(row, 'id')) : null;
+    },
+    async create(input) {
+      const transact = db.transaction(() => {
+        const existing = mapProjectReferenceSetMutation(db.prepare(
+          `SELECT * FROM project_reference_set_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(
+          input.mutation.teamId,
+          input.mutation.channelId,
+          input.mutation.idempotencyKey,
+        ));
+        if (existing) {
+          return existing.requestFingerprint === input.mutation.requestFingerprint
+            ? { kind: 'replayed' as const, mutation: existing }
+            : { kind: 'idempotency_conflict' as const };
+        }
+
+        db.prepare(
+          `INSERT INTO project_reference_sets (
+             id, contract_version, team_id, channel_id, message_id, created_by, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.set.id,
+          input.set.contractVersion,
+          input.set.teamId,
+          input.set.channelId,
+          input.set.messageId,
+          input.set.createdBy,
+          input.set.createdAt,
+        );
+        const insertSelection = db.prepare(
+          `INSERT INTO project_reference_selections (
+             id, reference_set_id, source_kind, position, bundle_id, bundle_name,
+             bundle_member_count, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const selection of input.selections) {
+          insertSelection.run(
+            selection.id,
+            selection.referenceSetId,
+            selection.sourceKind,
+            selection.position,
+            selection.bundleId ?? null,
+            selection.bundleName ?? null,
+            selection.bundleMemberCount ?? null,
+            selection.createdAt,
+          );
+        }
+        const insertItem = db.prepare(
+          `INSERT INTO project_reference_items (
+             id, selection_id, kind, position, document_id, revision_id, revision_number,
+             filename, bundle_position, collection_id, version_id, version_number,
+             artifact_id, artifact_filename, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const item of input.items) {
+          insertItem.run(
+            item.id,
+            item.selectionId,
+            item.kind,
+            item.position,
+            item.documentId ?? null,
+            item.revisionId ?? null,
+            item.revisionNumber ?? null,
+            item.filename ?? null,
+            item.bundlePosition ?? null,
+            item.collectionId ?? null,
+            item.versionId ?? null,
+            item.versionNumber ?? null,
+            item.artifactId ?? null,
+            item.artifactFilename ?? null,
+            item.createdAt,
+          );
+        }
+        db.prepare(
+          `INSERT INTO project_reference_set_mutations (
+             team_id, channel_id, idempotency_key, request_fingerprint,
+             reference_set_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.mutation.teamId,
+          input.mutation.channelId,
+          input.mutation.idempotencyKey,
+          input.mutation.requestFingerprint,
+          input.mutation.referenceSetId,
+          input.mutation.createdAt,
+        );
+        return { kind: 'created' as const, mutation: input.mutation };
+      });
+      return transact.immediate ? transact.immediate() : transact();
+    },
+  };
+}
+
+function mapProjectReferenceSet(
+  row: unknown,
+): Omit<ProjectReferenceSetRecord, 'selections'> | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    contractVersion: sqliteNumber(row, 'contract_version'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    messageId: sqliteText(row, 'message_id'),
+    createdBy: sqliteText(row, 'created_by'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectReferenceSelection(row: unknown): ProjectReferenceSelectionRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    referenceSetId: sqliteText(row, 'reference_set_id'),
+    sourceKind: sqliteText(row, 'source_kind') as ProjectReferenceSelectionRecord['sourceKind'],
+    position: sqliteNumber(row, 'position'),
+    bundleId: sqliteNullableText(row, 'bundle_id'),
+    bundleName: sqliteNullableText(row, 'bundle_name'),
+    bundleMemberCount: sqliteNullableNumber(row, 'bundle_member_count'),
+    createdAt: sqliteNumber(row, 'created_at'),
+    items: [],
+  };
+}
+
+function mapProjectReferenceItem(row: unknown): ProjectReferenceItemRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    selectionId: sqliteText(row, 'selection_id'),
+    kind: sqliteText(row, 'kind') as ProjectReferenceItemRecord['kind'],
+    position: sqliteNumber(row, 'position'),
+    documentId: sqliteNullableText(row, 'document_id'),
+    revisionId: sqliteNullableText(row, 'revision_id'),
+    revisionNumber: sqliteNullableNumber(row, 'revision_number'),
+    filename: sqliteNullableText(row, 'filename'),
+    bundlePosition: sqliteNullableNumber(row, 'bundle_position'),
+    collectionId: sqliteNullableText(row, 'collection_id'),
+    versionId: sqliteNullableText(row, 'version_id'),
+    versionNumber: sqliteNullableNumber(row, 'version_number'),
+    artifactId: sqliteNullableText(row, 'artifact_id'),
+    artifactFilename: sqliteNullableText(row, 'artifact_filename'),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapProjectReferenceSetMutation(row: unknown): ProjectReferenceSetMutationRecord | null {
+  if (!row) return null;
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    referenceSetId: sqliteText(row, 'reference_set_id'),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }

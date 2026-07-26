@@ -279,3 +279,74 @@ export interface ProjectDocumentBundleRepository {
     mutation: ProjectDocumentBundleMutationRecord;
   }): Promise<CreateProjectDocumentBundleResult>;
 }
+
+export interface ProjectReferenceItemRecord {
+  id: ID;
+  selectionId: ID;
+  kind: 'document_revision' | 'artifact_version';
+  position: number;
+  documentId?: ID;
+  revisionId?: ID;
+  revisionNumber?: number;
+  filename?: string;
+  bundlePosition?: number;
+  collectionId?: ID;
+  versionId?: ID;
+  versionNumber?: number;
+  artifactId?: ID;
+  artifactFilename?: string;
+  createdAt: UnixMs;
+}
+
+export interface ProjectReferenceSelectionRecord {
+  id: ID;
+  referenceSetId: ID;
+  sourceKind: 'bundle_all' | 'bundle_subset' | 'document' | 'artifact_version';
+  position: number;
+  bundleId?: ID;
+  bundleName?: string;
+  bundleMemberCount?: number;
+  createdAt: UnixMs;
+  items: ProjectReferenceItemRecord[];
+}
+
+export interface ProjectReferenceSetRecord {
+  id: ID;
+  contractVersion: number;
+  teamId: ID;
+  channelId: ID;
+  messageId: ID;
+  createdBy: ID;
+  createdAt: UnixMs;
+  selections: ProjectReferenceSelectionRecord[];
+}
+
+export interface ProjectReferenceSetMutationRecord {
+  teamId: ID;
+  channelId: ID;
+  idempotencyKey: string;
+  requestFingerprint: string;
+  referenceSetId: ID;
+  createdAt: UnixMs;
+}
+
+export type CreateProjectReferenceSetResult =
+  | {
+    kind: 'created' | 'replayed';
+    mutation: ProjectReferenceSetMutationRecord;
+  }
+  | { kind: 'idempotency_conflict' };
+
+export interface ProjectReferenceSetRepository {
+  getByMessageId(input: {
+    teamId: ID;
+    channelId: ID;
+    messageId: ID;
+  }): Promise<ProjectReferenceSetRecord | null>;
+  create(input: {
+    set: ProjectReferenceSetRecord;
+    selections: ProjectReferenceSelectionRecord[];
+    items: ProjectReferenceItemRecord[];
+    mutation: ProjectReferenceSetMutationRecord;
+  }): Promise<CreateProjectReferenceSetResult>;
+}
