@@ -217,15 +217,45 @@ describe('#826 冻结项目引用并随消息发送', () => {
       createdAt: now,
       updatedAt: now,
     });
+    await repositories.channels.update({
+      channelId: 'channel-1',
+      changes: {
+        agentMemberIds: ['agent-1'],
+        updatedAt: ++now,
+      },
+    });
+    const followUp = await app.sendMessage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@执行代理 补充同一冻结版本',
+      clientMessageId: 'client-message-follow-up',
+      meta: {
+        mentions: [{ id: 'agent-1', kind: 'agent', name: '执行代理', start: 0, end: 5 }],
+      },
+      selections: [{
+        kind: 'document',
+        documentId: 'document-1',
+        expectedRevisionId: 'revision-1',
+      }],
+    });
+    if (!followUp.ok) throw new Error('follow-up message send failed');
     await expect(app.getDispatchRequest({
       dispatchId: 'dispatch-reference-1',
     })).resolves.toMatchObject({
       ok: true,
       request: {
-        projectReferenceSet: {
-          messageId: sent.message.id,
-          selections: [{ items: [{ revisionId: 'revision-1' }] }],
-        },
+        projectReferenceSets: [
+          {
+            messageId: sent.message.id,
+            selections: [{ items: [{ revisionId: 'revision-1' }] }],
+          },
+          {
+            messageId: followUp.message.id,
+            selections: [{ items: [{ revisionId: 'revision-1' }] }],
+          },
+        ],
+        attachments: [{ id: 'artifact-doc-1', name: 'plan.md' }],
       },
     });
 
@@ -272,14 +302,11 @@ describe('#826 冻结项目引用并随消息发送', () => {
     });
 
     const history = await app.listChannelMessages({ channelId: 'channel-1', limit: 20 });
-    expect(history).toMatchObject({
-      ok: true,
-      messages: [{
-        id: sent.message.id,
-        referenceSet: {
-          selections: [{ items: [{ revisionId: 'revision-1', revisionNumber: 1 }] }],
-        },
-      }],
+    if (!history.ok) throw new Error('message history failed');
+    expect(history.messages.find((message) => message.id === sent.message.id)).toMatchObject({
+      referenceSet: {
+        selections: [{ items: [{ revisionId: 'revision-1', revisionNumber: 1 }] }],
+      },
     });
 
     const reconnectedApp = createServerNextUseCases({
@@ -288,17 +315,15 @@ describe('#826 冻结项目引用并随消息发送', () => {
       clock: { now: () => ++now },
       messageIngestionMode: 'legacy',
     });
-    await expect(reconnectedApp.listChannelMessages({
+    const reconnectedHistory = await reconnectedApp.listChannelMessages({
       channelId: 'channel-1',
       limit: 20,
-    })).resolves.toMatchObject({
-      ok: true,
-      messages: [{
-        id: sent.message.id,
-        referenceSet: {
-          selections: [{ items: [{ revisionId: 'revision-1', revisionNumber: 1 }] }],
-        },
-      }],
+    });
+    if (!reconnectedHistory.ok) throw new Error('reconnected message history failed');
+    expect(reconnectedHistory.messages.find((message) => message.id === sent.message.id)).toMatchObject({
+      referenceSet: {
+        selections: [{ items: [{ revisionId: 'revision-1', revisionNumber: 1 }] }],
+      },
     });
   });
 
@@ -378,39 +403,73 @@ describe('#826 冻结项目引用并随消息发送', () => {
     })).resolves.toEqual({ kind: 'reference_fact_conflict' });
   });
 
-  test('引用提交冲突不会遗留幽灵任务或消息', async () => {
-    repositories.projectReferenceSets.create = async () => ({
-      kind: 'reference_fact_conflict',
-    });
-    await repositories.management.runs.create({
-      schemaVersion: 2,
-      managementPhase: 1,
-      id: 'management-run-conflict',
-      teamId: 'team-1',
-      channelId: 'channel-1',
-      rootMessageId: 'pending-message',
-      mode: 'managed',
-      status: 'queued',
-      placementPolicy: {
-        placement: 'device',
-        allowedDeviceIds: ['device-1'],
-        allowServerContext: false,
-        requireLocalModelCredentials: true,
-      },
-      checkpointRevision: 0,
-      budget: { maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 1 },
-      createdAt: now,
-      updatedAt: now,
-    });
+  test('引用提交冲突不遗留任务消息，并保留可重试的 queued 管理预约', async () => {
+    const createReferenceSet = repositories.projectReferenceSets.create.bind(
+      repositories.projectReferenceSets,
+    );
+    let rejectNextReferenceCommit = true;
+    repositories.projectReferenceSets.create = async (input) => {
+      if (rejectNextReferenceCommit) {
+        rejectNextReferenceCommit = false;
+        return { kind: 'reference_fact_conflict' };
+      }
+      return createReferenceSet(input);
+    };
     const managedRouter = {
-      route: async () => ({
-        kind: 'managed' as const,
-        mode: 'managed' as const,
-        managementRunId: 'management-run-conflict',
-        profileId: 'profile-1',
-        disposition: 'created' as const,
-        managementPhase: 1 as const,
-      }),
+      route: async (input: {
+        teamId: string;
+        userId: string;
+        channelId: string;
+        clientMessageId?: string;
+        rootMessageId: string;
+        rootTaskId?: string;
+      }) => {
+        const requestKey = `${input.teamId}:${input.userId}:${input.clientMessageId}`;
+        const existing = await repositories.management.reservations.getByRequestKey({
+          teamId: input.teamId,
+          requestKey,
+        });
+        if (!existing) {
+          await repositories.management.runs.create({
+            schemaVersion: 2,
+            managementPhase: 2,
+            id: 'management-run-conflict',
+            teamId: input.teamId,
+            channelId: input.channelId,
+            rootMessageId: input.rootMessageId,
+            rootTaskId: input.rootTaskId!,
+            mode: 'managed',
+            status: 'queued',
+            placementPolicy: {
+              placement: 'device',
+              allowedDeviceIds: ['device-1'],
+              allowServerContext: false,
+              requireLocalModelCredentials: true,
+            },
+            checkpointRevision: 0,
+            budget: { maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 1 },
+            collaborationMode: 'manager-orchestrated',
+            createdAt: now,
+            updatedAt: now,
+          });
+          await repositories.management.reservations.create({
+            id: 'management-reservation-conflict',
+            teamId: input.teamId,
+            requestKey,
+            requestHash: 'request-hash',
+            managementRunId: 'management-run-conflict',
+            createdAt: now,
+          });
+        }
+        return {
+          kind: 'managed' as const,
+          mode: 'managed' as const,
+          managementRunId: 'management-run-conflict',
+          profileId: 'profile-1',
+          disposition: existing ? 'existing' as const : 'created' as const,
+          managementPhase: 2 as const,
+        };
+      },
       scheduleManaged: async (result: unknown) => result,
     } as unknown as NonNullable<CreateServerNextUseCasesInput['managementRouter']>;
     const managedApp = createServerNextUseCases({
@@ -420,7 +479,7 @@ describe('#826 冻结项目引用并随消息发送', () => {
       messageIngestionMode: 'legacy',
       managementRouter: managedRouter,
     });
-    await expect(managedApp.sendMessage({
+    const command = {
       userId: 'owner-1',
       teamId: 'team-1',
       channelId: 'channel-1',
@@ -428,11 +487,12 @@ describe('#826 冻结项目引用并随消息发送', () => {
       clientMessageId: 'client-task-conflict',
       asTask: true,
       selections: [{
-        kind: 'document',
+        kind: 'document' as const,
         documentId: 'document-1',
         expectedRevisionId: 'revision-1',
       }],
-    })).resolves.toMatchObject({
+    };
+    await expect(managedApp.sendMessage(command)).resolves.toMatchObject({
       ok: false,
       error: 'VALIDATION_ERROR',
     });
@@ -445,8 +505,15 @@ describe('#826 冻结项目引用并随消息发送', () => {
     await expect(repositories.management.runs.getById(
       'management-run-conflict',
     )).resolves.toMatchObject({
-      status: 'cancelled',
-      completedAt: expect.any(Number),
+      status: 'queued',
+    });
+    const reservedRun = await repositories.management.runs.getById('management-run-conflict');
+    const retried = await managedApp.sendMessage(command);
+    expect(retried).toMatchObject({
+      ok: true,
+      message: { id: reservedRun?.rootMessageId },
+      task: { id: reservedRun?.rootTaskId },
+      management: { disposition: 'existing' },
     });
   });
 

@@ -112,8 +112,11 @@ export interface DispatchRequestDto {
   managementInvocationId?: ID;
   managementContext?: DispatchManagementContextDto;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
-  /** 发送时冻结的项目引用事实；执行端不得重新解析为较新的 revision/version。 */
-  projectReferenceSet?: ProjectReferenceSetDto;
+  /**
+   * 本次 prompt 中各消息发送时冻结的项目引用事实。
+   * 合并消息必须逐条保留，执行端不得重新解析为较新的 revision/version。
+   */
+  projectReferenceSets?: readonly ProjectReferenceSetDto[];
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];

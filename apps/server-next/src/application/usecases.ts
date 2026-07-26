@@ -1398,8 +1398,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     if (!frozen.ok) return frozen;
 
     const now = clock.now();
-    const messageId = ids.nextId();
-    const threadId = messageInput.threadId ?? messageId;
+    let messageId = ids.nextId();
+    let threadId = messageInput.threadId ?? messageId;
     const visibleAgents = await repositories.agents.listVisibleInTeam(messageInput.teamId);
     const mentions = sanitizeMessageMentions({
       body: messageInput.body,
@@ -1438,7 +1438,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       route,
       threadId: messageInput.threadId,
     });
-    const taskId = shouldCreateTask ? ids.nextId() : undefined;
+    let taskId = shouldCreateTask ? ids.nextId() : undefined;
+    if (messageInput.clientMessageId) {
+      const reservation = await repositories.management.reservations.getByRequestKey({
+        teamId: messageInput.teamId,
+        requestKey: `${messageInput.teamId}:${messageInput.userId}:${messageInput.clientMessageId.trim()}`,
+      });
+      const reservedRun = reservation
+        ? await repositories.management.runs.getById(reservation.managementRunId)
+        : null;
+      if (reservedRun
+        && reservedRun.teamId === messageInput.teamId
+        && reservedRun.channelId === messageInput.channelId) {
+        // 引用提交冲突后的重试必须复用管理预约冻结的根身份，否则 run 会指向
+        // 已回滚的 message/task，createOrResumeRun 的 requestHash 也会冲突。
+        messageId = reservedRun.rootMessageId;
+        threadId = messageInput.threadId ?? messageId;
+        if (shouldCreateTask && reservedRun.rootTaskId) taskId = reservedRun.rootTaskId;
+      }
+    }
     let management: ManagementRoutingResult = await managementRouter.route({
       userId: messageInput.userId,
       teamId: messageInput.teamId,
@@ -1505,19 +1523,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     } catch (error) {
       if (!(error instanceof ProjectReferenceCommitConflictError)) throw error;
-      // 路由发生在消息事务之前。若本次路由新建了管理运行，引用事实冲突时
-      // 将其终止，避免不可见消息对应的运行继续被调度。
-      if (management.kind === 'managed' && management.disposition === 'created') {
-        const run = await repositories.management.runs.getById(management.managementRunId);
-        if (run) {
-          await repositories.management.runs.update({
-            ...run,
-            status: 'cancelled',
-            updatedAt: now,
-            completedAt: now,
-          });
-        }
-      }
+      // 管理运行尚未 schedule，必须保留 queued reservation 供相同请求重试复用。
+      // 这里取消它会让并发重放或后续重试只能拿到终态 run。
       if (error.kind === 'idempotency_conflict' && messageInput.clientMessageId) {
         const replay = await repositories.messages.getByClientMessageId({
           teamId: messageInput.teamId,
@@ -8581,13 +8588,6 @@ async function buildDispatchRequest(
     ? await repositories.agents.getExecutionConfig(agent.id)
     : null;
   const originMessage = await repositories.messages.getById(dispatch.messageId);
-  const projectReferenceSet = originMessage
-    ? await repositories.projectReferenceSets.getByMessageId({
-        teamId: dispatch.teamId,
-        channelId: dispatch.channelId,
-        messageId: dispatch.messageId,
-      })
-    : null;
   const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
   const managementInvocation = managementAttempt
     ? await repositories.management.invocations.getById(managementAttempt.invocationId)
@@ -8613,6 +8613,16 @@ async function buildDispatchRequest(
   const requestPrompt = managementHandoff ? managementInvocation!.intent.objective : (promptMessages.length > 0
     ? renderCoalescedDispatchPrompt(promptMessages)
     : dispatch.prompt);
+  const referenceMessageIds = promptMessages.length > 0
+    ? promptMessages.map((message) => message.id)
+    : [dispatch.messageId];
+  const projectReferenceSets = (await Promise.all(referenceMessageIds.map((messageId) =>
+    repositories.projectReferenceSets.getByMessageId({
+      teamId: dispatch.teamId,
+      channelId: dispatch.channelId,
+      messageId,
+    }))))
+    .filter((set): set is ProjectReferenceSetRecord => set !== null);
   const attachments: ArtifactRecord[] = [];
   if (managementInvocation) {
     for (const artifactId of uniqueIds([...managementInvocation.intent.attachmentIds])) {
@@ -8625,6 +8635,26 @@ async function buildDispatchRequest(
       : [dispatch.messageId];
     for (const messageId of attachmentMessageIds) {
       attachments.push(...await repositories.artifacts.listByMessage(messageId));
+    }
+  }
+  // 冻结引用对应的精确内容也进入既有 attachment 下载链路；daemon 同时获得
+  // revision/version 清单，既能读到文件，又不会把引用漂移到 current/final 指针。
+  for (const set of projectReferenceSets) {
+    for (const selection of set.selections) {
+      for (const item of selection.items) {
+        const artifact = item.kind === 'document_revision'
+          ? (await repositories.channelDocuments.getRevision({
+              documentId: item.documentId as string,
+              revisionId: item.revisionId as string,
+            }))?.artifact
+          : await repositories.artifacts.getForTeam({
+              teamId: dispatch.teamId,
+              artifactId: item.artifactId as string,
+            });
+        if (artifact?.teamId === dispatch.teamId && artifact.channelId === dispatch.channelId) {
+          attachments.push(artifact);
+        }
+      }
     }
   }
   const capsuleRef = managementInvocation?.intent.memoryCapsuleRef;
@@ -8669,10 +8699,18 @@ async function buildDispatchRequest(
       acceptanceCriteria: managementInvocation.intent.acceptanceCriteria,
     } } : {}),
     ...(memoryContext.length > 0 ? { memoryContext } : {}),
-    ...(projectReferenceSet ? { projectReferenceSet: toProjectReferenceSetDto(projectReferenceSet) } : {}),
+    ...(projectReferenceSets.length > 0
+      ? { projectReferenceSets: projectReferenceSets.map(toProjectReferenceSetDto) }
+      : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),
-    ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),
+    ...(attachments.length > 0
+      ? {
+          attachments: Array.from(
+            new Map(attachments.map((artifact) => [artifact.id, artifact])).values(),
+          ).map(toDispatchAttachmentDto),
+        }
+      : {}),
     ...(executionConfig
       ? {
           customAgent: {

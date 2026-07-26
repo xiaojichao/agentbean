@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -217,10 +217,29 @@ export interface DispatchRequestPayload {
   managementInvocationId?: string;
   managementContext?: DispatchManagementContextDto;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
+  projectReferenceSets?: readonly ProjectReferenceSetDto[];
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
   customAgent?: DaemonCustomAgent | null;
+}
+
+export function appendProjectReferenceContext(
+  prompt: string,
+  referenceSets: readonly ProjectReferenceSetDto[] | undefined,
+): string {
+  if (!referenceSets?.length) return prompt;
+  const lines = referenceSets.flatMap((set) => set.selections.flatMap((selection) =>
+    selection.items.map((item) => item.kind === 'document_revision'
+      ? `- 文档 ${JSON.stringify(item.filename)}：documentId=${item.documentId} revisionId=${item.revisionId} revision=${item.revisionNumber}`
+      : `- 逻辑产物 ${JSON.stringify(item.filename)}：collectionId=${item.collectionId} versionId=${item.versionId} version=${item.versionNumber} artifactId=${item.artifactId}`)));
+  if (lines.length === 0) return prompt;
+  return [
+    prompt,
+    '## 项目引用（发送时冻结）',
+    '以下身份与版本是本次执行的权威输入，不得替换为当前版或最终版。对应内容已作为输入附件提供时，请读取附件。',
+    ...lines,
+  ].join('\n\n');
 }
 
 export type AgentEnvResolver = (envRef: { agentId: string; teamId: string }) => Promise<Record<string, string>>;
@@ -502,6 +521,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               return;
             }
           }
+
+          request.prompt = appendProjectReferenceContext(
+            request.prompt,
+            request.projectReferenceSets,
+          );
 
           // Per-run workspace + input attachments (only when customAgent.cwd is set).
           const workspace = request.customAgent?.cwd

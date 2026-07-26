@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
-import { createDaemonProtocolClient } from '../src/index';
+import { appendProjectReferenceContext, createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
 import { createLocalMemoryStore } from '../src/memory/local-memory-store';
 import { persistWorkspaceRunManifest, persistWorkspaceRunResponse, prepareWorkspaceRun } from '../src/workspace-run';
@@ -691,5 +691,33 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
 
     await expect(client.start()).rejects.toThrow('socket has been disconnected');
+  });
+
+  test('将冻结的 revision/version 身份注入 Agent prompt', () => {
+    const prompt = appendProjectReferenceContext('执行任务', [{
+      id: 'set-1',
+      contractVersion: 1,
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      createdBy: 'user-1',
+      createdAt: 1,
+      selections: [{
+        id: 'selection-1',
+        position: 0,
+        sourceKind: 'document',
+        createdAt: 1,
+        items: [{
+          kind: 'document_revision',
+          documentId: 'document-1',
+          revisionId: 'revision-3',
+          revisionNumber: 3,
+          filename: 'plan.md',
+        }],
+      }],
+    }]);
+    expect(prompt).toContain('## 项目引用（发送时冻结）');
+    expect(prompt).toContain('documentId=document-1 revisionId=revision-3 revision=3');
+    expect(prompt).toContain('不得替换为当前版或最终版');
   });
 });
