@@ -195,6 +195,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.channelDocuments.publish,
       WEB_EVENTS.project.overview,
       WEB_EVENTS.project.createInitialStage,
+      WEB_EVENTS.project.artifactCollections,
+      WEB_EVENTS.project.promoteArtifact,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,
@@ -1088,6 +1090,46 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('#823 产物提升使用 Socket authenticated identity 并忽略伪造 userId', async () => {
+    const unauthenticatedSocket = new FakeSocket();
+    const promoteArtifactToProjectVersion = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { promoteArtifactToProjectVersion } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(unauthenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: false, userId: null, currentTeamId: null, currentDeviceId: null,
+      }),
+    });
+    await expect(unauthenticatedSocket.trigger(WEB_EVENTS.project.promoteArtifact, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      artifactId: 'artifact-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+    expect(promoteArtifactToProjectVersion).not.toHaveBeenCalled();
+
+    const authenticatedSocket = new FakeSocket();
+    registerWebSocketHandlers(authenticatedSocket, app, {
+      authenticatedUser: async () => ({
+        hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null,
+      }),
+    });
+    await authenticatedSocket.trigger(WEB_EVENTS.project.promoteArtifact, {
+      userId: 'user-spoofed',
+      channelId: 'channel-1',
+      artifactId: 'artifact-1',
+      stageId: 'stage-1',
+      idempotencyKey: 'key-1',
+    });
+    expect(promoteArtifactToProjectVersion).toHaveBeenCalledWith({
+      userId: 'user-session',
+      teamId: 'team-session',
+      currentDeviceId: null,
+      channelId: 'channel-1',
+      artifactId: 'artifact-1',
+      stageId: 'stage-1',
+      idempotencyKey: 'key-1',
+    });
+  });
+
   test('Memory governance events require authentication and ignore a spoofed payload userId', async () => {
     const unauthenticatedSocket = new FakeSocket();
     const getMemoryGovernanceSnapshot = vi.fn(async (payload) => makeSuccess({ payload }));
@@ -1286,6 +1328,9 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
     ]);
+    // #823 Agent/Daemon 通道不暴露项目产物写入端点：产物事实只能由已认证人类会话写入。
+    expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.promoteArtifact);
+    expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.artifactCollections);
 
     await socket.trigger(AGENT_EVENTS.device.hello, {
       teamId: 'team-1',

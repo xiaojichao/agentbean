@@ -135,6 +135,7 @@ export interface WebSocketHandlerOptions {
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterProjectArtifactMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemberMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterMemoryMutation?(payload: unknown, result: unknown): Promise<void> | void;
 }
@@ -398,6 +399,16 @@ export function registerWebSocketHandlers(
   });
   bind(socket, WEB_EVENTS.project.createInitialStage, app, 'createInitialProjectStage', (payload, result) =>
     options.afterProjectMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  // #823 逻辑产物读写只暴露在已认证的人类 Web 会话上；Agent/Daemon 通道没有这两个端点。
+  bind(socket, WEB_EVENTS.project.artifactCollections, app, 'listProjectArtifactCollections', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.promoteArtifact, app, 'promoteArtifactToProjectVersion', (payload, result) =>
+    options.afterProjectArtifactMutation?.(payload, result), {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });

@@ -186,6 +186,9 @@ export const WEB_EVENTS = {
     overview: 'project:overview',
     createInitialStage: 'project:create-initial-stage',
     updated: 'project:updated',
+    artifactCollections: 'project:artifact-collections',
+    promoteArtifact: 'project:promote-artifact',
+    artifactsUpdated: 'project:artifacts-updated',
   },
   dm: {
     start: 'dm:start',
