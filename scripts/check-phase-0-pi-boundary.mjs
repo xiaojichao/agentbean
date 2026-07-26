@@ -7,8 +7,13 @@ const WRAPPER_ROOT = 'packages/pi-management-runtime';
 const REQUIRED_PACKAGE = '@earendil-works/pi-coding-agent';
 const OPTIONAL_DIRECT_PACKAGES = new Set(['@earendil-works/pi-ai']);
 const REQUIRED_VERSION = '0.80.6';
+// 本地 agent 工具目录一律跳过：这些目录没有任何文件受版本控制（`git ls-files .claude`
+// 为空），CI 的 checkout 里并不存在。但它们下面常挂着 worktree——`.claude/worktrees/` 是
+// Claude Code 建 worktree 的默认位置——每个 worktree 都是完整仓库副本，含合法的
+// packages/pi-management-runtime。整树 walk 把它们扫进来就产生假违规：本地
+// `npm run test:retained-boundaries` 必红而 CI 全绿，最容易被误判成真实回归。
 const ignoredSegments = new Set([
-  '.agents', '.codex', '.git', '.next', '.omx', '.worktrees',
+  '.agents', '.claude', '.codex', '.git', '.next', '.omx', '.worktrees',
   'coverage', 'dist', 'docs', 'node_modules', 'playwright-report', 'test-results',
 ]);
 const guardFiles = new Set([

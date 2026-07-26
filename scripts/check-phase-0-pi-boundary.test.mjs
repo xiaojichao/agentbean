@@ -110,6 +110,33 @@ test('ignores build artifacts and node_modules', () => {
   });
 });
 
+test('ignores worktrees nested under local agent tool directories', () => {
+  withFixture((root) => {
+    scaffoldWrapper(root);
+    const rogue = "import '@earendil-works/pi-coding-agent';\n";
+    write(root, '.claude/worktrees/feature-a/apps/server-next/src/pi.ts', rogue);
+    write(root, '.codex/worktrees/feature-b/apps/server-next/src/pi.ts', rogue);
+    write(root, '.worktrees/feature-c/apps/server-next/src/pi.ts', rogue);
+    write(root, '.agents/scratch/pi.ts', rogue);
+
+    const result = runChecker(root);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+  });
+});
+
+// 与上一条配对：忽略必须精确匹配目录名，不能宽到"路径里出现 worktrees 就跳过"。
+// 否则真实源码树里的越界会静默溜过，门禁看着绿其实什么都没守。
+test('still rejects PI use under a tracked directory merely named worktrees', () => {
+  withFixture((root) => {
+    scaffoldWrapper(root);
+    write(root, 'apps/server-next/src/worktrees/pi.ts', "import '@earendil-works/pi-coding-agent';\n");
+
+    const result = runChecker(root);
+    assert.equal(result.status, 1, `${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /apps\/server-next\/src\/worktrees\/pi\.ts:1:PI_BOUNDARY_VIOLATION/);
+  });
+});
+
 test('rejects PI imports from root scripts', () => {
   withFixture((root) => {
     scaffoldWrapper(root);
