@@ -1,4 +1,4 @@
-import type { AgentInvocationIntentV1 } from '@agentbean/contracts';
+import type { AgentInvocationIntent } from '@agentbean/contracts';
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
@@ -22,7 +22,7 @@ function canonicalJson(value: unknown): string {
   throw new Error('INVOCATION_INTENT_UNSUPPORTED_VALUE');
 }
 
-export function canonicalizeAgentInvocationIntent(intent: AgentInvocationIntentV1): string {
+export function canonicalizeAgentInvocationIntent(intent: AgentInvocationIntent): string {
   return canonicalJson(intent);
 }
 

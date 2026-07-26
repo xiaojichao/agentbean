@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import type { AgentInvocationRecordDto } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
@@ -47,6 +48,7 @@ import { createCollaborationService } from './management/collaboration-service.j
 import { appendManagementEventInTransaction, createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
+import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
 import { createMemoryCandidateService, type MemoryCandidateView } from './memory-candidate-service.js';
@@ -674,6 +676,7 @@ export interface DiscoveredAgentInput {
   cwd?: string;
   discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface RegisterDiscoveredAgentsInput {
@@ -2709,6 +2712,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           args: discovered.args ?? existing?.args,
           cwd: discovered.cwd ?? existing?.cwd,
           gatewayInstanceKey: discovered.gatewayInstanceKey ?? existing?.gatewayInstanceKey,
+          projectDocumentInputSetVersions:
+            discovered.projectDocumentInputSetVersions
+            ?? device.capabilities?.projectDocumentInputSetVersions
+            ?? existing?.projectDocumentInputSetVersions,
           lastSeenAt: now,
         });
         await repositories.agents.linkIdentity({
@@ -2789,6 +2796,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         cwd: runtime?.cwd ?? agentInput.cwd,
         envKeys: Object.keys(agentInput.env ?? {}).sort(),
         env: agentInput.env,
+        projectDocumentInputSetVersions:
+          device.capabilities?.projectDocumentInputSetVersions,
         lastSeenAt: now,
       });
       await ensureDefaultChannelMembership(repositories, clock, { teamId: agentInput.teamId, agentId: agent.id });
@@ -3694,9 +3703,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeSuccess({ ready: false, retryAfterMs: readyAt - now });
       }
 
-      const request = await buildDispatchRequest(
-        repositories, dispatch, agent, now, true, input.serverCapsuleRuntimeContextResolver,
-      );
+      let request: DispatchRequestDto & { id: string };
+      try {
+        request = await buildDispatchRequest(
+          repositories, dispatch, agent, now, true, input.serverCapsuleRuntimeContextResolver,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')) throw error;
+        await repositories.dispatches.markFailed({
+          dispatchId: dispatch.id,
+          error: message,
+          completedAt: now,
+        });
+        return makeFailure('CONFLICT', message);
+      }
       const accepted = await repositories.dispatches.markAccepted({
         dispatchId: dispatch.id,
         agentId: agent.id,
@@ -8576,6 +8597,54 @@ async function loadAgentMemoryProjectionContext(
   }];
 }
 
+async function assertProjectDocumentInputSetDispatchReady(
+  repositories: ServerNextRepositories,
+  intent: Extract<AgentInvocationRecordDto['intent'], { schemaVersion: 2 }>,
+  agent: AgentRecord,
+): Promise<void> {
+  const version = intent.projectDocumentInputSet.contractVersion;
+  const channel = await repositories.channels.getById(intent.channelId);
+  if (!channel || channel.teamId !== intent.teamId || channel.archivedAt) {
+    throw new Error('PROJECT_DOCUMENT_INPUT_SET_CHANNEL_FORBIDDEN');
+  }
+  if (!agent.projectDocumentInputSetVersions?.includes(version)) {
+    throw new Error('PROJECT_DOCUMENT_INPUT_SET_AGENT_CAPABILITY_MISSING');
+  }
+  const device = agent.deviceId ? await repositories.devices.getById(agent.deviceId) : null;
+  if (device?.status !== 'online'
+    || !device.capabilities?.projectDocumentInputSetVersions?.includes(version)) {
+    throw new Error('PROJECT_DOCUMENT_INPUT_SET_DEVICE_CAPABILITY_MISSING');
+  }
+  if (intent.taskContext) {
+    const task = await repositories.tasks.getById(intent.taskContext.taskId);
+    if (!task || task.teamId !== intent.teamId || task.channelId !== intent.channelId
+      || task.revision !== intent.taskContext.taskRevision) {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_TASK_REVISION_STALE');
+    }
+    const gate = await resolveProjectStageExecutionGate(repositories, task);
+    if (gate.blocked) throw new Error('PROJECT_DOCUMENT_INPUT_SET_STAGE_BLOCKED');
+  }
+  for (const item of intent.projectDocumentInputSet.items) {
+    const document = await repositories.channelDocuments.getForTeam({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      documentId: item.documentId,
+    });
+    const revision = await repositories.channelDocuments.getRevision({
+      documentId: item.documentId,
+      revisionId: item.baseRevisionId,
+    });
+    if (!document || !revision
+      || revision.artifact.id !== item.artifactId
+      || revision.artifact.teamId !== intent.teamId
+      || revision.artifact.channelId !== intent.channelId
+      || revision.artifact.sha256 !== item.sha256
+      || revision.artifact.sizeBytes !== item.sizeBytes) {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_REVISION_FORBIDDEN');
+    }
+  }
+}
+
 async function buildDispatchRequest(
   repositories: ServerNextRepositories,
   dispatch: DispatchRecord,
@@ -8592,6 +8661,13 @@ async function buildDispatchRequest(
   const managementInvocation = managementAttempt
     ? await repositories.management.invocations.getById(managementAttempt.invocationId)
     : null;
+  if (managementInvocation?.intent.schemaVersion === 2) {
+    await assertProjectDocumentInputSetDispatchReady(
+      repositories,
+      managementInvocation.intent,
+      agent,
+    );
+  }
   const managementHandoff = managementInvocation
     ? await repositories.management.handoffs.getByInvocationId(managementInvocation.id)
     : null;
@@ -8642,6 +8718,12 @@ async function buildDispatchRequest(
   for (const set of projectReferenceSets) {
     for (const selection of set.selections) {
       for (const item of selection.items) {
+        // V2 Invocation 的文档 revision 由必需 InputSet 独立交付，不能落入普通附件
+        // “下载失败后跳过”的兼容链路；artifact_version 仍是普通附件。
+        if (managementInvocation?.intent.schemaVersion === 2
+          && item.kind === 'document_revision') {
+          continue;
+        }
         const artifact = item.kind === 'document_revision'
           ? (await repositories.channelDocuments.getRevision({
               documentId: item.documentId as string,
@@ -8701,6 +8783,9 @@ async function buildDispatchRequest(
     ...(memoryContext.length > 0 ? { memoryContext } : {}),
     ...(projectReferenceSets.length > 0
       ? { projectReferenceSets: projectReferenceSets.map(toProjectReferenceSetDto) }
+      : {}),
+    ...(managementInvocation?.intent.schemaVersion === 2
+      ? { projectDocumentInputSet: managementInvocation.intent.projectDocumentInputSet }
       : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),

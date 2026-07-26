@@ -98,6 +98,36 @@ describe('Phase 1 Invocation Gateway', () => {
     await expect(harness.repositories.management.invocations.listByRun(harness.authority.managementRunId)).resolves.toHaveLength(1);
   });
 
+  test('freezes root-message document selections into a deterministic V2 InputSet and gates capabilities', async () => {
+    const unsupported = await createHarness();
+    await seedProjectDocumentInputSet(unsupported.repositories, false);
+    await expect(unsupported.gateway.invoke(invokeInput(unsupported.authority)))
+      .rejects.toMatchObject({ code: 'INVOCATION_INPUT_SET_AGENT_CAPABILITY_MISSING' });
+
+    const harness = await createHarness();
+    await seedProjectDocumentInputSet(harness.repositories, true);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    expect(created.view.intent).toMatchObject({
+      schemaVersion: 2,
+      projectDocumentInputSet: {
+        contractVersion: 1,
+        required: true,
+        referenceSetId: 'reference-set-1',
+        items: [{
+          documentId: 'document-1',
+          baseRevisionId: 'revision-1',
+          artifactId: 'artifact-document-1',
+          displayName: 'plan.md',
+          sha256: 'sha256-document-1',
+          source: { selectionSourceKind: 'document' },
+        }],
+      },
+    });
+    const replay = await harness.gateway.invoke(invokeInput(harness.authority));
+    expect(replay.disposition).toBe('existing');
+    expect(replay.view.intent).toEqual(created.view.intent);
+  });
+
   test('blocks active retries and only creates attempt +1 after an explicit terminal retry', async () => {
     const harness = await createHarness();
     const created = await harness.gateway.invoke(invokeInput(harness.authority));
@@ -278,6 +308,101 @@ function intent() {
 
 function invokeInput(authority: { managementRunId: string; workerId: string; leaseToken: string; fencingToken: number }) {
   return { authority, frozenTargetAgentId: 'agent-1', allowedTargetAgentIds: ['agent-1'] as readonly string[], idempotencyKey: 'invoke-1', intent: intent() };
+}
+
+async function seedProjectDocumentInputSet(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  supported: boolean,
+): Promise<void> {
+  await repositories.devices.upsertHello({
+    id: 'device-1',
+    teamId: 'team-1',
+    ownerId: 'user-1',
+    status: 'online',
+    capabilities: supported ? { projectDocumentInputSetVersions: [1] } : {},
+    lastSeenAt: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const agent = await repositories.agents.getById('agent-1');
+  await repositories.agents.upsert({
+    ...agent!,
+    deviceId: 'device-1',
+    projectDocumentInputSetVersions: supported ? [1] : undefined,
+  });
+  const artifact = {
+    id: 'artifact-document-1',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    uploaderId: 'user-1',
+    filename: 'plan.md',
+    mimeType: 'text/markdown',
+    sizeBytes: 10,
+    sha256: 'sha256-document-1',
+    createdAt: 1,
+  };
+  await repositories.channelDocuments.create({
+    document: {
+      id: 'document-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      filename: 'plan.md',
+      currentRevisionId: 'revision-1',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    revision: {
+      id: 'revision-1',
+      documentId: 'document-1',
+      artifact,
+      revision: 1,
+      createdBy: 'user-1',
+      createdAt: 1,
+      source: 'attachment',
+      published: false,
+    },
+  });
+  const selection = {
+    id: 'selection-1',
+    referenceSetId: 'reference-set-1',
+    sourceKind: 'document' as const,
+    position: 0,
+    createdAt: 1,
+    items: [],
+  };
+  const item = {
+    id: 'reference-item-1',
+    selectionId: selection.id,
+    kind: 'document_revision' as const,
+    position: 0,
+    documentId: 'document-1',
+    revisionId: 'revision-1',
+    revisionNumber: 1,
+    filename: 'plan.md',
+    createdAt: 1,
+  };
+  await repositories.projectReferenceSets.create({
+    set: {
+      id: 'reference-set-1',
+      contractVersion: 1,
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      createdBy: 'user-1',
+      createdAt: 1,
+      selections: [],
+    },
+    selections: [selection],
+    items: [item],
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'reference-set-create',
+      requestFingerprint: 'reference-set-fingerprint',
+      referenceSetId: 'reference-set-1',
+      createdAt: 1,
+    },
+  });
 }
 
 async function createPhase2Harness(

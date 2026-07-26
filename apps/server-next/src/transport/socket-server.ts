@@ -90,6 +90,7 @@ interface DiscoveredAgentReport {
   cwd?: string;
   discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
+  projectDocumentInputSetVersions?: number[];
 }
 
 export function attachServerNextNamespaces(
@@ -1495,6 +1496,7 @@ function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
       cwd?: unknown;
       discoverySource?: unknown;
       gatewayInstanceKey?: unknown;
+      projectDocumentInputSetVersions?: unknown;
     };
     if (
       typeof candidate.name !== 'string' ||
@@ -1513,6 +1515,11 @@ function payloadDiscoveredAgents(payload: unknown): DiscoveredAgentReport[] {
       discoverySource: readDiscoverySource(candidate.discoverySource),
       gatewayInstanceKey:
         typeof candidate.gatewayInstanceKey === 'string' ? candidate.gatewayInstanceKey : undefined,
+      projectDocumentInputSetVersions: Array.isArray(candidate.projectDocumentInputSetVersions)
+        ? candidate.projectDocumentInputSetVersions.filter(
+            (version): version is number => Number.isInteger(version) && version > 0,
+          )
+        : undefined,
     }];
   });
 }

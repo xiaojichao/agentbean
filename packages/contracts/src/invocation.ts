@@ -3,6 +3,7 @@ import type { DispatchStatus } from './dispatch.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 import type { AgentCollaborationProposalV1 } from './collaboration.js';
 import type { MemoryCapsuleRefDto } from './management-memory.js';
+import type { ProjectDocumentInputSetV1 } from './project-document-input-set.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -45,11 +46,19 @@ export interface AgentInvocationIntentV1 {
   readonly deadlineAt?: UnixMs;
 }
 
+export interface AgentInvocationIntentV2
+  extends Omit<AgentInvocationIntentV1, 'schemaVersion'> {
+  readonly schemaVersion: 2;
+  readonly projectDocumentInputSet: ProjectDocumentInputSetV1;
+}
+
+export type AgentInvocationIntent = AgentInvocationIntentV1 | AgentInvocationIntentV2;
+
 export interface AgentInvocationRecordDto {
   readonly schemaVersion: 1;
   readonly id: ID;
   readonly managementRunId: ID;
-  readonly intent: AgentInvocationIntentV1;
+  readonly intent: AgentInvocationIntent;
   readonly intentHash: string;
   readonly idempotencyKey: string;
   readonly createdAt: UnixMs;

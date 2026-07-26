@@ -55,6 +55,8 @@ export interface AgentDto {
   skills?: SkillDto[];
   lastSeenAt?: UnixMs;
   lastError?: string;
+  /** Agent adapter 公开支持的 ProjectDocumentInputSet 合同版本。 */
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface DiscoveredAgentDto {

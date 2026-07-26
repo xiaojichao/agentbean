@@ -1,8 +1,9 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
+import { materializeProjectDocumentInputSet } from './project-document-input-set.js';
 import {
   discoverRecoverableWorkspaceRuns,
   markWorkspaceRunManifestReported,
@@ -24,6 +25,7 @@ export type { BuiltinScannerOptions } from './scanner.js';
 export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
 export { downloadAttachments } from './attachments.js';
+export { materializeProjectDocumentInputSet } from './project-document-input-set.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
 export {
   discoverRecoverableWorkspaceRuns,
@@ -193,6 +195,7 @@ export interface DaemonAgentReport {
   cwd?: string;
   discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface DaemonScanSnapshot {
@@ -218,6 +221,7 @@ export interface DispatchRequestPayload {
   managementContext?: DispatchManagementContextDto;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
   projectReferenceSets?: readonly ProjectReferenceSetDto[];
+  projectDocumentInputSet?: ProjectDocumentInputSetV1;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -535,7 +539,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 保证普通附件和冻结引用内容都能下载并通过绝对路径暴露给执行器。
           const explicitWorkspaceCwd = request.customAgent?.cwd;
           const workspaceRoot = explicitWorkspaceCwd
-            ?? (request.attachments?.length ? attachmentWorkspaceRoot : undefined);
+            ?? (request.attachments?.length || request.projectDocumentInputSet
+              ? attachmentWorkspaceRoot
+              : undefined);
           const workspace = workspaceRoot
             ? prepareWorkspaceRun(workspaceRoot, request.id)
             : undefined;
@@ -549,6 +555,33 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 .map((file) => `- ${file.name} (${file.mimeType ?? 'unknown'}, ${file.sizeBytes ?? 0} bytes): ${file.localPath}`)
                 .join('\n');
               request.prompt = `${request.prompt}\n\n用户随消息附加了以下本地文件，请在需要时读取并使用：\n${list}`;
+            }
+          }
+          if (request.projectDocumentInputSet) {
+            if (!workspace || !device.token || !request.managementInvocationId) {
+              throw new Error('PROJECT_DOCUMENT_INPUT_SET_RUNTIME_UNAVAILABLE');
+            }
+            const materialized = await materializeProjectDocumentInputSet({
+              serverUrl,
+              token: device.token,
+              teamId: device.teamId,
+              invocationId: request.managementInvocationId,
+              inputDir: workspace.inputDir,
+              inputSet: request.projectDocumentInputSet,
+              fetch: fetchFn,
+            });
+            const list = materialized.manifest.items
+              .map((item) => `- ${item.displayName}: ${item.localPath}`)
+              .join('\n');
+            request.prompt = `${request.prompt}\n\n## 必需项目文档 InputSet\nManifest：${materialized.manifestPath}\n${list}`;
+            if (request.customAgent) {
+              request.customAgent = {
+                ...request.customAgent,
+                env: {
+                  ...(request.customAgent.env ?? {}),
+                  AGENTBEAN_PROJECT_DOCUMENT_INPUT_SET_MANIFEST: materialized.manifestPath,
+                },
+              };
             }
           }
           if (workspace && request.customAgent) {

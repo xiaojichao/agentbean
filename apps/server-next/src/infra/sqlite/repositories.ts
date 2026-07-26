@@ -108,6 +108,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0016_device_capabilities.sql');
   applyMigration(db, 'global/0017_pi_provider_supply.sql');
   applyMigration(db, 'global/0018_pi_provider_test_publish.sql');
+  applyMigration(db, 'global/0019_agent_input_set_capabilities.sql');
   applyMigration(db, 'global/0019_active_pi_model.sql');
   applyMigration(db, 'global/0020_system_user_memory.sql');
 }
@@ -1360,8 +1361,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
               status, owner_id, device_id, command, args_json, cwd, gateway_instance_key, env_json, last_seen_at, last_error, created_at, updated_at,
-              deleted_at, skills_json, name_source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              deleted_at, skills_json, name_source, project_document_input_set_versions_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
               name = CASE WHEN name_source = 'custom' THEN agents.name ELSE excluded.name END,
@@ -1375,6 +1376,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               args_json = excluded.args_json,
               cwd = excluded.cwd,
               skills_json = excluded.skills_json,
+              project_document_input_set_versions_json = excluded.project_document_input_set_versions_json,
               gateway_instance_key = excluded.gateway_instance_key,
               last_seen_at = excluded.last_seen_at,
               updated_at = excluded.updated_at`,
@@ -1404,6 +1406,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.deletedAt ?? null,
             agent.skills ? JSON.stringify(agent.skills) : null,
             agent.nameSource ?? 'scanned',
+            agent.projectDocumentInputSetVersions
+              ? JSON.stringify(agent.projectDocumentInputSetVersions)
+              : null,
           );
         for (const teamId of agent.visibleTeamIds) {
           if (teamId === agent.primaryTeamId) {
@@ -3946,6 +3951,11 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     description: sqliteNullableText(row, 'description'),
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
+    projectDocumentInputSetVersions:
+      (parseJsonArraySafe(sqliteNullableText(
+        row,
+        'project_document_input_set_versions_json',
+      )) as number[] | null) ?? undefined,
     nameSource: sqliteText(row, 'name_source') as AgentRecord['nameSource'],
     deletedAt,
   };
