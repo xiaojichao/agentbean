@@ -224,12 +224,13 @@ export function decideProductionOfferAllocation(input: {
   }[];
 }): { claimPolicy: 'targeted' | 'open'; targetAgentId?: string } {
   const hardSpecifiedAgentId = input.claimPolicy === 'targeted' ? input.assigneeId : undefined;
+  const availableCandidates = input.qualifiedCandidates.filter((candidate) => candidate.available);
   if (input.claimPolicy === 'targeted'
     && (!hardSpecifiedAgentId
-      || !input.qualifiedCandidates.some((candidate) => candidate.agentId === hardSpecifiedAgentId))) {
+      || !availableCandidates.some((candidate) => candidate.agentId === hardSpecifiedAgentId))) {
     throw new Error('TASK_NEEDS_USER_ADJUSTMENT');
   }
-  const ranked = rankQualifiedCandidates(input.qualifiedCandidates, input.preferredSkills);
+  const ranked = rankQualifiedCandidates(availableCandidates, input.preferredSkills);
   const preferred = new Set(input.preferredSkills.map((name) => name.toLowerCase()));
   const rankKey = (candidate: typeof ranked[number]) => [
     candidate.exposedSkills.filter((name) => preferred.has(name.toLowerCase())).length,

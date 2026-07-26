@@ -73,6 +73,31 @@ describe('server-next dev server entry', () => {
     })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
   });
 
+  test('开放任务只有 unavailable 候选时要求用户调整', () => {
+    expect(() => decideProductionOfferAllocation({
+      claimPolicy: 'open',
+      preferredSkills: [],
+      qualifiedCandidates: [{
+        agentId: 'agent-unavailable',
+        exposedSkills: ['delivery'],
+        available: false,
+      }],
+    })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
+  });
+
+  test('显式目标 unavailable 时保留指派约束并要求用户调整', () => {
+    expect(() => decideProductionOfferAllocation({
+      claimPolicy: 'targeted',
+      assigneeId: 'agent-unavailable',
+      preferredSkills: [],
+      qualifiedCandidates: [{
+        agentId: 'agent-unavailable',
+        exposedSkills: ['delivery'],
+        available: false,
+      }],
+    })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
+  });
+
   test('只在合格候选中按 preferred Skill 选择定向 Agent', () => {
     expect(decideProductionOfferAllocation({
       claimPolicy: 'open',
