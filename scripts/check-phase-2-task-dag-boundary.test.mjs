@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { copyWorkspaceFixture } from './workspace-fixture.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const checker = join(root, 'scripts/check-phase-2-task-dag-boundary.mjs');
@@ -18,10 +19,7 @@ test('accepts the repository Phase 2 boundary scaffold', () => {
 test('fails closed when the controlled Green verdict drops the default Phase 1 boundary', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-matrix-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md');
     writeFileSync(path, readFileSync(path, 'utf8').replaceAll('`maxManagementPhase=1`', '`maxManagementPhase=2`'));
     const result = run(fixture);
@@ -35,10 +33,7 @@ test('fails closed when the controlled Green verdict drops the default Phase 1 b
 test('fails closed when the controlled Green verdict leaves P2-18 incomplete', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-matrix-status-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'agentbean-next/docs/phase-2-task-dag-team-claim-verification-matrix.md');
     writeFileSync(path, readFileSync(path, 'utf8').replace('| P2-18 | Green |', '| P2-18 | Yellow |'));
     const result = run(fixture);
@@ -52,10 +47,7 @@ test('fails closed when the controlled Green verdict leaves P2-18 incomplete', (
 test('fails closed when the controlled Green verdict drifts from the design spec', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-design-status-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'docs/superpowers/specs/2026-07-10-agentbean-pi-management-agent-design.md');
     writeFileSync(path, readFileSync(path, 'utf8').replace(
       '最终 verdict 已冻结为 Green / Ready（受控 opt-in）',
@@ -72,10 +64,7 @@ test('fails closed when the controlled Green verdict drifts from the design spec
 test('fails closed when the Phase 2 tool surface exposes Memory', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'packages/pi-management-runtime/src/types.ts');
     writeFileSync(path, readFileSync(path, 'utf8').replace(
       'export const PHASE_2_MANAGEMENT_TOOL_NAMES = [',
@@ -92,10 +81,7 @@ test('fails closed when the Phase 2 tool surface exposes Memory', () => {
 test('fails closed when a Phase 2 Domain policy disappears', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-domain-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'packages/domain/src/task-claim-policy.ts');
     writeFileSync(path, readFileSync(path, 'utf8').replace('evaluateTaskClaimAcquire', 'removedTaskClaimAcquire'));
     const result = run(fixture);
@@ -109,10 +95,7 @@ test('fails closed when a Phase 2 Domain policy disappears', () => {
 test('fails closed when the Phase 2 atomic persistence boundary disappears', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-persistence-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'apps/server-next/src/infra/sqlite/migrations/team/0013_management_phase_2_task_dag.sql');
     writeFileSync(path, readFileSync(path, 'utf8').replace('DEFERRABLE INITIALLY DEFERRED', ''));
     const result = run(fixture);
@@ -126,10 +109,7 @@ test('fails closed when the Phase 2 atomic persistence boundary disappears', () 
 test('fails closed when the Task coordination command boundary disappears', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-kernel-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'apps/server-next/src/application/management/task-coordination-kernel.ts');
     writeFileSync(path, readFileSync(path, 'utf8').replace('createRootCoordination', 'removedRootCoordination'));
     const result = run(fixture);
@@ -143,10 +123,7 @@ test('fails closed when the Task coordination command boundary disappears', () =
 test('fails closed when the Phase 2 rollout preflight stops being fail closed', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'agentbean-phase2-rollout-boundary-'));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     const path = join(fixture, 'apps/server-next/src/application/management/management-router.ts');
     const source = readFileSync(path, 'utf8');
     // 与 checker 同一套按缩进配对的框选逻辑；不要写死绝对缩进，否则 router 重构平移
