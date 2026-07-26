@@ -90,11 +90,9 @@ describe('#830 历史 Markdown 输出的回填分组判定', () => {
       .toEqual({ groupable: false, code: 'no_provable_member' });
   });
 
-  test('默认下限是「多份」，即至少两个成员', () => {
+  test('下限是「多份」，即至少两个成员', () => {
     expect(MINIMUM_BACKFILLED_BUNDLE_MEMBERS).toBe(2);
     const facts = [fact({ documentId: 'doc-a' }), fact({ documentId: 'doc-b' })];
     expect(evaluateBundleBackfillGrouping(facts, { channelId: CHANNEL }).groupable).toBe(true);
-    expect(evaluateBundleBackfillGrouping(facts, { channelId: CHANNEL, minimumMembers: 3 }))
-      .toEqual({ groupable: false, code: 'single_document' });
   });
 });

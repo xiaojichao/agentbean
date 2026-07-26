@@ -213,6 +213,36 @@ describe('#830 保守回填历史 Markdown 文档包', () => {
     emptyTeamDb.close();
   });
 
+  test('旧 schema 升级：0052 可从未安装状态应用且重复执行幂等', () => {
+    const legacyDb = new Database(':memory:');
+    applyTeamMigrations(legacyDb);
+    legacyDb.exec(`
+      DROP INDEX project_document_bundle_backfill_revision_run_idx;
+      DROP TABLE project_document_bundle_backfill_outcomes;
+      DROP TABLE project_document_bundle_backfill_progress;
+      DELETE FROM schema_migrations
+      WHERE id = 'team/0052_project_document_bundle_backfill.sql';
+    `);
+
+    expect(() => {
+      applyTeamMigrations(legacyDb);
+      applyTeamMigrations(legacyDb);
+    }).not.toThrow();
+    expect(legacyDb.prepare(
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name LIKE 'project_document_bundle_backfill_%'
+       ORDER BY name`,
+    ).all()).toEqual([
+      { name: 'project_document_bundle_backfill_outcomes' },
+      { name: 'project_document_bundle_backfill_progress' },
+    ]);
+    expect(legacyDb.prepare(
+      `SELECT id FROM schema_migrations
+       WHERE id = 'team/0052_project_document_bundle_backfill.sql'`,
+    ).all()).toHaveLength(1);
+    legacyDb.close();
+  });
+
   test('旧库：没有 derivationSource 的历史文档不构成候选', async () => {
     // 纯上传件（无 workspace_run_id）derive 出的文档来源不指向任何 Run。
     await repositories.artifacts.create({
@@ -287,6 +317,51 @@ describe('#830 保守回填历史 Markdown 文档包', () => {
     expect(await listBundles()).toHaveLength(0);
   });
 
+  test('全部文档改由另一次 Run 派生后，旧 Run 仍被发现并判为漂移', async () => {
+    const plan = await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
+    const spec = await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
+    for (const target of [
+      { ...plan, filename: 'plan.md' },
+      { ...spec, filename: 'spec.md' },
+    ]) {
+      const rederived = await app.deriveChannelDocument({
+        userId: 'owner-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        sourceArtifactId: 'artifact-solo',
+        filename: target.filename,
+        content: `# ${target.filename} from run-2\n`,
+        targetDocumentId: target.documentId,
+        targetBaseRevisionId: target.revisionId,
+      });
+      if (!rederived.ok) throw new Error('rederive failed');
+    }
+
+    const result = await createBackfill().runBatch();
+
+    expect(result.report).toMatchObject({
+      candidates: 2, ambiguous: 1, created: 1, backfillable: 1,
+    });
+    expect(result.report.reasons).toMatchObject({ member_drifted: 1 });
+  });
+
+  test('来源 Run 行缺失且位于后续批次时仍记录 run_unavailable', async () => {
+    await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
+    await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
+    now = 2_000;
+    await deriveDocument({ artifactId: 'artifact-solo', filename: 'solo.md' });
+    teamDb.prepare('DELETE FROM workspace_runs WHERE id = ?').run('run-2');
+    const backfill = createBackfill({ batchSize: 1 });
+
+    const first = await backfill.runBatch();
+    const second = await backfill.runBatch();
+
+    expect(first).toMatchObject({ processed: 1, completed: false });
+    expect(second).toMatchObject({ processed: 1, completed: true });
+    expect(second.report).toMatchObject({ candidates: 2, skipped: 1, created: 1 });
+    expect(second.report.reasons).toMatchObject({ run_unavailable: 1 });
+  });
+
   test('归档频道的候选保持未分组', async () => {
     await deriveDocument({ artifactId: 'artifact-plan', filename: 'plan.md' });
     await deriveDocument({ artifactId: 'artifact-spec', filename: 'spec.md' });
@@ -323,7 +398,8 @@ describe('#830 保守回填历史 Markdown 文档包', () => {
     });
     expect(await listBundles()).toHaveLength(0);
 
-    const applied = await createBackfill({ backfillId: 'apply-pass' }).runBatch();
+    // rollout 从 shadow 切到 apply 时 backfillId 不变；两种模式必须各自拥有独立游标。
+    const applied = await createBackfill().runBatch();
     expect(applied.report).toMatchObject({ candidates: 2, backfillable: 1, created: 1, skipped: 1 });
     expect(applied.report.reasons).toEqual(dryRun.report.reasons);
   });

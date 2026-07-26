@@ -2,11 +2,13 @@
 -- 不改写任何既有行 —— 回填的写入一律走 #825 的建包路径，迁移里不做数据推断。
 
 CREATE TABLE project_document_bundle_backfill_progress (
-  id TEXT PRIMARY KEY,
+  id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('dry_run', 'apply')),
   cursor_run_created_at INTEGER,
   cursor_run_id TEXT,
   completed_at INTEGER,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (id, mode)
 );
 
 -- 逐候选 Run 的裁决记录：既是可恢复的报告，也是「同一 Run 不重复裁决」的依据。

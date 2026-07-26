@@ -100,7 +100,6 @@ export interface ProjectDocumentBundleBackfillDocumentFact {
 
 export interface ProjectDocumentBundleBackfillScope {
   readonly channelId: string;
-  readonly minimumMembers?: number;
 }
 
 export type ProjectDocumentBundleBackfillGrouping =
@@ -125,8 +124,7 @@ export function evaluateBundleBackfillGrouping(
   if (facts.length === 0) {
     return { groupable: false, code: 'no_provable_member' };
   }
-  const minimumMembers = scope.minimumMembers ?? MINIMUM_BACKFILLED_BUNDLE_MEMBERS;
-  if (facts.length < minimumMembers) {
+  if (facts.length < MINIMUM_BACKFILLED_BUNDLE_MEMBERS) {
     return { groupable: false, code: 'single_document' };
   }
   // 成员顺序按文档创建时间取稳定序，而不是按文件名或路径排序 —— 顺序不得成为

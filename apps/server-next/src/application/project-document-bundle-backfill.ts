@@ -245,7 +245,7 @@ export function createProjectDocumentBundleBackfill(
   }
 
   async function runBatch(): Promise<ProjectDocumentBundleBackfillBatchResult> {
-    const progress = await backfill.getProgress({ backfillId });
+    const progress = await backfill.getProgress({ backfillId, mode });
     if (progress?.completedAt != null) {
       return { processed: 0, completed: true, report: await report(true) };
     }
@@ -298,6 +298,7 @@ export function createProjectDocumentBundleBackfill(
     const completed = exhausted;
     await backfill.saveProgress({
       backfillId,
+      mode,
       ...(cursor ? { cursor } : {}),
       ...(completed ? { completedAt: clock.now() } : {}),
       updatedAt: clock.now(),
@@ -311,7 +312,7 @@ export function createProjectDocumentBundleBackfill(
     runBatch,
     /** 供运维指标端点读取当前累计报告，不推进任何游标。 */
     async snapshot(): Promise<ProjectDocumentBundleBackfillReportDto> {
-      const progress = await backfill.getProgress({ backfillId });
+      const progress = await backfill.getProgress({ backfillId, mode });
       return report(progress?.completedAt != null);
     },
   };

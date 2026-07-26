@@ -25,7 +25,12 @@ import type {
   WorkspaceRunRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
-import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord, SkillDto } from '../../../../../packages/contracts/src/index.js';
+import type {
+  ChannelCoordinationDecisionRecord,
+  ChannelCoordinationJobRecord,
+  ProjectDocumentBundleBackfillMode,
+  SkillDto,
+} from '../../../../../packages/contracts/src/index.js';
 import { createSqliteManagementPersistence } from './management-repositories.js';
 import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
@@ -3240,13 +3245,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     projectDocumentBundleBackfill: {
       async getProgress(input) {
         const row = teamDb.prepare(
-          `SELECT * FROM project_document_bundle_backfill_progress WHERE id = ?`,
-        ).get(input.backfillId);
+          `SELECT * FROM project_document_bundle_backfill_progress WHERE id = ? AND mode = ?`,
+        ).get(input.backfillId, input.mode);
         if (!row) return null;
         const runCreatedAt = sqliteNullableNumber(row, 'cursor_run_created_at');
         const runId = sqliteNullableText(row, 'cursor_run_id');
         return {
           backfillId: sqliteText(row, 'id'),
+          mode: sqliteText(row, 'mode') as ProjectDocumentBundleBackfillMode,
           ...(runCreatedAt !== undefined && runId !== undefined
             ? { cursor: { runCreatedAt, runId } }
             : {}),
@@ -3259,15 +3265,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async saveProgress(input) {
         teamDb.prepare(
           `INSERT INTO project_document_bundle_backfill_progress (
-            id, cursor_run_created_at, cursor_run_id, completed_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(id) DO UPDATE SET
+            id, mode, cursor_run_created_at, cursor_run_id, completed_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id, mode) DO UPDATE SET
             cursor_run_created_at = excluded.cursor_run_created_at,
             cursor_run_id = excluded.cursor_run_id,
             completed_at = excluded.completed_at,
             updated_at = excluded.updated_at`,
         ).run(
           input.backfillId,
+          input.mode,
           input.cursor?.runCreatedAt ?? null,
           input.cursor?.runId ?? null,
           input.completedAt ?? null,
@@ -3275,25 +3282,40 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         );
       },
       async listCandidateRuns(input) {
-        // 候选 = 「本频道内至少有一份文档的当前 revision 派生自它」的 Run。
-        // EXISTS 按 Run 自身频道限定；跨频道声称同一 Run 的文档留给 listRunDocumentFacts
-        // 去发现，那是歧义信号，不该让 Run 干脆不进入候选。
-        const select = `SELECT r.id AS run_id, r.team_id, r.channel_id, r.created_at
-          FROM workspace_runs r
-          WHERE EXISTS (
-            SELECT 1 FROM channel_documents d
-            JOIN channel_document_revisions rev ON rev.id = d.current_revision_id
-            WHERE d.team_id = r.team_id
-              AND d.channel_id = r.channel_id
-              AND rev.source_json IS NOT NULL
-              AND json_extract(rev.source_json, '$.workspaceRunId') = r.id
-          )`;
+        // 从所有 revision（而非仅当前 revision）发现候选，才能看见「整组都已改由另一
+        // Run 派生」的旧 Run；LEFT JOIN 保留 Run 行已缺失的来源，让它进入裁决并留下
+        // run_unavailable，而不是静默消失。缺失 Run 的排序事实只取文档稳定字段。
+        const select = `WITH derived_runs AS (
+            SELECT
+              json_extract(rev.source_json, '$.workspaceRunId') AS run_id,
+              d.team_id AS source_team_id,
+              MIN(d.channel_id) AS source_channel_id,
+              MIN(d.created_at) AS source_created_at
+            FROM channel_document_revisions rev
+            JOIN channel_documents d ON d.id = rev.document_id
+            WHERE rev.source_json IS NOT NULL
+              AND json_extract(rev.source_json, '$.workspaceRunId') IS NOT NULL
+            GROUP BY run_id, d.team_id
+          ),
+          candidates AS (
+            SELECT
+              derived_runs.run_id,
+              derived_runs.source_team_id AS team_id,
+              COALESCE(r.channel_id, derived_runs.source_channel_id) AS channel_id,
+              COALESCE(r.created_at, derived_runs.source_created_at) AS created_at
+            FROM derived_runs
+            LEFT JOIN workspace_runs r
+              ON r.id = derived_runs.run_id
+             AND r.team_id = derived_runs.source_team_id
+          )
+          SELECT * FROM candidates
+          WHERE 1 = 1`;
         const rows = input.cursor
           ? teamDb.prepare(`${select}
-              AND (r.created_at > ? OR (r.created_at = ? AND r.id > ?))
-              ORDER BY r.created_at, r.id LIMIT ?`)
+              AND (created_at > ? OR (created_at = ? AND run_id > ?))
+              ORDER BY created_at, run_id LIMIT ?`)
             .all(input.cursor.runCreatedAt, input.cursor.runCreatedAt, input.cursor.runId, input.limit)
-          : teamDb.prepare(`${select} ORDER BY r.created_at, r.id LIMIT ?`).all(input.limit);
+          : teamDb.prepare(`${select} ORDER BY created_at, run_id LIMIT ?`).all(input.limit);
         return rows.map((row) => ({
           runId: sqliteText(row, 'run_id'),
           teamId: sqliteText(row, 'team_id'),

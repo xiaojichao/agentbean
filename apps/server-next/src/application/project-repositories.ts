@@ -8,6 +8,7 @@ import type {
   ProjectStageRequiredInputRuleDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
+import type { ProjectDocumentBundleBackfillReasonCode } from '../../../../packages/domain/src/index.js';
 
 export interface ChannelProjectProfileRecord {
   id: ID;
@@ -289,12 +290,13 @@ export interface ProjectDocumentBundleBackfillCursor {
 
 export interface ProjectDocumentBundleBackfillProgressRecord {
   backfillId: string;
+  mode: ProjectDocumentBundleBackfillMode;
   cursor?: ProjectDocumentBundleBackfillCursor;
   completedAt?: UnixMs;
   updatedAt: UnixMs;
 }
 
-/** 至少有一份频道文档的**当前** revision 派生自它的 Workspace Run。 */
+/** 至少有一份频道文档曾派生自它的 Workspace Run；Run 行本身可能已经缺失。 */
 export interface ProjectDocumentBundleBackfillCandidateRunRecord {
   runId: ID;
   teamId: ID;
@@ -325,7 +327,7 @@ export interface ProjectDocumentBundleBackfillOutcomeRecord {
   channelId?: ID;
   workspaceRunId: ID;
   outcome: ProjectDocumentBundleBackfillOutcomeKind;
-  reasonCode?: string;
+  reasonCode?: ProjectDocumentBundleBackfillReasonCode;
   memberCount: number;
   bundleId?: ID;
   decidedAt: UnixMs;
@@ -342,7 +344,10 @@ export interface ProjectDocumentBundleBackfillSummary {
  * 本接口同样不提供任何写 Bundle 的能力 —— 回填要建包只能走既有建包用例。
  */
 export interface ProjectDocumentBundleBackfillRepository {
-  getProgress(input: { backfillId: string }): Promise<ProjectDocumentBundleBackfillProgressRecord | null>;
+  getProgress(input: {
+    backfillId: string;
+    mode: ProjectDocumentBundleBackfillMode;
+  }): Promise<ProjectDocumentBundleBackfillProgressRecord | null>;
   saveProgress(input: ProjectDocumentBundleBackfillProgressRecord): Promise<void>;
   listCandidateRuns(input: {
     cursor?: ProjectDocumentBundleBackfillCursor;

@@ -57,6 +57,7 @@ import type {
   ProjectArtifactCollectionRecord,
   ProjectArtifactMutationRecord,
   ProjectArtifactVersionRecord,
+  ProjectDocumentBundleBackfillCandidateRunRecord,
   ProjectDocumentBundleBackfillOutcomeRecord,
   ProjectDocumentBundleBackfillProgressRecord,
   ProjectDocumentBundleMemberRecord,
@@ -1948,35 +1949,55 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     },
     projectDocumentBundleBackfill: {
       async getProgress(input) {
-        return projectDocumentBundleBackfillProgress.get(input.backfillId) ?? null;
+        return projectDocumentBundleBackfillProgress.get(`${input.backfillId}:${input.mode}`) ?? null;
       },
       async saveProgress(input) {
         // 复制一份再存：外泄共享可变引用会让调用方的后续改动悄悄写进「已持久化」的状态。
-        projectDocumentBundleBackfillProgress.set(input.backfillId, {
+        projectDocumentBundleBackfillProgress.set(`${input.backfillId}:${input.mode}`, {
           ...input,
           ...(input.cursor ? { cursor: { ...input.cursor } } : {}),
         });
       },
       async listCandidateRuns(input) {
-        const candidates = Array.from(workspaceRuns.values())
-          .filter((run) => Array.from(channelDocuments.values()).some((document) => {
-            if (document.teamId !== run.teamId || document.channelId !== run.channelId) return false;
-            const revision = channelDocumentRevisions.get(document.currentRevisionId);
-            return revision?.derivationSource?.workspaceRunId === run.id;
-          }))
-          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+        const candidatesByRun = new Map<string, ProjectDocumentBundleBackfillCandidateRunRecord>();
+        for (const document of channelDocuments.values()) {
+          for (const revision of channelDocumentRevisions.values()) {
+            if (revision.documentId !== document.id) continue;
+            const runId = revision.derivationSource?.workspaceRunId;
+            if (!runId) continue;
+            const key = `${document.teamId}:${runId}`;
+            const run = workspaceRuns.get(runId);
+            const candidate = run?.teamId === document.teamId
+              ? {
+                runId: run.id,
+                teamId: run.teamId,
+                channelId: run.channelId,
+                createdAt: run.createdAt,
+              }
+              : {
+                runId,
+                teamId: document.teamId,
+                channelId: document.channelId,
+                createdAt: document.createdAt,
+              };
+            const existing = candidatesByRun.get(key);
+            if (!existing
+              || candidate.createdAt < existing.createdAt
+              || (candidate.createdAt === existing.createdAt
+                && candidate.channelId.localeCompare(existing.channelId) < 0)) {
+              candidatesByRun.set(key, candidate);
+            }
+          }
+        }
+        const candidates = Array.from(candidatesByRun.values())
+          .sort((left, right) => left.createdAt - right.createdAt
+            || left.runId.localeCompare(right.runId));
         const after = input.cursor;
         return candidates
           .filter((run) => !after
             || run.createdAt > after.runCreatedAt
-            || (run.createdAt === after.runCreatedAt && run.id > after.runId))
-          .slice(0, input.limit)
-          .map((run) => ({
-            runId: run.id,
-            teamId: run.teamId,
-            channelId: run.channelId,
-            createdAt: run.createdAt,
-          }));
+            || (run.createdAt === after.runCreatedAt && run.runId > after.runId))
+          .slice(0, input.limit);
       },
       async listRunDocumentFacts(input) {
         return Array.from(channelDocuments.values())
