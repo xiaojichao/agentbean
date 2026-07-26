@@ -166,6 +166,7 @@ describe('runDaemonNextCli --all-profiles empty list (Fix #2)', () => {
       listAuthProfiles: vi.fn(() => []),
       loadAuth: vi.fn(() => null),
       saveAuth: vi.fn(),
+      assertRuntimeOwner: vi.fn(async () => undefined),
     };
 
     await expect(
@@ -188,6 +189,7 @@ describe('runDaemonNextCli all-profiles wiring (listAuthProfiles + recursion)', 
     const deps: DaemonNextCliDeps = {
       listAuthProfiles: vi.fn(() => profiles),
       runDaemon,
+      assertRuntimeOwner: vi.fn(async () => undefined),
     };
 
     await runDaemonNextCli(baseConfig({
@@ -247,6 +249,7 @@ describe('runDaemonNextCli device-removed shutdown', () => {
         return { start: async () => {} };
       }),
       createManagementWorkerHost: vi.fn(async () => ({ start: async () => {} })),
+      assertRuntimeOwner: vi.fn(async () => undefined),
       exit,
     };
 

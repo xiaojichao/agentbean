@@ -189,6 +189,25 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     return new Set((agent.skills ?? []).map((skill) => skill.name.toLowerCase()));
   }
 
+  async function resolveEffectiveSkills(teamId: string, agent: AgentRecord): Promise<Set<string>> {
+    const exposure = input.repositories.agentExposure;
+    const now = input.clock.now();
+    const active = await exposure.manifests.getActiveByTeamAgent(teamId, agent.id);
+    if (!active) return new Set();
+    if (active.validUntil !== null && active.validUntil <= now) {
+      await exposure.manifests.setStatus({ id: active.id, status: 'expired', now });
+      return new Set();
+    }
+    const restriction = await exposure.restrictions.getByTeamAgent(teamId, agent.id);
+    const disabled = restriction && restriction.manifestId === active.id ? restriction.disabledSkills : [];
+    const disabledSet = new Set(disabled.map((entry) => entry.toLowerCase()));
+    return new Set(
+      active.skills
+        .map((skill) => skill.name.toLowerCase())
+        .filter((name) => !disabledSet.has(name)),
+    );
+  }
+
   async function resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution> {
     const task = await input.repositories.tasks.getById(taskId);
     if (!task) throw new Error('TASK_CLAIM_TASK_NOT_FOUND');
@@ -222,7 +241,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       const explicitCapabilities = await resolveEffectiveCapabilities(task.teamId, agent);
       const missingCapabilities = coordination.requiredCapabilities
         .filter((capability) => !explicitCapabilities.has(capability.toLowerCase()));
-      if (missingCapabilities.length > 0) diagnostics.push('CAPABILITY_MISSING');
+      const explicitSkills = await resolveEffectiveSkills(task.teamId, agent);
+      const missingSkills = (coordination.requiredSkills ?? [])
+        .filter((skill) => !explicitSkills.has(skill.toLowerCase()));
+      if (missingCapabilities.length > 0 || missingSkills.length > 0) diagnostics.push('CAPABILITY_MISSING');
       if (task.channelId && (!taskChannel || !channelAllowsAgent(taskChannel, agent.id))) {
         diagnostics.push('TASK_CHANNEL_FORBIDDEN');
       }

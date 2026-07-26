@@ -86,6 +86,7 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
     readonly targetAgentId?: string;
     readonly requiredCapabilities: readonly string[];
     readonly requiredSkills?: readonly string[];
+    readonly preferredSkills?: readonly string[];
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
@@ -273,6 +274,7 @@ export function createTaskCoordinationKernel(
             rootTaskId, parentTaskId: parent.taskId, nodeKind: 'subtask', reviewPolicy: 'manager',
             claimPolicy: draft.claimPolicy, requiredCapabilities: [...draft.requiredCapabilities],
             requiredSkills: draft.requiredSkills ? [...draft.requiredSkills] : [],
+            preferredSkills: draft.preferredSkills ? [...draft.preferredSkills] : [],
             atomicityHint: input.atomicityHint ?? 'decomposable',
             taskRevision: task.revision, attempt: 1, maxAttempts: draft.maxAttempts,
             createdAt: now, updatedAt: now,
@@ -428,14 +430,18 @@ export function createTaskCoordinationKernel(
         // #807 allocation:如果 executor handler 传了 allocation,且 claimPolicy 与当前不同,覆写;
         // 否则(不传或同值→覆盖)保留历史强转 open 行为(向后兼容).
         const allocatedPolicy = input.allocation?.claimPolicy;
+        const allocatedAssigneeId = input.allocation?.claimPolicy === 'targeted'
+          ? input.allocation.targetAgentId
+          : undefined;
         const needsRevision = allocatedPolicy
-          ? allocatedPolicy !== coordination.claimPolicy
+          ? allocatedPolicy !== coordination.claimPolicy || allocatedAssigneeId !== task.assigneeId
           : (coordination.claimPolicy !== 'open' || task.assigneeId !== undefined);
         if (needsRevision) {
           const claimPolicy = allocatedPolicy ?? 'open';
           const revised = await reviseInTransaction(repositories, run, task, coordination, {
             objective: objectiveOf(task), acceptanceCriteria: currentCriteria, dependencyTaskIds,
-            claimPolicy, requiredCapabilities: coordination.requiredCapabilities,
+            claimPolicy, assigneeId: allocatedAssigneeId,
+            requiredCapabilities: coordination.requiredCapabilities,
             maxAttempts: coordination.maxAttempts,
           }, now);
           const revisionEvent = await appendRevisionEvent(repositories, run.id,

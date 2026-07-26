@@ -21,12 +21,13 @@ export function createSqliteTaskCoordinationRepositories(
         db.prepare(`INSERT INTO task_coordinations
           (task_id, team_id, management_run_id, root_task_id, parent_task_id, node_kind,
            review_policy, claim_policy, required_capabilities_json, required_skills_json,
-           atomicity_hint, task_revision, attempt,
+           preferred_skills_json, atomicity_hint, task_revision, attempt,
            max_attempts, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.taskId, record.teamId, record.managementRunId, record.rootTaskId ?? null,
             record.parentTaskId ?? null, record.nodeKind, record.reviewPolicy, record.claimPolicy,
             json(record.requiredCapabilities), record.requiredSkills ? json(record.requiredSkills) : null,
+            record.preferredSkills ? json(record.preferredSkills) : null,
             record.atomicityHint ?? null, record.taskRevision, record.attempt, record.maxAttempts,
             record.createdAt, record.updatedAt);
         return record;
@@ -44,12 +45,13 @@ export function createSqliteTaskCoordinationRepositories(
         const result = db.prepare(`UPDATE task_coordinations SET
           management_run_id = ?, root_task_id = ?, parent_task_id = ?, node_kind = ?,
           review_policy = ?, claim_policy = ?, required_capabilities_json = ?, required_skills_json = ?,
-          atomicity_hint = ?, task_revision = ?,
+          preferred_skills_json = ?, atomicity_hint = ?, task_revision = ?,
           attempt = ?, max_attempts = ?, updated_at = ?
           WHERE task_id = ? AND task_revision = ?`)
           .run(record.managementRunId, record.rootTaskId ?? null, record.parentTaskId ?? null,
             record.nodeKind, record.reviewPolicy, record.claimPolicy, json(record.requiredCapabilities),
-            record.requiredSkills ? json(record.requiredSkills) : null, record.atomicityHint ?? null,
+            record.requiredSkills ? json(record.requiredSkills) : null,
+            record.preferredSkills ? json(record.preferredSkills) : null, record.atomicityHint ?? null,
             record.taskRevision, record.attempt, record.maxAttempts, record.updatedAt, record.taskId,
             input.expectedTaskRevision);
         return changes(result) === 1 ? record : null;
@@ -364,6 +366,8 @@ function mapCoordination(value: unknown): TaskCoordinationRecord | null {
     requiredCapabilities: parse<string[]>(text(value, 'required_capabilities_json')),
     requiredSkills: nullableText(value, 'required_skills_json')
       ? parse<string[]>(text(value, 'required_skills_json')) : [],
+    preferredSkills: nullableText(value, 'preferred_skills_json')
+      ? parse<string[]>(text(value, 'preferred_skills_json')) : [],
     atomicityHint: nullableText(value, 'atomicity_hint') as TaskCoordinationRecord['atomicityHint'],
     taskRevision: number(value, 'task_revision'), attempt: number(value, 'attempt'),
     maxAttempts: number(value, 'max_attempts'),
