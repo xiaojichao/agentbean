@@ -142,18 +142,19 @@ describe('#826 Selection 资格判定', () => {
 
 describe('#826 短编号解析', () => {
   const members = [
-    { bundleId: 'bundle-a', documentId: 'a-1', position: 1, filename: 'a.md' },
-    { bundleId: 'bundle-a', documentId: 'a-3', position: 3, filename: 'a3.md' },
-    { bundleId: 'bundle-b', documentId: 'b-3', position: 3, filename: 'b3.md' },
+    { bundleId: 'bundle-a', documentId: 'a-1', revisionId: 'a-1-r1', position: 1, filename: 'a.md' },
+    { bundleId: 'bundle-a', documentId: 'a-3', revisionId: 'a-3-r7', position: 3, filename: 'a3.md' },
+    { bundleId: 'bundle-b', documentId: 'b-3', revisionId: 'b-3-r2', position: 3, filename: 'b3.md' },
   ];
 
   test('唯一焦点解析为明确 documentId', () => {
     expect(resolveReferenceOrdinal(3, ['bundle-a'], members)).toEqual({
       kind: 'resolved',
-      selection: { kind: 'document', documentId: 'a-3' },
+      selection: { kind: 'document', documentId: 'a-3', expectedRevisionId: 'a-3-r7' },
       candidate: {
         scopeId: 'bundle-a',
         documentId: 'a-3',
+        revisionId: 'a-3-r7',
         position: 3,
         filename: 'a3.md',
       },

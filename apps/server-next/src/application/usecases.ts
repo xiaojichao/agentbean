@@ -1424,30 +1424,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
     }
     const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
-    const task = shouldCreateTask
-      ? await repositories.tasks.create({
-          id: taskId!, teamId: messageInput.teamId, title: messageInput.body.trim() || '附件',
-          description: undefined,
-          status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
-          creatorId: messageInput.userId,
-          assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
-          channelId: messageInput.channelId, tags: [], sortOrder: now, createdAt: now, updatedAt: now,
-        })
-      : null;
-    if (task && management.kind === 'managed' && management.managementPhase >= 2) {
-      await taskCoordinationKernel.bootstrapRootCoordination({
-        managementRunId: management.managementRunId,
-        taskId: task.id,
-        idempotencyKey: `bootstrap-root:${task.id}`,
-        acceptanceCriteria: [{
-          id: `root-completion:${task.id}`,
-          description: '根任务目标已完成并可供用户审核',
-          evidenceRequired: false,
-        }],
-        maxAttempts: 1,
-      });
-    }
-    let saved: { message: MessageRecord; referenceSet?: ProjectReferenceSetDto };
+    let saved: {
+      message: MessageRecord;
+      task: TaskRecord | null;
+      referenceSet?: ProjectReferenceSetDto;
+    };
     try {
       saved = await repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
         const message = await transaction.messages.append({
@@ -1462,7 +1443,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           meta: {
             ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
             ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
-            ...(task ? { taskId: task.id } : {}),
+            ...(taskId ? { taskId } : {}),
             ...(mentions.length ? { mentions } : {}),
             projectReferenceRequestFingerprint: referenceFingerprint,
             routeReason: toRouteReason(route),
@@ -1479,10 +1460,35 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             createdAt: now,
           })
           : undefined;
-        return { message, referenceSet };
+        // 任务创建必须晚于引用事实的提交点复核，并与消息处于同一事务；
+        // 否则 revision 并发冲突会回滚消息，却遗留幽灵任务。
+        const task = shouldCreateTask
+          ? await transaction.tasks.create({
+              id: taskId!, teamId: messageInput.teamId, title: messageInput.body.trim() || '附件',
+              description: undefined,
+              status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
+              creatorId: messageInput.userId,
+              assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
+              channelId: messageInput.channelId, tags: [], sortOrder: now, createdAt: now, updatedAt: now,
+            })
+          : null;
+        return { message, task, referenceSet };
       });
     } catch (error) {
       if (!(error instanceof ProjectReferenceCommitConflictError)) throw error;
+      // 路由发生在消息事务之前。若本次路由新建了管理运行，引用事实冲突时
+      // 将其终止，避免不可见消息对应的运行继续被调度。
+      if (management.kind === 'managed' && management.disposition === 'created') {
+        const run = await repositories.management.runs.getById(management.managementRunId);
+        if (run) {
+          await repositories.management.runs.update({
+            ...run,
+            status: 'cancelled',
+            updatedAt: now,
+            completedAt: now,
+          });
+        }
+      }
       if (error.kind === 'idempotency_conflict' && messageInput.clientMessageId) {
         const replay = await repositories.messages.getByClientMessageId({
           teamId: messageInput.teamId,
@@ -1505,7 +1511,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         { reason: 'selections_rejected' },
       );
     }
-    const { message, referenceSet } = saved;
+    const { message, task, referenceSet } = saved;
+    if (task && management.kind === 'managed' && management.managementPhase >= 2) {
+      await taskCoordinationKernel.bootstrapRootCoordination({
+        managementRunId: management.managementRunId,
+        taskId: task.id,
+        idempotencyKey: `bootstrap-root:${task.id}`,
+        acceptanceCriteria: [{
+          id: `root-completion:${task.id}`,
+          description: '根任务目标已完成并可供用户审核',
+          evidenceRequired: false,
+        }],
+        maxAttempts: 1,
+      });
+    }
     const releaseDispatchCoalescingLock = await acquireKeyedLock(
       dispatchCoalescingLocks,
       `${message.teamId}:${message.channelId}:${message.senderId}`,
@@ -5077,11 +5096,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             channelId: referenceInput.channelId,
             documentId: member.documentId,
           });
+          if (!document) continue;
           bundleMembers.push({
             bundleId,
             documentId: member.documentId,
+            revisionId: document.currentRevisionId,
             position: member.position + 1,
-            filename: document?.filename ?? member.initialFilename,
+            filename: document.filename,
           });
         }
       }
@@ -8113,6 +8134,13 @@ async function buildDispatchRequest(
     ? await repositories.agents.getExecutionConfig(agent.id)
     : null;
   const originMessage = await repositories.messages.getById(dispatch.messageId);
+  const projectReferenceSet = originMessage
+    ? await repositories.projectReferenceSets.getByMessageId({
+        teamId: dispatch.teamId,
+        channelId: dispatch.channelId,
+        messageId: dispatch.messageId,
+      })
+    : null;
   const managementAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
   const managementInvocation = managementAttempt
     ? await repositories.management.invocations.getById(managementAttempt.invocationId)
@@ -8194,6 +8222,7 @@ async function buildDispatchRequest(
       acceptanceCriteria: managementInvocation.intent.acceptanceCriteria,
     } } : {}),
     ...(memoryContext.length > 0 ? { memoryContext } : {}),
+    ...(projectReferenceSet ? { projectReferenceSet: toProjectReferenceSetDto(projectReferenceSet) } : {}),
     prompt: requestPrompt,
     history: dispatchHistory.map(toDispatchHistoryMessageDto),
     ...(attachments.length > 0 ? { attachments: attachments.map(toDispatchAttachmentDto) } : {}),

@@ -4,6 +4,7 @@ import type { ArtifactRole } from './artifact.js';
 import type { SenderKind } from './message.js';
 import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
+import type { ProjectReferenceSetDto } from './project-reference.js';
 import type {
   LocalMemoryScopeType,
   MemoryKind,
@@ -111,6 +112,8 @@ export interface DispatchRequestDto {
   managementInvocationId?: ID;
   managementContext?: DispatchManagementContextDto;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
+  /** 发送时冻结的项目引用事实；执行端不得重新解析为较新的 revision/version。 */
+  projectReferenceSet?: ProjectReferenceSetDto;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];

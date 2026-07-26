@@ -1,7 +1,11 @@
 import { createRequire } from 'node:module';
 import { beforeEach, describe, expect, test } from 'vitest';
 
-import { createServerNextUseCases, type ServerNextUseCases } from '../src/application/usecases.js';
+import {
+  createServerNextUseCases,
+  type CreateServerNextUseCasesInput,
+  type ServerNextUseCases,
+} from '../src/application/usecases.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import {
@@ -155,7 +159,12 @@ describe('#826 冻结项目引用并随消息发送', () => {
     })).resolves.toMatchObject({
       ok: true,
       kind: 'resolved',
-      selection: { kind: 'document', documentId: 'document-1' },
+      selection: {
+        kind: 'document',
+        documentId: 'document-1',
+        expectedRevisionId: 'revision-1',
+      },
+      candidate: { revisionId: 'revision-1' },
     });
   });
 
@@ -183,6 +192,42 @@ describe('#826 冻结项目引用并随消息发送', () => {
       },
     });
     if (!sent.ok) throw new Error('message send failed');
+
+    await repositories.agents.upsert({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: '执行代理',
+      adapterKind: 'claude-code',
+      category: 'coding',
+      source: 'custom',
+      status: 'online',
+      ownerId: 'owner-1',
+      command: 'claude',
+    });
+    await repositories.dispatches.create({
+      id: 'dispatch-reference-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: sent.message.id,
+      agentId: 'agent-1',
+      status: 'queued',
+      requestId: 'request-reference-1',
+      prompt: sent.message.body,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await expect(app.getDispatchRequest({
+      dispatchId: 'dispatch-reference-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        projectReferenceSet: {
+          messageId: sent.message.id,
+          selections: [{ items: [{ revisionId: 'revision-1' }] }],
+        },
+      },
+    });
 
     const nextArtifact = {
       id: 'artifact-doc-2',
@@ -331,6 +376,78 @@ describe('#826 冻结项目引用并随消息发送', () => {
         createdAt: now,
       },
     })).resolves.toEqual({ kind: 'reference_fact_conflict' });
+  });
+
+  test('引用提交冲突不会遗留幽灵任务或消息', async () => {
+    repositories.projectReferenceSets.create = async () => ({
+      kind: 'reference_fact_conflict',
+    });
+    await repositories.management.runs.create({
+      schemaVersion: 2,
+      managementPhase: 1,
+      id: 'management-run-conflict',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      rootMessageId: 'pending-message',
+      mode: 'managed',
+      status: 'queued',
+      placementPolicy: {
+        placement: 'device',
+        allowedDeviceIds: ['device-1'],
+        allowServerContext: false,
+        requireLocalModelCredentials: true,
+      },
+      checkpointRevision: 0,
+      budget: { maxSubtasks: 1, maxDepth: 1, maxExternalInvocations: 1 },
+      createdAt: now,
+      updatedAt: now,
+    });
+    const managedRouter = {
+      route: async () => ({
+        kind: 'managed' as const,
+        mode: 'managed' as const,
+        managementRunId: 'management-run-conflict',
+        profileId: 'profile-1',
+        disposition: 'created' as const,
+        managementPhase: 1 as const,
+      }),
+      scheduleManaged: async (result: unknown) => result,
+    } as unknown as NonNullable<CreateServerNextUseCasesInput['managementRouter']>;
+    const managedApp = createServerNextUseCases({
+      repositories,
+      ids: { nextId: () => `conflict-id-${++id}` },
+      clock: { now: () => ++now },
+      messageIngestionMode: 'legacy',
+      managementRouter: managedRouter,
+    });
+    await expect(managedApp.sendMessage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '带引用的任务',
+      clientMessageId: 'client-task-conflict',
+      asTask: true,
+      selections: [{
+        kind: 'document',
+        documentId: 'document-1',
+        expectedRevisionId: 'revision-1',
+      }],
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+    });
+    expect(await repositories.messages.listByChannel('channel-1', 20)).toEqual([]);
+    expect(await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: false,
+    })).toEqual([]);
+    await expect(repositories.management.runs.getById(
+      'management-run-conflict',
+    )).resolves.toMatchObject({
+      status: 'cancelled',
+      completedAt: expect.any(Number),
+    });
   });
 
   test('陈旧 expected revision 与归档频道均拒绝整条消息', async () => {
@@ -505,6 +622,52 @@ test('#826 SQLite 四表往返保持 Selection 与 item 顺序', async () => {
         createdAt: 2,
       },
     })).resolves.toEqual({ kind: 'idempotency_conflict' });
+
+    await repositories.channels.create({
+      id: 'channel-2',
+      teamId: 'team-1',
+      kind: 'channel',
+      name: 'other',
+      visibility: 'public',
+      createdBy: 'owner-1',
+      humanMemberIds: ['owner-1'],
+      agentMemberIds: [],
+      createdAt: 2,
+      updatedAt: 2,
+      archivedAt: null,
+      revision: 1,
+    });
+    await repositories.messages.append({
+      id: 'message-2',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      senderKind: 'human',
+      senderId: 'owner-1',
+      body: '跨频道消息',
+      createdAt: 2,
+    });
+    await expect(repositories.projectReferenceSets.create({
+      set: {
+        id: 'set-cross-scope',
+        contractVersion: 1,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-2',
+        createdBy: 'owner-1',
+        createdAt: 2,
+        selections: [],
+      },
+      selections: [],
+      items: [],
+      mutation: {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        idempotencyKey: 'client-cross-scope',
+        requestFingerprint: 'fingerprint-cross-scope',
+        referenceSetId: 'set-cross-scope',
+        createdAt: 2,
+      },
+    })).rejects.toThrow('project reference set scope mismatch');
   } finally {
     globalDb.close();
     teamDb.close();

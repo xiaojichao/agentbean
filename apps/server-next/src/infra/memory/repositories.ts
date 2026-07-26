@@ -2007,9 +2007,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             : { kind: 'idempotency_conflict' };
         }
         const channel = channels.get(input.set.channelId);
+        const message = messages.get(input.set.messageId);
         if (!channel
           || channel.teamId !== input.set.teamId
           || channel.archivedAt != null
+          || !message
+          || message.teamId !== input.set.teamId
+          || message.channelId !== input.set.channelId
           || input.items.some((item) => {
             if (item.kind !== 'document_revision') return false;
             const document = item.documentId ? channelDocuments.get(item.documentId) : null;

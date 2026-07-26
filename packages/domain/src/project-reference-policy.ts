@@ -231,6 +231,7 @@ function rejected(
 export interface ProjectReferenceOrdinalBundleMember {
   readonly bundleId: string;
   readonly documentId: string;
+  readonly revisionId: string;
   readonly position: number;
   readonly filename: string;
 }
@@ -251,6 +252,7 @@ export function resolveReferenceOrdinal(
     .map((member) => ({
       scopeId: member.bundleId,
       documentId: member.documentId,
+      revisionId: member.revisionId,
       position: member.position,
       filename: member.filename,
     }));
@@ -258,7 +260,11 @@ export function resolveReferenceOrdinal(
     const candidate = candidates[0] as ProjectReferenceOrdinalCandidateDto;
     return {
       kind: 'resolved',
-      selection: { kind: 'document', documentId: candidate.documentId },
+      selection: {
+        kind: 'document',
+        documentId: candidate.documentId,
+        expectedRevisionId: candidate.revisionId,
+      },
       candidate,
     };
   }

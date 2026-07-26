@@ -180,6 +180,8 @@ export interface ResolveProjectReferencesResultDto {
 export interface ProjectReferenceOrdinalCandidateDto {
   readonly scopeId: ID;
   readonly documentId: ID;
+  /** 解析当刻的 revision fence，发送时必须原样回传。 */
+  readonly revisionId: ID;
   /** 1 起的位次，与用户口语中的「第 N 个」对齐。 */
   readonly position: number;
   readonly filename: string;

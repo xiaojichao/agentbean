@@ -10,6 +10,38 @@ CREATE TABLE project_reference_sets (
 );
 CREATE INDEX project_reference_sets_message_idx ON project_reference_sets(team_id, channel_id, message_id);
 
+CREATE TRIGGER project_reference_sets_scope_insert
+BEFORE INSERT ON project_reference_sets
+FOR EACH ROW
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM channels AS channel
+  JOIN messages AS message ON message.id = NEW.message_id
+  WHERE channel.id = NEW.channel_id
+    AND channel.team_id = NEW.team_id
+    AND message.team_id = NEW.team_id
+    AND message.channel_id = NEW.channel_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'project reference set scope mismatch');
+END;
+
+CREATE TRIGGER project_reference_sets_scope_update
+BEFORE UPDATE OF team_id, channel_id, message_id ON project_reference_sets
+FOR EACH ROW
+WHEN NOT EXISTS (
+  SELECT 1
+  FROM channels AS channel
+  JOIN messages AS message ON message.id = NEW.message_id
+  WHERE channel.id = NEW.channel_id
+    AND channel.team_id = NEW.team_id
+    AND message.team_id = NEW.team_id
+    AND message.channel_id = NEW.channel_id
+)
+BEGIN
+  SELECT RAISE(ABORT, 'project reference set scope mismatch');
+END;
+
 CREATE TABLE project_reference_selections (
   id TEXT PRIMARY KEY,
   reference_set_id TEXT NOT NULL REFERENCES project_reference_sets(id) ON DELETE CASCADE,
