@@ -3,6 +3,7 @@ import type { TaskClaimAcquireAckV1 } from '../../../packages/contracts/src/inde
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createTaskClaimBroker } from '../src/application/management/task-claim-broker.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
+import { resolveTaskAllocation } from '../src/application/management/task-allocation-service.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
@@ -236,6 +237,63 @@ describe('Task Offer publishOffer（#712 切片 C-2b-i：组合+持久化完整 
     expect(offer.objective.preferredSkills).toEqual(['rust']);
     const persisted = await harness.repositories.taskCoordination.offers.getById(offer.id);
     expect(persisted?.objective.preferredSkills).toEqual(['rust']);
+  });
+
+  test('显式指派的子 Task 经 allocation 服务发布后保留 assigneeId（#807 端到端）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await harness.coordination.createSubtasks({ authority: harness.authority,
+      idempotencyKey: 'subtasks-targeted', parentTaskId: 'root-task',
+      subtasks: [{ taskId: 'task-t', clientKey: 't', title: 'Task T', description: 'objective t',
+        claimPolicy: 'targeted', targetAgentId: 'agent-1', requiredCapabilities: ['code-review'],
+        acceptanceCriteria: [{ id: 'criterion-t', description: 'T accepted', evidenceRequired: false }],
+        maxAttempts: 3 }] });
+    // 拆解时 assigneeId 已落库
+    await expect(harness.repositories.tasks.getById('task-t'))
+      .resolves.toMatchObject({ assigneeId: 'agent-1' });
+
+    const allocation = await resolveTaskAllocation({
+      taskId: 'task-t', broker: harness.broker, repositories: harness.repositories,
+    });
+    expect(allocation).toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-1' });
+
+    const before = await harness.repositories.tasks.getById('task-t');
+    await harness.coordination.publishForClaim({ authority: harness.authority,
+      idempotencyKey: 'publish-t', taskId: 'task-t', expectedTaskRevision: before!.revision,
+      ...(allocation ? { allocation } : {}) });
+
+    // 发布后仍是 targeted 且 assigneeId 未被清空——未接线时此处会被强转 open 并清空
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-t'))
+      .resolves.toMatchObject({ claimPolicy: 'targeted' });
+    await expect(harness.repositories.tasks.getById('task-t'))
+      .resolves.toMatchObject({ assigneeId: 'agent-1' });
+  });
+
+  test('无显式指派 + 唯一合格候选 → open 修订为 targeted 并写入 assigneeId（#807 AC）', async () => {
+    // 回归防线：kernel 若只覆写 claimPolicy 而不落 allocation.targetAgentId，
+    // 会产出「targeted 且无 assignee」的非法状态，publish 直接抛
+    // TASK_REVISION_INVALID_SEMANTIC_STATE —— 这会打断所有恰好只有 1 个合格候选的普通任务。
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // harness 的 task-a 是 open + 无 assignee，此处只有 agent-1 一个合格候选
+    const allocation = await resolveTaskAllocation({
+      taskId: 'task-a', broker: harness.broker, repositories: harness.repositories,
+    });
+    expect(allocation).toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-1' });
+
+    const before = await harness.repositories.tasks.getById('task-a');
+    await expect(harness.coordination.publishForClaim({ authority: harness.authority,
+      idempotencyKey: 'publish-single', taskId: 'task-a', expectedTaskRevision: before!.revision,
+      ...(allocation ? { allocation } : {}) })).resolves.toMatchObject({ status: 'todo' });
+
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ claimPolicy: 'targeted' });
+    await expect(harness.repositories.tasks.getById('task-a'))
+      .resolves.toMatchObject({ assigneeId: 'agent-1' });
   });
 
   test('hardSpecified=true 透传（显式 @Agent，AC#8 仅元数据）', async () => {

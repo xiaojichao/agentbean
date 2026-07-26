@@ -440,9 +440,15 @@ export function createTaskCoordinationKernel(
           : (coordination.claimPolicy !== 'open' || task.assigneeId !== undefined);
         if (needsRevision) {
           const claimPolicy = allocatedPolicy ?? 'open';
+          // #807 AC：allocation 的 targetAgentId 必须随 claimPolicy 一并落到修订上。
+          // targeted 而无 assigneeId 是非法状态（evaluateTaskRevisionChange 判 invalid_semantic_state），
+          // 漏传会让「open → targeted」的分配在 publish 时抛 TASK_REVISION_INVALID_SEMANTIC_STATE。
+          // 强转 open 的兜底路径则必须保持 assigneeId 为空（open + assignee 同样非法）。
+          const assigneeId = claimPolicy === 'targeted' ? input.allocation?.targetAgentId : undefined;
           const revised = await reviseInTransaction(repositories, run, task, coordination, {
             objective: objectiveOf(task), acceptanceCriteria: currentCriteria, dependencyTaskIds,
-            claimPolicy, requiredCapabilities: coordination.requiredCapabilities,
+            claimPolicy, ...(assigneeId ? { assigneeId } : {}),
+            requiredCapabilities: coordination.requiredCapabilities,
             maxAttempts: coordination.maxAttempts,
           }, now);
           const revisionEvent = await appendRevisionEvent(repositories, run.id,
