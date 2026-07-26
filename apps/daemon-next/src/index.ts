@@ -527,9 +527,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             request.projectReferenceSets,
           );
 
-          // Per-run workspace + input attachments (only when customAgent.cwd is set).
-          const workspace = request.customAgent?.cwd
-            ? prepareWorkspaceRun(request.customAgent.cwd, request.id)
+          // 未配置 agent cwd 时仍以 daemon home 作为受控 workspace 根目录，
+          // 保证普通附件和冻结引用内容都能下载并通过绝对路径暴露给执行器。
+          const workspaceRoot = request.customAgent?.cwd
+            ?? (request.attachments?.length ? home : undefined);
+          const workspace = workspaceRoot
+            ? prepareWorkspaceRun(workspaceRoot, request.id)
             : undefined;
           if (workspace && request.attachments?.length && device.token) {
             const downloaded = await downloadAttachments(

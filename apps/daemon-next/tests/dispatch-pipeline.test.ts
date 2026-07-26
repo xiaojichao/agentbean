@@ -191,6 +191,70 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     ]);
   });
 
+  test('未配置 cwd 时也下载冻结引用附件并向执行器暴露路径', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reference-home-')));
+    const harness = createFakeSocket();
+    let executedPrompt = '';
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [],
+      serverUrl: 'http://server.test',
+      homeDir,
+      fetch: async () => new Response('frozen-revision-content', { status: 200 }),
+      executor: async (request) => {
+        executedPrompt = request.prompt;
+        return { body: 'done' };
+      },
+    });
+    await client.start();
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'dispatch-reference-no-cwd',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: '执行引用任务',
+      attachments: [{ id: 'artifact-revision-3', name: 'plan.md' }],
+      customAgent: { adapterKind: 'codex', command: 'echo' },
+      projectReferenceSets: [{
+        id: 'set-1',
+        contractVersion: 1,
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        createdBy: 'user-1',
+        createdAt: 1,
+        selections: [{
+          id: 'selection-1',
+          position: 0,
+          sourceKind: 'document',
+          createdAt: 1,
+          items: [{
+            kind: 'document_revision',
+            documentId: 'document-1',
+            revisionId: 'revision-3',
+            revisionNumber: 3,
+            filename: 'plan.md',
+          }],
+        }],
+      }],
+    });
+    const inputPath = join(
+      homeDir,
+      '.agentbean',
+      'runs',
+      'dispatch-reference-no-cwd',
+      'inputs',
+      'artifact-revision-3-plan.md',
+    );
+    expect(readFileSync(inputPath, 'utf8')).toBe('frozen-revision-content');
+    expect(executedPrompt).toContain('revisionId=revision-3');
+    expect(executedPrompt).toContain(inputPath);
+  });
+
   test('returns stable skipped-file diagnostics in the Run result', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-artifact-diagnostic-')));
     const harness = createFakeSocket();
