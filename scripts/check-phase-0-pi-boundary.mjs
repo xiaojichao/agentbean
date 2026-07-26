@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WORKSPACE_FIXTURE_IGNORED_SEGMENTS } from './workspace-fixture.mjs';
 
 const PI_SCOPE = '@earendil-works/pi-';
 const WRAPPER_ROOT = 'packages/pi-management-runtime';
@@ -12,10 +13,10 @@ const REQUIRED_VERSION = '0.80.6';
 // Claude Code 建 worktree 的默认位置——每个 worktree 都是完整仓库副本，含合法的
 // packages/pi-management-runtime。整树 walk 把它们扫进来就产生假违规：本地
 // `npm run test:retained-boundaries` 必红而 CI 全绿，最容易被误判成真实回归。
-const ignoredSegments = new Set([
-  '.agents', '.claude', '.codex', '.git', '.next', '.omx', '.worktrees',
-  'coverage', 'dist', 'docs', 'node_modules', 'playwright-report', 'test-results',
-]);
+//
+// 这份忽略集与 boundary 负向 fixture 的拷贝排除集是同一批目录，从
+// workspace-fixture.mjs 派生以免两处漂移；本 checker 只扫源码，额外再跳过 docs。
+const ignoredSegments = new Set([...WORKSPACE_FIXTURE_IGNORED_SEGMENTS, 'docs']);
 const guardFiles = new Set([
   'scripts/check-phase-0-pi-boundary.mjs',
   'scripts/check-phase-0-pi-boundary.test.mjs',

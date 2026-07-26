@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { copyWorkspaceFixture } from './workspace-fixture.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const checker = join(root, 'scripts/check-phase-3-memory-boundary.mjs');
@@ -13,10 +14,7 @@ const run = (workspace) => spawnSync(process.execPath, [checker, '--workspace-ro
 function withFixture(prefix, mutate) {
   const fixture = mkdtempSync(join(tmpdir(), prefix));
   try {
-    cpSync(root, fixture, {
-      recursive: true,
-      filter: (source) => !source.split('/').includes('node_modules') && !source.split('/').includes('.git'),
-    });
+    copyWorkspaceFixture(root, fixture);
     mutate(fixture);
     return run(fixture);
   } finally {
