@@ -1631,8 +1631,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (actualRevision !== input.expectedRevision || existingProfile) {
           return { kind: 'revision_conflict' };
         }
-        const currentTask = tasks.get(input.stage.taskId);
+        const currentTask = tasks.get(`${input.stage.taskId}#${input.stage.taskRevision}`);
         if (!currentTask
+          || currentTask.supersededByRevision !== null
           || currentTask.teamId !== input.stage.teamId
           || currentTask.channelId !== input.stage.channelId
           || currentTask.revision !== input.stage.taskRevision) {

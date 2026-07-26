@@ -392,7 +392,7 @@ describe('频道项目首个 Stage 总览', () => {
     });
   });
 
-  test('内存仓库在原子提交点拒绝已迁出频道的 Task', async () => {
+  test('内存仓库使用当前 Task revision 创建 Stage，并在原子提交点拒绝已迁出频道的 Task', async () => {
     const repositories = createInMemoryRepositories();
     await repositories.users.create({
       id: 'owner-1',
@@ -446,6 +446,20 @@ describe('频道项目首个 Stage 总览', () => {
       archivedAt: null,
       revision: 1,
     });
+    await repositories.channels.create({
+      id: 'channel-2',
+      teamId: 'team-1',
+      kind: 'channel',
+      name: 'delivery',
+      visibility: 'private',
+      createdBy: 'owner-1',
+      humanMemberIds: ['owner-1', 'reviewer-1'],
+      agentMemberIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      revision: 1,
+    });
     await repositories.tasks.create({
       id: 'task-1',
       teamId: 'team-1',
@@ -459,6 +473,52 @@ describe('频道项目首个 Stage 总览', () => {
       createdAt: now,
       updatedAt: now,
     });
+    await repositories.tasks.create({
+      id: 'task-2',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      title: '完成交付方案',
+      status: 'todo',
+      creatorId: 'owner-1',
+      assigneeId: 'owner-1',
+      tags: [],
+      sortOrder: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => ++now },
+      ids: { nextId: () => `project-id-${++id}` },
+      messageIngestionMode: 'legacy',
+    });
+
+    await expect(app.createInitialProjectStage({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-2',
+      expectedRevision: 0,
+      idempotencyKey: 'memory-success',
+      projectLeadId: 'owner-1',
+      defaultReviewerIds: ['reviewer-1'],
+      stage: {
+        name: '交付准备',
+        goal: '形成交付方案',
+        ownerId: 'owner-1',
+        reviewerIds: ['reviewer-1'],
+        acceptanceCriteria: ['交付步骤完整'],
+        taskId: 'task-2',
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      overview: {
+        stages: [{
+          task: { id: 'task-2' },
+        }],
+      },
+    });
+
     const createInitialStage = repositories.channelProjects.createInitialStage;
     repositories.channelProjects.createInitialStage = async (input) => {
       await repositories.tasks.update({
@@ -467,13 +527,6 @@ describe('频道项目首个 Stage 总览', () => {
       });
       return createInitialStage(input);
     };
-    const app = createServerNextUseCases({
-      repositories,
-      clock: { now: () => ++now },
-      ids: { nextId: () => `project-id-${++id}` },
-      messageIngestionMode: 'legacy',
-    });
-
     await expect(app.createInitialProjectStage({
       userId: 'owner-1',
       teamId: 'team-1',
