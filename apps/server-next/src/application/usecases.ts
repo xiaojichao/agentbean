@@ -1443,38 +1443,64 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         maxAttempts: 1,
       });
     }
-    const saved = await repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
-      const message = await transaction.messages.append({
-        id: messageId,
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
-        threadId,
-        senderKind: 'human',
-        senderId: messageInput.userId,
-        body: messageInput.body,
-        createdAt: now,
-        meta: {
-          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-          ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
-          ...(task ? { taskId: task.id } : {}),
-          ...(mentions.length ? { mentions } : {}),
-          projectReferenceRequestFingerprint: referenceFingerprint,
-          routeReason: toRouteReason(route),
-        },
-      });
-      const referenceSet = frozen.selections.length > 0
-        ? await persistFrozenProjectReferences(transaction.projectReferenceSets, {
-          ids,
-          message,
-          createdBy: messageInput.userId,
-          previews: frozen.selections,
-          idempotencyKey: messageInput.clientMessageId ?? message.id,
-          requestFingerprint: referenceFingerprint,
+    let saved: { message: MessageRecord; referenceSet?: ProjectReferenceSetDto };
+    try {
+      saved = await repositories.channelCoordinationUnitOfWork.run(async (transaction) => {
+        const message = await transaction.messages.append({
+          id: messageId,
+          teamId: messageInput.teamId,
+          channelId: messageInput.channelId,
+          threadId,
+          senderKind: 'human',
+          senderId: messageInput.userId,
+          body: messageInput.body,
           createdAt: now,
-        })
-        : undefined;
-      return { message, referenceSet };
-    });
+          meta: {
+            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+            ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
+            ...(task ? { taskId: task.id } : {}),
+            ...(mentions.length ? { mentions } : {}),
+            projectReferenceRequestFingerprint: referenceFingerprint,
+            routeReason: toRouteReason(route),
+          },
+        });
+        const referenceSet = frozen.selections.length > 0
+          ? await persistFrozenProjectReferences(transaction.projectReferenceSets, {
+            ids,
+            message,
+            createdBy: messageInput.userId,
+            previews: frozen.selections,
+            idempotencyKey: messageInput.clientMessageId ?? message.id,
+            requestFingerprint: referenceFingerprint,
+            createdAt: now,
+          })
+          : undefined;
+        return { message, referenceSet };
+      });
+    } catch (error) {
+      if (!(error instanceof ProjectReferenceCommitConflictError)) throw error;
+      if (error.kind === 'idempotency_conflict' && messageInput.clientMessageId) {
+        const replay = await repositories.messages.getByClientMessageId({
+          teamId: messageInput.teamId,
+          channelId: messageInput.channelId,
+          clientMessageId: messageInput.clientMessageId,
+        });
+        if (replay?.meta?.projectReferenceRequestFingerprint === referenceFingerprint) {
+          const [projected] = await enrichMessagesWithArtifacts(repositories, [replay]);
+          return makeSuccess({
+            message: projected ?? replay,
+            dispatches: (await repositories.dispatches.listByMessage(replay.id)).map(toDispatchDto),
+            ...(projected?.referenceSet ? { referenceSet: projected.referenceSet } : {}),
+          });
+        }
+        return makeFailure('CONFLICT', 'Client message id was already used for a different message');
+      }
+      return makeFailure(
+        'VALIDATION_ERROR',
+        'Project references changed before the message could be committed; refresh and retry',
+        { reason: 'selections_rejected' },
+      );
+    }
     const { message, referenceSet } = saved;
     const releaseDispatchCoalescingLock = await acquireKeyedLock(
       dispatchCoalescingLocks,
@@ -3524,10 +3550,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
           return { kind: 'saved' as const, message, artifacts: attachedArtifacts, referenceSet };
         });
+      }).catch((error: unknown) => {
+        if (error instanceof ProjectReferenceCommitConflictError) {
+          return { kind: 'reference_commit_conflict' as const };
+        }
+        throw error;
       });
 
       if (outcome.kind === 'conflict') {
         return makeFailure('CONFLICT', 'Client message id was already used for a different message');
+      }
+      if (outcome.kind === 'reference_commit_conflict') {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          'Project references changed before the message could be committed; refresh and retry',
+          { reason: 'selections_rejected' },
+        );
       }
       if (outcome.kind === 'rejected') return outcome.failure;
 
@@ -9329,14 +9367,30 @@ function normalizeUniqueTextItems(value: unknown): string[] {
 }
 
 function projectReferenceRequestFingerprint(
-  input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'body' | 'selections'>,
+  input: Pick<
+    SendMessageInput,
+    'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
+    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+  >,
 ): string {
   return createHash('sha256').update(JSON.stringify({
+    userId: input.userId,
     teamId: input.teamId,
     channelId: input.channelId,
+    messageId: input.messageId ?? null,
+    threadId: input.threadId ?? null,
     body: input.body,
+    asTask: input.asTask === true,
+    artifactIds: input.artifactIds ?? [],
+    meta: input.meta ?? null,
     selections: input.selections ?? [],
   })).digest('hex');
+}
+
+class ProjectReferenceCommitConflictError extends Error {
+  constructor(readonly kind: 'idempotency_conflict' | 'reference_fact_conflict') {
+    super(`Project reference set commit failed: ${kind}`);
+  }
 }
 
 async function persistFrozenProjectReferences(
@@ -9419,7 +9473,9 @@ async function persistFrozenProjectReferences(
     },
   });
   if (result.kind !== 'created') {
-    throw new Error(`Project reference set could not be atomically created: ${result.kind}`);
+    throw new ProjectReferenceCommitConflictError(
+      result.kind === 'reference_fact_conflict' ? result.kind : 'idempotency_conflict',
+    );
   }
   return toProjectReferenceSetDto(set);
 }
@@ -9569,7 +9625,7 @@ async function loadProjectReferenceSelectionCandidate(
       const candidate = await loadProjectReferenceDocumentCandidate(repositories, {
         ...input,
         documentId: member.documentId,
-        bundlePosition: member.position,
+        bundlePosition: member.position + 1,
       });
       if (!candidate) {
         visible = false;

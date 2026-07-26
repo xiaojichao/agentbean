@@ -30,6 +30,12 @@ describe('chat files surface', () => {
     expect(source).toContain('data-smoke="chat-file-input"');
   });
 
+  test('普通 Markdown 可携带当前 revision 进入 composer', () => {
+    expect(filesSurface).toContain('<ProjectDocumentReferenceButton');
+    expect(filesSurface).toContain('revisionId={file.documentRevisionId}');
+    expect(source).toContain('documentRevisionId: document.currentRevisionId');
+  });
+
   test('派生 Run Markdown 前明确确认且同名时要求改名', () => {
     expect(source).toContain('编辑此 Run Markdown 将创建新的 Channel document');
     expect(source).toContain('原 Run Artifact 和运行目录不会被修改');

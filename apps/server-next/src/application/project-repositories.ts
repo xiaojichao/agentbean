@@ -335,7 +335,7 @@ export type CreateProjectReferenceSetResult =
     kind: 'created' | 'replayed';
     mutation: ProjectReferenceSetMutationRecord;
   }
-  | { kind: 'idempotency_conflict' };
+  | { kind: 'idempotency_conflict' | 'reference_fact_conflict' };
 
 export interface ProjectReferenceSetRepository {
   getByMessageId(input: {

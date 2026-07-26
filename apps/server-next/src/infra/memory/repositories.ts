@@ -1999,6 +1999,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             ? { kind: 'replayed', mutation: { ...existingMutation } }
             : { kind: 'idempotency_conflict' };
         }
+        const channel = channels.get(input.set.channelId);
+        if (!channel
+          || channel.teamId !== input.set.teamId
+          || channel.archivedAt != null
+          || input.items.some((item) => {
+            if (item.kind !== 'document_revision') return false;
+            const document = item.documentId ? channelDocuments.get(item.documentId) : null;
+            return !document
+              || document.teamId !== input.set.teamId
+              || document.channelId !== input.set.channelId
+              || document.currentRevisionId !== item.revisionId;
+          })) {
+          return { kind: 'reference_fact_conflict' };
+        }
         projectReferenceSets.set(input.set.id, {
           ...input.set,
           selections: [],

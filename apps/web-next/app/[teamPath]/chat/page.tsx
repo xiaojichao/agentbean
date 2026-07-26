@@ -26,6 +26,7 @@ import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStag
 import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
+import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
@@ -97,6 +98,7 @@ interface TaskItem {
 interface ConversationFile {
   artifact: Artifact;
   documentId?: string;
+  documentRevisionId?: string;
   messageId?: string;
   createdAt: number;
   senderKind: ChatMessage['senderKind'];
@@ -298,6 +300,7 @@ export default function ChatPage() {
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
   const [projectReferenceSelections, setProjectReferenceSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
+  const [sendingMessage, setSendingMessage] = useState(false);
   const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
@@ -325,6 +328,8 @@ export default function ChatPage() {
   const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   const dmsRef = useRef(dms);
+  const activeChannelRef = useRef(activeChannel);
+  activeChannelRef.current = activeChannel;
   const savedKey = `agentbean:chat:saved:${routeTeamPath}`;
   const reactionsKey = `agentbean:chat:reactions:${routeTeamPath}`;
   const activeChannelMuted = activeChannel ? mutedChannelIds.has(activeChannel) : false;
@@ -1263,6 +1268,8 @@ export default function ChatPage() {
   const sendMessage = () => {
     const artifacts = readyArtifacts(pendingAttachments);
     if (
+      sendingMessage
+      ||
       (!input.trim() && artifacts.length === 0 && projectReferenceSelections.length === 0)
       || !activeChannel
       || hasUploadingAttachments(pendingAttachments)
@@ -1274,14 +1281,23 @@ export default function ChatPage() {
     const createTask = asTask;
     const mentions = extractMentions(body, visibleMentionMembers);
     const clientMessageId = createClientMessageId('chat');
+    setSendingMessage(true);
     getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, clientMessageId,
       body: body || (artifacts.length > 0 ? '附件' : '项目引用'), asTask, artifactIds,
       selections: projectReferenceSelections,
       ...(mentions.length ? { meta: { mentions } } : {}),
     }, (res?: SendMessageAck) => {
+      setSendingMessage(false);
       if (res?.ok) {
         appendAckMessage(res);
         if (createTask) setTimeout(() => loadTasks(), 150);
+        if (activeChannelRef.current === channelId) {
+          setInput('');
+          pendingAttachments.forEach(revokeComposerPreview);
+          setPendingAttachments([]);
+          setProjectReferenceSelections([]);
+          setAsTask(false);
+        }
         return;
       }
       appendMessage({
@@ -1294,11 +1310,6 @@ export default function ChatPage() {
         metaJson: JSON.stringify({ kind: 'send-fail' }),
       });
     });
-    setInput('');
-    pendingAttachments.forEach(revokeComposerPreview);
-    setPendingAttachments([]);
-    setProjectReferenceSelections([]);
-    setAsTask(false);
   };
 
   const sendThreadMessage = () => {
@@ -2036,7 +2047,7 @@ export default function ChatPage() {
                       ))}
                     </div>
                   )}
-                  <textarea data-smoke="chat-message-input" ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} rows={2} placeholder={isDm ? `私聊 @${activeDmName}` : `发送到 #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400" />
+                  <textarea data-smoke="chat-message-input" ref={textareaRef} value={input} onChange={handleInputChange} onKeyDown={handleInputKeyDown} disabled={sendingMessage} rows={2} placeholder={isDm ? `私聊 @${activeDmName}` : `发送到 #${activeName}  (输入 @ 提及成员)`} className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400 disabled:bg-neutral-50" />
                   {projectReferenceSelections.length > 0 && (
                     <div data-smoke="project-reference-composer-chips" className="flex flex-wrap gap-1.5 px-3 pb-2">
                       {projectReferenceSelections.map((selection, index) => {
@@ -2082,7 +2093,7 @@ export default function ChatPage() {
                       <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件"><Paperclip size={16} /></button>
                       <label className="ml-1 flex cursor-pointer items-center gap-1 text-neutral-400 hover:text-neutral-600"><input type="checkbox" checked={asTask} onChange={(e) => setAsTask(e.target.checked)} className="rounded border-neutral-300" /><span className="text-xs">作为任务</span></label>
                     </div>
-                    <button data-smoke="chat-message-send" onClick={sendMessage} disabled={uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
+                    <button data-smoke="chat-message-send" onClick={sendMessage} disabled={sendingMessage || uploading || hasUploadingAttachments(pendingAttachments) || hasFailedAttachments(pendingAttachments) || (!input.trim() && readyArtifacts(pendingAttachments).length === 0 && projectReferenceSelections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40"><Send size={14} /></button>
                   </div>
                 </div>
               </div>
@@ -2201,6 +2212,13 @@ export default function ChatPage() {
                     ...current.filter((item) =>
                       (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
                       || item.bundleId !== bundleId),
+                    ...(selection ? [selection] : []),
+                  ]);
+                }}
+                onDocumentReferenceSelection={(selection, documentId) => {
+                  setProjectReferenceSelections((current) => [
+                    ...current.filter((item) =>
+                      item.kind !== 'document' || item.documentId !== documentId),
                     ...(selection ? [selection] : []),
                   ]);
                 }}
@@ -3186,6 +3204,7 @@ function ConversationFiles({
   onLoadDocumentBundleDetail,
   referenceSelections,
   onReferenceSelection,
+  onDocumentReferenceSelection,
   agents,
   humanProfiles,
   channelMembers,
@@ -3209,6 +3228,7 @@ function ConversationFiles({
   onLoadDocumentBundleDetail: (bundleId: string) => Promise<ProjectDocumentBundleDetailDto | null>;
   referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
   onReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, bundleId: string) => void;
+  onDocumentReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, documentId: string) => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   channelMembers: ChannelMemberEntry[];
@@ -3278,11 +3298,23 @@ function ConversationFiles({
                     {file.role && <span>· {channelFileRoleLabel(file.role)}</span>}
                     {file.logicalPath && <span className="min-w-0 truncate">· {file.logicalPath}</span>}
                   </div>
-                  {file.messageId && (
-                    <button onClick={() => onJump(file.messageId!)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
-                      <ExternalLink size={15} />
-                    </button>
-                  )}
+                  <div className="flex shrink-0 items-center gap-2">
+                    {file.documentId && file.documentRevisionId && (
+                      <ProjectDocumentReferenceButton
+                        documentId={file.documentId}
+                        revisionId={file.documentRevisionId}
+                        selected={referenceSelections.some((selection) =>
+                          selection.kind === 'document' && selection.documentId === file.documentId)}
+                        disabled={documentBundlesArchived}
+                        onChange={(selection) => onDocumentReferenceSelection(selection, file.documentId!)}
+                      />
+                    )}
+                    {file.messageId && (
+                      <button onClick={() => onJump(file.messageId!)} className="flex h-8 w-8 shrink-0 items-center justify-center border border-neutral-900 text-neutral-700 hover:bg-amber-50" title="跳转到原消息">
+                        <ExternalLink size={15} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -5483,7 +5515,10 @@ function channelFileToConversationFile(entry: ChannelFileEntryDto, documents: Ma
   const document = documents.get(documentId);
   return {
     artifact: document?.currentRevision.artifact ?? entry.artifact,
-    ...(document ? { documentId: document.id } : {}),
+    ...(document ? {
+      documentId: document.id,
+      documentRevisionId: document.currentRevisionId,
+    } : {}),
     ...(entry.source.messageId ? { messageId: entry.source.messageId } : {}),
     createdAt: entry.artifact.createdAt || entry.source.messageCreatedAt,
     senderKind: entry.source.senderKind,

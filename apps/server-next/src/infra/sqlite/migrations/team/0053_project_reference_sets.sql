@@ -5,7 +5,8 @@ CREATE TABLE project_reference_sets (
   channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   created_by TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  UNIQUE (team_id, channel_id, message_id)
 );
 CREATE INDEX project_reference_sets_message_idx ON project_reference_sets(team_id, channel_id, message_id);
 
@@ -17,7 +18,13 @@ CREATE TABLE project_reference_selections (
   bundle_id TEXT,
   bundle_name TEXT,
   bundle_member_count INTEGER,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  UNIQUE (reference_set_id, position),
+  CHECK (
+    (bundle_id IS NULL AND bundle_name IS NULL AND bundle_member_count IS NULL)
+    OR
+    (bundle_id IS NOT NULL AND bundle_name IS NOT NULL AND bundle_member_count IS NOT NULL)
+  )
 );
 CREATE INDEX project_reference_selections_set_idx ON project_reference_selections(reference_set_id, position);
 
@@ -36,7 +43,36 @@ CREATE TABLE project_reference_items (
   version_number INTEGER,
   artifact_id TEXT,
   artifact_filename TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  UNIQUE (selection_id, position),
+  CHECK (
+    (
+      kind = 'document_revision'
+      AND document_id IS NOT NULL
+      AND revision_id IS NOT NULL
+      AND revision_number IS NOT NULL
+      AND filename IS NOT NULL
+      AND collection_id IS NULL
+      AND version_id IS NULL
+      AND version_number IS NULL
+      AND artifact_id IS NULL
+      AND artifact_filename IS NULL
+    )
+    OR
+    (
+      kind = 'artifact_version'
+      AND document_id IS NULL
+      AND revision_id IS NULL
+      AND revision_number IS NULL
+      AND filename IS NULL
+      AND bundle_position IS NULL
+      AND collection_id IS NOT NULL
+      AND version_id IS NOT NULL
+      AND version_number IS NOT NULL
+      AND artifact_id IS NOT NULL
+      AND artifact_filename IS NOT NULL
+    )
+  )
 );
 
 CREATE TABLE project_reference_set_mutations (

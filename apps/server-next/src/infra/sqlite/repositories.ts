@@ -4064,6 +4064,25 @@ function createSqliteProjectReferenceSetRepository(
             ? { kind: 'replayed' as const, mutation: existing }
             : { kind: 'idempotency_conflict' as const };
         }
+        const channel = db.prepare(
+          `SELECT id FROM channels
+           WHERE id = ? AND team_id = ? AND archived_at IS NULL`,
+        ).get(input.set.channelId, input.set.teamId);
+        const documentFactsAreCurrent = input.items.every((item) => {
+          if (item.kind !== 'document_revision') return true;
+          return Boolean(db.prepare(
+            `SELECT id FROM channel_documents
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND current_revision_id = ?`,
+          ).get(
+            item.documentId,
+            input.set.teamId,
+            input.set.channelId,
+            item.revisionId,
+          ));
+        });
+        if (!channel || !documentFactsAreCurrent) {
+          return { kind: 'reference_fact_conflict' as const };
+        }
 
         db.prepare(
           `INSERT INTO project_reference_sets (
