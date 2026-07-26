@@ -114,7 +114,7 @@ describe('AgentBean Next readiness checker', () => {
         '- packages/contracts/**',
         '- packages/domain/**',
         '      - name: Consume platform verdict through root gate',
-        '        if: always()',
+        '        if: ${{ !cancelled() }}',
         '        run: npm run check:pi-sea-compatibility -- --file artifacts/pi-sea-verdict/verdict.json',
       ].join('\n'),
     };
@@ -136,7 +136,8 @@ describe('AgentBean Next readiness checker', () => {
       { workflow: valid.workflow.replace('^\\.nvmrc$', '') },
       { workflow: valid.workflow.replace('package(-lock)?\\.json', '') },
       { seaWorkflow: valid.seaWorkflow.replace('- packages/contracts/**', '') },
-      { seaWorkflow: valid.seaWorkflow.replace('if: always()', '') },
+      { seaWorkflow: valid.seaWorkflow.replace('if: ${{ !cancelled() }}', '') },
+      { seaWorkflow: valid.seaWorkflow.replace('if: ${{ !cancelled() }}', 'if: always()') },
       { seaWorkflow: valid.seaWorkflow.replace('npm run check:pi-sea-compatibility', 'node scripts/check-pi-management-sea.mjs') },
     ]) {
       expect(hasPhase0CiGate({ ...valid, ...bypass })).toBe(false);
