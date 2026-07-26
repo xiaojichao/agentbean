@@ -128,6 +128,59 @@ describe('Phase 1 Invocation Gateway', () => {
     expect(replay.view.intent).toEqual(created.view.intent);
   });
 
+  test('rejects an explicit V2 InputSet that omits a frozen Selection item', async () => {
+    const harness = await createHarness();
+    await seedProjectDocumentInputSet(harness.repositories, true);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    expect(created.view.intent.schemaVersion).toBe(2);
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 intent');
+
+    await expect(harness.gateway.invoke({
+      ...invokeInput(harness.authority),
+      idempotencyKey: 'invoke-incomplete-input-set',
+      intent: {
+        ...created.view.intent,
+        projectDocumentInputSet: {
+          ...created.view.intent.projectDocumentInputSet,
+          items: [],
+        },
+      },
+    })).rejects.toMatchObject({ code: 'INVOCATION_INPUT_SET_REFERENCE_STALE' });
+  });
+
+  test('rejects a stale Task revision instead of rewriting it while freezing InputSet', async () => {
+    const harness = await createHarness();
+    await seedProjectDocumentInputSet(harness.repositories, true);
+    await harness.repositories.tasks.create({
+      id: 'task-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      title: 'Task',
+      description: 'Task',
+      status: 'in_progress',
+      creatorId: 'user-1',
+      assigneeId: 'agent-1',
+      tags: [],
+      sortOrder: 1,
+      revision: 2,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+
+    await expect(harness.gateway.invoke({
+      ...invokeInput(harness.authority),
+      intent: {
+        ...intent(),
+        taskContext: {
+          taskId: 'task-1',
+          taskRevision: 1,
+          taskAttempt: 1,
+          claimLeaseId: 'claim-1',
+        },
+      },
+    })).rejects.toMatchObject({ code: 'INVOCATION_TASK_REVISION_STALE' });
+  });
+
   test('blocks active retries and only creates attempt +1 after an explicit terminal retry', async () => {
     const harness = await createHarness();
     const created = await harness.gateway.invoke(invokeInput(harness.authority));

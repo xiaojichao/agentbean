@@ -55,6 +55,7 @@ describe('daemon-next builtin scanner', () => {
         command: '/Users/shaw/.local/share/claude-latest/current/claude',
         cwd: '/Users/shaw/.local/share/claude-latest/current',
         discoverySource: 'runtime',
+        projectDocumentInputSetVersions: [1],
       },
       {
         adapterKind: 'codex',
@@ -63,6 +64,7 @@ describe('daemon-next builtin scanner', () => {
         command: '/opt/homebrew/bin/codex',
         cwd: '/opt/homebrew/bin',
         discoverySource: 'runtime',
+        projectDocumentInputSetVersions: [1],
       },
     ]);
   });
@@ -115,6 +117,7 @@ describe('daemon-next builtin scanner', () => {
         cwd: '/opt/homebrew/bin',
         discoverySource: 'gateway',
         gatewayInstanceKey: 'hermes:/opt/homebrew/bin/hermes',
+        projectDocumentInputSetVersions: [1],
       },
       {
         adapterKind: 'openclaw',
@@ -125,6 +128,7 @@ describe('daemon-next builtin scanner', () => {
         cwd: '/opt/homebrew/bin',
         discoverySource: 'gateway',
         gatewayInstanceKey: 'openclaw:/opt/homebrew/bin/openclaw:main',
+        projectDocumentInputSetVersions: [1],
       },
       {
         adapterKind: 'codex',

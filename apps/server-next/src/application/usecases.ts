@@ -702,6 +702,7 @@ export interface CreateCustomAgentInput {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  projectDocumentInputSetVersions?: number[];
   /** web 连接上报的本机设备 id，用于校验 custom agent runtime 只能在本地设备创建。 */
   currentDeviceId?: string | null;
 }
@@ -2712,10 +2713,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           args: discovered.args ?? existing?.args,
           cwd: discovered.cwd ?? existing?.cwd,
           gatewayInstanceKey: discovered.gatewayInstanceKey ?? existing?.gatewayInstanceKey,
-          projectDocumentInputSetVersions:
-            discovered.projectDocumentInputSetVersions
-            ?? device.capabilities?.projectDocumentInputSetVersions
-            ?? existing?.projectDocumentInputSetVersions,
+          projectDocumentInputSetVersions: discovered.projectDocumentInputSetVersions,
           lastSeenAt: now,
         });
         await repositories.agents.linkIdentity({
@@ -2796,8 +2794,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         cwd: runtime?.cwd ?? agentInput.cwd,
         envKeys: Object.keys(agentInput.env ?? {}).sort(),
         env: agentInput.env,
-        projectDocumentInputSetVersions:
-          device.capabilities?.projectDocumentInputSetVersions,
+        projectDocumentInputSetVersions: agentInput.projectDocumentInputSetVersions,
         lastSeenAt: now,
       });
       await ensureDefaultChannelMembership(repositories, clock, { teamId: agentInput.teamId, agentId: agent.id });
@@ -8622,6 +8619,10 @@ async function assertProjectDocumentInputSetDispatchReady(
       throw new Error('PROJECT_DOCUMENT_INPUT_SET_TASK_REVISION_STALE');
     }
     const gate = await resolveProjectStageExecutionGate(repositories, task);
+    if (gate.boundStageTaskRevision !== null
+      && gate.boundStageTaskRevision !== task.revision) {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_STAGE_REVISION_STALE');
+    }
     if (gate.blocked) throw new Error('PROJECT_DOCUMENT_INPUT_SET_STAGE_BLOCKED');
   }
   for (const item of intent.projectDocumentInputSet.items) {

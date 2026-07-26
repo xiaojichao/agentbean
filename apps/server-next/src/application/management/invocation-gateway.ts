@@ -638,13 +638,17 @@ async function attachProjectDocumentInputSet(
   intent: AgentInvocationIntent,
   run: ManagementRunRecord,
 ): Promise<AgentInvocationIntent> {
-  if (intent.schemaVersion === 2) return intent;
   const referenceSet = await repositories.projectReferenceSets.getByMessageId({
     teamId: run.teamId,
     channelId: run.channelId,
     messageId: run.rootMessageId,
   });
-  if (!referenceSet) return intent;
+  if (!referenceSet) {
+    if (intent.schemaVersion === 2) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
   const items: ProjectDocumentInputSetItemV1[] = [];
   for (const selection of referenceSet.selections) {
     for (const item of selection.items) {
@@ -690,32 +694,36 @@ async function attachProjectDocumentInputSet(
       });
     }
   }
-  if (items.length === 0) return intent;
+  if (items.length === 0) {
+    if (intent.schemaVersion === 2) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
   const id = `project-document-input-set:${createHash('sha256')
     .update(`${referenceSet.id}:${intent.targetAgentId}:1`)
     .digest('hex')
     .slice(0, 24)}`;
-  const authoritativeTask = intent.taskContext
-    ? await repositories.tasks.getById(intent.taskContext.taskId)
-    : null;
+  const projectDocumentInputSet = {
+    id,
+    contractVersion: 1 as const,
+    required: true as const,
+    referenceSetId: referenceSet.id,
+    items,
+  };
+  if (intent.schemaVersion === 2) {
+    if (canonicalizeAgentInvocationIntent({
+      ...intent,
+      projectDocumentInputSet,
+    }) !== canonicalizeAgentInvocationIntent(intent)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
   return {
     ...intent,
     schemaVersion: 2,
-    ...(intent.taskContext && authoritativeTask
-      ? {
-          taskContext: {
-            ...intent.taskContext,
-            taskRevision: authoritativeTask.revision,
-          },
-        }
-      : {}),
-    projectDocumentInputSet: {
-      id,
-      contractVersion: 1,
-      required: true,
-      referenceSetId: referenceSet.id,
-      items,
-    },
+    projectDocumentInputSet,
   };
 }
 

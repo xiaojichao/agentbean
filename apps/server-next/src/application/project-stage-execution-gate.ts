@@ -77,6 +77,8 @@ export async function buildProjectStageUpstreamEdgeFacts(
 export interface ProjectStageExecutionGateResult {
   /** 该 Task 是否绑定了项目阶段。未绑定的 Task 不受本门禁约束。 */
   readonly boundStageId: string | null;
+  /** Stage 创建时冻结的 Task revision；启动边界用它拒绝陈旧绑定。 */
+  readonly boundStageTaskRevision: number | null;
   readonly blocked: boolean;
   readonly blocks: readonly ProjectStageExecutionBlock[];
 }
@@ -94,6 +96,7 @@ export async function resolveProjectStageExecutionGate(
 ): Promise<ProjectStageExecutionGateResult> {
   const allowed: ProjectStageExecutionGateResult = {
     boundStageId: null,
+    boundStageTaskRevision: null,
     blocked: false,
     blocks: [],
   };
@@ -104,7 +107,13 @@ export async function resolveProjectStageExecutionGate(
   if (!stage) return allowed;
   const edges = await repositories.channelProjects.listEdges(scope);
   const inboundEdges = edges.filter((edge) => edge.downstreamStageId === stage.id);
-  if (inboundEdges.length === 0) return { ...allowed, boundStageId: stage.id };
+  if (inboundEdges.length === 0) {
+    return {
+      ...allowed,
+      boundStageId: stage.id,
+      boundStageTaskRevision: stage.taskRevision,
+    };
+  }
   const upstreamFactsCache = new Map<string, ProjectStageFacts | undefined>();
   const resolveUpstream = async (stageId: string): Promise<ProjectStageFacts | undefined> => {
     if (upstreamFactsCache.has(stageId)) return upstreamFactsCache.get(stageId);
@@ -128,6 +137,7 @@ export async function resolveProjectStageExecutionGate(
   const gate = evaluateProjectStageExecutionGate({ upstreamEdges });
   return {
     boundStageId: stage.id,
+    boundStageTaskRevision: stage.taskRevision,
     blocked: gate.kind === 'blocked',
     blocks: gate.kind === 'blocked' ? gate.blocks : [],
   };
