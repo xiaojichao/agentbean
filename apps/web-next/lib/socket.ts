@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type CopyPiProviderCardInput, type CreatePiProviderCardInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -925,6 +925,44 @@ export function memoryEvents(socket: Socket = getWebSocket()): MemoryEvents {
     onChanged(handler) {
       socket.on(WEB_EVENTS.memory.changed, handler);
       return () => { socket.off(WEB_EVENTS.memory.changed, handler); };
+    },
+  };
+}
+
+/** #722/#723 Experience Pack socket 客户端：list/CRUD/频道 attachment。 */
+export function experiencePackEvents(socket: Socket = getWebSocket()) {
+  return {
+    listByTeam(teamId: string): Promise<{ ok: boolean; packs?: ExperiencePackDto[]; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.listByTeam, { teamId });
+    },
+    getById(teamId: string, packId: string): Promise<{ ok: boolean; pack?: ExperiencePackDto; attachments?: ChannelExperienceAttachmentDto[]; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.getById, { teamId, packId });
+    },
+    createDraft(payload: {
+      teamId: string; actorId: string; title: string; summary?: string;
+      sourceChannelId: string; applicabilityConditions?: string;
+      exclusionConditions?: string; conclusions?: string; limitations?: string;
+      sources?: readonly { sourceKind: string; sourceId: string; snapshotHash: string; sourceScopeType: string; sourceScopeRef: string }[];
+    }): Promise<{ ok: boolean; pack?: ExperiencePackDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.createDraft, payload);
+    },
+    approve(teamId: string, actorId: string, packId: string): Promise<{ ok: boolean; pack?: ExperiencePackDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.approve, { teamId, actorId, packId });
+    },
+    withdraw(teamId: string, actorId: string, packId: string): Promise<{ ok: boolean; pack?: ExperiencePackDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.withdraw, { teamId, actorId, packId });
+    },
+    markSourceInvalid(teamId: string, actorId: string, packId: string, reason: string): Promise<{ ok: boolean; pack?: ExperiencePackDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.markSourceInvalid, { teamId, actorId, packId, reason });
+    },
+    recommendToChannel(teamId: string, actorId: string, packId: string, channelId: string): Promise<{ ok: boolean; attachment?: ChannelExperienceAttachmentDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.recommendToChannel, { teamId, actorId, packId, channelId });
+    },
+    confirmAttachment(teamId: string, actorId: string, packId: string, channelId: string): Promise<{ ok: boolean; attachment?: ChannelExperienceAttachmentDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.confirmAttachment, { teamId, actorId, packId, channelId });
+    },
+    revokeAttachment(teamId: string, actorId: string, packId: string, channelId: string): Promise<{ ok: boolean; attachment?: ChannelExperienceAttachmentDto; error?: string }> {
+      return emitWithTimeout(socket, WEB_EVENTS.experiencePack.revokeAttachment, { teamId, actorId, packId, channelId });
     },
   };
 }

@@ -24,8 +24,9 @@ import {
   validateFormalMemoryForm,
 } from '@/lib/formal-memory-form';
 import { PROJECTION_KIND_LABELS } from '@/lib/agent-memory-projection-form';
+import { ExperiencePackPanel } from '@/components/ExperiencePackPanel';
 
-type MemoryTab = 'formal' | 'memories' | 'candidates' | 'grants' | 'capsules' | 'local' | 'projection';
+type MemoryTab = 'formal' | 'memories' | 'candidates' | 'grants' | 'capsules' | 'local' | 'projection' | 'experience';
 type LoadState = 'loading' | 'ready' | 'permission-denied' | 'error';
 
 const TABS: Array<{ id: MemoryTab; label: string }> = [
@@ -36,6 +37,7 @@ const TABS: Array<{ id: MemoryTab; label: string }> = [
   { id: 'capsules', label: 'Capsule / Invocation' },
   { id: 'local', label: '当前 Device' },
   { id: 'projection', label: 'Agent 投影' },
+  { id: 'experience', label: 'Experience 包' },
 ];
 const KINDS: MemoryKind[] = ['semantic', 'episodic', 'procedural', 'preference', 'decision', 'artifact-summary'];
 const SCOPES: MemoryScopeType[] = ['team', 'channel', 'dm', 'task', 'agent', 'user'];
@@ -149,6 +151,7 @@ export function MemoryGovernancePanel() {
       {tab === 'capsules' && <CapsulesSection snapshot={snapshot} agents={agents} />}
       {tab === 'local' && <LocalSection state={localState} items={local} reload={loadLocal} />}
       {tab === 'projection' && <ProjectionConsumptionSection teamId={teamId!} />}
+      {tab === 'experience' && <ExperiencePackPanel />}
     </div>
   );
 }
