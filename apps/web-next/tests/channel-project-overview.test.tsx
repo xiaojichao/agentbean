@@ -104,12 +104,176 @@ describe('频道任务页项目总览', () => {
       },
     }));
   });
+
+  test('#822 展示前置阶段、依赖满足情况、缺失必需输入与阻塞原因', () => {
+    render(
+      <ChannelProjectOverview
+        overview={twoStageOverview({ upstreamDone: false })}
+        tasks={[]}
+        participants={[{ id: 'owner-1', name: '负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+        onCreateEdge={vi.fn()}
+        onDeleteEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('stage-upstream-stage-down').textContent).toContain('剧本');
+    expect(screen.getByTestId('stage-upstream-stage-down').textContent).toContain('依赖未满足');
+    expect(screen.getByTestId('stage-missing-inputs-stage-down').textContent).toContain('剧本终稿');
+    expect(screen.getByTestId('stage-blocking-stage-down').textContent).toContain('前置阶段尚未完成');
+    expect(screen.getByTestId('stage-blocking-stage-down').textContent).toContain('缺少必需输入');
+    expect(screen.getByTestId('stage-execution-blocked-stage-down')).toBeTruthy();
+    expect(screen.getByTestId('stage-edge-edge-1').textContent).toContain('剧本 → 分镜');
+  });
+
+  test('#822 依赖满足后不再展示阻塞提示', () => {
+    render(
+      <ChannelProjectOverview
+        overview={twoStageOverview({ upstreamDone: true })}
+        tasks={[]}
+        participants={[{ id: 'owner-1', name: '负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+        onCreateEdge={vi.fn()}
+        onDeleteEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('stage-upstream-stage-down').textContent).toContain('依赖已满足');
+    expect(screen.queryByTestId('stage-missing-inputs-stage-down')).toBeNull();
+    expect(screen.queryByTestId('stage-execution-blocked-stage-down')).toBeNull();
+  });
+
+  test('#822 项目负责人可以提交新的 Stage edge 与必需输入规则', async () => {
+    const onCreateEdge = vi.fn(async () => null);
+    render(
+      <ChannelProjectOverview
+        overview={twoStageOverview({ upstreamDone: true, edges: [] })}
+        tasks={[]}
+        participants={[{ id: 'owner-1', name: '负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+        onCreateEdge={onCreateEdge}
+        onDeleteEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('stage-edges-empty')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('前置阶段'), { target: { value: 'stage-up' } });
+    fireEvent.change(screen.getByLabelText('后续阶段'), { target: { value: 'stage-down' } });
+    fireEvent.change(screen.getByLabelText('项目语义'), { target: { value: 'blocks_start' } });
+    fireEvent.change(screen.getByLabelText('必需输入'), { target: { value: '剧本终稿' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加依赖' }));
+
+    await waitFor(() => expect(onCreateEdge).toHaveBeenCalledWith({
+      upstreamStageId: 'stage-up',
+      downstreamStageId: 'stage-down',
+      semantics: 'blocks_start',
+      requiredInputs: [{ key: 'artifact-1', kind: 'artifact', label: '剧本终稿' }],
+    }));
+  });
+
+  test('#822 归档频道可读依赖图但不提供增删入口', () => {
+    render(
+      <ChannelProjectOverview
+        overview={{ ...twoStageOverview({ upstreamDone: true }), archived: true }}
+        tasks={[]}
+        participants={[{ id: 'owner-1', name: '负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+        onCreateEdge={vi.fn()}
+        onDeleteEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('stage-edge-edge-1')).toBeTruthy();
+    expect(screen.getByTestId('stage-edges-readonly')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '添加依赖' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除依赖 edge-1' })).toBeNull();
+  });
+
+  test('#822 删除依赖会回传边身份', async () => {
+    const onDeleteEdge = vi.fn(async () => null);
+    render(
+      <ChannelProjectOverview
+        overview={twoStageOverview({ upstreamDone: true })}
+        tasks={[]}
+        participants={[{ id: 'owner-1', name: '负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreate={vi.fn()}
+        onCreateEdge={vi.fn()}
+        onDeleteEdge={onDeleteEdge}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '删除依赖 edge-1' }));
+    await waitFor(() => expect(onDeleteEdge).toHaveBeenCalledWith('edge-1'));
+  });
 });
 
 function selectMultiple(element: HTMLElement, values: string[]): void {
   const select = element as HTMLSelectElement;
   for (const option of select.options) option.selected = values.includes(option.value);
   fireEvent.change(select);
+}
+
+/** #822 两阶段依赖投影 fixture：上游「剧本」→ 下游「分镜」，边声明一条必需输入。 */
+function twoStageOverview(options: {
+  upstreamDone: boolean;
+  edges?: ChannelProjectOverviewDto['edges'];
+}): ChannelProjectOverviewDto {
+  const base = overview();
+  const requiredInputs = [{ key: 'artifact-1', kind: 'artifact' as const, label: '剧本终稿' }];
+  const edges = options.edges ?? [{
+    id: 'edge-1',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    upstreamStageId: 'stage-up',
+    downstreamStageId: 'stage-down',
+    upstreamTaskId: 'task-up',
+    downstreamTaskId: 'task-down',
+    semantics: 'blocks_start' as const,
+    requiredInputs,
+    createdBy: 'owner-1',
+    createdAt: 1,
+    updatedAt: 1,
+  }];
+  const stageTemplate = base.stages[0] as ChannelProjectOverviewDto['stages'][number];
+  const blocked = edges.length > 0 && !options.upstreamDone;
+  return {
+    ...base,
+    archived: false,
+    edges,
+    stages: [
+      {
+        ...stageTemplate,
+        id: 'stage-up',
+        name: '剧本',
+        task: { ...stageTemplate.task, id: 'task-up', title: '完成剧本', status: options.upstreamDone ? 'done' : 'todo' },
+        aggregateStatus: options.upstreamDone ? 'complete' : 'pending',
+        blockingReasons: [],
+        upstreamStageIds: [],
+        dependenciesSatisfied: true,
+        missingRequiredInputs: [],
+        executionAllowed: true,
+      },
+      {
+        ...stageTemplate,
+        id: 'stage-down',
+        name: '分镜',
+        task: { ...stageTemplate.task, id: 'task-down', title: '完成分镜', status: 'todo' },
+        aggregateStatus: 'pending',
+        blockingReasons: blocked
+          ? [
+            { code: 'stage_dependency_incomplete', taskId: 'task-down', upstreamStageId: 'stage-up', edgeId: 'edge-1' },
+            { code: 'required_input_missing', taskId: 'task-down', upstreamStageId: 'stage-up', edgeId: 'edge-1', requiredInputKey: 'artifact-1' },
+          ]
+          : [],
+        upstreamStageIds: edges.length > 0 ? ['stage-up'] : [],
+        dependenciesSatisfied: !blocked,
+        missingRequiredInputs: blocked
+          ? [{ edgeId: 'edge-1', upstreamStageId: 'stage-up', ...requiredInputs[0] as typeof requiredInputs[number] }]
+          : [],
+        executionAllowed: !blocked,
+      },
+    ],
+  };
 }
 
 function overview(): ChannelProjectOverviewDto {
@@ -148,10 +312,16 @@ function overview(): ChannelProjectOverviewDto {
         createdAt: 1,
         updatedAt: 1,
       },
+      taskRevision: 1,
       aggregateStatus: 'pending',
       blockingReasons: [{ code: 'task_not_started', taskId: 'task-1' }],
+      upstreamStageIds: [],
+      dependenciesSatisfied: true,
+      missingRequiredInputs: [],
+      executionAllowed: true,
       createdAt: 1,
       updatedAt: 1,
     }],
+    edges: [],
   };
 }

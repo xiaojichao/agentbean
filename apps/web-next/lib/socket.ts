@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -859,15 +859,20 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
   };
 }
 
+export interface ProjectMutationResult {
+  ok: boolean;
+  overview?: ChannelProjectOverviewDto;
+  replayed?: boolean;
+  error?: string;
+  message?: string;
+}
+
 export interface ProjectEvents {
   overview(channelId: string): Promise<{ ok: boolean; overview?: ChannelProjectOverviewDto | null; error?: string; message?: string }>;
-  createInitialStage(payload: Omit<CreateInitialProjectStageInput, 'userId' | 'teamId'>): Promise<{
-    ok: boolean;
-    overview?: ChannelProjectOverviewDto;
-    replayed?: boolean;
-    error?: string;
-    message?: string;
-  }>;
+  createInitialStage(payload: Omit<CreateInitialProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
+  createStage(payload: Omit<CreateProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
+  createStageEdge(payload: Omit<CreateProjectStageEdgeInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
+  deleteStageEdge(payload: Omit<DeleteProjectStageEdgeInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
   onUpdated(channelId: string, handler: (overview: ChannelProjectOverviewDto | null) => void): () => void;
   /** #823 按逻辑产物读取当前版、历史、来源与 lineage。 */
   artifactCollections(channelId: string): Promise<{
@@ -921,6 +926,15 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     createInitialStage(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.createInitialStage, payload);
+    },
+    createStage(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.createStage, payload);
+    },
+    createStageEdge(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.createStageEdge, payload);
+    },
+    deleteStageEdge(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.deleteStageEdge, payload);
     },
     onUpdated(channelId, handler) {
       const listener = (payload: { channelId?: string; overview?: ChannelProjectOverviewDto | null }) => {

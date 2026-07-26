@@ -60,6 +60,7 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
 
@@ -102,6 +103,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const tasks = new Map<string, TaskRecord>();
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
+  const projectStageEdges = new Map<string, ProjectStageEdgeRecord>();
   const channelProjectMutations = new Map<string, ChannelProjectMutationRecord>();
   const projectArtifactCollections = new Map<string, ProjectArtifactCollectionRecord>();
   const projectArtifactVersions = new Map<string, ProjectArtifactVersionRecord>();
@@ -1671,6 +1673,123 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         projectStages.set(input.stage.id, input.stage);
         channelProjectMutations.set(mutationKey, input.mutation);
         return { kind: 'created', mutation: input.mutation };
+      },
+      async listEdges(input) {
+        return Array.from(projectStageEdges.values())
+          .filter((edge) => edge.teamId === input.teamId && edge.channelId === input.channelId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+      async createStage(input) {
+        const scopeKey = `${input.stage.teamId}:${input.stage.channelId}`;
+        const mutationKey = `${scopeKey}:${input.mutation.idempotencyKey}`;
+        const existingMutation = channelProjectMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          return { kind: 'replayed', mutation: existingMutation };
+        }
+        const profile = channelProjectProfiles.get(scopeKey);
+        if (!profile || profile.revision !== input.expectedRevision) {
+          return { kind: 'revision_conflict' };
+        }
+        const currentTask = tasks.get(`${input.stage.taskId}#${input.stage.taskRevision}`);
+        if (!currentTask
+          || currentTask.supersededByRevision !== null
+          || currentTask.teamId !== input.stage.teamId
+          || currentTask.channelId !== input.stage.channelId
+          || currentTask.revision !== input.stage.taskRevision) {
+          return { kind: 'task_scope_conflict' };
+        }
+        const duplicate = Array.from(projectStages.values()).some((stage) =>
+          stage.teamId === input.stage.teamId
+          && stage.channelId === input.stage.channelId
+          && stage.taskId === input.stage.taskId);
+        if (duplicate) return { kind: 'duplicate_edge' };
+        projectStages.set(input.stage.id, input.stage);
+        channelProjectProfiles.set(scopeKey, {
+          ...profile,
+          revision: input.nextRevision,
+          updatedAt: input.updatedAt,
+        });
+        channelProjectMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', mutation: input.mutation };
+      },
+      async createStageEdge(input) {
+        const scopeKey = `${input.edge.teamId}:${input.edge.channelId}`;
+        const mutationKey = `${scopeKey}:${input.mutation.idempotencyKey}`;
+        const existingMutation = channelProjectMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          return { kind: 'replayed', mutation: existingMutation };
+        }
+        const profile = channelProjectProfiles.get(scopeKey);
+        if (!profile || profile.revision !== input.expectedRevision) {
+          return { kind: 'revision_conflict' };
+        }
+        for (const stageId of [input.edge.upstreamStageId, input.edge.downstreamStageId]) {
+          const stage = projectStages.get(stageId);
+          if (!stage || stage.teamId !== input.edge.teamId || stage.channelId !== input.edge.channelId) {
+            return { kind: 'stage_scope_conflict' };
+          }
+        }
+        const taskFences: [string, number][] = [
+          [input.edge.upstreamTaskId, input.edge.upstreamTaskRevision],
+          [input.edge.downstreamTaskId, input.edge.downstreamTaskRevision],
+        ];
+        for (const [taskId, taskRevision] of taskFences) {
+          const currentTask = tasks.get(`${taskId}#${taskRevision}`);
+          if (!currentTask
+            || currentTask.supersededByRevision !== null
+            || currentTask.teamId !== input.edge.teamId
+            || currentTask.channelId !== input.edge.channelId
+            || currentTask.revision !== taskRevision) {
+            return { kind: 'task_scope_conflict' };
+          }
+        }
+        const duplicate = Array.from(projectStageEdges.values()).some((edge) =>
+          edge.teamId === input.edge.teamId
+          && edge.channelId === input.edge.channelId
+          && edge.upstreamStageId === input.edge.upstreamStageId
+          && edge.downstreamStageId === input.edge.downstreamStageId);
+        if (duplicate) return { kind: 'duplicate_edge' };
+        projectStageEdges.set(input.edge.id, input.edge);
+        channelProjectProfiles.set(scopeKey, {
+          ...profile,
+          revision: input.nextRevision,
+          updatedAt: input.updatedAt,
+        });
+        channelProjectMutations.set(mutationKey, input.mutation);
+        return { kind: 'created', mutation: input.mutation };
+      },
+      async deleteStageEdge(input) {
+        const scopeKey = `${input.teamId}:${input.channelId}`;
+        const mutationKey = `${scopeKey}:${input.mutation.idempotencyKey}`;
+        const existingMutation = channelProjectMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint) {
+            return { kind: 'idempotency_conflict' };
+          }
+          return { kind: 'replayed', mutation: existingMutation };
+        }
+        const profile = channelProjectProfiles.get(scopeKey);
+        if (!profile || profile.revision !== input.expectedRevision) {
+          return { kind: 'revision_conflict' };
+        }
+        const edge = projectStageEdges.get(input.edgeId);
+        if (!edge || edge.teamId !== input.teamId || edge.channelId !== input.channelId) {
+          return { kind: 'edge_not_found' };
+        }
+        projectStageEdges.delete(input.edgeId);
+        channelProjectProfiles.set(scopeKey, {
+          ...profile,
+          revision: input.nextRevision,
+          updatedAt: input.updatedAt,
+        });
+        channelProjectMutations.set(mutationKey, input.mutation);
+        return { kind: 'deleted', mutation: input.mutation };
       },
       async listArtifactCollections(input) {
         return Array.from(projectArtifactCollections.values())

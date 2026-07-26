@@ -185,6 +185,9 @@ export const WEB_EVENTS = {
   project: {
     overview: 'project:overview',
     createInitialStage: 'project:create-initial-stage',
+    createStage: 'project:create-stage',
+    createStageEdge: 'project:create-stage-edge',
+    deleteStageEdge: 'project:delete-stage-edge',
     updated: 'project:updated',
     artifactCollections: 'project:artifact-collections',
     promoteArtifact: 'project:promote-artifact',

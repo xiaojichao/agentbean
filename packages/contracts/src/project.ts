@@ -10,9 +10,50 @@ export interface ProjectStageBlockingReasonDto {
     | 'dependency_incomplete'
     | 'review_pending'
     | 'review_rejected'
-    | 'review_needs_human';
+    | 'review_needs_human'
+    | 'stage_dependency_incomplete'
+    | 'stage_dependency_unaccepted'
+    | 'required_input_missing';
   taskId: ID;
   dependencyTaskId?: ID;
+  /** #822 Stage edge 派生的阻塞原因携带边与上游阶段身份，便于界面解释。 */
+  edgeId?: ID;
+  upstreamStageId?: ID;
+  requiredInputKey?: string;
+}
+
+/**
+ * #822 Stage edge 的项目语义。
+ * - `blocks_start`：上游阶段完成后下游才可启动。
+ * - `provides_context`：上游产物只作为下游上下文，不阻塞启动。
+ */
+export type ProjectStageEdgeSemantics = 'blocks_start' | 'provides_context';
+
+/** #822 必需输入规则：声明下游阶段必须从上游阶段获得哪类产物。 */
+export interface ProjectStageRequiredInputRuleDto {
+  key: string;
+  kind: 'artifact' | 'document';
+  label: string;
+}
+
+export interface ProjectStageMissingRequiredInputDto extends ProjectStageRequiredInputRuleDto {
+  edgeId: ID;
+  upstreamStageId: ID;
+}
+
+export interface ProjectStageEdgeDto {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  upstreamStageId: ID;
+  downstreamStageId: ID;
+  upstreamTaskId: ID;
+  downstreamTaskId: ID;
+  semantics: ProjectStageEdgeSemantics;
+  requiredInputs: ProjectStageRequiredInputRuleDto[];
+  createdBy: ID;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
 }
 
 export interface ChannelProjectProfileDto {
@@ -37,8 +78,18 @@ export interface ProjectStageDto {
   reviewerIds: ID[];
   acceptanceCriteria: string[];
   task: TaskDto;
+  /** #822 阶段绑定的 Task revision，供客户端提交依赖写操作时携带 fence。 */
+  taskRevision: number;
   aggregateStatus: ProjectStageAggregateStatus;
   blockingReasons: ProjectStageBlockingReasonDto[];
+  /** #822 前置阶段身份（按 Stage edge 聚合，不含 provides_context 之外的推断）。 */
+  upstreamStageIds: ID[];
+  /** #822 全部 `blocks_start` 前置阶段是否已满足。 */
+  dependenciesSatisfied: boolean;
+  /** #822 尚未满足的必需输入。 */
+  missingRequiredInputs: ProjectStageMissingRequiredInputDto[];
+  /** #822 执行门禁结论：依赖与必需输入是否允许启动新的 claim/Invocation。 */
+  executionAllowed: boolean;
   createdAt: UnixMs;
   updatedAt: UnixMs;
 }
@@ -46,6 +97,8 @@ export interface ProjectStageDto {
 export interface ChannelProjectOverviewDto {
   profile: ChannelProjectProfileDto;
   stages: ProjectStageDto[];
+  /** #822 频道内的 Stage 依赖图。 */
+  edges: ProjectStageEdgeDto[];
   archived: boolean;
 }
 
@@ -71,6 +124,49 @@ export interface CreateInitialProjectStageInput {
     acceptanceCriteria: string[];
     taskId: ID;
   };
+}
+
+/**
+ * #822 在已有项目画像的频道中追加后续阶段。
+ * 配置 Stage edge 至少需要两个阶段，因此本切片补齐首个阶段之后的阶段创建。
+ */
+export interface CreateProjectStageInput {
+  userId?: ID;
+  teamId: ID;
+  channelId: ID;
+  expectedRevision: number;
+  idempotencyKey: string;
+  stage: {
+    name: string;
+    goal: string;
+    ownerId: ID;
+    reviewerIds: ID[];
+    acceptanceCriteria: string[];
+    taskId: ID;
+  };
+}
+
+export interface CreateProjectStageEdgeInput {
+  userId?: ID;
+  teamId: ID;
+  channelId: ID;
+  expectedRevision: number;
+  idempotencyKey: string;
+  upstreamStageId: ID;
+  downstreamStageId: ID;
+  semantics: ProjectStageEdgeSemantics;
+  requiredInputs: ProjectStageRequiredInputRuleDto[];
+  expectedUpstreamTaskRevision: number;
+  expectedDownstreamTaskRevision: number;
+}
+
+export interface DeleteProjectStageEdgeInput {
+  userId?: ID;
+  teamId: ID;
+  channelId: ID;
+  expectedRevision: number;
+  idempotencyKey: string;
+  edgeId: ID;
 }
 
 /**

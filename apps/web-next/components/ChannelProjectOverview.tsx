@@ -28,18 +28,29 @@ export interface InitialProjectStageDraft {
   };
 }
 
+export interface ProjectStageEdgeDraft {
+  upstreamStageId: string;
+  downstreamStageId: string;
+  semantics: 'blocks_start' | 'provides_context';
+  requiredInputs: { key: string; kind: 'artifact' | 'document'; label: string }[];
+}
+
 export function ChannelProjectOverview({
   overview,
   tasks,
   participants,
   currentUserId,
   onCreate,
+  onCreateEdge,
+  onDeleteEdge,
 }: {
   overview: ChannelProjectOverviewDto | null;
   tasks: ProjectTaskOption[];
   participants: ProjectParticipantOption[];
   currentUserId?: string;
   onCreate: (draft: InitialProjectStageDraft) => Promise<string | null>;
+  onCreateEdge?: (draft: ProjectStageEdgeDraft) => Promise<string | null>;
+  onDeleteEdge?: (edgeId: string) => Promise<string | null>;
 }) {
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
@@ -109,11 +120,42 @@ export function ChannelProjectOverview({
                 <dd className="text-neutral-700">
                   {stage.reviewerIds.map((id) => participantName(id, participants)).join('、') || '未配置'}
                 </dd>
+                <dt className="text-neutral-400">前置</dt>
+                <dd data-testid={`stage-upstream-${stage.id}`} className="text-neutral-700">
+                  {stage.upstreamStageIds.length === 0
+                    ? '无'
+                    : (
+                      <>
+                        {stage.upstreamStageIds.map((id) => stageName(id, overview)).join('、')}
+                        <span className={stage.dependenciesSatisfied ? 'ml-1 text-emerald-600' : 'ml-1 text-orange-700'}>
+                          {stage.dependenciesSatisfied ? '· 依赖已满足' : '· 依赖未满足'}
+                        </span>
+                      </>
+                    )}
+                </dd>
               </dl>
+              {stage.missingRequiredInputs.length > 0 && (
+                <div
+                  data-testid={`stage-missing-inputs-${stage.id}`}
+                  className="mt-2 rounded bg-orange-50 px-2 py-1 text-xs text-orange-700"
+                >
+                  缺少必需输入：{stage.missingRequiredInputs
+                    .map((input) => `${input.label}（${input.kind === 'artifact' ? '产物' : '文档'}）`)
+                    .join('、')}
+                </div>
+              )}
               {stage.blockingReasons.length > 0 && (
-                <div className="mt-2 flex items-center gap-1.5 rounded bg-orange-50 px-2 py-1 text-xs text-orange-700">
+                <div
+                  data-testid={`stage-blocking-${stage.id}`}
+                  className="mt-2 flex items-center gap-1.5 rounded bg-orange-50 px-2 py-1 text-xs text-orange-700"
+                >
                   <AlertCircle size={13} />
-                  {stage.blockingReasons.map((reason) => blockingReasonLabel(reason.code)).join('；')}
+                  {dedupeLabels(stage.blockingReasons.map((reason) => blockingReasonLabel(reason.code))).join('；')}
+                </div>
+              )}
+              {!stage.executionAllowed && (
+                <div data-testid={`stage-execution-blocked-${stage.id}`} className="mt-1 text-[11px] font-medium text-orange-700">
+                  依赖或必需输入未满足，暂不能启动执行
                 </div>
               )}
               <details className="mt-2 text-xs text-neutral-500">
@@ -128,6 +170,11 @@ export function ChannelProjectOverview({
             </article>
           ))}
         </div>
+        <ProjectStageEdgeSection
+          overview={overview}
+          onCreateEdge={onCreateEdge}
+          onDeleteEdge={onDeleteEdge}
+        />
       </section>
     );
   }
@@ -240,6 +287,178 @@ export function ChannelProjectOverview({
   );
 }
 
+/** #822 阶段依赖图：展示既有边并提供增删入口；归档频道只读。 */
+function ProjectStageEdgeSection({
+  overview,
+  onCreateEdge,
+  onDeleteEdge,
+}: {
+  overview: ChannelProjectOverviewDto;
+  onCreateEdge?: (draft: ProjectStageEdgeDraft) => Promise<string | null>;
+  onDeleteEdge?: (edgeId: string) => Promise<string | null>;
+}) {
+  const stages = overview.stages;
+  const [upstreamStageId, setUpstreamStageId] = useState('');
+  const [downstreamStageId, setDownstreamStageId] = useState('');
+  const [semantics, setSemantics] = useState<'blocks_start' | 'provides_context'>('blocks_start');
+  const [requiredInputLabels, setRequiredInputLabels] = useState('');
+  const [requiredInputKind, setRequiredInputKind] = useState<'artifact' | 'document'>('artifact');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!onCreateEdge || !upstreamStageId || !downstreamStageId) return;
+    const labels = requiredInputLabels.split('\n').map((item) => item.trim()).filter(Boolean);
+    setPending(true);
+    setError(null);
+    try {
+      const nextError = await onCreateEdge({
+        upstreamStageId,
+        downstreamStageId,
+        semantics,
+        requiredInputs: labels.map((label, index) => ({
+          key: `${requiredInputKind}-${index + 1}`,
+          kind: requiredInputKind,
+          label,
+        })),
+      });
+      if (nextError) setError(nextError);
+      else setRequiredInputLabels('');
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const remove = async (edgeId: string) => {
+    if (!onDeleteEdge) return;
+    setPending(true);
+    setError(null);
+    try {
+      const nextError = await onDeleteEdge(edgeId);
+      if (nextError) setError(nextError);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <div aria-label="阶段依赖" className="mt-3 border-t border-amber-200 pt-3">
+      <h3 className="mb-2 text-xs font-semibold text-neutral-700">阶段依赖</h3>
+      {overview.edges.length === 0
+        ? <p data-testid="stage-edges-empty" className="text-xs text-neutral-500">尚未配置阶段依赖</p>
+        : (
+          <ul className="space-y-1">
+            {overview.edges.map((edge) => (
+              <li
+                key={edge.id}
+                data-testid={`stage-edge-${edge.id}`}
+                className="flex items-center gap-2 text-xs text-neutral-700"
+              >
+                <span>
+                  {stageName(edge.upstreamStageId, overview)} → {stageName(edge.downstreamStageId, overview)}
+                </span>
+                <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-[11px] text-neutral-600">
+                  {edge.semantics === 'blocks_start' ? '完成后可启动' : '仅作为上下文'}
+                </span>
+                {edge.requiredInputs.length > 0 && (
+                  <span className="text-[11px] text-neutral-500">
+                    必需输入：{edge.requiredInputs.map((rule) => rule.label).join('、')}
+                  </span>
+                )}
+                {!overview.archived && onDeleteEdge && (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => { void remove(edge.id); }}
+                    className="ml-auto text-neutral-400 hover:text-red-600 disabled:opacity-50"
+                    title="删除依赖"
+                    aria-label={`删除依赖 ${edge.id}`}
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      {overview.archived
+        ? (
+          <p data-testid="stage-edges-readonly" className="mt-2 text-[11px] text-neutral-500">
+            频道已归档，依赖图只读
+          </p>
+        )
+        : onCreateEdge && stages.length >= 2 && (
+          <form onSubmit={submit} className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            <ProjectField label="前置阶段">
+              <select
+                aria-label="前置阶段"
+                value={upstreamStageId}
+                onChange={(event) => setUpstreamStageId(event.target.value)}
+                className={inputClass}
+              >
+                <option value="">请选择</option>
+                {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+              </select>
+            </ProjectField>
+            <ProjectField label="后续阶段">
+              <select
+                aria-label="后续阶段"
+                value={downstreamStageId}
+                onChange={(event) => setDownstreamStageId(event.target.value)}
+                className={inputClass}
+              >
+                <option value="">请选择</option>
+                {stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.name}</option>)}
+              </select>
+            </ProjectField>
+            <ProjectField label="项目语义">
+              <select
+                aria-label="项目语义"
+                value={semantics}
+                onChange={(event) => setSemantics(event.target.value === 'provides_context' ? 'provides_context' : 'blocks_start')}
+                className={inputClass}
+              >
+                <option value="blocks_start">完成后才能启动后续阶段</option>
+                <option value="provides_context">仅作为后续阶段上下文</option>
+              </select>
+            </ProjectField>
+            <ProjectField label="必需输入类型">
+              <select
+                aria-label="必需输入类型"
+                value={requiredInputKind}
+                onChange={(event) => setRequiredInputKind(event.target.value === 'document' ? 'document' : 'artifact')}
+                className={inputClass}
+              >
+                <option value="artifact">产物</option>
+                <option value="document">文档</option>
+              </select>
+            </ProjectField>
+            <ProjectField label="必需输入（每行一条，可留空）">
+              <textarea
+                aria-label="必需输入"
+                value={requiredInputLabels}
+                onChange={(event) => setRequiredInputLabels(event.target.value)}
+                className={`${inputClass} min-h-16 py-2`}
+                placeholder={'剧本终稿'}
+              />
+            </ProjectField>
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={pending || !upstreamStageId || !downstreamStageId}
+                className="h-8 rounded-md bg-neutral-900 px-3 text-xs font-medium text-white disabled:opacity-50"
+              >
+                {pending ? '保存中...' : '添加依赖'}
+              </button>
+            </div>
+          </form>
+        )}
+      {error && <p data-testid="stage-edge-error" className="mt-2 text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}
+
 const inputClass = 'h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500';
 
 function ProjectField({ label, children }: { label: string; children: ReactNode }) {
@@ -255,6 +474,14 @@ function participantName(id: string, participants: ProjectParticipantOption[]): 
   return participants.find((participant) => participant.id === id)?.name ?? id;
 }
 
+function stageName(stageId: string, overview: ChannelProjectOverviewDto): string {
+  return overview.stages.find((stage) => stage.id === stageId)?.name ?? stageId;
+}
+
+function dedupeLabels(labels: string[]): string[] {
+  return Array.from(new Set(labels));
+}
+
 function selectedValues(select: HTMLSelectElement): string[] {
   return Array.from(select.selectedOptions, (option) => option.value);
 }
@@ -267,9 +494,14 @@ function aggregateStatusLabel(status: ChannelProjectOverviewDto['stages'][number
 }
 
 function blockingReasonLabel(code: ChannelProjectOverviewDto['stages'][number]['blockingReasons'][number]['code']): string {
-  if (code === 'task_not_started') return '绑定任务尚未开始';
-  if (code === 'dependency_incomplete') return '依赖任务尚未完成';
-  if (code === 'review_pending') return '等待审核结论';
-  if (code === 'review_rejected') return '审核未通过';
-  return '需要人工确认';
+  switch (code) {
+    case 'task_not_started': return '绑定任务尚未开始';
+    case 'dependency_incomplete': return '依赖任务尚未完成';
+    case 'review_pending': return '等待审核结论';
+    case 'review_rejected': return '审核未通过';
+    case 'review_needs_human': return '需要人工确认';
+    case 'stage_dependency_incomplete': return '前置阶段尚未完成';
+    case 'stage_dependency_unaccepted': return '前置阶段产出未通过审核';
+    case 'required_input_missing': return '缺少必需输入';
+  }
 }

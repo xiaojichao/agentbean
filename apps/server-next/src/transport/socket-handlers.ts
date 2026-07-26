@@ -403,6 +403,21 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  bind(socket, WEB_EVENTS.project.createStage, app, 'createProjectStage', (payload, result) =>
+    options.afterProjectMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.createStageEdge, app, 'createProjectStageEdge', (payload, result) =>
+    options.afterProjectMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.deleteStageEdge, app, 'deleteProjectStageEdge', (payload, result) =>
+    options.afterProjectMutation?.(payload, result), {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   // #823 逻辑产物读写只暴露在已认证的人类 Web 会话上；Agent/Daemon 通道没有这两个端点。
   bind(socket, WEB_EVENTS.project.artifactCollections, app, 'listProjectArtifactCollections', undefined, {
     authenticatedUser: options.authenticatedUser,

@@ -22,7 +22,7 @@ import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
-import { ChannelProjectOverview, type InitialProjectStageDraft } from '@/components/ChannelProjectOverview';
+import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import { ProjectArtifactLibrary, type PromoteArtifactDraft } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
@@ -2819,6 +2819,50 @@ function ConversationTasks({
     return null;
   };
 
+  const nextIdempotencyKey = (prefix: string): string => (
+    typeof globalThis.crypto?.randomUUID === 'function'
+      ? globalThis.crypto.randomUUID()
+      : `${prefix}-${Date.now()}`
+  );
+
+  const createProjectStageEdge = async (draft: ProjectStageEdgeDraft): Promise<string | null> => {
+    const stages = projectOverview?.stages ?? [];
+    const upstream = stages.find((stage) => stage.id === draft.upstreamStageId);
+    const downstream = stages.find((stage) => stage.id === draft.downstreamStageId);
+    if (!projectOverview || !upstream || !downstream) return '阶段已变化，请刷新后重试';
+    const result = await projectEvents().createStageEdge({
+      channelId,
+      expectedRevision: projectOverview.profile.revision,
+      idempotencyKey: nextIdempotencyKey('project-stage-edge'),
+      upstreamStageId: draft.upstreamStageId,
+      downstreamStageId: draft.downstreamStageId,
+      semantics: draft.semantics,
+      requiredInputs: draft.requiredInputs,
+      expectedUpstreamTaskRevision: upstream.taskRevision,
+      expectedDownstreamTaskRevision: downstream.taskRevision,
+    });
+    if (!result.ok || !result.overview) {
+      return result.message ?? '配置阶段依赖失败，请刷新后重试';
+    }
+    setProjectOverview(result.overview);
+    return null;
+  };
+
+  const deleteProjectStageEdge = async (edgeId: string): Promise<string | null> => {
+    if (!projectOverview) return '阶段已变化，请刷新后重试';
+    const result = await projectEvents().deleteStageEdge({
+      channelId,
+      expectedRevision: projectOverview.profile.revision,
+      idempotencyKey: nextIdempotencyKey('project-stage-edge-delete'),
+      edgeId,
+    });
+    if (!result.ok || !result.overview) {
+      return result.message ?? '删除阶段依赖失败，请刷新后重试';
+    }
+    setProjectOverview(result.overview);
+    return null;
+  };
+
   const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
   const assigneeLabel = assigneeFilter === 'all'
     ? '负责人'
@@ -2883,6 +2927,8 @@ function ConversationTasks({
           participants={participants}
           currentUserId={currentUserId}
           onCreate={createInitialProjectStage}
+          onCreateEdge={createProjectStageEdge}
+          onDeleteEdge={deleteProjectStageEdge}
         />
       )}
 

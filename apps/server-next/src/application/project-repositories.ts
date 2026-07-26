@@ -3,6 +3,8 @@ import type {
   ID,
   ProjectArtifactLineageRefDto,
   ProjectDocumentBundleSourceDto,
+  ProjectStageEdgeSemantics,
+  ProjectStageRequiredInputRuleDto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 
@@ -50,6 +52,41 @@ export type CreateInitialProjectStageResult =
   | { kind: 'revision_conflict' }
   | { kind: 'task_scope_conflict' }
   | { kind: 'idempotency_conflict' };
+
+/**
+ * #822 Stage edge 记录。
+ *
+ * 这条记录同时承载「阶段依赖」与「对应 Task dependency」两重事实：
+ * 当上下游 Task 都拥有 canonical `task_coordinations` 行时，写入会在同一事务里
+ * 镜像一条 `task_dependencies`，并用 `mirroredTaskDependency` 记录该事实，
+ * 使删除时同样在一个事务内成对撤销，永不产生两套互相矛盾的依赖事实。
+ */
+export interface ProjectStageEdgeRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  upstreamStageId: ID;
+  downstreamStageId: ID;
+  upstreamTaskId: ID;
+  upstreamTaskRevision: number;
+  downstreamTaskId: ID;
+  downstreamTaskRevision: number;
+  semantics: ProjectStageEdgeSemantics;
+  requiredInputs: ProjectStageRequiredInputRuleDto[];
+  mirroredTaskDependency: boolean;
+  createdBy: ID;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+}
+
+export type ProjectStageEdgeMutationResult =
+  | { kind: 'created' | 'deleted' | 'replayed'; mutation: ChannelProjectMutationRecord }
+  | { kind: 'revision_conflict' }
+  | { kind: 'task_scope_conflict' }
+  | { kind: 'idempotency_conflict' }
+  | { kind: 'stage_scope_conflict' }
+  | { kind: 'duplicate_edge' }
+  | { kind: 'edge_not_found' };
 
 export interface ProjectArtifactCollectionRecord {
   id: ID;
@@ -126,6 +163,33 @@ export interface ChannelProjectRepository {
     stage: ProjectStageRecord;
     mutation: ChannelProjectMutationRecord;
   }): Promise<CreateInitialProjectStageResult>;
+  listEdges(input: { teamId: ID; channelId: ID }): Promise<ProjectStageEdgeRecord[]>;
+  /** 在已有画像上追加后续阶段：同一事务内校验 Task fence、提升 profile revision 并记录幂等结果。 */
+  createStage(input: {
+    expectedRevision: number;
+    nextRevision: number;
+    updatedAt: UnixMs;
+    stage: ProjectStageRecord;
+    mutation: ChannelProjectMutationRecord;
+  }): Promise<ProjectStageEdgeMutationResult>;
+  /** 同一事务内写入 Stage edge、镜像 Task dependency、提升 profile revision 并记录幂等结果。 */
+  createStageEdge(input: {
+    expectedRevision: number;
+    nextRevision: number;
+    updatedAt: UnixMs;
+    edge: ProjectStageEdgeRecord;
+    mutation: ChannelProjectMutationRecord;
+  }): Promise<ProjectStageEdgeMutationResult>;
+  /** 同一事务内删除 Stage edge 与其镜像 Task dependency，并提升 profile revision。 */
+  deleteStageEdge(input: {
+    teamId: ID;
+    channelId: ID;
+    edgeId: ID;
+    expectedRevision: number;
+    nextRevision: number;
+    updatedAt: UnixMs;
+    mutation: ChannelProjectMutationRecord;
+  }): Promise<ProjectStageEdgeMutationResult>;
   listArtifactCollections(input: { teamId: ID; channelId: ID }): Promise<ProjectArtifactCollectionRecord[]>;
   getArtifactCollection(input: {
     teamId: ID;

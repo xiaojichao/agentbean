@@ -21,6 +21,7 @@ import type {
   ManagementDispatchRepositories,
   ServerNextRepositories,
 } from '../repositories.js';
+import { resolveProjectStageExecutionGate } from '../project-stage-execution-gate.js';
 import {
   appendManagementEventInTransaction,
   authorizeManagementWrite,
@@ -29,6 +30,20 @@ import {
 } from './management-kernel.js';
 
 type TerminalDispatchStatus = Extract<DispatchStatus, 'succeeded' | 'failed' | 'cancelled' | 'timed_out'>;
+
+/**
+ * #822 AC#5：Invocation 启动前复算项目阶段门禁。
+ * 依赖或必需输入未满足时 fail closed，且不保存需要人工修复的阻塞状态。
+ */
+async function assertProjectStageExecutionAllowed(
+  repositories: ServerNextRepositories,
+  taskId: string,
+): Promise<void> {
+  const task = await repositories.tasks.getById(taskId);
+  if (!task) return;
+  const gate = await resolveProjectStageExecutionGate(repositories, task);
+  if (gate.blocked) throw new InvocationGatewayError('INVOCATION_PROJECT_STAGE_BLOCKED');
+}
 
 export class InvocationGatewayError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -125,6 +140,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         await assertNoActiveTaskAttempt(transactionRepositories, run.id, input.taskId,
           input.expectedTaskRevision, input.taskAttempt);
         await validateAuthoritativeTarget(repositories, intent, run, now);
+        await assertProjectStageExecutionAllowed(repositories, input.taskId);
         const invocation: AgentInvocationRecordDto = {
           schemaVersion: 1, id: ids.nextId(), managementRunId: run.id, intent, intentHash,
           idempotencyKey: input.idempotencyKey, createdAt: now,
