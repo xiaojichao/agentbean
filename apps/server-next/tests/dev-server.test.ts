@@ -6,7 +6,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS, WEB_EVENTS, makeSuccess, type DispatchDto } from '../../../packages/contracts/src/index';
 import { createInMemoryServerNext } from '../src/index';
 import type { ServerNextUseCases } from '../src/application/usecases';
-import { parseServerNextDevConfig, startServerNextDevServer } from '../src/dev-server';
+import {
+  decideProductionOfferAllocation,
+  parseServerNextDevConfig,
+  startServerNextDevServer,
+} from '../src/dev-server';
 import { applyTeamMigrations } from '../src/infra/sqlite/repositories';
 
 type SocketIoServerConstructor = ConstructorParameters<typeof startServerNextDevServer>[0] extends { Server?: infer T }
@@ -36,6 +40,50 @@ afterEach(async () => {
 });
 
 describe('server-next dev server entry', () => {
+  test('分配时没有合格候选则要求用户调整，不发布空 Offer', () => {
+    expect(() => decideProductionOfferAllocation({
+      claimPolicy: 'open',
+      preferredSkills: ['research'],
+      qualifiedCandidates: [],
+    })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
+  });
+
+  test('显式目标不合格时保留指派约束并要求用户调整', () => {
+    expect(() => decideProductionOfferAllocation({
+      claimPolicy: 'targeted',
+      assigneeId: 'agent-target',
+      preferredSkills: [],
+      qualifiedCandidates: [{
+        agentId: 'agent-fallback',
+        exposedSkills: ['delivery'],
+        available: true,
+      }],
+    })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
+  });
+
+  test('定向任务缺少目标 Agent 时不静默改派', () => {
+    expect(() => decideProductionOfferAllocation({
+      claimPolicy: 'targeted',
+      preferredSkills: [],
+      qualifiedCandidates: [{
+        agentId: 'agent-fallback',
+        exposedSkills: ['delivery'],
+        available: true,
+      }],
+    })).toThrow('TASK_NEEDS_USER_ADJUSTMENT');
+  });
+
+  test('只在合格候选中按 preferred Skill 选择定向 Agent', () => {
+    expect(decideProductionOfferAllocation({
+      claimPolicy: 'open',
+      preferredSkills: ['code-review'],
+      qualifiedCandidates: [
+        { agentId: 'agent-research', exposedSkills: ['research'], available: true },
+        { agentId: 'agent-review', exposedSkills: ['code-review'], available: true },
+      ],
+    })).toEqual({ claimPolicy: 'targeted', targetAgentId: 'agent-review' });
+  });
+
   test('parses host and port from args or env', () => {
     expect(
       parseServerNextDevConfig({

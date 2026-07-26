@@ -260,7 +260,10 @@ export function createPhase2ManagementToolHandlers(input: {
     clientKey: string; requiredCapabilities: readonly string[]; requiredSkills?: readonly string[];
   }[]) => Promise<ExecutableSubtaskCoverageResult>;
   /** #807 allocation 服务:可选,解析任务 published 时的 claimPolicy/targetAgentId。 */
-  readonly allocationService?: (taskId: string) => Promise<{ claimPolicy: 'targeted' | 'open'; targetAgentId?: string } | null>;
+  readonly allocationService?: (taskId: string) => Promise<{
+    claimPolicy: 'targeted' | 'open';
+    targetAgentId?: string;
+  }>;
 }): Phase2ToolHandlers {
   const { kernel, eligibilityService, allocationService } = input;
   return {
@@ -292,7 +295,7 @@ export function createPhase2ManagementToolHandlers(input: {
     'tasks.publish_for_claim': async (request) => {
       const allocation = allocationService
         ? await allocationService(request.input.taskId)
-        : null;
+        : undefined;
       const published = await kernel.publishForClaim({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         ...request.input,

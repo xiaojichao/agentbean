@@ -213,6 +213,44 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
     ...(maxArtifactBytes ? { maxArtifactBytes } : {}), ...(serverWorker ? { serverWorker } : {}) };
 }
 
+export function decideProductionOfferAllocation(input: {
+  readonly claimPolicy: 'targeted' | 'open';
+  readonly assigneeId?: string;
+  readonly preferredSkills: readonly string[];
+  readonly qualifiedCandidates: readonly {
+    readonly agentId: string;
+    readonly exposedSkills: readonly string[];
+    readonly available: boolean;
+  }[];
+}): { claimPolicy: 'targeted' | 'open'; targetAgentId?: string } {
+  const hardSpecifiedAgentId = input.claimPolicy === 'targeted' ? input.assigneeId : undefined;
+  if (input.claimPolicy === 'targeted'
+    && (!hardSpecifiedAgentId
+      || !input.qualifiedCandidates.some((candidate) => candidate.agentId === hardSpecifiedAgentId))) {
+    throw new Error('TASK_NEEDS_USER_ADJUSTMENT');
+  }
+  const ranked = rankQualifiedCandidates(input.qualifiedCandidates, input.preferredSkills);
+  const preferred = new Set(input.preferredSkills.map((name) => name.toLowerCase()));
+  const rankKey = (candidate: typeof ranked[number]) => [
+    candidate.exposedSkills.filter((name) => preferred.has(name.toLowerCase())).length,
+    candidate.available ? 1 : 0,
+  ] as const;
+  const firstKey = ranked[0] ? rankKey(ranked[0]) : null;
+  const secondKey = ranked[1] ? rankKey(ranked[1]) : null;
+  const decision = decideOfferAllocationPolicy({
+    ...(hardSpecifiedAgentId ? { hardSpecifiedAgentId } : {}),
+    rankedQualifiedAgentIds: ranked.map((candidate) => candidate.agentId),
+    topCandidatesTied: Boolean(
+      firstKey && secondKey && firstKey[0] === secondKey[0] && firstKey[1] === secondKey[1],
+    ),
+    loadUncertain: false,
+  });
+  if (decision.kind === 'not_decidable') throw new Error('TASK_NEEDS_USER_ADJUSTMENT');
+  return decision.kind === 'open'
+    ? { claimPolicy: 'open' }
+    : { claimPolicy: 'targeted', targetAgentId: decision.targetAgentId };
+}
+
 export async function startServerNextDevServer(
   input: StartServerNextDevServerInput = {},
 ): Promise<ServerNextDevServerHandle> {
@@ -1826,7 +1864,7 @@ function createDefaultManagementRuntime(
           repositories.taskCoordination.coordinations.getByTaskId(taskId),
           taskClaimBroker.resolveCandidates(taskId),
         ]);
-        if (!task || !coordination) return null;
+        if (!task || !coordination) throw new Error('TASK_NOT_FOUND');
         const candidates = [];
         for (const candidate of resolution.candidates) {
           if (!candidate.eligible) continue;
@@ -1838,28 +1876,12 @@ function createDefaultManagementRuntime(
             available: exposure.availability.status === 'available',
           });
         }
-        const ranked = rankQualifiedCandidates(candidates, coordination.preferredSkills ?? []);
-        const preferred = new Set((coordination.preferredSkills ?? []).map((name) => name.toLowerCase()));
-        const rankKey = (candidate: typeof ranked[number]) => [
-          candidate.exposedSkills.filter((name) => preferred.has(name.toLowerCase())).length,
-          candidate.available ? 1 : 0,
-        ] as const;
-        const firstKey = ranked[0] ? rankKey(ranked[0]) : null;
-        const secondKey = ranked[1] ? rankKey(ranked[1]) : null;
-        const decision = decideOfferAllocationPolicy({
-          ...(coordination.claimPolicy === 'targeted' && task.assigneeId
-            ? { hardSpecifiedAgentId: task.assigneeId }
-            : {}),
-          rankedQualifiedAgentIds: ranked.map((candidate) => candidate.agentId),
-          topCandidatesTied: Boolean(
-            firstKey && secondKey && firstKey[0] === secondKey[0] && firstKey[1] === secondKey[1],
-          ),
-          loadUncertain: false,
+        return decideProductionOfferAllocation({
+          claimPolicy: coordination.claimPolicy,
+          ...(task.assigneeId ? { assigneeId: task.assigneeId } : {}),
+          preferredSkills: coordination.preferredSkills ?? [],
+          qualifiedCandidates: candidates,
         });
-        if (decision.kind === 'not_decidable') return null;
-        return decision.kind === 'open'
-          ? { claimPolicy: 'open' as const }
-          : { claimPolicy: 'targeted' as const, targetAgentId: decision.targetAgentId };
       }
     : undefined;
   const executeManagementTool = createManagementToolExecutor({
