@@ -10,12 +10,13 @@ import {
   createSqliteRepositories,
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories.js';
-import type {
-  ProjectArtifactCollectionDto,
-  ProjectArtifactFinalizationDto,
-  ProjectArtifactReviewDto,
-  ProjectArtifactVersionDto,
-  ProjectArtifactReviewDecision,
+import {
+  projectArtifactFinalizationConfirmationText,
+  type ProjectArtifactCollectionDto,
+  type ProjectArtifactFinalizationDto,
+  type ProjectArtifactReviewDto,
+  type ProjectArtifactVersionDto,
+  type ProjectArtifactReviewDecision,
 } from '../../../packages/contracts/src/index.js';
 
 type DatabaseWithClose = SqliteDatabase & { close(): void };
@@ -559,6 +560,26 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
       createdAt: now,
       updatedAt: now,
     });
+    await repositories.messages.append({
+      id: 'message-finalize-confirmation',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-artifact-1',
+      senderKind: 'human',
+      senderId: 'owner-1',
+      body: projectArtifactFinalizationConfirmationText(collection.id, version.id, 1),
+      createdAt: now + 1,
+    });
+    await repositories.messages.append({
+      id: 'message-stale-finalize-confirmation',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: 'message-artifact-1',
+      senderKind: 'human',
+      senderId: 'owner-1',
+      body: projectArtifactFinalizationConfirmationText(collection.id, version.id, 2),
+      createdAt: now + 2,
+    });
     await expect(app.setArtifactFinalVersion({
       userId: 'owner-1',
       teamId: 'team-1',
@@ -572,7 +593,25 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
         humanConfirmation: {
           kind: 'message',
           refId: 'message-artifact-1',
-          confirmedBy: 'member-1',
+          confirmedBy: 'owner-1',
+        },
+      },
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    await expect(app.setArtifactFinalVersion({
+      userId: 'owner-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      collectionId: collection.id,
+      versionId: version.id,
+      expectedCollectionRevision: 1,
+      idempotencyKey: 'finalize-manager-stale-confirmation',
+      manager: {
+        managementRunId: 'management-run-1',
+        humanConfirmation: {
+          kind: 'message',
+          refId: 'message-stale-finalize-confirmation',
+          confirmedBy: 'owner-1',
         },
       },
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
@@ -589,7 +628,7 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
         managementRunId: 'management-run-1',
         humanConfirmation: {
           kind: 'message',
-          refId: 'message-artifact-1',
+          refId: 'message-finalize-confirmation',
           confirmedBy: 'owner-1',
         },
       },
@@ -599,7 +638,7 @@ describe.each<Backend>(['memory', 'sqlite'])('#824 人工审核与唯一最终�
         actorKind: 'pi_manager',
         finalizedBy: 'owner-1',
         managementRunId: 'management-run-1',
-        humanConfirmation: { refId: 'message-artifact-1', confirmedBy: 'owner-1' },
+        humanConfirmation: { refId: 'message-finalize-confirmation', confirmedBy: 'owner-1' },
       },
     });
   });

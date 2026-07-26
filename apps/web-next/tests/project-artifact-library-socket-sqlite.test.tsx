@@ -110,6 +110,21 @@ describe('频道文件库逻辑产物视图到 SQLite', () => {
     expect(screen.getByText(/最终版切换记录/)).toBeTruthy();
   });
 
+  test('无目标版本所属阶段决定权时不展示审核与最终化入口', async () => {
+    const harness = await createHarness();
+    render(<ArtifactLibraryPage harness={harness} canDecide={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '提升为逻辑产物版本' }));
+    fireEvent.change(screen.getByLabelText('逻辑产物名称'), { target: { value: '分镜脚本' } });
+    fireEvent.change(screen.getByLabelText('逻辑产物类型'), { target: { value: 'storyboard' } });
+    fireEvent.click(screen.getByRole('button', { name: '提升为版本' }));
+    await screen.findByText('分镜脚本');
+    fireEvent.click(screen.getByText(/历史版本/));
+
+    expect(screen.queryByRole('button', { name: '追加审核' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '设为最终版' })).toBeNull();
+  });
+
   test('归档频道展示逻辑产物只读投影，不提供提升入口', async () => {
     const harness = await createHarness();
     const promoted = await harness.socket.trigger(WEB_EVENTS.project.promoteArtifact, {
@@ -162,7 +177,13 @@ function collectionIdFromDom(): string {
   return collectionId;
 }
 
-function ArtifactLibraryPage({ harness }: { harness: Harness }) {
+function ArtifactLibraryPage({
+  harness,
+  canDecide = true,
+}: {
+  harness: Harness;
+  canDecide?: boolean;
+}) {
   const [library, setLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const onPromote = async (draft: PromoteArtifactDraft) => {
     const result = await harness.socket.trigger(WEB_EVENTS.project.promoteArtifact, {
@@ -203,7 +224,7 @@ function ArtifactLibraryPage({ harness }: { harness: Harness }) {
         { id: 'artifact-2', filename: 'artifact-2.md' },
       ]}
       canPromote
-      canDecide
+      canDecideVersion={() => canDecide}
       onPromote={onPromote}
       onReview={onReview}
       onFinalize={onFinalize}

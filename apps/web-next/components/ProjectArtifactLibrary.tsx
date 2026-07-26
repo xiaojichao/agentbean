@@ -54,7 +54,7 @@ export function ProjectArtifactLibrary({
   stages,
   promotableArtifacts,
   canPromote,
-  canDecide,
+  canDecideVersion,
   onPromote,
   onReview,
   onFinalize,
@@ -63,7 +63,7 @@ export function ProjectArtifactLibrary({
   stages: ProjectArtifactStageOption[];
   promotableArtifacts: PromotableArtifactOption[];
   canPromote: boolean;
-  canDecide?: boolean;
+  canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
@@ -122,7 +122,7 @@ export function ProjectArtifactLibrary({
             <CollectionCard
               key={collection.id}
               collection={collection}
-              canDecide={Boolean(canDecide) && !archived}
+              canDecideVersion={archived ? undefined : canDecideVersion}
               onReview={onReview}
               onFinalize={onFinalize}
             />
@@ -135,12 +135,12 @@ export function ProjectArtifactLibrary({
 
 function CollectionCard({
   collection,
-  canDecide,
+  canDecideVersion,
   onReview,
   onFinalize,
 }: {
   collection: ProjectArtifactCollectionDto;
-  canDecide: boolean;
+  canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
 }) {
@@ -201,7 +201,7 @@ function CollectionCard({
               <VersionDecisionPanel
                 version={version}
                 collection={collection}
-                canDecide={canDecide}
+                canDecide={Boolean(canDecideVersion?.(version))}
                 onReview={onReview}
                 onFinalize={onFinalize}
               />

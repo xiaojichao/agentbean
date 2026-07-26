@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -691,16 +691,17 @@ export default function ChatPage() {
   const currentHumanMember = channelMembers.find(
     (member) => member.kind === 'human' && member.id === currentUser?.id,
   );
-  const canDecideProjectArtifacts = Boolean(
-    currentUser?.id
-    && channelProjectOverview
-    && (
-      currentHumanMember?.role === 'owner'
+  const canDecideProjectArtifactVersion = useCallback((version: ProjectArtifactVersionDto) => {
+    if (!currentUser?.id || !channelProjectOverview) return false;
+    if (currentHumanMember?.role === 'owner'
       || currentHumanMember?.role === 'admin'
-      || channelProjectOverview.profile.projectLeadId === currentUser.id
-      || channelProjectOverview.stages.some((stage) => stage.reviewerIds.includes(currentUser.id))
-    ),
-  );
+      || channelProjectOverview.profile.projectLeadId === currentUser.id) {
+      return true;
+    }
+    return channelProjectOverview.stages.some(
+      (stage) => stage.id === version.source.stageId && stage.reviewerIds.includes(currentUser.id),
+    );
+  }, [channelProjectOverview, currentHumanMember?.role, currentUser?.id]);
 
   // #823 提升只提交 Server 需要的显式事实；文件名、目录与 mime 不参与集合判定。
   const promoteChannelArtifact = useCallback(async (draft: PromoteArtifactDraft): Promise<string | null> => {
@@ -2169,7 +2170,7 @@ export default function ChatPage() {
                   ...(file.logicalPath ? { logicalPath: file.logicalPath } : {}),
                 }))}
                 canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
-                canDecide={canDecideProjectArtifacts}
+                canDecideVersion={canDecideProjectArtifactVersion}
                 onPromote={promoteChannelArtifact}
                 onReview={reviewChannelArtifact}
                 onFinalize={finalizeChannelArtifact}

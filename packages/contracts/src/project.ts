@@ -243,6 +243,18 @@ export interface ProjectArtifactHumanConfirmationRefDto {
   confirmedBy: ID;
 }
 
+/**
+ * Manager 代用户设置最终版时，用户确认消息必须精确使用此文本。
+ * 将确认事实同时绑定集合、版本和预期集合修订，避免旧消息或其他动作的确认被重放。
+ */
+export function projectArtifactFinalizationConfirmationText(
+  collectionId: ID,
+  versionId: ID,
+  expectedCollectionRevision: number,
+): string {
+  return `确认在集合修订 ${expectedCollectionRevision} 下，将逻辑产物集合 ${collectionId} 的版本 ${versionId} 设为最终版`;
+}
+
 /** #824 每次最终版切换的 append-only 审计条目。旧版本、旧审核与旧最终化历史都不被修改。 */
 export interface ProjectArtifactFinalizationDto {
   id: ID;
