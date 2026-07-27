@@ -250,6 +250,51 @@ describe('OpenAI-compatible Management Model Adapter', () => {
     expect(body.thinking).toEqual({ type: 'disabled' });
   });
 
+  it('tool_calls 存在时容忍 finish_reason 缺失/unknown，并兼容 usage total 不一致与 object args', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({
+      model: 'deepseek-v4-pro',
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call-x',
+            type: 'function',
+            function: { name: 'context_get_root_message', arguments: {} },
+          }],
+        },
+        finish_reason: null,
+      }],
+      usage: {
+        prompt_tokens: '10',
+        completion_tokens: 5,
+        total_tokens: 20,
+        completion_tokens_details: { reasoning_tokens: 5 },
+      },
+    }));
+
+    const response = await createOpenAiCompatibleManagementModelAdapter({
+      id: 'provider-1:model-1',
+      apiKey: 'sk-never-expose',
+      baseUrl: 'https://provider.invalid/v1/',
+      modelId: 'model-1',
+      fetch: fetchFn,
+      requireResponseMetadata: true,
+      forceRequiredToolChoiceWhenToolsPresent: true,
+    }).respond(request, { callCount: 1 });
+
+    expect(response.finishReason).toBe('tool_use');
+    expect(response.content).toEqual([{
+      type: 'toolCall',
+      id: 'call-x',
+      name: 'context.get_root_message',
+      arguments: {},
+    }]);
+    expect(response.usage).toMatchObject({ inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+    const body = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body));
+    expect(body.tool_choice).toBe('required');
+  });
+
   it('上线探测模式在响应缺少 model 或 usage 时 fail closed', async () => {
     const missingModel = adapter(vi.fn<typeof fetch>(async () => jsonResponse({
       choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
