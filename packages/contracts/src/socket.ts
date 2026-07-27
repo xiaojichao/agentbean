@@ -147,6 +147,7 @@ export const WEB_EVENTS = {
     listUsers: 'admin:list-users',
     listDevices: 'admin:list-devices',
     listAgents: 'admin:list-agents',
+    createUser: 'admin:create-user',
     deleteTeam: 'admin:delete-team',
     deleteUser: 'admin:delete-user',
     deleteAgent: 'admin:delete-agent',

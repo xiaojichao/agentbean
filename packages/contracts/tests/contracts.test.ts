@@ -462,6 +462,7 @@ describe('first-slice contract result shape', () => {
     expect(WEB_EVENTS.team.create).toBe('team:create');
     expect(WEB_EVENTS.team.switch).toBe('team:switch');
     expect(WEB_EVENTS.admin.listTeams).toBe('admin:list-teams');
+    expect(WEB_EVENTS.admin.createUser).toBe('admin:create-user');
     expect(WEB_EVENTS.admin.deleteTeam).toBe('admin:delete-team');
     expect(keys).not.toContain(legacyListKey);
     expect(keys).not.toContain(legacyDeleteKey);
