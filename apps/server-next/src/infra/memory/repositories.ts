@@ -400,7 +400,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async updateProfile(input) {
         const user = users.get(input.userId);
-        if (!user) return null;
+        if (!user) return { ok: false as const, error: 'NOT_FOUND' as const };
+        const demotingAdmin = input.role === 'user' && user.role === 'admin';
+        if (demotingAdmin) {
+          const adminCount = Array.from(users.values()).filter((entry) => entry.role === 'admin').length;
+          if (adminCount <= 1) {
+            return { ok: false as const, error: 'LAST_ADMIN' as const };
+          }
+        }
         const updated = {
           ...user,
           updatedAt: input.updatedAt,
@@ -413,7 +420,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           ...(input.role !== undefined ? { role: input.role } : {}),
         };
         users.set(input.userId, updated);
-        return updated;
+        return { ok: true as const, user: updated };
       },
       async updatePassword(input) {
         const user = users.get(input.userId);

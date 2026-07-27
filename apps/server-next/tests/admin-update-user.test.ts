@@ -203,7 +203,7 @@ describe('admin update user profile and role', () => {
     expect(demoted.user.role).toBe('user');
   });
 
-  test('cannot update protected system identity', async () => {
+  test('cannot update protected system identity by id or username', async () => {
     const { app, repositories } = await seedAdmin();
     await repositories.users.create({
       id: 'system',
@@ -213,18 +213,32 @@ describe('admin update user profile and role', () => {
       createdAt: 0,
       updatedAt: 0,
     });
-
-    const updated = await app.updateAdminUser({
-      adminUserId: 'admin-1',
-      targetUserId: 'system',
-      displayName: 'Nope',
+    await repositories.users.create({
+      id: 'system-user-generated-id',
+      username: 'system',
       role: 'user',
+      passwordHash: 'x',
+      createdAt: 1,
+      updatedAt: 1,
     });
 
-    expect(updated).toMatchObject({
-      ok: false,
-      error: 'VALIDATION_ERROR',
-    });
+    await expect(
+      app.updateAdminUser({
+        adminUserId: 'admin-1',
+        targetUserId: 'system',
+        displayName: 'Nope',
+        role: 'user',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    // Username "system" is protected even when id is not the literal "system".
+    await expect(
+      app.updateAdminUser({
+        adminUserId: 'admin-1',
+        targetUserId: 'system-user-generated-id',
+        displayName: 'Nope',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
   });
 
   test('non-admin cannot update users', async () => {
@@ -323,7 +337,7 @@ describe('admin reset user password', () => {
     ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
   });
 
-  test('cannot reset protected system identity', async () => {
+  test('cannot reset protected system identity by id or username', async () => {
     const { app, repositories } = await seedAdmin();
     await repositories.users.create({
       id: 'system',
@@ -333,11 +347,27 @@ describe('admin reset user password', () => {
       createdAt: 0,
       updatedAt: 0,
     });
+    await repositories.users.create({
+      id: 'system-user-generated-id',
+      username: 'system',
+      role: 'user',
+      passwordHash: 'x',
+      createdAt: 1,
+      updatedAt: 1,
+    });
 
     await expect(
       app.resetAdminUserPassword({
         adminUserId: 'admin-1',
         targetUserId: 'system',
+        newPassword: 'secret12',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    await expect(
+      app.resetAdminUserPassword({
+        adminUserId: 'admin-1',
+        targetUserId: 'system-user-generated-id',
         newPassword: 'secret12',
       }),
     ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });

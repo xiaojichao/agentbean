@@ -559,21 +559,35 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
       },
       async updateProfile(input) {
-        const current = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
-        if (!current) return null;
-        const displayName =
-          input.displayName !== undefined
-            ? (input.displayName === null || input.displayName === '' ? null : input.displayName)
-            : (current.displayName ?? null);
-        const email =
-          input.email !== undefined
-            ? (input.email === null || input.email === '' ? null : input.email)
-            : (current.email ?? null);
-        const role = input.role !== undefined ? input.role : current.role;
-        globalDb
-          .prepare('UPDATE users SET display_name = ?, email = ?, role = ?, updated_at = ? WHERE id = ?')
-          .run(displayName, email, role, input.updatedAt, input.userId);
-        return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+        return globalDb.transaction(() => {
+          const current = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+          if (!current) return { ok: false as const, error: 'NOT_FOUND' as const };
+          const demotingAdmin = input.role === 'user' && current.role === 'admin';
+          if (demotingAdmin) {
+            const adminCountRow = globalDb
+              .prepare(`SELECT COUNT(*) AS c FROM users WHERE role = 'admin'`)
+              .get() as { c: number } | undefined;
+            const adminCount = Number(adminCountRow?.c ?? 0);
+            if (adminCount <= 1) {
+              return { ok: false as const, error: 'LAST_ADMIN' as const };
+            }
+          }
+          const displayName =
+            input.displayName !== undefined
+              ? (input.displayName === null || input.displayName === '' ? null : input.displayName)
+              : (current.displayName ?? null);
+          const email =
+            input.email !== undefined
+              ? (input.email === null || input.email === '' ? null : input.email)
+              : (current.email ?? null);
+          const role = input.role !== undefined ? input.role : current.role;
+          globalDb
+            .prepare('UPDATE users SET display_name = ?, email = ?, role = ?, updated_at = ? WHERE id = ?')
+            .run(displayName, email, role, input.updatedAt, input.userId);
+          const updated = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+          if (!updated) return { ok: false as const, error: 'NOT_FOUND' as const };
+          return { ok: true as const, user: updated };
+        })();
       },
       async updatePassword(input) {
         globalDb

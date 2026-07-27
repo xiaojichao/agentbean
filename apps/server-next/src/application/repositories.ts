@@ -180,6 +180,8 @@ export interface UserRepository {
   /**
    * System-admin profile patch: only provided fields are applied.
    * `displayName` / `email` null clears the field; `role` replaces system role.
+   * When demoting admin→user, the admin count check and role write are atomic so
+   * concurrent demotions cannot leave the system with zero admins.
    */
   updateProfile(input: {
     userId: ID;
@@ -187,7 +189,10 @@ export interface UserRepository {
     email?: string | null;
     role?: UserRecord['role'];
     updatedAt: UnixMs;
-  }): Promise<UserRecord | null>;
+  }): Promise<
+    | { ok: true; user: UserRecord }
+    | { ok: false; error: 'NOT_FOUND' | 'LAST_ADMIN' }
+  >;
   updatePassword(input: { userId: ID; passwordHash: string; updatedAt: UnixMs }): Promise<UserRecord | null>;
   delete(userId: ID): Promise<void>;
 }

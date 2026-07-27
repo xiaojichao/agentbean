@@ -2057,12 +2057,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      if (adminInput.targetUserId === 'system') {
-        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
-      }
       const user = await repositories.users.getById(adminInput.targetUserId);
       if (!user) {
         return makeFailure('NOT_FOUND', 'User not found');
+      }
+      if (isProtectedSystemUser(user)) {
+        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
       }
 
       const hasDisplayName = adminInput.displayName !== undefined;
@@ -2078,12 +2078,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           return makeFailure('VALIDATION_ERROR', 'Role must be user or admin');
         }
         nextRole = adminInput.role;
-        if (user.role === 'admin' && nextRole === 'user') {
-          const admins = (await repositories.users.listAll()).filter((entry) => entry.role === 'admin');
-          if (admins.length <= 1) {
-            return makeFailure('CONFLICT', 'Cannot demote the last admin');
-          }
-        }
       }
 
       let nextDisplayName: string | null | undefined;
@@ -2106,6 +2100,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }
       }
 
+      // Admin count check + role write are atomic inside updateProfile (see LAST_ADMIN).
       const updated = await repositories.users.updateProfile({
         userId: user.id,
         updatedAt: clock.now(),
@@ -2113,17 +2108,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(nextEmail !== undefined ? { email: nextEmail } : {}),
         ...(nextRole !== undefined ? { role: nextRole } : {}),
       });
-      if (!updated) {
+      if (!updated.ok) {
+        if (updated.error === 'LAST_ADMIN') {
+          return makeFailure('CONFLICT', 'Cannot demote the last admin');
+        }
         return makeFailure('NOT_FOUND', 'User not found');
       }
 
       return makeSuccess({
         user: {
-          ...toUserDto(updated),
+          ...toUserDto(updated.user),
           // Explicit nulls so JSON/socket clients can clear prior list-row fields on merge.
-          displayName: updated.displayName ?? null,
-          email: updated.email ?? null,
-          createdAt: updated.createdAt,
+          displayName: updated.user.displayName ?? null,
+          email: updated.user.email ?? null,
+          createdAt: updated.user.createdAt,
         },
       });
     },
@@ -2133,12 +2131,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      if (adminInput.targetUserId === 'system') {
-        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
-      }
       const user = await repositories.users.getById(adminInput.targetUserId);
       if (!user) {
         return makeFailure('NOT_FOUND', 'User not found');
+      }
+      if (isProtectedSystemUser(user)) {
+        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
       }
       const newPassword = typeof adminInput.newPassword === 'string' ? adminInput.newPassword : '';
       if (newPassword.length < 6) {
@@ -2204,12 +2202,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      if (adminInput.targetUserId === adminInput.adminUserId || adminInput.targetUserId === 'system') {
+      if (adminInput.targetUserId === adminInput.adminUserId) {
         return makeFailure('VALIDATION_ERROR', 'Cannot delete protected user');
       }
       const user = await repositories.users.getById(adminInput.targetUserId);
       if (!user) {
         return makeFailure('NOT_FOUND', 'User not found');
+      }
+      if (isProtectedSystemUser(user)) {
+        return makeFailure('VALIDATION_ERROR', 'Cannot delete protected user');
       }
       const ownedTeam = (await repositories.teams.listAll()).find((team) => team.ownerId === user.id);
       if (ownedTeam) {
@@ -8868,6 +8869,11 @@ async function requireGlobalAdmin(
     return makeFailure('FORBIDDEN', 'Admin access required');
   }
   return { ok: true, user };
+}
+
+/** System identity: id or username "system" must not be edited/deleted via admin ops. */
+function isProtectedSystemUser(user: Pick<UserRecord, 'id' | 'username'>): boolean {
+  return user.id === 'system' || user.username === 'system';
 }
 
 const ADMIN_LIST_DEFAULT_PAGE_SIZE = 20;
