@@ -1063,6 +1063,8 @@ async function projectStageAutoOfferStillCurrent(
   offer: TaskOfferRecord,
   now: number,
 ): Promise<boolean> {
+  const validity = await computeOfferValidity(input.repositories, offer, now);
+  if (!validity.acceptable) return false;
   const task = await input.repositories.tasks.getById(offer.taskId);
   const coordination = await input.repositories.taskCoordination.coordinations
     .getByTaskId(offer.taskId);

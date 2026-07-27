@@ -1580,6 +1580,30 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('PI auto-coordination policy mutation triggers the policy hook', async () => {
+    const socket = new FakeSocket();
+    const afterPiPolicyMutation = vi.fn();
+    const app = {
+      updatePiPolicy: vi.fn(async () => makeSuccess({ autoCoordinationEnabled: true })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { afterPiPolicyMutation });
+
+    const payload = {
+      userId: 'user-1',
+      teamId: 'team-1',
+      autoCoordinationEnabled: true,
+    };
+    await expect(socket.trigger(WEB_EVENTS.piPolicy.update, payload)).resolves.toEqual({
+      ok: true,
+      autoCoordinationEnabled: true,
+    });
+    expect(afterPiPolicyMutation).toHaveBeenCalledWith(payload, {
+      ok: true,
+      autoCoordinationEnabled: true,
+    });
+  });
+
   test('agent:set-visibility forwards to setAgentTeamVisibility use case', async () => {
     const socket = new FakeSocket();
     const app = {

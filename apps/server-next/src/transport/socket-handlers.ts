@@ -133,6 +133,7 @@ export interface WebSocketHandlerOptions {
   afterChannelMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterAgentExposureMutation?(payload: unknown, result: unknown): Promise<void> | void;
+  afterPiPolicyMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTeamMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterTaskMutation?(payload: unknown, result: unknown): Promise<void> | void;
   afterProjectMutation?(payload: unknown, result: unknown): Promise<void> | void;
@@ -244,7 +245,8 @@ export function registerWebSocketHandlers(
   }, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.team.update, app, 'updateTeam', afterTeamMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.piPolicy.get, app, 'getPiPolicy', undefined, { authenticatedUser: options.authenticatedUser });
-  bind(socket, WEB_EVENTS.piPolicy.update, app, 'updatePiPolicy', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.piPolicy.update, app, 'updatePiPolicy', (payload, result) =>
+    options.afterPiPolicyMutation?.(payload, result), { authenticatedUser: options.authenticatedUser });
   {
     // PI Provider Supply is system-admin only; never accept client-spoofed userId on unauthenticated sockets.
     const piProviderBindOptions = {

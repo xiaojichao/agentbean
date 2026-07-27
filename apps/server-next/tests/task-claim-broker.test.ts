@@ -123,6 +123,14 @@ describe('Task Claim Broker', () => {
     });
     await expect(healthy.repositories.taskCoordination.offers.getById(autoOffer!.id))
       .resolves.toMatchObject({ status: 'invalidated' });
+    await expect(healthy.broker.acquire({
+      schemaVersion: 1,
+      offerId: emittedOffers[0]!.offerId,
+      agentId: 'eligible',
+    })).resolves.toMatchObject({
+      ok: false,
+      diagnosticCode: 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE',
+    });
     await expect(healthy.repositories.taskCoordination.claimLeases.listActive()).resolves.toEqual([]);
     await expect(healthy.repositories.tasks.getById('task-a'))
       .resolves.toMatchObject({ status: 'todo' });

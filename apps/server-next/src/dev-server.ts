@@ -331,6 +331,19 @@ export async function startServerNextDevServer(
     httpServer.listen(config.port, config.host, () => resolve());
   });
   const stopVersionRefresh = startDaemonVersionRefresh();
+  let projectStageRecoveryRunning = false;
+  const projectStageRecoveryInterval = appWithCleanup.recoverProjectStages
+    ? setInterval(() => {
+      if (projectStageRecoveryRunning) return;
+      projectStageRecoveryRunning = true;
+      void appWithCleanup.recoverProjectStages?.()
+        .catch(() => undefined)
+        .finally(() => {
+          projectStageRecoveryRunning = false;
+        });
+    }, 30_000)
+    : undefined;
+  projectStageRecoveryInterval?.unref();
   const previewWorkerInterval = appWithCleanup.artifactPreviewService
     ? setInterval(() => {
       void appWithCleanup.artifactPreviewService?.runOnce().catch(() => undefined);
@@ -382,6 +395,9 @@ export async function startServerNextDevServer(
       }
       if (previewWorkerInterval) {
         clearInterval(previewWorkerInterval);
+      }
+      if (projectStageRecoveryInterval) {
+        clearInterval(projectStageRecoveryInterval);
       }
       if (channelFileBackfillInterval) {
         clearInterval(channelFileBackfillInterval);
