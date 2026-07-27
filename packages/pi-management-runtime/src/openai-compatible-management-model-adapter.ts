@@ -38,6 +38,11 @@ export interface CreateOpenAiCompatibleManagementModelAdapterInput {
   readonly maxOutputTokens?: number;
   /** Provider 上线探测使用：缺少 model 或 usage 时 fail closed。 */
   readonly requireResponseMetadata?: boolean;
+  /**
+   * Merged into the Chat Completions JSON body (e.g. DeepSeek
+   * `{ thinking: { type: 'disabled' } }` for deterministic probes).
+   */
+  readonly requestBodyExtras?: Readonly<Record<string, unknown>>;
   readonly fetch?: typeof fetch;
 }
 
@@ -86,6 +91,9 @@ export function createOpenAiCompatibleManagementModelAdapter(
         }
         if (input.maxOutputTokens !== undefined) {
           body.max_tokens = input.maxOutputTokens;
+        }
+        if (input.requestBodyExtras) {
+          Object.assign(body, input.requestBodyExtras);
         }
         response = await fetchFn(endpoint, {
           method: 'POST',
@@ -201,9 +209,12 @@ function parseOpenAiResponse(
   if (!isRecord(choice.message)) throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
 
   const content: ManagementModelContent[] = [];
-  if (typeof choice.message.content === 'string' && choice.message.content.length > 0) {
-    content.push({ type: 'text', text: choice.message.content });
-  } else if (choice.message.content !== null && choice.message.content !== undefined) {
+  // DeepSeek (and some OpenAI-compatible providers) return content: "" with tool_calls
+  // or reasoning_content. Treat empty string as no text — same as null.
+  const rawContent = choice.message.content;
+  if (typeof rawContent === 'string') {
+    if (rawContent.length > 0) content.push({ type: 'text', text: rawContent });
+  } else if (rawContent !== null && rawContent !== undefined) {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
 
