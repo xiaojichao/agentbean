@@ -3,7 +3,10 @@ import type { DispatchStatus } from './dispatch.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 import type { AgentCollaborationProposalV1 } from './collaboration.js';
 import type { MemoryCapsuleRefDto } from './management-memory.js';
-import type { ProjectDocumentInputSetV1 } from './project-document-input-set.js';
+import type {
+  ProjectDocumentInputSetResultDto,
+  ProjectDocumentInputSetV1,
+} from './project-document-input-set.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -87,6 +90,7 @@ export interface AgentInvocationResultDto {
   readonly workspaceRunId?: ID;
   readonly memoryCandidateIds: readonly ID[];
   readonly collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  readonly projectDocumentInputSetResult?: ProjectDocumentInputSetResultDto;
   readonly startedAt: UnixMs;
   readonly completedAt: UnixMs;
   readonly error?: string;

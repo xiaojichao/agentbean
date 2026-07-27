@@ -62,11 +62,13 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectDocumentInputSetItemResultRecord,
   ProjectReferenceItemRecord,
   ProjectReferenceSelectionRecord,
   ProjectReferenceSetMutationRecord,
   ProjectReferenceSetRecord,
   ProjectReferenceSetRepository,
+  ProjectDocumentInputSetResultRepository,
   ProjectStageEdgeMutationResult,
   ProjectStageEdgeRecord,
   ProjectStageRecord,
@@ -207,6 +209,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0053_project_artifact_reviews.sql');
   }
   applyMigration(db, 'team/0054_project_reference_sets.sql');
+  applyMigration(db, 'team/0055_project_document_input_set_results.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -448,6 +451,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   };
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
   const projectReferenceSets = createSqliteProjectReferenceSetRepository(teamDb);
+  const projectDocumentInputSetResults = createSqliteProjectDocumentInputSetResultRepository(teamDb);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -2285,6 +2289,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async deleteByChannel(channelId) {
         teamDb.transaction(() => {
+          teamDb.prepare('DELETE FROM project_document_input_set_results WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?)').run(channelId);
           teamDb.prepare('DELETE FROM channel_document_operations WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?)').run(channelId);
           teamDb.prepare('DELETE FROM channel_document_publications WHERE revision_id IN (SELECT id FROM channel_document_revisions WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?))').run(channelId);
           teamDb.prepare('DELETE FROM channel_document_revisions WHERE document_id IN (SELECT id FROM channel_documents WHERE channel_id = ?)').run(channelId);
@@ -3505,6 +3510,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
     },
     projectReferenceSets,
+    projectDocumentInputSetResults,
     projectDocumentBundleBackfill: {
       async getProgress(input) {
         const row = teamDb.prepare(
@@ -4163,7 +4169,7 @@ function mapChannelDocumentRevision(row: unknown): ChannelDocumentRevisionRecord
 }
 
 function insertChannelDocumentArtifact(teamDb: SqliteDatabase, artifact: ArtifactRecord): void {
-  teamDb.prepare(`INSERT INTO artifacts (
+  teamDb.prepare(`INSERT OR IGNORE INTO artifacts (
     id, team_id, channel_id, message_id, dispatch_id, workspace_run_id, uploader_id,
     filename, mime_type, size_bytes, storage_path, relative_path, path_kind, artifact_role,
     source_root_id, source_root_kind, source_root_label, sha256, created_at
@@ -4582,6 +4588,85 @@ function createSqliteProjectReferenceSetRepository(
       });
       return transact.immediate ? transact.immediate() : transact();
     },
+  };
+}
+
+function createSqliteProjectDocumentInputSetResultRepository(
+  db: SqliteDatabase,
+): ProjectDocumentInputSetResultRepository {
+  return {
+    async listByInvocation(input) {
+      return db.prepare(
+        `SELECT * FROM project_document_input_set_results
+         WHERE team_id = ? AND channel_id = ? AND invocation_id = ?
+         ORDER BY created_at ASC, document_id ASC`,
+      ).all(input.teamId, input.channelId, input.invocationId)
+        .map(mapProjectDocumentInputSetItemResult)
+        .filter((result): result is ProjectDocumentInputSetItemResultRecord => result !== null);
+    },
+    async record(input) {
+      const existing = mapProjectDocumentInputSetItemResult(db.prepare(
+        `SELECT * FROM project_document_input_set_results
+         WHERE input_set_id = ? AND document_id = ?`,
+      ).get(input.inputSetId, input.documentId));
+      if (existing) {
+        return existing.requestFingerprint === input.requestFingerprint
+          ? { kind: 'replayed', result: existing }
+          : { kind: 'idempotency_conflict' };
+      }
+      try {
+        db.prepare(
+          `INSERT INTO project_document_input_set_results (
+             input_set_id, invocation_id, team_id, channel_id, document_id,
+             base_revision_id, status, artifact_id, revision_id, error,
+             request_fingerprint, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.inputSetId,
+          input.invocationId,
+          input.teamId,
+          input.channelId,
+          input.documentId,
+          input.baseRevisionId,
+          input.status,
+          input.artifactId ?? null,
+          input.revisionId ?? null,
+          input.error ?? null,
+          input.requestFingerprint,
+          input.createdAt,
+        );
+      } catch {
+        const raced = mapProjectDocumentInputSetItemResult(db.prepare(
+          `SELECT * FROM project_document_input_set_results
+           WHERE input_set_id = ? AND document_id = ?`,
+        ).get(input.inputSetId, input.documentId));
+        if (raced?.requestFingerprint === input.requestFingerprint) {
+          return { kind: 'replayed', result: raced };
+        }
+        return { kind: 'idempotency_conflict' };
+      }
+      return { kind: 'created', result: input };
+    },
+  };
+}
+
+function mapProjectDocumentInputSetItemResult(
+  row: unknown,
+): ProjectDocumentInputSetItemResultRecord | null {
+  if (!row) return null;
+  return {
+    inputSetId: sqliteText(row, 'input_set_id'),
+    invocationId: sqliteText(row, 'invocation_id'),
+    teamId: sqliteText(row, 'team_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    documentId: sqliteText(row, 'document_id'),
+    baseRevisionId: sqliteText(row, 'base_revision_id'),
+    status: sqliteText(row, 'status') as ProjectDocumentInputSetItemResultRecord['status'],
+    artifactId: sqliteNullableText(row, 'artifact_id'),
+    revisionId: sqliteNullableText(row, 'revision_id'),
+    error: sqliteNullableText(row, 'error'),
+    requestFingerprint: sqliteText(row, 'request_fingerprint'),
+    createdAt: sqliteNumber(row, 'created_at'),
   };
 }
 

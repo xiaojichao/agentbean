@@ -1,5 +1,10 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AgentInvocationRecordDto } from '../../../../packages/contracts/src/index.js';
+import type {
+  ProjectDocumentInputSetItemResultDto,
+  ProjectDocumentInputSetResultDto,
+  ProjectDocumentInputSetResultProposalV1,
+} from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
@@ -32,6 +37,7 @@ import type {
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleRecord,
+  ProjectDocumentInputSetItemResultRecord,
   ProjectReferenceItemRecord,
   ProjectReferenceSelectionRecord,
   ProjectReferenceSetRecord,
@@ -1035,6 +1041,7 @@ export interface ReceiveDispatchResultInput {
   artifacts?: ReceiveDispatchArtifactInput[];
   workspaceRun?: ReceiveDispatchWorkspaceRunInput;
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
 }
 
 export interface ReceiveDispatchResultResult {
@@ -1042,6 +1049,7 @@ export interface ReceiveDispatchResultResult {
   message?: MessageDto;
   task?: TaskDto;
   collaborationProposalDiagnostics?: readonly string[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultDto;
 }
 
 export interface ReceiveDispatchErrorInput {
@@ -6359,6 +6367,32 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
       if (!isCompletableDispatchStatus(dispatch.status)) {
+        if (resultInput.projectDocumentInputSetResult) {
+          const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
+            resultInput.dispatchId,
+          );
+          const invocationId = managedAttempt?.invocationId;
+          const proposal = resultInput.projectDocumentInputSetResult;
+          if (invocationId === proposal.invocationId) {
+            const replayed = await repositories.projectDocumentInputSetResults.listByInvocation({
+              teamId: dispatch.teamId,
+              channelId: dispatch.channelId,
+              invocationId,
+            });
+            if (replayed.length === proposal.items.length
+              && replayed.every((item) =>
+                item.requestFingerprint === projectDocumentInputSetProposalFingerprint(proposal))) {
+              return makeSuccess({
+                dispatch: toDispatchDto(dispatch),
+                projectDocumentInputSetResult: toProjectDocumentInputSetResultDto(
+                  proposal.inputSetId,
+                  proposal.invocationId,
+                  replayed,
+                ),
+              });
+            }
+          }
+        }
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
       const agent = await repositories.agents.getById(resultInput.agentId);
@@ -6388,6 +6422,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const managedHandoff = managedAttempt
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
+      if (resultInput.projectDocumentInputSetResult) {
+        const validation = await validateProjectDocumentInputSetResultProposal({
+          repositories,
+          dispatch,
+          managedInvocation,
+          proposal: resultInput.projectDocumentInputSetResult,
+          reportedArtifactIds: uniqueIds([
+            ...(resultInput.artifactIds ?? []),
+            ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+          ]),
+        });
+        if (!validation.ok) return validation;
+      }
       const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
       const completed = managedAttempt
         ? await invocationGateway.completeAttempt({
@@ -6511,15 +6558,45 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
+      const projectDocumentInputSetResult = resultInput.projectDocumentInputSetResult && managedInvocation
+        ? await commitProjectDocumentInputSetResults({
+            repositories,
+            ids,
+            now,
+            agentId: resultInput.agentId,
+            dispatch: completed.dispatch,
+            invocation: managedInvocation,
+            proposal: resultInput.projectDocumentInputSetResult,
+            committedArtifacts,
+          })
+        : undefined;
       if (channelFileRollout.markdownEditing) {
-        await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+        const inputSetResultArtifactIds = new Set(
+          resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
+            item.artifactId ? [item.artifactId] : []) ?? [],
+        );
+        await createInitialChannelDocuments(
+          repositories,
+          committedArtifacts.filter((artifact) => !inputSetResultArtifactIds.has(artifact.id)),
+          resultInput.agentId,
+          now,
+        );
       }
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
       const chatArtifacts = artifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
-      const messageWithArtifacts: MessageDto | null = message ? {
-        ...message,
+      const authoritativeMessage = message && projectDocumentInputSetResult
+        ? await repositories.messages.updateMeta({
+            messageId: message.id,
+            meta: {
+              ...(message.meta ?? {}),
+              projectDocumentInputSetResult,
+            },
+          })
+        : message;
+      const messageWithArtifacts: MessageDto | null = authoritativeMessage ? {
+        ...authoritativeMessage,
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       } : null;
@@ -6547,6 +6624,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
           ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+          ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
         await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
@@ -6572,6 +6650,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(collaborationProposalDiagnostics.length > 0
           ? { collaborationProposalDiagnostics: [...new Set(collaborationProposalDiagnostics)] }
           : {}),
+        ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
       });
     },
 
@@ -11131,6 +11210,245 @@ async function ensureUserCanViewChannel(
     return makeFailure('FORBIDDEN', 'User cannot view channel');
   }
   return makeSuccess({ channel });
+}
+
+async function validateProjectDocumentInputSetResultProposal(input: {
+  repositories: ServerNextRepositories;
+  dispatch: DispatchRecord;
+  managedInvocation: AgentInvocationRecordDto | null;
+  proposal: ProjectDocumentInputSetResultProposalV1;
+  reportedArtifactIds: readonly string[];
+}): Promise<Ack<{ valid: true }>> {
+  const { managedInvocation, proposal } = input;
+  if (!managedInvocation
+    || managedInvocation.intent.schemaVersion !== 2
+    || managedInvocation.id !== proposal.invocationId
+    || managedInvocation.intent.teamId !== input.dispatch.teamId
+    || managedInvocation.intent.channelId !== input.dispatch.channelId
+    || managedInvocation.intent.projectDocumentInputSet.id !== proposal.inputSetId) {
+    return makeFailure('VALIDATION_ERROR', 'Project document InputSet result is outside its Invocation scope');
+  }
+  const channel = await input.repositories.channels.getById(input.dispatch.channelId);
+  if (!channel || channel.teamId !== input.dispatch.teamId || channel.archivedAt != null) {
+    return makeFailure('CONFLICT', 'Archived or unavailable channels reject late InputSet results');
+  }
+  const expectedItems = managedInvocation.intent.projectDocumentInputSet.items;
+  const proposedIds = new Set(proposal.items.map((item) => item.documentId));
+  if (proposal.contractVersion !== 1
+    || proposal.items.length !== expectedItems.length
+    || proposedIds.size !== proposal.items.length) {
+    return makeFailure('VALIDATION_ERROR', 'Project document InputSet result must cover each manifest item exactly once');
+  }
+  const reportedArtifacts = new Set(input.reportedArtifactIds);
+  for (const item of proposal.items) {
+    const expected = expectedItems.find((candidate) => candidate.documentId === item.documentId);
+    if (!expected || expected.baseRevisionId !== item.baseRevisionId) {
+      return makeFailure('VALIDATION_ERROR', 'Project document InputSet result identity does not match the manifest');
+    }
+    if (item.status === 'unchanged') {
+      if (item.sha256 !== expected.sha256 || item.artifactId || item.error) {
+        return makeFailure('VALIDATION_ERROR', 'Unchanged InputSet result has an invalid digest or Artifact');
+      }
+      continue;
+    }
+    if (item.status === 'changed') {
+      if (!item.sha256 || item.sha256 === expected.sha256
+        || !item.artifactId || !reportedArtifacts.has(item.artifactId)) {
+        return makeFailure('VALIDATION_ERROR', 'Changed InputSet result requires a newly reported Artifact and digest');
+      }
+      const artifact = await input.repositories.artifacts.getForTeam({
+        teamId: input.dispatch.teamId,
+        artifactId: item.artifactId,
+      });
+      if (!artifact
+        || artifact.channelId !== input.dispatch.channelId
+        || artifact.sha256 !== item.sha256
+        || !isMarkdownArtifact(artifact)) {
+        return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+      }
+      continue;
+    }
+    if (!item.error || item.artifactId) {
+      return makeFailure('VALIDATION_ERROR', 'Failed InputSet result requires an error and cannot commit an Artifact');
+    }
+  }
+  return makeSuccess({ valid: true });
+}
+
+async function commitProjectDocumentInputSetResults(input: {
+  repositories: ServerNextRepositories;
+  ids: ServerNextIds;
+  now: number;
+  agentId: string;
+  dispatch: DispatchRecord;
+  invocation: AgentInvocationRecordDto;
+  proposal: ProjectDocumentInputSetResultProposalV1;
+  committedArtifacts: readonly ArtifactRecord[];
+}): Promise<ProjectDocumentInputSetResultDto> {
+  if (input.invocation.intent.schemaVersion !== 2) {
+    throw new Error('Project document InputSet result requires Invocation V2');
+  }
+  const requestFingerprint = projectDocumentInputSetProposalFingerprint(input.proposal);
+  const expectedItems = input.invocation.intent.projectDocumentInputSet.items;
+  const taskContext = input.invocation.intent.taskContext;
+  const task = taskContext
+    ? await input.repositories.tasks.getById(taskContext.taskId)
+    : null;
+  const staleInvocation = Boolean(taskContext && (!task
+    || task.teamId !== input.dispatch.teamId
+    || task.channelId !== input.dispatch.channelId
+    || task.revision !== taskContext.taskRevision));
+  const results: ProjectDocumentInputSetItemResultRecord[] = [];
+  const record = async (
+    item: ProjectDocumentInputSetResultProposalV1['items'][number],
+    facts: Pick<ProjectDocumentInputSetItemResultRecord, 'status' | 'artifactId' | 'revisionId' | 'error'>,
+  ): Promise<void> => {
+    const result: ProjectDocumentInputSetItemResultRecord = {
+      inputSetId: input.proposal.inputSetId,
+      invocationId: input.proposal.invocationId,
+      teamId: input.dispatch.teamId,
+      channelId: input.dispatch.channelId,
+      documentId: item.documentId,
+      baseRevisionId: item.baseRevisionId,
+      status: facts.status,
+      ...(facts.artifactId ? { artifactId: facts.artifactId } : {}),
+      ...(facts.revisionId ? { revisionId: facts.revisionId } : {}),
+      ...(facts.error ? { error: facts.error } : {}),
+      requestFingerprint,
+      createdAt: input.now,
+    };
+    const stored = await input.repositories.projectDocumentInputSetResults.record(result);
+    if (stored.kind === 'idempotency_conflict') {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_RESULT_IDEMPOTENCY_CONFLICT');
+    }
+    results.push(stored.result);
+  };
+
+  for (const item of input.proposal.items) {
+    const expected = expectedItems.find((candidate) => candidate.documentId === item.documentId)!;
+    if (item.status === 'unchanged') {
+      await record(item, { status: 'unchanged' });
+      continue;
+    }
+    if (item.status === 'failed') {
+      await record(item, { status: 'failed', error: item.error });
+      continue;
+    }
+    const artifact = input.committedArtifacts.find((candidate) => candidate.id === item.artifactId);
+    if (!artifact) {
+      await record(item, { status: 'failed', error: 'PROJECT_DOCUMENT_RESULT_ARTIFACT_NOT_COMMITTED' });
+      continue;
+    }
+    if (staleInvocation) {
+      await record(item, {
+        status: 'failed',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_INVOCATION_STALE',
+      });
+      continue;
+    }
+    const document = await input.repositories.channelDocuments.getForTeam({
+      teamId: input.dispatch.teamId,
+      channelId: input.dispatch.channelId,
+      documentId: expected.documentId,
+    });
+    if (!document) {
+      await record(item, {
+        status: 'failed',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_DOCUMENT_UNAVAILABLE',
+      });
+      continue;
+    }
+    if (document.currentRevisionId !== expected.baseRevisionId) {
+      await record(item, {
+        status: 'conflict',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_BASE_REVISION_STALE',
+      });
+      continue;
+    }
+    const latest = (await input.repositories.channelDocuments.listRevisions({
+      documentId: document.id,
+    }))[0];
+    const revision: ChannelDocumentRevisionRecord = {
+      id: input.ids.nextId(),
+      documentId: document.id,
+      artifact,
+      revision: (latest?.revision ?? expected.revisionNumber) + 1,
+      createdBy: input.agentId,
+      createdAt: input.now,
+      source: 'run',
+      published: false,
+    };
+    const committed = await input.repositories.channelDocuments.addRevision({
+      documentId: document.id,
+      expectedCurrentRevisionId: expected.baseRevisionId,
+      document: {
+        ...document,
+        filename: sanitizeMarkdownFilename(artifact.filename),
+        currentRevisionId: revision.id,
+        updatedAt: input.now,
+      },
+      revision,
+      artifact,
+      operation: {
+        documentId: document.id,
+        idempotencyKey: `input-set-result:${input.proposal.inputSetId}:${document.id}`,
+        operationType: 'save',
+        requestFingerprint: createHash('sha256').update(JSON.stringify({
+          inputSetId: input.proposal.inputSetId,
+          invocationId: input.proposal.invocationId,
+          documentId: document.id,
+          baseRevisionId: expected.baseRevisionId,
+          artifactId: artifact.id,
+          sha256: item.sha256,
+        })).digest('hex'),
+        revisionId: revision.id,
+      },
+    });
+    if (!committed) {
+      await record(item, {
+        status: 'conflict',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_BASE_REVISION_STALE',
+      });
+      continue;
+    }
+    await record(item, {
+      status: 'committed',
+      artifactId: artifact.id,
+      revisionId: committed.revision.id,
+    });
+  }
+  return toProjectDocumentInputSetResultDto(
+    input.proposal.inputSetId,
+    input.proposal.invocationId,
+    results,
+  );
+}
+
+function projectDocumentInputSetProposalFingerprint(
+  proposal: ProjectDocumentInputSetResultProposalV1,
+): string {
+  return createHash('sha256').update(JSON.stringify(proposal)).digest('hex');
+}
+
+function toProjectDocumentInputSetResultDto(
+  inputSetId: string,
+  invocationId: string,
+  records: readonly ProjectDocumentInputSetItemResultRecord[],
+): ProjectDocumentInputSetResultDto {
+  const items: ProjectDocumentInputSetItemResultDto[] = records.map((record) => ({
+    documentId: record.documentId,
+    baseRevisionId: record.baseRevisionId,
+    status: record.status,
+    ...(record.artifactId ? { artifactId: record.artifactId } : {}),
+    ...(record.revisionId ? { revisionId: record.revisionId } : {}),
+    ...(record.error ? { error: record.error } : {}),
+    createdAt: record.createdAt,
+  }));
+  return { contractVersion: 1, inputSetId, invocationId, items };
 }
 
 type ChannelFileCursor = { createdAt: number; id: string };

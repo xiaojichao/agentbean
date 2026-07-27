@@ -49,3 +49,46 @@ export interface ProjectDocumentInputSetManifestV1 {
   readonly invocationId: ID;
   readonly items: readonly ProjectDocumentInputSetManifestItemV1[];
 }
+
+/**
+ * Device 根据 manifest 的稳定 documentId/baseRevisionId 与内容摘要提交结果。
+ * 文件名与本地路径只用于展示和物化，绝不参与文档身份判定。
+ */
+export interface ProjectDocumentInputSetItemResultProposalV1 {
+  readonly documentId: ID;
+  readonly baseRevisionId: ID;
+  readonly status: 'unchanged' | 'changed' | 'failed';
+  readonly sha256?: string;
+  readonly artifactId?: ID;
+  readonly error?: string;
+}
+
+export interface ProjectDocumentInputSetResultProposalV1 {
+  readonly contractVersion: 1;
+  readonly inputSetId: ID;
+  readonly invocationId: ID;
+  readonly items: readonly ProjectDocumentInputSetItemResultProposalV1[];
+}
+
+export type ProjectDocumentInputSetItemResultStatus =
+  | 'unchanged'
+  | 'committed'
+  | 'conflict'
+  | 'failed';
+
+export interface ProjectDocumentInputSetItemResultDto {
+  readonly documentId: ID;
+  readonly baseRevisionId: ID;
+  readonly status: ProjectDocumentInputSetItemResultStatus;
+  readonly artifactId?: ID;
+  readonly revisionId?: ID;
+  readonly error?: string;
+  readonly createdAt: number;
+}
+
+export interface ProjectDocumentInputSetResultDto {
+  readonly contractVersion: 1;
+  readonly inputSetId: ID;
+  readonly invocationId: ID;
+  readonly items: readonly ProjectDocumentInputSetItemResultDto[];
+}

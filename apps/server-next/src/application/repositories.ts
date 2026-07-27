@@ -15,6 +15,7 @@ import type {
   ChannelProjectRepository,
   ProjectDocumentBundleBackfillRepository,
   ProjectDocumentBundleRepository,
+  ProjectDocumentInputSetResultRepository,
   ProjectReferenceSetRepository,
 } from './project-repositories.js';
 import type {
@@ -450,6 +451,7 @@ export interface ServerNextRepositories {
   experiencePack: ExperiencePackRepositories;
   channelProjects: ChannelProjectRepository;
   projectDocumentBundles: ProjectDocumentBundleRepository;
+  projectDocumentInputSetResults: ProjectDocumentInputSetResultRepository;
   projectReferenceSets: ProjectReferenceSetRepository;
   projectDocumentBundleBackfill: ProjectDocumentBundleBackfillRepository;
 }

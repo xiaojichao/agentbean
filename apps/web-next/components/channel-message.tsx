@@ -6,6 +6,10 @@ import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { messageSpeakerName } from '@/lib/display-names';
 import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import {
+  ProjectDocumentInputSetResultSummary,
+  projectDocumentInputSetResultFromMeta,
+} from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -149,6 +153,12 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
         <span>{time}</span>
       </div>
       <div className="whitespace-pre-wrap text-sm">{msg.senderKind === 'agent' ? agentFailureDisplayBody(msg.body) : msg.body}</div>
+      {msg.teamId && projectDocumentInputSetResultFromMeta(meta) && (
+        <ProjectDocumentInputSetResultSummary
+          result={projectDocumentInputSetResultFromMeta(meta)!}
+          teamId={msg.teamId}
+        />
+      )}
       {renderDispatch()}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">

@@ -27,6 +27,127 @@ describe('managed Dispatch lifecycle bridge', () => {
     await expect(harness.repositories.tasks.getById('task-1')).resolves.toMatchObject({ status: 'in_review' });
   });
 
+  test('reclaims manifest results independently, preserves OCC conflicts, and replays idempotently', async () => {
+    const harness = await createHarness(true);
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    expect(created.view.intent.schemaVersion).toBe(2);
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    const inputSetId = created.view.intent.projectDocumentInputSet.id;
+    const dispatchId = created.view.dispatchAttempts[0]!.dispatchId;
+
+    await harness.repositories.channelDocuments.addRevision({
+      documentId: 'document-3',
+      expectedCurrentRevisionId: 'revision-3',
+      document: {
+        id: 'document-3', teamId: 'team-1', channelId: 'channel-1', filename: 'third.md',
+        currentRevisionId: 'human-revision-3', createdAt: 1, updatedAt: 15,
+      },
+      revision: {
+        id: 'human-revision-3', documentId: 'document-3',
+        artifact: markdownArtifact('human-artifact-3', 'third.md', 'human-sha'),
+        revision: 2, createdBy: 'user-1', createdAt: 15, source: 'edit', published: false,
+      },
+      artifact: markdownArtifact('human-artifact-3', 'third.md', 'human-sha'),
+      operation: {
+        documentId: 'document-3', idempotencyKey: 'human-edit-3',
+        operationType: 'save', requestFingerprint: 'human-edit-3', revisionId: 'human-revision-3',
+      },
+    });
+    for (const artifact of [
+      markdownArtifact('artifact-result-2', 'second.md', 'changed-sha-2'),
+      markdownArtifact('artifact-result-3', 'third-renamed.md', 'changed-sha-3'),
+      markdownArtifact('artifact-new', 'new.md', 'new-sha'),
+    ]) await harness.repositories.artifacts.create(artifact);
+
+    const proposal = {
+      contractVersion: 1 as const,
+      inputSetId,
+      invocationId: created.view.id,
+      items: [
+        { documentId: 'document-1', baseRevisionId: 'revision-1', status: 'unchanged' as const, sha256: 'sha-1' },
+        { documentId: 'document-2', baseRevisionId: 'revision-2', status: 'changed' as const, sha256: 'changed-sha-2', artifactId: 'artifact-result-2' },
+        { documentId: 'document-3', baseRevisionId: 'revision-3', status: 'changed' as const, sha256: 'changed-sha-3', artifactId: 'artifact-result-3' },
+        { documentId: 'document-4', baseRevisionId: 'revision-4', status: 'failed' as const, error: 'AGENT_RESULT_MISSING' },
+      ],
+    };
+    const input = {
+      dispatchId,
+      agentId: 'agent-1',
+      body: '逐项结果',
+      artifactIds: ['artifact-result-2', 'artifact-result-3', 'artifact-new'],
+      projectDocumentInputSetResult: proposal,
+    };
+    const result = await harness.usecases.receiveDispatchResult(input);
+    expect(result).toMatchObject({
+      ok: true,
+      projectDocumentInputSetResult: {
+        items: [
+          { documentId: 'document-1', status: 'unchanged' },
+          { documentId: 'document-2', status: 'committed', artifactId: 'artifact-result-2' },
+          { documentId: 'document-3', status: 'conflict', artifactId: 'artifact-result-3' },
+          { documentId: 'document-4', status: 'failed', error: 'AGENT_RESULT_MISSING' },
+        ],
+      },
+      message: { meta: { projectDocumentInputSetResult: { inputSetId } } },
+    });
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
+      .resolves.toHaveLength(1);
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
+      .resolves.toHaveLength(2);
+    await expect(harness.repositories.channelDocuments.getForTeam({
+      teamId: 'team-1', channelId: 'channel-1', documentId: 'document-3',
+    })).resolves.toMatchObject({ currentRevisionId: 'human-revision-3' });
+    const documents = await harness.repositories.channelDocuments.listByChannel({
+      teamId: 'team-1', channelId: 'channel-1',
+    });
+    expect(documents.map((document) => document.id)).toContain('channel-document:artifact-new');
+    expect(documents.map((document) => document.id)).not.toContain('channel-document:artifact-result-2');
+    expect(documents.map((document) => document.id)).not.toContain('channel-document:artifact-result-3');
+
+    await expect(harness.usecases.receiveDispatchResult(input)).resolves.toMatchObject({
+      ok: true,
+      projectDocumentInputSetResult: {
+        items: [
+          { status: 'unchanged' },
+          { status: 'committed' },
+          { status: 'conflict' },
+          { status: 'failed' },
+        ],
+      },
+    });
+  });
+
+  test('rejects archived late InputSet results without changing document facts', async () => {
+    const harness = await createHarness(true);
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    await harness.repositories.channels.archive({ channelId: 'channel-1', timestamp: 19 });
+
+    await expect(harness.usecases.receiveDispatchResult({
+      dispatchId: created.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      body: '迟到结果',
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId: created.view.intent.projectDocumentInputSet.id,
+        invocationId: created.view.id,
+        items: created.view.intent.projectDocumentInputSet.items.map((item) => ({
+          documentId: item.documentId,
+          baseRevisionId: item.baseRevisionId,
+          status: 'unchanged' as const,
+          sha256: item.sha256,
+        })),
+      },
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.repositories.projectDocumentInputSetResults.listByInvocation({
+      teamId: 'team-1', channelId: 'channel-1', invocationId: created.view.id,
+    })).resolves.toEqual([]);
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
+      .resolves.toHaveLength(1);
+  });
+
   test.each([
     ['cancelled', async (h: Awaited<ReturnType<typeof createHarness>>, dispatchId: string) => h.usecases.cancelDispatch({ dispatchId, userId: 'user-1' })],
     ['timed_out', async (h: Awaited<ReturnType<typeof createHarness>>) => h.usecases.failTimedOutDispatches({ olderThan: 21 })],
@@ -51,7 +172,12 @@ async function createHarness(withManagementRun: boolean) {
   await repositories.teams.create({ id: 'team-1', name: 'Team', path: 'team', visibility: 'private', ownerId: 'user-1', createdAt: 1 });
   await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-1', username: 'user', role: 'owner', joinedAt: 1 });
   await repositories.channels.create({ id: 'channel-1', teamId: 'team-1', kind: 'channel', name: 'general', visibility: 'public', humanMemberIds: ['user-1'], agentMemberIds: ['agent-1'], createdAt: 1 });
-  await repositories.agents.upsert({ id: 'agent-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Agent', adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status: 'online' });
+  await repositories.devices.upsertHello({
+    id: 'device-1', teamId: 'team-1', ownerId: 'user-1', status: 'online',
+    capabilities: { projectDocumentInputSetVersions: [1] },
+    lastSeenAt: 1, createdAt: 1, updatedAt: 1,
+  });
+  await repositories.agents.upsert({ id: 'agent-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Agent', adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status: 'online', deviceId: 'device-1', projectDocumentInputSetVersions: [1] });
   await repositories.messages.append({ id: 'message-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'message-1', senderKind: 'human', senderId: 'user-1', body: '完成目标', createdAt: 1, meta: { taskId: 'task-1' } });
   await repositories.tasks.create({ id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: '完成目标', status: 'in_progress', creatorId: 'user-1', assigneeId: 'agent-1', tags: [], sortOrder: 1, createdAt: 1, updatedAt: 1 });
   const kernel = createManagementKernel({ repositories: repositories.management, unitOfWork: repositories.managementUnitOfWork, clock, ids });
@@ -69,4 +195,59 @@ async function createHarness(withManagementRun: boolean) {
 
 function invokeInput(authority: { managementRunId: string; workerId: string; leaseToken: string; fencingToken: number }) {
   return { authority, frozenTargetAgentId: 'agent-1', allowedTargetAgentIds: ['agent-1'], idempotencyKey: 'invoke-1', intent: { schemaVersion: 1 as const, teamId: 'team-1', channelId: 'channel-1', targetAgentId: 'agent-1', targetKind: 'custom' as const, objective: '完成目标', taskContext: { taskId: 'task-1', rootTaskId: 'task-1', taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-1' }, acceptanceCriteria: [], dependencyResults: [], attachmentIds: [] } };
+}
+
+function markdownArtifact(id: string, filename: string, sha256: string) {
+  return {
+    id, teamId: 'team-1', channelId: 'channel-1', uploaderId: 'agent-1',
+    filename, mimeType: 'text/markdown', sizeBytes: 10, sha256, createdAt: 10,
+  };
+}
+
+async function seedProjectDocumentInputSet(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+): Promise<void> {
+  const items = [];
+  for (let index = 1; index <= 4; index += 1) {
+    const artifact = markdownArtifact(`artifact-${index}`, `${index}.md`, `sha-${index}`);
+    await repositories.channelDocuments.create({
+      document: {
+        id: `document-${index}`, teamId: 'team-1', channelId: 'channel-1',
+        filename: `${index}.md`, currentRevisionId: `revision-${index}`,
+        createdAt: 1, updatedAt: 1,
+      },
+      revision: {
+        id: `revision-${index}`, documentId: `document-${index}`, artifact,
+        revision: 1, createdBy: 'user-1', createdAt: 1, source: 'attachment', published: false,
+      },
+    });
+    items.push({
+      id: `reference-item-${index}`,
+      selectionId: 'selection-1',
+      kind: 'document_revision' as const,
+      position: index - 1,
+      documentId: `document-${index}`,
+      revisionId: `revision-${index}`,
+      revisionNumber: 1,
+      filename: `${index}.md`,
+      createdAt: 1,
+    });
+  }
+  const selection = {
+    id: 'selection-1', referenceSetId: 'reference-set-1', sourceKind: 'bundle_subset' as const,
+    position: 0, bundleId: 'bundle-1', bundleName: '输入包', bundleMemberCount: 4,
+    createdAt: 1, items: [],
+  };
+  await repositories.projectReferenceSets.create({
+    set: {
+      id: 'reference-set-1', contractVersion: 1, teamId: 'team-1', channelId: 'channel-1',
+      messageId: 'message-1', createdBy: 'user-1', createdAt: 1, selections: [],
+    },
+    selections: [selection],
+    items,
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'reference-set-create',
+      requestFingerprint: 'reference-set-fingerprint', referenceSetId: 'reference-set-1', createdAt: 1,
+    },
+  });
 }

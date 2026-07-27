@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { materializeProjectDocumentInputSet } from '../src/project-document-input-set.js';
+import {
+  buildProjectDocumentInputSetResultProposal,
+  collectProjectDocumentInputSetResults,
+  materializeProjectDocumentInputSet,
+} from '../src/project-document-input-set.js';
 
 const roots: string[] = [];
 
@@ -53,6 +57,52 @@ describe('ProjectDocumentInputSet materialization', () => {
     })).rejects.toThrow('PROJECT_DOCUMENT_INPUT_SET_SHA256_MISMATCH');
     expect(existsSync(join(root, 'input-set-input-set-1'))).toBe(false);
     expect(existsSync(join(root, 'input-set-input-set-1.staging'))).toBe(false);
+  });
+
+  test('submits each result by manifest identity and digest instead of filename or path', async () => {
+    const root = await tempRoot();
+    const original = Buffer.from('# original\n');
+    const materialized = await materializeProjectDocumentInputSet({
+      serverUrl: 'https://server.example',
+      token: 'device-token',
+      teamId: 'team-1',
+      invocationId: 'invocation-1',
+      inputDir: root,
+      inputSet: inputSet(original),
+      fetch: async () => new Response(original, { status: 200 }),
+    });
+    writeFileSync(materialized.manifest.items[0]!.localPath, '# changed\n');
+
+    const collected = collectProjectDocumentInputSetResults(materialized);
+    expect(collected.items).toEqual([{
+      documentId: 'document-1',
+      baseRevisionId: 'revision-1',
+      status: 'changed',
+      sha256: createHash('sha256').update('# changed\n').digest('hex'),
+    }]);
+    expect(collected.changedArtifacts[0]).toMatchObject({
+      filename: 'plan.md',
+      role: 'intermediate',
+      sourceRoot: { label: '项目文档回写' },
+    });
+
+    const proposal = buildProjectDocumentInputSetResultProposal(materialized, collected, [{
+      id: 'artifact-result-1',
+      filename: 'renamed-locally.md',
+      mimeType: 'text/markdown',
+      pathKind: 'generated',
+      sha256: collected.changedArtifacts[0]!.sha256,
+      sizeBytes: collected.changedArtifacts[0]!.sizeBytes,
+      role: 'intermediate',
+      sourceRoot: collected.changedArtifacts[0]!.sourceRoot,
+    }]);
+    expect(proposal.items).toEqual([{
+      documentId: 'document-1',
+      baseRevisionId: 'revision-1',
+      status: 'changed',
+      sha256: collected.changedArtifacts[0]!.sha256,
+      artifactId: 'artifact-result-1',
+    }]);
   });
 });
 
