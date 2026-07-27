@@ -52,6 +52,8 @@ describe('web-next socket client', () => {
       '../app/[teamPath]/agents/page.tsx',
       '../app/[teamPath]/agents/[agentId]/page.tsx',
       '../app/[teamPath]/dashboard/page.tsx',
+      '../app/[teamPath]/dashboard/layout.tsx',
+      '../components/admin-console-panel.tsx',
       '../app/[teamPath]/settings/page.tsx',
     ]) {
       const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');

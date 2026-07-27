@@ -57,7 +57,11 @@ export function collectAgentBeanNextReadinessChecks({
   const daemonNextCliTests = readFileSync(join(root, 'apps/daemon-next/tests/cli.test.ts'), 'utf8');
   const daemonNextAuthStoreTests = readFileSync(join(root, 'apps/daemon-next/tests/auth-store.test.ts'), 'utf8');
   const daemonNextProtocolClientTests = readFileSync(join(root, 'apps/daemon-next/tests/protocol-client.test.ts'), 'utf8');
-  const webNextDashboardPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/page.tsx'), 'utf8');
+  const webNextDashboardPage = [
+    readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/page.tsx'), 'utf8'),
+    readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/layout.tsx'), 'utf8'),
+    readFileSync(join(root, 'apps/web-next/components/admin-console-panel.tsx'), 'utf8'),
+  ].join('\n');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/chat/page.tsx'), 'utf8');
   const webNextDevicesPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/devices/page.tsx'), 'utf8');
   const webNextAgentsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/agents/page.tsx'), 'utf8');
@@ -681,10 +685,12 @@ export function collectAgentBeanNextReadinessChecks({
         webNextDashboardPage.includes("key: 'users'") &&
         webNextDashboardPage.includes("key: 'devices'") &&
         webNextDashboardPage.includes("key: 'agents'") &&
-        webNextDashboardPage.includes('data-smoke={`admin-tab-${t.key}`}') &&
+        webNextDashboardPage.includes('data-smoke={`admin-tab-${item.key}`}') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-select"') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-save"') &&
         webNextDashboardPage.includes('data-smoke="admin-agent-row"') &&
+        webNextDashboardPage.includes("dashboard/${item.key}") &&
+        webNextDashboardPage.includes("section === 'teams'") &&
         verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
       'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, and agent ownership projection',
