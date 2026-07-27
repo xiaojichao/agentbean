@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
 import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
@@ -438,6 +439,156 @@ describe('managed Dispatch lifecycle bridge', () => {
     });
   });
 
+  test('rejects inline InputSet Artifact whose content digest does not match the proposal', async () => {
+    const harness = await createHarness(true, { withArtifactContentStore: true });
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    const inputSetId = created.view.intent.projectDocumentInputSet.id;
+    const content = Buffer.from('# forged digest body\n');
+    const realSha256 = createHash('sha256').update(content).digest('hex');
+
+    await expect(harness.usecases.receiveDispatchResult({
+      dispatchId: created.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      body: '伪造摘要',
+      artifacts: [{
+        id: 'artifact-forged-inline',
+        filename: '2.md',
+        mimeType: 'text/markdown',
+        sizeBytes: content.byteLength,
+        relativePath: '2.md',
+        role: 'intermediate',
+        sourceRoot: {
+          id: `project-document-input-set:${inputSetId}`,
+          kind: 'configured_output',
+          label: '项目文档回写',
+        },
+        sha256: 'forged-not-the-content-hash',
+        contentBase64: content.toString('base64'),
+      }],
+      workspaceRun: { id: 'workspace-run-forged', status: 'succeeded' },
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId,
+        invocationId: created.view.id,
+        items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 1
+          ? {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'changed' as const,
+              sha256: 'forged-not-the-content-hash',
+              artifactId: 'artifact-forged-inline',
+            }
+          : {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'unchanged' as const,
+              sha256: item.sha256,
+            }),
+      },
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    await expect(harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: 'artifact-forged-inline',
+    })).resolves.toBeNull();
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
+      .resolves.toHaveLength(1);
+    expect(realSha256).not.toBe('forged-not-the-content-hash');
+  });
+
+  test('recovers terminal InputSet results by persisting missing inline Artifacts', async () => {
+    const harness = await createHarness(true, { withArtifactContentStore: true });
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    const inputSetId = created.view.intent.projectDocumentInputSet.id;
+    const content = Buffer.from('# recovered inline InputSet body\n');
+    const sha256 = createHash('sha256').update(content).digest('hex');
+    const inlineArtifact = {
+      id: 'artifact-inline-recovery',
+      filename: '2.md',
+      mimeType: 'text/markdown',
+      sizeBytes: content.byteLength,
+      relativePath: '2.md',
+      role: 'intermediate' as const,
+      sourceRoot: {
+        id: `project-document-input-set:${inputSetId}`,
+        kind: 'configured_output' as const,
+        label: '项目文档回写',
+      },
+      sha256,
+      contentBase64: content.toString('base64'),
+    };
+    const proposal = {
+      contractVersion: 1 as const,
+      inputSetId,
+      invocationId: created.view.id,
+      items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 1
+        ? {
+            documentId: item.documentId,
+            baseRevisionId: item.baseRevisionId,
+            status: 'changed' as const,
+            sha256,
+            artifactId: inlineArtifact.id,
+          }
+        : {
+            documentId: item.documentId,
+            baseRevisionId: item.baseRevisionId,
+            status: 'unchanged' as const,
+            sha256: item.sha256,
+          }),
+    };
+    const input = {
+      dispatchId: created.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      body: 'inline 可恢复结果',
+      artifacts: [inlineArtifact],
+      workspaceRun: { status: 'succeeded' as const },
+      projectDocumentInputSetResult: proposal,
+    };
+
+    const createWorkspaceRun = harness.repositories.workspaceRuns.create;
+    let workspaceRunWrites = 0;
+    harness.repositories.workspaceRuns.create = async (run) => {
+      workspaceRunWrites += 1;
+      if (workspaceRunWrites === 1) throw new Error('SIMULATED_INLINE_WORKSPACE_RUN_WRITE_FAILURE');
+      return createWorkspaceRun(run);
+    };
+    await expect(harness.usecases.receiveDispatchResult(input))
+      .rejects.toThrow('SIMULATED_INLINE_WORKSPACE_RUN_WRITE_FAILURE');
+    harness.repositories.workspaceRuns.create = createWorkspaceRun;
+
+    await expect(harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: inlineArtifact.id,
+    })).resolves.toBeNull();
+
+    await expect(harness.usecases.receiveDispatchResult(input)).resolves.toMatchObject({
+      ok: true,
+      dispatch: { status: 'succeeded' },
+      projectDocumentInputSetResult: {
+        items: [
+          { documentId: 'document-1', status: 'unchanged' },
+          { documentId: 'document-2', status: 'committed', artifactId: inlineArtifact.id },
+          { documentId: 'document-3', status: 'unchanged' },
+          { documentId: 'document-4', status: 'unchanged' },
+        ],
+      },
+    });
+    await expect(harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: inlineArtifact.id,
+    })).resolves.toMatchObject({
+      sha256,
+      dispatchId: input.dispatchId,
+      role: 'intermediate',
+    });
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
+      .resolves.toHaveLength(2);
+  });
+
   test('records bounded InputSet capability and materialization failures', async () => {
     const capabilityHarness = await createHarness(true);
     await seedProjectDocumentInputSet(capabilityHarness.repositories);
@@ -504,7 +655,10 @@ describe('managed Dispatch lifecycle bridge', () => {
   });
 });
 
-async function createHarness(withManagementRun: boolean) {
+async function createHarness(
+  withManagementRun: boolean,
+  options: { withArtifactContentStore?: boolean } = {},
+) {
   const repositories = createInMemoryRepositories();
   let id = 0;
   const clock = { now: () => 20 };
@@ -538,6 +692,22 @@ async function createHarness(withManagementRun: boolean) {
     fencingToken: 1, status: 'active', acquiredAt: 1, heartbeatAt: 1, expiresAt: 100,
   });
   const metrics = createProjectCollaborationMetrics();
+  const artifactContentStore = options.withArtifactContentStore
+    ? {
+        async writeContent(input: {
+          teamId: string;
+          artifactId: string;
+          filename: string;
+          content: Buffer;
+        }) {
+          return {
+            storagePath: `memory://${input.teamId}/${input.artifactId}/${input.filename}`,
+            sizeBytes: input.content.byteLength,
+            sha256: createHash('sha256').update(input.content).digest('hex'),
+          };
+        },
+      }
+    : undefined;
   return {
     repositories,
     gateway: createInvocationGateway({ repositories, clock, ids }),
@@ -546,6 +716,7 @@ async function createHarness(withManagementRun: boolean) {
       clock,
       ids,
       projectCollaborationMetrics: metrics,
+      ...(artifactContentStore ? { artifactContentStore } : {}),
     }),
     metrics,
     authority: { managementRunId: run?.id ?? 'unused', workerId: 'worker-1', leaseToken: 'token', fencingToken: 1 },

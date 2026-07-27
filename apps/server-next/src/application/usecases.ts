@@ -6710,6 +6710,48 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                     pathKind: 'generated',
                   });
                 }
+                // Terminal recovery may arrive with only inline Artifact payloads. Validation can
+                // accept them via inlineArtifacts, but commit requires persisted records — so
+                // materialize any missing ones the same way as the happy-path result handler.
+                for (const artifactInput of resultInput.artifacts ?? []) {
+                  const existing = await repositories.artifacts.getForTeam({
+                    teamId: dispatch.teamId,
+                    artifactId: artifactInput.id,
+                  });
+                  if (existing) continue;
+                  if (artifactInput.sourceRoot && !isValidArtifactSourceRoot(artifactInput.sourceRoot)) {
+                    projectCollaborationMetrics.recordInputSetFailure('result_validation');
+                    return makeFailure('VALIDATION_ERROR', 'Invalid artifact source root');
+                  }
+                  const contentResult = await resolveDispatchArtifactContent(artifactContentStore, {
+                    teamId: dispatch.teamId,
+                    artifact: artifactInput,
+                  });
+                  if (!contentResult.ok) {
+                    projectCollaborationMetrics.recordInputSetFailure('result_validation');
+                    return contentResult;
+                  }
+                  const persisted = await repositories.artifacts.create({
+                    id: artifactInput.id,
+                    teamId: dispatch.teamId,
+                    channelId: dispatch.channelId,
+                    ...(recoveryDeliveryMessage ? { messageId: recoveryDeliveryMessage.id } : {}),
+                    dispatchId: dispatch.id,
+                    workspaceRunId: recoveredRun.id,
+                    uploaderId: resultInput.agentId,
+                    filename: artifactInput.filename,
+                    mimeType: artifactInput.mimeType ?? 'application/octet-stream',
+                    sizeBytes: contentResult.content?.sizeBytes ?? artifactInput.sizeBytes ?? 0,
+                    storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
+                    relativePath: artifactInput.relativePath,
+                    pathKind: artifactInput.pathKind ?? 'generated',
+                    role: artifactInput.role ?? 'intermediate',
+                    sourceRoot: artifactInput.sourceRoot,
+                    sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
+                    createdAt: recoveryNow,
+                  });
+                  await onArtifactCommitted?.(persisted).catch(() => undefined);
+                }
               }
               const committedArtifacts = (await Promise.all(proposal.items.flatMap((item) =>
                 item.status === 'changed'
@@ -11910,14 +11952,34 @@ async function validateProjectDocumentInputSetResultProposal(input: {
         && !artifact.dispatchId
         && !artifact.workspaceRunId;
       const artifactBelongsToDispatch = artifact?.dispatchId === input.dispatch.id;
+      // Prefer bytes already on disk; for pure-inline payloads the proposal digest must match
+      // the actual content hash, otherwise resolveDispatchArtifactContent would later rewrite
+      // sha256 while commit still trusts item.sha256.
+      let contentSha256: string | undefined;
+      if (!artifact && inlineArtifact?.contentBase64 !== undefined) {
+        if (!isBase64Like(inlineArtifact.contentBase64)) {
+          return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+        }
+        const content = Buffer.from(inlineArtifact.contentBase64, 'base64');
+        if (content.length > DISPATCH_INLINE_ARTIFACT_CONTENT_MAX_BYTES) {
+          return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+        }
+        contentSha256 = createHash('sha256').update(content).digest('hex');
+        if (contentSha256 !== item.sha256
+          || (inlineArtifact.sha256 != null && inlineArtifact.sha256 !== contentSha256)
+          || (inlineArtifact.sizeBytes != null && inlineArtifact.sizeBytes !== content.byteLength)) {
+          return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+        }
+      }
       const candidate = artifact ?? inlineArtifact;
+      const candidateSha256 = artifact?.sha256 ?? contentSha256 ?? inlineArtifact?.sha256;
       if (!artifact
         && !inlineArtifact) {
         return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
       }
       if (!candidate
         || (artifact && artifact.channelId !== input.dispatch.channelId)
-        || candidate.sha256 !== item.sha256
+        || candidateSha256 !== item.sha256
         || !isMarkdownArtifact({ ...candidate, mimeType: candidate.mimeType ?? 'application/octet-stream' })
         || candidate.role !== 'intermediate'
         || candidate.sourceRoot?.kind !== 'configured_output'
@@ -11991,6 +12053,16 @@ async function commitProjectDocumentInputSetResults(input: {
     const artifact = input.committedArtifacts.find((candidate) => candidate.id === item.artifactId);
     if (!artifact) {
       await record(item, { status: 'failed', error: 'PROJECT_DOCUMENT_RESULT_ARTIFACT_NOT_COMMITTED' });
+      continue;
+    }
+    // Authoritative store digest wins: reject proposals whose claimed sha256 no longer matches
+    // the Artifact that was actually persisted (covers forged inline metadata and rewrite races).
+    if (artifact.sha256 && artifact.sha256 !== item.sha256) {
+      await record(item, {
+        status: 'failed',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_ARTIFACT_DIGEST_MISMATCH',
+      });
       continue;
     }
     const normalizedRelativePath = artifact.relativePath
