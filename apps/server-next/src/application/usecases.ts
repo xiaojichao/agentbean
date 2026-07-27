@@ -2112,6 +2112,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (updated.error === 'LAST_ADMIN') {
           return makeFailure('CONFLICT', 'Cannot demote the last admin');
         }
+        if (updated.error === 'EMAIL_CONFLICT') {
+          return makeFailure('CONFLICT', 'Email already in use');
+        }
         return makeFailure('NOT_FOUND', 'User not found');
       }
 

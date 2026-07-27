@@ -270,6 +270,39 @@ describe('admin update user profile and role', () => {
     ).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
   });
 
+  test('duplicate email returns CONFLICT instead of throwing', async () => {
+    const { app, repositories } = await seedAdmin();
+    await seedUser(repositories, {
+      id: 'user-1',
+      username: 'alice',
+      email: 'alice@example.com',
+    });
+    await repositories.users.create({
+      id: 'user-2',
+      username: 'bob',
+      role: 'user',
+      email: 'bob@example.com',
+      passwordHash: 'x',
+      createdAt: 6,
+      updatedAt: 6,
+    });
+
+    const updated = await app.updateAdminUser({
+      adminUserId: 'admin-1',
+      targetUserId: 'user-2',
+      email: 'alice@example.com',
+    });
+
+    expect(updated).toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    expect(updated.ok === false && updated.message).toMatch(/email|邮箱|already/i);
+
+    const bob = await repositories.users.getById('user-2');
+    expect(bob?.email).toBe('bob@example.com');
+  });
+
   test('self-delete and system identity remain protected', async () => {
     const { app, repositories } = await seedAdmin();
     await repositories.users.create({

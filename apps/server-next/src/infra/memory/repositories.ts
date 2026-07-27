@@ -408,6 +408,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             return { ok: false as const, error: 'LAST_ADMIN' as const };
           }
         }
+        const nextEmail =
+          input.email !== undefined
+            ? (input.email === null || input.email === '' ? null : input.email)
+            : undefined;
+        if (nextEmail) {
+          const emailTaken = Array.from(users.values()).some(
+            (entry) => entry.id !== input.userId && entry.email === nextEmail,
+          );
+          if (emailTaken) {
+            return { ok: false as const, error: 'EMAIL_CONFLICT' as const };
+          }
+        }
         const updated = {
           ...user,
           updatedAt: input.updatedAt,
@@ -415,7 +427,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             ? { displayName: input.displayName === null || input.displayName === '' ? undefined : input.displayName }
             : {}),
           ...(input.email !== undefined
-            ? { email: input.email === null || input.email === '' ? null : input.email }
+            ? { email: nextEmail ?? null }
             : {}),
           ...(input.role !== undefined ? { role: input.role } : {}),
         };

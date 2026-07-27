@@ -191,7 +191,7 @@ export interface UserRepository {
     updatedAt: UnixMs;
   }): Promise<
     | { ok: true; user: UserRecord }
-    | { ok: false; error: 'NOT_FOUND' | 'LAST_ADMIN' }
+    | { ok: false; error: 'NOT_FOUND' | 'LAST_ADMIN' | 'EMAIL_CONFLICT' }
   >;
   updatePassword(input: { userId: ID; passwordHash: string; updatedAt: UnixMs }): Promise<UserRecord | null>;
   delete(userId: ID): Promise<void>;
