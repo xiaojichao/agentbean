@@ -558,6 +558,54 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.description, input.updatedAt, input.userId);
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
       },
+      async updateProfile(input) {
+        try {
+          return globalDb.transaction(() => {
+            const current = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+            if (!current) return { ok: false as const, error: 'NOT_FOUND' as const };
+            const demotingAdmin = input.role === 'user' && current.role === 'admin';
+            if (demotingAdmin) {
+              const adminCountRow = globalDb
+                .prepare(`SELECT COUNT(*) AS c FROM users WHERE role = 'admin'`)
+                .get() as { c: number } | undefined;
+              const adminCount = Number(adminCountRow?.c ?? 0);
+              if (adminCount <= 1) {
+                return { ok: false as const, error: 'LAST_ADMIN' as const };
+              }
+            }
+            const displayName =
+              input.displayName !== undefined
+                ? (input.displayName === null || input.displayName === '' ? null : input.displayName)
+                : (current.displayName ?? null);
+            const email =
+              input.email !== undefined
+                ? (input.email === null || input.email === '' ? null : input.email)
+                : (current.email ?? null);
+            if (email) {
+              const taken = globalDb
+                .prepare('SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1')
+                .get(email, input.userId);
+              if (taken) {
+                return { ok: false as const, error: 'EMAIL_CONFLICT' as const };
+              }
+            }
+            const role = input.role !== undefined ? input.role : current.role;
+            globalDb
+              .prepare('UPDATE users SET display_name = ?, email = ?, role = ?, updated_at = ? WHERE id = ?')
+              .run(displayName, email, role, input.updatedAt, input.userId);
+            const updated = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+            if (!updated) return { ok: false as const, error: 'NOT_FOUND' as const };
+            return { ok: true as const, user: updated };
+          })();
+        } catch (error) {
+          // Defense: unique index on users.email may still fire under races.
+          const message = error instanceof Error ? error.message : String(error);
+          if (/UNIQUE constraint failed: users\.email/i.test(message)) {
+            return { ok: false as const, error: 'EMAIL_CONFLICT' as const };
+          }
+          throw error;
+        }
+      },
       async updatePassword(input) {
         globalDb
           .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')

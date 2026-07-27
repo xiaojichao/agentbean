@@ -177,6 +177,22 @@ export interface UserRepository {
   listAll(): Promise<UserRecord[]>;
   setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
   updateDescription(input: { userId: ID; description: string | null; updatedAt: UnixMs }): Promise<UserRecord | null>;
+  /**
+   * System-admin profile patch: only provided fields are applied.
+   * `displayName` / `email` null clears the field; `role` replaces system role.
+   * When demoting admin→user, the admin count check and role write are atomic so
+   * concurrent demotions cannot leave the system with zero admins.
+   */
+  updateProfile(input: {
+    userId: ID;
+    displayName?: string | null;
+    email?: string | null;
+    role?: UserRecord['role'];
+    updatedAt: UnixMs;
+  }): Promise<
+    | { ok: true; user: UserRecord }
+    | { ok: false; error: 'NOT_FOUND' | 'LAST_ADMIN' | 'EMAIL_CONFLICT' }
+  >;
   updatePassword(input: { userId: ID; passwordHash: string; updatedAt: UnixMs }): Promise<UserRecord | null>;
   delete(userId: ID): Promise<void>;
 }

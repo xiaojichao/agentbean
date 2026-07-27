@@ -570,6 +570,77 @@ export function registerWebSocketHandlers(
       ack?.(socketErrorAck(error, WEB_EVENTS.admin.createUser));
     }
   });
+  socket.on(WEB_EVENTS.admin.updateUser, async (payload, ack) => {
+    try {
+      const adminUserId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const targetUserId = payloadString(payload, 'userId') ?? payloadString(payload, 'targetUserId');
+      if (!targetUserId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+      const hasDisplayName = Object.prototype.hasOwnProperty.call(record, 'displayName');
+      const hasEmail = Object.prototype.hasOwnProperty.call(record, 'email');
+      const hasRole = Object.prototype.hasOwnProperty.call(record, 'role');
+      const roleRaw = hasRole ? payloadString(payload, 'role') : undefined;
+      if (hasRole && roleRaw !== 'admin' && roleRaw !== 'user') {
+        ack?.(makeFailure('VALIDATION_ERROR', 'role must be user or admin'));
+        return;
+      }
+      const role = roleRaw === 'admin' || roleRaw === 'user' ? roleRaw : undefined;
+      const displayName =
+        hasDisplayName
+          ? (record.displayName === null
+            ? null
+            : typeof record.displayName === 'string'
+              ? record.displayName
+              : undefined)
+          : undefined;
+      const email =
+        hasEmail
+          ? (record.email === null
+            ? null
+            : typeof record.email === 'string'
+              ? record.email
+              : undefined)
+          : undefined;
+      if (hasDisplayName && displayName === undefined) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'displayName must be a string or null'));
+        return;
+      }
+      if (hasEmail && email === undefined) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'email must be a string or null'));
+        return;
+      }
+      ack?.(await app.updateAdminUser({
+        adminUserId,
+        targetUserId,
+        ...(hasDisplayName ? { displayName: displayName ?? null } : {}),
+        ...(hasEmail ? { email: email ?? null } : {}),
+        ...(role ? { role } : {}),
+      }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.updateUser));
+    }
+  });
+  socket.on(WEB_EVENTS.admin.resetUserPassword, async (payload, ack) => {
+    try {
+      const adminUserId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const targetUserId = payloadString(payload, 'userId') ?? payloadString(payload, 'targetUserId');
+      const newPassword = payloadString(payload, 'newPassword') ?? payloadString(payload, 'password');
+      if (!targetUserId || !newPassword) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId and newPassword are required'));
+        return;
+      }
+      ack?.(await app.resetAdminUserPassword({
+        adminUserId,
+        targetUserId,
+        newPassword,
+      }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.resetUserPassword));
+    }
+  });
   socket.on(WEB_EVENTS.admin.deleteTeam, async (payload, ack) => {
     try {
       const userId = await requireAuthenticatedSocketUser(options.authenticatedUser);

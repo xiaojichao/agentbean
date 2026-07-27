@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save, Plus } from 'lucide-react';
+import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save, Plus, Pencil, KeyRound } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -123,6 +123,8 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
   const [selectedDevice, setSelectedDevice] = useState<AdminDevice | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AdminAgent | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
+  const [resetPasswordUser, setResetPasswordUser] = useState<AdminUser | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -292,6 +294,56 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
     }
   };
 
+  const handleUpdateUser = async (input: {
+    userId: string;
+    displayName: string;
+    email: string;
+    role: 'user' | 'admin';
+  }) => {
+    const socket = getWebSocket();
+    const res = await emitWithTimeout(socket, 'admin:update-user', {
+      userId: input.userId,
+      displayName: input.displayName.trim() ? input.displayName.trim() : null,
+      email: input.email.trim() ? input.email.trim() : null,
+      role: input.role,
+    });
+    if (!res?.ok) {
+      const message = res?.message ?? res?.error ?? '更新用户失败';
+      throw new Error(message);
+    }
+    setEditingUser(null);
+    if (res.user) {
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === res.user.id
+            ? {
+                ...user,
+                ...res.user,
+                // JSON may omit undefined; force clear when server returns null/absent.
+                displayName: res.user.displayName ?? undefined,
+                email: res.user.email ?? null,
+              }
+            : user,
+        ),
+      );
+    } else {
+      await loadData('users', page);
+    }
+  };
+
+  const handleResetUserPassword = async (input: { userId: string; newPassword: string }) => {
+    const socket = getWebSocket();
+    const res = await emitWithTimeout(socket, 'admin:reset-user-password', {
+      userId: input.userId,
+      newPassword: input.newPassword,
+    });
+    if (!res?.ok) {
+      const message = res?.message ?? res?.error ?? '重置密码失败';
+      throw new Error(message);
+    }
+    setResetPasswordUser(null);
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
 
   return (
@@ -340,7 +392,14 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
         )}
         {loading && <div className="py-8 text-center text-sm text-neutral-400">加载中...</div>}
         {!loading && section === 'teams' && <TeamsTable teams={teams} onDelete={(id) => handleDelete('team', id)} />}
-        {!loading && section === 'users' && <UsersTable users={users} onDelete={(id) => handleDelete('user', id)} />}
+        {!loading && section === 'users' && (
+          <UsersTable
+            users={users}
+            onEdit={setEditingUser}
+            onResetPassword={setResetPasswordUser}
+            onDelete={(id) => handleDelete('user', id)}
+          />
+        )}
         {!loading && section === 'devices' && <DevicesTable devices={devices} teams={teams} onSelect={setSelectedDevice} />}
         {!loading && section === 'agents' && (
           <AgentsTable agents={agents} teams={teams} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />
@@ -368,6 +427,20 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
           <CreateUserDialog
             onClose={() => setShowCreateUser(false)}
             onCreate={handleCreateUser}
+          />
+        )}
+        {editingUser && (
+          <EditUserDialog
+            user={editingUser}
+            onClose={() => setEditingUser(null)}
+            onSave={handleUpdateUser}
+          />
+        )}
+        {resetPasswordUser && (
+          <ResetPasswordDialog
+            user={resetPasswordUser}
+            onClose={() => setResetPasswordUser(null)}
+            onReset={handleResetUserPassword}
           />
         )}
       </div>
@@ -685,20 +758,59 @@ function TeamsTable({ teams, onDelete }: { teams: AdminTeam[]; onDelete: (id: st
   );
 }
 
-function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: string) => void }) {
+function UsersTable({
+  users,
+  onEdit,
+  onResetPassword,
+  onDelete,
+}: {
+  users: AdminUser[];
+  onEdit: (user: AdminUser) => void;
+  onResetPassword: (user: AdminUser) => void;
+  onDelete: (id: string) => void;
+}) {
   if (users.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无用户</div>;
   return (
     <Table headers={['用户名', '显示名', '邮箱', '角色', '创建时间', '']}>
-      {users.map((u) => (
-        <tr key={u.id} className="hover:bg-neutral-50" data-smoke="admin-user-row" data-user-id={u.id} data-username={u.username} data-user-role={u.role}>
-          <td className="px-4 py-2.5 font-medium">{u.username}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-600">{u.displayName ?? '—'}</td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{u.email ?? '—'}</td>
-          <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-neutral-100 text-neutral-500'}`}>{u.role === 'admin' ? '管理员' : '用户'}</span></td>
-          <td className="px-4 py-2.5 text-xs text-neutral-500">{new Date(u.createdAt).toLocaleDateString()}</td>
-          <td className="px-4 py-2.5"><DeleteButton onClick={() => onDelete(u.id)} disabled={u.username === 'admin' || u.username === 'system'} label="用户" /></td>
-        </tr>
-      ))}
+      {users.map((u) => {
+        const protectedUser = u.username === 'system' || u.id === 'system';
+        return (
+          <tr key={u.id} className="hover:bg-neutral-50" data-smoke="admin-user-row" data-user-id={u.id} data-username={u.username} data-user-role={u.role}>
+            <td className="px-4 py-2.5 font-medium">{u.username}</td>
+            <td className="px-4 py-2.5 text-xs text-neutral-600">{u.displayName ?? '—'}</td>
+            <td className="px-4 py-2.5 text-xs text-neutral-500">{u.email ?? '—'}</td>
+            <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-neutral-100 text-neutral-500'}`}>{u.role === 'admin' ? '管理员' : '用户'}</span></td>
+            <td className="px-4 py-2.5 text-xs text-neutral-500">{new Date(u.createdAt).toLocaleDateString()}</td>
+            <td className="px-4 py-2.5">
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={() => onEdit(u)}
+                  disabled={protectedUser}
+                  className="inline-flex items-center gap-1 rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  data-smoke="admin-edit-user-open"
+                  data-user-id={u.id}
+                  title="编辑资料"
+                >
+                  <Pencil size={12} /> 编辑
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onResetPassword(u)}
+                  disabled={protectedUser}
+                  className="inline-flex items-center gap-1 rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  data-smoke="admin-reset-password-open"
+                  data-user-id={u.id}
+                  title="重置密码"
+                >
+                  <KeyRound size={12} /> 重置密码
+                </button>
+                <DeleteButton onClick={() => onDelete(u.id)} disabled={u.username === 'admin' || protectedUser} label="用户" />
+              </div>
+            </td>
+          </tr>
+        );
+      })}
     </Table>
   );
 }
@@ -850,6 +962,228 @@ function CreateUserDialog({
               data-smoke="admin-create-user-submit"
             >
               <Save size={14} /> {submitting ? '创建中…' : '创建'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EditUserDialog({
+  user,
+  onClose,
+  onSave,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onSave: (input: {
+    userId: string;
+    displayName: string;
+    email: string;
+    role: 'user' | 'admin';
+  }) => Promise<void>;
+}) {
+  const [displayName, setDisplayName] = useState(user.displayName ?? '');
+  const [email, setEmail] = useState(user.email ?? '');
+  const [role, setRole] = useState<'user' | 'admin'>(user.role === 'admin' ? 'admin' : 'user');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const submit = async (event: { preventDefault(): void }) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await onSave({
+        userId: user.id,
+        displayName,
+        email,
+        role,
+      });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '更新用户失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-smoke="admin-edit-user-dialog">
+      <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+          <h2 className="text-sm font-semibold">编辑用户 · {user.username}</h2>
+          <button type="button" onClick={onClose} className="rounded p-1 text-neutral-500 hover:bg-neutral-100" aria-label="关闭">
+            <X size={16} />
+          </button>
+        </div>
+        <form onSubmit={(e) => void submit(e)} className="space-y-4 px-4 py-4">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">用户名</span>
+            <input
+              value={user.username}
+              disabled
+              className="w-full rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-500"
+              data-smoke="admin-edit-user-username"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">显示名</span>
+            <input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="off"
+              data-smoke="admin-edit-user-display-name"
+              placeholder="可选"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">邮箱</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="off"
+              data-smoke="admin-edit-user-email"
+              placeholder="可选"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">系统角色</span>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value === 'admin' ? 'admin' : 'user')}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              data-smoke="admin-edit-user-role"
+            >
+              <option value="user">用户</option>
+              <option value="admin">管理员</option>
+            </select>
+          </label>
+          {formError && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="admin-edit-user-error">
+              {formError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
+              data-smoke="admin-edit-user-submit"
+            >
+              <Save size={14} /> {submitting ? '保存中…' : '保存'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordDialog({
+  user,
+  onClose,
+  onReset,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onReset: (input: { userId: string; newPassword: string }) => Promise<void>;
+}) {
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const submit = async (event: { preventDefault(): void }) => {
+    event.preventDefault();
+    if (newPassword.length < 6) {
+      setFormError('新密码至少 6 位');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setFormError('两次输入的密码不一致');
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await onReset({ userId: user.id, newPassword });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '重置密码失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-smoke="admin-reset-password-dialog">
+      <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+          <h2 className="text-sm font-semibold">重置密码 · {user.username}</h2>
+          <button type="button" onClick={onClose} className="rounded p-1 text-neutral-500 hover:bg-neutral-100" aria-label="关闭">
+            <X size={16} />
+          </button>
+        </div>
+        <form onSubmit={(e) => void submit(e)} className="space-y-4 px-4 py-4">
+          <p className="text-xs text-neutral-500">
+            将为该用户设置新密码。旧密码立即失效；用户需使用新密码登录。
+          </p>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">新密码</span>
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="new-password"
+              data-smoke="admin-reset-password-new"
+              required
+              minLength={6}
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">确认新密码</span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="new-password"
+              data-smoke="admin-reset-password-confirm"
+              required
+              minLength={6}
+            />
+          </label>
+          {formError && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="admin-reset-password-error">
+              {formError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
+              data-smoke="admin-reset-password-submit"
+            >
+              <KeyRound size={14} /> {submitting ? '重置中…' : '确认重置'}
             </button>
           </div>
         </form>

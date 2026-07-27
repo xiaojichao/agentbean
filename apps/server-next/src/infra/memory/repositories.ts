@@ -398,6 +398,42 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         users.set(input.userId, updated);
         return updated;
       },
+      async updateProfile(input) {
+        const user = users.get(input.userId);
+        if (!user) return { ok: false as const, error: 'NOT_FOUND' as const };
+        const demotingAdmin = input.role === 'user' && user.role === 'admin';
+        if (demotingAdmin) {
+          const adminCount = Array.from(users.values()).filter((entry) => entry.role === 'admin').length;
+          if (adminCount <= 1) {
+            return { ok: false as const, error: 'LAST_ADMIN' as const };
+          }
+        }
+        const nextEmail =
+          input.email !== undefined
+            ? (input.email === null || input.email === '' ? null : input.email)
+            : undefined;
+        if (nextEmail) {
+          const emailTaken = Array.from(users.values()).some(
+            (entry) => entry.id !== input.userId && entry.email === nextEmail,
+          );
+          if (emailTaken) {
+            return { ok: false as const, error: 'EMAIL_CONFLICT' as const };
+          }
+        }
+        const updated = {
+          ...user,
+          updatedAt: input.updatedAt,
+          ...(input.displayName !== undefined
+            ? { displayName: input.displayName === null || input.displayName === '' ? undefined : input.displayName }
+            : {}),
+          ...(input.email !== undefined
+            ? { email: nextEmail ?? null }
+            : {}),
+          ...(input.role !== undefined ? { role: input.role } : {}),
+        };
+        users.set(input.userId, updated);
+        return { ok: true as const, user: updated };
+      },
       async updatePassword(input) {
         const user = users.get(input.userId);
         if (!user) return null;
