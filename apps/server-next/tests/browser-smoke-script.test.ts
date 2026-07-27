@@ -113,6 +113,25 @@ describe('AgentBean Next browser smoke script', () => {
     ]);
   });
 
+  test('admin Console browser smoke covers middle-nav sections, PI at dashboard/pi, and settings redirect', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+
+    expect(source).toContain('exerciseWebUiAdminDashboardBusinessSmoke');
+    expect(source).toContain('waitForWebUiAdminConsoleNav');
+    expect(source).toContain('waitForWebUiAdminSectionPath');
+    expect(source).toContain('waitForWebUiAdminPiPage');
+    expect(source).toContain('admin-console-nav');
+    expect(source).toContain('admin-tab-pi');
+    expect(source).toContain('admin-pi-page');
+    expect(source).toContain('dashboard/pi');
+    expect(source).toContain('settings?tab=pi');
+    expect(source).toContain('settings-tab-pi');
+    // Section path switches for all five Console sections
+    for (const section of ['teams', 'users', 'devices', 'agents', 'pi'] as const) {
+      expect(source).toContain(`section: '${section}'`);
+    }
+  });
+
   test('exercises App Router page routes in the browser', async () => {
     const { exerciseWebUiRouteSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];

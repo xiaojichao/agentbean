@@ -72,6 +72,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextRunsPanel = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/RunsPanel.tsx'), 'utf8');
   const webNextRunDetailPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/runs/[runId]/page.tsx'), 'utf8');
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/page.tsx'), 'utf8');
+  const webNextSettingsTabs = readFileSync(join(root, 'apps/web-next/lib/settings-tabs.ts'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
   const daemonInstallSmokeScript = readFileSync(
     join(root, 'scripts/smoke-agentbean-next-daemon-install.mjs'),
@@ -682,10 +683,18 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('admin-device-owner-select') &&
         browserSmokeScript.includes('admin-device-owner-save') &&
         browserSmokeScript.includes('admin-agent-row') &&
+        browserSmokeScript.includes('admin-console-nav') &&
+        browserSmokeScript.includes('waitForWebUiAdminConsoleNav') &&
+        browserSmokeScript.includes('waitForWebUiAdminSectionPath') &&
+        browserSmokeScript.includes('waitForWebUiAdminPiPage') &&
         browserSmokeScript.includes('admin-tab-pi') &&
         browserSmokeScript.includes('admin-pi-page') &&
         browserSmokeScript.includes('settings-pi-panel') &&
+        browserSmokeScript.includes('dashboard/pi') &&
+        browserSmokeScript.includes('settings?tab=pi') &&
+        browserSmokeScript.includes('settings-tab-pi') &&
         webNextDashboardPage.includes('data-smoke="admin-dashboard-page"') &&
+        webNextDashboardPage.includes('data-smoke="admin-console-nav"') &&
         webNextDashboardPage.includes("key: 'users'") &&
         webNextDashboardPage.includes("key: 'devices'") &&
         webNextDashboardPage.includes("key: 'agents'") &&
@@ -698,9 +707,17 @@ export function collectAgentBeanNextReadinessChecks({
         webNextDashboardPage.includes("section === 'teams'") &&
         webNextDashboardPage.includes('admin-pi-page') &&
         webNextDashboardPage.includes('PiManagementPanel') &&
+        webNextSettingsPage.includes('isLegacyPiSettingsTab') &&
+        webNextSettingsPage.includes('dashboard/pi') &&
+        !webNextSettingsPage.includes("id: 'pi'") &&
+        webNextSettingsTabs.includes('isLegacyPiSettingsTab') &&
+        webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'memory' | 'runs' | 'releases'") &&
+        !webNextSettingsTabs.includes("| 'pi'") &&
         verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
+        verificationMatrix.includes('System Admin Console') &&
+        verificationMatrix.includes('dashboard/pi') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
-      'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, agent ownership projection, and PI console migration',
+      'Admin Console parity must stay covered by browser smoke for middle-nav sections, inventory rows, owner transfer, PI at dashboard/pi, and settings without a PI primary entry',
     ),
     check(
       'phase-0-management-boundary-regression',
