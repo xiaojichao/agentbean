@@ -1409,10 +1409,16 @@ describe('server-next Socket.IO namespaces', () => {
 
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listTeams, {})).resolves.toMatchObject({
       ok: true,
+      page: 1,
+      pageSize: 20,
+      total: 1,
       teams: [{ id: 'team-admin', name: 'AgentBean', members: expect.arrayContaining([expect.objectContaining({ userId: 'member-user' })]) }],
     });
     await expect(admin.emitWithAck(WEB_EVENTS.admin.listUsers, {})).resolves.toMatchObject({
       ok: true,
+      page: 1,
+      pageSize: 20,
+      total: 3,
       users: expect.arrayContaining([
         expect.objectContaining({ id: 'admin-user', username: 'admin', role: 'admin' }),
         expect.objectContaining({ id: 'member-user', username: 'member', role: 'user' }),
@@ -1421,6 +1427,9 @@ describe('server-next Socket.IO namespaces', () => {
     const adminDevicesResult = await admin.emitWithAck(WEB_EVENTS.admin.listDevices, {});
     expect(adminDevicesResult).toMatchObject({
       ok: true,
+      page: 1,
+      pageSize: 20,
+      total: 1,
       devices: [expect.objectContaining({
         id: 'device-admin',
         name: 'Mac Studio',
@@ -1452,6 +1461,9 @@ describe('server-next Socket.IO namespaces', () => {
     const adminAgentsResult = await admin.emitWithAck(WEB_EVENTS.admin.listAgents, {});
     expect(adminAgentsResult).toMatchObject({
       ok: true,
+      page: 1,
+      pageSize: 20,
+      total: 1,
       agents: [expect.objectContaining({
         id: 'agent-admin',
         name: 'Drama',

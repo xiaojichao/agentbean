@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { ADMIN_CONSOLE_NAV } from '../components/admin-console-panel';
+import { ADMIN_CONSOLE_NAV, ADMIN_LIST_DEFAULT_PAGE_SIZE } from '../components/admin-console-panel';
 
 describe('System Admin Console shell', () => {
   test('exposes five console nav sections including PI Agent management', () => {
@@ -55,5 +55,18 @@ describe('System Admin Console shell', () => {
     expect(panel).toContain('admin:list-users');
     expect(panel).toContain('admin:transfer-device-owner');
     expect(panel).toContain('data-smoke="admin-agent-row"');
+  });
+
+  test('inventory lists request server-side pagination with default pageSize 20', () => {
+    expect(ADMIN_LIST_DEFAULT_PAGE_SIZE).toBe(20);
+    const panel = readFileSync(
+      new URL('../components/admin-console-panel.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(panel).toContain('page: pageToLoad, pageSize');
+    expect(panel).toContain('data-smoke="admin-list-pagination"');
+    expect(panel).toContain('data-smoke="admin-list-prev"');
+    expect(panel).toContain('data-smoke="admin-list-next"');
+    expect(panel).toContain('ADMIN_LIST_DEFAULT_PAGE_SIZE');
   });
 });
