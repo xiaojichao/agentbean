@@ -74,6 +74,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextSettingsPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/settings/page.tsx'), 'utf8');
   const webNextSettingsTabs = readFileSync(join(root, 'apps/web-next/lib/settings-tabs.ts'), 'utf8');
   const browserSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-browser.mjs'), 'utf8');
+  const businessSmokeScript = readFileSync(join(root, 'scripts/smoke-agentbean-next-business.mjs'), 'utf8');
   const daemonInstallSmokeScript = readFileSync(
     join(root, 'scripts/smoke-agentbean-next-daemon-install.mjs'),
     'utf8',
@@ -165,8 +166,14 @@ export function collectAgentBeanNextReadinessChecks({
         'node scripts/smoke-agentbean-next-business.mjs' &&
         cutoverRunbook.includes('npm run smoke:agentbean-next-business') &&
         cutoverRunbook.includes('custom agent') &&
-        cutoverRunbook.includes('agent reply'),
-      'root package.json and production runbook must expose the AgentBean Next business smoke',
+        cutoverRunbook.includes('agent reply') &&
+        businessSmokeScript.includes('teardownSmokeResources') &&
+        businessSmokeScript.includes('business-smoke-teardown') &&
+        businessSmokeScript.includes('auth:delete-account') &&
+        contractsSocket.includes("deleteAccount: 'auth:delete-account'") &&
+        serverNextUseCases.includes('deleteOwnAccount') &&
+        serverNextSocketHandlers.includes('WEB_EVENTS.auth.deleteAccount'),
+      'root package.json and production runbook must expose the AgentBean Next business smoke with post-run teardown',
     ),
     check(
       'persistence-smoke-script',

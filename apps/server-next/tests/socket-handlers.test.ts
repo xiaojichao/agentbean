@@ -130,6 +130,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.auth.login,
       WEB_EVENTS.auth.whoami,
       WEB_EVENTS.auth.changePassword,
+      WEB_EVENTS.auth.deleteAccount,
       WEB_EVENTS.team.list,
       WEB_EVENTS.team.create,
       WEB_EVENTS.team.switch,

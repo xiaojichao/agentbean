@@ -4,9 +4,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const WEB_EVENTS = {
-  auth: { register: 'auth:register', login: 'auth:login' },
-  device: { list: 'device:list' },
-  agent: { subscribe: 'agents:subscribe', create: 'agent:create' },
+  auth: { register: 'auth:register', login: 'auth:login', deleteAccount: 'auth:delete-account' },
+  device: { list: 'device:list', delete: 'device:delete' },
+  agent: { subscribe: 'agents:subscribe', create: 'agent:create', delete: 'agent:delete' },
+  team: { delete: 'team:delete' },
   channel: { subscribe: 'channels:subscribe', message: 'channel:message' },
   message: { send: 'message:send' },
 };
@@ -36,11 +37,16 @@ export async function runAgentBeanNextBusinessSmoke({
   const checks = [check('business-url-present', true, 'AgentBean Next business smoke target URL is configured')];
   const sockets = [];
   const pendingAgentResultsByDispatchId = new Map();
+  /** @type {{ userId?: string, teamId?: string, deviceId?: string, agentId?: string, webSocket?: any }} */
+  const created = {};
+  /** @type {ReturnType<typeof summarizeBusinessSmoke> | undefined} */
+  let summary;
 
   try {
     const webSocket = await connectSocket(ioFactory, new URL('/web', normalizedBaseUrl).toString(), timeoutMs);
     const agentSocket = await connectSocket(ioFactory, new URL('/agent', normalizedBaseUrl).toString(), timeoutMs);
     sockets.push(webSocket, agentSocket);
+    created.webSocket = webSocket;
     checks.push(check('business-sockets-connected', true, 'Web and daemon sockets must connect'));
 
     const session = await createSmokeSession(webSocket, suffix, timeoutMs);
@@ -54,140 +60,238 @@ export async function runAgentBeanNextBusinessSmoke({
       ),
     );
     if (!session.ok) {
-      return summarizeBusinessSmoke(checks);
-    }
+      summary = summarizeBusinessSmoke(checks);
+    } else {
+      const userId = session.user.id;
+      const teamId = session.currentTeam.id;
+      const channelId = session.defaultChannel.id;
+      created.userId = userId;
+      created.teamId = teamId;
 
-    const userId = session.user.id;
-    const teamId = session.currentTeam.id;
-    const channelId = session.defaultChannel.id;
+      await emitAck(webSocket, WEB_EVENTS.channel.subscribe, { userId, teamId }, timeoutMs);
+      await emitAck(webSocket, WEB_EVENTS.agent.subscribe, { userId, teamId }, timeoutMs);
+      await emitAck(webSocket, WEB_EVENTS.device.list, { userId, teamId }, timeoutMs);
 
-    await emitAck(webSocket, WEB_EVENTS.channel.subscribe, { userId, teamId }, timeoutMs);
-    await emitAck(webSocket, WEB_EVENTS.agent.subscribe, { userId, teamId }, timeoutMs);
-    await emitAck(webSocket, WEB_EVENTS.device.list, { userId, teamId }, timeoutMs);
+      agentSocket.on(AGENT_EVENTS.dispatch.request, (request) => {
+        const resultAck = emitAck(agentSocket, AGENT_EVENTS.dispatch.result, {
+          dispatchId: request.id,
+          agentId: request.agentId,
+          body: `business-smoke:${request.prompt}`,
+        }, timeoutMs);
+        pendingAgentResultsByDispatchId.set(request.id, resultAck);
+      });
 
-    agentSocket.on(AGENT_EVENTS.dispatch.request, (request) => {
-      const resultAck = emitAck(agentSocket, AGENT_EVENTS.dispatch.result, {
-        dispatchId: request.id,
-        agentId: request.agentId,
-        body: `business-smoke:${request.prompt}`,
+      const deviceAck = await emitAck(agentSocket, AGENT_EVENTS.device.hello, {
+        teamId,
+        ownerId: userId,
+        machineId: `agentbean-business-smoke:${suffix}`,
+        profileId: 'business-smoke',
+        hostname: 'agentbean-business-smoke',
       }, timeoutMs);
-      pendingAgentResultsByDispatchId.set(request.id, resultAck);
-    });
+      const deviceId = readNestedString(deviceAck, ['device', 'id']);
+      checks.push(
+        check(
+          'business-daemon-hello',
+          Boolean(deviceId),
+          deviceId
+            ? 'Daemon socket must announce an online device in the smoke team'
+            : `Daemon hello did not return a device id: ${formatAck(deviceAck)}`,
+        ),
+      );
+      if (!deviceId) {
+        summary = summarizeBusinessSmoke(checks);
+      } else {
+        created.deviceId = deviceId;
 
-    const deviceAck = await emitAck(agentSocket, AGENT_EVENTS.device.hello, {
-      teamId,
-      ownerId: userId,
-      machineId: `agentbean-business-smoke:${suffix}`,
-      profileId: 'business-smoke',
-      hostname: 'agentbean-business-smoke',
-    }, timeoutMs);
-    const deviceId = readNestedString(deviceAck, ['device', 'id']);
-    checks.push(
-      check(
-        'business-daemon-hello',
-        Boolean(deviceId),
-        deviceId
-          ? 'Daemon socket must announce an online device in the smoke team'
-          : `Daemon hello did not return a device id: ${formatAck(deviceAck)}`,
-      ),
-    );
-    if (!deviceId) {
-      return summarizeBusinessSmoke(checks);
+        const runtimesAck = await emitAck(agentSocket, AGENT_EVENTS.device.runtimes, {
+          teamId,
+          deviceId,
+          runtimes: [{
+            adapterKind: 'codex',
+            name: 'Codex CLI',
+            command: 'agentbean-business-smoke',
+            installed: true,
+          }],
+        }, timeoutMs);
+        const runtimeId = Array.isArray(runtimesAck?.runtimes) ? runtimesAck.runtimes[0]?.id : undefined;
+        checks.push(
+          check(
+            'business-runtime-report',
+            typeof runtimeId === 'string',
+            typeof runtimeId === 'string'
+              ? 'Daemon socket must report a runtime that can host a custom agent'
+              : `Runtime report did not return a runtime id: ${formatAck(runtimesAck)}`,
+          ),
+        );
+        if (typeof runtimeId !== 'string') {
+          summary = summarizeBusinessSmoke(checks);
+        } else {
+          const agentName = `SmokeCodex${suffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+          const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+            userId,
+            teamId,
+            deviceId,
+            runtimeId,
+            name: agentName,
+            env: { AGENTBEAN_BUSINESS_SMOKE: '1' },
+          }, timeoutMs);
+          const agentId = readNestedString(agentAck, ['agent', 'id']);
+          checks.push(
+            check(
+              'business-custom-agent-create',
+              Boolean(agentId),
+              agentId
+                ? 'Web socket must create a custom agent on the daemon runtime'
+                : `Custom agent create did not return an agent id: ${formatAck(agentAck)}`,
+            ),
+          );
+          if (!agentId) {
+            summary = summarizeBusinessSmoke(checks);
+          } else {
+            created.agentId = agentId;
+
+            const expectedReply = `business-smoke:@${agentName} hello`;
+            const replyPromise = waitForChannelMessage(webSocket, {
+              channelId,
+              body: expectedReply,
+              timeoutMs,
+            });
+            const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
+              userId,
+              teamId,
+              channelId,
+              body: `@${agentName} hello`,
+            }, timeoutMs);
+            const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
+            checks.push(
+              check(
+                'business-message-dispatch',
+                typeof dispatchId === 'string',
+                typeof dispatchId === 'string'
+                  ? 'Message send must create a dispatch for the custom agent'
+                  : `Message send did not return a dispatch id: ${formatAck(sendAck)}`,
+              ),
+            );
+            if (typeof dispatchId !== 'string') {
+              summary = summarizeBusinessSmoke(checks);
+            } else {
+              await waitForDispatchResultAck(pendingAgentResultsByDispatchId, dispatchId, timeoutMs);
+              const reply = await replyPromise;
+              checks.push(
+                check(
+                  'business-agent-reply-visible',
+                  reply.ok,
+                  reply.ok
+                    ? 'Agent reply must be visible on the subscribed web channel'
+                    : reply.message,
+                ),
+              );
+              summary = summarizeBusinessSmoke(checks);
+            }
+          }
+        }
+      }
     }
-
-    const runtimesAck = await emitAck(agentSocket, AGENT_EVENTS.device.runtimes, {
-      teamId,
-      deviceId,
-      runtimes: [{
-        adapterKind: 'codex',
-        name: 'Codex CLI',
-        command: 'agentbean-business-smoke',
-        installed: true,
-      }],
-    }, timeoutMs);
-    const runtimeId = Array.isArray(runtimesAck?.runtimes) ? runtimesAck.runtimes[0]?.id : undefined;
-    checks.push(
-      check(
-        'business-runtime-report',
-        typeof runtimeId === 'string',
-        typeof runtimeId === 'string'
-          ? 'Daemon socket must report a runtime that can host a custom agent'
-          : `Runtime report did not return a runtime id: ${formatAck(runtimesAck)}`,
-      ),
-    );
-    if (typeof runtimeId !== 'string') {
-      return summarizeBusinessSmoke(checks);
-    }
-
-    const agentName = `SmokeCodex${suffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
-    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
-      userId,
-      teamId,
-      deviceId,
-      runtimeId,
-      name: agentName,
-      env: { AGENTBEAN_BUSINESS_SMOKE: '1' },
-    }, timeoutMs);
-    const agentId = readNestedString(agentAck, ['agent', 'id']);
-    checks.push(
-      check(
-        'business-custom-agent-create',
-        Boolean(agentId),
-        agentId
-          ? 'Web socket must create a custom agent on the daemon runtime'
-          : `Custom agent create did not return an agent id: ${formatAck(agentAck)}`,
-      ),
-    );
-    if (!agentId) {
-      return summarizeBusinessSmoke(checks);
-    }
-
-    const expectedReply = `business-smoke:@${agentName} hello`;
-    const replyPromise = waitForChannelMessage(webSocket, {
-      channelId,
-      body: expectedReply,
-      timeoutMs,
-    });
-    const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
-      userId,
-      teamId,
-      channelId,
-      body: `@${agentName} hello`,
-    }, timeoutMs);
-    const dispatchId = Array.isArray(sendAck?.dispatches) ? sendAck.dispatches[0]?.id : undefined;
-    checks.push(
-      check(
-        'business-message-dispatch',
-        typeof dispatchId === 'string',
-        typeof dispatchId === 'string'
-          ? 'Message send must create a dispatch for the custom agent'
-          : `Message send did not return a dispatch id: ${formatAck(sendAck)}`,
-      ),
-    );
-    if (typeof dispatchId !== 'string') {
-      return summarizeBusinessSmoke(checks);
-    }
-
-    await waitForDispatchResultAck(pendingAgentResultsByDispatchId, dispatchId, timeoutMs);
-    const reply = await replyPromise;
-    checks.push(
-      check(
-        'business-agent-reply-visible',
-        reply.ok,
-        reply.ok
-          ? 'Agent reply must be visible on the subscribed web channel'
-          : reply.message,
-      ),
-    );
-
-    return summarizeBusinessSmoke(checks);
   } catch (error) {
     checks.push(check('business-smoke-runtime-error', false, error instanceof Error ? error.message : String(error)));
-    return summarizeBusinessSmoke(checks);
+    summary = summarizeBusinessSmoke(checks);
   } finally {
+    // 无论成功/失败，尽量清掉本轮创建的用户/团队/设备/Agent，避免污染产品库。
+    if (created.webSocket && created.userId) {
+      const teardown = await teardownSmokeResources(created, timeoutMs);
+      const baseChecks = summary?.checks ?? checks;
+      summary = summarizeBusinessSmoke([...baseChecks, teardown]);
+    } else if (!summary) {
+      summary = summarizeBusinessSmoke(checks);
+    }
     for (const socket of sockets.reverse()) {
       socket.disconnect?.();
     }
+  }
+
+  return summary;
+}
+
+/**
+ * 删除本轮 smoke 创建的资源：device → agent → team → account。
+ * team:delete 会级联清 primary_team 上的 agent；device:delete 也会 soft-delete 设备上 agent。
+ * 顺序仍按防御式执行，保证失败路径尽量回收。
+ */
+export async function teardownSmokeResources(created, timeoutMs = 30_000) {
+  const webSocket = created.webSocket;
+  const userId = created.userId;
+  if (!webSocket || !userId) {
+    return check('business-smoke-teardown', false, 'No smoke session available for teardown');
+  }
+
+  const steps = [];
+  try {
+    if (created.deviceId) {
+      const deviceAck = await emitAck(
+        webSocket,
+        WEB_EVENTS.device.delete,
+        { userId, deviceId: created.deviceId },
+        timeoutMs,
+      );
+      steps.push(`device:${deviceAck?.ok === true ? 'ok' : formatAck(deviceAck)}`);
+    }
+    if (created.agentId && created.teamId) {
+      const agentAck = await emitAck(
+        webSocket,
+        WEB_EVENTS.agent.delete,
+        { userId, teamId: created.teamId, agentId: created.agentId },
+        timeoutMs,
+      );
+      // device delete 可能已 soft-delete agent；NOT_FOUND 也视为可接受
+      const agentOk = agentAck?.ok === true
+        || agentAck?.error === 'NOT_FOUND'
+        || /not found/i.test(String(agentAck?.message ?? ''));
+      steps.push(`agent:${agentOk ? 'ok' : formatAck(agentAck)}`);
+      if (!agentOk && agentAck?.ok === false) {
+        // non-fatal if already gone
+      }
+    }
+    if (created.teamId) {
+      const teamAck = await emitAck(
+        webSocket,
+        WEB_EVENTS.team.delete,
+        { userId, teamId: created.teamId },
+        timeoutMs,
+      );
+      steps.push(`team:${teamAck?.ok === true ? 'ok' : formatAck(teamAck)}`);
+      if (teamAck?.ok !== true) {
+        return check(
+          'business-smoke-teardown',
+          false,
+          `Failed to delete smoke team during teardown (${steps.join('; ')})`,
+        );
+      }
+    }
+    const accountAck = await emitAck(
+      webSocket,
+      WEB_EVENTS.auth.deleteAccount,
+      { userId },
+      timeoutMs,
+    );
+    steps.push(`account:${accountAck?.ok === true ? 'ok' : formatAck(accountAck)}`);
+    if (accountAck?.ok !== true) {
+      return check(
+        'business-smoke-teardown',
+        false,
+        `Failed to delete smoke account during teardown (${steps.join('; ')})`,
+      );
+    }
+    return check(
+      'business-smoke-teardown',
+      true,
+      `Smoke resources removed after run (${steps.join('; ')})`,
+    );
+  } catch (error) {
+    return check(
+      'business-smoke-teardown',
+      false,
+      `Teardown threw: ${error instanceof Error ? error.message : String(error)} (${steps.join('; ')})`,
+    );
   }
 }
 

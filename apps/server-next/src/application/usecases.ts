@@ -225,6 +225,8 @@ export interface ServerNextUseCases {
   loginUser(input: LoginUserInput): Promise<Ack<LoginUserResult>>;
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
   changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<Ack<{}>>;
+  /** 用户自删账号：非 admin、且当前不拥有任何 team。供 smoke teardown 与账号注销。 */
+  deleteOwnAccount(input: { userId: string }): Promise<Ack<{}>>;
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
   listAdminTeams(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'teams', AdminTeamDto>>>;
   listAdminUsers(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'users', AdminUserDto>>>;
@@ -1843,6 +1845,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         passwordHash: await hashPassword(input.newPassword),
         updatedAt: clock.now(),
       });
+      return makeSuccess({});
+    },
+
+    async deleteOwnAccount(input) {
+      if (input.userId === 'system') {
+        return makeFailure('VALIDATION_ERROR', 'Cannot delete protected user');
+      }
+      const user = await repositories.users.getById(input.userId);
+      if (!user) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+      if (user.role === 'admin') {
+        return makeFailure('FORBIDDEN', 'System admin cannot delete own account');
+      }
+      const ownedTeam = (await repositories.teams.listAll()).find((team) => team.ownerId === user.id);
+      if (ownedTeam) {
+        return makeFailure('CONFLICT', 'Cannot delete a user who owns a team');
+      }
+      const memberships = await repositories.teams.listForUser(user.id);
+      if (memberships.length > 0) {
+        return makeFailure('CONFLICT', 'Leave or remove all team memberships before deleting account');
+      }
+      await repositories.users.delete(user.id);
       return makeSuccess({});
     },
 
