@@ -3,6 +3,7 @@
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
 ### Fixed
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.20：将 0.3.19 之后已合入 main 的设备侧能力推到 npm latest（冻结文档 InputSet 全量交付、Task Offer 显式响应、Active Memory Context、频道运行产物隔离与大媒体流式链路、自更新回滚修复等）；此前代码已合入但版本未 bump，CI 因 already published 跳过 publish
 - 发布 `@agentbean/daemon` 0.3.19：修复 `agentbean update` 使用 `--ignore-scripts` 导致安装残缺与 UPDATE_RECOVERY_REQUIRED
 - 发布 `@agentbean/daemon` 0.3.18：探测并注入 node 所在目录到 PATH，修复 pnpm codex 的 `exec: node: not found`
 - 发布 `@agentbean/daemon` 0.3.17：LaunchAgent 下为子进程注入登录 shell PATH，修复 `env: node: No such file or directory`（exit 127）
