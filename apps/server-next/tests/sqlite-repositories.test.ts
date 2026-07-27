@@ -59,6 +59,7 @@ describe('server-next SQLite repositories', () => {
           'saved_messages',
           'pinned_messages',
           'artifact_preview_jobs',
+          'project_document_input_set_results',
         ]),
       );
     } finally {
@@ -108,6 +109,10 @@ describe('server-next SQLite repositories', () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {
       const repositories = createSqliteRepositories({ globalDb, teamDb });
+      teamDb.prepare(
+        `INSERT INTO channels (id, team_id, kind, name, visibility, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run('channel-1', 'team-1', 'channel', 'general', 'public', 1);
       const initialArtifact = {
         id: 'artifact-doc-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'message-1',
         uploaderId: 'user-1', filename: 'notes.md', mimeType: 'text/markdown', sizeBytes: 5,
@@ -263,6 +268,34 @@ describe('server-next SQLite repositories', () => {
         teamId: 'team-1',
         artifactId: collisionArtifact.id,
       })).resolves.toBeNull();
+      const inputSetResult = {
+        inputSetId: 'input-set-1', invocationId: 'invocation-1',
+        agentId: 'agent-1',
+        teamId: 'team-1', channelId: 'channel-1',
+        documentId: initial.document.id, baseRevisionId: 'revision-1',
+        status: 'committed' as const, artifactId: nextArtifact.id, revisionId: nextRevision.id,
+        requestFingerprint: 'input-set-result-fingerprint', createdAt: 250,
+      };
+      await expect(repositories.projectDocumentInputSetResults.record(inputSetResult))
+        .resolves.toMatchObject({ kind: 'created' });
+      await expect(repositories.projectDocumentInputSetResults.record(inputSetResult))
+        .resolves.toMatchObject({ kind: 'replayed' });
+      await expect(repositories.projectDocumentInputSetResults.record({
+        ...inputSetResult, requestFingerprint: 'changed-fingerprint',
+      })).resolves.toEqual({ kind: 'idempotency_conflict' });
+      const nextInvocationResult = {
+        ...inputSetResult,
+        invocationId: 'invocation-2',
+        requestFingerprint: 'input-set-result-fingerprint-2',
+      };
+      await expect(repositories.projectDocumentInputSetResults.record(nextInvocationResult))
+        .resolves.toMatchObject({ kind: 'created' });
+      await expect(repositories.projectDocumentInputSetResults.listByInvocation({
+        teamId: 'team-1', channelId: 'channel-1', invocationId: 'invocation-1',
+      })).resolves.toMatchObject([{ status: 'committed', revisionId: 'revision-2' }]);
+      await expect(repositories.projectDocumentInputSetResults.listByInvocation({
+        teamId: 'team-1', channelId: 'channel-1', invocationId: 'invocation-2',
+      })).resolves.toMatchObject([{ requestFingerprint: 'input-set-result-fingerprint-2' }]);
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',

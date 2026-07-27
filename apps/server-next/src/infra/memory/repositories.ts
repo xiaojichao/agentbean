@@ -66,6 +66,7 @@ import type {
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleMutationRecord,
   ProjectDocumentBundleRecord,
+  ProjectDocumentInputSetItemResultRecord,
   ProjectReferenceItemRecord,
   ProjectReferenceSelectionRecord,
   ProjectReferenceSetMutationRecord,
@@ -128,6 +129,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectReferenceSelections = new Map<string, ProjectReferenceSelectionRecord>();
   const projectReferenceItems = new Map<string, ProjectReferenceItemRecord>();
   const projectReferenceSetMutations = new Map<string, ProjectReferenceSetMutationRecord>();
+  const projectDocumentInputSetResults = new Map<string, ProjectDocumentInputSetItemResultRecord>();
   const projectDocumentBundleBackfillProgress
     = new Map<string, ProjectDocumentBundleBackfillProgressRecord>();
   const projectDocumentBundleBackfillOutcomes
@@ -1488,6 +1490,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const [operationKey, operation] of channelDocumentOperations) {
           if (documentIds.has(operation.documentId)) channelDocumentOperations.delete(operationKey);
         }
+        for (const [key, result] of projectDocumentInputSetResults) {
+          if (documentIds.has(result.documentId)) projectDocumentInputSetResults.delete(key);
+        }
         // 与 SQLite 的 ON DELETE CASCADE 对齐：Bundle 是文档的只读投影，
         // 文档消失时成员行随之消失，绝不反过来阻塞文档删除。
         for (const [bundleId, members] of projectDocumentBundleMembers) {
@@ -2143,6 +2148,29 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         for (const item of input.items) projectReferenceItems.set(item.id, { ...item });
         projectReferenceSetMutations.set(mutationKey, { ...input.mutation });
         return { kind: 'created', mutation: { ...input.mutation } };
+      },
+    },
+    projectDocumentInputSetResults: {
+      async listByInvocation(input) {
+        return Array.from(projectDocumentInputSetResults.values())
+          .filter((result) =>
+            result.teamId === input.teamId
+            && result.channelId === input.channelId
+            && result.invocationId === input.invocationId)
+          .sort((left, right) =>
+            left.createdAt - right.createdAt || left.documentId.localeCompare(right.documentId))
+          .map((result) => ({ ...result }));
+      },
+      async record(input) {
+        const key = `${input.invocationId}:${input.inputSetId}:${input.documentId}`;
+        const existing = projectDocumentInputSetResults.get(key);
+        if (existing) {
+          return existing.requestFingerprint === input.requestFingerprint
+            ? { kind: 'replayed', result: { ...existing } }
+            : { kind: 'idempotency_conflict' };
+        }
+        projectDocumentInputSetResults.set(key, { ...input });
+        return { kind: 'created', result: { ...input } };
       },
     },
     projectDocumentBundleBackfill: {

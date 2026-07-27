@@ -1,5 +1,10 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { AgentInvocationRecordDto } from '../../../../packages/contracts/src/index.js';
+import type {
+  ProjectDocumentInputSetItemResultDto,
+  ProjectDocumentInputSetResultDto,
+  ProjectDocumentInputSetResultProposalV1,
+} from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
@@ -32,6 +37,7 @@ import type {
   ProjectArtifactVersionRecord,
   ProjectDocumentBundleMemberRecord,
   ProjectDocumentBundleRecord,
+  ProjectDocumentInputSetItemResultRecord,
   ProjectReferenceItemRecord,
   ProjectReferenceSelectionRecord,
   ProjectReferenceSetRecord,
@@ -1035,6 +1041,7 @@ export interface ReceiveDispatchResultInput {
   artifacts?: ReceiveDispatchArtifactInput[];
   workspaceRun?: ReceiveDispatchWorkspaceRunInput;
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
 }
 
 export interface ReceiveDispatchResultResult {
@@ -1042,6 +1049,7 @@ export interface ReceiveDispatchResultResult {
   message?: MessageDto;
   task?: TaskDto;
   collaborationProposalDiagnostics?: readonly string[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultDto;
 }
 
 export interface ReceiveDispatchErrorInput {
@@ -6359,6 +6367,236 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
       if (!isCompletableDispatchStatus(dispatch.status)) {
+        if (resultInput.projectDocumentInputSetResult) {
+          const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
+            resultInput.dispatchId,
+          );
+          if (!managedAttempt) {
+            return makeFailure('VALIDATION_ERROR', 'Project document InputSet Dispatch attempt is unavailable');
+          }
+          const invocationId = managedAttempt.invocationId;
+          const proposal = resultInput.projectDocumentInputSetResult;
+          if (invocationId === proposal.invocationId) {
+            const managedInvocation = await repositories.management.invocations.getById(invocationId);
+            if (!managedInvocation) {
+              return makeFailure('VALIDATION_ERROR', 'Project document InputSet Invocation is unavailable');
+            }
+            const requestFingerprint = projectDocumentInputSetProposalFingerprint(proposal);
+            const replayed = await repositories.projectDocumentInputSetResults.listByInvocation({
+              teamId: dispatch.teamId,
+              channelId: dispatch.channelId,
+              invocationId,
+            });
+            let recoveredResult: ProjectDocumentInputSetResultDto | undefined;
+            if (replayed.length === proposal.items.length
+              && replayed.every((item) =>
+                item.inputSetId === proposal.inputSetId
+                && item.requestFingerprint === requestFingerprint)) {
+              recoveredResult = toProjectDocumentInputSetResultDto(
+                proposal.inputSetId,
+                proposal.invocationId,
+                replayed,
+              );
+            } else {
+              const recoveryNow = clock.now();
+              const reportedArtifactIds = uniqueIds([
+                ...(resultInput.artifactIds ?? []),
+                ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+              ]);
+              const validation = await validateProjectDocumentInputSetResultProposal({
+                repositories,
+                dispatch,
+                managedInvocation,
+                proposal,
+                reportedArtifactIds,
+              });
+              if (!validation.ok) return validation;
+              if (await isProjectDocumentInputSetResultAttemptStale({
+                repositories,
+                invocation: managedInvocation,
+                dispatch,
+                agentId: resultInput.agentId,
+              })) {
+                return makeFailure('CONFLICT', 'Project document InputSet result belongs to a stale Dispatch attempt');
+              }
+              let recoveredRun = (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1);
+              if (!recoveredRun && resultInput.workspaceRun) {
+                const existingDeliveryMessage = (await repositories.messages.listByChannel(
+                  dispatch.channelId,
+                  10_000,
+                )).find((message) => message.meta?.dispatchId === dispatch.id);
+                const publishedWorkspaceRunId = typeof existingDeliveryMessage?.meta?.workspaceRunId === 'string'
+                  ? existingDeliveryMessage.meta.workspaceRunId
+                  : undefined;
+                const recoveryWorkspaceRunId = resultInput.workspaceRun.id
+                  ?? publishedWorkspaceRunId
+                  ?? ids.nextId();
+                const managedHandoff = await repositories.management.handoffs.getByInvocationId(invocationId);
+                const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
+                const originMessage = await repositories.messages.getById(dispatch.messageId);
+                const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+                const deliveryMessage = existingDeliveryMessage ?? (publishResult
+                  ? await repositories.messages.append({
+                      id: ids.nextId(),
+                      teamId: dispatch.teamId,
+                      channelId: dispatch.channelId,
+                      threadId: originMessage?.threadId ?? originMessage?.id,
+                      senderKind: 'agent',
+                      senderId: resultInput.agentId,
+                      body: resultInput.body,
+                      createdAt: recoveryNow,
+                      meta: {
+                        dispatchId: dispatch.id,
+                        replyScope: nestReplyInThread ? 'thread' : 'channel',
+                        ...(nestReplyInThread && originMessage?.threadId
+                          ? { parentMessageId: originMessage.threadId }
+                          : {}),
+                        ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
+                        workspaceRunId: recoveryWorkspaceRunId,
+                      },
+                    })
+                  : null);
+                const recoveryAgent = await repositories.agents.getById(resultInput.agentId);
+                recoveredRun = await repositories.workspaceRuns.create({
+                  id: recoveryWorkspaceRunId,
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(deliveryMessage ? { messageId: deliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  ...(recoveryAgent?.deviceId ? { deviceId: recoveryAgent.deviceId } : {}),
+                  status: resultInput.workspaceRun.status ?? 'succeeded',
+                  cwd: resultInput.workspaceRun.cwd,
+                  command: resultInput.workspaceRun.command,
+                  logExcerpt: normalizeWorkspaceRunLogExcerpt(resultInput.workspaceRun.logExcerpt),
+                  exitCode: resultInput.workspaceRun.exitCode,
+                  startedAt: resultInput.workspaceRun.startedAt,
+                  completedAt: resultInput.workspaceRun.completedAt ?? recoveryNow,
+                  createdAt: recoveryNow,
+                  updatedAt: recoveryNow,
+                  artifactIds: reportedArtifactIds,
+                });
+              }
+              if (recoveredRun) {
+                const recoveryDeliveryMessage = recoveredRun.messageId
+                  ? await repositories.messages.getById(recoveredRun.messageId)
+                  : (await repositories.messages.listByChannel(
+                      dispatch.channelId,
+                      10_000,
+                    )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+                for (const artifactId of reportedArtifactIds) {
+                  const artifact = await repositories.artifacts.getForTeam({
+                    teamId: dispatch.teamId,
+                    artifactId,
+                  });
+                  if (!artifact || artifact.channelId !== dispatch.channelId) continue;
+                  await repositories.artifacts.create({
+                    ...artifact,
+                    ...(recoveryDeliveryMessage ? { messageId: recoveryDeliveryMessage.id } : {}),
+                    dispatchId: dispatch.id,
+                    workspaceRunId: recoveredRun.id,
+                    pathKind: 'generated',
+                  });
+                }
+              }
+              const committedArtifacts = (await Promise.all(proposal.items.flatMap((item) =>
+                item.status === 'changed'
+                  ? [repositories.artifacts.getForTeam({
+                      teamId: dispatch.teamId,
+                      artifactId: item.artifactId,
+                    })]
+                  : [])))
+                .filter((artifact): artifact is ArtifactRecord => artifact !== null);
+              const recovered = await commitProjectDocumentInputSetResults({
+                repositories,
+                ids,
+                now: recoveryNow,
+                agentId: resultInput.agentId,
+                dispatch,
+                invocation: managedInvocation,
+                proposal,
+                committedArtifacts,
+                ...(recoveredRun ? { workspaceRunId: recoveredRun.id } : {}),
+              });
+              recoveredResult = recovered;
+            }
+            if (recoveredResult) {
+              const recoveredRuns = await repositories.workspaceRuns.listByDispatch(dispatch.id);
+              const recoveredRun = recoveredRuns.at(-1);
+              const fallbackMessage = (await repositories.messages.listByChannel(
+                dispatch.channelId,
+                10_000,
+              )).find((message) => message.meta?.dispatchId === dispatch.id);
+              const deliveryMessage = recoveredRun?.messageId
+                ? await repositories.messages.getById(recoveredRun.messageId)
+                : fallbackMessage ?? null;
+              if (deliveryMessage) {
+                await repositories.messages.updateMeta({
+                  messageId: deliveryMessage.id,
+                  meta: {
+                    ...(deliveryMessage.meta ?? {}),
+                    projectDocumentInputSetResult: recoveredResult,
+                  },
+                });
+              }
+              const terminalStatus = dispatch.status === 'succeeded'
+                || dispatch.status === 'failed'
+                || dispatch.status === 'cancelled'
+                || dispatch.status === 'timed_out'
+                ? dispatch.status
+                : null;
+              if (terminalStatus) {
+                const artifactIds = uniqueIds([
+                  ...(recoveredRun?.artifactIds ?? []),
+                  ...(resultInput.artifactIds ?? []),
+                  ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+                ]);
+                const invocationResult: AgentInvocationResultDto = {
+                  schemaVersion: 1,
+                  invocationId: managedAttempt.invocationId,
+                  ...(managedInvocation.intent.taskContext?.taskId
+                    ? { taskId: managedInvocation.intent.taskContext.taskId }
+                    : {}),
+                  agentId: resultInput.agentId,
+                  status: terminalStatus,
+                  body: resultInput.body,
+                  artifactIds,
+                  ...(recoveredRun ? { workspaceRunId: recoveredRun.id } : {}),
+                  memoryCandidateIds: [],
+                  projectDocumentInputSetResult: recoveredResult,
+                  startedAt: managedAttempt.startedAt,
+                  completedAt: dispatch.completedAt ?? clock.now(),
+                  ...(terminalStatus === 'succeeded'
+                    ? {}
+                    : { error: dispatch.error ?? `DISPATCH_${terminalStatus.toUpperCase()}` }),
+                };
+                await recordManagedDispatchTerminal(
+                  repositories,
+                  clock,
+                  ids,
+                  managementKernel,
+                  taskCoordinationKernel,
+                  collaborationService,
+                  {
+                    dispatchId: dispatch.id,
+                    status: terminalStatus,
+                    artifactIds,
+                    result: invocationResult,
+                    ...(deliveryMessage ? { deliveryMessageId: deliveryMessage.id } : {}),
+                    actorId: resultInput.agentId,
+                    ...(terminalStatus === 'succeeded'
+                      ? {}
+                      : { errorCode: dispatch.error ?? `DISPATCH_${terminalStatus.toUpperCase()}` }),
+                  },
+                );
+              }
+              return makeSuccess({
+                dispatch: toDispatchDto(dispatch),
+                projectDocumentInputSetResult: recoveredResult,
+              });
+            }
+          }
+        }
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
       const agent = await repositories.agents.getById(resultInput.agentId);
@@ -6388,6 +6626,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const managedHandoff = managedAttempt
         ? await repositories.management.handoffs.getByInvocationId(managedAttempt.invocationId)
         : null;
+      if (resultInput.projectDocumentInputSetResult) {
+        const validation = await validateProjectDocumentInputSetResultProposal({
+          repositories,
+          dispatch,
+          managedInvocation,
+          proposal: resultInput.projectDocumentInputSetResult,
+          reportedArtifactIds: uniqueIds([
+            ...(resultInput.artifactIds ?? []),
+            ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+          ]),
+        });
+        if (!validation.ok) return validation;
+        if (managedInvocation && await isProjectDocumentInputSetResultAttemptStale({
+          repositories,
+          invocation: managedInvocation,
+          dispatch,
+          agentId: resultInput.agentId,
+        })) {
+          return makeFailure('CONFLICT', 'Project document InputSet result belongs to a stale Dispatch attempt');
+        }
+      }
       const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
       const completed = managedAttempt
         ? await invocationGateway.completeAttempt({
@@ -6511,15 +6770,46 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         committedArtifacts.push(artifact);
         artifacts.push(toArtifactDto(artifact));
       }
+      const projectDocumentInputSetResult = resultInput.projectDocumentInputSetResult && managedInvocation
+        ? await commitProjectDocumentInputSetResults({
+            repositories,
+            ids,
+            now,
+            agentId: resultInput.agentId,
+            dispatch: completed.dispatch,
+            invocation: managedInvocation,
+            proposal: resultInput.projectDocumentInputSetResult,
+            committedArtifacts,
+            ...(workspaceRunId ? { workspaceRunId } : {}),
+          })
+        : undefined;
       if (channelFileRollout.markdownEditing) {
-        await createInitialChannelDocuments(repositories, committedArtifacts, resultInput.agentId, now);
+        const inputSetResultArtifactIds = new Set(
+          resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
+            'artifactId' in item ? [item.artifactId] : []) ?? [],
+        );
+        await createInitialChannelDocuments(
+          repositories,
+          committedArtifacts.filter((artifact) => !inputSetResultArtifactIds.has(artifact.id)),
+          resultInput.agentId,
+          now,
+        );
       }
       // The real-time broadcast of this agent reply goes straight to the chat view, so the internal
       // workspace-run.log must be stripped here too — matching enrichMessagesWithArtifacts. The log
       // stays persisted (created above) and is served by the workspace-run detail endpoint.
       const chatArtifacts = artifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
-      const messageWithArtifacts: MessageDto | null = message ? {
-        ...message,
+      const authoritativeMessage = message && projectDocumentInputSetResult
+        ? await repositories.messages.updateMeta({
+            messageId: message.id,
+            meta: {
+              ...(message.meta ?? {}),
+              projectDocumentInputSetResult,
+            },
+          })
+        : message;
+      const messageWithArtifacts: MessageDto | null = authoritativeMessage ? {
+        ...authoritativeMessage,
         ...(chatArtifacts.length > 0 ? { artifacts: chatArtifacts } : {}),
         ...(workspaceRun ? { workspaceRun } : {}),
       } : null;
@@ -6547,6 +6837,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
           ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+          ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
         await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
@@ -6572,6 +6863,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(collaborationProposalDiagnostics.length > 0
           ? { collaborationProposalDiagnostics: [...new Set(collaborationProposalDiagnostics)] }
           : {}),
+        ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
       });
     },
 
@@ -11131,6 +11423,354 @@ async function ensureUserCanViewChannel(
     return makeFailure('FORBIDDEN', 'User cannot view channel');
   }
   return makeSuccess({ channel });
+}
+
+async function validateProjectDocumentInputSetResultProposal(input: {
+  repositories: ServerNextRepositories;
+  dispatch: DispatchRecord;
+  managedInvocation: AgentInvocationRecordDto | null;
+  proposal: ProjectDocumentInputSetResultProposalV1;
+  reportedArtifactIds: readonly string[];
+}): Promise<Ack<{ valid: true }>> {
+  const { managedInvocation, proposal } = input;
+  if (!managedInvocation
+    || managedInvocation.intent.schemaVersion !== 2
+    || managedInvocation.id !== proposal.invocationId
+    || managedInvocation.intent.teamId !== input.dispatch.teamId
+    || managedInvocation.intent.channelId !== input.dispatch.channelId
+    || managedInvocation.intent.projectDocumentInputSet.id !== proposal.inputSetId) {
+    return makeFailure('VALIDATION_ERROR', 'Project document InputSet result is outside its Invocation scope');
+  }
+  const channel = await input.repositories.channels.getById(input.dispatch.channelId);
+  if (!channel || channel.teamId !== input.dispatch.teamId || channel.archivedAt != null) {
+    return makeFailure('CONFLICT', 'Archived or unavailable channels reject late InputSet results');
+  }
+  const expectedItems = managedInvocation.intent.projectDocumentInputSet.items;
+  const proposedIds = new Set(proposal.items.map((item) => item.documentId));
+  if (proposal.contractVersion !== 1
+    || proposal.items.length !== expectedItems.length
+    || proposedIds.size !== proposal.items.length) {
+    return makeFailure('VALIDATION_ERROR', 'Project document InputSet result must cover each manifest item exactly once');
+  }
+  const reportedArtifacts = new Set(input.reportedArtifactIds);
+  for (const item of proposal.items) {
+    const expected = expectedItems.find((candidate) => candidate.documentId === item.documentId);
+    if (!expected || expected.baseRevisionId !== item.baseRevisionId) {
+      return makeFailure('VALIDATION_ERROR', 'Project document InputSet result identity does not match the manifest');
+    }
+    if (item.status === 'unchanged') {
+      if (item.sha256 !== expected.sha256 || 'artifactId' in item || 'error' in item) {
+        return makeFailure('VALIDATION_ERROR', 'Unchanged InputSet result has an invalid digest or Artifact');
+      }
+      continue;
+    }
+    if (item.status === 'changed') {
+      if (!item.sha256 || item.sha256 === expected.sha256
+        || !item.artifactId || !reportedArtifacts.has(item.artifactId)) {
+        return makeFailure('VALIDATION_ERROR', 'Changed InputSet result requires a newly reported Artifact and digest');
+      }
+      const artifact = await input.repositories.artifacts.getForTeam({
+        teamId: input.dispatch.teamId,
+        artifactId: item.artifactId,
+      });
+      const artifactIsUnbound = artifact
+        && !artifact.messageId
+        && !artifact.dispatchId
+        && !artifact.workspaceRunId;
+      const artifactBelongsToDispatch = artifact?.dispatchId === input.dispatch.id;
+      if (!artifact
+        || artifact.channelId !== input.dispatch.channelId
+        || artifact.sha256 !== item.sha256
+        || !isMarkdownArtifact(artifact)
+        || artifact.role !== 'intermediate'
+        || artifact.sourceRoot?.kind !== 'configured_output'
+        || artifact.sourceRoot.id !== `project-document-input-set:${proposal.inputSetId}`
+        || (!artifactIsUnbound && !artifactBelongsToDispatch)) {
+        return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+      }
+      continue;
+    }
+    if (!item.error || 'artifactId' in item) {
+      return makeFailure('VALIDATION_ERROR', 'Failed InputSet result requires an error and cannot commit an Artifact');
+    }
+  }
+  return makeSuccess({ valid: true });
+}
+
+async function commitProjectDocumentInputSetResults(input: {
+  repositories: ServerNextRepositories;
+  ids: ServerNextIds;
+  now: number;
+  agentId: string;
+  dispatch: DispatchRecord;
+  invocation: AgentInvocationRecordDto;
+  proposal: ProjectDocumentInputSetResultProposalV1;
+  committedArtifacts: readonly ArtifactRecord[];
+  workspaceRunId?: string;
+}): Promise<ProjectDocumentInputSetResultDto> {
+  if (input.invocation.intent.schemaVersion !== 2) {
+    throw new Error('Project document InputSet result requires Invocation V2');
+  }
+  const requestFingerprint = projectDocumentInputSetProposalFingerprint(input.proposal);
+  const expectedItems = input.invocation.intent.projectDocumentInputSet.items;
+  const results: ProjectDocumentInputSetItemResultRecord[] = [];
+  const record = async (
+    item: ProjectDocumentInputSetResultProposalV1['items'][number],
+    facts: Pick<ProjectDocumentInputSetItemResultRecord, 'status' | 'artifactId' | 'revisionId' | 'error'>,
+  ): Promise<void> => {
+    const result: ProjectDocumentInputSetItemResultRecord = {
+      inputSetId: input.proposal.inputSetId,
+      invocationId: input.proposal.invocationId,
+      agentId: input.agentId,
+      ...(input.workspaceRunId ? { workspaceRunId: input.workspaceRunId } : {}),
+      teamId: input.dispatch.teamId,
+      channelId: input.dispatch.channelId,
+      documentId: item.documentId,
+      baseRevisionId: item.baseRevisionId,
+      status: facts.status,
+      ...(facts.artifactId ? { artifactId: facts.artifactId } : {}),
+      ...(facts.revisionId ? { revisionId: facts.revisionId } : {}),
+      ...(facts.error ? { error: facts.error } : {}),
+      requestFingerprint,
+      createdAt: input.now,
+    };
+    const stored = await input.repositories.projectDocumentInputSetResults.record(result);
+    if (stored.kind === 'idempotency_conflict') {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_RESULT_IDEMPOTENCY_CONFLICT');
+    }
+    results.push(stored.result);
+  };
+
+  for (const item of input.proposal.items) {
+    const expected = expectedItems.find((candidate) => candidate.documentId === item.documentId)!;
+    if (item.status === 'unchanged') {
+      await record(item, { status: 'unchanged' });
+      continue;
+    }
+    if (item.status === 'failed') {
+      await record(item, { status: 'failed', error: item.error });
+      continue;
+    }
+    const artifact = input.committedArtifacts.find((candidate) => candidate.id === item.artifactId);
+    if (!artifact) {
+      await record(item, { status: 'failed', error: 'PROJECT_DOCUMENT_RESULT_ARTIFACT_NOT_COMMITTED' });
+      continue;
+    }
+    const normalizedRelativePath = artifact.relativePath
+      ? normalizeRootRelativePath(artifact.relativePath)
+      : null;
+    if (!input.workspaceRunId
+      || artifact.workspaceRunId !== input.workspaceRunId
+      || !artifact.sourceRoot
+      || !artifact.relativePath
+      || !normalizedRelativePath) {
+      await record(item, {
+        status: 'failed',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_SOURCE_UNAVAILABLE',
+      });
+      continue;
+    }
+    const document = await input.repositories.channelDocuments.getForTeam({
+      teamId: input.dispatch.teamId,
+      channelId: input.dispatch.channelId,
+      documentId: expected.documentId,
+    });
+    if (!document) {
+      await record(item, {
+        status: 'failed',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_DOCUMENT_UNAVAILABLE',
+      });
+      continue;
+    }
+    const revisions = await input.repositories.channelDocuments.listRevisions({
+      documentId: document.id,
+    });
+    const recoveredRevision = revisions.find((revision) =>
+      revision.artifact.id === artifact.id
+      && revision.createdBy === input.agentId
+      && revision.source === 'run'
+      && document.currentRevisionId === revision.id);
+    if (recoveredRevision) {
+      await record(item, {
+        status: 'committed',
+        artifactId: artifact.id,
+        revisionId: recoveredRevision.id,
+      });
+      continue;
+    }
+    if (document.currentRevisionId !== expected.baseRevisionId) {
+      await record(item, {
+        status: 'conflict',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_BASE_REVISION_STALE',
+      });
+      continue;
+    }
+    const latest = revisions[0];
+    const fileSource = await channelFileSource(input.repositories, artifact);
+    const derivationSource: ChannelDocumentSourceDto = {
+      ...(fileSource?.messageId ? { messageId: fileSource.messageId } : {}),
+      ...(fileSource?.threadId ? { threadId: fileSource.threadId } : {}),
+      ...(fileSource?.taskId ? { taskId: fileSource.taskId } : {}),
+      workspaceRunId: input.workspaceRunId,
+      agentId: input.agentId,
+      messageCreatedAt: fileSource?.messageCreatedAt ?? input.now,
+      sourceRoot: artifact.sourceRoot,
+      relativePath: artifact.relativePath,
+      normalizedRelativePath,
+      artifactId: artifact.id,
+      artifactRole: artifact.role ?? 'intermediate',
+    };
+    const revision: ChannelDocumentRevisionRecord = {
+      id: input.ids.nextId(),
+      documentId: document.id,
+      artifact,
+      revision: (latest?.revision ?? expected.revisionNumber) + 1,
+      createdBy: input.agentId,
+      createdAt: input.now,
+      source: 'run',
+      derivationSource,
+      published: false,
+    };
+    const committed = await input.repositories.channelDocuments.addRevision({
+      documentId: document.id,
+      expectedCurrentRevisionId: expected.baseRevisionId,
+      document: {
+        ...document,
+        filename: sanitizeMarkdownFilename(artifact.filename),
+        currentRevisionId: revision.id,
+        updatedAt: input.now,
+      },
+      revision,
+      artifact,
+      operation: {
+        documentId: document.id,
+        idempotencyKey: `input-set-result:${input.proposal.inputSetId}:${document.id}`,
+        operationType: 'save',
+        requestFingerprint: createHash('sha256').update(JSON.stringify({
+          inputSetId: input.proposal.inputSetId,
+          invocationId: input.proposal.invocationId,
+          documentId: document.id,
+          baseRevisionId: expected.baseRevisionId,
+          artifactId: artifact.id,
+          sha256: item.sha256,
+        })).digest('hex'),
+        revisionId: revision.id,
+      },
+    });
+    if (!committed) {
+      await record(item, {
+        status: 'conflict',
+        artifactId: artifact.id,
+        error: 'PROJECT_DOCUMENT_RESULT_BASE_REVISION_STALE',
+      });
+      continue;
+    }
+    await record(item, {
+      status: 'committed',
+      artifactId: artifact.id,
+      revisionId: committed.revision.id,
+    });
+  }
+  return toProjectDocumentInputSetResultDto(
+    input.proposal.inputSetId,
+    input.proposal.invocationId,
+    results,
+  );
+}
+
+async function isProjectDocumentInputSetResultAttemptStale(input: {
+  repositories: ServerNextRepositories;
+  invocation: AgentInvocationRecordDto;
+  dispatch: DispatchRecord;
+  agentId: string;
+}): Promise<boolean> {
+  const taskContext = input.invocation.intent.taskContext;
+  const dispatchAttempt = await input.repositories.management.dispatchAttempts.getByDispatchId(
+    input.dispatch.id,
+  );
+  const invocationAttempts = await input.repositories.management.dispatchAttempts.list(
+    input.invocation.id,
+  );
+  const latestAttemptNumber = invocationAttempts.reduce(
+    (latest, attempt) => Math.max(latest, attempt.attemptNumber),
+    0,
+  );
+  if (!dispatchAttempt || dispatchAttempt.attemptNumber !== latestAttemptNumber) {
+    return true;
+  }
+  if (!taskContext) return false;
+  const [task, currentClaim] = await Promise.all([
+    input.repositories.tasks.getById(taskContext.taskId),
+    input.repositories.taskCoordination.claimLeases.getCurrent({
+      taskId: taskContext.taskId,
+      taskRevision: taskContext.taskRevision,
+      taskAttempt: taskContext.taskAttempt,
+    }),
+  ]);
+  return !task
+    || task.teamId !== input.dispatch.teamId
+    || task.channelId !== input.dispatch.channelId
+    || task.revision !== taskContext.taskRevision
+    || !currentClaim
+    || currentClaim.id !== taskContext.claimLeaseId
+    || currentClaim.agentId !== input.agentId
+    || currentClaim.status !== 'active';
+}
+
+function projectDocumentInputSetProposalFingerprint(
+  proposal: ProjectDocumentInputSetResultProposalV1,
+): string {
+  return createHash('sha256').update(JSON.stringify(proposal)).digest('hex');
+}
+
+function toProjectDocumentInputSetResultDto(
+  inputSetId: string,
+  invocationId: string,
+  records: readonly ProjectDocumentInputSetItemResultRecord[],
+): ProjectDocumentInputSetResultDto {
+  const items: ProjectDocumentInputSetItemResultDto[] = records.map((record) => {
+    const base = {
+      documentId: record.documentId,
+      baseRevisionId: record.baseRevisionId,
+      createdAt: record.createdAt,
+    };
+    if (record.status === 'unchanged') return { ...base, status: 'unchanged' };
+    if (record.status === 'committed' && record.artifactId && record.revisionId) {
+      return {
+        ...base,
+        status: 'committed',
+        artifactId: record.artifactId,
+        revisionId: record.revisionId,
+      };
+    }
+    if (record.status === 'conflict' && record.artifactId && record.error) {
+      return {
+        ...base,
+        status: 'conflict',
+        artifactId: record.artifactId,
+        error: record.error,
+      };
+    }
+    if (record.status === 'failed' && record.error) {
+      return {
+        ...base,
+        status: 'failed',
+        ...(record.artifactId ? { artifactId: record.artifactId } : {}),
+        error: record.error,
+      };
+    }
+    throw new Error(`Invalid persisted Project document InputSet result: ${record.status}`);
+  });
+  const first = records[0];
+  if (!first) throw new Error('Project document InputSet result is empty');
+  const source = {
+    agentId: first.agentId,
+    ...(first.workspaceRunId ? { workspaceRunId: first.workspaceRunId } : {}),
+  };
+  return { contractVersion: 1, inputSetId, invocationId, source, items };
 }
 
 type ChannelFileCursor = { createdAt: number; id: string };

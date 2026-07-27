@@ -8,6 +8,7 @@ import type {
   ProjectArtifactReviewDecision,
   ProjectDocumentBundleBackfillMode,
   ProjectDocumentBundleSourceDto,
+  ProjectDocumentInputSetItemResultStatus,
   ProjectStageEdgeSemantics,
   ProjectStageRequiredInputRuleDto,
   UnixMs,
@@ -450,6 +451,36 @@ export interface ProjectReferenceSetRepository {
     items: ProjectReferenceItemRecord[];
     mutation: ProjectReferenceSetMutationRecord;
   }): Promise<CreateProjectReferenceSetResult>;
+}
+
+export interface ProjectDocumentInputSetItemResultRecord {
+  inputSetId: ID;
+  invocationId: ID;
+  agentId: ID;
+  workspaceRunId?: ID;
+  teamId: ID;
+  channelId: ID;
+  documentId: ID;
+  baseRevisionId: ID;
+  status: ProjectDocumentInputSetItemResultStatus;
+  artifactId?: ID;
+  revisionId?: ID;
+  error?: string;
+  requestFingerprint: string;
+  createdAt: UnixMs;
+}
+
+export type RecordProjectDocumentInputSetItemResult =
+  | { kind: 'created' | 'replayed'; result: ProjectDocumentInputSetItemResultRecord }
+  | { kind: 'idempotency_conflict' };
+
+export interface ProjectDocumentInputSetResultRepository {
+  listByInvocation(input: {
+    teamId: ID;
+    channelId: ID;
+    invocationId: ID;
+  }): Promise<ProjectDocumentInputSetItemResultRecord[]>;
+  record(input: ProjectDocumentInputSetItemResultRecord): Promise<RecordProjectDocumentInputSetItemResult>;
 }
 
 /** #830：回填游标。backfillId 让不同版本的回填策略各走各的游标，互不覆盖。 */

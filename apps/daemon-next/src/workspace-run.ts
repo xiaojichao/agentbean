@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   parseAgentCollaborationProposalV1,
   type AgentCollaborationProposalV1,
+  type ProjectDocumentInputSetResultProposalV1,
 } from '../../../packages/contracts/src/index.js';
 
 export interface WorkspaceRunDir {
@@ -49,6 +50,7 @@ export interface WorkspaceRunManifest {
   artifactIds?: string[];
   artifacts?: WorkspaceRunManifestArtifact[];
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
   reportedAt?: number;
   files: WorkspaceRunManifestFile[];
 }
@@ -72,6 +74,7 @@ export interface RecoverableWorkspaceRun {
   artifactIds?: string[];
   artifacts?: WorkspaceRunManifestArtifact[];
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
 }
 
 export function workspaceRunPath(cwd: string, runId: string): string {
@@ -163,6 +166,9 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
             }
           })
         : [];
+      const projectDocumentInputSetResult = parseProjectDocumentInputSetResultProposal(
+        manifest.projectDocumentInputSetResult,
+      );
       runs.push({
         runId: manifest.runId || entry.name,
         agentId: manifest.agentId,
@@ -182,6 +188,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
         ...(artifactIds.length > 0 ? { artifactIds } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
         ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+        ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
       });
     }
   }
@@ -240,4 +247,39 @@ function isWorkspaceRunManifestArtifact(artifact: unknown): artifact is Workspac
   }
   const candidate = artifact as { id?: unknown; filename?: unknown };
   return typeof candidate.id === 'string' && typeof candidate.filename === 'string';
+}
+
+function parseProjectDocumentInputSetResultProposal(
+  value: unknown,
+): ProjectDocumentInputSetResultProposalV1 | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<ProjectDocumentInputSetResultProposalV1>;
+  if (candidate.contractVersion !== 1
+    || typeof candidate.inputSetId !== 'string'
+    || typeof candidate.invocationId !== 'string'
+    || !Array.isArray(candidate.items)
+    || candidate.items.length === 0) {
+    return undefined;
+  }
+  for (const item of candidate.items) {
+    if (!item || typeof item !== 'object'
+      || typeof item.documentId !== 'string'
+      || typeof item.baseRevisionId !== 'string') {
+      return undefined;
+    }
+    if (item.status === 'unchanged') {
+      if (typeof item.sha256 !== 'string') return undefined;
+      continue;
+    }
+    if (item.status === 'changed') {
+      if (typeof item.sha256 !== 'string' || typeof item.artifactId !== 'string') return undefined;
+      continue;
+    }
+    if (item.status === 'failed') {
+      if (typeof item.error !== 'string') return undefined;
+      continue;
+    }
+    return undefined;
+  }
+  return candidate as ProjectDocumentInputSetResultProposalV1;
 }

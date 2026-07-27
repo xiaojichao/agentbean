@@ -30,6 +30,10 @@ import {
   type SubmitArtifactReviewDraft,
 } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
+import {
+  ProjectDocumentInputSetResultSummary,
+  projectDocumentInputSetResultFromMeta,
+} from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
@@ -4680,6 +4684,12 @@ function ChatBubble({
         )}
         {!isDeleted && !editing && msg.referenceSet && (
           <ProjectReferenceChips referenceSet={msg.referenceSet} />
+        )}
+        {!isDeleted && !editing && msg.teamId && projectDocumentInputSetResultFromMeta(msg.meta) && (
+          <ProjectDocumentInputSetResultSummary
+            result={projectDocumentInputSetResultFromMeta(msg.meta)!}
+            teamId={msg.teamId}
+          />
         )}
         {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (

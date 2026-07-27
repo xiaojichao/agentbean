@@ -49,3 +49,77 @@ export interface ProjectDocumentInputSetManifestV1 {
   readonly invocationId: ID;
   readonly items: readonly ProjectDocumentInputSetManifestItemV1[];
 }
+
+/**
+ * Device 根据 manifest 的稳定 documentId/baseRevisionId 与内容摘要提交结果。
+ * 文件名与本地路径只用于展示和物化，绝不参与文档身份判定。
+ */
+interface ProjectDocumentInputSetItemResultProposalBaseV1 {
+  readonly documentId: ID;
+  readonly baseRevisionId: ID;
+}
+
+export type ProjectDocumentInputSetItemResultProposalV1 =
+  | (ProjectDocumentInputSetItemResultProposalBaseV1 & {
+      readonly status: 'unchanged';
+      readonly sha256: string;
+    })
+  | (ProjectDocumentInputSetItemResultProposalBaseV1 & {
+      readonly status: 'changed';
+      readonly sha256: string;
+      readonly artifactId: ID;
+    })
+  | (ProjectDocumentInputSetItemResultProposalBaseV1 & {
+      readonly status: 'failed';
+      readonly error: string;
+    });
+
+export interface ProjectDocumentInputSetResultProposalV1 {
+  readonly contractVersion: 1;
+  readonly inputSetId: ID;
+  readonly invocationId: ID;
+  readonly items: readonly ProjectDocumentInputSetItemResultProposalV1[];
+}
+
+export type ProjectDocumentInputSetItemResultStatus =
+  | 'unchanged'
+  | 'committed'
+  | 'conflict'
+  | 'failed';
+
+interface ProjectDocumentInputSetItemResultBaseDto {
+  readonly documentId: ID;
+  readonly baseRevisionId: ID;
+  readonly createdAt: number;
+}
+
+export type ProjectDocumentInputSetItemResultDto =
+  | (ProjectDocumentInputSetItemResultBaseDto & {
+      readonly status: 'unchanged';
+    })
+  | (ProjectDocumentInputSetItemResultBaseDto & {
+      readonly status: 'committed';
+      readonly artifactId: ID;
+      readonly revisionId: ID;
+    })
+  | (ProjectDocumentInputSetItemResultBaseDto & {
+      readonly status: 'conflict';
+      readonly artifactId: ID;
+      readonly error: string;
+    })
+  | (ProjectDocumentInputSetItemResultBaseDto & {
+      readonly status: 'failed';
+      readonly artifactId?: ID;
+      readonly error: string;
+    });
+
+export interface ProjectDocumentInputSetResultDto {
+  readonly contractVersion: 1;
+  readonly inputSetId: ID;
+  readonly invocationId: ID;
+  readonly source: {
+    readonly agentId: ID;
+    readonly workspaceRunId?: ID;
+  };
+  readonly items: readonly ProjectDocumentInputSetItemResultDto[];
+}

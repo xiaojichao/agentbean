@@ -1,9 +1,14 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
-import { materializeProjectDocumentInputSet } from './project-document-input-set.js';
+import {
+  buildProjectDocumentInputSetResultProposal,
+  collectProjectDocumentInputSetResults,
+  materializeProjectDocumentInputSet,
+  type MaterializedProjectDocumentInputSet,
+} from './project-document-input-set.js';
 import {
   discoverRecoverableWorkspaceRuns,
   markWorkspaceRunManifestReported,
@@ -161,6 +166,7 @@ export interface DaemonDispatchResult {
   artifacts?: DaemonDispatchArtifactResult[];
   workspaceRun?: DaemonWorkspaceRunResult;
   collaborationProposals?: readonly import('../../../packages/contracts/src/index.js').AgentCollaborationProposalV1[];
+  projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
 }
 
 export type StubExecutor = (request: DispatchRequestPayload) => Promise<string | DaemonDispatchResult>;
@@ -557,6 +563,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               request.prompt = `${request.prompt}\n\n用户随消息附加了以下本地文件，请在需要时读取并使用：\n${list}`;
             }
           }
+          let materializedProjectDocumentInputSet: MaterializedProjectDocumentInputSet | undefined;
           if (request.projectDocumentInputSet) {
             if (!workspace || !device.token || !request.managementInvocationId) {
               throw new Error('PROJECT_DOCUMENT_INPUT_SET_RUNTIME_UNAVAILABLE');
@@ -570,6 +577,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               inputSet: request.projectDocumentInputSet,
               fetch: fetchFn,
             });
+            materializedProjectDocumentInputSet = materialized;
             const list = materialized.manifest.items
               .map((item) => `- ${item.displayName}: ${item.localPath}`)
               .join('\n');
@@ -682,6 +690,33 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               ...diagnosticLines,
             ].filter(Boolean).join('\n');
           }
+          let projectDocumentInputSetResult: ProjectDocumentInputSetResultProposalV1 | undefined;
+          if (materializedProjectDocumentInputSet) {
+            const collectedResults = collectProjectDocumentInputSetResults(
+              materializedProjectDocumentInputSet,
+            );
+            const resultArtifacts = [
+              ...collectedResults.changedArtifacts,
+              ...collectedResults.newDocumentArtifacts,
+            ];
+            const uploadedResults = device.token && resultArtifacts.length > 0
+              ? await uploadArtifacts({
+                  serverUrl,
+                  token: device.token,
+                  teamId: device.teamId,
+                  channelId: request.channelId,
+                  fetch: fetchFn,
+                  maxBytes: input.artifactMaxBytes,
+                  maxTotalBytes: input.artifactRunMaxBytes,
+                }, resultArtifacts)
+              : [];
+            productArtifactIds.push(...uploadedResults.map((artifact) => artifact.id));
+            projectDocumentInputSetResult = buildProjectDocumentInputSetResultProposal(
+              materializedProjectDocumentInputSet,
+              collectedResults,
+              uploadedResults,
+            );
+          }
           const artifacts = result.artifacts ?? [];
           const artifactIds = [...(result.artifactIds ?? []), ...productArtifactIds];
           let reportedManifestPath: string | undefined;
@@ -704,6 +739,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 ...(result.collaborationProposals?.length
                   ? { collaborationProposals: result.collaborationProposals }
                   : {}),
+                ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
@@ -730,6 +766,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             ...(result.collaborationProposals?.length
               ? { collaborationProposals: result.collaborationProposals }
               : {}),
+            ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           }, {
             isDeliveredAck: isDispatchResultDeliveredAck,
             ...(reportedManifestPath
@@ -813,6 +850,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           ...(run.artifacts && run.artifacts.length > 0 ? { artifacts: run.artifacts } : {}),
           ...(run.collaborationProposals && run.collaborationProposals.length > 0
             ? { collaborationProposals: run.collaborationProposals }
+            : {}),
+          ...(run.projectDocumentInputSetResult
+            ? { projectDocumentInputSetResult: run.projectDocumentInputSetResult }
             : {}),
           workspaceRun: run.workspaceRun,
         };
