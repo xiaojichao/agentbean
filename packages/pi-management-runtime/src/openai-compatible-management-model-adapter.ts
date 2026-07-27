@@ -43,6 +43,8 @@ export interface CreateOpenAiCompatibleManagementModelAdapterInput {
    * `{ thinking: { type: 'disabled' } }` for deterministic probes).
    */
   readonly requestBodyExtras?: Readonly<Record<string, unknown>>;
+  /** When tools are present, set `tool_choice: 'required'` (connectivity probes). */
+  readonly forceRequiredToolChoiceWhenToolsPresent?: boolean;
   readonly fetch?: typeof fetch;
 }
 
@@ -88,6 +90,9 @@ export function createOpenAiCompatibleManagementModelAdapter(
               parameters: tool.inputSchema,
             },
           }));
+          if (input.forceRequiredToolChoiceWhenToolsPresent) {
+            body.tool_choice = 'required';
+          }
         }
         if (input.maxOutputTokens !== undefined) {
           body.max_tokens = input.maxOutputTokens;
@@ -209,11 +214,15 @@ function parseOpenAiResponse(
   if (!isRecord(choice.message)) throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
 
   const content: ManagementModelContent[] = [];
-  // DeepSeek (and some OpenAI-compatible providers) return content: "" with tool_calls
-  // or reasoning_content. Treat empty string as no text — same as null.
+  // DeepSeek may return content: "" or multimodal-style content arrays with tool_calls.
   const rawContent = choice.message.content;
   if (typeof rawContent === 'string') {
     if (rawContent.length > 0) content.push({ type: 'text', text: rawContent });
+  } else if (Array.isArray(rawContent)) {
+    const text = rawContent
+      .map((part) => (isRecord(part) && typeof part.text === 'string' ? part.text : ''))
+      .join('');
+    if (text.length > 0) content.push({ type: 'text', text });
   } else if (rawContent !== null && rawContent !== undefined) {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
@@ -226,9 +235,12 @@ function parseOpenAiResponse(
       content.push(parseToolCall(call, fromWireToolName));
     }
   }
-  const finishReason = parseFinishReason(choice.finish_reason);
+  let finishReason = parseFinishReason(choice.finish_reason);
   const hasToolCall = content.some((item) => item.type === 'toolCall');
-  if ((hasToolCall && finishReason !== 'tool_use') || (!hasToolCall && finishReason === 'tool_use')) {
+  // If the provider emitted tool_calls but finish_reason is missing/unknown, treat as tool_use.
+  if (hasToolCall && finishReason !== 'tool_use') {
+    finishReason = 'tool_use';
+  } else if (!hasToolCall && finishReason === 'tool_use') {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
 
@@ -257,14 +269,21 @@ function parseToolCall(
     || !value.id.trim()
     || !isRecord(value.function)
     || typeof value.function.name !== 'string'
-    || !value.function.name.trim()
-    || typeof value.function.arguments !== 'string') {
+    || !value.function.name.trim()) {
     throw adapterError('MANAGEMENT_MODEL_TOOL_CALL_INVALID');
   }
   let argumentsValue: unknown;
-  try {
-    argumentsValue = JSON.parse(value.function.arguments);
-  } catch {
+  const rawArgs = value.function.arguments;
+  if (typeof rawArgs === 'string') {
+    try {
+      argumentsValue = rawArgs.trim() === '' ? {} : JSON.parse(rawArgs);
+    } catch {
+      throw adapterError('MANAGEMENT_MODEL_TOOL_CALL_INVALID');
+    }
+  } else if (isRecord(rawArgs) || rawArgs === undefined || rawArgs === null) {
+    // Some providers return already-parsed objects (or omit empty args).
+    argumentsValue = rawArgs ?? {};
+  } else {
     throw adapterError('MANAGEMENT_MODEL_TOOL_CALL_INVALID');
   }
   if (!isRecord(argumentsValue)) throw adapterError('MANAGEMENT_MODEL_TOOL_CALL_INVALID');
@@ -284,18 +303,17 @@ function parseUsage(value: unknown): ManagementModelUsage {
   if (inputTokens === null || outputTokens === null) {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
   }
-  const reportedTotal = value.total_tokens === undefined
-    ? inputTokens + outputTokens
-    : nonNegativeInteger(value.total_tokens);
-  if (reportedTotal === null || reportedTotal !== inputTokens + outputTokens) {
-    throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
-  }
+  // Prefer provider total when it matches; otherwise use the arithmetic sum.
+  // DeepSeek thinking/cache fields sometimes make total ≠ prompt+completion.
+  const reportedTotal = nonNegativeInteger(value.total_tokens);
+  const sum = inputTokens + outputTokens;
+  const totalTokens = reportedTotal === null || reportedTotal !== sum ? sum : reportedTotal;
   return {
     inputTokens,
     outputTokens,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
-    totalTokens: reportedTotal,
+    totalTokens,
   };
 }
 
@@ -355,6 +373,9 @@ function assertOptionalPositiveInteger(value: number | undefined): void {
 }
 
 function nonNegativeInteger(value: unknown): number | null {
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) {
+    value = Number(value);
+  }
   return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
 }
 

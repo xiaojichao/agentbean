@@ -75,8 +75,10 @@ export async function runPiProviderProductionTest(
     baseUrl: input.config.baseUrl,
     modelId: input.config.modelId,
     timeoutMs: input.config.timeoutMs,
-    maxOutputTokens: Math.min(input.config.maxOutputTokens, 256),
+    // Tool-call JSON + reasoning can exceed 256; keep a modest probe budget.
+    maxOutputTokens: Math.min(Math.max(input.config.maxOutputTokens, 512), 1024),
     requireResponseMetadata: true,
+    forceRequiredToolChoiceWhenToolsPresent: true,
     // DeepSeek-V4 默认 thinking；仅对其关闭，避免污染 OpenAI 等不认 thinking 字段的供应商。
     ...(isDeepSeekHost
       ? { requestBodyExtras: { thinking: { type: 'disabled' as const } } }
@@ -260,9 +262,14 @@ function extractToolCall(
   response: ManagementModelResponse,
 ): { id: string; name: string } | null {
   if (response.finishReason !== 'tool_use') return null;
-  if (response.content.length !== 1) return null;
-  const call = response.content[0];
-  if (!call || call.type !== 'toolCall') return null;
+  // Allow incidental text alongside the tool call, but require exactly one tool call.
+  const toolCalls = response.content.filter(
+    (item): item is Extract<ManagementModelResponse['content'][number], { type: 'toolCall' }> =>
+      item.type === 'toolCall',
+  );
+  if (toolCalls.length !== 1) return null;
+  const call = toolCalls[0];
+  if (!call) return null;
   if (call.name !== PI_PROVIDER_PROBE_TOOL.name) return null;
   if (Object.keys(call.arguments).length !== 0) return null;
   if (response.usage.inputTokens === null || response.usage.outputTokens === null) return null;
