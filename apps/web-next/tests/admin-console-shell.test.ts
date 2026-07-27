@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { ADMIN_CONSOLE_NAV, ADMIN_LIST_DEFAULT_PAGE_SIZE } from '../components/admin-console-panel';
+import {
+  ADMIN_CONSOLE_NAV,
+  ADMIN_LIST_DEFAULT_PAGE_SIZE,
+  ADMIN_LIST_PAGE_SIZE_OPTIONS,
+} from '../components/admin-console-panel';
 
 describe('System Admin Console shell', () => {
   test('exposes five console nav sections including PI Agent management', () => {
@@ -76,10 +80,27 @@ describe('System Admin Console shell', () => {
       new URL('../components/admin-console-panel.tsx', import.meta.url),
       'utf8',
     );
-    expect(panel).toContain('page: pageToLoad, pageSize');
+    expect(panel).toContain('page: pageToLoad,');
+    expect(panel).toContain('pageSize,');
     expect(panel).toContain('data-smoke="admin-list-pagination"');
     expect(panel).toContain('data-smoke="admin-list-prev"');
     expect(panel).toContain('data-smoke="admin-list-next"');
     expect(panel).toContain('ADMIN_LIST_DEFAULT_PAGE_SIZE');
+  });
+
+  test('inventory lists support keyword search q and pageSize 20/50/100', () => {
+    expect(ADMIN_LIST_PAGE_SIZE_OPTIONS).toEqual([20, 50, 100]);
+    const panel = readFileSync(
+      new URL('../components/admin-console-panel.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(panel).toContain('listPayload.q = q');
+    expect(panel).toContain('data-smoke="admin-list-search"');
+    expect(panel).toContain('data-smoke="admin-list-search-submit"');
+    expect(panel).toContain('data-smoke="admin-list-page-size"');
+    expect(panel).toContain('ADMIN_LIST_PAGE_SIZE_OPTIONS');
+    for (const size of ADMIN_LIST_PAGE_SIZE_OPTIONS) {
+      expect(panel).toContain(String(size));
+    }
   });
 });

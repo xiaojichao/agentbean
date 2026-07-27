@@ -554,11 +554,16 @@ type AdminAgentDto = AgentDto & {
   deviceUserName?: string | null;
 };
 
-/** System inventory list query: 1-based page, default pageSize 20, clamped to [1, 100]. */
+/**
+ * System inventory list query: 1-based page, default pageSize 20, clamped to [1, 100].
+ * Optional `q` filters after sort and before slice (case-insensitive substring).
+ */
 type AdminListQueryInput = {
   userId: string;
   page?: number;
   pageSize?: number;
+  /** Keyword filter; empty/whitespace means no filter. */
+  q?: string;
 };
 
 type AdminListPageMeta = {
@@ -1899,9 +1904,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return admin;
       }
       const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const q = normalizeAdminListQuery(adminInput.q);
       const allTeams = sortAdminInventoryByCreatedAtDesc(await repositories.teams.listAll());
-      const total = allTeams.length;
-      const pageTeams = sliceAdminInventoryPage(allTeams, page, pageSize);
+      const filtered = q
+        ? allTeams.filter((team) => adminInventoryMatchesQuery(q, [team.name, team.path]))
+        : allTeams;
+      const total = filtered.length;
+      const pageTeams = sliceAdminInventoryPage(filtered, page, pageSize);
       const result: AdminTeamDto[] = [];
       for (const team of pageTeams) {
         result.push({
@@ -1918,9 +1927,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return admin;
       }
       const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const q = normalizeAdminListQuery(adminInput.q);
       const allUsers = sortAdminInventoryByCreatedAtDesc(await repositories.users.listAll());
-      const total = allUsers.length;
-      const pageUsers = sliceAdminInventoryPage(allUsers, page, pageSize);
+      const filtered = q
+        ? allUsers.filter((user) =>
+            adminInventoryMatchesQuery(q, [user.username, user.displayName, user.email]))
+        : allUsers;
+      const total = filtered.length;
+      const pageUsers = sliceAdminInventoryPage(filtered, page, pageSize);
       return makeSuccess({
         users: pageUsers.map((user) => ({
           ...toUserDto(user),
@@ -2037,9 +2051,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return admin;
       }
       const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const q = normalizeAdminListQuery(adminInput.q);
       const allDevices = sortAdminInventoryByCreatedAtDesc(await repositories.devices.listAll());
-      const total = allDevices.length;
-      const pageDevices = sliceAdminInventoryPage(allDevices, page, pageSize);
+      const filtered = q
+        ? allDevices.filter((device) =>
+            adminInventoryMatchesQuery(q, [
+              device.name,
+              device.hostname,
+              device.systemInfo?.hostname,
+            ]))
+        : allDevices;
+      const total = filtered.length;
+      const pageDevices = sliceAdminInventoryPage(filtered, page, pageSize);
       const devices: AdminDeviceDto[] = [];
       for (const device of pageDevices) {
         devices.push(await toAdminDeviceDto(repositories, device));
@@ -2053,10 +2076,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return admin;
       }
       const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const q = normalizeAdminListQuery(adminInput.q);
       // listAll already excludes soft-deleted agents; keep that as the default inventory filter.
       const allAgents = sortAdminInventoryByCreatedAtDesc(await repositories.agents.listAll());
-      const total = allAgents.length;
-      const pageAgents = sliceAdminInventoryPage(allAgents, page, pageSize);
+      const filtered = q
+        ? allAgents.filter((agent) => adminInventoryMatchesQuery(q, [agent.name]))
+        : allAgents;
+      const total = filtered.length;
+      const pageAgents = sliceAdminInventoryPage(filtered, page, pageSize);
       return makeSuccess({
         agents: await toAdminAgentDtos(repositories, pageAgents),
         page,
@@ -8768,6 +8795,22 @@ function normalizeAdminListPagination(input: { page?: number; pageSize?: number 
     page,
     pageSize: Math.min(ADMIN_LIST_MAX_PAGE_SIZE, Math.floor(pageSizeRaw)),
   };
+}
+
+/** Trim and lowercase keyword; empty/whitespace → undefined (no filter). */
+function normalizeAdminListQuery(q: unknown): string | undefined {
+  if (typeof q !== 'string') {
+    return undefined;
+  }
+  const trimmed = q.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function adminInventoryMatchesQuery(
+  q: string,
+  fields: Array<string | null | undefined>,
+): boolean {
+  return fields.some((field) => typeof field === 'string' && field.toLowerCase().includes(q));
 }
 
 function adminInventoryCreatedAt(item: { createdAt?: number | null; lastSeenAt?: number | null }): number {
