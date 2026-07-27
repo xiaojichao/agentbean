@@ -99,6 +99,17 @@ const SECTION_TITLE: Record<AdminConsoleSection, string> = {
 /** Default inventory page size for System Admin Console lists. */
 export const ADMIN_LIST_DEFAULT_PAGE_SIZE = 20;
 
+/** Console page-size options for System Admin Console inventory lists. */
+export const ADMIN_LIST_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
+export type AdminListPageSize = (typeof ADMIN_LIST_PAGE_SIZE_OPTIONS)[number];
+
+const SECTION_SEARCH_PLACEHOLDER: Record<AdminConsoleSection, string> = {
+  teams: '搜索名称或 path',
+  users: '搜索用户名、显示名或邮箱',
+  devices: '搜索名称或 hostname',
+  agents: '搜索名称',
+};
+
 /**
  * Right-pane inventory for System Admin Console.
  * Shell / middle nav live in dashboard layout; this panel only loads and renders one section.
@@ -115,9 +126,14 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(ADMIN_LIST_DEFAULT_PAGE_SIZE);
+  const [pageSize, setPageSize] = useState<AdminListPageSize>(ADMIN_LIST_DEFAULT_PAGE_SIZE);
+  /** Applied keyword sent to the server (`q`). */
+  const [q, setQ] = useState('');
+  /** Draft text in the search input (applied on submit / clear). */
+  const [qDraft, setQDraft] = useState('');
   const [total, setTotal] = useState(0);
   const loadGenerationRef = useRef(0);
+  const prevSectionRef = useRef(section);
 
   const loadData = async (t: AdminConsoleSection, pageToLoad = page) => {
     const generation = ++loadGenerationRef.current;
@@ -125,7 +141,14 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
     setError(null);
     const socket = getWebSocket();
     try {
-      const res = await emitWithTimeout(socket, `admin:list-${t}`, { page: pageToLoad, pageSize });
+      const listPayload: { page: number; pageSize: number; q?: string } = {
+        page: pageToLoad,
+        pageSize,
+      };
+      if (q) {
+        listPayload.q = q;
+      }
+      const res = await emitWithTimeout(socket, `admin:list-${t}`, listPayload);
       if (generation !== loadGenerationRef.current) {
         return;
       }
@@ -150,7 +173,7 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
         if (t === 'devices') {
           setDevices(res.devices ?? []);
           // Owner transfer dropdown needs a wider user sample than the inventory page.
-          // Full searchable user picker is P3; inject current owner in the dialog if missing.
+          // Searchable full-user picker can refine later; inject current owner if missing.
           const usersRes = await emitWithTimeout(socket, 'admin:list-users', { page: 1, pageSize: 100 });
           if (generation !== loadGenerationRef.current) {
             return;
@@ -178,12 +201,48 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
     }
   };
 
+  // Switching section clears search and returns to page 1 (independent inventory views).
+  useEffect(() => {
+    if (prevSectionRef.current === section) {
+      return;
+    }
+    prevSectionRef.current = section;
+    setPage(1);
+    setQ('');
+    setQDraft('');
+    setSelectedDevice(null);
+    setSelectedAgent(null);
+  }, [section]);
+
   useEffect(() => {
     if (conn !== 'open') return;
     void loadData(section, page);
-    // section/page/conn drive reloads; loadData closes over latest pageSize.
+    // section/page/pageSize/q/conn drive reloads; loadData closes over latest filters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conn, section, page, pageSize]);
+  }, [conn, section, page, pageSize, q]);
+
+  const applySearch = (nextDraft: string = qDraft) => {
+    const nextQ = nextDraft.trim();
+    setQDraft(nextDraft);
+    if (nextQ === q) {
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        void loadData(section, 1);
+      }
+      return;
+    }
+    setQ(nextQ);
+    setPage(1);
+  };
+
+  const handlePageSizeChange = (next: AdminListPageSize) => {
+    if (next === pageSize) {
+      return;
+    }
+    setPageSize(next);
+    setPage(1);
+  };
 
   const handleDelete = async (type: string, id: string) => {
     const socket = getWebSocket();
@@ -262,6 +321,18 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
       </div>
       <div className="flex-1 overflow-y-auto p-6">
         <ConnectionBanner />
+        <AdminListFilters
+          section={section}
+          qDraft={qDraft}
+          pageSize={pageSize}
+          onQDraftChange={setQDraft}
+          onSearch={() => applySearch()}
+          onClearSearch={() => {
+            setQDraft('');
+            applySearch('');
+          }}
+          onPageSizeChange={handlePageSizeChange}
+        />
         {error && (
           <div className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="admin-error">
             {error}
@@ -281,6 +352,7 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
             total={total}
             totalPages={totalPages}
             onPageChange={setPage}
+            onPageSizeChange={handlePageSizeChange}
           />
         )}
         {selectedDevice && (
@@ -303,21 +375,110 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
   );
 }
 
+function AdminListFilters({
+  section,
+  qDraft,
+  pageSize,
+  onQDraftChange,
+  onSearch,
+  onClearSearch,
+  onPageSizeChange,
+}: {
+  section: AdminConsoleSection;
+  qDraft: string;
+  pageSize: AdminListPageSize;
+  onQDraftChange: (value: string) => void;
+  onSearch: () => void;
+  onClearSearch: () => void;
+  onPageSizeChange: (pageSize: AdminListPageSize) => void;
+}) {
+  return (
+    <div
+      className="mb-4 flex flex-wrap items-center gap-2"
+      data-smoke="admin-list-filters"
+    >
+      <form
+        className="flex min-w-[16rem] flex-1 flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSearch();
+        }}
+      >
+        <input
+          type="search"
+          value={qDraft}
+          onChange={(event) => onQDraftChange(event.target.value)}
+          placeholder={SECTION_SEARCH_PLACEHOLDER[section]}
+          className="min-w-[12rem] flex-1 rounded border border-neutral-300 px-3 py-1.5 text-sm outline-none focus:border-neutral-500"
+          data-smoke="admin-list-search"
+          aria-label="关键词搜索"
+        />
+        <button
+          type="submit"
+          className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+          data-smoke="admin-list-search-submit"
+        >
+          搜索
+        </button>
+        {qDraft.trim().length > 0 && (
+          <button
+            type="button"
+            onClick={onClearSearch}
+            className="rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-600 hover:bg-neutral-50"
+            data-smoke="admin-list-search-clear"
+          >
+            清除
+          </button>
+        )}
+      </form>
+      <label className="inline-flex items-center gap-1.5 text-sm text-neutral-600">
+        <span className="whitespace-nowrap">每页</span>
+        <select
+          value={pageSize}
+          onChange={(event) => onPageSizeChange(Number(event.target.value) as AdminListPageSize)}
+          className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm"
+          data-smoke="admin-list-page-size"
+          aria-label="每页条数"
+        >
+          {ADMIN_LIST_PAGE_SIZE_OPTIONS.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+        <span className="whitespace-nowrap">条</span>
+      </label>
+    </div>
+  );
+}
+
 function AdminListPagination({
   page,
   pageSize,
   total,
   totalPages,
   onPageChange,
+  onPageSizeChange,
 }: {
   page: number;
-  pageSize: number;
+  pageSize: AdminListPageSize;
   total: number;
   totalPages: number;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: AdminListPageSize) => void;
 }) {
   if (total === 0) {
-    return null;
+    return (
+      <div
+        className="mt-4 border-t border-neutral-100 pt-4 text-sm text-neutral-500"
+        data-smoke="admin-list-pagination"
+        data-page={page}
+        data-page-size={pageSize}
+        data-total={0}
+      >
+        无匹配结果
+      </div>
+    );
   }
   const from = (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
@@ -332,7 +493,23 @@ function AdminListPagination({
       <span data-smoke="admin-list-pagination-summary">
         第 {from}–{to} 条，共 {total} 条
       </span>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="inline-flex items-center gap-1.5 text-sm text-neutral-600">
+          <span className="whitespace-nowrap">每页</span>
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSizeChange(Number(event.target.value) as AdminListPageSize)}
+            className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm"
+            data-smoke="admin-list-page-size-footer"
+            aria-label="每页条数"
+          >
+            {ADMIN_LIST_PAGE_SIZE_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="button"
           disabled={page <= 1}

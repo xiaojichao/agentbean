@@ -24,6 +24,8 @@ async function seedAdminFixture() {
     id: 'admin-1',
     username: 'admin',
     role: 'admin',
+    displayName: 'Site Admin',
+    email: 'admin@example.com',
     primaryTeamId: 'team-a',
     currentTeamId: 'team-a',
     passwordHash: sha256('secret'),
@@ -34,6 +36,8 @@ async function seedAdminFixture() {
     id: 'user-member',
     username: 'member',
     role: 'user',
+    displayName: 'Team Member',
+    email: 'member@example.com',
     primaryTeamId: 'team-a',
     currentTeamId: 'team-a',
     passwordHash: sha256('secret'),
@@ -44,6 +48,8 @@ async function seedAdminFixture() {
     id: 'user-z',
     username: 'zeta',
     role: 'user',
+    displayName: 'Zeta User',
+    email: 'zeta@corp.test',
     primaryTeamId: 'team-b',
     currentTeamId: 'team-b',
     passwordHash: sha256('secret'),
@@ -90,6 +96,7 @@ async function seedAdminFixture() {
     ownerId: 'user-member',
     status: 'online',
     name: 'Old Device',
+    hostname: 'old-host.local',
     machineId: 'machine-old',
     profileId: 'default',
     lastSeenAt: 5000,
@@ -102,6 +109,7 @@ async function seedAdminFixture() {
     ownerId: 'user-z',
     status: 'offline',
     name: 'New Device',
+    hostname: 'new-host.local',
     machineId: 'machine-new',
     profileId: 'default',
     lastSeenAt: 9000,
@@ -114,6 +122,7 @@ async function seedAdminFixture() {
     ownerId: 'admin-1',
     status: 'online',
     name: 'Mid Device',
+    hostname: 'mid-host.local',
     machineId: 'machine-mid',
     profileId: 'default',
     lastSeenAt: 7000,
@@ -327,5 +336,110 @@ describe('admin inventory list pagination', () => {
 
     const pastEnd = await app.listAdminAgents({ userId: 'admin-1', page: 99, pageSize: 20 });
     expect(pastEnd).toMatchObject({ ok: true, page: 99, pageSize: 20, total: 3, agents: [] });
+  });
+
+  test('q filters teams by name/path and combines with pageSize total/page', async () => {
+    const { app } = await seedAdminFixture();
+
+    const byName = await app.listAdminTeams({ userId: 'admin-1', q: 'char' });
+    expect(byName).toMatchObject({
+      ok: true,
+      page: 1,
+      pageSize: 20,
+      total: 1,
+      teams: [expect.objectContaining({ id: 'team-c', name: 'Charlie' })],
+    });
+
+    const byPath = await app.listAdminTeams({ userId: 'admin-1', q: 'BETA' });
+    expect(byPath).toMatchObject({
+      ok: true,
+      total: 1,
+      teams: [expect.objectContaining({ id: 'team-b', path: 'beta' })],
+    });
+
+    const empty = await app.listAdminTeams({ userId: 'admin-1', q: '   ' });
+    expect(empty).toMatchObject({ ok: true, total: 3 });
+    expect(empty.ok && empty.teams).toHaveLength(3);
+
+    const none = await app.listAdminTeams({ userId: 'admin-1', q: 'no-such-team' });
+    expect(none).toMatchObject({ ok: true, total: 0, teams: [] });
+
+    // pageSize options used by Console (20/50/100) round-trip with filtered total.
+    for (const pageSize of [20, 50, 100] as const) {
+      const page = await app.listAdminTeams({ userId: 'admin-1', q: 'a', page: 1, pageSize });
+      expect(page).toMatchObject({ ok: true, page: 1, pageSize, total: 3 });
+      expect(page.ok && page.teams).toHaveLength(3);
+    }
+
+    // "a" matches Alpha/alpha, Beta/beta, Charlie/charlie → total 3; pageSize 2 yields 2 then 1.
+    const page1 = await app.listAdminTeams({ userId: 'admin-1', q: 'a', page: 1, pageSize: 2 });
+    expect(page1).toMatchObject({
+      ok: true,
+      page: 1,
+      pageSize: 2,
+      total: 3,
+      teams: [
+        expect.objectContaining({ id: 'team-c' }),
+        expect.objectContaining({ id: 'team-b' }),
+      ],
+    });
+    const page2 = await app.listAdminTeams({ userId: 'admin-1', q: 'a', page: 2, pageSize: 2 });
+    expect(page2).toMatchObject({
+      ok: true,
+      page: 2,
+      pageSize: 2,
+      total: 3,
+      teams: [expect.objectContaining({ id: 'team-a' })],
+    });
+  });
+
+  test('q filters users/devices/agents on DTO search fields', async () => {
+    const { app } = await seedAdminFixture();
+
+    const byUsername = await app.listAdminUsers({ userId: 'admin-1', q: 'zet' });
+    expect(byUsername).toMatchObject({
+      ok: true,
+      total: 1,
+      users: [expect.objectContaining({ id: 'user-z', username: 'zeta' })],
+    });
+
+    const byDisplayName = await app.listAdminUsers({ userId: 'admin-1', q: 'team member' });
+    expect(byDisplayName).toMatchObject({
+      ok: true,
+      total: 1,
+      users: [expect.objectContaining({ id: 'user-member' })],
+    });
+
+    const byEmail = await app.listAdminUsers({ userId: 'admin-1', q: 'corp.test' });
+    expect(byEmail).toMatchObject({
+      ok: true,
+      total: 1,
+      users: [expect.objectContaining({ id: 'user-z', email: 'zeta@corp.test' })],
+    });
+
+    const byDeviceName = await app.listAdminDevices({ userId: 'admin-1', q: 'mid device' });
+    expect(byDeviceName).toMatchObject({
+      ok: true,
+      total: 1,
+      devices: [expect.objectContaining({ id: 'device-mid' })],
+    });
+
+    const byHostname = await app.listAdminDevices({ userId: 'admin-1', q: 'old-host' });
+    expect(byHostname).toMatchObject({
+      ok: true,
+      total: 1,
+      devices: [expect.objectContaining({ id: 'device-old' })],
+    });
+
+    const byAgentName = await app.listAdminAgents({ userId: 'admin-1', q: 'New Agent' });
+    expect(byAgentName).toMatchObject({
+      ok: true,
+      total: 1,
+      agents: [expect.objectContaining({ id: 'agent-new', name: 'New Agent' })],
+    });
+
+    // Soft-deleted agent still excluded even when q would match its name.
+    const deleted = await app.listAdminAgents({ userId: 'admin-1', q: 'Deleted' });
+    expect(deleted).toMatchObject({ ok: true, total: 0, agents: [] });
   });
 });
