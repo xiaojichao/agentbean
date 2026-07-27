@@ -361,6 +361,25 @@ describe('managed Dispatch lifecycle bridge', () => {
       workspaceRun: { id: 'workspace-run-recovery', status: 'succeeded' as const },
       projectDocumentInputSetResult: proposal,
     };
+    const createWorkspaceRun = harness.repositories.workspaceRuns.create;
+    let workspaceRunWrites = 0;
+    harness.repositories.workspaceRuns.create = async (run) => {
+      workspaceRunWrites += 1;
+      if (workspaceRunWrites === 1) throw new Error('SIMULATED_WORKSPACE_RUN_WRITE_FAILURE');
+      return createWorkspaceRun(run);
+    };
+    await expect(harness.usecases.receiveDispatchResult(input))
+      .rejects.toThrow('SIMULATED_WORKSPACE_RUN_WRITE_FAILURE');
+    harness.repositories.workspaceRuns.create = createWorkspaceRun;
+    await expect(harness.repositories.workspaceRuns.listByDispatch(input.dispatchId))
+      .resolves.toHaveLength(0);
+    const artifactBeforeRecovery = await harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: 'artifact-recovery',
+    });
+    expect(artifactBeforeRecovery?.dispatchId).toBeUndefined();
+    expect(artifactBeforeRecovery?.workspaceRunId).toBeUndefined();
+
     const record = harness.repositories.projectDocumentInputSetResults.record;
     let writes = 0;
     harness.repositories.projectDocumentInputSetResults.record = async (result) => {
@@ -371,6 +390,15 @@ describe('managed Dispatch lifecycle bridge', () => {
     await expect(harness.usecases.receiveDispatchResult(input))
       .rejects.toThrow('SIMULATED_RESULT_WRITE_FAILURE');
     harness.repositories.projectDocumentInputSetResults.record = record;
+    await expect(harness.repositories.workspaceRuns.listByDispatch(input.dispatchId))
+      .resolves.toMatchObject([{ id: 'workspace-run-recovery' }]);
+    await expect(harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: 'artifact-recovery',
+    })).resolves.toMatchObject({
+      dispatchId: input.dispatchId,
+      workspaceRunId: 'workspace-run-recovery',
+    });
     const deliveryBeforeRecovery = (await harness.repositories.messages.listByChannel(
       'channel-1',
       100,

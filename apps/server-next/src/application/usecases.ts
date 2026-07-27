@@ -6398,15 +6398,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 replayed,
               );
             } else {
+              const recoveryNow = clock.now();
+              const reportedArtifactIds = uniqueIds([
+                ...(resultInput.artifactIds ?? []),
+                ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+              ]);
               const validation = await validateProjectDocumentInputSetResultProposal({
                 repositories,
                 dispatch,
                 managedInvocation,
                 proposal,
-                reportedArtifactIds: uniqueIds([
-                  ...(resultInput.artifactIds ?? []),
-                  ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
-                ]),
+                reportedArtifactIds,
               });
               if (!validation.ok) return validation;
               if (await isProjectDocumentInputSetResultAttemptStale({
@@ -6417,6 +6419,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               })) {
                 return makeFailure('CONFLICT', 'Project document InputSet result belongs to a stale Dispatch attempt');
               }
+              let recoveredRun = (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1);
+              if (!recoveredRun && resultInput.workspaceRun) {
+                const recoveryWorkspaceRunId = resultInput.workspaceRun.id ?? ids.nextId();
+                const existingDeliveryMessage = (await repositories.messages.listByChannel(
+                  dispatch.channelId,
+                  10_000,
+                )).find((message) => message.meta?.dispatchId === dispatch.id);
+                const managedHandoff = await repositories.management.handoffs.getByInvocationId(invocationId);
+                const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
+                const originMessage = await repositories.messages.getById(dispatch.messageId);
+                const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+                const deliveryMessage = existingDeliveryMessage ?? (publishResult
+                  ? await repositories.messages.append({
+                      id: ids.nextId(),
+                      teamId: dispatch.teamId,
+                      channelId: dispatch.channelId,
+                      threadId: originMessage?.threadId ?? originMessage?.id,
+                      senderKind: 'agent',
+                      senderId: resultInput.agentId,
+                      body: resultInput.body,
+                      createdAt: recoveryNow,
+                      meta: {
+                        dispatchId: dispatch.id,
+                        replyScope: nestReplyInThread ? 'thread' : 'channel',
+                        ...(nestReplyInThread && originMessage?.threadId
+                          ? { parentMessageId: originMessage.threadId }
+                          : {}),
+                        ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
+                        workspaceRunId: recoveryWorkspaceRunId,
+                      },
+                    })
+                  : null);
+                const recoveryAgent = await repositories.agents.getById(resultInput.agentId);
+                recoveredRun = await repositories.workspaceRuns.create({
+                  id: recoveryWorkspaceRunId,
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(deliveryMessage ? { messageId: deliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  ...(recoveryAgent?.deviceId ? { deviceId: recoveryAgent.deviceId } : {}),
+                  status: resultInput.workspaceRun.status ?? 'succeeded',
+                  cwd: resultInput.workspaceRun.cwd,
+                  command: resultInput.workspaceRun.command,
+                  logExcerpt: normalizeWorkspaceRunLogExcerpt(resultInput.workspaceRun.logExcerpt),
+                  exitCode: resultInput.workspaceRun.exitCode,
+                  startedAt: resultInput.workspaceRun.startedAt,
+                  completedAt: resultInput.workspaceRun.completedAt ?? recoveryNow,
+                  createdAt: recoveryNow,
+                  updatedAt: recoveryNow,
+                  artifactIds: reportedArtifactIds,
+                });
+              }
+              if (recoveredRun) {
+                const recoveryDeliveryMessage = recoveredRun.messageId
+                  ? await repositories.messages.getById(recoveredRun.messageId)
+                  : (await repositories.messages.listByChannel(
+                      dispatch.channelId,
+                      10_000,
+                    )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+                for (const artifactId of reportedArtifactIds) {
+                  const artifact = await repositories.artifacts.getForTeam({
+                    teamId: dispatch.teamId,
+                    artifactId,
+                  });
+                  if (!artifact || artifact.channelId !== dispatch.channelId) continue;
+                  await repositories.artifacts.create({
+                    ...artifact,
+                    ...(recoveryDeliveryMessage ? { messageId: recoveryDeliveryMessage.id } : {}),
+                    dispatchId: dispatch.id,
+                    workspaceRunId: recoveredRun.id,
+                    pathKind: 'generated',
+                  });
+                }
+              }
               const committedArtifacts = (await Promise.all(proposal.items.flatMap((item) =>
                 item.status === 'changed'
                   ? [repositories.artifacts.getForTeam({
@@ -6425,19 +6502,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                     })]
                   : [])))
                 .filter((artifact): artifact is ArtifactRecord => artifact !== null);
-              const recoveredWorkspaceRunId = committedArtifacts.find(
-                (artifact) => artifact.workspaceRunId,
-              )?.workspaceRunId;
               const recovered = await commitProjectDocumentInputSetResults({
                 repositories,
                 ids,
-                now: clock.now(),
+                now: recoveryNow,
                 agentId: resultInput.agentId,
                 dispatch,
                 invocation: managedInvocation,
                 proposal,
                 committedArtifacts,
-                ...(recoveredWorkspaceRunId ? { workspaceRunId: recoveredWorkspaceRunId } : {}),
+                ...(recoveredRun ? { workspaceRunId: recoveredRun.id } : {}),
               });
               recoveredResult = recovered;
             }
