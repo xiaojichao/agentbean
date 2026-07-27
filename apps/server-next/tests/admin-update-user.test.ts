@@ -419,4 +419,22 @@ describe('admin reset user password', () => {
       }),
     ).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
+
+  test('reset password returns NOT_FOUND when target disappears before write', async () => {
+    const { app, repositories } = await seedAdmin();
+    await seedUser(repositories, { id: 'user-1', username: 'alice' });
+    const originalUpdate = repositories.users.updatePassword.bind(repositories.users);
+    repositories.users.updatePassword = async (input) => {
+      await repositories.users.delete(input.userId);
+      return originalUpdate(input);
+    };
+
+    await expect(
+      app.resetAdminUserPassword({
+        adminUserId: 'admin-1',
+        targetUserId: 'user-1',
+        newPassword: 'secret12',
+      }),
+    ).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
 });

@@ -2145,11 +2145,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (newPassword.length < 6) {
         return makeFailure('VALIDATION_ERROR', 'Password must be at least 6 characters');
       }
-      await repositories.users.updatePassword({
+      const written = await repositories.users.updatePassword({
         userId: user.id,
         passwordHash: await hashPassword(newPassword),
         updatedAt: clock.now(),
       });
+      if (!written) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
       return makeSuccess({});
     },
 
