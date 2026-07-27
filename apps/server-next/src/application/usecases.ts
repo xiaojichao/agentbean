@@ -6,7 +6,7 @@ import type {
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   initialChannelDocumentIds,
@@ -230,6 +230,7 @@ export interface ServerNextUseCases {
   listAdminUsers(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'users', AdminUserDto>>>;
   listAdminDevices(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'devices', AdminDeviceDto>>>;
   listAdminAgents(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'agents', AdminAgentDto>>>;
+  createAdminUser(input: CreateAdminUserInput): Promise<Ack<CreateAdminUserResult>>;
   deleteAdminTeam(input: { userId: string; teamId: string }): Promise<Ack<{}>>;
   deleteAdminUser(input: { adminUserId: string; targetUserId: string }): Promise<Ack<{}>>;
   deleteAdminAgent(input: { userId: string; agentId: string }): Promise<Ack<{}>>;
@@ -499,6 +500,26 @@ export interface RegisterUserResult {
   currentTeam: TeamDto;
   defaultChannel: ChannelDto;
   joinedTeam?: TeamDto;
+}
+
+/** System admin creates a user; default path also creates a personal private team. */
+export interface CreateAdminUserInput {
+  adminUserId: string;
+  username: string;
+  password: string;
+  displayName?: string;
+  role?: UserRole;
+  /**
+   * When true (default), create a personal private Team (owner + default channel)
+   * so the new user can log in immediately. When false, user can only enter via invite code.
+   */
+  createPersonalTeam?: boolean;
+}
+
+export interface CreateAdminUserResult {
+  user: AdminUserDto;
+  team?: TeamDto;
+  defaultChannel?: ChannelDto;
 }
 
 type DeviceAgentListDto = AgentDto & {
@@ -1909,6 +1930,104 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         page,
         pageSize,
         total,
+      });
+    },
+
+    async createAdminUser(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.adminUserId);
+      if (!admin.ok) {
+        return admin;
+      }
+
+      const usernameRaw = typeof adminInput.username === 'string' ? adminInput.username : '';
+      const username = normalizeUsername(usernameRaw);
+      if (!username) {
+        return makeFailure('VALIDATION_ERROR', 'Username is required');
+      }
+      const password = typeof adminInput.password === 'string' ? adminInput.password : '';
+      if (password.length < 6) {
+        return makeFailure('VALIDATION_ERROR', 'Password must be at least 6 characters');
+      }
+      const role: UserRole = adminInput.role ?? 'user';
+      if (role !== 'user' && role !== 'admin') {
+        return makeFailure('VALIDATION_ERROR', 'Role must be user or admin');
+      }
+      const createPersonalTeam = adminInput.createPersonalTeam !== false;
+      const displayName =
+        typeof adminInput.displayName === 'string' && adminInput.displayName.trim().length > 0
+          ? adminInput.displayName.trim()
+          : undefined;
+
+      const existing = await repositories.users.getByUsername(username);
+      if (existing) {
+        return makeFailure('CONFLICT', 'Username already exists');
+      }
+
+      const now = clock.now();
+      const userId = ids.nextId();
+      const teamId = createPersonalTeam ? ids.nextId() : undefined;
+      const channelId = createPersonalTeam ? ids.nextId() : undefined;
+      const passwordHash = await hashPassword(password);
+
+      const user = await repositories.users.create({
+        id: userId,
+        username,
+        role,
+        ...(displayName ? { displayName } : {}),
+        ...(teamId ? { primaryTeamId: teamId, currentTeamId: teamId } : {}),
+        passwordHash,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      if (!createPersonalTeam || !teamId || !channelId) {
+        return makeSuccess({
+          user: {
+            ...toUserDto(user),
+            email: user.email ?? null,
+            createdAt: user.createdAt,
+          },
+        });
+      }
+
+      const teamName = displayName || username;
+      const teamPath = await allocateUniqueTeamPath(repositories, teamName);
+      const team = await repositories.teams.create({
+        id: teamId,
+        name: teamName,
+        path: teamPath,
+        visibility: 'private',
+        ownerId: userId,
+        createdAt: now,
+      });
+      await repositories.teams.addMember({
+        teamId,
+        userId,
+        username,
+        role: 'owner',
+        joinedAt: now,
+      });
+      await repositories.users.setCurrentTeam(userId, teamId);
+      const defaultChannel = await repositories.channels.create({
+        id: channelId,
+        teamId,
+        kind: 'channel',
+        name: 'all',
+        visibility: 'public',
+        createdBy: userId,
+        createdAt: now,
+        humanMemberIds: [userId],
+        agentMemberIds: [],
+      });
+
+      return makeSuccess({
+        user: {
+          ...toUserDto({ ...user, primaryTeamId: teamId }),
+          email: user.email ?? null,
+          createdAt: user.createdAt,
+        },
+        team: toTeamDto(team, 'owner'),
+        defaultChannel,
       });
     },
 
@@ -9863,6 +9982,23 @@ function normalizeUsername(username: string): string {
 
 function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'team';
+}
+
+async function allocateUniqueTeamPath(
+  repositories: ServerNextRepositories,
+  preferredName: string,
+): Promise<string> {
+  const base = slugify(preferredName);
+  const teams = await repositories.teams.listAll();
+  const used = new Set(teams.map((team) => team.path));
+  if (!used.has(base)) {
+    return base;
+  }
+  let suffix = 2;
+  while (used.has(`${base}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}-${suffix}`;
 }
 
 function generateJoinCode(): string {

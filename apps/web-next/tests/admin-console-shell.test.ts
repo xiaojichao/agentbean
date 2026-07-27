@@ -63,8 +63,11 @@ describe('System Admin Console shell', () => {
     expect(panel).toContain("section === 'devices'");
     expect(panel).toContain("section === 'agents'");
     expect(panel).toContain('admin:list-users');
+    expect(panel).toContain('admin:create-user');
     expect(panel).toContain('admin:transfer-device-owner');
     expect(panel).toContain('data-smoke="admin-agent-row"');
+    expect(panel).toContain('data-smoke="admin-create-user-open"');
+    expect(panel).toContain('data-smoke="admin-create-user-no-team-warning"');
   });
 
   test('inventory lists request server-side pagination with default pageSize 20', () => {

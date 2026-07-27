@@ -534,6 +534,38 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.admin.listUsers, app, 'listAdminUsers', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listDevices, app, 'listAdminDevices', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.admin.listAgents, app, 'listAdminAgents', undefined, { authenticatedUser: options.authenticatedUser });
+  socket.on(WEB_EVENTS.admin.createUser, async (payload, ack) => {
+    try {
+      const adminUserId = await requireAuthenticatedSocketUser(options.authenticatedUser);
+      const username = payloadString(payload, 'username');
+      const password = payloadString(payload, 'password');
+      if (!username || !password) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'username and password are required'));
+        return;
+      }
+      const displayName = payloadString(payload, 'displayName');
+      const roleRaw = payloadString(payload, 'role');
+      if (roleRaw !== undefined && roleRaw !== 'admin' && roleRaw !== 'user') {
+        ack?.(makeFailure('VALIDATION_ERROR', 'role must be user or admin'));
+        return;
+      }
+      const role = roleRaw === 'admin' || roleRaw === 'user' ? roleRaw : undefined;
+      const createPersonalTeamFlag =
+        payload && typeof payload === 'object'
+          ? (payload as Record<string, unknown>).createPersonalTeam
+          : undefined;
+      ack?.(await app.createAdminUser({
+        adminUserId,
+        username,
+        password,
+        ...(displayName ? { displayName } : {}),
+        ...(role ? { role } : {}),
+        ...(createPersonalTeamFlag === false ? { createPersonalTeam: false } : {}),
+      }));
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.admin.createUser));
+    }
+  });
   socket.on(WEB_EVENTS.admin.deleteTeam, async (payload, ack) => {
     try {
       const userId = await requireAuthenticatedSocketUser(options.authenticatedUser);

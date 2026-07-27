@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save } from 'lucide-react';
+import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save, Plus } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -21,7 +21,7 @@ export const ADMIN_CONSOLE_NAV: { key: AdminConsoleNavKey; label: string }[] = [
 ];
 
 interface AdminTeam { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }
-interface AdminUser { id: string; username: string; email: string | null; role: string; createdAt: number; }
+interface AdminUser { id: string; username: string; email: string | null; role: string; displayName?: string; createdAt: number; }
 interface AdminDevice {
   id: string;
   name: string;
@@ -111,6 +111,7 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<AdminDevice | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AdminAgent | null>(null);
+  const [showCreateUser, setShowCreateUser] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -204,20 +205,60 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
     setSelectedDevice((current) => (current?.id === res.device.id ? res.device : current));
   };
 
+  const handleCreateUser = async (input: {
+    username: string;
+    displayName: string;
+    password: string;
+    role: 'user' | 'admin';
+    createPersonalTeam: boolean;
+  }) => {
+    const socket = getWebSocket();
+    const res = await emitWithTimeout(socket, 'admin:create-user', {
+      username: input.username,
+      password: input.password,
+      role: input.role,
+      createPersonalTeam: input.createPersonalTeam,
+      ...(input.displayName.trim() ? { displayName: input.displayName.trim() } : {}),
+    });
+    if (!res?.ok) {
+      const message = res?.message ?? res?.error ?? '创建用户失败';
+      throw new Error(message);
+    }
+    setShowCreateUser(false);
+    // New users sort by createdAt desc at the front of page 1.
+    if (page !== 1) {
+      setPage(1);
+    } else {
+      await loadData('users', 1);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
         <h1 className="text-sm font-semibold">{SECTION_TITLE[section]}</h1>
-        <button
-          onClick={() => void loadData(section, page)}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
-          data-smoke="admin-refresh"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
-        </button>
+        <div className="flex items-center gap-2">
+          {section === 'users' && (
+            <button
+              type="button"
+              onClick={() => setShowCreateUser(true)}
+              className="inline-flex items-center gap-1.5 rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-800"
+              data-smoke="admin-create-user-open"
+            >
+              <Plus size={14} /> 添加用户
+            </button>
+          )}
+          <button
+            onClick={() => void loadData(section, page)}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
+            data-smoke="admin-refresh"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-6">
         <ConnectionBanner />
@@ -251,6 +292,12 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
           />
         )}
         {selectedAgent && <AgentDetailDialog agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
+        {showCreateUser && (
+          <CreateUserDialog
+            onClose={() => setShowCreateUser(false)}
+            onCreate={handleCreateUser}
+          />
+        )}
       </div>
     </div>
   );
@@ -464,10 +511,11 @@ function TeamsTable({ teams, onDelete }: { teams: AdminTeam[]; onDelete: (id: st
 function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: string) => void }) {
   if (users.length === 0) return <div className="py-6 text-center text-sm text-neutral-400">暂无用户</div>;
   return (
-    <Table headers={['用户名', '邮箱', '角色', '创建时间', '']}>
+    <Table headers={['用户名', '显示名', '邮箱', '角色', '创建时间', '']}>
       {users.map((u) => (
         <tr key={u.id} className="hover:bg-neutral-50" data-smoke="admin-user-row" data-user-id={u.id} data-username={u.username} data-user-role={u.role}>
           <td className="px-4 py-2.5 font-medium">{u.username}</td>
+          <td className="px-4 py-2.5 text-xs text-neutral-600">{u.displayName ?? '—'}</td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{u.email ?? '—'}</td>
           <td className="px-4 py-2.5"><span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${u.role === 'admin' ? 'bg-purple-50 text-purple-700' : 'bg-neutral-100 text-neutral-500'}`}>{u.role === 'admin' ? '管理员' : '用户'}</span></td>
           <td className="px-4 py-2.5 text-xs text-neutral-500">{new Date(u.createdAt).toLocaleDateString()}</td>
@@ -475,6 +523,161 @@ function UsersTable({ users, onDelete }: { users: AdminUser[]; onDelete: (id: st
         </tr>
       ))}
     </Table>
+  );
+}
+
+function CreateUserDialog({
+  onClose,
+  onCreate,
+}: {
+  onClose: () => void;
+  onCreate: (input: {
+    username: string;
+    displayName: string;
+    password: string;
+    role: 'user' | 'admin';
+    createPersonalTeam: boolean;
+  }) => Promise<void>;
+}) {
+  const [username, setUsername] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'user' | 'admin'>('user');
+  const [createPersonalTeam, setCreatePersonalTeam] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const submit = async (event: { preventDefault(): void }) => {
+    event.preventDefault();
+    if (!username.trim()) {
+      setFormError('用户名不能为空');
+      return;
+    }
+    if (password.length < 6) {
+      setFormError('初始密码至少 6 位');
+      return;
+    }
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await onCreate({
+        username: username.trim(),
+        displayName,
+        password,
+        role,
+        createPersonalTeam,
+      });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : '创建用户失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" data-smoke="admin-create-user-dialog">
+      <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
+          <h2 className="text-sm font-semibold">添加用户</h2>
+          <button type="button" onClick={onClose} className="rounded p-1 text-neutral-500 hover:bg-neutral-100" aria-label="关闭">
+            <X size={16} />
+          </button>
+        </div>
+        <form onSubmit={(e) => void submit(e)} className="space-y-4 px-4 py-4">
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">用户名</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="off"
+              data-smoke="admin-create-user-username"
+              required
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">显示名</span>
+            <input
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="off"
+              data-smoke="admin-create-user-display-name"
+              placeholder="可选"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">初始密码</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              autoComplete="new-password"
+              data-smoke="admin-create-user-password"
+              required
+              minLength={6}
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-xs font-medium text-neutral-600">系统角色</span>
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value === 'admin' ? 'admin' : 'user')}
+              className="w-full rounded border border-neutral-300 px-3 py-2 text-sm outline-none focus:border-neutral-500"
+              data-smoke="admin-create-user-role"
+            >
+              <option value="user">用户</option>
+              <option value="admin">管理员</option>
+            </select>
+          </label>
+          <div className="rounded border border-neutral-200 bg-neutral-50 px-3 py-3 space-y-2">
+            <label className="flex items-start gap-2 text-sm text-neutral-700">
+              <input
+                type="checkbox"
+                checked={createPersonalTeam}
+                onChange={(e) => setCreatePersonalTeam(e.target.checked)}
+                className="mt-0.5"
+                data-smoke="admin-create-user-personal-team"
+              />
+              <span>
+                创建个人私有 Team（推荐）
+                <span className="mt-0.5 block text-xs text-neutral-500">
+                  默认创建 owner + 默认频道，新用户可直接登录进入产品。
+                </span>
+              </span>
+            </label>
+            {!createPersonalTeam && (
+              <p className="rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800" data-smoke="admin-create-user-no-team-warning">
+                未创建 Team 时，该账号<strong>仅能通过邀请码登录</strong>加入既有团队；直接用密码登录会因无团队成员资格被拒绝。
+              </p>
+            )}
+          </div>
+          {formError && (
+            <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-smoke="admin-create-user-error">
+              {formError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="inline-flex items-center gap-1.5 rounded bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-800 disabled:opacity-50"
+              data-smoke="admin-create-user-submit"
+            >
+              <Save size={14} /> {submitting ? '创建中…' : '创建'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
