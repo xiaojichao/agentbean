@@ -76,7 +76,8 @@ describe('OpenAI-compatible Management Model Adapter', () => {
       ],
       tools: [{
         type: 'function',
-        function: { name: 'context.get_root_message' },
+        // Wire name must satisfy DeepSeek/OpenAI function-name grammar (no dots).
+        function: { name: 'context_get_root_message' },
       }],
     });
   });
@@ -90,7 +91,8 @@ describe('OpenAI-compatible Management Model Adapter', () => {
           tool_calls: [{
             id: 'call-2',
             type: 'function',
-            function: { name: 'context.get_root_message', arguments: '{"includeBody":true}' },
+            // Provider returns the wire-safe name; adapter maps back to catalog name.
+            function: { name: 'context_get_root_message', arguments: '{"includeBody":true}' },
           }],
         },
         finish_reason: 'tool_calls',
@@ -143,11 +145,58 @@ describe('OpenAI-compatible Management Model Adapter', () => {
         tool_calls: [{
           id: 'call-1',
           type: 'function',
-          function: { name: 'context.get_root_message', arguments: '{}' },
+          function: { name: 'context_get_root_message', arguments: '{}' },
         }],
       },
       { role: 'tool', tool_call_id: 'call-1', content: 'root body' },
     ]);
+  });
+
+  it('将点号 catalog 工具名映射为 DeepSeek 合法 function name，并在回程还原', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      const wireName = body.tools?.[0]?.function?.name;
+      expect(wireName).toBe('context_get_root_message');
+      expect(wireName).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+      return jsonResponse({
+        model: 'deepseek-v4-pro',
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call-ds',
+              type: 'function',
+              function: { name: wireName, arguments: '{}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      });
+    });
+
+    const response = await adapter(fetchFn, { requireResponseMetadata: true })
+      .respond(request, { callCount: 1 });
+    expect(response.content).toEqual([{
+      type: 'toolCall',
+      id: 'call-ds',
+      name: 'context.get_root_message',
+      arguments: {},
+    }]);
+  });
+
+  it('无 tools 时不发送 tools 字段，避免部分供应商拒绝空数组', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({
+      model: 'model-1',
+      choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+    await adapter(fetchFn).respond({ ...request, tools: [] }, { callCount: 1 });
+    const body = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body));
+    expect(body).not.toHaveProperty('tools');
   });
 
   it('上线探测模式在响应缺少 model 或 usage 时 fail closed', async () => {
