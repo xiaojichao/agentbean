@@ -53,6 +53,13 @@ describe('server-next dev server entry', () => {
       dataDir: '/tmp/arg-data',
       sessionSecret: 'secret-from-env',
       webEntry: 'preview',
+      projectCollaborationRollout: {
+        projectStage: false,
+        reviewFinalization: false,
+        bundleSelection: false,
+        inputSetOutput: false,
+        managerAutoAdvance: false,
+      },
     });
   });
 
@@ -73,6 +80,13 @@ describe('server-next dev server entry', () => {
       dataDir: '/tmp/prod-agentbean-next',
       sessionSecret: 'prod-secret',
       webEntry: 'app',
+      projectCollaborationRollout: {
+        projectStage: false,
+        reviewFinalization: false,
+        bundleSelection: false,
+        inputSetOutput: false,
+        managerAutoAdvance: false,
+      },
     });
     expect(() =>
       parseServerNextDevConfig({
@@ -104,6 +118,13 @@ describe('server-next dev server entry', () => {
       dataDir: join(process.cwd(), '.agentbean-next'),
       sessionSecret: 'prod-secret',
       webEntry: 'app',
+      projectCollaborationRollout: {
+        projectStage: false,
+        reviewFinalization: false,
+        bundleSelection: false,
+        inputSetOutput: false,
+        managerAutoAdvance: false,
+      },
     });
   });
 
@@ -315,6 +336,30 @@ describe('server-next dev server entry', () => {
         indexShadowUnexpected: 0,
         indexShadowChanged: 0,
         rangeResponses: 0,
+      },
+      projectCollaboration: {
+        rollout: {
+          projectStage: false,
+          reviewFinalization: false,
+          bundleSelection: false,
+          inputSetOutput: false,
+          managerAutoAdvance: false,
+        },
+        metrics: {
+          mutationFailures: { total: 0, byReason: {} },
+          occConflicts: 0,
+          inputSet: {
+            failures: 0,
+            failuresByReason: {},
+            items: {
+              unchanged: 0,
+              committed: 0,
+              conflict: 0,
+              failed: 0,
+            },
+          },
+          eventBroadcastLatencyMs: { count: 0, total: 0, max: 0 },
+        },
       },
     });
     await expect(fetch(server.baseUrl).then((response) => response.text())).resolves.toContain('id="agent-create-form"');

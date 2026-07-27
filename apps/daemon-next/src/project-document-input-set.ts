@@ -59,13 +59,23 @@ export async function materializeProjectDocumentInputSet(
     const manifestItems = [];
     for (const item of input.inputSet.items) {
       const url = `${input.serverUrl}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/${encodeURIComponent(item.artifactId)}/download`;
-      const response = await fetchFn(url, {
-        headers: { Authorization: `Bearer ${input.token}` },
-      });
+      let response: Response;
+      try {
+        response = await fetchFn(url, {
+          headers: { Authorization: `Bearer ${input.token}` },
+        });
+      } catch {
+        throw new Error(`PROJECT_DOCUMENT_INPUT_SET_DOWNLOAD_FAILED:${item.documentId}:network`);
+      }
       if (!response.ok) {
         throw new Error(`PROJECT_DOCUMENT_INPUT_SET_DOWNLOAD_FAILED:${item.documentId}:${response.status}`);
       }
-      const bytes = Buffer.from(await response.arrayBuffer());
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(await response.arrayBuffer());
+      } catch {
+        throw new Error(`PROJECT_DOCUMENT_INPUT_SET_DOWNLOAD_FAILED:${item.documentId}:body`);
+      }
       if (bytes.byteLength !== item.sizeBytes) {
         throw new Error(`PROJECT_DOCUMENT_INPUT_SET_SIZE_MISMATCH:${item.documentId}`);
       }
@@ -98,7 +108,10 @@ export async function materializeProjectDocumentInputSet(
   } catch (error) {
     rmSync(stagingDir, { recursive: true, force: true });
     rmSync(finalDir, { recursive: true, force: true });
-    throw error;
+    if (error instanceof Error && error.message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')) {
+      throw error;
+    }
+    throw new Error('PROJECT_DOCUMENT_INPUT_SET_MATERIALIZATION_FAILED');
   }
 }
 

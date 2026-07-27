@@ -396,4 +396,24 @@ describe('management tool executor', () => {
     await expect(harness.repositories.tasks.getById('task-child'))
       .resolves.toMatchObject({ status: 'in_review' });
   });
+
+  test('finds a completed Phase 2 delivery by Dispatch ID when its reply is nested outside the root thread', async () => {
+    const harness = await createSubtaskEvidenceHarness();
+    const listByThread = vi.fn(async () => []);
+    const repositories = {
+      ...harness.repositories,
+      messages: { ...harness.repositories.messages, listByThread },
+    };
+    const handlers = createPhase2InvocationToolHandlers({ repositories: repositories as never,
+      kernel: { recordInvocationTerminal: vi.fn() } as never, clock: harness.clock,
+      ids: harness.ids, onDispatchCreated: vi.fn(), terminalTimeoutMs: 25 });
+
+    await expect(handlers['agents.invoke']!({ schemaVersion: 2, managementPhase: 2,
+      commandId: 'command-nested-delivery', managementRunId: harness.run.id, workerId: 'worker-1',
+      toolCallId: 'call-nested-delivery', toolName: 'agents.invoke', leaseToken: 'token', fencingToken: 1,
+      idempotencyKey: 'invoke-1', input: { taskId: 'task-child', expectedTaskRevision: 1,
+        taskAttempt: 1, claimLeaseId: 'claim-child', objective: '完成 child', attachmentIds: [] } }))
+      .resolves.toMatchObject({ invocationId: 'invocation-1', status: 'succeeded' });
+    expect(listByThread).not.toHaveBeenCalled();
+  });
 });

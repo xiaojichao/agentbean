@@ -228,6 +228,162 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('聊天'))).toBe(true);
   });
 
+  test('covers staged project rollout through Socket facts and a real browser page seam', async () => {
+    const { exerciseWebUiProjectCollaborationSmoke } = await import(
+      '../../../scripts/smoke-agentbean-next-browser.mjs'
+    );
+    const calls: Array<[string, unknown]> = [];
+    const responses: Record<string, unknown[]> = {
+      'task:list': [{ ok: true, tasks: [{ id: 'task-1', title: 'Ship' }] }],
+      'task:create': [{ ok: true, task: { id: 'task-blocked-1', revision: 1 } }],
+      'project:create-initial-stage': [
+        { ok: true, overview: { profile: { revision: 1 }, stages: [{ id: 'stage-1', name: '发布保护 smoke' }] } },
+        { ok: false, error: 'CONFLICT', message: 'Project revision is stale' },
+      ],
+      'project:overview': [{
+        ok: true,
+        overview: { profile: { revision: 1 }, stages: [{ id: 'stage-1', name: '发布保护 smoke' }] },
+      }],
+      'project:create-stage': [{
+        ok: true,
+        overview: {
+          profile: { revision: 2 },
+          stages: [
+            { id: 'stage-1', taskId: 'task-1', taskRevision: 1 },
+            { id: 'stage-2', taskId: 'task-blocked-1', taskRevision: 1 },
+          ],
+        },
+      }],
+      'project:create-stage-edge': [{
+        ok: true,
+        overview: {
+          stages: [{
+            id: 'stage-2',
+            executionAllowed: false,
+            blockingReasons: [{ code: 'required_input_missing', requiredInputKey: 'release-proof' }],
+          }],
+        },
+      }],
+      'project:promote-artifact': [{
+        ok: true,
+        collection: { id: 'collection-1', revision: 1 },
+        version: { id: 'version-1' },
+      }],
+      'project:submit-artifact-review': [{
+        ok: true,
+        collection: { id: 'collection-1', revision: 1 },
+        version: { id: 'version-1', reviewState: 'approved' },
+      }],
+      'project:set-artifact-final-version': [{
+        ok: true,
+        collection: { id: 'collection-1', revision: 2, finalVersionId: 'version-1' },
+      }],
+      'channel-documents:derive': [
+        {
+          ok: true,
+          document: {
+            id: 'document-1',
+            currentRevision: { artifact: { id: 'summary-1' } },
+          },
+        },
+        {
+          ok: true,
+          document: {
+            id: 'document-2',
+            currentRevision: { artifact: { id: 'summary-2' } },
+          },
+        },
+      ],
+      'project:create-document-bundle': [{
+        ok: true,
+        bundle: { id: 'bundle-1' },
+      }],
+      'channel:create': [{
+        ok: true,
+        channel: { id: 'channel-2' },
+      }],
+      'project:resolve-references': [
+        {
+          ok: true,
+          selections: [{ items: [
+            { documentId: 'document-1', revisionId: 'revision-1' },
+            { documentId: 'document-2', revisionId: 'revision-2' },
+          ] }],
+        },
+        {
+          ok: false,
+          details: {
+            reason: 'selections_rejected',
+            rejections: [{ selectionIndex: 0, refId: 'bundle-1', code: 'not_found' }],
+          },
+        },
+      ],
+      'message:send': [{
+        ok: true,
+        referenceSet: {
+          id: 'reference-set-1',
+          selections: [{ items: [
+            { documentId: 'document-1', revisionId: 'revision-1' },
+            { documentId: 'document-2', revisionId: 'revision-2' },
+          ] }],
+        },
+      }],
+    };
+    const webSocket = {
+      emit(event: string, payload: unknown, ack: (result: unknown) => void) {
+        calls.push([event, payload]);
+        ack(responses[event]?.shift());
+      },
+    };
+    const page = {
+      async navigate(url: string) {
+        calls.push(['navigate', url]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson(expression: string) {
+        calls.push(['evaluateJson', expression]);
+        return true;
+      },
+    };
+
+    const result = await exerciseWebUiProjectCollaborationSmoke({
+      page,
+      baseUrl: 'http://127.0.0.1:4100',
+      webSocket,
+      session: {
+        token: 'token-1',
+        user: { id: 'user-1' },
+        team: { id: 'team-1', path: 'team-one' },
+        channel: { id: 'channel-1' },
+      },
+      taskTitle: 'Ship',
+      workspaceRun: { id: 'run-1', summaryArtifactId: 'summary-1' },
+      suffix: 'smoke',
+      timeoutMs: 1000,
+      fetchImpl: async () => new Response('# Project rollout smoke\n\nsmoke\n'),
+    });
+
+    expect(result).toMatchObject({
+      stageId: 'stage-1',
+      versionId: 'version-1',
+      bundleId: 'bundle-1',
+      referenceSetId: 'reference-set-1',
+    });
+    expect(calls.map(([event]) => event)).toEqual(expect.arrayContaining([
+      'project:create-initial-stage',
+      'project:promote-artifact',
+      'project:submit-artifact-review',
+      'project:set-artifact-final-version',
+      'project:create-document-bundle',
+      'project:resolve-references',
+      'message:send',
+      'navigate',
+      'waitForFunction',
+    ]));
+  });
+
   test('exercises WebUI chat send and refresh restore', async () => {
     const { exerciseWebUiChatBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
@@ -329,6 +485,10 @@ describe('AgentBean Next browser smoke script', () => {
           if (event === 'join:create') return { ok: true, link: { code: 'join-1' } };
           if (event === 'auth:register') return { ok: true, token: 'member-token-1', user: { id: 'user-2' } };
           if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
+          if (event === 'task:create') return { ok: true, task: { id: 'task-archived-1' } };
+          if (event === 'project:create-initial-stage') {
+            return { ok: true, overview: { profile: { revision: 1 }, stages: [{ id: 'stage-archived-1' }] } };
+          }
           if (event === 'channel:members') {
             channelMembersCount += 1;
             return channelMembersCount >= 4
@@ -363,7 +523,9 @@ describe('AgentBean Next browser smoke script', () => {
       channelId: 'channel-1',
       channelName: 'webui-channel-channels-smoke',
       memberUserId: 'user-2',
+      memberToken: 'member-token-1',
       agentId: 'agent-1',
+      archivedProjectStageName: '归档保留 channels-smoke',
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/channels']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-create-open"]']);

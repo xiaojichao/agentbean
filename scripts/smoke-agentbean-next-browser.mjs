@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { accessSync, constants, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,15 @@ const AGENT_EVENTS = {
   managementWorker: {
     register: 'management-worker:register',
     leaseOffer: 'management-worker:lease-offer',
+    leaseAcquire: 'management-worker:lease-acquire',
+    leaseRelease: 'management-worker:lease-release',
+    toolRequest: 'management-worker:tool-request',
+    checkpointFetch: 'management-worker:checkpoint-fetch',
+  },
+  taskClaim: {
+    offer: 'task-claim:offer',
+    acquire: 'task-claim:acquire',
+    respond: 'task-claim:respond',
   },
 };
 
@@ -27,11 +37,17 @@ const WEB_EVENTS = {
   },
   channel: {
     subscribe: 'channels:subscribe',
+    create: 'channel:create',
     addMember: 'channel:add-member',
     removeMember: 'channel:remove-member',
     addAgent: 'channel:add-agent',
     removeAgent: 'channel:remove-agent',
     members: 'channel:members',
+  },
+  channelDocuments: {
+    list: 'channel-documents:list',
+    derive: 'channel-documents:derive',
+    save: 'channel-documents:save',
   },
   device: {
     rename: 'device:rename',
@@ -41,6 +57,19 @@ const WEB_EVENTS = {
     list: 'members:list',
   },
   message: { send: 'message:send' },
+  project: {
+    overview: 'project:overview',
+    createInitialStage: 'project:create-initial-stage',
+    createStage: 'project:create-stage',
+    createStageEdge: 'project:create-stage-edge',
+    artifactCollections: 'project:artifact-collections',
+    promoteArtifact: 'project:promote-artifact',
+    submitArtifactReview: 'project:submit-artifact-review',
+    setArtifactFinalVersion: 'project:set-artifact-final-version',
+    createDocumentBundle: 'project:create-document-bundle',
+    resolveReferences: 'project:resolve-references',
+  },
+  task: { create: 'task:create', list: 'task:list' },
   piPolicy: { get: 'pi-policy:get', update: 'pi-policy:update' },
   team: {
     create: 'team:create',
@@ -390,21 +419,6 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
-    const teamResult = await exerciseWebUiTeamsBusinessSmoke({
-      page,
-      baseUrl: target.baseUrl,
-      session: seededSession.session,
-      suffix,
-      timeoutMs,
-    });
-    checks.push(
-      check(
-        'webui-teams-business-flow',
-        true,
-        `Created team "${teamResult.teamName}", switched to ${teamResult.teamPath}, deleted it, and restored ${teamResult.restoredTeamPath}`,
-      ),
-    );
-
     const taskResult = await exerciseWebUiTaskBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -441,6 +455,83 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         'webui-runs-business-flow',
         true,
         `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`,
+      ),
+    );
+
+    const projectResult = await exerciseWebUiProjectCollaborationSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      webSocket: seededSession.socket,
+      session: seededSession.session,
+      taskTitle: taskResult.title,
+      workspaceRun: runResult,
+      ioFactory,
+      archivedChannelId: channelResult.channelId,
+      archivedProjectStageName: channelResult.archivedProjectStageName,
+      memberToken: channelResult.memberToken,
+      suffix: webUiFlowSuffix(suffix, 'project'),
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-project-stage-overview',
+        true,
+        `Rendered project Stage "${projectResult.stageName}" from the authoritative Server projection`,
+      ),
+      check(
+        'webui-project-review-finalization',
+        true,
+        `Reviewed and finalized project artifact version ${projectResult.versionId}`,
+      ),
+      check(
+        'webui-project-bundle-selection-reference',
+        true,
+        `Created Bundle ${projectResult.bundleId} and persisted stable message references`,
+      ),
+      check(
+        'webui-project-stale-revision-negative',
+        true,
+        'Rejected a stale project revision without changing the authoritative project facts',
+      ),
+      check(
+        'webui-project-permission-archived-negative',
+        true,
+        'Rejected unauthorized and archived-channel project writes',
+      ),
+      check(
+        'webui-project-archived-history-readable',
+        true,
+        'Read the authoritative Stage history after its channel was archived',
+      ),
+      check(
+        'webui-project-scope-required-input-negative',
+        true,
+        'Rejected a cross-channel Bundle reference and kept a downstream Stage blocked on missing required input',
+      ),
+      check(
+        'webui-project-document-http-materialization',
+        true,
+        `Downloaded exact selected project document bytes through authenticated HTTP for Bundle ${projectResult.bundleId}`,
+      ),
+      check(
+        'webui-project-inputset-partial-conflict',
+        projectResult.inputSetResult?.statuses?.includes('conflict') === true,
+        'Executed a real V2 InputSet through Management Worker → Agent Socket → HTTP/SQLite and retained a per-item OCC conflict',
+      ),
+    );
+
+    const teamResult = await exerciseWebUiTeamsBusinessSmoke({
+      page,
+      baseUrl: target.baseUrl,
+      session: seededSession.session,
+      suffix,
+      timeoutMs,
+    });
+    checks.push(
+      check(
+        'webui-teams-business-flow',
+        true,
+        `Created team "${teamResult.teamName}", switched to ${teamResult.teamPath}, deleted it, and restored ${teamResult.restoredTeamPath}`,
       ),
     );
 
@@ -671,7 +762,16 @@ async function startLocalServer({ suffix, skipBuild, timeoutMs, webEntry = 'prev
     ],
     {
       cwd: process.cwd(),
-      env: { ...process.env, PORT: '' },
+      env: {
+        ...process.env,
+        PORT: '',
+        AGENTBEAN_CHANNEL_FILES_MARKDOWN_EDITING: 'true',
+        AGENTBEAN_PROJECT_STAGE: 'true',
+        AGENTBEAN_PROJECT_REVIEW_FINALIZATION: 'true',
+        AGENTBEAN_PROJECT_BUNDLE_SELECTION: 'true',
+        AGENTBEAN_PROJECT_INPUT_SET_OUTPUT: 'true',
+        AGENTBEAN_PROJECT_MANAGER_AUTO_ADVANCE: 'true',
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
@@ -1004,6 +1104,37 @@ export async function exerciseWebUiChannelsBusinessSmoke({
       timeoutMs,
     });
 
+    const archivedProjectStageName = `归档保留 ${safeSuffix}`;
+    const projectTask = await emitAck(ownerSocket, WEB_EVENTS.task.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId,
+      title: `Archived project task ${safeSuffix}`,
+    }, timeoutMs);
+    if (projectTask?.ok !== true || typeof projectTask.task?.id !== 'string') {
+      throw new Error(`WebUI channels smoke could not seed archived project Task: ${formatAck(projectTask)}`);
+    }
+    const archivedProject = await emitAck(ownerSocket, WEB_EVENTS.project.createInitialStage, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId,
+      expectedRevision: 0,
+      idempotencyKey: `archived-project-${safeSuffix}`,
+      projectLeadId: session.user.id,
+      defaultReviewerIds: [session.user.id],
+      stage: {
+        name: archivedProjectStageName,
+        goal: '验证归档后历史项目事实仍可读取',
+        ownerId: session.user.id,
+        reviewerIds: [session.user.id],
+        acceptanceCriteria: ['归档只读'],
+        taskId: projectTask.task.id,
+      },
+    }, timeoutMs);
+    if (archivedProject?.ok !== true) {
+      throw new Error(`WebUI channels smoke could not seed archived project Stage: ${formatAck(archivedProject)}`);
+    }
+
     await page.click('[data-smoke="channel-edit-open"]');
     await page.waitForFunction(
       `document.querySelector('[data-smoke="channel-edit-dialog"]')?.dataset.channelId === ${JSON.stringify(channelId)}`,
@@ -1021,7 +1152,14 @@ export async function exerciseWebUiChannelsBusinessSmoke({
 
     await page.navigate(new URL(`/${teamPath}/channels`, root).toString());
     await waitForWebUiChannelListMissing({ page, channelId, channelName, timeoutMs });
-    return { channelId, channelName, memberUserId: targetUserId, agentId };
+    return {
+      channelId,
+      channelName,
+      memberUserId: targetUserId,
+      memberToken: targetToken,
+      agentId,
+      archivedProjectStageName,
+    };
   } finally {
     daemon?.socket?.disconnect?.();
     memberSocket?.disconnect?.();
@@ -1823,6 +1961,11 @@ export async function exerciseWebUiRunsBusinessSmoke({
             filename: 'summary.md',
             mimeType: 'text/markdown',
             relativePath: 'outputs/summary.md',
+            sourceRoot: {
+              id: 'browser-smoke-output',
+              kind: 'run_output',
+              label: 'Browser smoke output',
+            },
             contentBase64: Buffer.from(`# Workspace smoke\n\n${command}\n`).toString('base64'),
           },
         ],
@@ -2104,6 +2247,696 @@ async function waitForWebUiWorkspaceRunInlineLogSearch({ page, expectedText, tim
     'workspace run inline full log search to filter matching lines',
     timeoutMs,
   );
+}
+
+export async function exerciseWebUiProjectCollaborationSmoke({
+  page,
+  baseUrl,
+  webSocket,
+  session,
+  taskTitle,
+  workspaceRun,
+  ioFactory,
+  archivedChannelId,
+  archivedProjectStageName,
+  memberToken,
+  suffix,
+  timeoutMs,
+  fetchImpl = fetch,
+}) {
+  assertSession(session);
+  if (!session.channel?.id) {
+    throw new Error('Project collaboration smoke needs a default channel');
+  }
+  const scope = {
+    userId: session.user.id,
+    teamId: session.team.id,
+    channelId: session.channel.id,
+  };
+  const tasksAck = await emitAck(webSocket, WEB_EVENTS.task.list, scope, timeoutMs);
+  const task = Array.isArray(tasksAck?.tasks)
+    ? tasksAck.tasks.find((candidate) => candidate?.title === taskTitle)
+    : undefined;
+  if (!task?.id) {
+    throw new Error(`Project collaboration smoke could not find Task "${taskTitle}": ${formatAck(tasksAck)}`);
+  }
+
+  const stageName = `发布保护 ${suffix}`;
+  const created = await emitAck(webSocket, WEB_EVENTS.project.createInitialStage, {
+    ...scope,
+    expectedRevision: 0,
+    idempotencyKey: `project-stage-${suffix}`,
+    projectLeadId: session.user.id,
+    defaultReviewerIds: [session.user.id],
+    stage: {
+      name: stageName,
+      goal: '验证灰度、监控与可回退协作链路',
+      ownerId: session.user.id,
+      reviewerIds: [session.user.id],
+      acceptanceCriteria: ['项目事实可读', '回退不改写既有事实'],
+      taskId: task.id,
+    },
+  }, timeoutMs);
+  const stage = created?.overview?.stages?.[0];
+  if (created?.ok !== true || !stage?.id) {
+    throw new Error(`Project collaboration smoke could not create the Stage: ${formatAck(created)}`);
+  }
+  const createdRevision = created.overview?.profile?.revision;
+  if (!Number.isInteger(createdRevision)) {
+    throw new Error(`Project collaboration smoke received an invalid Stage revision: ${formatAck(created)}`);
+  }
+
+  const stale = await emitAck(webSocket, WEB_EVENTS.project.createInitialStage, {
+    ...scope,
+    expectedRevision: 0,
+    idempotencyKey: `project-stage-stale-${suffix}`,
+    projectLeadId: session.user.id,
+    defaultReviewerIds: [session.user.id],
+    stage: {
+      name: `${stageName} stale`,
+      goal: '此陈旧写入必须被拒绝',
+      ownerId: session.user.id,
+      reviewerIds: [session.user.id],
+      acceptanceCriteria: ['拒绝陈旧 revision'],
+      taskId: task.id,
+    },
+  }, timeoutMs);
+  if (stale?.ok !== false || stale?.error !== 'CONFLICT') {
+    throw new Error(`Project collaboration smoke accepted a stale revision: ${formatAck(stale)}`);
+  }
+  const afterConflict = await emitAck(webSocket, WEB_EVENTS.project.overview, scope, timeoutMs);
+  if (afterConflict?.ok !== true
+    || afterConflict.overview?.profile?.revision !== createdRevision
+    || afterConflict.overview?.stages?.length !== 1
+    || afterConflict.overview.stages[0]?.id !== stage.id
+    || afterConflict.overview.stages.some((candidate) => candidate?.name === `${stageName} stale`)) {
+    throw new Error(
+      `Project collaboration smoke observed changed facts after stale revision rejection: ${formatAck(afterConflict)}`,
+    );
+  }
+
+  if (archivedChannelId) {
+    const archivedOverview = await emitAck(webSocket, WEB_EVENTS.project.overview, {
+      ...scope,
+      channelId: archivedChannelId,
+    }, timeoutMs);
+    if (archivedOverview?.ok !== true
+      || archivedOverview.overview?.archived !== true
+      || !archivedOverview.overview?.stages?.some(
+        (candidate) => candidate?.name === archivedProjectStageName,
+      )) {
+      throw new Error(`Project collaboration smoke could not read archived project facts: ${formatAck(archivedOverview)}`);
+    }
+    const archivedWrite = await emitAck(webSocket, WEB_EVENTS.project.createInitialStage, {
+      ...scope,
+      channelId: archivedChannelId,
+      expectedRevision: 0,
+      idempotencyKey: `project-archived-${suffix}`,
+      projectLeadId: session.user.id,
+      defaultReviewerIds: [session.user.id],
+      stage: {
+        name: `${stageName} archived`,
+        goal: '归档频道必须拒绝写入',
+        ownerId: session.user.id,
+        reviewerIds: [session.user.id],
+        acceptanceCriteria: ['只读'],
+        taskId: task.id,
+      },
+    }, timeoutMs);
+    if (archivedWrite?.ok !== false || archivedWrite?.error !== 'CONFLICT') {
+      throw new Error(`Project collaboration smoke accepted an archived channel write: ${formatAck(archivedWrite)}`);
+    }
+  }
+  if (memberToken && ioFactory) {
+    const memberSocket = await connectSocket(
+      ioFactory,
+      new URL('/web', normalizeBaseUrlOrThrow(baseUrl)).toString(),
+      timeoutMs,
+      { auth: { token: memberToken } },
+    );
+    try {
+      const forbiddenWrite = await emitAck(memberSocket, WEB_EVENTS.project.createStage, {
+        teamId: scope.teamId,
+        channelId: scope.channelId,
+        expectedRevision: createdRevision,
+        idempotencyKey: `project-forbidden-${suffix}`,
+        stage: {
+          name: `${stageName} forbidden`,
+          goal: '普通成员不得配置项目',
+          ownerId: session.user.id,
+          reviewerIds: [session.user.id],
+          acceptanceCriteria: ['拒绝越权'],
+          taskId: task.id,
+        },
+      }, timeoutMs);
+      if (forbiddenWrite?.ok !== false || forbiddenWrite?.error !== 'FORBIDDEN') {
+        throw new Error(`Project collaboration smoke accepted an unauthorized project write: ${formatAck(forbiddenWrite)}`);
+      }
+    } finally {
+      memberSocket.disconnect?.();
+    }
+  }
+
+  const blockedTask = await emitAck(webSocket, WEB_EVENTS.task.create, {
+    ...scope,
+    title: `Blocked project task ${suffix}`,
+  }, timeoutMs);
+  if (blockedTask?.ok !== true || typeof blockedTask.task?.id !== 'string') {
+    throw new Error(`Project collaboration smoke could not create blocked Task: ${formatAck(blockedTask)}`);
+  }
+  const downstream = await emitAck(webSocket, WEB_EVENTS.project.createStage, {
+    ...scope,
+    expectedRevision: createdRevision,
+    idempotencyKey: `project-downstream-${suffix}`,
+    stage: {
+      name: `待输入 ${suffix}`,
+      goal: '验证缺失必需输入保持阻塞',
+      ownerId: session.user.id,
+      reviewerIds: [session.user.id],
+      acceptanceCriteria: ['必需输入齐备后才可执行'],
+      taskId: blockedTask.task.id,
+    },
+  }, timeoutMs);
+  const downstreamStage = downstream?.overview?.stages?.find(
+    (candidate) => candidate?.task?.id === blockedTask.task.id
+      || candidate?.taskId === blockedTask.task.id,
+  );
+  if (downstream?.ok !== true || !downstreamStage?.id) {
+    throw new Error(`Project collaboration smoke could not create downstream Stage: ${formatAck(downstream)}`);
+  }
+  const missingInput = await emitAck(webSocket, WEB_EVENTS.project.createStageEdge, {
+    ...scope,
+    expectedRevision: downstream.overview.profile.revision,
+    idempotencyKey: `project-required-input-${suffix}`,
+    upstreamStageId: stage.id,
+    downstreamStageId: downstreamStage.id,
+    semantics: 'blocks_start',
+    requiredInputs: [{ key: 'release-proof', kind: 'artifact', label: '发布证明' }],
+    expectedUpstreamTaskRevision: stage.taskRevision,
+    expectedDownstreamTaskRevision: downstreamStage.taskRevision,
+  }, timeoutMs);
+  const blockedProjection = missingInput?.overview?.stages?.find(
+    (candidate) => candidate?.id === downstreamStage.id,
+  );
+  if (missingInput?.ok !== true
+    || blockedProjection?.executionAllowed !== false
+    || !blockedProjection.blockingReasons?.some(
+      (reason) => reason?.code === 'required_input_missing'
+        && reason.requiredInputKey === 'release-proof',
+    )) {
+    throw new Error(`Project collaboration smoke did not fail closed on missing required input: ${formatAck(missingInput)}`);
+  }
+
+  const promoted = await emitAck(webSocket, WEB_EVENTS.project.promoteArtifact, {
+    ...scope,
+    idempotencyKey: `project-promote-${suffix}`,
+    artifactId: workspaceRun.summaryArtifactId,
+    stageId: stage.id,
+    collection: {
+      name: `Smoke 发布包 ${suffix}`,
+      kind: 'release_bundle',
+    },
+  }, timeoutMs);
+  if (promoted?.ok !== true || !promoted?.version?.id || !promoted?.collection?.id) {
+    throw new Error(`Project collaboration smoke could not promote an Artifact: ${formatAck(promoted)}`);
+  }
+  const reviewed = await emitAck(webSocket, WEB_EVENTS.project.submitArtifactReview, {
+    ...scope,
+    idempotencyKey: `project-review-${suffix}`,
+    versionId: promoted.version.id,
+    decision: 'approved',
+    comment: '真实浏览器 smoke 审核通过',
+    basis: [{ kind: 'artifact', refId: workspaceRun.summaryArtifactId }],
+  }, timeoutMs);
+  if (reviewed?.ok !== true || reviewed?.version?.reviewState !== 'approved') {
+    throw new Error(`Project collaboration smoke could not review the version: ${formatAck(reviewed)}`);
+  }
+  const finalized = await emitAck(webSocket, WEB_EVENTS.project.setArtifactFinalVersion, {
+    ...scope,
+    idempotencyKey: `project-finalize-${suffix}`,
+    collectionId: promoted.collection.id,
+    versionId: promoted.version.id,
+    expectedCollectionRevision: reviewed.collection?.revision ?? promoted.collection.revision,
+    reason: '真实浏览器 smoke 人工确认',
+  }, timeoutMs);
+  if (finalized?.ok !== true || finalized?.collection?.finalVersionId !== promoted.version.id) {
+    throw new Error(`Project collaboration smoke could not finalize the version: ${formatAck(finalized)}`);
+  }
+
+  const derivedAck = await emitAck(webSocket, WEB_EVENTS.channelDocuments.derive, {
+    ...scope,
+    sourceArtifactId: workspaceRun.summaryArtifactId,
+    content: `# Project rollout smoke\n\n${suffix}\n`,
+    filename: `project-rollout-${suffix}.md`,
+  }, timeoutMs);
+  const document = derivedAck?.document;
+  if (derivedAck?.ok !== true || !document?.id) {
+    throw new Error(`Project collaboration smoke could not derive the run document: ${formatAck(derivedAck)}`);
+  }
+  const secondDerivedAck = await emitAck(webSocket, WEB_EVENTS.channelDocuments.derive, {
+    ...scope,
+    sourceArtifactId: workspaceRun.summaryArtifactId,
+    content: `# Project rollout companion\n\n${suffix}\n`,
+    filename: `project-rollout-companion-${suffix}.md`,
+  }, timeoutMs);
+  const secondDocument = secondDerivedAck?.document;
+  if (secondDerivedAck?.ok !== true || !secondDocument?.id) {
+    throw new Error(`Project collaboration smoke could not derive the companion document: ${formatAck(secondDerivedAck)}`);
+  }
+  const derivedArtifactId = document.currentRevision?.artifact?.id;
+  if (typeof derivedArtifactId !== 'string') {
+    throw new Error(`Project collaboration smoke derived document has no Artifact: ${formatAck(derivedAck)}`);
+  }
+  const materializedContent = `# Project rollout smoke\n\n${suffix}\n`;
+  const materializedResponse = await fetchImpl(
+    new URL(
+      `/api/teams/${encodeURIComponent(scope.teamId)}/artifacts/${encodeURIComponent(derivedArtifactId)}/download`,
+      normalizeBaseUrlOrThrow(baseUrl),
+    ),
+    { headers: { Authorization: `Bearer ${session.token}` } },
+  );
+  if (!materializedResponse.ok || await materializedResponse.text() !== materializedContent) {
+    throw new Error('Project collaboration smoke could not materialize exact document bytes through HTTP');
+  }
+  const bundleAck = await emitAck(webSocket, WEB_EVENTS.project.createDocumentBundle, {
+    ...scope,
+    idempotencyKey: `project-bundle-${suffix}`,
+    name: `Smoke 文档包 ${suffix}`,
+    workspaceRunId: workspaceRun.id,
+    documentIds: [document.id, secondDocument.id],
+  }, timeoutMs);
+  const bundleId = bundleAck?.bundle?.id;
+  if (bundleAck?.ok !== true || typeof bundleId !== 'string') {
+    throw new Error(`Project collaboration smoke could not create a Bundle: ${formatAck(bundleAck)}`);
+  }
+  const referencesAck = await emitAck(webSocket, WEB_EVENTS.project.resolveReferences, {
+    ...scope,
+    selections: [{ kind: 'bundle_all', bundleId }],
+  }, timeoutMs);
+  if (referencesAck?.ok !== true || referencesAck?.selections?.[0]?.items?.length !== 2) {
+    throw new Error(`Project collaboration smoke could not freeze Bundle references: ${formatAck(referencesAck)}`);
+  }
+  const alternateChannelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: scope.teamId,
+    name: `project-cross-channel-${suffix}`,
+    visibility: 'public',
+  }, timeoutMs);
+  const alternateChannelId = readNestedString(alternateChannelAck, ['channel', 'id']);
+  if (!alternateChannelId) {
+    throw new Error(`Project collaboration smoke could not create an active cross-channel scope: ${formatAck(alternateChannelAck)}`);
+  }
+  const crossChannel = await emitAck(webSocket, WEB_EVENTS.project.resolveReferences, {
+    ...scope,
+    channelId: alternateChannelId,
+    selections: [{ kind: 'bundle_all', bundleId }],
+  }, timeoutMs);
+  if (crossChannel?.ok !== false
+    || crossChannel?.details?.reason !== 'selections_rejected'
+    || crossChannel.details.rejections?.[0]?.code !== 'not_found') {
+    throw new Error(`Project collaboration smoke did not reject an active cross-channel Bundle reference: ${formatAck(crossChannel)}`);
+  }
+  const sent = await emitAck(webSocket, WEB_EVENTS.message.send, {
+    ...scope,
+    clientMessageId: `project-reference-${suffix}`,
+    body: `Project reference smoke ${suffix}`,
+    selections: [{ kind: 'bundle_all', bundleId }],
+  }, timeoutMs);
+  if (sent?.ok !== true || sent?.referenceSet?.selections?.[0]?.items?.length !== 2) {
+    throw new Error(`Project collaboration smoke did not persist stable references: ${formatAck(sent)}`);
+  }
+  const inputSetResult = ioFactory
+    ? await exerciseProjectInputSetLifecycleSmoke({
+        baseUrl,
+        ioFactory,
+        webSocket,
+        session,
+        scope,
+        bundleId,
+        suffix,
+        timeoutMs,
+      })
+    : undefined;
+
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  const teamPath = session.team.path ?? session.team.id;
+  await page.navigate(new URL(`/${teamPath}/channel/${scope.channelId}`, root).toString());
+  const openedTasksTab = await page.evaluateJson(`
+    (() => {
+      const button = Array.from(document.querySelectorAll('button'))
+        .find((candidate) => candidate.textContent?.trim() === '任务');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!openedTasksTab) throw new Error(`Could not open channel task view for project Task "${taskTitle}"`);
+  await page.waitForFunction(
+    `(() => { const text = document.querySelector('[aria-label="项目总览"]')?.textContent ?? ''; return text.includes(${JSON.stringify(stageName)}) && !text.includes(${JSON.stringify(`${stageName} stale`)}); })()`,
+    `project Stage "${stageName}" to render from the Server projection`,
+    timeoutMs,
+  );
+
+  return {
+    stageName,
+    stageId: stage.id,
+    versionId: promoted.version.id,
+    bundleId,
+    referenceSetId: sent.referenceSet.id,
+    ...(inputSetResult ? { inputSetResult } : {}),
+  };
+}
+
+async function exerciseProjectInputSetLifecycleSmoke({
+  baseUrl,
+  ioFactory,
+  webSocket,
+  session,
+  scope,
+  bundleId,
+  suffix,
+  timeoutMs,
+}) {
+  const root = normalizeBaseUrlOrThrow(baseUrl);
+  let dispatchStep = 'waiting for dispatch request';
+  let dispatchAck;
+  let resolveDispatchAck;
+  const dispatchAckReceived = new Promise((resolve) => {
+    resolveDispatchAck = resolve;
+  });
+  let conflictInjected = false;
+  const daemon = await connectSmokeDaemon({
+    baseUrl: root,
+    ioFactory,
+    session,
+    suffix: `inputset-${suffix}`,
+    timeoutMs,
+    onDispatchResultAck: (ack) => {
+      dispatchStep = 'dispatch result acknowledged';
+      dispatchAck = ack;
+      resolveDispatchAck(ack);
+    },
+    dispatchResultFactory: async (request) => {
+      dispatchStep = 'validating InputSet dispatch request';
+      const inputSet = request.projectDocumentInputSet;
+      if (!inputSet || inputSet.items?.length !== 2 || !request.managementInvocationId) {
+        throw new Error(`InputSet smoke received an invalid Dispatch request: ${formatAck(request)}`);
+      }
+      for (const item of inputSet.items) {
+        dispatchStep = `materializing ${item.documentId}`;
+        const response = await fetch(
+          new URL(
+            `/api/teams/${encodeURIComponent(scope.teamId)}/artifacts/${encodeURIComponent(item.artifactId)}/download`,
+            root,
+          ),
+          { headers: { Authorization: `Bearer ${session.token}` } },
+        );
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (!response.ok
+          || bytes.byteLength !== item.sizeBytes
+          || createHash('sha256').update(bytes).digest('hex') !== item.sha256) {
+          throw new Error(`InputSet smoke could not materialize ${item.documentId}`);
+        }
+      }
+
+      const changedArtifacts = inputSet.items.map((item, index) => {
+        const bytes = Buffer.from(`# Agent changed InputSet ${index + 1}\n\n${suffix}\n`);
+        const artifactId = `inputset-result-${index + 1}-${suffix}`;
+        const filename = `inputset-result-${index + 1}-${suffix}.md`;
+        return {
+          id: artifactId,
+          filename,
+          mimeType: 'text/markdown',
+          sizeBytes: bytes.byteLength,
+          relativePath: filename,
+          pathKind: 'generated',
+          role: 'intermediate',
+          sourceRoot: {
+            id: `project-document-input-set:${inputSet.id}`,
+            kind: 'configured_output',
+            label: '项目文档回写',
+          },
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          contentBase64: bytes.toString('base64'),
+          documentId: item.documentId,
+          baseRevisionId: item.baseRevisionId,
+        };
+      });
+      const first = inputSet.items[0];
+      dispatchStep = 'injecting concurrent document revision';
+      const humanEdit = await emitAck(webSocket, WEB_EVENTS.channelDocuments.save, {
+        ...scope,
+        documentId: first.documentId,
+        baseRevisionId: first.baseRevisionId,
+        content: `# Human concurrent edit\n\n${suffix}\n`,
+        filename: first.displayName,
+        idempotencyKey: `inputset-human-conflict-${suffix}`,
+      }, timeoutMs);
+      if (humanEdit?.ok !== true) {
+        throw new Error(`InputSet smoke could not inject a human OCC edit: ${formatAck(humanEdit)}`);
+      }
+      conflictInjected = true;
+      dispatchStep = 'submitting InputSet result';
+      return {
+        body: `InputSet partial conflict ${suffix}`,
+        artifacts: changedArtifacts.map(({ documentId: _documentId, baseRevisionId: _baseRevisionId, ...artifact }) => artifact),
+        workspaceRun: {
+          id: `inputset-run-${suffix}`,
+          status: 'succeeded',
+          command: 'browser-inputset-smoke',
+        },
+        projectDocumentInputSetResult: {
+          contractVersion: 1,
+          inputSetId: inputSet.id,
+          invocationId: request.managementInvocationId,
+          items: changedArtifacts.map((artifact) => ({
+            documentId: artifact.documentId,
+            baseRevisionId: artifact.baseRevisionId,
+            status: 'changed',
+            sha256: artifact.sha256,
+            artifactId: artifact.id,
+          })),
+        },
+      };
+    },
+  });
+  let policyChanged = false;
+  let originalAutoCoordination;
+  try {
+    const agentName = `InputSet${suffix.replace(/[^a-zA-Z0-9]/g, '').slice(-12)}`;
+    const agentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      ...scope,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: agentName,
+      projectDocumentInputSetVersions: [1],
+      env: { AGENTBEAN_INPUT_SET_SMOKE: '1' },
+    }, timeoutMs);
+    const agentId = readNestedString(agentAck, ['agent', 'id']);
+    if (!agentId) throw new Error(`InputSet smoke could not create Agent: ${formatAck(agentAck)}`);
+    const managerAgentName = `InputSetManager${suffix.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}`;
+    const managerAgentAck = await emitAck(webSocket, WEB_EVENTS.agent.create, {
+      ...scope,
+      deviceId: daemon.deviceId,
+      runtimeId: daemon.runtimeId,
+      name: managerAgentName,
+      env: { AGENTBEAN_INPUT_SET_MANAGER_SMOKE: '1' },
+    }, timeoutMs);
+    if (!readNestedString(managerAgentAck, ['agent', 'id'])) {
+      throw new Error(`InputSet smoke could not create manager Agent: ${formatAck(managerAgentAck)}`);
+    }
+
+    let workerResolve;
+    let workerReject;
+    const workerDone = new Promise((resolve, reject) => {
+      workerResolve = resolve;
+      workerReject = reject;
+    });
+    daemon.socket.on(AGENT_EVENTS.taskClaim.offer, async (offer, ack) => {
+      ack?.({ schemaVersion: 1, ok: true });
+      try {
+        const response = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.respond, {
+          schemaVersion: 1,
+          offerId: offer.offerId,
+          agentId: offer.agentId,
+          kind: offer.agentId === agentId ? 'accepted' : 'rejected',
+        }, timeoutMs);
+        if (offer.agentId === agentId && response?.kind === 'not_accepted'
+          && response.diagnosticCode === 'TASK_CLAIM_OFFER_INVALID') {
+          const acquired = await emitAck(daemon.socket, AGENT_EVENTS.taskClaim.acquire, {
+            schemaVersion: 1,
+            offerId: offer.offerId,
+            agentId: offer.agentId,
+          }, timeoutMs);
+          if (acquired?.ok !== true) {
+            throw new Error(`InputSet legacy claim fallback failed: ${formatAck(acquired)}`);
+          }
+        } else if (offer.agentId === agentId && response?.kind !== 'claim_granted') {
+          throw new Error(`InputSet claim was not granted: ${formatAck(response)}`);
+        }
+      } catch (error) {
+        workerReject(error);
+      }
+    });
+    daemon.socket.on(AGENT_EVENTS.managementWorker.leaseOffer, async (offer, ack) => {
+      ack?.({ ok: true });
+      try {
+        const lease = await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.leaseAcquire, {
+          schemaVersion: 1,
+          offerId: offer.offerId,
+          workerInstanceId: `inputset-worker-${suffix}`,
+        }, timeoutMs);
+        if (lease?.ok !== true) throw new Error(`InputSet lease rejected: ${formatAck(lease)}`);
+        const checkpoint = await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.checkpointFetch, {
+          schemaVersion: 1,
+          managementRunId: lease.managementRunId,
+          workerId: lease.workerId,
+          leaseToken: lease.leaseToken,
+          fencingToken: lease.fencingToken,
+        }, timeoutMs);
+        const rootTaskId = checkpoint?.context?.rootTaskId;
+        const managementPhase = checkpoint?.context?.managementPhase;
+        if (typeof rootTaskId !== 'string') {
+          throw new Error(`InputSet checkpoint has no root Task: ${formatAck(checkpoint)}`);
+        }
+        if (managementPhase !== 2 && managementPhase !== 3) {
+          throw new Error(`InputSet checkpoint has an invalid management phase: ${formatAck(checkpoint)}`);
+        }
+        let sequence = 0;
+        const tool = async (toolName, input) => {
+          sequence += 1;
+          // agents.invoke 等待 Dispatch 回收、项目事实写入和 Delivery 提交；正式 daemon
+          // 协议为终态工具调用预留 6 分钟 ACK 窗口，smoke 至少给它一分钟。
+          const toolTimeoutMs = toolName === 'agents.invoke' ? Math.max(timeoutMs, 60_000) : timeoutMs;
+          let result;
+          try {
+            result = await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.toolRequest, {
+              schemaVersion: 2,
+              // Phase 3 reuses the Phase 2 task/agent protocol; only memory tools
+              // are encoded with managementPhase=3.
+              managementPhase: 2,
+              commandId: `inputset-command-${suffix}-${sequence}`,
+              managementRunId: lease.managementRunId,
+              workerId: lease.workerId,
+              toolCallId: `inputset-tool-${suffix}-${sequence}`,
+              toolName,
+              leaseToken: lease.leaseToken,
+              fencingToken: lease.fencingToken,
+              idempotencyKey: `inputset-tool-${suffix}-${sequence}`,
+              input,
+            }, toolTimeoutMs);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(`InputSet tool ${toolName} request failed at ${dispatchStep}; dispatch ack=${formatAck(dispatchAck)}: ${detail}`);
+          }
+          if (result?.ok !== true) {
+            throw new Error(`InputSet tool ${toolName} failed: ${formatAck(result)}`);
+          }
+          return result.output;
+        };
+        const created = await tool('tasks.create_subtasks', {
+          parentTaskId: rootTaskId,
+          subtasks: [{
+            clientKey: 'inputset',
+            title: `InputSet execution ${suffix}`,
+            description: 'Materialize, execute and reclaim a frozen project document InputSet',
+            claimPolicy: 'open',
+            requiredCapabilities: [],
+            acceptanceCriteria: [],
+            maxAttempts: 1,
+          }],
+        });
+        const taskId = created.taskIds?.[0];
+        if (typeof taskId !== 'string') throw new Error('InputSet smoke created no subtask');
+        await tool('tasks.publish_for_claim', {
+          taskId,
+          expectedTaskRevision: 1,
+        });
+        let snapshot;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const waited = await tool('tasks.wait', { taskIds: [taskId] });
+          snapshot = waited.taskSnapshots?.[0];
+          if (snapshot?.claimLeaseId && snapshot?.claimedAgentId === agentId) break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!snapshot?.claimLeaseId) throw new Error('InputSet smoke Task claim timed out');
+        const invocation = await tool('agents.invoke', {
+          taskId,
+          expectedTaskRevision: snapshot.taskRevision,
+          taskAttempt: snapshot.taskAttempt,
+          claimLeaseId: snapshot.claimLeaseId,
+          targetAgentId: agentId,
+          objective: 'Execute the frozen project document InputSet',
+          attachmentIds: [],
+        });
+        await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.leaseRelease, {
+          schemaVersion: 1,
+          managementRunId: lease.managementRunId,
+          workerId: lease.workerId,
+          leaseToken: lease.leaseToken,
+          fencingToken: lease.fencingToken,
+          idempotencyKey: `inputset-release-${suffix}`,
+          reasonCode: 'INPUT_SET_SMOKE_COMPLETE',
+        }, timeoutMs);
+        workerResolve(invocation);
+      } catch (error) {
+        workerReject(error);
+      }
+    });
+    const workerAck = await emitAck(daemon.socket, AGENT_EVENTS.managementWorker.register, {
+      schemaVersion: 2,
+      workerInstanceId: `inputset-worker-${suffix}`,
+      profileId: 'browser-smoke',
+      runtimeVersion: '0.1.0',
+      supportedProtocolVersions: [1, 2],
+      supportedPhases: [1, 2, 3],
+      credentialStatus: 'production_ready',
+      providerId: 'browser-smoke',
+      modelId: 'browser-smoke',
+      capacity: { maxConcurrentLeases: 1, activeLeaseCount: 0 },
+    }, timeoutMs);
+    if (workerAck?.ok !== true) throw new Error(`InputSet worker registration failed: ${formatAck(workerAck)}`);
+
+    const currentPolicy = await emitAck(webSocket, WEB_EVENTS.piPolicy.get, scope, timeoutMs);
+    if (currentPolicy?.ok !== true) throw new Error(`InputSet policy read failed: ${formatAck(currentPolicy)}`);
+    originalAutoCoordination = currentPolicy.autoCoordinationEnabled;
+    const policyAck = await emitAck(webSocket, WEB_EVENTS.piPolicy.update, {
+      ...scope,
+      autoCoordinationEnabled: true,
+    }, timeoutMs);
+    if (policyAck?.ok !== true) throw new Error(`InputSet policy update failed: ${formatAck(policyAck)}`);
+    policyChanged = true;
+
+    const sent = await emitAck(webSocket, WEB_EVENTS.message.send, {
+      ...scope,
+      // 使用独立 manager Agent 触发 device placement；执行 Agent 不能与根任务
+      // 的祖先 Agent 相同，否则 claim broker 会以 ANCESTOR_AGENT_LOOP 拒绝。
+      body: `@${managerAgentName} InputSet lifecycle ${suffix}`,
+      asTask: true,
+      clientMessageId: `inputset-lifecycle-${suffix}`,
+      selections: [{ kind: 'bundle_all', bundleId }],
+    }, timeoutMs);
+    if (sent?.ok !== true || sent.management?.kind !== 'managed') {
+      throw new Error(`InputSet managed root Task was not created: ${formatAck(sent)}`);
+    }
+    await promiseWithTimeout(workerDone, timeoutMs * 4, 'InputSet management worker lifecycle');
+    await promiseWithTimeout(dispatchAckReceived, timeoutMs, 'InputSet dispatch result acknowledgement');
+    if (!conflictInjected) throw new Error('InputSet smoke did not inject the OCC conflict');
+    const result = dispatchAck?.projectDocumentInputSetResult;
+    if (!result?.items?.some((item) => item.status === 'conflict')
+      || !result.items.some((item) => item.status === 'committed')) {
+      throw new Error(`InputSet smoke did not preserve partial results: ${formatAck(dispatchAck)}`);
+    }
+    return { statuses: result.items.map((item) => item.status) };
+  } finally {
+    if (policyChanged) {
+      await emitAck(webSocket, WEB_EVENTS.piPolicy.update, {
+        ...scope,
+        autoCoordinationEnabled: originalAutoCoordination,
+      }, timeoutMs).catch(() => undefined);
+    }
+    daemon.socket.disconnect?.();
+  }
 }
 
 export async function exerciseWebUiMembersBusinessSmoke({
@@ -3408,7 +4241,15 @@ async function waitForWebUiAdminAgentDetail({ page, agentId, ownerId, deviceId, 
   );
 }
 
-async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeoutMs, dispatchResultFactory }) {
+async function connectSmokeDaemon({
+  baseUrl,
+  ioFactory,
+  session,
+  suffix,
+  timeoutMs,
+  dispatchResultFactory,
+  onDispatchResultAck,
+}) {
   const socket = await connectSocket(ioFactory, new URL('/agent', baseUrl).toString(), timeoutMs);
   const dispatchResults = new Map();
   const dispatchResultFor = (dispatchId) => {
@@ -3425,7 +4266,7 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
   };
   socket.on(AGENT_EVENTS.dispatch.request, async (request) => {
     const pending = dispatchResultFor(request.id);
-    const result = dispatchResultFactory?.(request) ?? {
+    const result = await dispatchResultFactory?.(request) ?? {
       body: `browser-smoke:${request.prompt}`,
     };
     try {
@@ -3434,6 +4275,7 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
         agentId: request.agentId,
         ...result,
       }, timeoutMs);
+      onDispatchResultAck?.(ack, request);
       pending.resolve(
         ack?.ok === false
           ? { ok: false, error: new Error(`Smoke daemon dispatch result was rejected: ${formatAck(ack)}`) }
@@ -3450,6 +4292,7 @@ async function connectSmokeDaemon({ baseUrl, ioFactory, session, suffix, timeout
     machineId: `agentbean-browser-smoke:${suffix}`,
     profileId: 'browser-smoke',
     hostname: 'agentbean-browser-smoke',
+    capabilities: { projectDocumentInputSetVersions: [1] },
   }, timeoutMs);
   const deviceId = readNestedString(helloAck, ['device', 'id']);
   if (!deviceId) {
@@ -3505,8 +4348,17 @@ async function createSmokeBrowserSession({ baseUrl, ioFactory, suffix, timeoutMs
     typeof ack.user?.id === 'string' &&
     typeof ack.currentTeam?.id === 'string'
   ) {
+    // project:* mutations require an authenticated Socket handshake; auth:register/login on the
+    // bootstrap socket cannot retroactively update its handshake credentials.
+    socket.disconnect?.();
+    const authenticatedSocket = await connectSocket(
+      ioFactory,
+      new URL('/web', baseUrl).toString(),
+      timeoutMs,
+      { auth: { token: ack.token } },
+    );
     return {
-      socket,
+      socket: authenticatedSocket,
       session: {
         token: ack.token,
         user: ack.user,
@@ -4156,10 +5008,20 @@ async function connectSocket(ioFactory, url, timeoutMs, options = {}) {
 
 async function emitAck(socket, event, payload, timeoutMs) {
   if (typeof socket.timeout === 'function' && typeof socket.timeout(timeoutMs)?.emitWithAck === 'function') {
-    return socket.timeout(timeoutMs).emitWithAck(event, payload);
+    try {
+      return await socket.timeout(timeoutMs).emitWithAck(event, payload);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${event} ack failed: ${detail}`);
+    }
   }
   if (typeof socket.emitWithAck === 'function') {
-    return socket.emitWithAck(event, payload);
+    try {
+      return await socket.emitWithAck(event, payload);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`${event} ack failed: ${detail}`);
+    }
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${event} ack`)), timeoutMs);
