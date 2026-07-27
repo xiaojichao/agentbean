@@ -143,6 +143,35 @@ describe('pi provider secret crypto', () => {
   });
 });
 
+describe('pi provider createCard encryption gate', () => {
+  test('createCard fails closed when AGENTBEAN_PI_SECRET_KEY is missing', async () => {
+    const repos = createInMemoryRepositories();
+    await seedUsers(repos);
+    let seq = 0;
+    const service = createPiProviderService({
+      repositories: repos.piProvider,
+      unitOfWork: repos.piProviderUnitOfWork,
+      users: repos.users,
+      clock: { now: () => 1_700_000_000_000 + seq },
+      ids: { nextId: () => `id-${++seq}` },
+      resolveSecretKey: () => resolvePiSecretKey({}),
+    });
+
+    const created = await service.createCard(validCreate({
+      preset: 'deepseek',
+      displayName: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      modelId: 'deepseek-chat',
+    }));
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: 'INTERNAL_ERROR',
+      message: 'PI secret key is not configured (AGENTBEAN_PI_SECRET_KEY)',
+    });
+  });
+});
+
 function serializeForTest(secret: ReturnType<typeof encryptPiProviderApiKey>): string {
   return [
     `v${secret.keyVersion}`,

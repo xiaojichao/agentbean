@@ -16,6 +16,7 @@ describe('AgentBean Next cutover audit', () => {
           { name: 'RAILWAY_TOKEN' },
           { name: 'NPM_TOKEN' },
           { name: 'AGENTBEAN_NEXT_SESSION_SECRET' },
+          { name: 'AGENTBEAN_PI_SECRET_KEY' },
         ],
         npmVersions: {
           '@agentbean/contracts@0.2.5': '0.2.5',
@@ -32,7 +33,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 13,
+      total: 14,
     });
   });
 
@@ -56,6 +57,7 @@ describe('AgentBean Next cutover audit', () => {
       'github-variable-next-data-dir',
       'github-variable-next-entry-url',
       'github-secret-next-session-secret',
+      'github-secret-pi-secret-key',
       'npm-contracts-next-version',
       'npm-pi-management-runtime-version',
       'npm-canonical-daemon-next-version',
@@ -97,6 +99,7 @@ describe('AgentBean Next cutover audit', () => {
         RAILWAY_TOKEN: 'railway-token',
         NPM_TOKEN: 'npm-token',
         AGENTBEAN_NEXT_SESSION_SECRET: 'session-secret',
+        AGENTBEAN_PI_SECRET_KEY: 'pi-secret-key',
       },
       runCommand: (_command, args) => {
         if (args[0] === 'variable' || args[0] === 'secret') {
@@ -125,7 +128,7 @@ describe('AgentBean Next cutover audit', () => {
     expect(summarizeCutoverAudit(checks)).toMatchObject({
       ok: true,
       failed: 0,
-      total: 13,
+      total: 14,
     });
   });
 
@@ -137,6 +140,7 @@ describe('AgentBean Next cutover audit', () => {
         RAILWAY_TOKEN: 'railway-token',
         NPM_TOKEN: 'npm-token',
         AGENTBEAN_NEXT_SESSION_SECRET: 'session-secret',
+        AGENTBEAN_PI_SECRET_KEY: 'pi-secret-key',
       },
       runCommand: (_command, args) => {
         if (args[0] === 'variable' || args[0] === 'secret') {
