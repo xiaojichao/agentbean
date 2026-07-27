@@ -199,6 +199,57 @@ describe('OpenAI-compatible Management Model Adapter', () => {
     expect(body).not.toHaveProperty('tools');
   });
 
+  it('接受 content 为空字符串的 tool_calls 响应（DeepSeek thinking/tool 常见形态）', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({
+      model: 'deepseek-v4-pro',
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: '',
+          reasoning_content: 'I should call the tool.',
+          tool_calls: [{
+            id: 'call-empty',
+            type: 'function',
+            function: { name: 'context_get_root_message', arguments: '{}' },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 12, total_tokens: 17 },
+    }));
+
+    const response = await adapter(fetchFn, { requireResponseMetadata: true })
+      .respond(request, { callCount: 1 });
+    expect(response).toMatchObject({
+      finishReason: 'tool_use',
+      content: [{
+        type: 'toolCall',
+        id: 'call-empty',
+        name: 'context.get_root_message',
+        arguments: {},
+      }],
+    });
+    expect(response.content.some((c) => c.type === 'text')).toBe(false);
+  });
+
+  it('requestBodyExtras 合并进请求体（如关闭 DeepSeek thinking）', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse({
+      model: 'model-1',
+      choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+    await createOpenAiCompatibleManagementModelAdapter({
+      id: 'provider-1:model-1',
+      apiKey: 'sk-never-expose',
+      baseUrl: 'https://provider.invalid/v1/',
+      modelId: 'model-1',
+      fetch: fetchFn,
+      requestBodyExtras: { thinking: { type: 'disabled' } },
+    }).respond({ ...request, tools: [] }, { callCount: 1 });
+    const body = JSON.parse(String(fetchFn.mock.calls[0]![1]?.body));
+    expect(body.thinking).toEqual({ type: 'disabled' });
+  });
+
   it('上线探测模式在响应缺少 model 或 usage 时 fail closed', async () => {
     const missingModel = adapter(vi.fn<typeof fetch>(async () => jsonResponse({
       choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],

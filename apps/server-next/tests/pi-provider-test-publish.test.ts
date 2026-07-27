@@ -284,6 +284,68 @@ describe('PI Provider discover / test / publish', () => {
     }
   });
 
+  test('production-path test accepts DeepSeek tool responses with empty-string content', async () => {
+    // Repro: after wire-name fix, text_ok=1 but tool step threw MANAGEMENT_MODEL_RESPONSE_INVALID
+    // because DeepSeek returns content: "" alongside tool_calls.
+    let call = 0;
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      call += 1;
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        tools?: Array<{ function?: { name?: string } }>;
+        thinking?: { type?: string };
+        messages?: Array<{ role?: string }>;
+      };
+      if (call === 1) {
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        return jsonResponse({
+          model: 'deepseek-v4-pro',
+          choices: [{ message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 22, completion_tokens: 1, total_tokens: 23 },
+        });
+      }
+      const hasToolResult = body.messages?.some((m) => m.role === 'tool');
+      if (!hasToolResult) {
+        const wireName = body.tools?.[0]?.function?.name ?? 'context_get_root_message';
+        return jsonResponse({
+          model: 'deepseek-v4-pro',
+          choices: [{
+            message: {
+              role: 'assistant',
+              content: '',
+              reasoning_content: 'call tool',
+              tool_calls: [{
+                id: 'call-1', type: 'function', function: { name: wireName, arguments: '{}' },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 5, completion_tokens: 12, total_tokens: 17 },
+        });
+      }
+      return jsonResponse({
+        model: 'deepseek-v4-pro',
+        choices: [{ message: { role: 'assistant', content: 'DONE' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 },
+      });
+    });
+
+    const { repos, service } = createService({ fetch: fetchFn });
+    await seedAdmin(repos);
+    const created = await service.createCard(validCreate({
+      preset: 'deepseek',
+      displayName: 'DeepSeek',
+      baseUrl: 'https://api.deepseek.com',
+      modelId: 'deepseek-v4-pro',
+    }));
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const tested = await service.runTest({ userId: 'admin-1', cardId: created.card.id });
+    expect(tested).toMatchObject({
+      ok: true,
+      test: { status: 'passed', textOk: true, toolCallOk: true, diagnosticCode: null },
+    });
+  });
+
   test('production-path test maps dotted catalog tool names to DeepSeek-safe wire names', async () => {
     // Repro: DeepSeek rejects function names with dots (HTTP 400 → MANAGEMENT_MODEL_RESPONSE_REJECTED).
     // Production evidence: text_ok=1, tool_call_ok=0, diagnosticCode=MANAGEMENT_MODEL_RESPONSE_REJECTED.

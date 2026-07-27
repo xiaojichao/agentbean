@@ -68,6 +68,7 @@ export async function runPiProviderProductionTest(
 ): Promise<PiProviderProductionTestOutcome> {
   const now = input.now ?? Date.now;
   const started = now();
+  const isDeepSeekHost = /deepseek\.com/i.test(input.config.baseUrl);
   const adapter = createOpenAiCompatibleManagementModelAdapter({
     id: `pi-provider-probe:${input.config.modelId}`,
     apiKey: input.apiKey,
@@ -76,6 +77,10 @@ export async function runPiProviderProductionTest(
     timeoutMs: input.config.timeoutMs,
     maxOutputTokens: Math.min(input.config.maxOutputTokens, 256),
     requireResponseMetadata: true,
+    // DeepSeek-V4 默认 thinking；仅对其关闭，避免污染 OpenAI 等不认 thinking 字段的供应商。
+    ...(isDeepSeekHost
+      ? { requestBodyExtras: { thinking: { type: 'disabled' as const } } }
+      : {}),
     fetch: input.fetch,
   });
 
