@@ -195,8 +195,23 @@ _Avoid_: 消息发送失败、隐式跨模型 fallback、伪装成正常协调�
 
 ## PI Management
 
-设置侧栏中与“团队”并列的一级产品区域。系统管理员在系统作用域管理 PI Provider Supply、Active PI Model、Rollout、治理和健康；Team Owner/Admin 在 Team 作用域只管理自动化、Memory、Agent coverage、限制与使用情况，不查看或选择底层模型。两种作用域不共享配置表单。
-_Avoid_: Team 详情页内的 PI 表单、系统与 Team 混合保存、Provider 管理入口。
+系统作用域的 PI 底座配置能力（Provider Supply、Active PI Model、Rollout、治理与健康）以及 Team 作用域的自动化 / Memory / coverage 治理；两种作用域不共享配置表单。系统作用域入口在 System Admin Console 的 PI Agent 管理（见该术语）；Team 作用域仍在团队设置与 Memory 治理中，不并入全局 Console。
+_Avoid_: Team 详情页内的 PI 表单、系统与 Team 混合保存、把系统 Provider 管理放回设置一级 Tab。
+
+## System Admin Console
+
+仅系统管理员可进入的全局运维壳：在保留应用左侧业务主导航的前提下，主区内再分**中栏导航 + 右栏内容**。入口仍可叫「仪表盘」，语义是系统管理，不是 Team 业务页。导航项至少包括团队管理、用户管理、设备管理、Agent 管理与 PI Agent 管理；路由为 `/{teamPath}/dashboard/{section}`，其中 `teamPath` 仅为 Web 壳，列表数据为全系统范围。
+_Avoid_: Team 设置、普通成员仪表盘、把全局运维塞进个人设置、用当前 Team 过滤全局用户/团队列表。
+
+## PI Agent 管理
+
+System Admin Console 中的 PI 系统作用域管理页，承载原设置中「PI Agent」的系统级职责（如 PI Provider Supply、Active PI Model、系统侧健康与紧急控制，以及系统作用域 System Knowledge）。不再作为设置一级 Tab 的主入口；旧 `settings?tab=pi` 重定向到 `dashboard/pi`。
+_Avoid_: 设置里的 PI Agent 主入口、Team PI 自动协调开关、普通 Agent 列表管理、Team Memory Center 塞进全局 Console。
+
+## Team Memory governance surface
+
+Team 作用域 Memory 的管理入口（Team Memory、Channel Memory、Agent Memory 投影、Candidates、Experience Packs 等），仍面向 Team Owner/Admin 等有权角色，留在设置侧，不并入 System Admin Console 的全局导航。
+_Avoid_: 全局 Console 的 Team Memory 列表、把 Team 治理做成系统管理员独占页。
 
 ## PI Memory Center
 

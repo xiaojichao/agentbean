@@ -60,6 +60,7 @@ export function collectAgentBeanNextReadinessChecks({
   const webNextDashboardPage = [
     readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/page.tsx'), 'utf8'),
     readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/layout.tsx'), 'utf8'),
+    readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/pi/page.tsx'), 'utf8'),
     readFileSync(join(root, 'apps/web-next/components/admin-console-panel.tsx'), 'utf8'),
   ].join('\n');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/chat/page.tsx'), 'utf8');
@@ -681,19 +682,25 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('admin-device-owner-select') &&
         browserSmokeScript.includes('admin-device-owner-save') &&
         browserSmokeScript.includes('admin-agent-row') &&
+        browserSmokeScript.includes('admin-tab-pi') &&
+        browserSmokeScript.includes('admin-pi-page') &&
+        browserSmokeScript.includes('settings-pi-panel') &&
         webNextDashboardPage.includes('data-smoke="admin-dashboard-page"') &&
         webNextDashboardPage.includes("key: 'users'") &&
         webNextDashboardPage.includes("key: 'devices'") &&
         webNextDashboardPage.includes("key: 'agents'") &&
+        webNextDashboardPage.includes("key: 'pi'") &&
         webNextDashboardPage.includes('data-smoke={`admin-tab-${item.key}`}') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-select"') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-save"') &&
         webNextDashboardPage.includes('data-smoke="admin-agent-row"') &&
         webNextDashboardPage.includes("dashboard/${item.key}") &&
         webNextDashboardPage.includes("section === 'teams'") &&
+        webNextDashboardPage.includes('admin-pi-page') &&
+        webNextDashboardPage.includes('PiManagementPanel') &&
         verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
-      'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, and agent ownership projection',
+      'Admin dashboard parity must stay covered by an App Router browser smoke for admin tabs, list rows, device detail, owner transfer, agent ownership projection, and PI console migration',
     ),
     check(
       'phase-0-management-boundary-regression',

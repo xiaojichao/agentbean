@@ -3030,6 +3030,13 @@ export async function exerciseWebUiAdminDashboardBusinessSmoke({
       timeoutMs,
     });
 
+    await page.click('[data-smoke="admin-tab-pi"]');
+    await page.waitForFunction(
+      `Boolean(document.querySelector('[data-smoke="admin-pi-page"]')) && Boolean(document.querySelector('[data-smoke="settings-pi-panel"]'))`,
+      'admin PI Agent management panel to render',
+      timeoutMs,
+    );
+
     return {
       deviceId: daemon.deviceId,
       agentId,
