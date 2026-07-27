@@ -55,9 +55,12 @@ describe('managed Dispatch lifecycle bridge', () => {
       },
     });
     for (const artifact of [
-      markdownArtifact('artifact-result-2', 'second.md', 'changed-sha-2'),
-      markdownArtifact('artifact-result-3', 'third-renamed.md', 'changed-sha-3'),
-      markdownArtifact('artifact-new', 'new.md', 'new-sha'),
+      inputSetArtifact('artifact-result-2', 'second.md', 'changed-sha-2', inputSetId),
+      inputSetArtifact('artifact-result-3', 'third-renamed.md', 'changed-sha-3', inputSetId),
+      {
+        ...inputSetArtifact('artifact-new', 'new.md', 'new-sha', inputSetId),
+        role: 'run_output' as const,
+      },
     ]) await harness.repositories.artifacts.create(artifact);
 
     const proposal = {
@@ -76,6 +79,7 @@ describe('managed Dispatch lifecycle bridge', () => {
       agentId: 'agent-1',
       body: '逐项结果',
       artifactIds: ['artifact-result-2', 'artifact-result-3', 'artifact-new'],
+      workspaceRun: { id: 'workspace-run-input-set', status: 'succeeded' as const },
       projectDocumentInputSetResult: proposal,
     };
     const result = await harness.usecases.receiveDispatchResult(input);
@@ -94,7 +98,18 @@ describe('managed Dispatch lifecycle bridge', () => {
     await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
       .resolves.toHaveLength(1);
     await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
-      .resolves.toHaveLength(2);
+      .resolves.toMatchObject([
+        {
+          source: 'run',
+          derivationSource: {
+            workspaceRunId: 'workspace-run-input-set',
+            agentId: 'agent-1',
+            sourceRoot: { id: `project-document-input-set:${inputSetId}` },
+            artifactId: 'artifact-result-2',
+          },
+        },
+        {},
+      ]);
     await expect(harness.repositories.channelDocuments.getForTeam({
       teamId: 'team-1', channelId: 'channel-1', documentId: 'document-3',
     })).resolves.toMatchObject({ currentRevisionId: 'human-revision-3' });
@@ -116,6 +131,64 @@ describe('managed Dispatch lifecycle bridge', () => {
         ],
       },
     });
+    await harness.repositories.channels.archive({ channelId: 'channel-1', timestamp: 30 });
+    await expect(harness.usecases.receiveDispatchResult(input)).resolves.toMatchObject({
+      ok: true,
+      projectDocumentInputSetResult: { inputSetId },
+    });
+  });
+
+  test('rejects a changed Artifact already bound to another Dispatch', async () => {
+    const harness = await createHarness(true);
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    const inputSetId = created.view.intent.projectDocumentInputSet.id;
+    const artifact = {
+      ...inputSetArtifact('artifact-cross-invocation', 'first.md', 'cross-sha', inputSetId),
+      dispatchId: 'other-dispatch',
+      workspaceRunId: 'other-run',
+      messageId: 'other-message',
+    };
+    await harness.repositories.artifacts.create(artifact);
+
+    const result = await harness.usecases.receiveDispatchResult({
+      dispatchId: created.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      body: '跨 Invocation 结果',
+      artifactIds: [artifact.id],
+      workspaceRun: { id: 'workspace-run-current', status: 'succeeded' },
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId,
+        invocationId: created.view.id,
+        items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 0
+          ? {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'changed' as const,
+              sha256: artifact.sha256,
+              artifactId: artifact.id,
+            }
+          : {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'unchanged' as const,
+              sha256: item.sha256,
+            }),
+      },
+    });
+    expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(harness.repositories.artifacts.getForTeam({
+      teamId: 'team-1',
+      artifactId: artifact.id,
+    })).resolves.toMatchObject({
+      dispatchId: 'other-dispatch',
+      workspaceRunId: 'other-run',
+      messageId: 'other-message',
+    });
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
+      .resolves.toHaveLength(1);
   });
 
   test('rejects archived late InputSet results without changing document facts', async () => {
@@ -161,7 +234,12 @@ describe('managed Dispatch lifecycle bridge', () => {
     });
     await harness.gateway.retry({ authority: harness.authority, invocationId: created.view.id });
     await harness.repositories.artifacts.create(
-      markdownArtifact('artifact-stale-attempt', '1.md', 'stale-attempt-sha'),
+      inputSetArtifact(
+        'artifact-stale-attempt',
+        '1.md',
+        'stale-attempt-sha',
+        created.view.intent.projectDocumentInputSet.id,
+      ),
     );
 
     const result = await harness.usecases.receiveDispatchResult({
@@ -208,7 +286,12 @@ describe('managed Dispatch lifecycle bridge', () => {
     const created = await harness.gateway.invoke(invokeInput(harness.authority));
     if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
     await harness.repositories.artifacts.create(
-      markdownArtifact('artifact-recovery', '2.md', 'recovery-sha'),
+      inputSetArtifact(
+        'artifact-recovery',
+        '2.md',
+        'recovery-sha',
+        created.view.intent.projectDocumentInputSet.id,
+      ),
     );
     const proposal = {
       contractVersion: 1 as const,
@@ -234,6 +317,7 @@ describe('managed Dispatch lifecycle bridge', () => {
       agentId: 'agent-1',
       body: '可恢复结果',
       artifactIds: ['artifact-recovery'],
+      workspaceRun: { id: 'workspace-run-recovery', status: 'succeeded' as const },
       projectDocumentInputSetResult: proposal,
     };
     const record = harness.repositories.projectDocumentInputSetResults.record;
@@ -327,6 +411,19 @@ function markdownArtifact(id: string, filename: string, sha256: string) {
   return {
     id, teamId: 'team-1', channelId: 'channel-1', uploaderId: 'agent-1',
     filename, mimeType: 'text/markdown', sizeBytes: 10, sha256, createdAt: 10,
+  };
+}
+
+function inputSetArtifact(id: string, filename: string, sha256: string, inputSetId: string) {
+  return {
+    ...markdownArtifact(id, filename, sha256),
+    relativePath: filename,
+    role: 'intermediate' as const,
+    sourceRoot: {
+      id: `project-document-input-set:${inputSetId}`,
+      kind: 'configured_output' as const,
+      label: '项目文档回写',
+    },
   };
 }
 
