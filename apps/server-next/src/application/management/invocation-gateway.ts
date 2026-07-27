@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type {
+  AgentInvocationIntent,
   AgentInvocationIntentV1,
   AgentInvocationRecordDto,
   AgentInvocationStatus,
@@ -8,6 +9,7 @@ import type {
   DependencyResultRefDto,
   DispatchStatus,
   MemoryCapsuleRefDto,
+  ProjectDocumentInputSetItemV1,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
@@ -60,7 +62,7 @@ export interface InvokeAgentInput {
   readonly frozenTargetAgentId: string;
   readonly allowedTargetAgentIds: readonly string[];
   readonly idempotencyKey: string;
-  readonly intent: AgentInvocationIntentV1;
+  readonly intent: AgentInvocationIntent;
 }
 
 export interface InvokeTaskAgentInput {
@@ -115,7 +117,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
         }
         const targetKind = agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const;
-        const intent: AgentInvocationIntentV1 = {
+        const baseIntent: AgentInvocationIntentV1 = {
           schemaVersion: 1,
           teamId: run.teamId,
           channelId: run.channelId,
@@ -135,6 +137,11 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
+        const intent = await attachProjectDocumentInputSet(
+          repositories,
+          baseIntent,
+          run,
+        );
         const intentHash = hashIntent(intent);
 
         await assertNoActiveTaskAttempt(transactionRepositories, run.id, input.taskId,
@@ -164,12 +171,13 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
     },
 
     async invoke(input: InvokeAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
-      const intentHash = hashIntent(input.intent);
       return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
         await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
         const run = await requireRun(transactionRepositories.management, input.authority.managementRunId);
-        validateFrozenIntent(input, run);
+        const intent = await attachProjectDocumentInputSet(repositories, input.intent, run);
+        validateFrozenIntent({ ...input, intent }, run);
+        const intentHash = hashIntent(intent);
         if (!input.idempotencyKey) throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_KEY_INVALID');
 
         const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
@@ -199,12 +207,12 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
-        await validateAuthoritativeTarget(repositories, input.intent, run, now);
+        await validateAuthoritativeTarget(repositories, intent, run, now);
         const invocation: AgentInvocationRecordDto = {
           schemaVersion: 1,
           id: ids.nextId(),
           managementRunId: run.id,
-          intent: input.intent,
+          intent,
           intentHash,
           idempotencyKey: input.idempotencyKey,
           createdAt: now,
@@ -219,7 +227,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           payload: {
             invocationId: invocation.id,
             intentHash,
-            ...(input.intent.taskContext && { taskRevision: input.intent.taskContext.taskRevision }),
+            ...(intent.taskContext && { taskRevision: intent.taskContext.taskRevision }),
           },
         }, now, ids);
         await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt, input.authority.workerId, now, ids);
@@ -245,6 +253,9 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
 
         await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
+        if (invocation.intent.taskContext) {
+          await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
+        }
         const attempt = await createAttempt(transactionRepositories.management, transactionRepositories.dispatches, invocation, latest.attemptNumber + 1, now, ids);
         await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt, input.authority.workerId, now, ids);
         return deriveInvocationView(transactionRepositories.management, transactionRepositories.dispatches, invocation);
@@ -428,7 +439,7 @@ async function assertNoActiveTaskAttempt(
 
 async function validateAuthoritativeTarget(
   repositories: ServerNextRepositories,
-  intent: AgentInvocationIntentV1,
+  intent: AgentInvocationIntent,
   run: ManagementRunRecord,
   now: number,
 ): Promise<void> {
@@ -443,6 +454,20 @@ async function validateAuthoritativeTarget(
   if (!agent || agent.deletedAt !== undefined || !agent.visibleTeamIds.includes(intent.teamId)) throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
   const actualKind = agent.category === 'agentos-hosted' ? 'agentos-hosted' : 'custom';
   if (actualKind !== intent.targetKind) throw new InvocationGatewayError('INVOCATION_TARGET_KIND_MISMATCH');
+  if (intent.schemaVersion === 2) {
+    const version = intent.projectDocumentInputSet.contractVersion;
+    if (!agent.projectDocumentInputSetVersions?.includes(version)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_AGENT_CAPABILITY_MISSING');
+    }
+    const device = agent.deviceId
+      ? await repositories.devices.getById(agent.deviceId)
+      : null;
+    if (device?.status !== 'online'
+      || !device.capabilities?.projectDocumentInputSetVersions?.includes(version)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_DEVICE_CAPABILITY_MISSING');
+    }
+    await validateProjectDocumentInputSet(repositories, intent, run);
+  }
   await validateMemoryCapsuleRef(
     repositories.memory,
     intent.memoryCapsuleRef,
@@ -459,6 +484,9 @@ async function validateAuthoritativeTarget(
     const task = await repositories.tasks.getById(intent.taskContext.taskId);
     if (!task || task.teamId !== intent.teamId || task.channelId !== intent.channelId) throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
     if (run.rootTaskId && intent.taskContext.rootTaskId !== run.rootTaskId) throw new InvocationGatewayError('INVOCATION_ROOT_TASK_MISMATCH');
+    if (intent.schemaVersion === 2 && task.revision !== intent.taskContext.taskRevision) {
+      throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+    }
   }
 }
 
@@ -601,8 +629,144 @@ function deriveStatus(status: DispatchStatus | undefined): AgentInvocationStatus
   return status;
 }
 
-function hashIntent(intent: AgentInvocationIntentV1): string {
+function hashIntent(intent: AgentInvocationIntent): string {
   return createHash('sha256').update(canonicalizeAgentInvocationIntent(intent)).digest('hex');
+}
+
+async function attachProjectDocumentInputSet(
+  repositories: ServerNextRepositories,
+  intent: AgentInvocationIntent,
+  run: ManagementRunRecord,
+): Promise<AgentInvocationIntent> {
+  const referenceSet = await repositories.projectReferenceSets.getByMessageId({
+    teamId: run.teamId,
+    channelId: run.channelId,
+    messageId: run.rootMessageId,
+  });
+  if (!referenceSet) {
+    if (intent.schemaVersion === 2) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
+  const items: ProjectDocumentInputSetItemV1[] = [];
+  for (const selection of referenceSet.selections) {
+    for (const item of selection.items) {
+      if (item.kind !== 'document_revision') continue;
+      const document = await repositories.channelDocuments.getForTeam({
+        teamId: run.teamId,
+        channelId: run.channelId,
+        documentId: item.documentId!,
+      });
+      const revision = await repositories.channelDocuments.getRevision({
+        documentId: item.documentId!,
+        revisionId: item.revisionId!,
+      });
+      if (!document || !revision
+        || revision.artifact.teamId !== run.teamId
+        || revision.artifact.channelId !== run.channelId) {
+        throw new InvocationGatewayError('INVOCATION_INPUT_SET_REVISION_FORBIDDEN');
+      }
+      if (!revision.artifact.sha256) {
+        throw new InvocationGatewayError('INVOCATION_INPUT_SET_CHECKSUM_UNAVAILABLE');
+      }
+      const displayName = item.filename ?? document.filename;
+      items.push({
+        documentId: item.documentId!,
+        baseRevisionId: item.revisionId!,
+        revisionNumber: item.revisionNumber!,
+        artifactId: revision.artifact.id,
+        displayName,
+        summary: selection.bundleName
+          ? `${selection.sourceKind}:${selection.bundleName}`
+          : selection.sourceKind,
+        relativePath: `documents/${String(items.length + 1).padStart(3, '0')}-${safeInputName(displayName)}`,
+        mimeType: revision.artifact.mimeType,
+        sizeBytes: revision.artifact.sizeBytes,
+        sha256: revision.artifact.sha256,
+        source: {
+          referenceSetId: referenceSet.id,
+          selectionId: selection.id,
+          selectionSourceKind: selection.sourceKind,
+          ...(selection.bundleId ? { bundleId: selection.bundleId } : {}),
+          ...(selection.bundleName ? { bundleName: selection.bundleName } : {}),
+        },
+      });
+    }
+  }
+  if (items.length === 0) {
+    if (intent.schemaVersion === 2) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
+  const id = `project-document-input-set:${createHash('sha256')
+    .update(`${referenceSet.id}:${intent.targetAgentId}:1`)
+    .digest('hex')
+    .slice(0, 24)}`;
+  const projectDocumentInputSet = {
+    id,
+    contractVersion: 1 as const,
+    required: true as const,
+    referenceSetId: referenceSet.id,
+    items,
+  };
+  if (intent.schemaVersion === 2) {
+    if (canonicalizeAgentInvocationIntent({
+      ...intent,
+      projectDocumentInputSet,
+    }) !== canonicalizeAgentInvocationIntent(intent)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
+  return {
+    ...intent,
+    schemaVersion: 2,
+    projectDocumentInputSet,
+  };
+}
+
+async function validateProjectDocumentInputSet(
+  repositories: ServerNextRepositories,
+  intent: Extract<AgentInvocationIntent, { schemaVersion: 2 }>,
+  run: ManagementRunRecord,
+): Promise<void> {
+  const inputSet = intent.projectDocumentInputSet;
+  if (inputSet.contractVersion !== 1 || !inputSet.required || inputSet.items.length === 0) {
+    throw new InvocationGatewayError('INVOCATION_INPUT_SET_INVALID');
+  }
+  const referenceSet = await repositories.projectReferenceSets.getByMessageId({
+    teamId: intent.teamId,
+    channelId: intent.channelId,
+    messageId: run.rootMessageId,
+  });
+  if (!referenceSet || referenceSet.id !== inputSet.referenceSetId) {
+    throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+  }
+  for (const item of inputSet.items) {
+    const document = await repositories.channelDocuments.getForTeam({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      documentId: item.documentId,
+    });
+    const revision = await repositories.channelDocuments.getRevision({
+      documentId: item.documentId,
+      revisionId: item.baseRevisionId,
+    });
+    if (!document || !revision
+      || revision.artifact.id !== item.artifactId
+      || revision.artifact.teamId !== intent.teamId
+      || revision.artifact.channelId !== intent.channelId
+      || revision.artifact.sha256 !== item.sha256
+      || revision.artifact.sizeBytes !== item.sizeBytes) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REVISION_FORBIDDEN');
+    }
+  }
+}
+
+function safeInputName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '') || 'document.md';
 }
 
 async function requireRun(management: ManagementRepositories, managementRunId: string): Promise<ManagementRunRecord> {

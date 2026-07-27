@@ -104,6 +104,42 @@ describe('agent team visibility', () => {
     expect(res.ok && res.agents.map((a) => a.category)).toEqual(['agentos-hosted']);
   });
 
+  test('requires the Agent adapter to declare InputSet support independently of the Device', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'device-1', 'agent-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    const hello = await app.deviceHello({
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      hostname: 'mac',
+      capabilities: { projectDocumentInputSetVersions: [1] },
+    });
+    const deviceId = hello.ok ? hello.device.id : 'device-1';
+
+    const unsupported = await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{ name: 'Hermes', adapterKind: 'hermes', category: 'agentos-hosted' }],
+    });
+    expect(unsupported.ok && unsupported.agents[0]?.projectDocumentInputSetVersions)
+      .toBeUndefined();
+
+    const supported = await app.registerDiscoveredAgents({
+      teamId: 'team-1',
+      deviceId,
+      agents: [{
+        name: 'Hermes',
+        adapterKind: 'hermes',
+        category: 'agentos-hosted',
+        projectDocumentInputSetVersions: [1],
+      }],
+    });
+    expect(supported.ok && supported.agents[0]?.projectDocumentInputSetVersions)
+      .toEqual([1]);
+  });
+
   test('memory setPrimaryTeamVisibility refuses soft-deleted agents (I2 deep-defense)', async () => {
     // I2: memory/repositories.ts 的 setPrimaryTeamVisibility 缺 deletedAt 守卫，软删 agent
     // 被调用会"复活"进 visibleTeamIds。本测试直接打内存仓库，绕过 usecase 层守卫，

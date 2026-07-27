@@ -49,6 +49,7 @@ export async function scanBuiltinRuntimeAgents(
         command,
         cwd: dirname(command),
         discoverySource: 'runtime',
+        projectDocumentInputSetVersions: [1],
       });
     }
   }
@@ -157,6 +158,7 @@ async function scanHermesGateway(
     cwd: dirname(command),
     discoverySource: 'gateway',
     gatewayInstanceKey: `hermes:${command}`,
+    projectDocumentInputSetVersions: [1],
   };
 }
 
@@ -189,6 +191,7 @@ async function scanOpenClawGateway(
     cwd: dirname(command),
     discoverySource: 'gateway',
     gatewayInstanceKey: `openclaw:${command}:${resolvedAgentId}`,
+    projectDocumentInputSetVersions: [1],
   };
 }
 

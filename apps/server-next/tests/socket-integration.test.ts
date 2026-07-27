@@ -2686,7 +2686,7 @@ describe('server-next Socket.IO namespaces', () => {
     const scanRequests: unknown[] = [];
     const discoveredEvents: Array<{
       runtimes: Array<{ name: string; adapterKind: string; command?: string; cwd?: string; installed?: boolean }>;
-      agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string }>;
+      agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string; projectDocumentInputSetVersions?: number[] }>;
     }> = [];
     agent.on(AGENT_EVENTS.device.scanRequested, (payload) => {
       scanRequests.push(payload);
@@ -2723,7 +2723,12 @@ describe('server-next Socket.IO namespaces', () => {
       agent.emitWithAck(AGENT_EVENTS.agent.registerBatch, {
         teamId: 'team-1',
         deviceId: 'device-1',
-        agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'agentos-hosted' }],
+        agents: [{
+          name: 'Codex',
+          adapterKind: 'codex-cli',
+          category: 'agentos-hosted',
+          projectDocumentInputSetVersions: [1],
+        }],
       }),
     ).resolves.toMatchObject({ ok: true, agents: [{ id: 'agent-1', status: 'online' }] });
 
@@ -2746,6 +2751,7 @@ describe('server-next Socket.IO namespaces', () => {
             source: 'runtime',
             command: '/opt/homebrew/bin/codex',
             cwd: '/Users/shaw/AgentBean',
+            projectDocumentInputSetVersions: [1],
           },
         ],
       });
@@ -3540,7 +3546,7 @@ function runtimeSummary(payload: unknown): {
 
 function discoveredPayloadSummary(payload: unknown): {
   runtimes: Array<{ name: string; adapterKind: string; command?: string; cwd?: string; installed?: boolean }>;
-  agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string }>;
+  agents: Array<{ name: string; adapterKind: string; category: string; source: string; command?: string; cwd?: string; projectDocumentInputSetVersions?: number[] }>;
 } {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Expected agents:discovered payload to be an object');
@@ -3567,7 +3573,7 @@ function discoveredPayloadSummary(payload: unknown): {
       if (!agent || typeof agent !== 'object' || !('name' in agent) || !('adapterKind' in agent) || !('category' in agent) || !('source' in agent)) {
         throw new Error('Expected discovered agent to include name, adapterKind, category, and source');
       }
-      const item = agent as { name: unknown; adapterKind: unknown; category: unknown; source: unknown; command?: unknown; cwd?: unknown };
+      const item = agent as { name: unknown; adapterKind: unknown; category: unknown; source: unknown; command?: unknown; cwd?: unknown; projectDocumentInputSetVersions?: unknown };
       return {
         name: String(item.name),
         adapterKind: String(item.adapterKind),
@@ -3575,6 +3581,11 @@ function discoveredPayloadSummary(payload: unknown): {
         source: String(item.source),
         command: typeof item.command === 'string' ? item.command : undefined,
         cwd: typeof item.cwd === 'string' ? item.cwd : undefined,
+        projectDocumentInputSetVersions: Array.isArray(item.projectDocumentInputSetVersions)
+          ? item.projectDocumentInputSetVersions.filter(
+              (version): version is number => Number.isInteger(version) && version > 0,
+            )
+          : undefined,
       };
     }),
   };

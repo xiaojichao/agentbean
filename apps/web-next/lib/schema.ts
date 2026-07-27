@@ -47,6 +47,7 @@ export interface DiscoveredAgent {
   args?: string[];
   cwd?: string;
   source: 'gateway' | 'filesystem';
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface RuntimeInfo {

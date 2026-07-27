@@ -5,6 +5,7 @@ import type { SenderKind } from './message.js';
 import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './invocation.js';
 import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
 import type { ProjectReferenceSetDto } from './project-reference.js';
+import type { ProjectDocumentInputSetV1 } from './project-document-input-set.js';
 import type {
   LocalMemoryScopeType,
   MemoryKind,
@@ -117,6 +118,8 @@ export interface DispatchRequestDto {
    * 合并消息必须逐条保留，执行端不得重新解析为较新的 revision/version。
    */
   projectReferenceSets?: readonly ProjectReferenceSetDto[];
+  /** 必需输入；Device 必须完整物化并校验后才可启动 Agent。 */
+  projectDocumentInputSet?: ProjectDocumentInputSetV1;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];

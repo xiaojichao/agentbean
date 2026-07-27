@@ -31,6 +31,8 @@ export interface DeviceCapabilitiesDto {
   scanAgents?: boolean;
   runDispatches?: boolean;
   fsBrowse?: boolean;
+  /** Device 能完整物化的 ProjectDocumentInputSet 合同版本。 */
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface DeviceDto {

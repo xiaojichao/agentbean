@@ -94,6 +94,7 @@ describe('agent registration modals', () => {
         adapterKind: 'codex',
         command: '',
         source: 'filesystem',
+        projectDocumentInputSetVersions: [1],
       },
       onClose: vi.fn(),
     }));
@@ -111,6 +112,7 @@ describe('agent registration modals', () => {
       teamId: 'team-1',
       deviceId: 'device-scan-1',
       name: 'Codex',
+      projectDocumentInputSetVersions: [1],
     });
     expect(mocks.create.mock.calls[0]?.[0]).not.toHaveProperty('command');
   });

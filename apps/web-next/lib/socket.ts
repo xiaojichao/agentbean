@@ -226,7 +226,7 @@ export interface AgentEvents {
   // 设置 Agent 对指定团队的可见性（替代旧的 publish/unpublish，由后端统一收敛到 visibleTeamIds）
   setVisibility(agentId: string, teamId: string, visible: boolean): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   delete(agentId: string, teamId?: string): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
-  create(payload: { teamId: string; deviceId: string; name: string; adapterKind?: string; command?: string; args?: string[]; cwd?: string; env?: Record<string, string>; description?: string }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
+  create(payload: { teamId: string; deviceId: string; name: string; adapterKind?: string; command?: string; args?: string[]; cwd?: string; env?: Record<string, string>; description?: string; projectDocumentInputSetVersions?: number[] }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   updateConfig(payload: { id: string; teamId?: string; name: string; adapterKind?: string; command?: string; cwd?: string | null; description?: string | null; env?: Record<string, string> }): Promise<{ ok: boolean; agent?: AgentSnapshot; error?: string }>;
   subscribe(teamId: string): void;
 }

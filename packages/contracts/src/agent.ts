@@ -55,6 +55,8 @@ export interface AgentDto {
   skills?: SkillDto[];
   lastSeenAt?: UnixMs;
   lastError?: string;
+  /** Agent adapter 公开支持的 ProjectDocumentInputSet 合同版本。 */
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface DiscoveredAgentDto {
@@ -70,6 +72,8 @@ export interface DiscoveredAgentDto {
   gatewayId?: string;
   gatewayName?: string;
   gatewayInstanceKey?: string;
+  /** Agent adapter 公开支持的 ProjectDocumentInputSet 合同版本。 */
+  projectDocumentInputSetVersions?: number[];
   metadata?: Record<string, unknown>;
 }
 
@@ -85,6 +89,8 @@ export interface CreateAgentCommandDto {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** 创建 Agent 时由 adapter 显式声明的 ProjectDocumentInputSet 合同版本。 */
+  projectDocumentInputSetVersions?: number[];
 }
 
 export interface UpdateAgentConfigCommandDto {
