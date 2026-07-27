@@ -7,6 +7,7 @@ import { resolveProjectStageExecutionGate } from './project-stage-execution-gate
 import {
   filterStrictProjectStageAgentIds,
   hasActiveProjectStageInvocation,
+  resolveProjectStageClaimFence,
   resolveProjectStageStableInputs,
 } from './project-stage-advance-service.js';
 import type { ServerNextRepositories } from './repositories.js';
@@ -81,27 +82,14 @@ export function createProjectStageAutoAdvance(input: {
           task,
           coordination,
         );
-        const projectStageFence = stable.stageId
-          ? `agentbean:project-stage-fence:${JSON.stringify({
-            stageId: stable.stageId,
-            inputs: stable.inputs,
-          })}`
-          : null;
-        const taskOffers = await input.repositories.taskCoordination.offers.listByTask(task.id);
-        const acceptedClaimOffer = claim
-          ? taskOffers.find((offer) =>
-            offer.taskRevision === task.revision
-            && offer.taskAttempt === coordination.attempt
-            && offer.agentId === claim.agentId
-            && offer.status === 'accepted'
-            && offer.response?.kind === 'accepted'
-            && offer.response.respondedAt === claim.acquiredAt
-            && offer.objective.constraints.includes('agentbean:project-stage-auto'))
-          : undefined;
-        const claimInputFenceCurrent = !claim || (
-          projectStageFence !== null
-          && acceptedClaimOffer?.objective.inputs.includes(projectStageFence) === true
-        );
+        const claimFence = await resolveProjectStageClaimFence(input.repositories, {
+          task,
+          coordination,
+          claim,
+          stable,
+          now: input.now(),
+        });
+        const { projectStageFence, taskOffers } = claimFence;
         const activeOffers = taskOffers
           .filter((offer) => offer.taskRevision === task.revision
             && offer.taskAttempt === coordination.attempt
@@ -117,9 +105,7 @@ export function createProjectStageAutoAdvance(input: {
           stageTaskRevision: stage.taskRevision,
           coordinationTaskRevision: coordination.taskRevision,
           claimStatus: claim
-            ? claim.status === 'active' && claim.expiresAt > input.now() && claimInputFenceCurrent
-              ? 'active'
-              : 'stale'
+            ? claimFence.current ? 'active' : 'stale'
             : 'none',
           ...(claim ? { claimedAgentId: claim.agentId } : {}),
           invocationStatus: activeInvocation ? 'active' : 'none',

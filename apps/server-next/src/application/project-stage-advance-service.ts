@@ -8,13 +8,57 @@ import type {
   ProjectStageEdgeRecord,
 } from './project-repositories.js';
 import type { ServerNextRepositories, TaskRecord } from './repositories.js';
-import type { TaskCoordinationRecord } from './task-coordination-repositories.js';
+import type {
+  TaskClaimLeaseRecord,
+  TaskCoordinationRecord,
+  TaskOfferRecord,
+} from './task-coordination-repositories.js';
 
 export interface ProjectStageStableInputResolution {
   readonly stageId?: string;
   readonly requiredRuleCount: number;
   readonly satisfiedRuleKeys: readonly string[];
   readonly inputs: readonly ProjectStageStableInputDto[];
+}
+
+export async function resolveProjectStageClaimFence(
+  repositories: ServerNextRepositories,
+  input: {
+    task: TaskRecord;
+    coordination: TaskCoordinationRecord;
+    claim: TaskClaimLeaseRecord | null;
+    stable: ProjectStageStableInputResolution;
+    now: number;
+  },
+): Promise<{
+  readonly current: boolean;
+  readonly projectStageFence: string | null;
+  readonly taskOffers: readonly TaskOfferRecord[];
+}> {
+  const projectStageFence = input.stable.stageId
+    ? `agentbean:project-stage-fence:${JSON.stringify({
+      stageId: input.stable.stageId,
+      inputs: input.stable.inputs,
+    })}`
+    : null;
+  const taskOffers = await repositories.taskCoordination.offers.listByTask(input.task.id);
+  if (!input.claim) return { current: false, projectStageFence, taskOffers };
+  const acceptedClaimOffer = taskOffers.find((offer) =>
+    offer.taskRevision === input.task.revision
+    && offer.taskAttempt === input.coordination.attempt
+    && offer.agentId === input.claim!.agentId
+    && offer.status === 'accepted'
+    && offer.response?.kind === 'accepted'
+    && offer.response.respondedAt === input.claim!.acquiredAt
+    && offer.objective.constraints.includes('agentbean:project-stage-auto'));
+  return {
+    current: input.claim.status === 'active'
+      && input.claim.expiresAt > input.now
+      && projectStageFence !== null
+      && acceptedClaimOffer?.objective.inputs.includes(projectStageFence) === true,
+    projectStageFence,
+    taskOffers,
+  };
 }
 
 export async function hasActiveProjectStageInvocation(

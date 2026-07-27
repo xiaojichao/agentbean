@@ -135,6 +135,7 @@ import {
 import {
   filterStrictProjectStageAgentIds,
   hasActiveProjectStageInvocation,
+  resolveProjectStageClaimFence,
   resolveProjectStageStableInputs,
 } from './project-stage-advance-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
@@ -11485,6 +11486,15 @@ async function projectStageDto(
   const activeInvocation = coordination
     ? await hasActiveProjectStageInvocation(repositories, task, coordination)
     : false;
+  const claimFenceCurrent = coordination
+    ? (await resolveProjectStageClaimFence(repositories, {
+      task,
+      coordination,
+      claim: currentClaim,
+      stable: stableResolution,
+      now,
+    })).current
+    : false;
   const candidateAgentIds = await projectStageCandidateAgentIds(repositories, task, coordination,
     stableResolution.inputs.some((input) => input.kind === 'document_revision'), now);
   const policy = await repositories.teamPiPolicy.getOrDefault(task.teamId);
@@ -11497,7 +11507,7 @@ async function projectStageDto(
     stageTaskRevision: record.taskRevision,
     coordinationTaskRevision: coordination?.taskRevision ?? -1,
     claimStatus: currentClaim
-      ? currentClaim.status === 'active' ? 'active' : 'stale'
+      ? claimFenceCurrent ? 'active' : 'stale'
       : 'none',
     ...(currentClaim ? { claimedAgentId: currentClaim.agentId } : {}),
     invocationStatus: activeInvocation ? 'active' : 'none',

@@ -128,6 +128,7 @@ interface AppWithCleanup {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
   }) => Promise<void>): void;
+  recoverProjectStages?(): Promise<void>;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -311,6 +312,7 @@ export async function startServerNextDevServer(
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
     await realtime.offerTaskClaims(taskId, options);
   });
+  await appWithCleanup.recoverProjectStages?.();
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
@@ -1611,7 +1613,6 @@ function createDefaultApp(
       messageIngestionMode,
     });
     appForPiHealth = app;
-    void management.recoverProjectStages().catch(() => undefined);
     return {
       app,
       artifactPreviewService,
@@ -1625,6 +1626,7 @@ function createDefaultApp(
       serverWorkerAuthToken: serverWorker?.authToken,
       bindManagementDispatchEmitter: management.bindDispatchEmitter,
       bindTaskClaimEmitter: management.bindTaskClaimEmitter,
+      recoverProjectStages: management.recoverProjectStages,
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1693,7 +1695,6 @@ function createDefaultApp(
     messageIngestionMode,
   });
   appForPiHealth = app;
-  void management.recoverProjectStages().catch(() => undefined);
   return {
     app,
     artifactPreviewService,
@@ -1708,6 +1709,7 @@ function createDefaultApp(
     serverWorkerAuthToken: serverWorker?.authToken,
     bindManagementDispatchEmitter: management.bindDispatchEmitter,
     bindTaskClaimEmitter: management.bindTaskClaimEmitter,
+    recoverProjectStages: management.recoverProjectStages,
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
