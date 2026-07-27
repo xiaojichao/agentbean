@@ -70,8 +70,9 @@ export function evaluatePiProviderPublish(
 export const PI_PROVIDER_PROBE = {
   textSystem: 'You are a connectivity probe. Reply with exactly the word OK and nothing else.',
   textUser: 'probe',
+  // 不硬编码 catalog 工具名：adapter 会把点号名映射为供应商合法 function name（如 DeepSeek）。
   toolSystem:
-    'You are a connectivity probe. You must call the function context.get_root_message with an empty JSON object {}. Do not answer in plain text before the tool call.',
+    'You are a connectivity probe. You must call the only available tool with an empty JSON object {}. Do not answer in plain text before the tool call.',
   toolUser: 'run tool probe',
   toolResultContent: 'probe-ok',
   toolFinalSystem:

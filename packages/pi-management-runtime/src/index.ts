@@ -2,6 +2,7 @@ export { createManagementRuntimeFactory } from './pi-session-adapter.js';
 export {
   ManagementModelAdapterError,
   createOpenAiCompatibleManagementModelAdapter,
+  toProviderSafeToolName,
 } from './openai-compatible-management-model-adapter.js';
 export type {
   CreateOpenAiCompatibleManagementModelAdapterInput,

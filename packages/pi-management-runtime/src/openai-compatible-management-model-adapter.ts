@@ -59,32 +59,41 @@ export function createOpenAiCompatibleManagementModelAdapter(
     async respond(request): Promise<ManagementModelResponse> {
       if (request.signal?.aborted) throw adapterError('MANAGEMENT_MODEL_ABORTED');
 
+      // DeepSeek / OpenAI function names: a-z A-Z 0-9 _ - only (no dots). Keep dotted
+      // catalog names internally; map to wire-safe names for the provider request and back.
+      const toolNames = buildToolNameWireMap(request.tools.map((tool) => tool.name));
+
       const abort = createRequestAbort(request.signal, input.timeoutMs);
       let response: Response;
       try {
+        const body: Record<string, unknown> = {
+          model: modelId,
+          messages: [
+            { role: 'system', content: request.systemPrompt },
+            ...request.messages.map((message) => toOpenAiMessage(message, toolNames.toWire)),
+          ],
+          stream: false,
+        };
+        if (request.tools.length > 0) {
+          body.tools = request.tools.map((tool) => ({
+            type: 'function',
+            function: {
+              name: toolNames.toWire(tool.name),
+              description: tool.description,
+              parameters: tool.inputSchema,
+            },
+          }));
+        }
+        if (input.maxOutputTokens !== undefined) {
+          body.max_tokens = input.maxOutputTokens;
+        }
         response = await fetchFn(endpoint, {
           method: 'POST',
           headers: {
             authorization: `Bearer ${input.apiKey}`,
             'content-type': 'application/json',
           },
-          body: JSON.stringify({
-            model: modelId,
-            messages: [
-              { role: 'system', content: request.systemPrompt },
-              ...request.messages.map(toOpenAiMessage),
-            ],
-            tools: request.tools.map((tool) => ({
-              type: 'function',
-              function: {
-                name: tool.name,
-                description: tool.description,
-                parameters: tool.inputSchema,
-              },
-            })),
-            ...(input.maxOutputTokens === undefined ? {} : { max_tokens: input.maxOutputTokens }),
-            stream: false,
-          }),
+          body: JSON.stringify(body),
           signal: abort.signal,
         });
       } catch {
@@ -105,7 +114,12 @@ export function createOpenAiCompatibleManagementModelAdapter(
           if (abort.didTimeout()) throw adapterError('MANAGEMENT_MODEL_TIMEOUT');
           throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID_JSON');
         }
-        return parseOpenAiResponse(body, modelId, input.requireResponseMetadata ?? false);
+        return parseOpenAiResponse(
+          body,
+          modelId,
+          input.requireResponseMetadata ?? false,
+          toolNames.fromWire,
+        );
       } finally {
         abort.dispose();
       }
@@ -113,7 +127,41 @@ export function createOpenAiCompatibleManagementModelAdapter(
   };
 }
 
-function toOpenAiMessage(message: ManagementModelMessage): Record<string, unknown> {
+/**
+ * Map catalog tool names (often dotted, e.g. context.get_root_message) to provider-safe
+ * function names required by DeepSeek and the OpenAI function-name grammar.
+ */
+export function toProviderSafeToolName(name: string): string {
+  return name.replace(/\./g, '_');
+}
+
+function buildToolNameWireMap(toolNames: readonly string[]): {
+  toWire(name: string): string;
+  fromWire(name: string): string;
+} {
+  const wireByOriginal = new Map<string, string>();
+  const originalByWire = new Map<string, string>();
+  for (const original of toolNames) {
+    const wire = toProviderSafeToolName(original);
+    const existing = originalByWire.get(wire);
+    if (existing !== undefined && existing !== original) {
+      throw adapterError('MANAGEMENT_MODEL_REQUEST_INVALID');
+    }
+    wireByOriginal.set(original, wire);
+    originalByWire.set(wire, original);
+    // Accept providers that echo the catalog name unchanged.
+    originalByWire.set(original, original);
+  }
+  return {
+    toWire: (name) => wireByOriginal.get(name) ?? toProviderSafeToolName(name),
+    fromWire: (name) => originalByWire.get(name) ?? name,
+  };
+}
+
+function toOpenAiMessage(
+  message: ManagementModelMessage,
+  toWireToolName: (name: string) => string,
+): Record<string, unknown> {
   if (message.role === 'user') {
     return { role: 'user', content: message.content.map((item) => item.text).join('\n') };
   }
@@ -131,7 +179,7 @@ function toOpenAiMessage(message: ManagementModelMessage): Record<string, unknow
   const toolCalls = message.content.flatMap((item) => item.type === 'toolCall' ? [{
     id: item.id,
     type: 'function',
-    function: { name: item.name, arguments: JSON.stringify(item.arguments) },
+    function: { name: toWireToolName(item.name), arguments: JSON.stringify(item.arguments) },
   }] : []);
   return {
     role: 'assistant',
@@ -144,6 +192,7 @@ function parseOpenAiResponse(
   value: unknown,
   fallbackModel: string,
   requireResponseMetadata: boolean,
+  fromWireToolName: (name: string) => string = (name) => name,
 ): ManagementModelResponse {
   if (!isRecord(value) || !Array.isArray(value.choices) || !isRecord(value.choices[0])) {
     throw adapterError('MANAGEMENT_MODEL_RESPONSE_INVALID');
@@ -163,7 +212,7 @@ function parseOpenAiResponse(
       throw adapterError('MANAGEMENT_MODEL_TOOL_CALL_INVALID');
     }
     for (const call of choice.message.tool_calls) {
-      content.push(parseToolCall(call));
+      content.push(parseToolCall(call, fromWireToolName));
     }
   }
   const finishReason = parseFinishReason(choice.finish_reason);
@@ -187,7 +236,10 @@ function parseOpenAiResponse(
   };
 }
 
-function parseToolCall(value: unknown): Extract<ManagementModelContent, { type: 'toolCall' }> {
+function parseToolCall(
+  value: unknown,
+  fromWireToolName: (name: string) => string = (name) => name,
+): Extract<ManagementModelContent, { type: 'toolCall' }> {
   if (!isRecord(value)
     || (value.type !== undefined && value.type !== 'function')
     || typeof value.id !== 'string'
@@ -208,7 +260,7 @@ function parseToolCall(value: unknown): Extract<ManagementModelContent, { type: 
   return {
     type: 'toolCall',
     id: value.id,
-    name: value.function.name as never,
+    name: fromWireToolName(value.function.name) as never,
     arguments: argumentsValue,
   };
 }
