@@ -1,7 +1,11 @@
 import { evaluateProjectStageAdvance } from '@agentbean/domain';
 import type { TaskClaimBroker } from './management/task-claim-broker.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
-import { resolveProjectStageStableInputs } from './project-stage-advance-service.js';
+import {
+  filterStrictProjectStageAgentIds,
+  hasActiveProjectStageInvocation,
+  resolveProjectStageStableInputs,
+} from './project-stage-advance-service.js';
 import type { ServerNextRepositories } from './repositories.js';
 
 export interface ProjectStageAutoAdvanceOutcome {
@@ -21,7 +25,10 @@ export function createProjectStageAutoAdvance(input: {
   readonly repositories: ServerNextRepositories;
   readonly broker: TaskClaimBroker;
   readonly piHealthy: () => Promise<boolean>;
-  readonly emitTaskOffers: (taskId: string) => Promise<void>;
+  readonly emitTaskOffers: (
+    taskId: string,
+    options: { readonly allowedAgentIds: readonly string[]; readonly projectStageAuto: true },
+  ) => Promise<void>;
   readonly now: () => number;
 }) {
   return {
@@ -48,31 +55,31 @@ export function createProjectStageAutoAdvance(input: {
         const gate = await resolveProjectStageExecutionGate(input.repositories, task);
         const stable = await resolveProjectStageStableInputs(input.repositories, task);
         const resolution = await input.broker.resolveCandidates(task.id);
-        const eligibleAgentIds = resolution.candidates
+        const brokerEligibleAgentIds = resolution.candidates
           .filter((candidate) => candidate.eligible)
           .map((candidate) => candidate.agentId);
+        const eligibleAgentIds = await filterStrictProjectStageAgentIds(input.repositories, {
+          teamId: task.teamId,
+          candidateAgentIds: brokerEligibleAgentIds,
+          requiredCapabilities: coordination.requiredCapabilities,
+          now: input.now(),
+        });
         const claim = await input.repositories.taskCoordination.claimLeases.getCurrent({
           taskId: task.id,
           taskRevision: task.revision,
           taskAttempt: coordination.attempt,
         });
-        const activeInvocation = (await input.repositories.management.invocations
-          .listByRun(coordination.managementRunId))
-          .some((invocation) => invocation.intent.taskContext?.taskId === task.id
-            && invocation.intent.taskContext.taskRevision === task.revision);
-        const activeOffer = (await input.repositories.taskCoordination.offers.listByTask(task.id))
-          .find((offer) => offer.taskRevision === task.revision
+        const activeInvocation = await hasActiveProjectStageInvocation(
+          input.repositories,
+          task,
+          coordination,
+        );
+        const activeOffers = (await input.repositories.taskCoordination.offers.listByTask(task.id))
+          .filter((offer) => offer.taskRevision === task.revision
             && offer.taskAttempt === coordination.attempt
             && offer.status === 'open'
-            && offer.offerExpiresAt > input.now());
-        if (activeOffer) {
-          outcomes.push({
-            taskId: task.id,
-            kind: 'offered',
-            targetAgentIds: [activeOffer.agentId],
-          });
-          continue;
-        }
+            && offer.offerExpiresAt > input.now()
+            && offer.objective.constraints.includes('agentbean:project-stage-auto'));
         const decision = evaluateProjectStageAdvance({
           channelWritable: channel.archivedAt == null,
           piHealthy,
@@ -92,8 +99,42 @@ export function createProjectStageAutoAdvance(input: {
           stableInputFenceCurrent: true,
           eligibleAgentIds,
         });
+        if (activeOffers.length > 0) {
+          const activeAgentIds = activeOffers.map((offer) => offer.agentId).sort();
+          const expectedAgentIds = decision.kind === 'publish_offer'
+            ? [...decision.targetAgentIds].sort()
+            : [];
+          const expectedFence = stable.stageId
+            ? `agentbean:project-stage-fence:${JSON.stringify({
+              stageId: stable.stageId,
+              inputs: stable.inputs,
+            })}`
+            : null;
+          const fencesCurrent = expectedFence !== null && activeOffers.every((offer) =>
+            offer.objective.inputs.includes(expectedFence));
+          if (fencesCurrent
+            && JSON.stringify(activeAgentIds) === JSON.stringify(expectedAgentIds)) {
+            outcomes.push({
+              taskId: task.id,
+              kind: 'offered',
+              targetAgentIds: activeAgentIds,
+            });
+            continue;
+          }
+          await Promise.all(activeOffers.map((offer) =>
+            input.repositories.taskCoordination.offers.updateStatus({
+              id: offer.id,
+              expectedStatus: 'open',
+              status: 'invalidated',
+              response: null,
+              now: input.now(),
+            })));
+        }
         if (decision.kind === 'publish_offer') {
-          await input.emitTaskOffers(task.id);
+          await input.emitTaskOffers(task.id, {
+            allowedAgentIds: decision.targetAgentIds,
+            projectStageAuto: true,
+          });
           outcomes.push({
             taskId: task.id,
             kind: 'offered',

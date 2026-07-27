@@ -132,7 +132,11 @@ import {
   resolveProjectStageReviewDecision,
   type ProjectStageFacts,
 } from './project-stage-execution-gate.js';
-import { resolveProjectStageStableInputs } from './project-stage-advance-service.js';
+import {
+  filterStrictProjectStageAgentIds,
+  hasActiveProjectStageInvocation,
+  resolveProjectStageStableInputs,
+} from './project-stage-advance-service.js';
 import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
@@ -1184,6 +1188,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const { repositories, clock, ids } = input;
   const resolveProjectPiHealthy = input.resolvePiHealthy
     ?? (async () => !getEmergencyStopActive());
+  const notifyProjectFactsChanged = async (scope: { teamId: string; channelId: string }) => {
+    try {
+      await input.onProjectFactsChanged?.(scope);
+    } catch {
+      // 权威写入已经提交；推进器失败必须 fail closed，但不能回滚人类或项目事实。
+    }
+  };
   const joinCodes = input.joinCodes ?? { nextCode: generateJoinCode };
   const deviceInviteCodes = input.deviceInviteCodes ?? { nextCode: generateJoinCode };
   const sessionSecret = input.sessionSecret ?? 'agentbean-next-dev-session-secret';
@@ -3942,6 +3953,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
           return makeFailure('CONFLICT', 'Target document has changed; reload before deriving');
         }
+        await notifyProjectFactsChanged({
+          teamId: documentInput.teamId,
+          channelId: documentInput.channelId,
+        });
         return makeSuccess({ document: toCommittedChannelDocumentDto(saved.document, saved.revision) });
       }
       const documentId = ids.nextId();
@@ -3959,6 +3974,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         await artifactContentStore?.deleteContent?.({ teamId: documentInput.teamId, artifactId });
         return makeFailure('CONFLICT', 'Document could not be created');
       }
+      await notifyProjectFactsChanged({
+        teamId: documentInput.teamId,
+        channelId: documentInput.channelId,
+      });
       return makeSuccess({ document: { ...saved, currentRevision: toChannelDocumentRevisionDto(revision) } });
     },
 
@@ -3971,10 +3990,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const document = await getOrCreateChannelDocument(repositories, documentInput);
       if (!document) return makeFailure('NOT_FOUND', 'Channel document not found');
-      return commitChannelDocumentRevision({
+      const result = await commitChannelDocumentRevision({
         repositories, artifactContentStore, clock, ids, document, input: documentInput,
         operationType: 'save', source: 'edit',
       });
+      if (result.ok) {
+        await notifyProjectFactsChanged({
+          teamId: documentInput.teamId,
+          channelId: documentInput.channelId,
+        });
+      }
+      return result;
     },
 
     async restoreChannelDocument(documentInput) {
@@ -3991,10 +4017,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         revisionId: documentInput.revisionId,
       });
       if (!sourceRevision) return makeFailure('NOT_FOUND', 'Channel document revision not found');
-      return commitChannelDocumentRevision({
+      const result = await commitChannelDocumentRevision({
         repositories, artifactContentStore, clock, ids, document, input: documentInput,
         operationType: 'restore', source: 'restore', sourceRevision,
       });
+      if (result.ok) {
+        await notifyProjectFactsChanged({
+          teamId: documentInput.teamId,
+          channelId: documentInput.channelId,
+        });
+      }
+      return result;
     },
 
     async publishChannelDocument(documentInput) {
@@ -4011,6 +4044,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         operationType: 'publish', source: 'edit',
       });
       if (!result.ok) return result;
+      await notifyProjectFactsChanged({
+        teamId: documentInput.teamId,
+        channelId: documentInput.channelId,
+      });
       if (!result.message) throw new Error('Published channel document is missing its message');
       return makeSuccess({
         document: result.document,
@@ -4239,6 +4276,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         repositories,
         access.channel,
         await resolveProjectPiHealthy(),
+        clock.now(),
       );
       return makeSuccess({ overview });
     },
@@ -4362,6 +4400,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         [stage],
         [],
         await resolveProjectPiHealthy(),
+        now,
       );
       const result = await repositories.channelProjects.createInitialStage({
         expectedRevision: projectInput.expectedRevision,
@@ -4448,6 +4487,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         [...stages, stage],
         edges,
         await resolveProjectPiHealthy(),
+        now,
       );
       const result = await repositories.channelProjects.createStage({
         expectedRevision: stageInput.expectedRevision,
@@ -4552,6 +4592,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         stages,
         [...edges, edge],
         await resolveProjectPiHealthy(),
+        now,
       );
       const result = await repositories.channelProjects.createStageEdge({
         expectedRevision: edgeInput.expectedRevision,
@@ -4570,6 +4611,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           createdAt: now,
         },
       });
+      if (result.kind === 'created') {
+        await notifyProjectFactsChanged({
+          teamId: edgeInput.teamId,
+          channelId: edgeInput.channelId,
+        });
+      }
       return projectStageEdgeMutationAck(result);
     },
 
@@ -4590,6 +4637,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         stages,
         edges.filter((candidate) => candidate.id !== edge.id),
         await resolveProjectPiHealthy(),
+        now,
       );
       const result = await repositories.channelProjects.deleteStageEdge({
         teamId: edgeInput.teamId,
@@ -4610,6 +4658,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           createdAt: now,
         },
       });
+      if (result.kind === 'deleted') {
+        await notifyProjectFactsChanged({
+          teamId: edgeInput.teamId,
+          channelId: edgeInput.channelId,
+        });
+      }
       return projectStageEdgeMutationAck(result);
     },
 
@@ -5568,6 +5622,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!committed) {
         return bundleFailure('NOT_FOUND', 'Document bundle not found', 'bundle_unavailable');
+      }
+      if (result.kind === 'created') {
+        await notifyProjectFactsChanged({
+          teamId: bundleInput.teamId,
+          channelId: bundleInput.channelId,
+        });
       }
       return makeSuccess({
         bundle: await toProjectDocumentBundleDetailDto(repositories, committed),
@@ -11038,6 +11098,7 @@ async function buildChannelProjectOverview(
   repositories: ServerNextRepositories,
   channel: ChannelRecord,
   piHealthy: boolean,
+  now: number,
 ): Promise<ChannelProjectOverviewDto | null> {
   const profile = await repositories.channelProjects.getProfile({
     teamId: channel.teamId,
@@ -11048,7 +11109,7 @@ async function buildChannelProjectOverview(
     repositories.channelProjects.listStages({ teamId: channel.teamId, channelId: channel.id }),
     repositories.channelProjects.listEdges({ teamId: channel.teamId, channelId: channel.id }),
   ]);
-  return projectChannelProjectOverview(repositories, channel, profile, records, edges, piHealthy);
+  return projectChannelProjectOverview(repositories, channel, profile, records, edges, piHealthy, now);
 }
 
 /**
@@ -11064,6 +11125,7 @@ async function projectChannelProjectOverview(
   stageRecords: readonly ProjectStageRecord[],
   edgeRecords: readonly ProjectStageEdgeRecord[],
   piHealthy: boolean,
+  now: number,
 ): Promise<ChannelProjectOverviewDto> {
   const stageFacts = new Map<string, ProjectStageFacts>();
   for (const record of stageRecords) {
@@ -11080,7 +11142,7 @@ async function projectChannelProjectOverview(
   const stages: ChannelProjectOverviewDto['stages'] = [];
   for (const record of stageRecords) {
     const facts = stageFacts.get(record.id) as ProjectStageFacts;
-    stages.push(await projectStageDto(repositories, facts, stageFacts, edgeRecords, piHealthy));
+    stages.push(await projectStageDto(repositories, facts, stageFacts, edgeRecords, piHealthy, now));
   }
   return {
     profile,
@@ -11342,6 +11404,7 @@ async function projectStageDto(
   stageFacts: ReadonlyMap<string, ProjectStageFacts>,
   edgeRecords: readonly ProjectStageEdgeRecord[],
   piHealthy: boolean,
+  now: number,
 ): Promise<ChannelProjectOverviewDto['stages'][number]> {
   const { record, task } = facts;
   const inboundEdges = edgeRecords.filter((edge) => edge.downstreamStageId === record.id);
@@ -11420,12 +11483,10 @@ async function projectStageDto(
     })
     : null;
   const activeInvocation = coordination
-    ? (await repositories.management.invocations.listByRun(coordination.managementRunId))
-      .find((invocation) => invocation.intent.taskContext?.taskId === task.id
-        && invocation.intent.taskContext.taskRevision === task.revision)
-    : undefined;
+    ? await hasActiveProjectStageInvocation(repositories, task, coordination)
+    : false;
   const candidateAgentIds = await projectStageCandidateAgentIds(repositories, task, coordination,
-    stableResolution.inputs.some((input) => input.kind === 'document_revision'));
+    stableResolution.inputs.some((input) => input.kind === 'document_revision'), now);
   const policy = await repositories.teamPiPolicy.getOrDefault(task.teamId);
   const advanceDecision = evaluateProjectStageAdvance({
     channelWritable: !(await repositories.channels.getById(record.channelId))?.archivedAt,
@@ -11500,6 +11561,7 @@ async function projectStageCandidateAgentIds(
   task: TaskRecord,
   coordination: Awaited<ReturnType<ServerNextRepositories['taskCoordination']['coordinations']['getByTaskId']>>,
   requiresDocumentInputSet: boolean,
+  now: number,
 ): Promise<string[]> {
   if (!coordination || !task.channelId) return [];
   const channel = await repositories.channels.getById(task.channelId);
@@ -11531,7 +11593,12 @@ async function projectStageCandidateAgentIds(
     if (coordination.claimPolicy === 'targeted' && task.assigneeId !== agent.id) continue;
     eligible.push(agent.id);
   }
-  return eligible.sort();
+  return filterStrictProjectStageAgentIds(repositories, {
+    teamId: task.teamId,
+    candidateAgentIds: eligible,
+    requiredCapabilities: coordination.requiredCapabilities,
+    now,
+  });
 }
 
 async function taskIsBoundToProjectStage(

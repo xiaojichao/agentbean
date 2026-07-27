@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { TaskClaimAcquireAckV1 } from '../../../packages/contracts/src/index.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
+import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createTaskClaimBroker } from '../src/application/management/task-claim-broker.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { resolveTaskAllocation } from '../src/application/management/task-allocation-service.js';
@@ -22,13 +23,14 @@ describe('Task Claim Broker', () => {
     });
     await seedProjectStageEdge(healthy.repositories);
     const emitted: string[] = [];
+    const emittedOffers: Array<{ offerId: string; agentId: string }> = [];
     const autoAdvance = createProjectStageAutoAdvance({
       repositories: healthy.repositories,
       broker: healthy.broker,
       piHealthy: async () => true,
-      emitTaskOffers: async (taskId) => {
+      emitTaskOffers: async (taskId, options) => {
         emitted.push(taskId);
-        await healthy.broker.prepareOffers(taskId);
+        emittedOffers.push(...await healthy.broker.prepareOffers(taskId, options));
       },
       now: () => healthy.clock.value,
     });
@@ -42,12 +44,39 @@ describe('Task Claim Broker', () => {
       targetAgentIds: ['eligible'],
     }]);
     expect(emitted).toEqual(['task-a']);
-    await expect(healthy.repositories.taskCoordination.offers.listByTask('task-a'))
-      .resolves.toEqual([expect.objectContaining({
+    const [autoOffer] = await healthy.repositories.taskCoordination.offers.listByTask('task-a');
+    expect(autoOffer).toEqual(expect.objectContaining({
         taskId: 'task-a',
         agentId: 'eligible',
         status: 'open',
-      })]);
+      }));
+    await healthy.repositories.teamPiPolicy.setAutoCoordination({
+      teamId: 'team-1',
+      enabled: false,
+      actorId: 'user-1',
+      now: healthy.clock.value,
+    });
+    await expect(healthy.broker.acquire({
+      schemaVersion: 1,
+      offerId: emittedOffers[0]!.offerId,
+      agentId: 'eligible',
+    })).resolves.toMatchObject({
+      ok: false,
+      diagnosticCode: 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE',
+    });
+    await expect(healthy.broker.respondToOffer({
+      offerId: autoOffer!.id,
+      agentId: 'eligible',
+      kind: 'accepted',
+    })).resolves.toMatchObject({
+      kind: 'not_accepted',
+      diagnosticCode: 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE',
+    });
+    await expect(healthy.repositories.taskCoordination.offers.getById(autoOffer!.id))
+      .resolves.toMatchObject({ status: 'invalidated' });
+    await expect(healthy.repositories.taskCoordination.claimLeases.listActive()).resolves.toEqual([]);
+    await expect(healthy.repositories.tasks.getById('task-a'))
+      .resolves.toMatchObject({ status: 'todo' });
 
     const degraded = await createHarness();
     await seedAgent(degraded.repositories, 'eligible', 'device-1', 'online', ['code-review']);
@@ -79,6 +108,117 @@ describe('Task Claim Broker', () => {
       targetAgentIds: [],
     }]);
     expect(degradedEmit).not.toHaveBeenCalled();
+
+    const legacy = await createHarness();
+    await legacy.repositories.agents.upsert({
+      id: 'legacy',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'legacy',
+      adapterKind: 'codex',
+      category: 'executor-hosted',
+      source: 'custom',
+      status: 'online',
+      deviceId: 'device-1',
+      skills: [{
+        name: 'code-review',
+        description: 'legacy',
+        scope: 'user',
+        sourcePath: '/legacy',
+        adapterKind: 'codex',
+      }],
+    });
+    await legacy.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['legacy'], updatedAt: 10 },
+    });
+    await legacy.repositories.tasks.update({
+      taskId: 'root-task',
+      changes: { status: 'done', updatedAt: 10 },
+    });
+    await seedProjectStageEdge(legacy.repositories);
+    const legacyEmit = vi.fn();
+    const legacyAdvance = createProjectStageAutoAdvance({
+      repositories: legacy.repositories,
+      broker: legacy.broker,
+      piHealthy: async () => true,
+      emitTaskOffers: legacyEmit,
+      now: () => legacy.clock.value,
+    });
+    await expect(legacyAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'waiting',
+      reason: 'no_eligible_agent',
+      targetAgentIds: [],
+    }]);
+    expect(legacyEmit).not.toHaveBeenCalled();
+
+    const execution = await createHarness();
+    await seedAgent(execution.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await execution.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: 10 },
+    });
+    await execution.repositories.tasks.update({
+      taskId: 'root-task',
+      changes: { status: 'done', updatedAt: 10 },
+    });
+    await seedProjectStageEdge(execution.repositories);
+    const executionAdvance = createProjectStageAutoAdvance({
+      repositories: execution.repositories,
+      broker: execution.broker,
+      piHealthy: async () => true,
+      emitTaskOffers: async (taskId, options) => {
+        await execution.broker.prepareOffers(taskId, options);
+      },
+      now: () => execution.clock.value,
+    });
+    await executionAdvance.advanceChannel({ teamId: 'team-1', channelId: 'channel-1' });
+    const [executionOffer] = await execution.repositories.taskCoordination.offers.listByTask('task-a');
+    const accepted = await execution.broker.respondToOffer({
+      offerId: executionOffer!.id,
+      agentId: 'eligible',
+      kind: 'accepted',
+    });
+    expect(accepted.kind).toBe('claim_granted');
+    if (accepted.kind !== 'claim_granted') throw new Error('expected claim');
+    let invocationId = 0;
+    const gateway = createInvocationGateway({
+      repositories: execution.repositories,
+      clock: { now: () => execution.clock.value },
+      ids: { nextId: () => `stage-invocation-${++invocationId}` },
+    });
+    const invoked = await gateway.invokeTask({
+      authority: execution.authority,
+      idempotencyKey: 'invoke-stage-829',
+      taskId: 'task-a',
+      expectedTaskRevision: 1,
+      taskAttempt: 1,
+      claimLeaseId: accepted.lease.claimLeaseId,
+      objective: '执行下游阶段',
+      attachmentIds: [],
+    });
+    expect(invoked.view).toMatchObject({
+      status: 'pending',
+      intent: {
+        targetAgentId: 'eligible',
+        attachmentIds: ['artifact-stage-829-final'],
+        projectStageInputFence: {
+          stageId: 'stage-downstream-829',
+          inputs: [expect.objectContaining({
+            key: 'upstream-final',
+            kind: 'artifact_version',
+            artifactId: 'artifact-stage-829-final',
+            versionId: 'version-stage-829-final',
+            reviewId: 'review-stage-829-final',
+            finalizationId: 'finalization-stage-829-final',
+          })],
+        },
+      },
+    });
   });
 
   test('候选集对 visibility/readiness/capability/channel 给出明确 diagnostics', async () => {
@@ -532,6 +672,22 @@ async function createHarness() {
   const clock = { value: 10 };
   let id = 0;
   const kernelIds = { nextId: () => id++ === 0 ? 'run-1' : `kernel-${id}` };
+  await repositories.users.create({
+    id: 'user-1',
+    username: 'user-1',
+    passwordHash: 'hash',
+    role: 'user',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  await repositories.teams.create({
+    id: 'team-1',
+    name: 'Team',
+    path: 'team-1',
+    visibility: 'private',
+    ownerId: 'user-1',
+    createdAt: 1,
+  });
   await repositories.channels.create({ id: 'channel-1', teamId: 'team-1', kind: 'channel',
     name: 'private', visibility: 'private', createdBy: 'user-1', humanMemberIds: ['user-1'],
     agentMemberIds: [], createdAt: 1, updatedAt: 1 });
@@ -561,7 +717,8 @@ async function createHarness() {
   let tokenId = 0;
   const broker = createTaskClaimBroker({ repositories, clock: { now: () => clock.value },
     ids: { nextId: () => `broker-${++brokerId}` },
-    leaseTokens: { nextToken: () => `raw-token-${++tokenId}` }, offerTtlMs: 20, leaseTtlMs: 100 });
+    leaseTokens: { nextToken: () => `raw-token-${++tokenId}` }, offerTtlMs: 20, leaseTtlMs: 100,
+    piHealthy: async () => true });
   return { repositories, clock, broker, coordination, authority };
 }
 
@@ -655,6 +812,69 @@ async function seedProjectStageEdge(repositories: ServerNextRepositories) {
       createdAt: 2,
     },
   });
+  await repositories.artifacts.create({
+    id: 'artifact-stage-829-final',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    uploaderId: 'user-1',
+    filename: 'upstream-final.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 8,
+    sha256: 'sha256-stage-829-final',
+    createdAt: 4,
+  });
+  await repositories.channelProjects.promoteArtifact({
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    createsCollection: true,
+    collection: {
+      id: 'collection-stage-829', teamId: 'team-1', channelId: 'channel-1',
+      name: '上游最终产物', kind: 'file', revision: 1,
+      currentVersionId: 'version-stage-829-final', versionCount: 1,
+      createdBy: 'user-1', createdAt: 4, updatedAt: 4,
+    },
+    version: {
+      id: 'version-stage-829-final', teamId: 'team-1', channelId: 'channel-1',
+      collectionId: 'collection-stage-829', versionNumber: 1,
+      artifactId: 'artifact-stage-829-final', stageId: upstream.id,
+      taskId: upstream.taskId, taskRevision: upstream.taskRevision, lineage: [],
+      promotedBy: 'user-1', createdAt: 4,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'promote-stage-829-final',
+      requestFingerprint: 'promote-stage-829-final', collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-final', createdAt: 4,
+    },
+  });
+  await repositories.channelProjects.appendArtifactReview({
+    review: {
+      id: 'review-stage-829-final', teamId: 'team-1', channelId: 'channel-1',
+      collectionId: 'collection-stage-829', versionId: 'version-stage-829-final',
+      stageId: upstream.id, decision: 'approved', comment: '通过', basis: [],
+      reviewedBy: 'user-1', createdAt: 5,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'review-stage-829-final',
+      requestFingerprint: 'review-stage-829-final', action: 'review',
+      collectionId: 'collection-stage-829', versionId: 'version-stage-829-final',
+      resultId: 'review-stage-829-final', createdAt: 5,
+    },
+  });
+  await repositories.channelProjects.setArtifactFinalVersion({
+    teamId: 'team-1', channelId: 'channel-1', collectionId: 'collection-stage-829',
+    expectedCollectionRevision: 1, nextRevision: 2, updatedAt: 6,
+    finalization: {
+      id: 'finalization-stage-829-final', teamId: 'team-1', channelId: 'channel-1',
+      collectionId: 'collection-stage-829', versionId: 'version-stage-829-final',
+      basisReviewId: 'review-stage-829-final', actorKind: 'human', finalizedBy: 'user-1', createdAt: 6,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'finalize-stage-829-final',
+      requestFingerprint: 'finalize-stage-829-final', action: 'finalize',
+      collectionId: 'collection-stage-829', versionId: 'version-stage-829-final',
+      resultId: 'finalization-stage-829-final', createdAt: 6,
+    },
+  });
   await repositories.channelProjects.createStageEdge({
     expectedRevision: 2,
     nextRevision: 3,
@@ -670,7 +890,16 @@ async function seedProjectStageEdge(repositories: ServerNextRepositories) {
       downstreamTaskId: downstream.taskId,
       downstreamTaskRevision: downstream.taskRevision,
       semantics: 'blocks_start',
-      requiredInputs: [],
+      requiredInputs: [{
+        key: 'upstream-final',
+        kind: 'artifact',
+        label: '上游最终产物',
+        source: {
+          kind: 'artifact_collection',
+          collectionId: 'collection-stage-829',
+          versionPolicy: 'final',
+        },
+      }],
       mirroredTaskDependency: false,
       createdBy: 'user-1',
       createdAt: 3,

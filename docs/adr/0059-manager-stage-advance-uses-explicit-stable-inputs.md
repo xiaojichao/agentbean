@@ -38,6 +38,15 @@ Stage edge 的必需输入可绑定显式稳定来源：
 在创建时冻结 ArtifactVersion 和文档 revision；任何指针、revision、claim 或审核变化都
 使旧决定 fail closed。
 
+自动 Offer 也冻结同一组精确身份，并在 Agent 接受前重验 Team 策略、PI 健康状态、
+公开 Exposure、审核/最终化 basis 与文档 revision；任一字段变化都使旧 Offer 失效，
+不得切换 active owner。Invocation intent 保存 review/finalization 与 ArtifactVersion
+身份，重试前再次重验，不能只比较底层 Artifact ID。
+
+影响 gate 的权威写入（Stage edge、Artifact review/finalization、Document Bundle 与
+文档 revision）提交后统一触发推进重算。重算是 best-effort，失败不得回滚人类事实，
+但 Offer 接受与 Invocation 提交边界仍须 fail closed。
+
 ## 结果
 
 ADR 0057 的阶段级证据只保留为历史迁移语境；从 #829 起，带必需输入的自动推进必须

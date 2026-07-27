@@ -102,7 +102,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         const taskForStableInputs = await repositories.tasks.getById(input.taskId);
         const stableResolution = taskForStableInputs
           ? await resolveProjectStageStableInputs(repositories, taskForStableInputs)
-          : { inputs: [] };
+          : { stageId: undefined, requiredRuleCount: 0, satisfiedRuleKeys: [], inputs: [] };
         const stableArtifactIds = stableResolution.inputs
           .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
             item.kind === 'artifact_version')
@@ -117,6 +117,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         });
         if (existing) {
           assertTaskInvocationReplay(existing, normalizedInput);
+          await validateAuthoritativeTarget(repositories, existing.intent, run, now);
           return { disposition: 'existing' as const,
             view: await deriveInvocationView(transactionRepositories.management,
               transactionRepositories.dispatches, existing) };
@@ -148,6 +149,12 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           acceptanceCriteria: authority.acceptanceCriteria,
           dependencyResults: authority.dependencyResults,
           attachmentIds: [...normalizedInput.attachmentIds],
+          ...(stableResolution.stageId && {
+            projectStageInputFence: {
+              stageId: stableResolution.stageId,
+              inputs: stableResolution.inputs,
+            },
+          }),
           ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
@@ -260,6 +267,10 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
         const run = await requireWritableRun(transactionRepositories.management, input.authority.managementRunId);
         const invocation = await transactionRepositories.management.invocations.getById(input.invocationId);
         if (!invocation || invocation.managementRunId !== run.id) throw new InvocationGatewayError('INVOCATION_NOT_FOUND');
+        await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
+        if (invocation.intent.taskContext) {
+          await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
+        }
         const attempts = await transactionRepositories.management.dispatchAttempts.list(invocation.id);
         const latest = attempts.at(-1);
         if (!latest) throw new InvocationGatewayError('INVOCATION_ATTEMPT_NOT_FOUND');
@@ -499,18 +510,46 @@ async function validateAuthoritativeTarget(
     const task = await repositories.tasks.getById(intent.taskContext.taskId);
     if (!task || task.teamId !== intent.teamId || task.channelId !== intent.channelId) throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
     if (run.rootTaskId && intent.taskContext.rootTaskId !== run.rootTaskId) throw new InvocationGatewayError('INVOCATION_ROOT_TASK_MISMATCH');
-    if (intent.schemaVersion === 2 && task.revision !== intent.taskContext.taskRevision) {
+    const hasProjectStageFence = intent.projectStageInputFence !== undefined;
+    if ((intent.schemaVersion === 2 || hasProjectStageFence)
+      && task.revision !== intent.taskContext.taskRevision) {
       throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+    }
+    if (hasProjectStageFence) {
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      if (!coordination || coordination.teamId !== intent.teamId || coordination.managementRunId !== run.id) {
+        throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
+      }
+      if (coordination.taskRevision !== intent.taskContext.taskRevision) {
+        throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+      }
+      if (coordination.attempt !== intent.taskContext.taskAttempt) {
+        throw new InvocationGatewayError('INVOCATION_TASK_ATTEMPT_STALE');
+      }
+      if (task.status !== 'in_progress') throw new InvocationGatewayError('INVOCATION_TASK_NOT_ACTIVE');
+      const claim = await repositories.taskCoordination.claimLeases.getById(intent.taskContext.claimLeaseId);
+      const currentClaim = await repositories.taskCoordination.claimLeases.getCurrent({
+        taskId: task.id,
+        taskRevision: intent.taskContext.taskRevision,
+        taskAttempt: intent.taskContext.taskAttempt,
+      });
+      if (!claim || !currentClaim || claim.id !== currentClaim.id
+        || claim.status !== 'active' || claim.expiresAt <= now
+        || claim.teamId !== intent.teamId || claim.taskId !== task.id
+        || claim.taskRevision !== intent.taskContext.taskRevision
+        || claim.taskAttempt !== intent.taskContext.taskAttempt
+        || claim.agentId !== intent.targetAgentId || task.assigneeId !== claim.agentId) {
+        throw new InvocationGatewayError('INVOCATION_CLAIM_STALE');
+      }
     }
     const stable = await resolveProjectStageStableInputs(repositories, task);
     if (stable.satisfiedRuleKeys.length !== stable.requiredRuleCount) {
       throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
     }
-    const stableArtifactIds = stable.inputs
-      .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
-        item.kind === 'artifact_version')
-      .map((item) => item.artifactId);
-    if (stableArtifactIds.some((artifactId) => !intent.attachmentIds.includes(artifactId))) {
+    const expectedFence = stable.stageId
+      ? { stageId: stable.stageId, inputs: stable.inputs }
+      : undefined;
+    if (JSON.stringify(intent.projectStageInputFence) !== JSON.stringify(expectedFence)) {
       throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
     }
   }

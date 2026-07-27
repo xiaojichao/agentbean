@@ -134,6 +134,8 @@ export type ProjectStageStableInputDto =
       readonly collectionId: ID;
       readonly versionId: ID;
       readonly artifactId: ID;
+      readonly reviewId: ID;
+      readonly finalizationId?: ID;
       readonly taskRevision: number;
     }
   | {
@@ -148,6 +150,12 @@ export type ProjectStageStableInputDto =
       readonly artifactId: ID;
       readonly taskRevision: number;
     };
+
+/** #829 随 Offer/Invocation 冻结的精确项目输入身份；任何字段变化都使旧决定失效。 */
+export interface ProjectStageInputFenceDto {
+  readonly stageId: ID;
+  readonly inputs: readonly ProjectStageStableInputDto[];
+}
 
 export interface ProjectStageAdvanceDto {
   readonly kind: 'waiting' | 'suggest' | 'publish_offer' | 'create_invocation';

@@ -119,7 +119,10 @@ interface AppWithCleanup {
   serverWorkerPool?: ServerWorkerPool;
   serverWorkerAuthToken?: string;
   bindManagementDispatchEmitter?(emit: (dispatchId: string) => Promise<void>): void;
-  bindTaskClaimEmitter?(emit: (taskId: string) => Promise<void>): void;
+  bindTaskClaimEmitter?(emit: (taskId: string, options?: {
+    readonly allowedAgentIds?: readonly string[];
+    readonly projectStageAuto?: boolean;
+  }) => Promise<void>): void;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -300,8 +303,8 @@ export async function startServerNextDevServer(
     serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
   });
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
-  appWithCleanup.bindTaskClaimEmitter?.(async (taskId) => {
-    await realtime.offerTaskClaims(taskId);
+  appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
+    await realtime.offerTaskClaims(taskId, options);
   });
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
@@ -1568,13 +1571,15 @@ function createDefaultApp(
       repositories, ids,
     );
     const serverWorker = createDefaultServerWorker(config, clock, ids);
-    // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
-    const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
     let appForPiHealth: ServerNextUseCases | undefined;
     const resolvePiHealthy = async () => {
       const health = await appForPiHealth?.getPublicPiHealth({});
       return health?.ok === true && health.health.status === 'normal';
     };
+    // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
+    const taskClaimBroker = createTaskClaimBroker({
+      repositories, clock, ids, piHealthy: resolvePiHealthy,
+    });
     const management = createDefaultManagementRuntime(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
       resolvePiHealthy,
@@ -1647,13 +1652,15 @@ function createDefaultApp(
     repositories, ids,
   );
   const serverWorker = createDefaultServerWorker(config, clock, ids);
-  // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
-  const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
   let appForPiHealth: ServerNextUseCases | undefined;
   const resolvePiHealthy = async () => {
     const health = await appForPiHealth?.getPublicPiHealth({});
     return health?.ok === true && health.health.status === 'normal';
   };
+  // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
+  const taskClaimBroker = createTaskClaimBroker({
+    repositories, clock, ids, piHealthy: resolvePiHealthy,
+  });
   const management = createDefaultManagementRuntime(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
     resolvePiHealthy,
@@ -1797,7 +1804,10 @@ function createDefaultManagementRuntime(
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
 ) {
   let dispatchEmitter: ((dispatchId: string) => Promise<void>) | undefined;
-  let taskClaimEmitter: ((taskId: string) => Promise<void>) | undefined;
+  let taskClaimEmitter: ((taskId: string, options?: {
+    readonly allowedAgentIds?: readonly string[];
+    readonly projectStageAuto?: boolean;
+  }) => Promise<void>) | undefined;
   const kernel = createManagementKernel({
     repositories: repositories.management,
     unitOfWork: repositories.managementUnitOfWork,
@@ -1841,9 +1851,9 @@ function createDefaultManagementRuntime(
     broker: taskClaimBroker,
     piHealthy,
     now: clock.now,
-    emitTaskOffers: async (taskId) => {
+    emitTaskOffers: async (taskId, options) => {
       if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
-      await taskClaimEmitter(taskId);
+      await taskClaimEmitter(taskId, options);
     },
   });
   const executeManagementTool = createManagementToolExecutor({
@@ -2022,7 +2032,10 @@ function createDefaultManagementRuntime(
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
       dispatchEmitter = emit;
     },
-    bindTaskClaimEmitter(emit: (taskId: string) => Promise<void>) {
+    bindTaskClaimEmitter(emit: (taskId: string, options?: {
+      readonly allowedAgentIds?: readonly string[];
+      readonly projectStageAuto?: boolean;
+    }) => Promise<void>) {
       taskClaimEmitter = emit;
     },
   };

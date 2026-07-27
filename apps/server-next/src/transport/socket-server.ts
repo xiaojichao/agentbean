@@ -45,7 +45,10 @@ export interface ServerNextRealtime {
   dispatchRequest(dispatchId: string): Promise<void>;
   refreshAgents(teamId: string): Promise<void>;
   scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
-  offerTaskClaims(taskId: string): Promise<{ taskId: string; offered: number; accepted: number }>;
+  offerTaskClaims(taskId: string, options?: {
+    readonly allowedAgentIds?: readonly string[];
+    readonly projectStageAuto?: boolean;
+  }): Promise<{ taskId: string; offered: number; accepted: number }>;
   expireTaskClaims(): Promise<readonly TaskClaimExpiredV1[]>;
 }
 
@@ -876,9 +879,9 @@ export function attachServerNextNamespaces(
       }
       return options.managementWorkerScheduler.scheduleManagementRun(input);
     },
-    async offerTaskClaims(taskId) {
+    async offerTaskClaims(taskId, offerOptions) {
       if (!options.taskClaimBroker) return { taskId, offered: 0, accepted: 0 };
-      const offers = await options.taskClaimBroker.prepareOffers(taskId);
+      const offers = await options.taskClaimBroker.prepareOffers(taskId, offerOptions);
       let accepted = 0;
       await Promise.all(offers.map(async (offer) => {
         const socket = agentSocketsByDeviceId.get(offer.deviceId);

@@ -7,6 +7,7 @@ import type {
   ProjectDocumentInputSetResultDto,
   ProjectDocumentInputSetV1,
 } from './project-document-input-set.js';
+import type { ProjectStageInputFenceDto } from './project.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -46,6 +47,8 @@ export interface AgentInvocationIntentV1 {
   /** 冻结的 Capsule ref（intentHash 天然含此字段）；recovery 据此判 capsule 是否仍有效。 */
   readonly memoryCapsuleRef?: MemoryCapsuleRefDto;
   readonly attachmentIds: readonly ID[];
+  /** #829 项目阶段稳定输入精确 fence；属于 immutable intent 与 intentHash。 */
+  readonly projectStageInputFence?: ProjectStageInputFenceDto;
   readonly deadlineAt?: UnixMs;
 }
 

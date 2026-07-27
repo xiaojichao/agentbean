@@ -8,11 +8,68 @@ import type {
   ProjectStageEdgeRecord,
 } from './project-repositories.js';
 import type { ServerNextRepositories, TaskRecord } from './repositories.js';
+import type { TaskCoordinationRecord } from './task-coordination-repositories.js';
 
 export interface ProjectStageStableInputResolution {
+  readonly stageId?: string;
   readonly requiredRuleCount: number;
   readonly satisfiedRuleKeys: readonly string[];
   readonly inputs: readonly ProjectStageStableInputDto[];
+}
+
+export async function hasActiveProjectStageInvocation(
+  repositories: ServerNextRepositories,
+  task: TaskRecord,
+  coordination: TaskCoordinationRecord,
+): Promise<boolean> {
+  const invocations = (await repositories.management.invocations
+    .listByRun(coordination.managementRunId))
+    .filter((invocation) => invocation.intent.taskContext?.taskId === task.id
+      && invocation.intent.taskContext.taskRevision === task.revision
+      && invocation.intent.taskContext.taskAttempt === coordination.attempt);
+  for (const invocation of invocations) {
+    const attempts = await repositories.management.dispatchAttempts.list(invocation.id);
+    const latest = attempts.at(-1);
+    if (!latest) continue;
+    const dispatch = await repositories.dispatches.getById(latest.dispatchId);
+    if (dispatch && ['queued', 'sent', 'accepted', 'running'].includes(dispatch.status)) return true;
+  }
+  return false;
+}
+
+/** #829 自动推进禁用 legacy skill 回退，只接受当前 Team 的有效公开 Exposure。 */
+export async function filterStrictProjectStageAgentIds(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: string;
+    candidateAgentIds: readonly string[];
+    requiredCapabilities: readonly string[];
+    now: number;
+  },
+): Promise<string[]> {
+  const eligible: string[] = [];
+  for (const agentId of input.candidateAgentIds) {
+    const manifest = await repositories.agentExposure.manifests
+      .getActiveByTeamAgent(input.teamId, agentId);
+    if (!manifest
+      || manifest.validFrom > input.now
+      || (manifest.validUntil !== null && manifest.validUntil <= input.now)
+      || manifest.availability.status !== 'available') continue;
+    const restriction = await repositories.agentExposure.restrictions
+      .getByTeamAgent(input.teamId, agentId);
+    const disabled = new Set(
+      restriction?.manifestId === manifest.id
+        ? restriction.disabledCapabilities.map((name) => name.toLowerCase())
+        : [],
+    );
+    const capabilities = new Set(manifest.capabilities
+      .map((capability) => capability.name.toLowerCase())
+      .filter((name) => !disabled.has(name)));
+    if (input.requiredCapabilities
+      .some((required) => !capabilities.has(required.toLowerCase()))) continue;
+    eligible.push(agentId);
+  }
+  return eligible.sort();
 }
 
 /**
@@ -53,7 +110,7 @@ export async function resolveProjectStageStableInputs(
       inputs.push(...resolved);
     }
   }
-  return { requiredRuleCount, satisfiedRuleKeys, inputs };
+  return { stageId: downstreamStage.id, requiredRuleCount, satisfiedRuleKeys, inputs };
 }
 
 async function resolveRule(
@@ -77,9 +134,19 @@ async function resolveRule(
         && version.taskId === upstreamStage.taskId
         && version.taskRevision === upstreamStage.taskRevision);
     const reviews = await repositories.channelProjects.listArtifactReviews(scope);
-    const version = selectArtifactVersion(collection.finalVersionId, rule.source.versionPolicy,
+    const finalizations = await repositories.channelProjects.listArtifactFinalizations(scope);
+    const selected = selectArtifactVersion(collection.finalVersionId, rule.source.versionPolicy,
       versions, reviews);
-    if (!version) return null;
+    if (!selected) return null;
+    const { version, review } = selected;
+    const finalization = collection.finalVersionId === version.id
+      ? finalizations
+        .filter((item) => item.collectionId === collection.id
+          && item.versionId === version.id
+          && item.basisReviewId === review.id)
+        .sort(newestByCreatedAtThenId)[0]
+      : undefined;
+    if (rule.source.versionPolicy === 'final' && !finalization) return null;
     const artifact = await repositories.artifacts.getForTeam({
       teamId: scope.teamId,
       artifactId: version.artifactId,
@@ -93,6 +160,8 @@ async function resolveRule(
       collectionId: collection.id,
       versionId: version.id,
       artifactId: version.artifactId,
+      reviewId: review.id,
+      ...(finalization ? { finalizationId: finalization.id } : {}),
       taskRevision: version.taskRevision,
     }];
   }
@@ -148,26 +217,37 @@ function selectArtifactVersion(
   policy: 'final' | 'approved',
   versions: readonly ProjectArtifactVersionRecord[],
   reviews: readonly {
+    id: string;
     versionId: string;
     decision: 'approved' | 'rejected' | 'changes_requested';
     createdAt: number;
   }[],
-): ProjectArtifactVersionRecord | null {
-  const approved = (version: ProjectArtifactVersionRecord): boolean => {
+): { version: ProjectArtifactVersionRecord; review: (typeof reviews)[number] } | null {
+  const approved = (version: ProjectArtifactVersionRecord) => {
     const latest = reviews.filter((review) => review.versionId === version.id)
-      .sort((left, right) => right.createdAt - left.createdAt)[0];
-    return latest?.decision === 'approved';
+      .sort(newestByCreatedAtThenId)[0];
+    return latest?.decision === 'approved' ? latest : null;
   };
   if (finalVersionId) {
     const final = versions.find((version) => version.id === finalVersionId);
-    if (final && approved(final)) return final;
+    const review = final ? approved(final) : null;
+    if (final && review) return { version: final, review };
   }
   if (policy === 'final') return null;
-  return [...versions]
-    .sort((left, right) => right.versionNumber - left.versionNumber)
-    .find(approved) ?? null;
+  for (const version of [...versions].sort((left, right) => right.versionNumber - left.versionNumber)) {
+    const review = approved(version);
+    if (review) return { version, review };
+  }
+  return null;
 }
 
 function emptyResolution(): ProjectStageStableInputResolution {
   return { requiredRuleCount: 0, satisfiedRuleKeys: [], inputs: [] };
+}
+
+function newestByCreatedAtThenId(
+  left: { createdAt: number; id: string },
+  right: { createdAt: number; id: string },
+): number {
+  return right.createdAt - left.createdAt || right.id.localeCompare(left.id);
 }

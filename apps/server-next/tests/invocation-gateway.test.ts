@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
 import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
+import { hasActiveProjectStageInvocation } from '../src/application/project-stage-advance-service.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 import { applyGlobalMigrations, applyTeamMigrations, createSqliteRepositories, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
 
@@ -340,6 +341,16 @@ describe('Phase 2 claim-bound Invocation Gateway', () => {
     const created = await harness.gateway.invokeTask(phase2InvokeInput(harness.authority));
 
     expect(created.view.intent.attachmentIds).toEqual(['artifact-1', 'artifact-stage-final']);
+    expect(created.view.intent.projectStageInputFence).toEqual({
+      stageId: 'stage-downstream',
+      inputs: [expect.objectContaining({
+        kind: 'artifact_version',
+        collectionId: 'collection-stage-input',
+        versionId: 'version-stage-final',
+        reviewId: 'review-stage-final',
+        finalizationId: 'finalization-stage-final',
+      })],
+    });
   });
 
   test('最终产物的最新审核改变后，Invocation 在提交边界重新校验并 fail closed', async () => {
@@ -357,7 +368,7 @@ describe('Phase 2 claim-bound Invocation Gateway', () => {
         comment: '需要修改',
         basis: [],
         reviewedBy: 'user-1',
-        createdAt: 6,
+        createdAt: 5,
       },
       mutation: {
         teamId: 'team-1',
@@ -368,12 +379,85 @@ describe('Phase 2 claim-bound Invocation Gateway', () => {
         collectionId: 'collection-stage-input',
         versionId: 'version-stage-final',
         resultId: 'review-stage-invalidated',
-        createdAt: 6,
+        createdAt: 5,
       },
     });
 
     await expect(harness.gateway.invokeTask(phase2InvokeInput(harness.authority)))
       .rejects.toMatchObject({ code: 'INVOCATION_PROJECT_INPUT_STALE' });
+  });
+
+  test('Invocation 冻结精确 ArtifactVersion 审核 fence，事实变化后不能重试旧 intent', async () => {
+    const harness = await createPhase2Harness();
+    await seedArtifactStageInput(harness.repositories);
+    const created = await harness.gateway.invokeTask(phase2InvokeInput(harness.authority));
+    const dispatchId = created.view.activeDispatchId!;
+    await harness.gateway.completeAttempt({
+      dispatchId,
+      status: 'failed',
+      error: 'TEST_FAILURE',
+    });
+    const task = await harness.repositories.tasks.getById('task-child');
+    const coordination = await harness.repositories.taskCoordination.coordinations
+      .getByTaskId('task-child');
+    expect(task && coordination
+      ? await hasActiveProjectStageInvocation(harness.repositories, task, coordination)
+      : true).toBe(false);
+    await harness.repositories.channelProjects.appendArtifactReview({
+      review: {
+        id: 'review-stage-after-invocation',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        collectionId: 'collection-stage-input',
+        versionId: 'version-stage-final',
+        stageId: 'stage-upstream',
+        decision: 'changes_requested',
+        comment: '撤回通过',
+        basis: [],
+        reviewedBy: 'user-1',
+        createdAt: 7,
+      },
+      mutation: {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        idempotencyKey: 'review-stage-after-invocation',
+        requestFingerprint: 'review-stage-after-invocation',
+        action: 'review',
+        collectionId: 'collection-stage-input',
+        versionId: 'version-stage-final',
+        resultId: 'review-stage-after-invocation',
+        createdAt: 7,
+      },
+    });
+
+    await expect(harness.gateway.retry({
+      authority: harness.authority,
+      invocationId: created.view.id,
+    })).rejects.toMatchObject({ code: 'INVOCATION_PROJECT_INPUT_STALE' });
+  });
+
+  test('V1 项目阶段 Invocation 重试时重新校验当前 Claim，而非仅依赖冻结 intent', async () => {
+    const harness = await createPhase2Harness();
+    await seedArtifactStageInput(harness.repositories);
+    const created = await harness.gateway.invokeTask(phase2InvokeInput(harness.authority));
+    await harness.gateway.completeAttempt({
+      dispatchId: created.view.activeDispatchId!,
+      status: 'failed',
+      error: 'TEST_FAILURE',
+    });
+    await harness.repositories.taskCoordination.claimLeases.update({
+      id: 'claim-child',
+      expectedStatus: 'active',
+      status: 'released',
+      heartbeatAt: 21,
+      expiresAt: 21,
+      releasedAt: 21,
+    });
+
+    await expect(harness.gateway.retry({
+      authority: harness.authority,
+      invocationId: created.view.id,
+    })).rejects.toMatchObject({ code: 'INVOCATION_CLAIM_STALE' });
   });
 
   test('项目阶段推进把显式文档包的当前 revision 冻结为 InputSet', async () => {
@@ -658,7 +742,7 @@ async function seedArtifactStageInput(
     collection: {
       id: 'collection-stage-input', teamId: 'team-1', channelId: 'channel-1',
       name: '最终产物', kind: 'file', revision: 1,
-      currentVersionId: 'version-stage-final', finalVersionId: 'version-stage-final',
+      currentVersionId: 'version-stage-final',
       versionCount: 1, createdBy: 'user-1', createdAt: 4, updatedAt: 4,
     },
     version: {
@@ -686,6 +770,36 @@ async function seedArtifactStageInput(
       requestFingerprint: 'review-stage-final', action: 'review',
       collectionId: 'collection-stage-input', versionId: 'version-stage-final',
       resultId: 'review-stage-final', createdAt: 5,
+    },
+  });
+  await repositories.channelProjects.setArtifactFinalVersion({
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    collectionId: 'collection-stage-input',
+    expectedCollectionRevision: 1,
+    nextRevision: 2,
+    updatedAt: 6,
+    finalization: {
+      id: 'finalization-stage-final',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      collectionId: 'collection-stage-input',
+      versionId: 'version-stage-final',
+      basisReviewId: 'review-stage-final',
+      actorKind: 'human',
+      finalizedBy: 'user-1',
+      createdAt: 6,
+    },
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'finalize-stage-final',
+      requestFingerprint: 'finalize-stage-final',
+      action: 'finalize',
+      collectionId: 'collection-stage-input',
+      versionId: 'version-stage-final',
+      resultId: 'finalization-stage-final',
+      createdAt: 6,
     },
   });
 }
