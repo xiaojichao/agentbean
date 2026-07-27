@@ -170,6 +170,37 @@ describe('Phase 1 message routing rules', () => {
     });
     expect(result).toEqual({ kind: 'no-dispatch', reason: 'no-online-agent' });
   });
+
+  test('does not fallback to an online agent that is outside the channel membership', () => {
+    const result = routeMessage({
+      body: '帮我写一个剧本，主题是AI陪伴机器人',
+      teamId: 'team-1',
+      channelId: 'channel-drama',
+      agents: [
+        { id: 'agent-bettafish', name: 'BettaFish', status: 'online', channelIds: ['channel-all'] },
+        { id: 'agent-pi', name: 'PI', status: 'online', channelIds: ['channel-drama'] },
+      ],
+      humanMembers: [],
+    });
+    expect(result).toEqual({
+      kind: 'dispatch',
+      agentId: 'agent-pi',
+      reason: 'fallback',
+    });
+  });
+
+  test('returns no-online-agent when every online agent is outside the channel', () => {
+    const result = routeMessage({
+      body: '帮我写一个剧本',
+      teamId: 'team-1',
+      channelId: 'channel-drama',
+      agents: [
+        { id: 'agent-bettafish', name: 'BettaFish', status: 'online', channelIds: ['channel-all'] },
+      ],
+      humanMembers: [],
+    });
+    expect(result).toEqual({ kind: 'no-dispatch', reason: 'no-online-agent' });
+  });
 });
 
 describe('Phase 1 agent identity and visibility rules', () => {

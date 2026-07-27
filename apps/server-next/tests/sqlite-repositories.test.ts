@@ -950,6 +950,12 @@ describe('server-next SQLite repositories', () => {
         status: 'online',
         lastSeenAt: 500,
       });
+      // Raw upsert bypasses registerAgent → ensureDefaultChannelMembership.
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        agentMemberIds: ['agent-1'],
+        timestamp: 500,
+      });
       await repositories.users.create({
         id: 'user-2',
         username: 'teammate',
@@ -1379,6 +1385,11 @@ describe('server-next SQLite repositories', () => {
         status: 'online',
         lastSeenAt: 1000,
       });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        agentMemberIds: ['agent-1'],
+        timestamp: 1000,
+      });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
 
       await expect(app.failTimedOutDispatches({ olderThan: 1001 })).resolves.toMatchObject({
@@ -1423,6 +1434,11 @@ describe('server-next SQLite repositories', () => {
         source: 'scanned',
         status: 'online',
         lastSeenAt: now,
+      });
+      await repositories.channels.addDefaultChannelMembers({
+        teamId: 'team-1',
+        agentMemberIds: ['agent-1'],
+        timestamp: now,
       });
       await expect(app.sendMessage({
         userId: 'user-1',
