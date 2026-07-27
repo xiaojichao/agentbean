@@ -145,6 +145,7 @@ const upstreamEdge = (
   upstreamTaskId: 'task-script',
   semantics: 'blocks_start',
   upstreamTaskStatus: 'done',
+  upstreamReviewDecision: 'accepted',
   requiredInputs: [],
   satisfiedRequiredInputKeys: [],
   ...overrides,
@@ -173,6 +174,20 @@ describe('Project Stage 执行门禁', () => {
     expect(evaluateProjectStageExecutionGate({
       upstreamEdges: [upstreamEdge({ upstreamTaskStatus: 'closed' })],
     })).toEqual({ kind: 'allowed' });
+  });
+
+  test('blocks_start 上游完成但 canonical acceptance 缺失时仍阻止执行', () => {
+    expect(evaluateProjectStageExecutionGate({
+      upstreamEdges: [upstreamEdge({ upstreamReviewDecision: undefined })],
+    })).toEqual({
+      kind: 'blocked',
+      blocks: [{
+        code: 'stage_dependency_unaccepted',
+        edgeId: 'edge-1',
+        upstreamStageId: 'stage-script',
+        upstreamTaskId: 'task-script',
+      }],
+    });
   });
 
   test('provides_context 上游未完成本身不阻塞', () => {

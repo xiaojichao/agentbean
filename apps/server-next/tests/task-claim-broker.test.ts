@@ -6,10 +6,57 @@ import { createTaskClaimBroker } from '../src/application/management/task-claim-
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { resolveTaskAllocation } from '../src/application/management/task-allocation-service.js';
 import { createProjectStageAutoAdvance } from '../src/application/project-stage-auto-advance.js';
+import { filterStrictProjectStageAgentIds } from '../src/application/project-stage-advance-service.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Task Claim Broker', () => {
+  test('#829 文档 InputSet 候选必须同时声明 Agent 与 Device 合同版本', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+
+    await expect(filterStrictProjectStageAgentIds(harness.repositories, {
+      teamId: 'team-1',
+      candidateAgentIds: ['eligible'],
+      requiredCapabilities: ['code-review'],
+      requiredProjectDocumentInputSetVersion: 1,
+      now: harness.clock.value,
+    })).resolves.toEqual([]);
+  });
+
+  test('#829 canonical acceptance 缺失时不发布下游 Offer', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: 10 },
+    });
+    await harness.repositories.tasks.update({
+      taskId: 'root-task',
+      changes: { status: 'done', updatedAt: 10 },
+    });
+    await seedProjectStageEdge(harness.repositories, false);
+    const emitTaskOffers = vi.fn();
+    const autoAdvance = createProjectStageAutoAdvance({
+      repositories: harness.repositories,
+      broker: harness.broker,
+      piHealthy: async () => true,
+      emitTaskOffers,
+      now: () => harness.clock.value,
+    });
+
+    await expect(autoAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'waiting',
+      reason: 'execution_gate_blocked',
+      targetAgentIds: [],
+    }]);
+    expect(emitTaskOffers).not.toHaveBeenCalled();
+  });
+
   test('#829 上游完成后由健康 PI 通过真实候选与 Offer 协议推进下游，降级时 fail closed', async () => {
     const healthy = await createHarness();
     await seedAgent(healthy.repositories, 'eligible', 'device-1', 'online', ['code-review']);
@@ -176,6 +223,25 @@ describe('Task Claim Broker', () => {
       },
       now: () => execution.clock.value,
     });
+    let invocationId = 0;
+    const gateway = createInvocationGateway({
+      repositories: execution.repositories,
+      clock: { now: () => execution.clock.value },
+      ids: { nextId: () => `stage-invocation-${++invocationId}` },
+    });
+    execution.broker.bindProjectStageClaimGranted(async (claim) => {
+      await gateway.invokeClaimedProjectStage({
+        managementRunId: claim.managementRunId,
+        idempotencyKey: `project-stage-auto:${claim.claimLeaseId}`,
+        taskId: claim.taskId,
+        expectedTaskRevision: claim.taskRevision,
+        taskAttempt: claim.taskAttempt,
+        claimLeaseId: claim.claimLeaseId,
+        targetAgentId: claim.targetAgentId,
+        objective: claim.objective,
+        attachmentIds: [],
+      });
+    });
     await executionAdvance.advanceChannel({ teamId: 'team-1', channelId: 'channel-1' });
     const [executionOffer] = await execution.repositories.taskCoordination.offers.listByTask('task-a');
     const accepted = await execution.broker.respondToOffer({
@@ -185,23 +251,9 @@ describe('Task Claim Broker', () => {
     });
     expect(accepted.kind).toBe('claim_granted');
     if (accepted.kind !== 'claim_granted') throw new Error('expected claim');
-    let invocationId = 0;
-    const gateway = createInvocationGateway({
-      repositories: execution.repositories,
-      clock: { now: () => execution.clock.value },
-      ids: { nextId: () => `stage-invocation-${++invocationId}` },
-    });
-    const invoked = await gateway.invokeTask({
-      authority: execution.authority,
-      idempotencyKey: 'invoke-stage-829',
-      taskId: 'task-a',
-      expectedTaskRevision: 1,
-      taskAttempt: 1,
-      claimLeaseId: accepted.lease.claimLeaseId,
-      objective: '执行下游阶段',
-      attachmentIds: [],
-    });
-    expect(invoked.view).toMatchObject({
+    const [invoked] = await execution.repositories.management.invocations.listByRun('run-1');
+    expect(invoked).toBeDefined();
+    await expect(gateway.getView(invoked!.id)).resolves.toMatchObject({
       status: 'pending',
       intent: {
         targetAgentId: 'eligible',
@@ -744,7 +796,67 @@ async function seedAgent(
   }
 }
 
-async function seedProjectStageEdge(repositories: ServerNextRepositories) {
+async function seedProjectStageEdge(
+  repositories: ServerNextRepositories,
+  canonicalAcceptance = true,
+) {
+  if (canonicalAcceptance) {
+    await repositories.taskCoordination.claimLeases.create({
+      id: 'claim-stage-829',
+      teamId: 'team-1',
+      taskId: 'root-task',
+      taskRevision: 1,
+      taskAttempt: 1,
+      agentId: 'eligible',
+      leaseTokenHash: 'lease-token-hash',
+      leaseFingerprint: 'lease-fingerprint',
+      fencingToken: 1,
+      status: 'active',
+      acquiredAt: 1,
+      heartbeatAt: 1,
+      expiresAt: 1_000,
+    });
+    await repositories.taskCoordination.deliveries.create({
+      schemaVersion: 1,
+      id: 'delivery-stage-829',
+      teamId: 'team-1',
+      taskId: 'root-task',
+      taskRevision: 1,
+      taskAttempt: 1,
+      claimLeaseId: 'claim-stage-829',
+      invocationId: 'invocation-stage-829',
+      summary: '上游阶段已交付',
+      claims: [],
+      evidenceRefs: [],
+      idempotencyKey: 'delivery-stage-829',
+      createdAt: 3,
+    });
+    await repositories.taskCoordination.acceptances.create({
+      schemaVersion: 1,
+      id: 'acceptance-stage-829',
+      teamId: 'team-1',
+      taskId: 'root-task',
+      deliveryId: 'delivery-stage-829',
+      expectedTaskRevision: 1,
+      taskAttempt: 1,
+      claimLeaseId: 'claim-stage-829',
+      decision: 'accepted',
+      criteriaResults: [],
+      reason: '人审通过',
+      decidedBy: 'manager',
+      decidedAt: 3,
+      decisionVersion: 1,
+      canonical: true,
+    });
+    await repositories.taskCoordination.claimLeases.update({
+      id: 'claim-stage-829',
+      expectedStatus: 'active',
+      status: 'released',
+      heartbeatAt: 1,
+      expiresAt: 1_000,
+      releasedAt: 3,
+    });
+  }
   const profile = {
     id: 'profile-829',
     teamId: 'team-1',

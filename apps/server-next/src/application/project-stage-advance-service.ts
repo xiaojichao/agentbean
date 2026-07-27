@@ -44,6 +44,7 @@ export async function filterStrictProjectStageAgentIds(
     teamId: string;
     candidateAgentIds: readonly string[];
     requiredCapabilities: readonly string[];
+    requiredProjectDocumentInputSetVersion?: number;
     now: number;
   },
 ): Promise<string[]> {
@@ -67,6 +68,18 @@ export async function filterStrictProjectStageAgentIds(
       .filter((name) => !disabled.has(name)));
     if (input.requiredCapabilities
       .some((required) => !capabilities.has(required.toLowerCase()))) continue;
+    if (input.requiredProjectDocumentInputSetVersion !== undefined) {
+      const agent = await repositories.agents.getById(agentId);
+      const device = agent?.deviceId
+        ? await repositories.devices.getById(agent.deviceId)
+        : null;
+      if (!agent?.projectDocumentInputSetVersions
+        ?.includes(input.requiredProjectDocumentInputSetVersion)
+        || !device?.capabilities?.projectDocumentInputSetVersions
+          ?.includes(input.requiredProjectDocumentInputSetVersion)) {
+        continue;
+      }
+    }
     eligible.push(agentId);
   }
   return eligible.sort();

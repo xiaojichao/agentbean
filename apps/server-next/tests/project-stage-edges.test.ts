@@ -230,7 +230,7 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     expect(refreshed.overview.stages.find((stage) => stage.id === downstreamStageId))
       .toMatchObject({ dependenciesSatisfied: false, executionAllowed: false });
 
-    // #829：上游 Task 完成只解除 Stage/Task 依赖；旧规则没有显式稳定来源，不能再假定输入已满足。
+    // #829：Task 完成但 canonical acceptance 与显式稳定来源都缺失时继续 fail closed。
     const repositories = createSqliteRepositories({ globalDb, teamDb });
     await repositories.tasks.update({
       taskId: 'task-up',
@@ -243,7 +243,7 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     const unblockedDownstream = unblocked.overview.stages
       .find((stage) => stage.id === downstreamStageId);
     expect(unblockedDownstream).toMatchObject({
-      dependenciesSatisfied: true,
+      dependenciesSatisfied: false,
       executionAllowed: false,
       missingRequiredInputs: [{
         edgeId: created.overview.edges[0]?.id,
@@ -254,7 +254,10 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
       }],
     });
     expect(unblockedDownstream?.blockingReasons.map((reason) => reason.code))
-      .toContain('required_input_missing');
+      .toEqual(expect.arrayContaining([
+        'stage_dependency_unaccepted',
+        'required_input_missing',
+      ]));
   });
 
   test('删除依赖后下游立即恢复可执行，且依赖图不再包含该边', async () => {

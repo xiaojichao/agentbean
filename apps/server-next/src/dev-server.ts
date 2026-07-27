@@ -24,6 +24,7 @@ import { createServerWorkerPool, type ServerWorkerPool } from './application/man
 import { createServerWorkerScheduler, type ServerWorkerScheduler } from './application/management/server-worker-scheduler.js';
 import { createAutoPlacementProbe } from './application/management/auto-placement-probe.js';
 import { createManagementKernel } from './application/management/management-kernel.js';
+import { createInvocationGateway } from './application/management/invocation-gateway.js';
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
@@ -1855,6 +1856,41 @@ function createDefaultManagementRuntime(
       if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
       await taskClaimEmitter(taskId, options);
     },
+  });
+  const projectStageInvocationGateway = createInvocationGateway({ repositories, clock, ids });
+  taskClaimBroker.bindProjectStageClaimGranted(async (claim) => {
+    const invoked = await projectStageInvocationGateway.invokeClaimedProjectStage({
+      managementRunId: claim.managementRunId,
+      idempotencyKey: [
+        'project-stage-auto',
+        claim.taskId,
+        claim.taskRevision,
+        claim.taskAttempt,
+        claim.claimLeaseId,
+      ].join(':'),
+      taskId: claim.taskId,
+      expectedTaskRevision: claim.taskRevision,
+      taskAttempt: claim.taskAttempt,
+      claimLeaseId: claim.claimLeaseId,
+      targetAgentId: claim.targetAgentId,
+      objective: claim.objective,
+      attachmentIds: [],
+    });
+    if (invoked.disposition !== 'created') return;
+    const dispatchId = invoked.view.activeDispatchId;
+    if (!dispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
+    if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+    try {
+      await dispatchEmitter(dispatchId);
+    } catch {
+      await projectStageInvocationGateway.completeAttempt({
+        dispatchId,
+        status: 'failed',
+        error: 'MANAGEMENT_DISPATCH_EMIT_FAILED',
+        actorKind: 'system',
+      });
+      throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
+    }
   });
   const executeManagementTool = createManagementToolExecutor({
     kernel,

@@ -44,9 +44,7 @@ export function resolveSatisfiedRequiredInputKeys(
 ): string[] {
   if (!upstream) return [];
   const complete = upstream.task.status === 'done' || upstream.task.status === 'closed';
-  const rejected = upstream.reviewDecision === 'rejected'
-    || upstream.reviewDecision === 'needs_human';
-  if (!complete || rejected) return [];
+  if (!complete || upstream.reviewDecision !== 'accepted') return [];
   return edge.requiredInputs
     .filter((rule) => rule.source
       && stableInputs.some((input) => input.edgeId === edge.id && input.key === rule.key))

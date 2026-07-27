@@ -132,6 +132,16 @@ export type TaskOfferRespondResult =
       readonly diagnosticCode: string;
     };
 
+export interface ProjectStageClaimGranted {
+  readonly managementRunId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly claimLeaseId: string;
+  readonly targetAgentId: string;
+  readonly objective: string;
+}
+
 export interface TaskClaimBroker {
   resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution>;
   prepareOffers(taskId: string, options?: {
@@ -154,6 +164,10 @@ export interface TaskClaimBroker {
   publishOffer(input: TaskOfferPublishInput): Promise<TaskOfferRecord>;
   /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
   respondToOffer(input: TaskOfferRespondInput): Promise<TaskOfferRespondResult>;
+  /** #829：自动阶段 Offer 形成 Claim 后，接通 Server 内部 Invocation 创建。 */
+  bindProjectStageClaimGranted(
+    handler: (claim: ProjectStageClaimGranted) => Promise<void>,
+  ): void;
 }
 
 export interface CreateTaskClaimBrokerInput {
@@ -181,6 +195,8 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
   const offers = new Map<string, StoredOffer>();
   const disconnectedDevices = new Set<string>();
   const taskTails = new Map<string, Promise<void>>();
+  let onProjectStageClaimGranted:
+    ((claim: ProjectStageClaimGranted) => Promise<void>) | undefined;
 
   // #710：候选硬过滤优先用 Team Agent Exposure 公开 capability（active 能力减去 Team restriction）。
   // 过渡兼容（计划 §8：旧代码先降为兼容层，切片 E 强制前保留）：无 active manifest 时回退到
@@ -454,7 +470,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             return { lease, task, coordination, criteria, dependencyTaskIds };
           });
           consumeTaskOffers(offers, offer.taskId);
-          return {
+          const response = {
             schemaVersion: 1,
             ok: true,
             lease: authority(result.lease, leaseToken),
@@ -471,6 +487,18 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
             },
           } satisfies TaskClaimAcquireAckV1;
+          if (offer.projectStageAuto) {
+            await notifyProjectStageClaimGranted(onProjectStageClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
+          }
+          return response;
         } catch (error) {
           if (error instanceof TaskClaimConflict) {
             return failure('CONFLICT', error.message, error.message === 'TASK_CLAIM_ACTIVE_CLAIM_HELD');
@@ -552,6 +580,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           teamId: task.teamId,
           candidateAgentIds: [params.agentId],
           requiredCapabilities: coordination.requiredCapabilities,
+          ...(projectStageFence?.requiresProjectDocumentInputSetV1
+            ? { requiredProjectDocumentInputSetVersion: 1 }
+            : {}),
           now,
         });
         if (!policy.autoCoordinationEnabled || !piHealthy || !projectStageFence
@@ -573,7 +604,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         // 过渡派生：decision 的结构化 objective/inputs/constraints 属后续切片（计划 §6.3）。
         objective: {
           objective: task.description ?? task.title,
-          inputs: projectStageFence ? [projectStageFence] : [],
+          inputs: projectStageFence ? [projectStageFence.value] : [],
           deliverables: criteria.map((criterion) => criterion.description),
           constraints: params.projectStageAuto ? [PROJECT_STAGE_AUTO_CONSTRAINT] : [],
           riskLevel: 'low',
@@ -769,7 +800,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             return { lease, task, coordination, criteria, dependencyTaskIds };
           });
           if ('overtaken' in result) return { kind: 'overtaken' };
-          return {
+          const response = {
             kind: 'claim_granted',
             lease: authority(result.lease, leaseToken),
             execution: {
@@ -780,7 +811,19 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               acceptanceCriteria: result.criteria, dependencyTaskIds: result.dependencyTaskIds,
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
             },
-          };
+          } satisfies TaskOfferRespondResult;
+          if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)) {
+            await notifyProjectStageClaimGranted(onProjectStageClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
+          }
+          return response;
         } catch (error) {
           if (error instanceof TaskClaimConflict) {
             if (error.message === 'TASK_CLAIM_OFFER_OVERTAKEN') return { kind: 'overtaken' };
@@ -793,6 +836,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           throw error;
         }
       });
+    },
+    bindProjectStageClaimGranted(handler) {
+      onProjectStageClaimGranted = handler;
     },
   };
 
@@ -841,6 +887,18 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
       return expired;
     });
+  }
+}
+
+async function notifyProjectStageClaimGranted(
+  handler: ((claim: ProjectStageClaimGranted) => Promise<void>) | undefined,
+  claim: ProjectStageClaimGranted,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(claim);
+  } catch {
+    // Claim 已提交，不能因后续派发失败伪装成 Agent 接受失败；后续重算仍会看到待创建 Invocation。
   }
 }
 
@@ -912,14 +970,21 @@ function offerValidityCode(reason: OfferInvalidationReason): string {
 async function resolveProjectStageOfferFence(
   repositories: ServerNextRepositories,
   task: TaskRecord,
-): Promise<string | null> {
+): Promise<{
+  value: string;
+  requiresProjectDocumentInputSetV1: boolean;
+} | null> {
   const stable = await resolveProjectStageStableInputs(repositories, task);
   if (!stable.stageId
     || stable.satisfiedRuleKeys.length !== stable.requiredRuleCount) return null;
-  return `${PROJECT_STAGE_FENCE_PREFIX}${JSON.stringify({
-    stageId: stable.stageId,
-    inputs: stable.inputs,
-  })}`;
+  return {
+    value: `${PROJECT_STAGE_FENCE_PREFIX}${JSON.stringify({
+      stageId: stable.stageId,
+      inputs: stable.inputs,
+    })}`,
+    requiresProjectDocumentInputSetV1: stable.inputs
+      .some((item) => item.kind === 'document_revision'),
+  };
 }
 
 async function projectStageAutoOfferStillCurrent(
@@ -931,15 +996,18 @@ async function projectStageAutoOfferStillCurrent(
   const coordination = await input.repositories.taskCoordination.coordinations
     .getByTaskId(offer.taskId);
   if (!task || !coordination) return false;
-  const [policy, piHealthy, currentFence, gate, strictAgentIds] = await Promise.all([
+  const currentFence = await resolveProjectStageOfferFence(input.repositories, task);
+  const [policy, piHealthy, gate, strictAgentIds] = await Promise.all([
     input.repositories.teamPiPolicy.getOrDefault(task.teamId),
     input.piHealthy?.() ?? Promise.resolve(false),
-    resolveProjectStageOfferFence(input.repositories, task),
     resolveProjectStageExecutionGate(input.repositories, task),
     filterStrictProjectStageAgentIds(input.repositories, {
       teamId: task.teamId,
       candidateAgentIds: [offer.agentId],
       requiredCapabilities: coordination.requiredCapabilities,
+      ...(currentFence?.requiresProjectDocumentInputSetV1
+        ? { requiredProjectDocumentInputSetVersion: 1 }
+        : {}),
       now,
     }),
   ]);
@@ -950,7 +1018,7 @@ async function projectStageAutoOfferStillCurrent(
     && !gate.blocked
     && strictAgentIds.length === 1
     && currentFence !== null
-    && frozenFence === currentFence;
+    && frozenFence === currentFence.value;
 }
 
 function toDomainLease(lease: TaskClaimLeaseRecord): DomainTaskClaimLeaseRecord {

@@ -62,6 +62,9 @@ export function createProjectStageAutoAdvance(input: {
           teamId: task.teamId,
           candidateAgentIds: brokerEligibleAgentIds,
           requiredCapabilities: coordination.requiredCapabilities,
+          ...(stable.inputs.some((item) => item.kind === 'document_revision')
+            ? { requiredProjectDocumentInputSetVersion: 1 }
+            : {}),
           now: input.now(),
         });
         const claim = await input.repositories.taskCoordination.claimLeases.getCurrent({

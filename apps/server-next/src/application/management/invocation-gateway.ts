@@ -81,15 +81,24 @@ export interface InvokeTaskAgentInput {
   readonly deadlineAt?: number;
 }
 
+export type InvokeClaimedProjectStageInput = Omit<InvokeTaskAgentInput, 'authority'> & {
+  readonly managementRunId: string;
+};
+
 export function createInvocationGateway(dependencies: InvocationGatewayDependencies) {
   const { repositories, clock, ids } = dependencies;
 
-  return {
-    async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
-      return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
+  const invokeTaskAs = async (
+    input: InvokeClaimedProjectStageInput,
+    actorId: string,
+    leaseAuthority?: LeaseAuthorityInput,
+  ): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> =>
+    repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
-        await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
-        const run = await requireRun(transactionRepositories.management, input.authority.managementRunId);
+        if (leaseAuthority) {
+          await authorizeManagementWrite(transactionRepositories.management, leaseAuthority, now);
+        }
+        const run = await requireRun(transactionRepositories.management, input.managementRunId);
         if (!input.idempotencyKey) throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_KEY_INVALID');
         if (!input.objective.trim()) throw new InvocationGatewayError('INVOCATION_OBJECTIVE_INVALID');
         if (input.deadlineAt !== undefined && input.deadlineAt <= now) {
@@ -107,7 +116,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
             item.kind === 'artifact_version')
           .map((item) => item.artifactId);
-        const normalizedInput: InvokeTaskAgentInput = {
+        const normalizedInput: Omit<InvokeTaskAgentInput, 'authority'> = {
           ...input,
           attachmentIds: [...new Set([...input.attachmentIds, ...stableArtifactIds])],
         };
@@ -180,16 +189,30 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           managementRunId: run.id,
           type: 'invocation-created',
           actorKind: 'manager',
-          actorId: input.authority.workerId,
+          actorId,
           idempotencyKey: `invocation-created:${invocation.id}`,
           payload: { invocationId: invocation.id, intentHash, taskRevision: input.expectedTaskRevision },
         }, now, ids);
         await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt,
-          input.authority.workerId, now, ids);
+          actorId, now, ids);
         return { disposition: 'created' as const,
           view: await deriveInvocationView(transactionRepositories.management,
             transactionRepositories.dispatches, invocation) };
       });
+
+  return {
+    async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
+      const { authority, ...request } = input;
+      return invokeTaskAs({
+        ...request,
+        managementRunId: authority.managementRunId,
+      }, authority.workerId, authority);
+    },
+
+    async invokeClaimedProjectStage(
+      input: InvokeClaimedProjectStageInput,
+    ): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
+      return invokeTaskAs(input, 'pi-manager-auto');
     },
 
     async invoke(input: InvokeAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
@@ -330,7 +353,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
 async function resolveTaskInvocationAuthority(
   repositories: ManagementDispatchRepositories,
   run: ManagementRunRecord,
-  input: InvokeTaskAgentInput,
+  input: Omit<InvokeTaskAgentInput, 'authority'>,
   now: number,
 ): Promise<{
   targetAgentId: string;
@@ -412,7 +435,7 @@ async function resolveTaskInvocationAuthority(
 }
 
 function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
-  input: InvokeTaskAgentInput): void {
+  input: Omit<InvokeTaskAgentInput, 'authority'>): void {
   const context = existing.intent.taskContext;
   const sameAttachments = existing.intent.attachmentIds.length === input.attachmentIds.length
     && existing.intent.attachmentIds.every((id, index) => id === input.attachmentIds[index]);
