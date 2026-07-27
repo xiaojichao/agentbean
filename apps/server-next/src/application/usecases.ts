@@ -6371,41 +6371,52 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
             resultInput.dispatchId,
           );
-          const invocationId = managedAttempt?.invocationId;
+          if (!managedAttempt) {
+            return makeFailure('VALIDATION_ERROR', 'Project document InputSet Dispatch attempt is unavailable');
+          }
+          const invocationId = managedAttempt.invocationId;
           const proposal = resultInput.projectDocumentInputSetResult;
           if (invocationId === proposal.invocationId) {
             const managedInvocation = await repositories.management.invocations.getById(invocationId);
+            if (!managedInvocation) {
+              return makeFailure('VALIDATION_ERROR', 'Project document InputSet Invocation is unavailable');
+            }
             const requestFingerprint = projectDocumentInputSetProposalFingerprint(proposal);
             const replayed = await repositories.projectDocumentInputSetResults.listByInvocation({
               teamId: dispatch.teamId,
               channelId: dispatch.channelId,
               invocationId,
             });
+            let recoveredResult: ProjectDocumentInputSetResultDto | undefined;
             if (replayed.length === proposal.items.length
               && replayed.every((item) =>
                 item.inputSetId === proposal.inputSetId
                 && item.requestFingerprint === requestFingerprint)) {
-              return makeSuccess({
-                dispatch: toDispatchDto(dispatch),
-                projectDocumentInputSetResult: toProjectDocumentInputSetResultDto(
-                  proposal.inputSetId,
-                  proposal.invocationId,
-                  replayed,
-                ),
+              recoveredResult = toProjectDocumentInputSetResultDto(
+                proposal.inputSetId,
+                proposal.invocationId,
+                replayed,
+              );
+            } else {
+              const validation = await validateProjectDocumentInputSetResultProposal({
+                repositories,
+                dispatch,
+                managedInvocation,
+                proposal,
+                reportedArtifactIds: uniqueIds([
+                  ...(resultInput.artifactIds ?? []),
+                  ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+                ]),
               });
-            }
-            const validation = await validateProjectDocumentInputSetResultProposal({
-              repositories,
-              dispatch,
-              managedInvocation,
-              proposal,
-              reportedArtifactIds: uniqueIds([
-                ...(resultInput.artifactIds ?? []),
-                ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
-              ]),
-            });
-            if (!validation.ok) return validation;
-            if (managedInvocation) {
+              if (!validation.ok) return validation;
+              if (await isProjectDocumentInputSetResultAttemptStale({
+                repositories,
+                invocation: managedInvocation,
+                dispatch,
+                agentId: resultInput.agentId,
+              })) {
+                return makeFailure('CONFLICT', 'Project document InputSet result belongs to a stale Dispatch attempt');
+              }
               const committedArtifacts = (await Promise.all(proposal.items.flatMap((item) =>
                 item.status === 'changed'
                   ? [repositories.artifacts.getForTeam({
@@ -6428,9 +6439,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 committedArtifacts,
                 ...(recoveredWorkspaceRunId ? { workspaceRunId: recoveredWorkspaceRunId } : {}),
               });
+              recoveredResult = recovered;
+            }
+            if (recoveredResult) {
+              const recoveredRuns = await repositories.workspaceRuns.listByDispatch(dispatch.id);
+              const recoveredRun = recoveredRuns.at(-1);
+              const fallbackMessage = (await repositories.messages.listByChannel(
+                dispatch.channelId,
+                10_000,
+              )).find((message) => message.meta?.dispatchId === dispatch.id);
+              const deliveryMessage = recoveredRun?.messageId
+                ? await repositories.messages.getById(recoveredRun.messageId)
+                : fallbackMessage ?? null;
+              if (deliveryMessage) {
+                await repositories.messages.updateMeta({
+                  messageId: deliveryMessage.id,
+                  meta: {
+                    ...(deliveryMessage.meta ?? {}),
+                    projectDocumentInputSetResult: recoveredResult,
+                  },
+                });
+              }
+              const terminalStatus = dispatch.status === 'succeeded'
+                || dispatch.status === 'failed'
+                || dispatch.status === 'cancelled'
+                || dispatch.status === 'timed_out'
+                ? dispatch.status
+                : null;
+              if (terminalStatus) {
+                const artifactIds = uniqueIds([
+                  ...(recoveredRun?.artifactIds ?? []),
+                  ...(resultInput.artifactIds ?? []),
+                  ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+                ]);
+                const invocationResult: AgentInvocationResultDto = {
+                  schemaVersion: 1,
+                  invocationId: managedAttempt.invocationId,
+                  ...(managedInvocation.intent.taskContext?.taskId
+                    ? { taskId: managedInvocation.intent.taskContext.taskId }
+                    : {}),
+                  agentId: resultInput.agentId,
+                  status: terminalStatus,
+                  body: resultInput.body,
+                  artifactIds,
+                  ...(recoveredRun ? { workspaceRunId: recoveredRun.id } : {}),
+                  memoryCandidateIds: [],
+                  projectDocumentInputSetResult: recoveredResult,
+                  startedAt: managedAttempt.startedAt,
+                  completedAt: dispatch.completedAt ?? clock.now(),
+                  ...(terminalStatus === 'succeeded'
+                    ? {}
+                    : { error: dispatch.error ?? `DISPATCH_${terminalStatus.toUpperCase()}` }),
+                };
+                await recordManagedDispatchTerminal(
+                  repositories,
+                  clock,
+                  ids,
+                  managementKernel,
+                  taskCoordinationKernel,
+                  collaborationService,
+                  {
+                    dispatchId: dispatch.id,
+                    status: terminalStatus,
+                    artifactIds,
+                    result: invocationResult,
+                    ...(deliveryMessage ? { deliveryMessageId: deliveryMessage.id } : {}),
+                    actorId: resultInput.agentId,
+                    ...(terminalStatus === 'succeeded'
+                      ? {}
+                      : { errorCode: dispatch.error ?? `DISPATCH_${terminalStatus.toUpperCase()}` }),
+                  },
+                );
+              }
               return makeSuccess({
                 dispatch: toDispatchDto(dispatch),
-                projectDocumentInputSetResult: recovered,
+                projectDocumentInputSetResult: recoveredResult,
               });
             }
           }
@@ -6476,6 +6559,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ]),
         });
         if (!validation.ok) return validation;
+        if (managedInvocation && await isProjectDocumentInputSetResultAttemptStale({
+          repositories,
+          invocation: managedInvocation,
+          dispatch,
+          agentId: resultInput.agentId,
+        })) {
+          return makeFailure('CONFLICT', 'Project document InputSet result belongs to a stale Dispatch attempt');
+        }
       }
       const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
       const completed = managedAttempt
@@ -11343,37 +11434,6 @@ async function commitProjectDocumentInputSetResults(input: {
   }
   const requestFingerprint = projectDocumentInputSetProposalFingerprint(input.proposal);
   const expectedItems = input.invocation.intent.projectDocumentInputSet.items;
-  const taskContext = input.invocation.intent.taskContext;
-  const task = taskContext
-    ? await input.repositories.tasks.getById(taskContext.taskId)
-    : null;
-  const dispatchAttempt = await input.repositories.management.dispatchAttempts.getByDispatchId(
-    input.dispatch.id,
-  );
-  const invocationAttempts = await input.repositories.management.dispatchAttempts.list(
-    input.invocation.id,
-  );
-  const latestAttemptNumber = invocationAttempts.reduce(
-    (latest, attempt) => Math.max(latest, attempt.attemptNumber),
-    0,
-  );
-  const currentClaim = taskContext
-    ? await input.repositories.taskCoordination.claimLeases.getCurrent({
-        taskId: taskContext.taskId,
-        taskRevision: taskContext.taskRevision,
-        taskAttempt: taskContext.taskAttempt,
-      })
-    : null;
-  const staleInvocation = Boolean(taskContext && (!task
-    || task.teamId !== input.dispatch.teamId
-    || task.channelId !== input.dispatch.channelId
-    || task.revision !== taskContext.taskRevision
-    || !dispatchAttempt
-    || dispatchAttempt.attemptNumber !== latestAttemptNumber
-    || !currentClaim
-    || currentClaim.id !== taskContext.claimLeaseId
-    || currentClaim.agentId !== input.agentId
-    || currentClaim.status !== 'active'));
   const results: ProjectDocumentInputSetItemResultRecord[] = [];
   const record = async (
     item: ProjectDocumentInputSetResultProposalV1['items'][number],
@@ -11415,14 +11475,6 @@ async function commitProjectDocumentInputSetResults(input: {
     const artifact = input.committedArtifacts.find((candidate) => candidate.id === item.artifactId);
     if (!artifact) {
       await record(item, { status: 'failed', error: 'PROJECT_DOCUMENT_RESULT_ARTIFACT_NOT_COMMITTED' });
-      continue;
-    }
-    if (staleInvocation) {
-      await record(item, {
-        status: 'failed',
-        artifactId: artifact.id,
-        error: 'PROJECT_DOCUMENT_RESULT_INVOCATION_STALE',
-      });
       continue;
     }
     const normalizedRelativePath = artifact.relativePath
@@ -11548,6 +11600,45 @@ async function commitProjectDocumentInputSetResults(input: {
     input.proposal.invocationId,
     results,
   );
+}
+
+async function isProjectDocumentInputSetResultAttemptStale(input: {
+  repositories: ServerNextRepositories;
+  invocation: AgentInvocationRecordDto;
+  dispatch: DispatchRecord;
+  agentId: string;
+}): Promise<boolean> {
+  const taskContext = input.invocation.intent.taskContext;
+  const dispatchAttempt = await input.repositories.management.dispatchAttempts.getByDispatchId(
+    input.dispatch.id,
+  );
+  const invocationAttempts = await input.repositories.management.dispatchAttempts.list(
+    input.invocation.id,
+  );
+  const latestAttemptNumber = invocationAttempts.reduce(
+    (latest, attempt) => Math.max(latest, attempt.attemptNumber),
+    0,
+  );
+  if (!dispatchAttempt || dispatchAttempt.attemptNumber !== latestAttemptNumber) {
+    return true;
+  }
+  if (!taskContext) return false;
+  const [task, currentClaim] = await Promise.all([
+    input.repositories.tasks.getById(taskContext.taskId),
+    input.repositories.taskCoordination.claimLeases.getCurrent({
+      taskId: taskContext.taskId,
+      taskRevision: taskContext.taskRevision,
+      taskAttempt: taskContext.taskAttempt,
+    }),
+  ]);
+  return !task
+    || task.teamId !== input.dispatch.teamId
+    || task.channelId !== input.dispatch.channelId
+    || task.revision !== taskContext.taskRevision
+    || !currentClaim
+    || currentClaim.id !== taskContext.claimLeaseId
+    || currentClaim.agentId !== input.agentId
+    || currentClaim.status !== 'active';
 }
 
 function projectDocumentInputSetProposalFingerprint(

@@ -739,6 +739,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 ...(result.collaborationProposals?.length
                   ? { collaborationProposals: result.collaborationProposals }
                   : {}),
+                ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
@@ -849,6 +850,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           ...(run.artifacts && run.artifacts.length > 0 ? { artifacts: run.artifacts } : {}),
           ...(run.collaborationProposals && run.collaborationProposals.length > 0
             ? { collaborationProposals: run.collaborationProposals }
+            : {}),
+          ...(run.projectDocumentInputSetResult
+            ? { projectDocumentInputSetResult: run.projectDocumentInputSetResult }
             : {}),
           workspaceRun: run.workspaceRun,
         };

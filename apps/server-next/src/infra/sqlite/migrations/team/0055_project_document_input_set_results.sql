@@ -13,7 +13,7 @@ CREATE TABLE project_document_input_set_results (
   error TEXT,
   request_fingerprint TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (input_set_id, document_id),
+  PRIMARY KEY (invocation_id, input_set_id, document_id),
   CHECK (
     (status = 'unchanged' AND artifact_id IS NULL AND revision_id IS NULL AND error IS NULL)
     OR (status = 'committed' AND artifact_id IS NOT NULL AND revision_id IS NOT NULL AND error IS NULL)

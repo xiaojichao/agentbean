@@ -569,6 +569,18 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         attachmentIds: [],
         returnMode: 'return_to_manager',
       }],
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId: 'input-set-1',
+        invocationId: 'invocation-1',
+        items: [{
+          documentId: 'document-1',
+          baseRevisionId: 'revision-1',
+          status: 'changed',
+          sha256: 'changed-sha',
+          artifactId: 'srv-art-1',
+        }],
+      },
       files: [],
     });
 
@@ -617,6 +629,15 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
         toAgentId: 'agent-2',
         kind: 'consult',
       }],
+      projectDocumentInputSetResult: {
+        inputSetId: 'input-set-1',
+        invocationId: 'invocation-1',
+        items: [{
+          documentId: 'document-1',
+          status: 'changed',
+          artifactId: 'srv-art-1',
+        }],
+      },
       workspaceRun: {
         status: 'succeeded',
         cwd,

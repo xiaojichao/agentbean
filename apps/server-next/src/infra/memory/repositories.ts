@@ -2162,7 +2162,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .map((result) => ({ ...result }));
       },
       async record(input) {
-        const key = `${input.inputSetId}:${input.documentId}`;
+        const key = `${input.invocationId}:${input.inputSetId}:${input.documentId}`;
         const existing = projectDocumentInputSetResults.get(key);
         if (existing) {
           return existing.requestFingerprint === input.requestFingerprint

@@ -283,9 +283,19 @@ describe('server-next SQLite repositories', () => {
       await expect(repositories.projectDocumentInputSetResults.record({
         ...inputSetResult, requestFingerprint: 'changed-fingerprint',
       })).resolves.toEqual({ kind: 'idempotency_conflict' });
+      const nextInvocationResult = {
+        ...inputSetResult,
+        invocationId: 'invocation-2',
+        requestFingerprint: 'input-set-result-fingerprint-2',
+      };
+      await expect(repositories.projectDocumentInputSetResults.record(nextInvocationResult))
+        .resolves.toMatchObject({ kind: 'created' });
       await expect(repositories.projectDocumentInputSetResults.listByInvocation({
         teamId: 'team-1', channelId: 'channel-1', invocationId: 'invocation-1',
       })).resolves.toMatchObject([{ status: 'committed', revisionId: 'revision-2' }]);
+      await expect(repositories.projectDocumentInputSetResults.listByInvocation({
+        teamId: 'team-1', channelId: 'channel-1', invocationId: 'invocation-2',
+      })).resolves.toMatchObject([{ requestFingerprint: 'input-set-result-fingerprint-2' }]);
       await repositories.channelDocuments.deleteByChannel('channel-1');
       await expect(repositories.channelDocuments.listByChannel({
         teamId: 'team-1', channelId: 'channel-1',

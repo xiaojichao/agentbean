@@ -4607,8 +4607,8 @@ function createSqliteProjectDocumentInputSetResultRepository(
     async record(input) {
       const existing = mapProjectDocumentInputSetItemResult(db.prepare(
         `SELECT * FROM project_document_input_set_results
-         WHERE input_set_id = ? AND document_id = ?`,
-      ).get(input.inputSetId, input.documentId));
+         WHERE invocation_id = ? AND input_set_id = ? AND document_id = ?`,
+      ).get(input.invocationId, input.inputSetId, input.documentId));
       if (existing) {
         return existing.requestFingerprint === input.requestFingerprint
           ? { kind: 'replayed', result: existing }
@@ -4641,8 +4641,8 @@ function createSqliteProjectDocumentInputSetResultRepository(
       } catch {
         const raced = mapProjectDocumentInputSetItemResult(db.prepare(
           `SELECT * FROM project_document_input_set_results
-           WHERE input_set_id = ? AND document_id = ?`,
-        ).get(input.inputSetId, input.documentId));
+           WHERE invocation_id = ? AND input_set_id = ? AND document_id = ?`,
+        ).get(input.invocationId, input.inputSetId, input.documentId));
         if (raced?.requestFingerprint === input.requestFingerprint) {
           return { kind: 'replayed', result: raced };
         }

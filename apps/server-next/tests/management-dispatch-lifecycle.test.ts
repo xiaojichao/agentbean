@@ -232,7 +232,10 @@ describe('managed Dispatch lifecycle bridge', () => {
       status: 'timed_out',
       error: 'DISPATCH_TIMEOUT',
     });
-    await harness.gateway.retry({ authority: harness.authority, invocationId: created.view.id });
+    const retried = await harness.gateway.retry({
+      authority: harness.authority,
+      invocationId: created.view.id,
+    });
     await harness.repositories.artifacts.create(
       inputSetArtifact(
         'artifact-stale-attempt',
@@ -267,17 +270,55 @@ describe('managed Dispatch lifecycle bridge', () => {
             }),
       },
     });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.projectDocumentInputSetResult?.items.find(
-        (item) => item.documentId === 'document-1',
-      )).toMatchObject({
-        status: 'failed',
-        error: 'PROJECT_DOCUMENT_RESULT_INVOCATION_STALE',
-      });
-    }
+    expect(result).toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.repositories.projectDocumentInputSetResults.listByInvocation({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      invocationId: created.view.id,
+    })).resolves.toEqual([]);
     await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
       .resolves.toHaveLength(1);
+
+    const currentArtifact = inputSetArtifact(
+      'artifact-current-attempt',
+      '1.md',
+      'current-attempt-sha',
+      created.view.intent.projectDocumentInputSet.id,
+    );
+    await harness.repositories.artifacts.create(currentArtifact);
+    await expect(harness.usecases.receiveDispatchResult({
+      dispatchId: retried.dispatchAttempts.at(-1)!.dispatchId,
+      agentId: 'agent-1',
+      body: '当前 attempt 结果',
+      artifactIds: [currentArtifact.id],
+      workspaceRun: { id: 'workspace-run-current-attempt', status: 'succeeded' },
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId: created.view.intent.projectDocumentInputSet.id,
+        invocationId: created.view.id,
+        items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 0
+          ? {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'changed' as const,
+              sha256: currentArtifact.sha256,
+              artifactId: currentArtifact.id,
+            }
+          : {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'unchanged' as const,
+              sha256: item.sha256,
+            }),
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      projectDocumentInputSetResult: {
+        items: expect.arrayContaining([
+          expect.objectContaining({ documentId: 'document-1', status: 'committed' }),
+        ]),
+      },
+    });
   });
 
   test('resumes a partially persisted result after the Dispatch is already terminal', async () => {
@@ -330,6 +371,11 @@ describe('managed Dispatch lifecycle bridge', () => {
     await expect(harness.usecases.receiveDispatchResult(input))
       .rejects.toThrow('SIMULATED_RESULT_WRITE_FAILURE');
     harness.repositories.projectDocumentInputSetResults.record = record;
+    const deliveryBeforeRecovery = (await harness.repositories.messages.listByChannel(
+      'channel-1',
+      100,
+    )).find((message) => message.meta?.dispatchId === input.dispatchId);
+    expect(deliveryBeforeRecovery?.meta?.projectDocumentInputSetResult).toBeUndefined();
 
     await expect(harness.usecases.receiveDispatchResult(input)).resolves.toMatchObject({
       ok: true,
@@ -345,6 +391,16 @@ describe('managed Dispatch lifecycle bridge', () => {
     });
     await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
       .resolves.toHaveLength(2);
+    const deliveryAfterRecovery = (await harness.repositories.messages.listByChannel(
+      'channel-1',
+      100,
+    )).find((message) => message.meta?.dispatchId === input.dispatchId);
+    expect(deliveryAfterRecovery?.meta?.projectDocumentInputSetResult).toMatchObject({
+      inputSetId: proposal.inputSetId,
+      items: expect.arrayContaining([
+        expect.objectContaining({ documentId: 'document-2', status: 'committed' }),
+      ]),
+    });
   });
 
   test.each([
