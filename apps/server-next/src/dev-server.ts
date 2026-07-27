@@ -1611,7 +1611,7 @@ function createDefaultApp(
       serverCapsuleRuntimeContextResolver,
       resolvePiHealthy,
       resolveProjectStageCandidates: (taskId, options) =>
-        taskClaimBroker.resolveCandidates(taskId, options),
+        taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
       onProjectFactsChanged: async (scope) => {
         await management.advanceProjectStages(scope);
       },
@@ -1695,7 +1695,7 @@ function createDefaultApp(
     serverCapsuleRuntimeContextResolver,
     resolvePiHealthy,
     resolveProjectStageCandidates: (taskId, options) =>
-      taskClaimBroker.resolveCandidates(taskId, options),
+      taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
     onProjectFactsChanged: async (scope) => {
       await management.advanceProjectStages(scope);
     },

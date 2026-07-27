@@ -147,6 +147,10 @@ export interface TaskClaimBroker {
     readonly dependencyTaskIds?: readonly string[];
     readonly skipProjectStageGate?: boolean;
   }): Promise<TaskClaimCandidateResolution>;
+  resolveProjectStageCandidates(
+    taskId: string,
+    dependencyTaskIds?: readonly string[],
+  ): Promise<TaskClaimCandidateResolution>;
   prepareOffers(taskId: string, options?: {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
@@ -305,11 +309,47 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     };
   }
 
+  async function resolveProjectStageCandidates(
+    taskId: string,
+    dependencyTaskIds?: readonly string[],
+  ): Promise<TaskClaimCandidateResolution> {
+    if (dependencyTaskIds) {
+      return resolveCandidates(taskId, { dependencyTaskIds, skipProjectStageGate: true });
+    }
+    const task = await input.repositories.tasks.getById(taskId);
+    if (!task?.channelId) return resolveCandidates(taskId);
+    const [dependencies, edges] = await Promise.all([
+      input.repositories.taskCoordination.dependencies.list(taskId),
+      input.repositories.channelProjects.listEdges({
+        teamId: task.teamId,
+        channelId: task.channelId,
+      }),
+    ]);
+    const mirroredDependencyIds = new Set(edges
+      .filter((edge) => edge.downstreamTaskId === taskId && edge.mirroredTaskDependency)
+      .map((edge) => edge.upstreamTaskId));
+    const effectiveDependencyTaskIds = [
+      ...dependencies
+        .map((dependency) => dependency.dependencyTaskId)
+        .filter((id) => !mirroredDependencyIds.has(id)),
+      ...edges
+        .filter((edge) => edge.downstreamTaskId === taskId && edge.semantics === 'blocks_start')
+        .map((edge) => edge.upstreamTaskId),
+    ];
+    return resolveCandidates(taskId, {
+      dependencyTaskIds: [...new Set(effectiveDependencyTaskIds)],
+      skipProjectStageGate: true,
+    });
+  }
+
   return {
     resolveCandidates,
+    resolveProjectStageCandidates,
     async prepareOffers(taskId, options) {
       await expireClaims();
-      const resolution = await resolveCandidates(taskId);
+      const resolution = options?.projectStageAuto
+        ? await resolveProjectStageCandidates(taskId)
+        : await resolveCandidates(taskId);
       const task = await input.repositories.tasks.getById(taskId);
       if (!task || !['todo', 'in_progress'].includes(task.status)) throw new Error('TASK_CLAIM_TASK_NOT_OFFERABLE');
       const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(taskId);

@@ -376,6 +376,13 @@ export function attachServerNextNamespaces(
       dispatchClaimDeviceIds() {
         return [...dispatchClaimDeviceIds];
       },
+      async afterAgentExposureMutation(payload, result) {
+        if (!isSuccessAck(result)) return;
+        const teamId = payloadTeamId(payload);
+        if (teamId) {
+          await options.onAgentAvailabilityChanged?.(teamId).catch(() => undefined);
+        }
+      },
       deviceScan(request) {
         agentSocketsByDeviceId.get(request.deviceId)?.emit?.(AGENT_EVENTS.device.scanRequested, request);
       },

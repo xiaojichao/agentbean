@@ -730,6 +730,8 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     });
     expect(contextOnly.ok).toBe(true);
     if (!contextOnly.ok) return;
+    expect(teamDb.prepare('SELECT COUNT(*) AS total FROM task_dependencies').get())
+      .toEqual({ total: 0 });
     expect(contextOnly.overview.stages.find((stage) => stage.id === downstreamStageId))
       .toMatchObject({
         upstreamStageIds: [upstreamStageId],

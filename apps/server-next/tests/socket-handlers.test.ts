@@ -1549,6 +1549,37 @@ describe('server-next socket handlers', () => {
     });
   });
 
+  test('exposure availability mutations trigger the shared availability hook', async () => {
+    const socket = new FakeSocket();
+    const afterAgentExposureMutation = vi.fn();
+    const app = {
+      publishAgentExposure: vi.fn(async () => makeSuccess({ revision: { id: 'revision-1' } })),
+      revokeAgentExposure: vi.fn(async () => makeSuccess({ revision: { id: 'revision-1' } })),
+      upsertAgentExposureRestriction: vi.fn(async () => makeSuccess({ restriction: { id: 'restriction-1' } })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { afterAgentExposureMutation });
+
+    const payload = { userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' };
+    await socket.trigger(WEB_EVENTS.agentExposure.publish, payload);
+    await socket.trigger(WEB_EVENTS.agentExposure.revoke, payload);
+    await socket.trigger(WEB_EVENTS.agentExposure.upsertRestriction, payload);
+
+    expect(afterAgentExposureMutation).toHaveBeenCalledTimes(3);
+    expect(afterAgentExposureMutation).toHaveBeenNthCalledWith(1, payload, {
+      ok: true,
+      revision: { id: 'revision-1' },
+    });
+    expect(afterAgentExposureMutation).toHaveBeenNthCalledWith(2, payload, {
+      ok: true,
+      revision: { id: 'revision-1' },
+    });
+    expect(afterAgentExposureMutation).toHaveBeenNthCalledWith(3, payload, {
+      ok: true,
+      restriction: { id: 'restriction-1' },
+    });
+  });
+
   test('agent:set-visibility forwards to setAgentTeamVisibility use case', async () => {
     const socket = new FakeSocket();
     const app = {

@@ -59,7 +59,7 @@ export function createProjectStageAutoAdvance(input: {
           || task.channelId !== scope.channelId) continue;
         const gate = await resolveProjectStageExecutionGate(input.repositories, task);
         const stable = await resolveProjectStageStableInputs(input.repositories, task);
-        const resolution = await input.broker.resolveCandidates(task.id);
+        const resolution = await input.broker.resolveProjectStageCandidates(task.id);
         const brokerEligibleAgentIds = resolution.candidates
           .filter((candidate) => candidate.eligible)
           .map((candidate) => candidate.agentId);

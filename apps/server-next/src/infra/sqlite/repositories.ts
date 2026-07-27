@@ -2887,7 +2887,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           //
           // 只有本次真正插入的依赖行才标记 mirrored：若 canonical 依赖已由 PI 分解写入，
           // 我们不认领它的所有权，删除本边时也就不会销毁不属于自己的依赖事实。
-          const mirrored = projectStageEdgeCanMirrorTaskDependency(
+          const mirrored = input.edge.semantics === 'blocks_start' && projectStageEdgeCanMirrorTaskDependency(
             teamDb,
             input.edge.upstreamTaskId,
             input.edge.downstreamTaskId,
