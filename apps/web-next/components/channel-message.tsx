@@ -26,7 +26,10 @@ function artifactUrl(path: string): string {
 function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   const downloadUrl = artifact.downloadUrl ? artifactUrl(artifact.downloadUrl) : undefined;
   const previewUrl = artifact.previewUrl ? artifactUrl(artifact.previewUrl) : undefined;
-  return <ArtifactCard artifact={artifact} previewUrl={previewUrl} downloadUrl={downloadUrl} imagePrimaryAction="download" />;
+  const thumbnailUrl = artifact.preview?.status === 'ready' && artifact.preview.url
+    ? artifactUrl(artifact.preview.url)
+    : undefined;
+  return <ArtifactCard artifact={artifact} previewUrl={previewUrl} thumbnailUrl={thumbnailUrl} downloadUrl={downloadUrl} imagePrimaryAction="download" />;
 }
 
 function agentFailureDisplayBody(body: string): string {
