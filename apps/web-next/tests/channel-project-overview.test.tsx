@@ -194,22 +194,37 @@ describe('频道任务页项目总览', () => {
     fireEvent.change(screen.getByLabelText('项目语义'), { target: { value: 'blocks_start' } });
     fireEvent.change(screen.getByLabelText('必需输入'), { target: { value: '剧本终稿' } });
     fireEvent.change(screen.getByLabelText('必需输入来源 ID'), { target: { value: 'collection-script' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加必需输入' }));
+    fireEvent.change(screen.getByLabelText('必需输入 2'), { target: { value: '制片说明' } });
+    fireEvent.change(screen.getByLabelText('必需输入类型 2'), { target: { value: 'document' } });
+    fireEvent.change(screen.getByLabelText('必需输入来源 ID 2'), { target: { value: 'bundle-production' } });
     fireEvent.click(screen.getByRole('button', { name: '添加依赖' }));
 
     await waitFor(() => expect(onCreateEdge).toHaveBeenCalledWith({
       upstreamStageId: 'stage-up',
       downstreamStageId: 'stage-down',
       semantics: 'blocks_start',
-      requiredInputs: [{
-        key: 'artifact-1',
-        kind: 'artifact',
-        label: '剧本终稿',
-        source: {
-          kind: 'artifact_collection',
-          collectionId: 'collection-script',
-          versionPolicy: 'final',
+      requiredInputs: [
+        {
+          key: 'artifact-1',
+          kind: 'artifact',
+          label: '剧本终稿',
+          source: {
+            kind: 'artifact_collection',
+            collectionId: 'collection-script',
+            versionPolicy: 'final',
+          },
         },
-      }],
+        {
+          key: 'document-2',
+          kind: 'document',
+          label: '制片说明',
+          source: {
+            kind: 'document_bundle',
+            bundleId: 'bundle-production',
+          },
+        },
+      ],
     }));
   });
 

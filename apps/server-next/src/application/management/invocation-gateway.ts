@@ -200,6 +200,58 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
             transactionRepositories.dispatches, invocation) };
       });
 
+  const retryAs = async (
+    input: { managementRunId: string; invocationId: string },
+    actorId: string,
+    leaseAuthority?: LeaseAuthorityInput,
+  ): Promise<AgentInvocationViewDto> =>
+    repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
+      const now = clock.now();
+      if (leaseAuthority) {
+        await authorizeManagementWrite(transactionRepositories.management, leaseAuthority, now);
+      }
+      const run = await requireWritableRun(
+        transactionRepositories.management,
+        input.managementRunId,
+      );
+      const invocation = await transactionRepositories.management.invocations.getById(input.invocationId);
+      if (!invocation || invocation.managementRunId !== run.id) {
+        throw new InvocationGatewayError('INVOCATION_NOT_FOUND');
+      }
+      await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
+      if (invocation.intent.taskContext) {
+        await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
+      }
+      const attempts = await transactionRepositories.management.dispatchAttempts.list(invocation.id);
+      const latest = attempts.at(-1);
+      if (!latest) throw new InvocationGatewayError('INVOCATION_ATTEMPT_NOT_FOUND');
+      const latestDispatch = await transactionRepositories.dispatches.getById(latest.dispatchId);
+      if (!latestDispatch) throw new InvocationGatewayError('INVOCATION_DISPATCH_NOT_FOUND');
+      if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
+
+      const attempt = await createAttempt(
+        transactionRepositories.management,
+        transactionRepositories.dispatches,
+        invocation,
+        latest.attemptNumber + 1,
+        now,
+        ids,
+      );
+      await appendAttemptStartedEvent(
+        transactionRepositories.management,
+        invocation,
+        attempt,
+        actorId,
+        now,
+        ids,
+      );
+      return deriveInvocationView(
+        transactionRepositories.management,
+        transactionRepositories.dispatches,
+        invocation,
+      );
+    });
+
   return {
     async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
       const { authority, ...request } = input;
@@ -213,6 +265,13 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
       input: InvokeClaimedProjectStageInput,
     ): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
       return invokeTaskAs(input, 'pi-manager-auto');
+    },
+
+    async retryClaimedProjectStage(input: {
+      managementRunId: string;
+      invocationId: string;
+    }): Promise<AgentInvocationViewDto> {
+      return retryAs(input, 'pi-manager-auto');
     },
 
     async invoke(input: InvokeAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
@@ -284,31 +343,10 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
     },
 
     async retry(input: { authority: LeaseAuthorityInput; invocationId: string }): Promise<AgentInvocationViewDto> {
-      return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
-        const now = clock.now();
-        await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
-        const run = await requireWritableRun(transactionRepositories.management, input.authority.managementRunId);
-        const invocation = await transactionRepositories.management.invocations.getById(input.invocationId);
-        if (!invocation || invocation.managementRunId !== run.id) throw new InvocationGatewayError('INVOCATION_NOT_FOUND');
-        await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
-        if (invocation.intent.taskContext) {
-          await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
-        }
-        const attempts = await transactionRepositories.management.dispatchAttempts.list(invocation.id);
-        const latest = attempts.at(-1);
-        if (!latest) throw new InvocationGatewayError('INVOCATION_ATTEMPT_NOT_FOUND');
-        const latestDispatch = await transactionRepositories.dispatches.getById(latest.dispatchId);
-        if (!latestDispatch) throw new InvocationGatewayError('INVOCATION_DISPATCH_NOT_FOUND');
-        if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
-
-        await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
-        if (invocation.intent.taskContext) {
-          await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
-        }
-        const attempt = await createAttempt(transactionRepositories.management, transactionRepositories.dispatches, invocation, latest.attemptNumber + 1, now, ids);
-        await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt, input.authority.workerId, now, ids);
-        return deriveInvocationView(transactionRepositories.management, transactionRepositories.dispatches, invocation);
-      });
+      return retryAs({
+        managementRunId: input.authority.managementRunId,
+        invocationId: input.invocationId,
+      }, input.authority.workerId, input.authority);
     },
 
     async completeAttempt(input: {

@@ -42,6 +42,7 @@ describe('Task Claim Broker', () => {
       broker: harness.broker,
       piHealthy: async () => true,
       emitTaskOffers,
+      invokeClaimedProjectStage: async () => undefined,
       now: () => harness.clock.value,
     });
 
@@ -79,6 +80,7 @@ describe('Task Claim Broker', () => {
         emitted.push(taskId);
         emittedOffers.push(...await healthy.broker.prepareOffers(taskId, options));
       },
+      invokeClaimedProjectStage: async () => undefined,
       now: () => healthy.clock.value,
     });
 
@@ -142,6 +144,7 @@ describe('Task Claim Broker', () => {
       broker: degraded.broker,
       piHealthy: async () => false,
       emitTaskOffers: degradedEmit,
+      invokeClaimedProjectStage: async () => undefined,
       now: () => degraded.clock.value,
     });
 
@@ -190,6 +193,7 @@ describe('Task Claim Broker', () => {
       broker: legacy.broker,
       piHealthy: async () => true,
       emitTaskOffers: legacyEmit,
+      invokeClaimedProjectStage: async () => undefined,
       now: () => legacy.clock.value,
     });
     await expect(legacyAdvance.advanceChannel({
@@ -214,23 +218,22 @@ describe('Task Claim Broker', () => {
       changes: { status: 'done', updatedAt: 10 },
     });
     await seedProjectStageEdge(execution.repositories);
-    const executionAdvance = createProjectStageAutoAdvance({
-      repositories: execution.repositories,
-      broker: execution.broker,
-      piHealthy: async () => true,
-      emitTaskOffers: async (taskId, options) => {
-        await execution.broker.prepareOffers(taskId, options);
-      },
-      now: () => execution.clock.value,
-    });
     let invocationId = 0;
     const gateway = createInvocationGateway({
       repositories: execution.repositories,
       clock: { now: () => execution.clock.value },
       ids: { nextId: () => `stage-invocation-${++invocationId}` },
     });
-    execution.broker.bindProjectStageClaimGranted(async (claim) => {
-      await gateway.invokeClaimedProjectStage({
+    const invokeClaimedProjectStage = async (claim: {
+      managementRunId: string;
+      taskId: string;
+      taskRevision: number;
+      taskAttempt: number;
+      claimLeaseId: string;
+      targetAgentId: string;
+      objective: string;
+    }) => {
+      const invoked = await gateway.invokeClaimedProjectStage({
         managementRunId: claim.managementRunId,
         idempotencyKey: `project-stage-auto:${claim.claimLeaseId}`,
         taskId: claim.taskId,
@@ -241,6 +244,33 @@ describe('Task Claim Broker', () => {
         objective: claim.objective,
         attachmentIds: [],
       });
+      return invoked.view.activeDispatchId
+        ? invoked.view
+        : gateway.retryClaimedProjectStage({
+          managementRunId: claim.managementRunId,
+          invocationId: invoked.view.id,
+        });
+    };
+    const executionAdvance = createProjectStageAutoAdvance({
+      repositories: execution.repositories,
+      broker: execution.broker,
+      piHealthy: async () => true,
+      emitTaskOffers: async (taskId, options) => {
+        await execution.broker.prepareOffers(taskId, options);
+      },
+      invokeClaimedProjectStage: async (claim) => {
+        await invokeClaimedProjectStage(claim);
+      },
+      now: () => execution.clock.value,
+    });
+    execution.broker.bindProjectStageClaimGranted(async (claim) => {
+      const view = await invokeClaimedProjectStage(claim);
+      await gateway.completeAttempt({
+        dispatchId: view.activeDispatchId!,
+        status: 'failed',
+        error: 'simulated initial dispatch failure',
+      });
+      throw new Error('simulated initial dispatch failure');
     });
     await executionAdvance.advanceChannel({ teamId: 'team-1', channelId: 'channel-1' });
     const [executionOffer] = await execution.repositories.taskCoordination.offers.listByTask('task-a');
@@ -251,6 +281,14 @@ describe('Task Claim Broker', () => {
     });
     expect(accepted.kind).toBe('claim_granted');
     if (accepted.kind !== 'claim_granted') throw new Error('expected claim');
+    await expect(executionAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'claimed',
+      targetAgentIds: ['eligible'],
+    }]);
     const [invoked] = await execution.repositories.management.invocations.listByRun('run-1');
     expect(invoked).toBeDefined();
     await expect(gateway.getView(invoked!.id)).resolves.toMatchObject({

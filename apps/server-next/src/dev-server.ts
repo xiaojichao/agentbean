@@ -34,7 +34,11 @@ import { createCollaborativeMemorySearchService } from './application/collaborat
 import { createMemoryCapsuleService } from './application/memory-capsule-service.js';
 import { createMemoryCandidateService } from './application/memory-candidate-service.js';
 import { createCollaborativeMemoryService } from './application/collaborative-memory-service.js';
-import { createTaskClaimBroker, type TaskClaimBroker } from './application/management/task-claim-broker.js';
+import {
+  createTaskClaimBroker,
+  type ProjectStageClaimGranted,
+  type TaskClaimBroker,
+} from './application/management/task-claim-broker.js';
 import { createInMemoryRepositories } from './infra/memory/repositories.js';
 import {
   applyGlobalMigrations,
@@ -1847,18 +1851,8 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
-  const projectStageAutoAdvance = createProjectStageAutoAdvance({
-    repositories,
-    broker: taskClaimBroker,
-    piHealthy,
-    now: clock.now,
-    emitTaskOffers: async (taskId, options) => {
-      if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
-      await taskClaimEmitter(taskId, options);
-    },
-  });
   const projectStageInvocationGateway = createInvocationGateway({ repositories, clock, ids });
-  taskClaimBroker.bindProjectStageClaimGranted(async (claim) => {
+  const invokeClaimedProjectStage = async (claim: ProjectStageClaimGranted) => {
     const invoked = await projectStageInvocationGateway.invokeClaimedProjectStage({
       managementRunId: claim.managementRunId,
       idempotencyKey: [
@@ -1876,8 +1870,13 @@ function createDefaultManagementRuntime(
       objective: claim.objective,
       attachmentIds: [],
     });
-    if (invoked.disposition !== 'created') return;
-    const dispatchId = invoked.view.activeDispatchId;
+    const view = invoked.view.activeDispatchId
+      ? invoked.view
+      : await projectStageInvocationGateway.retryClaimedProjectStage({
+        managementRunId: claim.managementRunId,
+        invocationId: invoked.view.id,
+      });
+    const dispatchId = view.activeDispatchId;
     if (!dispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
     if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
     try {
@@ -1891,7 +1890,19 @@ function createDefaultManagementRuntime(
       });
       throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
     }
+  };
+  const projectStageAutoAdvance = createProjectStageAutoAdvance({
+    repositories,
+    broker: taskClaimBroker,
+    piHealthy,
+    invokeClaimedProjectStage,
+    now: clock.now,
+    emitTaskOffers: async (taskId, options) => {
+      if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
+      await taskClaimEmitter(taskId, options);
+    },
   });
+  taskClaimBroker.bindProjectStageClaimGranted(invokeClaimedProjectStage);
   const executeManagementTool = createManagementToolExecutor({
     kernel,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,

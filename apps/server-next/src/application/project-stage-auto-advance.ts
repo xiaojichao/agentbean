@@ -1,5 +1,8 @@
 import { evaluateProjectStageAdvance } from '../../../../packages/domain/src/index.js';
-import type { TaskClaimBroker } from './management/task-claim-broker.js';
+import type {
+  ProjectStageClaimGranted,
+  TaskClaimBroker,
+} from './management/task-claim-broker.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import {
   filterStrictProjectStageAgentIds,
@@ -29,6 +32,7 @@ export function createProjectStageAutoAdvance(input: {
     taskId: string,
     options: { readonly allowedAgentIds: readonly string[]; readonly projectStageAuto: true },
   ) => Promise<void>;
+  readonly invokeClaimedProjectStage: (claim: ProjectStageClaimGranted) => Promise<void>;
   readonly now: () => number;
 }) {
   return {
@@ -150,6 +154,16 @@ export function createProjectStageAutoAdvance(input: {
             targetAgentIds: decision.targetAgentIds,
           });
         } else if (decision.kind === 'create_invocation') {
+          if (!claim) throw new Error('PROJECT_STAGE_ACTIVE_CLAIM_MISSING');
+          await input.invokeClaimedProjectStage({
+            managementRunId: coordination.managementRunId,
+            taskId: task.id,
+            taskRevision: task.revision,
+            taskAttempt: coordination.attempt,
+            claimLeaseId: claim.id,
+            targetAgentId: decision.targetAgentId,
+            objective: task.description ?? task.title,
+          });
           outcomes.push({
             taskId: task.id,
             kind: 'claimed',
