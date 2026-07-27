@@ -54,4 +54,13 @@ describe('chat files surface', () => {
     expect(source).toContain('findFirstMarkdownCodeSpan(text)');
     expect(source).toContain('findClosingMarkdownBacktickRun');
   });
+
+  test('files-tab thumbnails and directory mosaics use authenticated artifact URLs', () => {
+    // Regression lock for #816 / 0dda5211: raw preview-derivative paths lack ?token=
+    // and fail under private artifact auth. Do not reintroduce unauthenticated src.
+    expect(source).toMatch(
+      /thumbnailUrl=\{artifact\.preview\?\.status === 'ready'[\s\S]*?artifactUrl\(artifact\.preview\.url\)/,
+    );
+    expect(filesSurface).toContain('artifactUrl(preview)');
+  });
 });
