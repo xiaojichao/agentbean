@@ -1,4 +1,4 @@
-import { evaluateProjectStageAdvance } from '@agentbean/domain';
+import { evaluateProjectStageAdvance } from '../../../../packages/domain/src/index.js';
 import type { TaskClaimBroker } from './management/task-claim-broker.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import {
