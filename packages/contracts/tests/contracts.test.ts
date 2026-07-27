@@ -426,6 +426,7 @@ describe('first-slice contract result shape', () => {
 
   test('exposes first-slice socket event constants without old network naming', () => {
     expect(WEB_EVENTS.auth.login).toBe('auth:login');
+    expect(WEB_EVENTS.auth.deleteAccount).toBe('auth:delete-account');
     expect(WEB_EVENTS.team.list).toBe('team:list');
     expect(WEB_EVENTS.team.create).toBe('team:create');
     expect(WEB_EVENTS.team.switch).toBe('team:switch');

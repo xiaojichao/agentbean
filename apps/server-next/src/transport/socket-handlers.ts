@@ -231,6 +231,10 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  // 与 team/device delete 一致：有 session 时注入 userId；business smoke 也可在 payload 里带 userId。
+  bind(socket, WEB_EVENTS.auth.deleteAccount, app, 'deleteOwnAccount', undefined, {
+    authenticatedUser: options.authenticatedUser,
+  });
   bind(socket, WEB_EVENTS.team.list, app, 'listTeams', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTeamMutation = (payload: unknown, result: unknown) =>
     options.afterTeamMutation?.(payload, result);

@@ -3,9 +3,10 @@ import { runAgentBeanNextBusinessSmoke } from '../../../scripts/smoke-agentbean-
 import { startServerNextDevServer } from '../src/dev-server';
 
 const WEB_EVENTS = {
-  auth: { register: 'auth:register' },
-  device: { list: 'device:list' },
-  agent: { subscribe: 'agents:subscribe', create: 'agent:create' },
+  auth: { register: 'auth:register', deleteAccount: 'auth:delete-account' },
+  device: { list: 'device:list', delete: 'device:delete' },
+  agent: { subscribe: 'agents:subscribe', create: 'agent:create', delete: 'agent:delete' },
+  team: { delete: 'team:delete' },
   channel: { subscribe: 'channels:subscribe', message: 'channel:message' },
   message: { send: 'message:send' },
 };
@@ -38,7 +39,7 @@ describe('AgentBean Next business smoke', () => {
       expect(summary).toMatchObject({
         ok: true,
         failed: 0,
-        total: 8,
+        total: 9,
       });
       expect(summary.checks.map((check) => check.id)).toEqual([
         'business-url-present',
@@ -49,6 +50,7 @@ describe('AgentBean Next business smoke', () => {
         'business-custom-agent-create',
         'business-message-dispatch',
         'business-agent-reply-visible',
+        'business-smoke-teardown',
       ]);
     } finally {
       await server.close();
@@ -87,6 +89,10 @@ describe('AgentBean Next business smoke', () => {
     webSocket.acks.set(WEB_EVENTS.agent.subscribe, { ok: true });
     webSocket.acks.set(WEB_EVENTS.device.list, { ok: true });
     webSocket.acks.set(WEB_EVENTS.agent.create, { ok: true, agent: { id: 'agent-1' } });
+    webSocket.acks.set(WEB_EVENTS.device.delete, { ok: true });
+    webSocket.acks.set(WEB_EVENTS.agent.delete, { ok: true });
+    webSocket.acks.set(WEB_EVENTS.team.delete, { ok: true });
+    webSocket.acks.set(WEB_EVENTS.auth.deleteAccount, { ok: true });
     webSocket.acks.set(WEB_EVENTS.message.send, () => {
       setTimeout(() => {
         agentSocket.trigger(AGENT_EVENTS.dispatch.request, {

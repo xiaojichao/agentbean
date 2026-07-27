@@ -21,6 +21,8 @@ export const WEB_EVENTS = {
     register: 'auth:register',
     whoami: 'auth:whoami',
     changePassword: 'auth:change-password',
+    /** 用户自删账号：无任何仍拥有的 team 时允许；系统管理员不可自删。 */
+    deleteAccount: 'auth:delete-account',
   },
   team: {
     list: 'team:list',
