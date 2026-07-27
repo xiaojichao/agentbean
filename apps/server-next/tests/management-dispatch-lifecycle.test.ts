@@ -358,7 +358,7 @@ describe('managed Dispatch lifecycle bridge', () => {
       agentId: 'agent-1',
       body: '可恢复结果',
       artifactIds: ['artifact-recovery'],
-      workspaceRun: { id: 'workspace-run-recovery', status: 'succeeded' as const },
+      workspaceRun: { status: 'succeeded' as const },
       projectDocumentInputSetResult: proposal,
     };
     const createWorkspaceRun = harness.repositories.workspaceRuns.create;
@@ -379,6 +379,12 @@ describe('managed Dispatch lifecycle bridge', () => {
     });
     expect(artifactBeforeRecovery?.dispatchId).toBeUndefined();
     expect(artifactBeforeRecovery?.workspaceRunId).toBeUndefined();
+    const deliveryBeforeRunRecovery = (await harness.repositories.messages.listByChannel(
+      'channel-1',
+      100,
+    )).find((message) => message.meta?.dispatchId === input.dispatchId);
+    const publishedWorkspaceRunId = deliveryBeforeRunRecovery?.meta?.workspaceRunId;
+    expect(typeof publishedWorkspaceRunId).toBe('string');
 
     const record = harness.repositories.projectDocumentInputSetResults.record;
     let writes = 0;
@@ -391,13 +397,13 @@ describe('managed Dispatch lifecycle bridge', () => {
       .rejects.toThrow('SIMULATED_RESULT_WRITE_FAILURE');
     harness.repositories.projectDocumentInputSetResults.record = record;
     await expect(harness.repositories.workspaceRuns.listByDispatch(input.dispatchId))
-      .resolves.toMatchObject([{ id: 'workspace-run-recovery' }]);
+      .resolves.toMatchObject([{ id: publishedWorkspaceRunId }]);
     await expect(harness.repositories.artifacts.getForTeam({
       teamId: 'team-1',
       artifactId: 'artifact-recovery',
     })).resolves.toMatchObject({
       dispatchId: input.dispatchId,
-      workspaceRunId: 'workspace-run-recovery',
+      workspaceRunId: publishedWorkspaceRunId,
     });
     const deliveryBeforeRecovery = (await harness.repositories.messages.listByChannel(
       'channel-1',

@@ -6421,11 +6421,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               }
               let recoveredRun = (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1);
               if (!recoveredRun && resultInput.workspaceRun) {
-                const recoveryWorkspaceRunId = resultInput.workspaceRun.id ?? ids.nextId();
                 const existingDeliveryMessage = (await repositories.messages.listByChannel(
                   dispatch.channelId,
                   10_000,
                 )).find((message) => message.meta?.dispatchId === dispatch.id);
+                const publishedWorkspaceRunId = typeof existingDeliveryMessage?.meta?.workspaceRunId === 'string'
+                  ? existingDeliveryMessage.meta.workspaceRunId
+                  : undefined;
+                const recoveryWorkspaceRunId = resultInput.workspaceRun.id
+                  ?? publishedWorkspaceRunId
+                  ?? ids.nextId();
                 const managedHandoff = await repositories.management.handoffs.getByInvocationId(invocationId);
                 const publishResult = !managedHandoff || managedHandoff.intent.returnMode === 'deliver_to_root';
                 const originMessage = await repositories.messages.getById(dispatch.messageId);
