@@ -6374,6 +6374,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const invocationId = managedAttempt?.invocationId;
           const proposal = resultInput.projectDocumentInputSetResult;
           if (invocationId === proposal.invocationId) {
+            const managedInvocation = await repositories.management.invocations.getById(invocationId);
+            const validation = await validateProjectDocumentInputSetResultProposal({
+              repositories,
+              dispatch,
+              managedInvocation,
+              proposal,
+              reportedArtifactIds: uniqueIds([
+                ...(resultInput.artifactIds ?? []),
+                ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+              ]),
+            });
+            if (!validation.ok) return validation;
             const replayed = await repositories.projectDocumentInputSetResults.listByInvocation({
               teamId: dispatch.teamId,
               channelId: dispatch.channelId,
@@ -6389,6 +6401,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   proposal.invocationId,
                   replayed,
                 ),
+              });
+            }
+            if (managedInvocation) {
+              const committedArtifacts = (await Promise.all(proposal.items.flatMap((item) =>
+                item.status === 'changed'
+                  ? [repositories.artifacts.getForTeam({
+                      teamId: dispatch.teamId,
+                      artifactId: item.artifactId,
+                    })]
+                  : [])))
+                .filter((artifact): artifact is ArtifactRecord => artifact !== null);
+              const recoveredWorkspaceRunId = committedArtifacts.find(
+                (artifact) => artifact.workspaceRunId,
+              )?.workspaceRunId;
+              const recovered = await commitProjectDocumentInputSetResults({
+                repositories,
+                ids,
+                now: clock.now(),
+                agentId: resultInput.agentId,
+                dispatch,
+                invocation: managedInvocation,
+                proposal,
+                committedArtifacts,
+                ...(recoveredWorkspaceRunId ? { workspaceRunId: recoveredWorkspaceRunId } : {}),
+              });
+              return makeSuccess({
+                dispatch: toDispatchDto(dispatch),
+                projectDocumentInputSetResult: recovered,
               });
             }
           }
@@ -6568,12 +6608,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             invocation: managedInvocation,
             proposal: resultInput.projectDocumentInputSetResult,
             committedArtifacts,
+            ...(workspaceRunId ? { workspaceRunId } : {}),
           })
         : undefined;
       if (channelFileRollout.markdownEditing) {
         const inputSetResultArtifactIds = new Set(
           resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
-            item.artifactId ? [item.artifactId] : []) ?? [],
+            'artifactId' in item ? [item.artifactId] : []) ?? [],
         );
         await createInitialChannelDocuments(
           repositories,
@@ -11246,7 +11287,7 @@ async function validateProjectDocumentInputSetResultProposal(input: {
       return makeFailure('VALIDATION_ERROR', 'Project document InputSet result identity does not match the manifest');
     }
     if (item.status === 'unchanged') {
-      if (item.sha256 !== expected.sha256 || item.artifactId || item.error) {
+      if (item.sha256 !== expected.sha256 || 'artifactId' in item || 'error' in item) {
         return makeFailure('VALIDATION_ERROR', 'Unchanged InputSet result has an invalid digest or Artifact');
       }
       continue;
@@ -11268,7 +11309,7 @@ async function validateProjectDocumentInputSetResultProposal(input: {
       }
       continue;
     }
-    if (!item.error || item.artifactId) {
+    if (!item.error || 'artifactId' in item) {
       return makeFailure('VALIDATION_ERROR', 'Failed InputSet result requires an error and cannot commit an Artifact');
     }
   }
@@ -11284,6 +11325,7 @@ async function commitProjectDocumentInputSetResults(input: {
   invocation: AgentInvocationRecordDto;
   proposal: ProjectDocumentInputSetResultProposalV1;
   committedArtifacts: readonly ArtifactRecord[];
+  workspaceRunId?: string;
 }): Promise<ProjectDocumentInputSetResultDto> {
   if (input.invocation.intent.schemaVersion !== 2) {
     throw new Error('Project document InputSet result requires Invocation V2');
@@ -11294,10 +11336,33 @@ async function commitProjectDocumentInputSetResults(input: {
   const task = taskContext
     ? await input.repositories.tasks.getById(taskContext.taskId)
     : null;
+  const dispatchAttempt = await input.repositories.management.dispatchAttempts.getByDispatchId(
+    input.dispatch.id,
+  );
+  const invocationAttempts = await input.repositories.management.dispatchAttempts.list(
+    input.invocation.id,
+  );
+  const latestAttemptNumber = invocationAttempts.reduce(
+    (latest, attempt) => Math.max(latest, attempt.attemptNumber),
+    0,
+  );
+  const currentClaim = taskContext
+    ? await input.repositories.taskCoordination.claimLeases.getCurrent({
+        taskId: taskContext.taskId,
+        taskRevision: taskContext.taskRevision,
+        taskAttempt: taskContext.taskAttempt,
+      })
+    : null;
   const staleInvocation = Boolean(taskContext && (!task
     || task.teamId !== input.dispatch.teamId
     || task.channelId !== input.dispatch.channelId
-    || task.revision !== taskContext.taskRevision));
+    || task.revision !== taskContext.taskRevision
+    || !dispatchAttempt
+    || dispatchAttempt.attemptNumber !== latestAttemptNumber
+    || !currentClaim
+    || currentClaim.id !== taskContext.claimLeaseId
+    || currentClaim.agentId !== input.agentId
+    || currentClaim.status !== 'active'));
   const results: ProjectDocumentInputSetItemResultRecord[] = [];
   const record = async (
     item: ProjectDocumentInputSetResultProposalV1['items'][number],
@@ -11306,6 +11371,8 @@ async function commitProjectDocumentInputSetResults(input: {
     const result: ProjectDocumentInputSetItemResultRecord = {
       inputSetId: input.proposal.inputSetId,
       invocationId: input.proposal.invocationId,
+      agentId: input.agentId,
+      ...(input.workspaceRunId ? { workspaceRunId: input.workspaceRunId } : {}),
       teamId: input.dispatch.teamId,
       channelId: input.dispatch.channelId,
       documentId: item.documentId,
@@ -11360,6 +11427,22 @@ async function commitProjectDocumentInputSetResults(input: {
       });
       continue;
     }
+    const revisions = await input.repositories.channelDocuments.listRevisions({
+      documentId: document.id,
+    });
+    const recoveredRevision = revisions.find((revision) =>
+      revision.artifact.id === artifact.id
+      && revision.createdBy === input.agentId
+      && revision.source === 'run'
+      && document.currentRevisionId === revision.id);
+    if (recoveredRevision) {
+      await record(item, {
+        status: 'committed',
+        artifactId: artifact.id,
+        revisionId: recoveredRevision.id,
+      });
+      continue;
+    }
     if (document.currentRevisionId !== expected.baseRevisionId) {
       await record(item, {
         status: 'conflict',
@@ -11368,9 +11451,7 @@ async function commitProjectDocumentInputSetResults(input: {
       });
       continue;
     }
-    const latest = (await input.repositories.channelDocuments.listRevisions({
-      documentId: document.id,
-    }))[0];
+    const latest = revisions[0];
     const revision: ChannelDocumentRevisionRecord = {
       id: input.ids.nextId(),
       documentId: document.id,
@@ -11439,16 +11520,46 @@ function toProjectDocumentInputSetResultDto(
   invocationId: string,
   records: readonly ProjectDocumentInputSetItemResultRecord[],
 ): ProjectDocumentInputSetResultDto {
-  const items: ProjectDocumentInputSetItemResultDto[] = records.map((record) => ({
-    documentId: record.documentId,
-    baseRevisionId: record.baseRevisionId,
-    status: record.status,
-    ...(record.artifactId ? { artifactId: record.artifactId } : {}),
-    ...(record.revisionId ? { revisionId: record.revisionId } : {}),
-    ...(record.error ? { error: record.error } : {}),
-    createdAt: record.createdAt,
-  }));
-  return { contractVersion: 1, inputSetId, invocationId, items };
+  const items: ProjectDocumentInputSetItemResultDto[] = records.map((record) => {
+    const base = {
+      documentId: record.documentId,
+      baseRevisionId: record.baseRevisionId,
+      createdAt: record.createdAt,
+    };
+    if (record.status === 'unchanged') return { ...base, status: 'unchanged' };
+    if (record.status === 'committed' && record.artifactId && record.revisionId) {
+      return {
+        ...base,
+        status: 'committed',
+        artifactId: record.artifactId,
+        revisionId: record.revisionId,
+      };
+    }
+    if (record.status === 'conflict' && record.artifactId && record.error) {
+      return {
+        ...base,
+        status: 'conflict',
+        artifactId: record.artifactId,
+        error: record.error,
+      };
+    }
+    if (record.status === 'failed' && record.error) {
+      return {
+        ...base,
+        status: 'failed',
+        ...(record.artifactId ? { artifactId: record.artifactId } : {}),
+        error: record.error,
+      };
+    }
+    throw new Error(`Invalid persisted Project document InputSet result: ${record.status}`);
+  });
+  const first = records[0];
+  if (!first) throw new Error('Project document InputSet result is empty');
+  const source = {
+    agentId: first.agentId,
+    ...(first.workspaceRunId ? { workspaceRunId: first.workspaceRunId } : {}),
+  };
+  return { contractVersion: 1, inputSetId, invocationId, source, items };
 }
 
 type ChannelFileCursor = { createdAt: number; id: string };

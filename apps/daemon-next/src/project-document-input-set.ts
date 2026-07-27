@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import type {
   ProjectDocumentInputSetItemResultProposalV1,
@@ -25,9 +25,19 @@ export interface MaterializedProjectDocumentInputSet {
   manifestPath: string;
 }
 
+type CollectedProjectDocumentInputSetItemResult =
+  | Extract<ProjectDocumentInputSetItemResultProposalV1, { status: 'unchanged' | 'failed' }>
+  | {
+      readonly documentId: string;
+      readonly baseRevisionId: string;
+      readonly status: 'changed';
+      readonly sha256: string;
+    };
+
 export interface CollectedProjectDocumentInputSetResults {
-  readonly items: readonly ProjectDocumentInputSetItemResultProposalV1[];
-  readonly changedArtifacts: readonly CollectedArtifact[];
+  readonly items: readonly CollectedProjectDocumentInputSetItemResult[];
+  readonly changedArtifacts: ReadonlyArray<CollectedArtifact & { readonly documentId: string }>;
+  readonly newDocumentArtifacts: readonly CollectedArtifact[];
 }
 
 /**
@@ -100,8 +110,13 @@ export function collectProjectDocumentInputSetResults(
   materialized: MaterializedProjectDocumentInputSet,
 ): CollectedProjectDocumentInputSetResults {
   const root = dirname(materialized.manifestPath);
-  const items: ProjectDocumentInputSetItemResultProposalV1[] = [];
-  const changedArtifacts: CollectedArtifact[] = [];
+  const items: CollectedProjectDocumentInputSetItemResult[] = [];
+  const changedArtifacts: Array<CollectedArtifact & { readonly documentId: string }> = [];
+  const sourceRoot = {
+    id: `project-document-input-set:${materialized.manifest.inputSetId}`,
+    kind: 'configured_output' as const,
+    label: '项目文档回写',
+  };
   for (const item of materialized.manifest.items) {
     try {
       const bytes = readFileSync(item.localPath);
@@ -117,17 +132,14 @@ export function collectProjectDocumentInputSetResults(
       }
       const stat = statSync(item.localPath);
       changedArtifacts.push({
+        documentId: item.documentId,
         absolutePath: item.localPath,
         relativePath: relative(root, item.localPath),
         sha256,
         sizeBytes: stat.size,
         filename: item.displayName,
         role: 'intermediate',
-        sourceRoot: {
-          id: `project-document-input-set:${materialized.manifest.inputSetId}`,
-          kind: 'configured_output',
-          label: '项目文档回写',
-        },
+        sourceRoot,
       });
       items.push({
         documentId: item.documentId,
@@ -144,7 +156,33 @@ export function collectProjectDocumentInputSetResults(
       });
     }
   }
-  return { items, changedArtifacts };
+  const knownPaths = new Set(materialized.manifest.items.map((item) => item.localPath));
+  const newDocumentArtifacts: CollectedArtifact[] = [];
+  const directories = [root];
+  while (directories.length > 0) {
+    const directory = directories.pop()!;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolutePath = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        directories.push(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()
+        || knownPaths.has(absolutePath)
+        || !/\.(?:md|markdown)$/i.test(entry.name)) continue;
+      const bytes = readFileSync(absolutePath);
+      newDocumentArtifacts.push({
+        absolutePath,
+        relativePath: relative(root, absolutePath),
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        sizeBytes: bytes.byteLength,
+        filename: entry.name,
+        role: 'run_output',
+        sourceRoot,
+      });
+    }
+  }
+  return { items, changedArtifacts, newDocumentArtifacts };
 }
 
 export function buildProjectDocumentInputSetResultProposal(
@@ -152,21 +190,27 @@ export function buildProjectDocumentInputSetResultProposal(
   collected: CollectedProjectDocumentInputSetResults,
   uploaded: readonly UploadedArtifact[],
 ): ProjectDocumentInputSetResultProposalV1 {
-  const uploadedByDigest = new Map(uploaded.map((artifact) => [artifact.sha256, artifact]));
+  const uploadedByRelativePath = new Map(
+    uploaded.map((artifact) => [artifact.relativePath, artifact]),
+  );
   return {
     contractVersion: 1,
     inputSetId: materialized.manifest.inputSetId,
     invocationId: materialized.manifest.invocationId,
-    items: collected.items.map((item) => {
-      if (item.status !== 'changed' || !item.sha256) return item;
-      const artifact = uploadedByDigest.get(item.sha256);
+    items: collected.items.map((item): ProjectDocumentInputSetItemResultProposalV1 => {
+      if (item.status !== 'changed') return item;
+      const changedArtifact = collected.changedArtifacts.find(
+        (candidate) => candidate.documentId === item.documentId,
+      );
+      const artifact = changedArtifact
+        ? uploadedByRelativePath.get(changedArtifact.relativePath)
+        : undefined;
       return artifact
         ? { ...item, artifactId: artifact.id }
         : {
             documentId: item.documentId,
             baseRevisionId: item.baseRevisionId,
             status: 'failed' as const,
-            sha256: item.sha256,
             error: 'PROJECT_DOCUMENT_INPUT_SET_RESULT_UPLOAD_FAILED',
           };
     }),

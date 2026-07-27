@@ -270,6 +270,7 @@ describe('server-next SQLite repositories', () => {
       })).resolves.toBeNull();
       const inputSetResult = {
         inputSetId: 'input-set-1', invocationId: 'invocation-1',
+        agentId: 'agent-1',
         teamId: 'team-1', channelId: 'channel-1',
         documentId: initial.document.id, baseRevisionId: 'revision-1',
         status: 'committed' as const, artifactId: nextArtifact.id, revisionId: nextRevision.id,

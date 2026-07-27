@@ -148,6 +148,121 @@ describe('managed Dispatch lifecycle bridge', () => {
       .resolves.toHaveLength(1);
   });
 
+  test('keeps a timed-out older attempt from writing after a retry starts', async () => {
+    const harness = await createHarness(true);
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    const oldDispatchId = created.view.dispatchAttempts[0]!.dispatchId;
+    await harness.gateway.completeAttempt({
+      dispatchId: oldDispatchId,
+      status: 'timed_out',
+      error: 'DISPATCH_TIMEOUT',
+    });
+    await harness.gateway.retry({ authority: harness.authority, invocationId: created.view.id });
+    await harness.repositories.artifacts.create(
+      markdownArtifact('artifact-stale-attempt', '1.md', 'stale-attempt-sha'),
+    );
+
+    const result = await harness.usecases.receiveDispatchResult({
+      dispatchId: oldDispatchId,
+      agentId: 'agent-1',
+      body: '旧 attempt 迟到',
+      artifactIds: ['artifact-stale-attempt'],
+      projectDocumentInputSetResult: {
+        contractVersion: 1,
+        inputSetId: created.view.intent.projectDocumentInputSet.id,
+        invocationId: created.view.id,
+        items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 0
+          ? {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'changed' as const,
+              sha256: 'stale-attempt-sha',
+              artifactId: 'artifact-stale-attempt',
+            }
+          : {
+              documentId: item.documentId,
+              baseRevisionId: item.baseRevisionId,
+              status: 'unchanged' as const,
+              sha256: item.sha256,
+            }),
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.projectDocumentInputSetResult?.items.find(
+        (item) => item.documentId === 'document-1',
+      )).toMatchObject({
+        status: 'failed',
+        error: 'PROJECT_DOCUMENT_RESULT_INVOCATION_STALE',
+      });
+    }
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-1' }))
+      .resolves.toHaveLength(1);
+  });
+
+  test('resumes a partially persisted result after the Dispatch is already terminal', async () => {
+    const harness = await createHarness(true);
+    await seedProjectDocumentInputSet(harness.repositories);
+    const created = await harness.gateway.invoke(invokeInput(harness.authority));
+    if (created.view.intent.schemaVersion !== 2) throw new Error('expected V2 InputSet');
+    await harness.repositories.artifacts.create(
+      markdownArtifact('artifact-recovery', '2.md', 'recovery-sha'),
+    );
+    const proposal = {
+      contractVersion: 1 as const,
+      inputSetId: created.view.intent.projectDocumentInputSet.id,
+      invocationId: created.view.id,
+      items: created.view.intent.projectDocumentInputSet.items.map((item, index) => index === 1
+        ? {
+            documentId: item.documentId,
+            baseRevisionId: item.baseRevisionId,
+            status: 'changed' as const,
+            sha256: 'recovery-sha',
+            artifactId: 'artifact-recovery',
+          }
+        : {
+            documentId: item.documentId,
+            baseRevisionId: item.baseRevisionId,
+            status: 'unchanged' as const,
+            sha256: item.sha256,
+          }),
+    };
+    const input = {
+      dispatchId: created.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      body: '可恢复结果',
+      artifactIds: ['artifact-recovery'],
+      projectDocumentInputSetResult: proposal,
+    };
+    const record = harness.repositories.projectDocumentInputSetResults.record;
+    let writes = 0;
+    harness.repositories.projectDocumentInputSetResults.record = async (result) => {
+      writes += 1;
+      if (writes === 2) throw new Error('SIMULATED_RESULT_WRITE_FAILURE');
+      return record(result);
+    };
+    await expect(harness.usecases.receiveDispatchResult(input))
+      .rejects.toThrow('SIMULATED_RESULT_WRITE_FAILURE');
+    harness.repositories.projectDocumentInputSetResults.record = record;
+
+    await expect(harness.usecases.receiveDispatchResult(input)).resolves.toMatchObject({
+      ok: true,
+      dispatch: { status: 'succeeded' },
+      projectDocumentInputSetResult: {
+        items: [
+          { documentId: 'document-1', status: 'unchanged' },
+          { documentId: 'document-2', status: 'committed' },
+          { documentId: 'document-3', status: 'unchanged' },
+          { documentId: 'document-4', status: 'unchanged' },
+        ],
+      },
+    });
+    await expect(harness.repositories.channelDocuments.listRevisions({ documentId: 'document-2' }))
+      .resolves.toHaveLength(2);
+  });
+
   test.each([
     ['cancelled', async (h: Awaited<ReturnType<typeof createHarness>>, dispatchId: string) => h.usecases.cancelDispatch({ dispatchId, userId: 'user-1' })],
     ['timed_out', async (h: Awaited<ReturnType<typeof createHarness>>) => h.usecases.failTimedOutDispatches({ olderThan: 21 })],
@@ -185,6 +300,17 @@ async function createHarness(withManagementRun: boolean) {
     ? (await kernel.createOrResumeRun({ teamId: 'team-1', channelId: 'channel-1', rootTaskId: 'task-1', rootMessageId: 'message-1', requestKey: 'request-1', requestHash: 'hash-1', placementPolicy: { placement: 'device', allowServerContext: false, requireLocalModelCredentials: true }, budget: { maxSubtasks: 4, maxDepth: 2, maxExternalInvocations: 4 } })).run
     : undefined;
   if (run) await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1', host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
+  await repositories.taskCoordination.coordinations.create({
+    schemaVersion: 1, taskId: 'task-1', teamId: 'team-1',
+    managementRunId: run?.id ?? 'unused', rootTaskId: 'task-1', nodeKind: 'root',
+    reviewPolicy: 'human', claimPolicy: 'open', requiredCapabilities: [],
+    taskRevision: 1, attempt: 1, maxAttempts: 2, createdAt: 1, updatedAt: 1,
+  });
+  await repositories.taskCoordination.claimLeases.create({
+    id: 'claim-1', teamId: 'team-1', taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+    agentId: 'agent-1', leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint',
+    fencingToken: 1, status: 'active', acquiredAt: 1, heartbeatAt: 1, expiresAt: 100,
+  });
   return {
     repositories,
     gateway: createInvocationGateway({ repositories, clock, ids }),

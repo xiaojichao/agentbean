@@ -456,6 +456,8 @@ export interface ProjectReferenceSetRepository {
 export interface ProjectDocumentInputSetItemResultRecord {
   inputSetId: ID;
   invocationId: ID;
+  agentId: ID;
+  workspaceRunId?: ID;
   teamId: ID;
   channelId: ID;
   documentId: ID;

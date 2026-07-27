@@ -1,6 +1,8 @@
 CREATE TABLE project_document_input_set_results (
   input_set_id TEXT NOT NULL,
   invocation_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  workspace_run_id TEXT,
   team_id TEXT NOT NULL,
   channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
   document_id TEXT NOT NULL REFERENCES channel_documents(id) ON DELETE CASCADE,

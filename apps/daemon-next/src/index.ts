@@ -695,7 +695,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const collectedResults = collectProjectDocumentInputSetResults(
               materializedProjectDocumentInputSet,
             );
-            const uploadedResults = device.token && collectedResults.changedArtifacts.length > 0
+            const resultArtifacts = [
+              ...collectedResults.changedArtifacts,
+              ...collectedResults.newDocumentArtifacts,
+            ];
+            const uploadedResults = device.token && resultArtifacts.length > 0
               ? await uploadArtifacts({
                   serverUrl,
                   token: device.token,
@@ -704,7 +708,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   fetch: fetchFn,
                   maxBytes: input.artifactMaxBytes,
                   maxTotalBytes: input.artifactRunMaxBytes,
-                }, [...collectedResults.changedArtifacts])
+                }, resultArtifacts)
               : [];
             productArtifactIds.push(...uploadedResults.map((artifact) => artifact.id));
             projectDocumentInputSetResult = buildProjectDocumentInputSetResultProposal(

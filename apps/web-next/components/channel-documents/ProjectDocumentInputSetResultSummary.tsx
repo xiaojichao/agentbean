@@ -7,18 +7,23 @@ import type {
 } from '@agentbean/contracts';
 import { getResolvedServerUrl, getStoredAuthToken } from '@/lib/socket';
 
-const STATUS_LABEL = {
-  unchanged: '未变化',
-  committed: '已提交',
-  conflict: '有冲突',
-  failed: '失败',
-} as const;
-
-const STATUS_TONE = {
-  unchanged: 'border-neutral-200 bg-neutral-50 text-neutral-600',
-  committed: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  conflict: 'border-amber-200 bg-amber-50 text-amber-800',
-  failed: 'border-red-200 bg-red-50 text-red-700',
+const STATUS_META = {
+  unchanged: {
+    label: '未变化',
+    tone: 'border-neutral-200 bg-neutral-50 text-neutral-600',
+  },
+  committed: {
+    label: '已提交',
+    tone: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  },
+  conflict: {
+    label: '有冲突',
+    tone: 'border-amber-200 bg-amber-50 text-amber-800',
+  },
+  failed: {
+    label: '失败',
+    tone: 'border-red-200 bg-red-50 text-red-700',
+  },
 } as const;
 
 export function projectDocumentInputSetResultFromMeta(
@@ -48,19 +53,23 @@ export function ProjectDocumentInputSetResultSummary({
         <span className="font-semibold text-neutral-800">项目文档处理结果</span>
         <span className="text-neutral-500">{result.items.length} 项</span>
       </div>
+      <div className="mb-1.5 text-[11px] text-neutral-500">
+        来源 Agent {result.source.agentId}
+        {result.source.workspaceRunId ? ` · 运行 ${result.source.workspaceRunId}` : ''}
+      </div>
       <ul className="space-y-1">
         {result.items.map((item) => (
           <li
             key={`${item.documentId}:${item.baseRevisionId}`}
-            className={`flex flex-wrap items-center justify-between gap-2 border px-2 py-1 text-xs ${STATUS_TONE[item.status]}`}
+            className={`flex flex-wrap items-center justify-between gap-2 border px-2 py-1 text-xs ${STATUS_META[item.status].tone}`}
           >
             <span className="min-w-0 truncate font-mono" title={item.documentId}>
               {item.documentId}
             </span>
             <span className="flex items-center gap-2">
-              <span>{STATUS_LABEL[item.status]}</span>
-              {item.revisionId && <span title={item.revisionId}>新修订</span>}
-              {item.status === 'conflict' && item.artifactId && (
+              <span>{STATUS_META[item.status].label}</span>
+              {item.status === 'committed' && <span title={item.revisionId}>新修订</span>}
+              {item.status === 'conflict' && (
                 <a
                   className="font-medium underline underline-offset-2"
                   href={artifactDownloadUrl(teamId, item.artifactId)}
@@ -69,7 +78,9 @@ export function ProjectDocumentInputSetResultSummary({
                 </a>
               )}
             </span>
-            {item.error && <span className="w-full truncate opacity-80" title={item.error}>{item.error}</span>}
+            {(item.status === 'conflict' || item.status === 'failed') && (
+              <span className="w-full truncate opacity-80" title={item.error}>{item.error}</span>
+            )}
           </li>
         ))}
       </ul>

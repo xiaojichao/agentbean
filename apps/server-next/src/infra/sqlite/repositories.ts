@@ -4617,13 +4617,16 @@ function createSqliteProjectDocumentInputSetResultRepository(
       try {
         db.prepare(
           `INSERT INTO project_document_input_set_results (
-             input_set_id, invocation_id, team_id, channel_id, document_id,
+             input_set_id, invocation_id, agent_id, workspace_run_id,
+             team_id, channel_id, document_id,
              base_revision_id, status, artifact_id, revision_id, error,
              request_fingerprint, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           input.inputSetId,
           input.invocationId,
+          input.agentId,
+          input.workspaceRunId ?? null,
           input.teamId,
           input.channelId,
           input.documentId,
@@ -4657,6 +4660,10 @@ function mapProjectDocumentInputSetItemResult(
   return {
     inputSetId: sqliteText(row, 'input_set_id'),
     invocationId: sqliteText(row, 'invocation_id'),
+    agentId: sqliteText(row, 'agent_id'),
+    ...(sqliteNullableText(row, 'workspace_run_id')
+      ? { workspaceRunId: sqliteNullableText(row, 'workspace_run_id')! }
+      : {}),
     teamId: sqliteText(row, 'team_id'),
     channelId: sqliteText(row, 'channel_id'),
     documentId: sqliteText(row, 'document_id'),

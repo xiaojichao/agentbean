@@ -13,6 +13,7 @@ describe('ProjectDocumentInputSetResultSummary', () => {
         contractVersion: 1,
         inputSetId: 'input-set-1',
         invocationId: 'invocation-1',
+        source: { agentId: 'agent-1', workspaceRunId: 'run-1' },
         items: [
           { documentId: 'document-1', baseRevisionId: 'revision-1', status: 'unchanged', createdAt: 1 },
           { documentId: 'document-2', baseRevisionId: 'revision-2', status: 'committed', artifactId: 'artifact-2', revisionId: 'revision-3', createdAt: 1 },
@@ -23,6 +24,7 @@ describe('ProjectDocumentInputSetResultSummary', () => {
     />);
 
     expect(screen.getByRole('region', { name: '项目文档处理结果' }).textContent).toContain('4 项');
+    expect(screen.getByText(/来源 Agent agent-1 · 运行 run-1/)).not.toBeNull();
     expect(screen.getByText('未变化')).not.toBeNull();
     expect(screen.getByText('已提交')).not.toBeNull();
     expect(screen.getByText('新修订')).not.toBeNull();
