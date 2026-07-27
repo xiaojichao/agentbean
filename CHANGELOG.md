@@ -19,6 +19,38 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-27] - 2026-07-27
+### Added
+- 实现管理员添加用户（默认个人 Team）
+- 将系统 PI Agent 管理迁入 Console 并收尾设置入口
+- 实现 System Admin Console 壳与四类清单迁入
+- 支持无 cwd 的冻结引用附件
+- 支持人工审核产物版本并切换唯一最终版
+### Changed
+- 将 AGENTBEAN_PI_SECRET_KEY 纳入生产部署门禁与回归测试
+- 实现项目协作分阶段灰度与生产保护
+- 实现管理员修改用户资料/角色与重置密码
+- 对齐 admin Console browser smoke 与 readiness 到新 IA
+- 实现系统清单关键词搜索与 pageSize 切换
+- 实现系统清单四类列表服务端分页
+- 回收多文档 Agent 修改并逐项处理冲突
+- 将冻结文档选择作为必需 InputSet 全量交付给 Agent
+- 贯通冻结引用的 Agent 执行上下文
+- 记录 2026-07-26 每日更新日志
+- 保守回填可证的历史 Markdown 文档包
+- 实现消息发送时冻结项目引用
+### Fixed
+- 修复 DeepSeek tool 响应 content 空字符串导致 MANAGEMENT_MODEL_RESPONSE_INVALID
+- 修复 InputSet inline Artifact 摘要校验与终态恢复落库
+- 修复 DeepSeek Provider 测试：将点号工具名映射为供应商合法 function name
+- 修复 Socket 事件清单 CI 断言
+- 防止 production smoke 污染产品库并补齐清理工具
+- 隔离无 cwd 附件工作区并支持恢复
+- 修复项目引用复审发现的完整性问题
+- 修复项目引用发送的并发与交互问题
+### Security
+- 由 PI Manager 在审核后安全推进下游阶段（#872）
+
 ## [Daily 2026-07-26] - 2026-07-26
 ### Added
 - 补齐 PI 工具 schema 的 Skill 字段：模型此前无法产出 required/preferredSkills
