@@ -806,6 +806,7 @@ export function attachServerNextNamespaces(
         const refreshTeamIds = uniqueStrings([teamId, payloadTargetTeamId(payload), ...resultAgentVisibleTeamIds(result)]);
         for (const refreshTeamId of refreshTeamIds) {
           await refreshAgentSubscribers(webSubscribers, app, refreshTeamId);
+          await options.onAgentAvailabilityChanged?.(refreshTeamId).catch(() => undefined);
         }
         await emitDiscoveredAgents(webSubscribers, app, payload);
       },

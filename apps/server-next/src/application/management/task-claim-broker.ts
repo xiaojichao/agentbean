@@ -143,7 +143,10 @@ export interface ProjectStageClaimGranted {
 }
 
 export interface TaskClaimBroker {
-  resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution>;
+  resolveCandidates(taskId: string, options?: {
+    readonly dependencyTaskIds?: readonly string[];
+    readonly skipProjectStageGate?: boolean;
+  }): Promise<TaskClaimCandidateResolution>;
   prepareOffers(taskId: string, options?: {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
@@ -222,7 +225,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     return new Set((agent.skills ?? []).map((skill) => skill.name.toLowerCase()));
   }
 
-  async function resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution> {
+  async function resolveCandidates(taskId: string, options?: {
+    readonly dependencyTaskIds?: readonly string[];
+    readonly skipProjectStageGate?: boolean;
+  }): Promise<TaskClaimCandidateResolution> {
     const task = await input.repositories.tasks.getById(taskId);
     if (!task) throw new Error('TASK_CLAIM_TASK_NOT_FOUND');
     const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(taskId);
@@ -231,7 +237,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       agent.primaryTeamId === task.teamId || agent.visibleTeamIds.includes(task.teamId));
     const devices = new Map((await input.repositories.devices.listByTeam(task.teamId))
       .map((device) => [device.id, device]));
-    const dependencies = await input.repositories.taskCoordination.dependencies.list(taskId);
+    const dependencies = options?.dependencyTaskIds
+      ? options.dependencyTaskIds.map((dependencyTaskId) => ({
+        taskId,
+        dependencyTaskId,
+        taskRevision: task.revision,
+      }))
+      : await input.repositories.taskCoordination.dependencies.list(taskId);
     const dependencyTasks = await Promise.all(dependencies.map((edge) => input.repositories.tasks.getById(edge.dependencyTaskId)));
     const taskChannel = task.channelId ? await input.repositories.channels.getById(task.channelId) : null;
     const dependencyChannels = new Map<string, Awaited<ReturnType<typeof input.repositories.channels.getById>>>();
@@ -264,7 +276,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (dependencyTasks.some((dependency) => !dependency || dependency.status !== 'done')) {
         diagnostics.push('DEPENDENCY_NOT_READY');
       }
-      if (projectStageGate.blocked) diagnostics.push('PROJECT_STAGE_BLOCKED');
+      if (!options?.skipProjectStageGate && projectStageGate.blocked) {
+        diagnostics.push('PROJECT_STAGE_BLOCKED');
+      }
       if (dependencyTasks.some((dependency) => dependency?.channelId &&
         (!dependencyChannels.get(dependency.channelId) ||
           !channelAllowsAgent(dependencyChannels.get(dependency.channelId), agent.id)))) {

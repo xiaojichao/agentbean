@@ -1610,7 +1610,8 @@ function createDefaultApp(
       taskCoordinationKernel: management.taskCoordinationKernel,
       serverCapsuleRuntimeContextResolver,
       resolvePiHealthy,
-      resolveProjectStageCandidates: (taskId) => taskClaimBroker.resolveCandidates(taskId),
+      resolveProjectStageCandidates: (taskId, options) =>
+        taskClaimBroker.resolveCandidates(taskId, options),
       onProjectFactsChanged: async (scope) => {
         await management.advanceProjectStages(scope);
       },
@@ -1693,7 +1694,8 @@ function createDefaultApp(
     taskCoordinationKernel: management.taskCoordinationKernel,
     serverCapsuleRuntimeContextResolver,
     resolvePiHealthy,
-    resolveProjectStageCandidates: (taskId) => taskClaimBroker.resolveCandidates(taskId),
+    resolveProjectStageCandidates: (taskId, options) =>
+      taskClaimBroker.resolveCandidates(taskId, options),
     onProjectFactsChanged: async (scope) => {
       await management.advanceProjectStages(scope);
     },

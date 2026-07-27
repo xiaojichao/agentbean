@@ -1176,7 +1176,10 @@ export interface CreateServerNextUseCasesInput {
   /** #829 阶段投影与自动推进共用同一条公开 PI 健康判定，避免 UI 显示可推进但 Server fail closed。 */
   resolvePiHealthy?: () => Promise<boolean>;
   /** #829 Overview 使用与自动推进相同的 Broker 候选事实。 */
-  resolveProjectStageCandidates?: (taskId: string) => Promise<{
+  resolveProjectStageCandidates?: (taskId: string, options?: {
+    readonly dependencyTaskIds?: readonly string[];
+    readonly skipProjectStageGate?: boolean;
+  }) => Promise<{
     candidates: readonly { agentId: string; eligible: boolean }[];
   }>;
   managementRouter?: ReturnType<typeof createManagementRouter>;
@@ -11524,8 +11527,28 @@ async function projectStageDto(
       now,
     })).current
     : false;
-  const brokerEligibleAgentIds = resolveProjectStageCandidates
-    ? (await resolveProjectStageCandidates(task.id)).candidates
+  const persistedEdges = task.channelId
+    ? await repositories.channelProjects.listEdges({
+      teamId: task.teamId,
+      channelId: task.channelId,
+    })
+    : [];
+  const persistedMirroredDependencyIds = new Set(persistedEdges
+    .filter((edge) => edge.downstreamTaskId === task.id && edge.mirroredTaskDependency)
+    .map((edge) => edge.upstreamTaskId));
+  const expectedDependencyTaskIds = [
+    ...dependencyRecords
+      .map((dependency) => dependency.dependencyTaskId)
+      .filter((dependencyTaskId) => !persistedMirroredDependencyIds.has(dependencyTaskId)),
+    ...edgeRecords
+      .filter((edge) => edge.downstreamTaskId === task.id && edge.semantics === 'blocks_start')
+      .map((edge) => edge.upstreamTaskId),
+  ];
+  const brokerEligibleAgentIds = coordination && resolveProjectStageCandidates
+    ? (await resolveProjectStageCandidates(task.id, {
+      dependencyTaskIds: [...new Set(expectedDependencyTaskIds)],
+      skipProjectStageGate: true,
+    })).candidates
       .filter((candidate) => candidate.eligible)
       .map((candidate) => candidate.agentId)
     : undefined;
