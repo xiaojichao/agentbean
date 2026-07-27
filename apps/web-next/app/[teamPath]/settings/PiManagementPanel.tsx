@@ -358,7 +358,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
       <div>
         <h2 className="text-xl font-semibold">PI Agent</h2>
         <p className="mt-1 text-sm text-neutral-500">
-          系统作用域管理 Provider Supply；与团队设置分离，不共享表单。
+          系统作用域管理 Provider Supply（Console · PI Agent 管理）；与团队设置 / Memory 治理分离，不共享表单。
         </p>
       </div>
 

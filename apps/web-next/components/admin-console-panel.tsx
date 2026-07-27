@@ -7,7 +7,7 @@ import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 
-/** System Admin Console inventory sections (PI is layout-level placeholder until #866). */
+/** System Admin Console inventory sections (PI lives on dashboard/pi via PiManagementPanel). */
 export type AdminConsoleSection = 'teams' | 'users' | 'devices' | 'agents';
 
 export type AdminConsoleNavKey = AdminConsoleSection | 'pi';
@@ -307,23 +307,6 @@ function AdminListPagination({
         >
           下一页
         </button>
-      </div>
-    </div>
-  );
-}
-
-/** PI section placeholder until System Admin Console PI migration lands. */
-export function AdminConsolePiPlaceholder() {
-  return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex h-14 items-center border-b border-neutral-200 px-4">
-        <h1 className="text-sm font-semibold">PI Agent 管理</h1>
-      </div>
-      <div className="flex-1 overflow-y-auto p-6" data-smoke="admin-pi-placeholder">
-        <ConnectionBanner />
-        <p className="text-sm text-neutral-600">
-          PI 系统管理将迁入此页。当前请暂用后续切片完成后的完整能力；占位保证导航与路由可用。
-        </p>
       </div>
     </div>
   );

@@ -120,6 +120,10 @@ const settingsSource = readFileSync(
   resolve(import.meta.dirname, '../app/[teamPath]/settings/page.tsx'),
   'utf8',
 );
+const dashboardPiSource = readFileSync(
+  resolve(import.meta.dirname, '../app/[teamPath]/dashboard/pi/page.tsx'),
+  'utf8',
+);
 const sidebarSource = readFileSync(
   resolve(import.meta.dirname, '../components/sidebar.tsx'),
   'utf8',
@@ -129,14 +133,16 @@ const socketSource = readFileSync(
   'utf8',
 );
 
-describe('PI Management settings scope', () => {
-  test('settings sidebar includes PI Agent tab separate from team settings for admins only', () => {
-    expect(settingsSource).toContain("id: 'pi'");
-    expect(settingsSource).toContain("label: 'PI Agent'");
-    expect(settingsSource).toContain('PiManagementPanel');
-    expect(settingsSource).toContain('settingsTabsForRole');
-    expect(settingsSource).toContain('resolveSettingsTab');
-    expect(settingsSource).toContain('tab === \'pi\' && isSystemAdmin');
+describe('PI Management console scope', () => {
+  test('system PI lives on dashboard/pi; settings has no PI primary tab and redirects legacy ?tab=pi', () => {
+    expect(dashboardPiSource).toContain('PiManagementPanel');
+    expect(dashboardPiSource).toContain('admin-pi-page');
+    expect(settingsSource).not.toContain("label: 'PI Agent'");
+    expect(settingsSource).not.toContain("id: 'pi'");
+    expect(settingsSource).toContain('isLegacyPiSettingsTab');
+    expect(settingsSource).toContain('dashboard/pi');
+    expect(settingsSource).toContain('MemoryGovernancePanel');
+    expect(settingsSource).toContain("id: 'memory'");
   });
 
   test('panel itself remains system-admin scoped', () => {

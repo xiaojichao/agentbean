@@ -33,6 +33,10 @@ describe('System Admin Console shell', () => {
       new URL('../app/[teamPath]/dashboard/teams/page.tsx', import.meta.url),
       'utf8',
     );
+    const piPage = readFileSync(
+      new URL('../app/[teamPath]/dashboard/pi/page.tsx', import.meta.url),
+      'utf8',
+    );
     const panel = readFileSync(
       new URL('../components/admin-console-panel.tsx', import.meta.url),
       'utf8',
@@ -47,6 +51,12 @@ describe('System Admin Console shell', () => {
     expect(indexPage).toContain('dashboard/teams');
     expect(teamsPage).toContain('AdminConsolePanel');
     expect(teamsPage).toContain('section="teams"');
+
+    expect(piPage).toContain('PiManagementPanel');
+    expect(piPage).toContain('admin-pi-page');
+    expect(piPage).not.toContain('AdminConsolePiPlaceholder');
+    expect(panel).not.toContain('AdminConsolePiPlaceholder');
+    expect(panel).not.toContain('admin-pi-placeholder');
 
     expect(panel).toContain("section === 'teams'");
     expect(panel).toContain("section === 'users'");
