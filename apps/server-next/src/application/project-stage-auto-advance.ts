@@ -81,7 +81,28 @@ export function createProjectStageAutoAdvance(input: {
           task,
           coordination,
         );
-        const activeOffers = (await input.repositories.taskCoordination.offers.listByTask(task.id))
+        const projectStageFence = stable.stageId
+          ? `agentbean:project-stage-fence:${JSON.stringify({
+            stageId: stable.stageId,
+            inputs: stable.inputs,
+          })}`
+          : null;
+        const taskOffers = await input.repositories.taskCoordination.offers.listByTask(task.id);
+        const acceptedClaimOffer = claim
+          ? taskOffers.find((offer) =>
+            offer.taskRevision === task.revision
+            && offer.taskAttempt === coordination.attempt
+            && offer.agentId === claim.agentId
+            && offer.status === 'accepted'
+            && offer.response?.kind === 'accepted'
+            && offer.response.respondedAt === claim.acquiredAt
+            && offer.objective.constraints.includes('agentbean:project-stage-auto'))
+          : undefined;
+        const claimInputFenceCurrent = !claim || (
+          projectStageFence !== null
+          && acceptedClaimOffer?.objective.inputs.includes(projectStageFence) === true
+        );
+        const activeOffers = taskOffers
           .filter((offer) => offer.taskRevision === task.revision
             && offer.taskAttempt === coordination.attempt
             && offer.status === 'open'
@@ -96,7 +117,9 @@ export function createProjectStageAutoAdvance(input: {
           stageTaskRevision: stage.taskRevision,
           coordinationTaskRevision: coordination.taskRevision,
           claimStatus: claim
-            ? claim.status === 'active' && claim.expiresAt > input.now() ? 'active' : 'stale'
+            ? claim.status === 'active' && claim.expiresAt > input.now() && claimInputFenceCurrent
+              ? 'active'
+              : 'stale'
             : 'none',
           ...(claim ? { claimedAgentId: claim.agentId } : {}),
           invocationStatus: activeInvocation ? 'active' : 'none',
@@ -111,14 +134,8 @@ export function createProjectStageAutoAdvance(input: {
           const expectedAgentIds = decision.kind === 'publish_offer'
             ? [...decision.targetAgentIds].sort()
             : [];
-          const expectedFence = stable.stageId
-            ? `agentbean:project-stage-fence:${JSON.stringify({
-              stageId: stable.stageId,
-              inputs: stable.inputs,
-            })}`
-            : null;
-          const fencesCurrent = expectedFence !== null && activeOffers.every((offer) =>
-            offer.objective.inputs.includes(expectedFence));
+          const fencesCurrent = projectStageFence !== null && activeOffers.every((offer) =>
+            offer.objective.inputs.includes(projectStageFence));
           if (fencesCurrent
             && JSON.stringify(activeAgentIds) === JSON.stringify(expectedAgentIds)) {
             outcomes.push({

@@ -291,7 +291,8 @@ describe('Task Claim Broker', () => {
     }]);
     const [invoked] = await execution.repositories.management.invocations.listByRun('run-1');
     expect(invoked).toBeDefined();
-    await expect(gateway.getView(invoked!.id)).resolves.toMatchObject({
+    const recovered = await gateway.getView(invoked!.id);
+    expect(recovered).toMatchObject({
       status: 'pending',
       intent: {
         targetAgentId: 'eligible',
@@ -308,6 +309,25 @@ describe('Task Claim Broker', () => {
           })],
         },
       },
+    });
+    await gateway.completeAttempt({
+      dispatchId: recovered.activeDispatchId!,
+      status: 'failed',
+      error: 'prepare stale fence scenario',
+    });
+    await promoteReplacementStageArtifact(execution.repositories);
+    await expect(executionAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'waiting',
+      reason: 'claim_stale',
+      targetAgentIds: [],
+    }]);
+    await expect(gateway.getView(invoked!.id)).resolves.toMatchObject({
+      status: 'failed',
+      dispatchAttempts: [{ attemptNumber: 1 }, { attemptNumber: 2 }],
     });
   });
 
@@ -1065,6 +1085,118 @@ async function seedProjectStageEdge(
       resultRevision: 3,
       resultOverview: {} as never,
       createdAt: 3,
+    },
+  });
+}
+
+async function promoteReplacementStageArtifact(repositories: ServerNextRepositories) {
+  await repositories.artifacts.create({
+    id: 'artifact-stage-829-replacement',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    uploaderId: 'user-1',
+    filename: 'upstream-replacement.pdf',
+    mimeType: 'application/pdf',
+    sizeBytes: 9,
+    sha256: 'sha256-stage-829-replacement',
+    createdAt: 7,
+  });
+  await repositories.channelProjects.promoteArtifact({
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    expectedCollectionRevision: 2,
+    createsCollection: false,
+    collection: {
+      id: 'collection-stage-829',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      name: '上游最终产物',
+      kind: 'file',
+      revision: 3,
+      currentVersionId: 'version-stage-829-replacement',
+      versionCount: 2,
+      createdBy: 'user-1',
+      createdAt: 4,
+      updatedAt: 7,
+    },
+    version: {
+      id: 'version-stage-829-replacement',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      collectionId: 'collection-stage-829',
+      versionNumber: 2,
+      artifactId: 'artifact-stage-829-replacement',
+      stageId: 'stage-upstream-829',
+      taskId: 'root-task',
+      taskRevision: 1,
+      lineage: [],
+      promotedBy: 'user-1',
+      createdAt: 7,
+    },
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'promote-stage-829-replacement',
+      requestFingerprint: 'promote-stage-829-replacement',
+      collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-replacement',
+      createdAt: 7,
+    },
+  });
+  await repositories.channelProjects.appendArtifactReview({
+    review: {
+      id: 'review-stage-829-replacement',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-replacement',
+      stageId: 'stage-upstream-829',
+      decision: 'approved',
+      comment: '替换版本通过',
+      basis: [],
+      reviewedBy: 'user-1',
+      createdAt: 8,
+    },
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'review-stage-829-replacement',
+      requestFingerprint: 'review-stage-829-replacement',
+      action: 'review',
+      collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-replacement',
+      resultId: 'review-stage-829-replacement',
+      createdAt: 8,
+    },
+  });
+  await repositories.channelProjects.setArtifactFinalVersion({
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    collectionId: 'collection-stage-829',
+    expectedCollectionRevision: 3,
+    nextRevision: 4,
+    updatedAt: 9,
+    finalization: {
+      id: 'finalization-stage-829-replacement',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-replacement',
+      basisReviewId: 'review-stage-829-replacement',
+      actorKind: 'human',
+      finalizedBy: 'user-1',
+      createdAt: 9,
+    },
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'finalize-stage-829-replacement',
+      requestFingerprint: 'finalize-stage-829-replacement',
+      action: 'finalize',
+      collectionId: 'collection-stage-829',
+      versionId: 'version-stage-829-replacement',
+      resultId: 'finalization-stage-829-replacement',
+      createdAt: 9,
     },
   });
 }

@@ -1611,6 +1611,7 @@ function createDefaultApp(
       messageIngestionMode,
     });
     appForPiHealth = app;
+    void management.recoverProjectStages().catch(() => undefined);
     return {
       app,
       artifactPreviewService,
@@ -1692,6 +1693,7 @@ function createDefaultApp(
     messageIngestionMode,
   });
   appForPiHealth = app;
+  void management.recoverProjectStages().catch(() => undefined);
   return {
     app,
     artifactPreviewService,
@@ -1852,46 +1854,81 @@ function createDefaultManagementRuntime(
     ids,
   });
   const projectStageInvocationGateway = createInvocationGateway({ repositories, clock, ids });
+  const projectStageRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const projectStageRetryAttempts = new Map<string, number>();
+  let projectStageAutoAdvance: ReturnType<typeof createProjectStageAutoAdvance>;
+  const scheduleProjectStageRetry = (claim: ProjectStageClaimGranted) => {
+    const key = `${claim.managementRunId}:${claim.taskId}:${claim.claimLeaseId}`;
+    if (projectStageRetryTimers.has(key)) return;
+    const attempt = projectStageRetryAttempts.get(key) ?? 0;
+    const delayMs = Math.min(1_000 * (2 ** attempt), 30_000);
+    projectStageRetryAttempts.set(key, attempt + 1);
+    const timer = setTimeout(() => {
+      projectStageRetryTimers.delete(key);
+      void repositories.tasks.getById(claim.taskId).then(async (task) => {
+        if (!task?.channelId) return;
+        const outcomes = await projectStageAutoAdvance.advanceChannel({
+          teamId: task.teamId,
+          channelId: task.channelId,
+        });
+        const outcome = outcomes.find((item) => item.taskId === claim.taskId);
+        if (outcome?.reason === 'pi_degraded') {
+          scheduleProjectStageRetry(claim);
+        } else {
+          projectStageRetryAttempts.delete(key);
+        }
+      }).catch(() => {
+        scheduleProjectStageRetry(claim);
+      });
+    }, delayMs);
+    timer.unref();
+    projectStageRetryTimers.set(key, timer);
+  };
   const invokeClaimedProjectStage = async (claim: ProjectStageClaimGranted) => {
-    const invoked = await projectStageInvocationGateway.invokeClaimedProjectStage({
-      managementRunId: claim.managementRunId,
-      idempotencyKey: [
-        'project-stage-auto',
-        claim.taskId,
-        claim.taskRevision,
-        claim.taskAttempt,
-        claim.claimLeaseId,
-      ].join(':'),
-      taskId: claim.taskId,
-      expectedTaskRevision: claim.taskRevision,
-      taskAttempt: claim.taskAttempt,
-      claimLeaseId: claim.claimLeaseId,
-      targetAgentId: claim.targetAgentId,
-      objective: claim.objective,
-      attachmentIds: [],
-    });
-    const view = invoked.view.activeDispatchId
-      ? invoked.view
-      : await projectStageInvocationGateway.retryClaimedProjectStage({
-        managementRunId: claim.managementRunId,
-        invocationId: invoked.view.id,
-      });
-    const dispatchId = view.activeDispatchId;
-    if (!dispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
-    if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
     try {
-      await dispatchEmitter(dispatchId);
-    } catch {
-      await projectStageInvocationGateway.completeAttempt({
-        dispatchId,
-        status: 'failed',
-        error: 'MANAGEMENT_DISPATCH_EMIT_FAILED',
-        actorKind: 'system',
+      const invoked = await projectStageInvocationGateway.invokeClaimedProjectStage({
+        managementRunId: claim.managementRunId,
+        idempotencyKey: [
+          'project-stage-auto',
+          claim.taskId,
+          claim.taskRevision,
+          claim.taskAttempt,
+          claim.claimLeaseId,
+        ].join(':'),
+        taskId: claim.taskId,
+        expectedTaskRevision: claim.taskRevision,
+        taskAttempt: claim.taskAttempt,
+        claimLeaseId: claim.claimLeaseId,
+        targetAgentId: claim.targetAgentId,
+        objective: claim.objective,
+        attachmentIds: [],
       });
-      throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
+      const view = invoked.view.activeDispatchId
+        ? invoked.view
+        : await projectStageInvocationGateway.retryClaimedProjectStage({
+          managementRunId: claim.managementRunId,
+          invocationId: invoked.view.id,
+        });
+      const dispatchId = view.activeDispatchId;
+      if (!dispatchId) throw new Error('MANAGEMENT_ACTIVE_DISPATCH_MISSING');
+      if (!dispatchEmitter) throw new Error('MANAGEMENT_DISPATCH_EMITTER_UNAVAILABLE');
+      try {
+        await dispatchEmitter(dispatchId);
+      } catch {
+        await projectStageInvocationGateway.completeAttempt({
+          dispatchId,
+          status: 'failed',
+          error: 'MANAGEMENT_DISPATCH_EMIT_FAILED',
+          actorKind: 'system',
+        });
+        throw new Error('MANAGEMENT_DISPATCH_EMIT_FAILED');
+      }
+    } catch (error) {
+      scheduleProjectStageRetry(claim);
+      throw error;
     }
   };
-  const projectStageAutoAdvance = createProjectStageAutoAdvance({
+  projectStageAutoAdvance = createProjectStageAutoAdvance({
     repositories,
     broker: taskClaimBroker,
     piHealthy,
@@ -2075,6 +2112,18 @@ function createDefaultManagementRuntime(
     router,
     advanceProjectStages(scope: { teamId: string; channelId: string }) {
       return projectStageAutoAdvance.advanceChannel(scope);
+    },
+    async recoverProjectStages() {
+      const teams = await repositories.teams.listAll();
+      for (const team of teams) {
+        const channels = await repositories.channels.listByTeam(team.id);
+        for (const channel of channels) {
+          await projectStageAutoAdvance.advanceChannel({
+            teamId: team.id,
+            channelId: channel.id,
+          }).catch(() => undefined);
+        }
+      }
     },
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
       dispatchEmitter = emit;

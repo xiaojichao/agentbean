@@ -411,6 +411,23 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             });
             if (decision.kind === 'rejected') throw new TaskClaimConflict(`TASK_CLAIM_${code(decision.reason)}`);
             if (decision.kind === 'existing') throw new TaskClaimConflict('TASK_CLAIM_ALREADY_HELD');
+            if (offer.projectStageAuto) {
+              const acceptedResponse: TaskOfferResponseRecordDto = {
+                offerId: offer.offerId,
+                agentId: offer.agentId,
+                kind: 'accepted',
+                detail: null,
+                respondedAt: now,
+              };
+              const accepted = await repositories.coordination.offers.updateStatus({
+                id: offer.offerId,
+                expectedStatus: 'open',
+                status: 'accepted',
+                response: acceptedResponse,
+                now,
+              });
+              if (!accepted) throw new TaskClaimConflict('TASK_CLAIM_OFFER_OVERTAKEN');
+            }
             if (latest?.status === 'active') {
               const expired = await repositories.coordination.claimLeases.update({
                 id: latest.id, expectedStatus: 'active', status: 'expired',
