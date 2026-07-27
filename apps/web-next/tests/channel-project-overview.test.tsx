@@ -193,13 +193,38 @@ describe('频道任务页项目总览', () => {
     fireEvent.change(screen.getByLabelText('后续阶段'), { target: { value: 'stage-down' } });
     fireEvent.change(screen.getByLabelText('项目语义'), { target: { value: 'blocks_start' } });
     fireEvent.change(screen.getByLabelText('必需输入'), { target: { value: '剧本终稿' } });
+    fireEvent.change(screen.getByLabelText('必需输入来源 ID'), { target: { value: 'collection-script' } });
+    fireEvent.click(screen.getByRole('button', { name: '添加必需输入' }));
+    fireEvent.change(screen.getByLabelText('必需输入 2'), { target: { value: '制片说明' } });
+    fireEvent.change(screen.getByLabelText('必需输入类型 2'), { target: { value: 'document' } });
+    fireEvent.change(screen.getByLabelText('必需输入来源 ID 2'), { target: { value: 'bundle-production' } });
     fireEvent.click(screen.getByRole('button', { name: '添加依赖' }));
 
     await waitFor(() => expect(onCreateEdge).toHaveBeenCalledWith({
       upstreamStageId: 'stage-up',
       downstreamStageId: 'stage-down',
       semantics: 'blocks_start',
-      requiredInputs: [{ key: 'artifact-1', kind: 'artifact', label: '剧本终稿' }],
+      requiredInputs: [
+        {
+          key: 'artifact-1',
+          kind: 'artifact',
+          label: '剧本终稿',
+          source: {
+            kind: 'artifact_collection',
+            collectionId: 'collection-script',
+            versionPolicy: 'final',
+          },
+        },
+        {
+          key: 'document-2',
+          kind: 'document',
+          label: '制片说明',
+          source: {
+            kind: 'document_bundle',
+            bundleId: 'bundle-production',
+          },
+        },
+      ],
     }));
   });
 
@@ -251,7 +276,16 @@ function twoStageOverview(options: {
   edges?: ChannelProjectOverviewDto['edges'];
 }): ChannelProjectOverviewDto {
   const base = overview();
-  const requiredInputs = [{ key: 'artifact-1', kind: 'artifact' as const, label: '剧本终稿' }];
+  const requiredInputs = [{
+    key: 'artifact-1',
+    kind: 'artifact' as const,
+    label: '剧本终稿',
+    source: {
+      kind: 'artifact_collection' as const,
+      collectionId: 'collection-script',
+      versionPolicy: 'final' as const,
+    },
+  }];
   const edges = options.edges ?? [{
     id: 'edge-1',
     teamId: 'team-1',
@@ -351,6 +385,16 @@ function overview(): ChannelProjectOverviewDto {
       dependenciesSatisfied: true,
       missingRequiredInputs: [],
       executionAllowed: true,
+      advance: {
+        kind: 'waiting',
+        automatic: true,
+        reason: 'task_not_pending',
+        stableInputs: [],
+        candidateAgentIds: [],
+        taskRevision: 1,
+        stageTaskRevision: 1,
+        coordinationTaskRevision: 1,
+      },
       createdAt: 1,
       updatedAt: 1,
     }],

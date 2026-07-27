@@ -61,6 +61,22 @@ describe('Project Stage edge 创建校验', () => {
       [{ key: ' ', kind: 'artifact' as const, label: '剧本' }],
       [{ key: 'script', kind: 'artifact' as const, label: '  ' }],
       [{ key: 'script', kind: 'video' as unknown as 'artifact', label: '剧本' }],
+      [{
+        key: 'script',
+        kind: 'artifact' as const,
+        label: '剧本',
+        source: { kind: 'document_bundle' as const, bundleId: 'bundle-1' },
+      }],
+      [{
+        key: 'notes',
+        kind: 'document' as const,
+        label: '改稿说明',
+        source: {
+          kind: 'artifact_collection' as const,
+          collectionId: 'collection-1',
+          versionPolicy: 'final' as const,
+        },
+      }],
       [
         { key: 'script', kind: 'artifact' as const, label: '剧本' },
         { key: 'script', kind: 'document' as const, label: '剧本文档' },
@@ -129,6 +145,7 @@ const upstreamEdge = (
   upstreamTaskId: 'task-script',
   semantics: 'blocks_start',
   upstreamTaskStatus: 'done',
+  upstreamReviewDecision: 'accepted',
   requiredInputs: [],
   satisfiedRequiredInputKeys: [],
   ...overrides,
@@ -157,6 +174,20 @@ describe('Project Stage 执行门禁', () => {
     expect(evaluateProjectStageExecutionGate({
       upstreamEdges: [upstreamEdge({ upstreamTaskStatus: 'closed' })],
     })).toEqual({ kind: 'allowed' });
+  });
+
+  test('blocks_start 上游完成但 canonical acceptance 缺失时仍阻止执行', () => {
+    expect(evaluateProjectStageExecutionGate({
+      upstreamEdges: [upstreamEdge({ upstreamReviewDecision: undefined })],
+    })).toEqual({
+      kind: 'blocked',
+      blocks: [{
+        code: 'stage_dependency_unaccepted',
+        edgeId: 'edge-1',
+        upstreamStageId: 'stage-script',
+        upstreamTaskId: 'task-script',
+      }],
+    });
   });
 
   test('provides_context 上游未完成本身不阻塞', () => {

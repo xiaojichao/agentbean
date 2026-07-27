@@ -5,6 +5,8 @@ import {
 } from '../../../../packages/domain/src/index.js';
 import type { ProjectStageEdgeRecord, ProjectStageRecord } from './project-repositories.js';
 import type { ServerNextRepositories, TaskRecord } from './repositories.js';
+import { resolveProjectStageStableInputs } from './project-stage-advance-service.js';
+import type { ProjectStageStableInputDto } from '@agentbean/contracts';
 
 export interface ProjectStageFacts {
   record: ProjectStageRecord;
@@ -38,19 +40,22 @@ export async function resolveProjectStageReviewDecision(
 export function resolveSatisfiedRequiredInputKeys(
   edge: ProjectStageEdgeRecord,
   upstream: ProjectStageFacts | undefined,
+  stableInputs: readonly ProjectStageStableInputDto[] = [],
 ): string[] {
   if (!upstream) return [];
   const complete = upstream.task.status === 'done' || upstream.task.status === 'closed';
-  const rejected = upstream.reviewDecision === 'rejected'
-    || upstream.reviewDecision === 'needs_human';
-  if (!complete || rejected) return [];
-  return edge.requiredInputs.map((rule) => rule.key);
+  if (!complete || upstream.reviewDecision !== 'accepted') return [];
+  return edge.requiredInputs
+    .filter((rule) => rule.source
+      && stableInputs.some((input) => input.edgeId === edge.id && input.key === rule.key))
+    .map((rule) => rule.key);
 }
 
 export async function buildProjectStageUpstreamEdgeFacts(
   repositories: ServerNextRepositories,
   inboundEdges: readonly ProjectStageEdgeRecord[],
   resolveUpstream: (stageId: string) => Promise<ProjectStageFacts | undefined>,
+  stableInputs: readonly ProjectStageStableInputDto[] = [],
 ): Promise<ProjectStageUpstreamEdgeFacts[]> {
   const facts: ProjectStageUpstreamEdgeFacts[] = [];
   for (const edge of inboundEdges) {
@@ -68,7 +73,7 @@ export async function buildProjectStageUpstreamEdgeFacts(
         ? {}
         : { upstreamReviewDecision: upstream.reviewDecision }),
       requiredInputs: edge.requiredInputs,
-      satisfiedRequiredInputKeys: resolveSatisfiedRequiredInputKeys(edge, upstream),
+      satisfiedRequiredInputKeys: resolveSatisfiedRequiredInputKeys(edge, upstream, stableInputs),
     });
   }
   return facts;
@@ -133,6 +138,7 @@ export async function resolveProjectStageExecutionGate(
     repositories,
     inboundEdges,
     resolveUpstream,
+    (await resolveProjectStageStableInputs(repositories, task)).inputs,
   );
   const gate = evaluateProjectStageExecutionGate({ upstreamEdges });
   return {

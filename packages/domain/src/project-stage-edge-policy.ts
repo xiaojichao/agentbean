@@ -42,6 +42,18 @@ function hasInvalidRequiredInputs(
   for (const rule of requiredInputs) {
     if (isBlankText(rule?.key) || isBlankText(rule?.label)) return true;
     if (rule.kind !== 'artifact' && rule.kind !== 'document') return true;
+    if (rule.source) {
+      if (rule.kind === 'artifact') {
+        if (rule.source.kind !== 'artifact_collection'
+          || isBlankText(rule.source.collectionId)
+          || (rule.source.versionPolicy !== 'final' && rule.source.versionPolicy !== 'approved')) {
+          return true;
+        }
+      } else if (rule.source.kind !== 'document_bundle'
+        || isBlankText(rule.source.bundleId)) {
+        return true;
+      }
+    }
     const key = rule.key.trim();
     if (seen.has(key)) return true;
     seen.add(key);
@@ -159,8 +171,8 @@ export function evaluateProjectStageExecutionGate(input: {
   const blocks: ProjectStageExecutionBlock[] = [];
   for (const edge of input.upstreamEdges) {
     const complete = upstreamTaskIsComplete(edge.upstreamTaskStatus);
-    const rejectedReview = edge.upstreamReviewDecision === 'rejected'
-      || edge.upstreamReviewDecision === 'needs_human';
+    const acceptanceRequired = edge.semantics === 'blocks_start'
+      || edge.requiredInputs.length > 0;
     if (edge.semantics === 'blocks_start' && !complete) {
       blocks.push({
         code: 'stage_dependency_incomplete',
@@ -169,8 +181,16 @@ export function evaluateProjectStageExecutionGate(input: {
         upstreamTaskId: edge.upstreamTaskId,
       });
     }
+    if (complete && acceptanceRequired && edge.upstreamReviewDecision !== 'accepted') {
+      blocks.push({
+        code: 'stage_dependency_unaccepted',
+        edgeId: edge.edgeId,
+        upstreamStageId: edge.upstreamStageId,
+        upstreamTaskId: edge.upstreamTaskId,
+      });
+    }
     if (edge.requiredInputs.length === 0) continue;
-    // 必需输入只能来自已交付且未被否决的上游阶段。
+    // 必需输入只能来自已交付且 canonical acceptance 明确通过的上游阶段。
     if (!complete) {
       if (edge.semantics !== 'blocks_start') {
         blocks.push({
@@ -180,13 +200,6 @@ export function evaluateProjectStageExecutionGate(input: {
           upstreamTaskId: edge.upstreamTaskId,
         });
       }
-    } else if (rejectedReview) {
-      blocks.push({
-        code: 'stage_dependency_unaccepted',
-        edgeId: edge.edgeId,
-        upstreamStageId: edge.upstreamStageId,
-        upstreamTaskId: edge.upstreamTaskId,
-      });
     }
     const satisfied = new Set(edge.satisfiedRequiredInputKeys);
     for (const rule of edge.requiredInputs) {

@@ -26,7 +26,11 @@ import {
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
 } from '../../../../../packages/domain/src/index.js';
 import { resolveProjectStageExecutionGate } from '../project-stage-execution-gate.js';
-import type { AgentRecord, ServerNextRepositories } from '../repositories.js';
+import {
+  filterStrictProjectStageAgentIds,
+  resolveProjectStageStableInputs,
+} from '../project-stage-advance-service.js';
+import type { AgentRecord, ServerNextRepositories, TaskRecord } from '../repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
@@ -90,8 +94,10 @@ export interface TaskOfferPublishInput {
    * 可选：显式指定 offer id（prepareOffers 持久化时与 wire TaskClaimOfferV1.offerId 共享，
    * 使 daemon 用同一 offerId 既能 respond（新路径）也能 acquire（旧兼容路径）。
    * 缺省 nextId 生成。
-   */
+  */
   readonly id?: string;
+  /** #829 标记由项目阶段自动推进产生，accept 时必须重验策略、PI 与稳定输入 fence。 */
+  readonly projectStageAuto?: boolean;
 }
 
 /**
@@ -126,9 +132,29 @@ export type TaskOfferRespondResult =
       readonly diagnosticCode: string;
     };
 
+export interface ProjectStageClaimGranted {
+  readonly managementRunId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly claimLeaseId: string;
+  readonly targetAgentId: string;
+  readonly objective: string;
+}
+
 export interface TaskClaimBroker {
-  resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution>;
-  prepareOffers(taskId: string): Promise<readonly TaskClaimOfferV1[]>;
+  resolveCandidates(taskId: string, options?: {
+    readonly dependencyTaskIds?: readonly string[];
+    readonly skipProjectStageGate?: boolean;
+  }): Promise<TaskClaimCandidateResolution>;
+  resolveProjectStageCandidates(
+    taskId: string,
+    dependencyTaskIds?: readonly string[],
+  ): Promise<TaskClaimCandidateResolution>;
+  prepareOffers(taskId: string, options?: {
+    readonly allowedAgentIds?: readonly string[];
+    readonly projectStageAuto?: boolean;
+  }): Promise<readonly TaskClaimOfferV1[]>;
   acquire(input: TaskClaimAcquireV1): Promise<TaskClaimAcquireAckV1>;
   renew(input: TaskClaimRenewV1): Promise<TaskClaimRenewAckV1>;
   release(input: TaskClaimReleaseV1): Promise<TaskClaimReleaseAckV1>;
@@ -145,6 +171,10 @@ export interface TaskClaimBroker {
   publishOffer(input: TaskOfferPublishInput): Promise<TaskOfferRecord>;
   /** #712 切片 C-1：处理 Agent 对 Offer 的显式响应（AC#2/AC#4/AC#5/AC#6）。 */
   respondToOffer(input: TaskOfferRespondInput): Promise<TaskOfferRespondResult>;
+  /** #829：自动阶段 Offer 形成 Claim 后，接通 Server 内部 Invocation 创建。 */
+  bindProjectStageClaimGranted(
+    handler: (claim: ProjectStageClaimGranted) => Promise<void>,
+  ): void;
 }
 
 export interface CreateTaskClaimBrokerInput {
@@ -154,10 +184,15 @@ export interface CreateTaskClaimBrokerInput {
   readonly leaseTokens?: { nextToken(): string };
   readonly offerTtlMs?: number;
   readonly leaseTtlMs?: number;
+  readonly piHealthy?: () => Promise<boolean>;
 }
+
+const PROJECT_STAGE_AUTO_CONSTRAINT = 'agentbean:project-stage-auto';
+const PROJECT_STAGE_FENCE_PREFIX = 'agentbean:project-stage-fence:';
 
 interface StoredOffer extends TaskClaimOfferV1 {
   readonly ancestorAgentIds: readonly string[];
+  readonly projectStageAuto: boolean;
 }
 
 export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskClaimBroker {
@@ -167,6 +202,8 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
   const offers = new Map<string, StoredOffer>();
   const disconnectedDevices = new Set<string>();
   const taskTails = new Map<string, Promise<void>>();
+  let onProjectStageClaimGranted:
+    ((claim: ProjectStageClaimGranted) => Promise<void>) | undefined;
 
   // #710：候选硬过滤优先用 Team Agent Exposure 公开 capability（active 能力减去 Team restriction）。
   // 过渡兼容（计划 §8：旧代码先降为兼容层，切片 E 强制前保留）：无 active manifest 时回退到
@@ -192,7 +229,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     return new Set((agent.skills ?? []).map((skill) => skill.name.toLowerCase()));
   }
 
-  async function resolveCandidates(taskId: string): Promise<TaskClaimCandidateResolution> {
+  async function resolveCandidates(taskId: string, options?: {
+    readonly dependencyTaskIds?: readonly string[];
+    readonly skipProjectStageGate?: boolean;
+  }): Promise<TaskClaimCandidateResolution> {
     const task = await input.repositories.tasks.getById(taskId);
     if (!task) throw new Error('TASK_CLAIM_TASK_NOT_FOUND');
     const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(taskId);
@@ -201,7 +241,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       agent.primaryTeamId === task.teamId || agent.visibleTeamIds.includes(task.teamId));
     const devices = new Map((await input.repositories.devices.listByTeam(task.teamId))
       .map((device) => [device.id, device]));
-    const dependencies = await input.repositories.taskCoordination.dependencies.list(taskId);
+    const dependencies = options?.dependencyTaskIds
+      ? options.dependencyTaskIds.map((dependencyTaskId) => ({
+        taskId,
+        dependencyTaskId,
+        taskRevision: task.revision,
+      }))
+      : await input.repositories.taskCoordination.dependencies.list(taskId);
     const dependencyTasks = await Promise.all(dependencies.map((edge) => input.repositories.tasks.getById(edge.dependencyTaskId)));
     const taskChannel = task.channelId ? await input.repositories.channels.getById(task.channelId) : null;
     const dependencyChannels = new Map<string, Awaited<ReturnType<typeof input.repositories.channels.getById>>>();
@@ -234,7 +280,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (dependencyTasks.some((dependency) => !dependency || dependency.status !== 'done')) {
         diagnostics.push('DEPENDENCY_NOT_READY');
       }
-      if (projectStageGate.blocked) diagnostics.push('PROJECT_STAGE_BLOCKED');
+      if (!options?.skipProjectStageGate && projectStageGate.blocked) {
+        diagnostics.push('PROJECT_STAGE_BLOCKED');
+      }
       if (dependencyTasks.some((dependency) => dependency?.channelId &&
         (!dependencyChannels.get(dependency.channelId) ||
           !channelAllowsAgent(dependencyChannels.get(dependency.channelId), agent.id)))) {
@@ -261,11 +309,47 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     };
   }
 
+  async function resolveProjectStageCandidates(
+    taskId: string,
+    dependencyTaskIds?: readonly string[],
+  ): Promise<TaskClaimCandidateResolution> {
+    if (dependencyTaskIds) {
+      return resolveCandidates(taskId, { dependencyTaskIds, skipProjectStageGate: true });
+    }
+    const task = await input.repositories.tasks.getById(taskId);
+    if (!task?.channelId) return resolveCandidates(taskId);
+    const [dependencies, edges] = await Promise.all([
+      input.repositories.taskCoordination.dependencies.list(taskId),
+      input.repositories.channelProjects.listEdges({
+        teamId: task.teamId,
+        channelId: task.channelId,
+      }),
+    ]);
+    const mirroredDependencyIds = new Set(edges
+      .filter((edge) => edge.downstreamTaskId === taskId && edge.mirroredTaskDependency)
+      .map((edge) => edge.upstreamTaskId));
+    const effectiveDependencyTaskIds = [
+      ...dependencies
+        .map((dependency) => dependency.dependencyTaskId)
+        .filter((id) => !mirroredDependencyIds.has(id)),
+      ...edges
+        .filter((edge) => edge.downstreamTaskId === taskId && edge.semantics === 'blocks_start')
+        .map((edge) => edge.upstreamTaskId),
+    ];
+    return resolveCandidates(taskId, {
+      dependencyTaskIds: [...new Set(effectiveDependencyTaskIds)],
+      skipProjectStageGate: true,
+    });
+  }
+
   return {
     resolveCandidates,
-    async prepareOffers(taskId) {
+    resolveProjectStageCandidates,
+    async prepareOffers(taskId, options) {
       await expireClaims();
-      const resolution = await resolveCandidates(taskId);
+      const resolution = options?.projectStageAuto
+        ? await resolveProjectStageCandidates(taskId)
+        : await resolveCandidates(taskId);
       const task = await input.repositories.tasks.getById(taskId);
       if (!task || !['todo', 'in_progress'].includes(task.status)) throw new Error('TASK_CLAIM_TASK_NOT_OFFERABLE');
       const coordination = await input.repositories.taskCoordination.coordinations.getByTaskId(taskId);
@@ -281,6 +365,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       const eligibleCandidates = resolution.candidates.filter((item) => {
         if (!item.eligible || !item.deviceId) return false;
         if (isTargeted && item.agentId !== task.assigneeId) return false;
+        if (options?.allowedAgentIds && !options.allowedAgentIds.includes(item.agentId)) return false;
         return true;
       });
       for (const candidate of eligibleCandidates) {
@@ -295,6 +380,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             offerTtlMs,
             hardSpecified: coordination.claimPolicy === 'targeted' && task.assigneeId === candidate.agentId,
             id: offerId,
+            projectStageAuto: options?.projectStageAuto,
           });
         } catch (error) {
           if (!(error instanceof Error && error.message === 'TASK_CLAIM_MANIFEST_NOT_ACTIVE')) throw error;
@@ -310,10 +396,15 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           requiredCapabilities: [...coordination.requiredCapabilities],
           offerExpiresAt: now + offerTtlMs,
           ancestorAgentIds: resolution.ancestorAgentIds,
+          projectStageAuto: options?.projectStageAuto === true,
         });
       }
       for (const offer of prepared) offers.set(offer.offerId, offer);
-      return prepared.map(({ ancestorAgentIds: _ancestorAgentIds, ...offer }) => offer);
+      return prepared.map(({
+        ancestorAgentIds: _ancestorAgentIds,
+        projectStageAuto: _projectStageAuto,
+        ...offer
+      }) => offer);
     },
     async acquire(payload) {
       const offer = offers.get(payload.offerId);
@@ -323,6 +414,16 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         return failure('UNAVAILABLE', 'TASK_CLAIM_OFFER_EXPIRED', true);
       }
       return withTaskLock(offer.taskId, taskTails, async () => {
+        if (offer.projectStageAuto) {
+          const persisted = await input.repositories.taskCoordination.offers.getById(offer.offerId);
+          if (!persisted || !(await projectStageAutoOfferStillCurrent(
+            input,
+            persisted,
+            input.clock.now(),
+          ))) {
+            return failure('CONFLICT', 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE', false);
+          }
+        }
         const resolution = await resolveCandidates(offer.taskId);
         const candidate = resolution.candidates.find((item) => item.agentId === offer.agentId);
         if (!candidate?.eligible || candidate.deviceId !== offer.deviceId) {
@@ -339,6 +440,12 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             if (!task || !coordination || task.revision !== offer.taskRevision ||
                 coordination.attempt !== offer.taskAttempt || !['todo', 'in_progress'].includes(task.status)) {
               throw new TaskClaimConflict('TASK_CLAIM_OFFER_STALE');
+            }
+            if (offer.projectStageAuto) {
+              const persisted = await repositories.coordination.offers.getById(offer.offerId);
+              if (!persisted || !(await projectStageAutoOfferStillCurrent(input, persisted, now))) {
+                throw new TaskClaimConflict('TASK_CLAIM_PROJECT_STAGE_FENCE_STALE');
+              }
             }
             const latest = await repositories.coordination.claimLeases.getLatest({
               taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
@@ -358,6 +465,23 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             });
             if (decision.kind === 'rejected') throw new TaskClaimConflict(`TASK_CLAIM_${code(decision.reason)}`);
             if (decision.kind === 'existing') throw new TaskClaimConflict('TASK_CLAIM_ALREADY_HELD');
+            if (offer.projectStageAuto) {
+              const acceptedResponse: TaskOfferResponseRecordDto = {
+                offerId: offer.offerId,
+                agentId: offer.agentId,
+                kind: 'accepted',
+                detail: null,
+                respondedAt: now,
+              };
+              const accepted = await repositories.coordination.offers.updateStatus({
+                id: offer.offerId,
+                expectedStatus: 'open',
+                status: 'accepted',
+                response: acceptedResponse,
+                now,
+              });
+              if (!accepted) throw new TaskClaimConflict('TASK_CLAIM_OFFER_OVERTAKEN');
+            }
             if (latest?.status === 'active') {
               const expired = await repositories.coordination.claimLeases.update({
                 id: latest.id, expectedStatus: 'active', status: 'expired',
@@ -417,7 +541,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             return { lease, task, coordination, criteria, dependencyTaskIds };
           });
           consumeTaskOffers(offers, offer.taskId);
-          return {
+          const response = {
             schemaVersion: 1,
             ok: true,
             lease: authority(result.lease, leaseToken),
@@ -434,6 +558,18 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
             },
           } satisfies TaskClaimAcquireAckV1;
+          if (offer.projectStageAuto) {
+            await notifyProjectStageClaimGranted(onProjectStageClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
+          }
+          return response;
         } catch (error) {
           if (error instanceof TaskClaimConflict) {
             return failure('CONFLICT', error.message, error.message === 'TASK_CLAIM_ACTIVE_CLAIM_HELD');
@@ -505,6 +641,26 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       if (!activeManifest || (activeManifest.validUntil !== null && activeManifest.validUntil <= now)) {
         throw new Error('TASK_CLAIM_MANIFEST_NOT_ACTIVE');
       }
+      const projectStageFence = params.projectStageAuto
+        ? await resolveProjectStageOfferFence(input.repositories, task)
+        : null;
+      if (params.projectStageAuto) {
+        const policy = await input.repositories.teamPiPolicy.getOrDefault(task.teamId);
+        const piHealthy = await input.piHealthy?.() ?? false;
+        const strictAgentIds = await filterStrictProjectStageAgentIds(input.repositories, {
+          teamId: task.teamId,
+          candidateAgentIds: [params.agentId],
+          requiredCapabilities: coordination.requiredCapabilities,
+          ...(projectStageFence?.requiresProjectDocumentInputSetV1
+            ? { requiredProjectDocumentInputSetVersion: 1 }
+            : {}),
+          now,
+        });
+        if (!policy.autoCoordinationEnabled || !piHealthy || !projectStageFence
+          || strictAgentIds.length !== 1) {
+          throw new Error('TASK_CLAIM_PROJECT_STAGE_AUTO_BLOCKED');
+        }
+      }
       // 过滤退休 criterion（#709 修订退休的验收标准不进入新 offer 的 deliverables）。
       const criteria = (await input.repositories.taskCoordination.criteria.list(params.taskId))
         .filter((criterion) => criterion.retiredRevision === undefined);
@@ -519,9 +675,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         // 过渡派生：decision 的结构化 objective/inputs/constraints 属后续切片（计划 §6.3）。
         objective: {
           objective: task.description ?? task.title,
-          inputs: [],
+          inputs: projectStageFence ? [projectStageFence.value] : [],
           deliverables: criteria.map((criterion) => criterion.description),
-          constraints: [],
+          constraints: params.projectStageAuto ? [PROJECT_STAGE_AUTO_CONSTRAINT] : [],
           riskLevel: 'low',
           requiredCapabilities: [...coordination.requiredCapabilities],
           requiredSkills: [...(coordination.requiredSkills ?? [])],
@@ -545,6 +701,21 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
       const now = input.clock.now();
       const validity = await computeOfferValidity(input.repositories, offer, now);
+      if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)
+        && !(await projectStageAutoOfferStillCurrent(input, offer, now))) {
+        await offerStore.updateStatus({
+          id: offer.id,
+          expectedStatus: 'open',
+          status: 'invalidated',
+          response: null,
+          now,
+        });
+        return {
+          kind: 'not_accepted',
+          reason: 'offer_invalid',
+          diagnosticCode: 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE',
+        };
+      }
 
       // 非接受响应：rejected / needs_info / counter_proposed（AC#5：不产 Lease）
       if (payload.kind !== 'accepted') {
@@ -572,6 +743,22 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: offerValidityCode(validity.reason) };
       }
       return withTaskLock(offer.taskId, taskTails, async () => {
+        if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)
+          && !(await projectStageAutoOfferStillCurrent(input, offer, input.clock.now()))) {
+          const checkedAt = input.clock.now();
+          await offerStore.updateStatus({
+            id: offer.id,
+            expectedStatus: 'open',
+            status: 'invalidated',
+            response: null,
+            now: checkedAt,
+          });
+          return {
+            kind: 'not_accepted',
+            reason: 'offer_invalid' as const,
+            diagnosticCode: 'TASK_CLAIM_PROJECT_STAGE_FENCE_STALE',
+          };
+        }
         const resolution = await resolveCandidates(offer.taskId);
         const candidate = resolution.candidates.find((item) => item.agentId === offer.agentId);
         if (!candidate?.eligible) {
@@ -592,6 +779,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 coordination.attempt !== offer.taskAttempt || !['todo', 'in_progress'].includes(task.status)) {
               // AC#4：task 已变 → 回滚，不留 accepted 无 claim
               throw new TaskClaimConflict('TASK_CLAIM_OFFER_STALE');
+            }
+            if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)
+              && !(await projectStageAutoOfferStillCurrent(input, offer, now))) {
+              throw new TaskClaimConflict('TASK_CLAIM_PROJECT_STAGE_FENCE_STALE');
             }
             const latest = await repositories.coordination.claimLeases.getLatest({
               taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
@@ -680,7 +871,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             return { lease, task, coordination, criteria, dependencyTaskIds };
           });
           if ('overtaken' in result) return { kind: 'overtaken' };
-          return {
+          const response = {
             kind: 'claim_granted',
             lease: authority(result.lease, leaseToken),
             execution: {
@@ -691,7 +882,19 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               acceptanceCriteria: result.criteria, dependencyTaskIds: result.dependencyTaskIds,
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
             },
-          };
+          } satisfies TaskOfferRespondResult;
+          if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)) {
+            await notifyProjectStageClaimGranted(onProjectStageClaimGranted, {
+              managementRunId: result.coordination.managementRunId,
+              taskId: result.task.id,
+              taskRevision: result.task.revision,
+              taskAttempt: result.coordination.attempt,
+              claimLeaseId: result.lease.id,
+              targetAgentId: result.lease.agentId,
+              objective: result.task.description ?? result.task.title,
+            });
+          }
+          return response;
         } catch (error) {
           if (error instanceof TaskClaimConflict) {
             if (error.message === 'TASK_CLAIM_OFFER_OVERTAKEN') return { kind: 'overtaken' };
@@ -704,6 +907,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           throw error;
         }
       });
+    },
+    bindProjectStageClaimGranted(handler) {
+      onProjectStageClaimGranted = handler;
     },
   };
 
@@ -752,6 +958,18 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
       return expired;
     });
+  }
+}
+
+async function notifyProjectStageClaimGranted(
+  handler: ((claim: ProjectStageClaimGranted) => Promise<void>) | undefined,
+  claim: ProjectStageClaimGranted,
+): Promise<void> {
+  if (!handler) return;
+  try {
+    await handler(claim);
+  } catch {
+    // Claim 已提交，不能因后续派发失败伪装成 Agent 接受失败；后续重算仍会看到待创建 Invocation。
   }
 }
 
@@ -818,6 +1036,62 @@ function offerValidityCode(reason: OfferInvalidationReason): string {
     case 'manifest_superseded': return 'TASK_CLAIM_OFFER_MANIFEST_SUPERSEDED';
     case 'not_open': return 'TASK_CLAIM_OFFER_NOT_OPEN';
   }
+}
+
+async function resolveProjectStageOfferFence(
+  repositories: ServerNextRepositories,
+  task: TaskRecord,
+): Promise<{
+  value: string;
+  requiresProjectDocumentInputSetV1: boolean;
+} | null> {
+  const stable = await resolveProjectStageStableInputs(repositories, task);
+  if (!stable.stageId
+    || stable.satisfiedRuleKeys.length !== stable.requiredRuleCount) return null;
+  return {
+    value: `${PROJECT_STAGE_FENCE_PREFIX}${JSON.stringify({
+      stageId: stable.stageId,
+      inputs: stable.inputs,
+    })}`,
+    requiresProjectDocumentInputSetV1: stable.inputs
+      .some((item) => item.kind === 'document_revision'),
+  };
+}
+
+async function projectStageAutoOfferStillCurrent(
+  input: CreateTaskClaimBrokerInput,
+  offer: TaskOfferRecord,
+  now: number,
+): Promise<boolean> {
+  const validity = await computeOfferValidity(input.repositories, offer, now);
+  if (!validity.acceptable) return false;
+  const task = await input.repositories.tasks.getById(offer.taskId);
+  const coordination = await input.repositories.taskCoordination.coordinations
+    .getByTaskId(offer.taskId);
+  if (!task || !coordination) return false;
+  const currentFence = await resolveProjectStageOfferFence(input.repositories, task);
+  const [policy, piHealthy, gate, strictAgentIds] = await Promise.all([
+    input.repositories.teamPiPolicy.getOrDefault(task.teamId),
+    input.piHealthy?.() ?? Promise.resolve(false),
+    resolveProjectStageExecutionGate(input.repositories, task),
+    filterStrictProjectStageAgentIds(input.repositories, {
+      teamId: task.teamId,
+      candidateAgentIds: [offer.agentId],
+      requiredCapabilities: coordination.requiredCapabilities,
+      ...(currentFence?.requiresProjectDocumentInputSetV1
+        ? { requiredProjectDocumentInputSetVersion: 1 }
+        : {}),
+      now,
+    }),
+  ]);
+  const frozenFence = offer.objective.inputs
+    .find((item) => item.startsWith(PROJECT_STAGE_FENCE_PREFIX));
+  return policy.autoCoordinationEnabled
+    && piHealthy
+    && !gate.blocked
+    && strictAgentIds.length === 1
+    && currentFence !== null
+    && frozenFence === currentFence.value;
 }
 
 function toDomainLease(lease: TaskClaimLeaseRecord): DomainTaskClaimLeaseRecord {

@@ -30,10 +30,27 @@ export interface ProjectStageBlockingReasonDto {
 export type ProjectStageEdgeSemantics = 'blocks_start' | 'provides_context';
 
 /** #822 必需输入规则：声明下游阶段必须从上游阶段获得哪类产物。 */
+export type ProjectStageRequiredInputSourceDto =
+  | {
+      readonly kind: 'artifact_collection';
+      readonly collectionId: ID;
+      /** `final` 只接受明确最终版；`approved` 接受当前最新通过版，若已有最终版则优先最终版。 */
+      readonly versionPolicy: 'final' | 'approved';
+    }
+  | {
+      readonly kind: 'document_bundle';
+      readonly bundleId: ID;
+    };
+
 export interface ProjectStageRequiredInputRuleDto {
   key: string;
   kind: 'artifact' | 'document';
   label: string;
+  /**
+   * #829 显式稳定来源。旧 edge 读取时可能缺失；Server 对自动推进一律视为未满足，
+   * 绝不从 key、label、文件名或路径猜来源。
+   */
+  source?: ProjectStageRequiredInputSourceDto;
 }
 
 export interface ProjectStageMissingRequiredInputDto extends ProjectStageRequiredInputRuleDto {
@@ -90,8 +107,66 @@ export interface ProjectStageDto {
   missingRequiredInputs: ProjectStageMissingRequiredInputDto[];
   /** #822 执行门禁结论：依赖与必需输入是否允许启动新的 claim/Invocation。 */
   executionAllowed: boolean;
+  /** #829 PI Manager 对该阶段的权威推进投影。 */
+  advance: ProjectStageAdvanceDto;
   createdAt: UnixMs;
   updatedAt: UnixMs;
+}
+
+export type ProjectStageAdvanceWaitingReason =
+  | 'channel_archived'
+  | 'pi_degraded'
+  | 'task_not_pending'
+  | 'task_revision_stale'
+  | 'execution_gate_blocked'
+  | 'required_input_incomplete'
+  | 'stable_input_stale'
+  | 'no_eligible_agent'
+  | 'claim_stale'
+  | 'invocation_active';
+
+export type ProjectStageStableInputDto =
+  | {
+      readonly key: string;
+      readonly kind: 'artifact_version';
+      readonly edgeId: ID;
+      readonly upstreamStageId: ID;
+      readonly collectionId: ID;
+      readonly versionId: ID;
+      readonly artifactId: ID;
+      readonly reviewId: ID;
+      readonly finalizationId?: ID;
+      readonly taskRevision: number;
+    }
+  | {
+      readonly key: string;
+      readonly kind: 'document_revision';
+      readonly edgeId: ID;
+      readonly upstreamStageId: ID;
+      readonly bundleId: ID;
+      readonly documentId: ID;
+      readonly revisionId: ID;
+      readonly revisionNumber: number;
+      readonly artifactId: ID;
+      readonly taskRevision: number;
+    };
+
+/** #829 随 Offer/Invocation 冻结的精确项目输入身份；任何字段变化都使旧决定失效。 */
+export interface ProjectStageInputFenceDto {
+  readonly stageId: ID;
+  readonly inputs: readonly ProjectStageStableInputDto[];
+}
+
+export interface ProjectStageAdvanceDto {
+  readonly kind: 'waiting' | 'suggest' | 'publish_offer' | 'create_invocation';
+  readonly automatic: boolean;
+  readonly reason?: ProjectStageAdvanceWaitingReason;
+  readonly stableInputs: readonly ProjectStageStableInputDto[];
+  readonly candidateAgentIds: readonly ID[];
+  readonly targetAgentId?: ID;
+  readonly taskRevision: number;
+  readonly stageTaskRevision: number;
+  readonly coordinationTaskRevision?: number;
 }
 
 export interface ChannelProjectOverviewDto {

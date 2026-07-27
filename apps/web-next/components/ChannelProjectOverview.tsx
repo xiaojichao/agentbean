@@ -2,7 +2,11 @@
 
 import { AlertCircle, CheckCircle2, ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { ChannelProjectOverviewDto, ProjectArtifactLibraryDto } from '@agentbean/contracts';
+import type {
+  ChannelProjectOverviewDto,
+  ProjectArtifactLibraryDto,
+  ProjectStageRequiredInputRuleDto,
+} from '@agentbean/contracts';
 
 export interface ProjectTaskOption {
   id: string;
@@ -32,7 +36,7 @@ export interface ProjectStageEdgeDraft {
   upstreamStageId: string;
   downstreamStageId: string;
   semantics: 'blocks_start' | 'provides_context';
-  requiredInputs: { key: string; kind: 'artifact' | 'document'; label: string }[];
+  requiredInputs: ProjectStageRequiredInputRuleDto[];
 }
 
 export function ChannelProjectOverview({
@@ -160,6 +164,28 @@ export function ChannelProjectOverview({
                   依赖或必需输入未满足，暂不能启动执行
                 </div>
               )}
+              <div
+                data-testid={`stage-advance-${stage.id}`}
+                className="mt-2 rounded border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-600"
+              >
+                <div className="font-medium text-neutral-700">
+                  PI 推进：{stageAdvanceLabel(stage.advance.kind)}
+                  {!stage.advance.automatic && '（仅建议）'}
+                </div>
+                {stage.advance.reason && <div>等待原因：{stageAdvanceReasonLabel(stage.advance.reason)}</div>}
+                {stage.advance.stableInputs.length > 0 && (
+                  <div>稳定输入：{stage.advance.stableInputs
+                    .map((input) => `${input.key} · ${input.kind === 'artifact_version' ? input.versionId : input.revisionId}`)
+                    .join('、')}</div>
+                )}
+                {stage.advance.targetAgentId && (
+                  <div>目标 Agent：{participantName(stage.advance.targetAgentId, participants)}</div>
+                )}
+                {!stage.advance.targetAgentId && stage.advance.candidateAgentIds.length > 0 && (
+                  <div>候选 Agent：{stage.advance.candidateAgentIds
+                    .map((id) => participantName(id, participants)).join('、')}</div>
+                )}
+              </div>
               <StageArtifactSummary stageId={stage.id} library={artifactLibrary} />
               <details className="mt-2 text-xs text-neutral-500">
                 <summary className="flex cursor-pointer list-none items-center gap-1">
@@ -339,15 +365,20 @@ function ProjectStageEdgeSection({
   const [upstreamStageId, setUpstreamStageId] = useState('');
   const [downstreamStageId, setDownstreamStageId] = useState('');
   const [semantics, setSemantics] = useState<'blocks_start' | 'provides_context'>('blocks_start');
-  const [requiredInputLabels, setRequiredInputLabels] = useState('');
-  const [requiredInputKind, setRequiredInputKind] = useState<'artifact' | 'document'>('artifact');
+  const [requiredInputs, setRequiredInputs] = useState<RequiredInputDraft[]>([
+    { label: '', kind: 'artifact', sourceId: '', versionPolicy: 'final' },
+  ]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!onCreateEdge || !upstreamStageId || !downstreamStageId) return;
-    const labels = requiredInputLabels.split('\n').map((item) => item.trim()).filter(Boolean);
+    const rules = requiredInputs.filter((item) => item.label.trim());
+    if (rules.some((item) => !item.sourceId.trim())) {
+      setError('必需输入必须绑定明确的产物集合或文档包 ID');
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -355,14 +386,28 @@ function ProjectStageEdgeSection({
         upstreamStageId,
         downstreamStageId,
         semantics,
-        requiredInputs: labels.map((label, index) => ({
-          key: `${requiredInputKind}-${index + 1}`,
-          kind: requiredInputKind,
-          label,
+        requiredInputs: rules.map((rule, index) => ({
+          key: `${rule.kind}-${index + 1}`,
+          kind: rule.kind,
+          label: rule.label.trim(),
+          source: rule.kind === 'artifact'
+            ? {
+              kind: 'artifact_collection' as const,
+              collectionId: rule.sourceId.trim(),
+              versionPolicy: rule.versionPolicy,
+            }
+            : {
+              kind: 'document_bundle' as const,
+              bundleId: rule.sourceId.trim(),
+            },
         })),
       });
       if (nextError) setError(nextError);
-      else setRequiredInputLabels('');
+      else {
+        setRequiredInputs([
+          { label: '', kind: 'artifact', sourceId: '', versionPolicy: 'final' },
+        ]);
+      }
     } finally {
       setPending(false);
     }
@@ -461,26 +506,94 @@ function ProjectStageEdgeSection({
                 <option value="provides_context">仅作为后续阶段上下文</option>
               </select>
             </ProjectField>
-            <ProjectField label="必需输入类型">
-              <select
-                aria-label="必需输入类型"
-                value={requiredInputKind}
-                onChange={(event) => setRequiredInputKind(event.target.value === 'document' ? 'document' : 'artifact')}
-                className={inputClass}
+            <div className="grid gap-2 md:col-span-2 md:grid-cols-2 xl:col-span-4 xl:grid-cols-4">
+              {requiredInputs.map((rule, index) => {
+                const suffix = index === 0 ? '' : ` ${index + 1}`;
+                const updateRule = (changes: Partial<RequiredInputDraft>) => {
+                  setRequiredInputs((current) => current.map((item, itemIndex) =>
+                    itemIndex === index ? { ...item, ...changes } : item));
+                };
+                return (
+                  <div
+                    key={index}
+                    className="contents"
+                    data-testid={`required-input-row-${index + 1}`}
+                  >
+                    <ProjectField label={`必需输入${suffix}（可留空）`}>
+                      <input
+                        aria-label={`必需输入${suffix}`}
+                        value={rule.label}
+                        onChange={(event) => updateRule({ label: event.target.value })}
+                        className={inputClass}
+                        placeholder="剧本终稿"
+                      />
+                    </ProjectField>
+                    <ProjectField label={`必需输入类型${suffix}`}>
+                      <select
+                        aria-label={`必需输入类型${suffix}`}
+                        value={rule.kind}
+                        onChange={(event) => updateRule({
+                          kind: event.target.value === 'document' ? 'document' : 'artifact',
+                        })}
+                        className={inputClass}
+                      >
+                        <option value="artifact">产物</option>
+                        <option value="document">文档</option>
+                      </select>
+                    </ProjectField>
+                    <ProjectField label={rule.kind === 'artifact' ? '产物集合 ID' : '文档包 ID'}>
+                      <input
+                        aria-label={`必需输入来源 ID${suffix}`}
+                        value={rule.sourceId}
+                        onChange={(event) => updateRule({ sourceId: event.target.value })}
+                        className={inputClass}
+                        placeholder={rule.kind === 'artifact' ? 'collection-id' : 'bundle-id'}
+                      />
+                    </ProjectField>
+                    <div className="flex items-end gap-2">
+                      {rule.kind === 'artifact' && (
+                        <ProjectField label={`版本要求${suffix}`}>
+                          <select
+                            aria-label={`产物版本要求${suffix}`}
+                            value={rule.versionPolicy}
+                            onChange={(event) => updateRule({
+                              versionPolicy: event.target.value === 'approved' ? 'approved' : 'final',
+                            })}
+                            className={inputClass}
+                          >
+                            <option value="final">必须是最终版</option>
+                            <option value="approved">已通过即可（优先最终版）</option>
+                          </select>
+                        </ProjectField>
+                      )}
+                      {requiredInputs.length > 1 && (
+                        <button
+                          type="button"
+                          aria-label={`删除必需输入${suffix || ' 1'}`}
+                          onClick={() => setRequiredInputs((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index))}
+                          className="h-9 shrink-0 text-xs text-neutral-500 hover:text-red-600"
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setRequiredInputs((current) => [...current, {
+                  label: '',
+                  kind: 'artifact',
+                  sourceId: '',
+                  versionPolicy: 'final',
+                }])}
+                className="h-8 justify-self-start text-xs text-neutral-600 hover:text-neutral-900"
               >
-                <option value="artifact">产物</option>
-                <option value="document">文档</option>
-              </select>
-            </ProjectField>
-            <ProjectField label="必需输入（每行一条，可留空）">
-              <textarea
-                aria-label="必需输入"
-                value={requiredInputLabels}
-                onChange={(event) => setRequiredInputLabels(event.target.value)}
-                className={`${inputClass} min-h-16 py-2`}
-                placeholder={'剧本终稿'}
-              />
-            </ProjectField>
+                添加必需输入
+              </button>
+            </div>
             <div className="flex items-end">
               <button
                 type="submit"
@@ -498,6 +611,13 @@ function ProjectStageEdgeSection({
 }
 
 const inputClass = 'h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500';
+
+interface RequiredInputDraft {
+  readonly label: string;
+  readonly kind: 'artifact' | 'document';
+  readonly sourceId: string;
+  readonly versionPolicy: 'final' | 'approved';
+}
 
 function ProjectField({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -542,4 +662,29 @@ function blockingReasonLabel(code: ChannelProjectOverviewDto['stages'][number]['
     case 'stage_dependency_unaccepted': return '前置阶段产出未通过审核';
     case 'required_input_missing': return '缺少必需输入';
   }
+}
+
+function stageAdvanceLabel(kind: ChannelProjectOverviewDto['stages'][number]['advance']['kind']): string {
+  if (kind === 'publish_offer') return '可发布 Agent Offer';
+  if (kind === 'create_invocation') return 'Agent 已接受，可创建 Invocation';
+  if (kind === 'suggest') return '建议推进';
+  return '等待';
+}
+
+function stageAdvanceReasonLabel(
+  reason: NonNullable<ChannelProjectOverviewDto['stages'][number]['advance']['reason']>,
+): string {
+  const labels: Record<typeof reason, string> = {
+    channel_archived: '频道已归档',
+    pi_degraded: 'PI 当前降级或不可用',
+    task_not_pending: 'Task 当前状态不可推进',
+    task_revision_stale: 'Task 或 Stage revision 已变化',
+    execution_gate_blocked: '阶段依赖或审核门禁未满足',
+    required_input_incomplete: '必需稳定输入不完整',
+    stable_input_stale: '稳定输入 revision 已变化',
+    no_eligible_agent: '没有通过公开能力匹配的 Agent',
+    claim_stale: 'Agent claim 已失效',
+    invocation_active: '当前 revision 已有活动 Invocation',
+  };
+  return labels[reason];
 }

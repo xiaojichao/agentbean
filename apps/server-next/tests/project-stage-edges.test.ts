@@ -175,7 +175,7 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     teamDb.close();
   });
 
-  test('创建依赖后下游被阻塞，上游完成即自动解除阻塞，刷新读到同一权威投影', async () => {
+  test('创建依赖后下游被阻塞；上游完成只解除依赖，未绑定稳定来源的旧输入仍 fail closed', async () => {
     const { upstreamStageId, downstreamStageId, revision } = await seedTwoStages();
 
     const created = await app.createProjectStageEdge({
@@ -230,7 +230,7 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     expect(refreshed.overview.stages.find((stage) => stage.id === downstreamStageId))
       .toMatchObject({ dependenciesSatisfied: false, executionAllowed: false });
 
-    // 上游 Task 完成 → 依赖与必需输入同时满足，无需人工修复内部状态。
+    // #829：Task 完成但 canonical acceptance 与显式稳定来源都缺失时继续 fail closed。
     const repositories = createSqliteRepositories({ globalDb, teamDb });
     await repositories.tasks.update({
       taskId: 'task-up',
@@ -243,12 +243,21 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     const unblockedDownstream = unblocked.overview.stages
       .find((stage) => stage.id === downstreamStageId);
     expect(unblockedDownstream).toMatchObject({
-      dependenciesSatisfied: true,
-      executionAllowed: true,
-      missingRequiredInputs: [],
+      dependenciesSatisfied: false,
+      executionAllowed: false,
+      missingRequiredInputs: [{
+        edgeId: created.overview.edges[0]?.id,
+        upstreamStageId,
+        key: 'script-final',
+        kind: 'artifact',
+        label: '剧本终稿',
+      }],
     });
     expect(unblockedDownstream?.blockingReasons.map((reason) => reason.code))
-      .not.toContain('required_input_missing');
+      .toEqual(expect.arrayContaining([
+        'stage_dependency_unaccepted',
+        'required_input_missing',
+      ]));
   });
 
   test('删除依赖后下游立即恢复可执行，且依赖图不再包含该边', async () => {
@@ -721,6 +730,8 @@ describe('#822 频道项目阶段依赖与执行门禁', () => {
     });
     expect(contextOnly.ok).toBe(true);
     if (!contextOnly.ok) return;
+    expect(teamDb.prepare('SELECT COUNT(*) AS total FROM task_dependencies').get())
+      .toEqual({ total: 0 });
     expect(contextOnly.overview.stages.find((stage) => stage.id === downstreamStageId))
       .toMatchObject({
         upstreamStageIds: [upstreamStageId],

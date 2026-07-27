@@ -10,6 +10,7 @@ import type {
   DispatchStatus,
   MemoryCapsuleRefDto,
   ProjectDocumentInputSetItemV1,
+  ProjectStageStableInputDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
@@ -24,6 +25,7 @@ import type {
   ServerNextRepositories,
 } from '../repositories.js';
 import { resolveProjectStageExecutionGate } from '../project-stage-execution-gate.js';
+import { resolveProjectStageStableInputs } from '../project-stage-advance-service.js';
 import {
   appendManagementEventInTransaction,
   authorizeManagementWrite,
@@ -79,15 +81,24 @@ export interface InvokeTaskAgentInput {
   readonly deadlineAt?: number;
 }
 
+export type InvokeClaimedProjectStageInput = Omit<InvokeTaskAgentInput, 'authority'> & {
+  readonly managementRunId: string;
+};
+
 export function createInvocationGateway(dependencies: InvocationGatewayDependencies) {
   const { repositories, clock, ids } = dependencies;
 
-  return {
-    async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
-      return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
+  const invokeTaskAs = async (
+    input: InvokeClaimedProjectStageInput,
+    actorId: string,
+    leaseAuthority?: LeaseAuthorityInput,
+  ): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> =>
+    repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
         const now = clock.now();
-        await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
-        const run = await requireRun(transactionRepositories.management, input.authority.managementRunId);
+        if (leaseAuthority) {
+          await authorizeManagementWrite(transactionRepositories.management, leaseAuthority, now);
+        }
+        const run = await requireRun(transactionRepositories.management, input.managementRunId);
         if (!input.idempotencyKey) throw new InvocationGatewayError('INVOCATION_IDEMPOTENCY_KEY_INVALID');
         if (!input.objective.trim()) throw new InvocationGatewayError('INVOCATION_OBJECTIVE_INVALID');
         if (input.deadlineAt !== undefined && input.deadlineAt <= now) {
@@ -97,18 +108,31 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
+        const taskForStableInputs = await repositories.tasks.getById(input.taskId);
+        const stableResolution = taskForStableInputs
+          ? await resolveProjectStageStableInputs(repositories, taskForStableInputs)
+          : { stageId: undefined, requiredRuleCount: 0, satisfiedRuleKeys: [], inputs: [] };
+        const stableArtifactIds = stableResolution.inputs
+          .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
+            item.kind === 'artifact_version')
+          .map((item) => item.artifactId);
+        const normalizedInput: Omit<InvokeTaskAgentInput, 'authority'> = {
+          ...input,
+          attachmentIds: [...new Set([...input.attachmentIds, ...stableArtifactIds])],
+        };
         const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
           managementRunId: run.id,
           idempotencyKey: input.idempotencyKey,
         });
         if (existing) {
-          assertTaskInvocationReplay(existing, input);
+          assertTaskInvocationReplay(existing, normalizedInput);
+          await validateAuthoritativeTarget(repositories, existing.intent, run, now);
           return { disposition: 'existing' as const,
             view: await deriveInvocationView(transactionRepositories.management,
               transactionRepositories.dispatches, existing) };
         }
 
-        const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, input, now);
+        const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, normalizedInput, now);
         if (input.targetAgentId !== undefined && input.targetAgentId !== authority.targetAgentId) {
           throw new InvocationGatewayError('INVOCATION_TARGET_CLAIM_MISMATCH');
         }
@@ -133,7 +157,13 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           },
           acceptanceCriteria: authority.acceptanceCriteria,
           dependencyResults: authority.dependencyResults,
-          attachmentIds: [...input.attachmentIds],
+          attachmentIds: [...normalizedInput.attachmentIds],
+          ...(stableResolution.stageId && {
+            projectStageInputFence: {
+              stageId: stableResolution.stageId,
+              inputs: stableResolution.inputs,
+            },
+          }),
           ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
@@ -141,6 +171,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           repositories,
           baseIntent,
           run,
+          stableResolution.inputs,
         );
         const intentHash = hashIntent(intent);
 
@@ -158,16 +189,89 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           managementRunId: run.id,
           type: 'invocation-created',
           actorKind: 'manager',
-          actorId: input.authority.workerId,
+          actorId,
           idempotencyKey: `invocation-created:${invocation.id}`,
           payload: { invocationId: invocation.id, intentHash, taskRevision: input.expectedTaskRevision },
         }, now, ids);
         await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt,
-          input.authority.workerId, now, ids);
+          actorId, now, ids);
         return { disposition: 'created' as const,
           view: await deriveInvocationView(transactionRepositories.management,
             transactionRepositories.dispatches, invocation) };
       });
+
+  const retryAs = async (
+    input: { managementRunId: string; invocationId: string },
+    actorId: string,
+    leaseAuthority?: LeaseAuthorityInput,
+  ): Promise<AgentInvocationViewDto> =>
+    repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
+      const now = clock.now();
+      if (leaseAuthority) {
+        await authorizeManagementWrite(transactionRepositories.management, leaseAuthority, now);
+      }
+      const run = await requireWritableRun(
+        transactionRepositories.management,
+        input.managementRunId,
+      );
+      const invocation = await transactionRepositories.management.invocations.getById(input.invocationId);
+      if (!invocation || invocation.managementRunId !== run.id) {
+        throw new InvocationGatewayError('INVOCATION_NOT_FOUND');
+      }
+      await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
+      if (invocation.intent.taskContext) {
+        await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
+      }
+      const attempts = await transactionRepositories.management.dispatchAttempts.list(invocation.id);
+      const latest = attempts.at(-1);
+      if (!latest) throw new InvocationGatewayError('INVOCATION_ATTEMPT_NOT_FOUND');
+      const latestDispatch = await transactionRepositories.dispatches.getById(latest.dispatchId);
+      if (!latestDispatch) throw new InvocationGatewayError('INVOCATION_DISPATCH_NOT_FOUND');
+      if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
+
+      const attempt = await createAttempt(
+        transactionRepositories.management,
+        transactionRepositories.dispatches,
+        invocation,
+        latest.attemptNumber + 1,
+        now,
+        ids,
+      );
+      await appendAttemptStartedEvent(
+        transactionRepositories.management,
+        invocation,
+        attempt,
+        actorId,
+        now,
+        ids,
+      );
+      return deriveInvocationView(
+        transactionRepositories.management,
+        transactionRepositories.dispatches,
+        invocation,
+      );
+    });
+
+  return {
+    async invokeTask(input: InvokeTaskAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
+      const { authority, ...request } = input;
+      return invokeTaskAs({
+        ...request,
+        managementRunId: authority.managementRunId,
+      }, authority.workerId, authority);
+    },
+
+    async invokeClaimedProjectStage(
+      input: InvokeClaimedProjectStageInput,
+    ): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
+      return invokeTaskAs(input, 'pi-manager-auto');
+    },
+
+    async retryClaimedProjectStage(input: {
+      managementRunId: string;
+      invocationId: string;
+    }): Promise<AgentInvocationViewDto> {
+      return retryAs(input, 'pi-manager-auto');
     },
 
     async invoke(input: InvokeAgentInput): Promise<{ disposition: 'created' | 'existing'; view: AgentInvocationViewDto }> {
@@ -239,27 +343,10 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
     },
 
     async retry(input: { authority: LeaseAuthorityInput; invocationId: string }): Promise<AgentInvocationViewDto> {
-      return repositories.managementDispatchUnitOfWork.run(async (transactionRepositories) => {
-        const now = clock.now();
-        await authorizeManagementWrite(transactionRepositories.management, input.authority, now);
-        const run = await requireWritableRun(transactionRepositories.management, input.authority.managementRunId);
-        const invocation = await transactionRepositories.management.invocations.getById(input.invocationId);
-        if (!invocation || invocation.managementRunId !== run.id) throw new InvocationGatewayError('INVOCATION_NOT_FOUND');
-        const attempts = await transactionRepositories.management.dispatchAttempts.list(invocation.id);
-        const latest = attempts.at(-1);
-        if (!latest) throw new InvocationGatewayError('INVOCATION_ATTEMPT_NOT_FOUND');
-        const latestDispatch = await transactionRepositories.dispatches.getById(latest.dispatchId);
-        if (!latestDispatch) throw new InvocationGatewayError('INVOCATION_DISPATCH_NOT_FOUND');
-        if (isActive(latestDispatch.status)) throw new InvocationGatewayError('INVOCATION_ACTIVE_ATTEMPT');
-
-        await validateAuthoritativeTarget(repositories, invocation.intent, run, now);
-        if (invocation.intent.taskContext) {
-          await assertProjectStageExecutionAllowed(repositories, invocation.intent.taskContext.taskId);
-        }
-        const attempt = await createAttempt(transactionRepositories.management, transactionRepositories.dispatches, invocation, latest.attemptNumber + 1, now, ids);
-        await appendAttemptStartedEvent(transactionRepositories.management, invocation, attempt, input.authority.workerId, now, ids);
-        return deriveInvocationView(transactionRepositories.management, transactionRepositories.dispatches, invocation);
-      });
+      return retryAs({
+        managementRunId: input.authority.managementRunId,
+        invocationId: input.invocationId,
+      }, input.authority.workerId, input.authority);
     },
 
     async completeAttempt(input: {
@@ -304,7 +391,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
 async function resolveTaskInvocationAuthority(
   repositories: ManagementDispatchRepositories,
   run: ManagementRunRecord,
-  input: InvokeTaskAgentInput,
+  input: Omit<InvokeTaskAgentInput, 'authority'>,
   now: number,
 ): Promise<{
   targetAgentId: string;
@@ -386,7 +473,7 @@ async function resolveTaskInvocationAuthority(
 }
 
 function assertTaskInvocationReplay(existing: AgentInvocationRecordDto,
-  input: InvokeTaskAgentInput): void {
+  input: Omit<InvokeTaskAgentInput, 'authority'>): void {
   const context = existing.intent.taskContext;
   const sameAttachments = existing.intent.attachmentIds.length === input.attachmentIds.length
     && existing.intent.attachmentIds.every((id, index) => id === input.attachmentIds[index]);
@@ -484,8 +571,47 @@ async function validateAuthoritativeTarget(
     const task = await repositories.tasks.getById(intent.taskContext.taskId);
     if (!task || task.teamId !== intent.teamId || task.channelId !== intent.channelId) throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
     if (run.rootTaskId && intent.taskContext.rootTaskId !== run.rootTaskId) throw new InvocationGatewayError('INVOCATION_ROOT_TASK_MISMATCH');
-    if (intent.schemaVersion === 2 && task.revision !== intent.taskContext.taskRevision) {
+    const hasProjectStageFence = intent.projectStageInputFence !== undefined;
+    if ((intent.schemaVersion === 2 || hasProjectStageFence)
+      && task.revision !== intent.taskContext.taskRevision) {
       throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+    }
+    if (hasProjectStageFence) {
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      if (!coordination || coordination.teamId !== intent.teamId || coordination.managementRunId !== run.id) {
+        throw new InvocationGatewayError('INVOCATION_TASK_FORBIDDEN');
+      }
+      if (coordination.taskRevision !== intent.taskContext.taskRevision) {
+        throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
+      }
+      if (coordination.attempt !== intent.taskContext.taskAttempt) {
+        throw new InvocationGatewayError('INVOCATION_TASK_ATTEMPT_STALE');
+      }
+      if (task.status !== 'in_progress') throw new InvocationGatewayError('INVOCATION_TASK_NOT_ACTIVE');
+      const claim = await repositories.taskCoordination.claimLeases.getById(intent.taskContext.claimLeaseId);
+      const currentClaim = await repositories.taskCoordination.claimLeases.getCurrent({
+        taskId: task.id,
+        taskRevision: intent.taskContext.taskRevision,
+        taskAttempt: intent.taskContext.taskAttempt,
+      });
+      if (!claim || !currentClaim || claim.id !== currentClaim.id
+        || claim.status !== 'active' || claim.expiresAt <= now
+        || claim.teamId !== intent.teamId || claim.taskId !== task.id
+        || claim.taskRevision !== intent.taskContext.taskRevision
+        || claim.taskAttempt !== intent.taskContext.taskAttempt
+        || claim.agentId !== intent.targetAgentId || task.assigneeId !== claim.agentId) {
+        throw new InvocationGatewayError('INVOCATION_CLAIM_STALE');
+      }
+    }
+    const stable = await resolveProjectStageStableInputs(repositories, task);
+    if (stable.satisfiedRuleKeys.length !== stable.requiredRuleCount) {
+      throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
+    }
+    const expectedFence = stable.stageId
+      ? { stageId: stable.stageId, inputs: stable.inputs }
+      : undefined;
+    if (JSON.stringify(intent.projectStageInputFence) !== JSON.stringify(expectedFence)) {
+      throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
     }
   }
 }
@@ -637,7 +763,15 @@ async function attachProjectDocumentInputSet(
   repositories: ServerNextRepositories,
   intent: AgentInvocationIntent,
   run: ManagementRunRecord,
+  stableInputs: readonly ProjectStageStableInputDto[] = [],
 ): Promise<AgentInvocationIntent> {
+  const stableDocuments = stableInputs.filter(
+    (item): item is Extract<ProjectStageStableInputDto, { kind: 'document_revision' }> =>
+      item.kind === 'document_revision',
+  );
+  if (stableDocuments.length > 0) {
+    return attachStableProjectDocuments(repositories, intent, stableDocuments);
+  }
   const referenceSet = await repositories.projectReferenceSets.getByMessageId({
     teamId: run.teamId,
     channelId: run.channelId,
@@ -727,6 +861,69 @@ async function attachProjectDocumentInputSet(
   };
 }
 
+async function attachStableProjectDocuments(
+  repositories: ServerNextRepositories,
+  intent: AgentInvocationIntent,
+  stableDocuments: readonly Extract<ProjectStageStableInputDto, { kind: 'document_revision' }>[],
+): Promise<AgentInvocationIntent> {
+  const referenceSetId = `project-stage:${intent.taskContext?.taskId}:${intent.taskContext?.taskRevision}`;
+  const items: ProjectDocumentInputSetItemV1[] = [];
+  for (const stable of stableDocuments) {
+    const document = await repositories.channelDocuments.getForTeam({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      documentId: stable.documentId,
+    });
+    const revision = await repositories.channelDocuments.getRevision({
+      documentId: stable.documentId,
+      revisionId: stable.revisionId,
+    });
+    if (!document || !revision
+      || revision.artifact.id !== stable.artifactId
+      || revision.artifact.teamId !== intent.teamId
+      || revision.artifact.channelId !== intent.channelId
+      || !revision.artifact.sha256) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REVISION_FORBIDDEN');
+    }
+    items.push({
+      documentId: stable.documentId,
+      baseRevisionId: stable.revisionId,
+      revisionNumber: stable.revisionNumber,
+      artifactId: stable.artifactId,
+      displayName: document.filename,
+      summary: `project-stage:${stable.upstreamStageId}:${stable.key}`,
+      relativePath: `documents/${String(items.length + 1).padStart(3, '0')}-${safeInputName(document.filename)}`,
+      mimeType: revision.artifact.mimeType,
+      sizeBytes: revision.artifact.sizeBytes,
+      sha256: revision.artifact.sha256,
+      source: {
+        referenceSetId,
+        selectionId: `project-stage-input:${stable.edgeId}:${stable.key}`,
+        selectionSourceKind: 'document',
+        bundleId: stable.bundleId,
+      },
+    });
+  }
+  const projectDocumentInputSet = {
+    id: `project-document-input-set:${createHash('sha256')
+      .update(`${referenceSetId}:${intent.targetAgentId}:1:${items.map((item) => item.baseRevisionId).join(':')}`)
+      .digest('hex')
+      .slice(0, 24)}`,
+    contractVersion: 1 as const,
+    required: true as const,
+    referenceSetId,
+    items,
+  };
+  if (intent.schemaVersion === 2) {
+    if (canonicalizeAgentInvocationIntent({ ...intent, projectDocumentInputSet })
+      !== canonicalizeAgentInvocationIntent(intent)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
+  return { ...intent, schemaVersion: 2, projectDocumentInputSet };
+}
+
 async function validateProjectDocumentInputSet(
   repositories: ServerNextRepositories,
   intent: Extract<AgentInvocationIntent, { schemaVersion: 2 }>,
@@ -736,13 +933,34 @@ async function validateProjectDocumentInputSet(
   if (inputSet.contractVersion !== 1 || !inputSet.required || inputSet.items.length === 0) {
     throw new InvocationGatewayError('INVOCATION_INPUT_SET_INVALID');
   }
-  const referenceSet = await repositories.projectReferenceSets.getByMessageId({
-    teamId: intent.teamId,
-    channelId: intent.channelId,
-    messageId: run.rootMessageId,
-  });
-  if (!referenceSet || referenceSet.id !== inputSet.referenceSetId) {
-    throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+  if (inputSet.referenceSetId.startsWith('project-stage:')) {
+    const task = intent.taskContext
+      ? await repositories.tasks.getById(intent.taskContext.taskId)
+      : null;
+    if (!task || task.revision !== intent.taskContext?.taskRevision) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    const current = await resolveProjectStageStableInputs(repositories, task);
+    const currentDocuments = current.inputs.filter(
+      (item): item is Extract<ProjectStageStableInputDto, { kind: 'document_revision' }> =>
+        item.kind === 'document_revision',
+    );
+    if (currentDocuments.length !== inputSet.items.length
+      || inputSet.items.some((item) => !currentDocuments.some((candidate) =>
+        candidate.documentId === item.documentId
+        && candidate.revisionId === item.baseRevisionId
+        && candidate.artifactId === item.artifactId))) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+  } else {
+    const referenceSet = await repositories.projectReferenceSets.getByMessageId({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      messageId: run.rootMessageId,
+    });
+    if (!referenceSet || referenceSet.id !== inputSet.referenceSetId) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
   }
   for (const item of inputSet.items) {
     const document = await repositories.channelDocuments.getForTeam({
