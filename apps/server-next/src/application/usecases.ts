@@ -10054,13 +10054,18 @@ function routeMessageForChannel(input: {
       ? { kind: 'dispatch', agentId: targetAgent.id, reason: 'direct' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
+  // Non-DM channels only dispatch to explicit channel agent members. Team-visible
+  // outsiders (e.g. BettaFish not in "AI短剧") must never win unmentioned fallback.
+  const channelAgents = input.visibleAgents.filter((agent) =>
+    input.channel.agentMemberIds.includes(agent.id)
+  );
   const bodyStart = input.body.length - input.body.trimStart().length;
   const structuredLeadingMention = input.mentions?.find((mention) => mention.start === bodyStart);
   if (structuredLeadingMention?.kind === 'human') {
     return { kind: 'no-dispatch', reason: 'human-mention' };
   }
   if (structuredLeadingMention?.kind === 'agent') {
-    const targetAgent = input.visibleAgents.find((agent) => agent.id === structuredLeadingMention.id);
+    const targetAgent = channelAgents.find((agent) => agent.id === structuredLeadingMention.id);
     const isEligible = targetAgent
       && targetAgent.visibleTeamIds.includes(input.teamId)
       && (targetAgent.status === 'online' || canQueueForBusyAgent(targetAgent));
@@ -10075,10 +10080,10 @@ function routeMessageForChannel(input: {
   const route = routeMessage({
     body: input.body,
     agents: hasLeadingMention
-      ? input.visibleAgents.map((agent) => canQueueForBusyAgent(agent)
-          ? { ...agent, status: 'online' as const }
-          : agent)
-      : input.visibleAgents,
+      ? channelAgents.map((agent) => canQueueForBusyAgent(agent)
+          ? { ...agent, status: 'online' as const, channelIds: [input.channel.id] }
+          : { ...agent, channelIds: [input.channel.id] })
+      : channelAgents.map((agent) => ({ ...agent, channelIds: [input.channel.id] })),
     humanMembers: [],
     teamId: input.teamId,
     channelId: input.channel.id,
@@ -10087,7 +10092,7 @@ function routeMessageForChannel(input: {
     if (route.kind !== 'dispatch') {
       return route;
     }
-    const agent = input.visibleAgents.find((candidate) => candidate.id === route.agentId);
+    const agent = channelAgents.find((candidate) => candidate.id === route.agentId);
     return agent && isSocketReachable(agent)
       ? route
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
@@ -10097,7 +10102,7 @@ function routeMessageForChannel(input: {
     return { kind: 'no-dispatch', reason: 'human-assignee' };
   }
   if (contextOwner?.kind === 'agent') {
-    const contextAgent = input.visibleAgents.find((agent) => agent.id === contextOwner.agentId);
+    const contextAgent = channelAgents.find((agent) => agent.id === contextOwner.agentId);
     return contextAgent && isDispatchEligibleAgent(contextAgent, input) && isSocketReachable(contextAgent)
       ? { kind: 'dispatch', agentId: contextAgent.id, reason: 'fallback' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
@@ -10177,6 +10182,10 @@ function isDispatchEligibleAgent(
     return false;
   }
   if (!agent.visibleTeamIds.includes(input.teamId)) {
+    return false;
+  }
+  // DM targets are already scoped; group channels require explicit membership.
+  if (input.channel.kind !== 'direct' && !input.channel.agentMemberIds.includes(agent.id)) {
     return false;
   }
   return true;
