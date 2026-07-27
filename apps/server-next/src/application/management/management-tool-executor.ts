@@ -1027,7 +1027,10 @@ async function hasAgentDelivery(repositories: ServerNextRepositories, run: Manag
 async function findAgentDelivery(repositories: ServerNextRepositories, run: ManagementRunRecord,
   dispatchId: string | undefined): Promise<MessageRecord | null> {
   if (!dispatchId) return null;
-  const messages = await repositories.messages.listByThread({ channelId: run.channelId, threadId: run.rootMessageId, limit: 200 });
+  // Dispatch ID is the authoritative correlation key. Replies may be nested below a
+  // thread alias rather than run.rootMessageId, so a root-thread-only lookup can miss
+  // an already committed delivery and leave agents.invoke waiting until timeout.
+  const messages = await repositories.messages.listByChannel(run.channelId, 10_000);
   return messages.find((message) => message.senderKind === 'agent'
     && message.meta?.dispatchId === dispatchId) ?? null;
 }

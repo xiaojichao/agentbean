@@ -152,6 +152,11 @@ import {
   type ChannelFileRolloutConfig,
   type ChannelFileSnapshotEntry,
 } from './channel-file-rollout.js';
+import {
+  createProjectCollaborationMetrics,
+  FULL_PROJECT_COLLABORATION_ROLLOUT,
+  type ProjectCollaborationRolloutConfig,
+} from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import type {
   CancelPiProviderTestResult,
@@ -1190,6 +1195,8 @@ export interface CreateServerNextUseCasesInput {
   messageIngestionMode?: 'legacy' | 'durable-job';
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
+  projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
+  projectCollaborationMetrics?: ReturnType<typeof createProjectCollaborationMetrics>;
 }
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
@@ -1232,6 +1239,27 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     markdownEditing: true,
   };
   const channelFileMetrics = input.channelFileMetrics ?? createChannelFileMetrics();
+  const projectCollaborationRollout = input.projectCollaborationRollout
+    ?? FULL_PROJECT_COLLABORATION_ROLLOUT;
+  const projectCollaborationMetrics = input.projectCollaborationMetrics
+    ?? createProjectCollaborationMetrics();
+  const recordProjectInputSetResultMetrics = (result: ProjectDocumentInputSetResultDto) => {
+    for (const item of result.items) {
+      projectCollaborationMetrics.recordInputSetResult(item.status);
+    }
+  };
+  const recordProjectInputSetRuntimeFailure = (error: string) => {
+    if (error.includes('CAPABILITY_MISSING')) {
+      projectCollaborationMetrics.recordInputSetFailure('capability');
+    } else if (error.includes('DOWNLOAD_FAILED')) {
+      projectCollaborationMetrics.recordInputSetFailure('download');
+    } else if (error.includes('SIZE_MISMATCH') || error.includes('SHA256_MISMATCH')) {
+      projectCollaborationMetrics.recordInputSetFailure('checksum');
+    } else if (error.includes('PROJECT_DOCUMENT_INPUT_SET_RUNTIME_UNAVAILABLE')
+      || error.includes('PROJECT_DOCUMENT_INPUT_SET_MATERIALIZATION_FAILED')) {
+      projectCollaborationMetrics.recordInputSetFailure('materialization');
+    }
+  };
   const dispatchCoalescingLocks = new Map<string, Promise<void>>();
   const invocationGateway = createInvocationGateway({ repositories, clock, ids });
   const collaborationService = createCollaborationService({ repositories, clock, ids });
@@ -1392,6 +1420,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   };
 
   async function sendLegacyMessage(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
+    if ((messageInput.selections?.length ?? 0) > 0
+      && !projectCollaborationRollout.bundleSelection) {
+      projectCollaborationMetrics.recordMutationFailure('disabled');
+      return makeFailure('NOT_FOUND', 'Project document Selection is disabled');
+    }
     if (!(await repositories.teams.isMember(messageInput.teamId, messageInput.userId))) {
       return makeFailure('FORBIDDEN', 'User is not a team member');
     }
@@ -3506,6 +3539,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
+      if ((messageInput.selections?.length ?? 0) > 0
+        && !projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Selection is disabled');
+      }
       if (!(await repositories.teams.isMember(messageInput.teamId, messageInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -3708,6 +3746,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           clock.now(),
           requestInput.purpose !== 'route',
           input.serverCapsuleRuntimeContextResolver,
+          projectCollaborationRollout.inputSetOutput,
         ),
       });
     },
@@ -3740,9 +3779,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       try {
         request = await buildDispatchRequest(
           repositories, dispatch, agent, now, true, input.serverCapsuleRuntimeContextResolver,
+          projectCollaborationRollout.inputSetOutput,
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        recordProjectInputSetRuntimeFailure(message);
         if (!message.startsWith('PROJECT_DOCUMENT_INPUT_SET_')) throw error;
         await repositories.dispatches.markFailed({
           dispatchId: dispatch.id,
@@ -4275,6 +4316,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getChannelProjectOverview(projectInput) {
+      if (!projectCollaborationRollout.projectStage) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Channel project stages are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -4291,6 +4336,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async createInitialProjectStage(projectInput) {
+      if (!projectCollaborationRollout.projectStage) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Channel project stages are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -4444,6 +4493,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async createProjectStage(stageInput) {
+      if (!projectCollaborationRollout.projectStage) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Channel project stages are disabled');
+      }
       const stageName = normalizeOptionalText(stageInput.stage?.name);
       const stageGoal = normalizeOptionalText(stageInput.stage?.goal);
       const stageOwnerId = normalizeOptionalId(stageInput.stage?.ownerId);
@@ -4524,6 +4577,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async createProjectStageEdge(edgeInput) {
+      if (!projectCollaborationRollout.projectStage) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Channel project stages are disabled');
+      }
       if (edgeInput.semantics !== 'blocks_start' && edgeInput.semantics !== 'provides_context') {
         return makeFailure('VALIDATION_ERROR', 'semantics must be blocks_start or provides_context');
       }
@@ -4633,6 +4690,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async deleteProjectStageEdge(edgeInput) {
+      if (!projectCollaborationRollout.projectStage) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Channel project stages are disabled');
+      }
       const prepared = await prepareProjectStageEdgeMutation(repositories, edgeInput, {
         edgeId: normalizeOptionalId(edgeInput.edgeId),
       });
@@ -4681,6 +4742,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listProjectArtifactCollections(projectInput) {
+      if (!projectCollaborationRollout.reviewFinalization) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project artifact review and finalization are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -4692,6 +4757,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async promoteArtifactToProjectVersion(projectInput) {
+      if (!projectCollaborationRollout.reviewFinalization) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project artifact review and finalization are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -4980,6 +5049,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async submitArtifactReview(projectInput) {
+      if (!projectCollaborationRollout.reviewFinalization) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project artifact review and finalization are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -5151,6 +5224,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async setArtifactFinalVersion(projectInput) {
+      if (!projectCollaborationRollout.reviewFinalization) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project artifact review and finalization are disabled');
+      }
       if (!(await repositories.teams.isMember(projectInput.teamId, projectInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -5414,6 +5491,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listProjectDocumentBundles(bundleInput) {
+      if (!projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Bundle and Selection are disabled');
+      }
       if (!(await repositories.teams.isMember(bundleInput.teamId, bundleInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -5430,6 +5511,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getProjectDocumentBundle(bundleInput) {
+      if (!projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Bundle and Selection are disabled');
+      }
       if (!(await repositories.teams.isMember(bundleInput.teamId, bundleInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -5449,6 +5534,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async createProjectDocumentBundle(bundleInput) {
+      if (!projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Bundle and Selection are disabled');
+      }
       if (!(await repositories.teams.isMember(bundleInput.teamId, bundleInput.userId))) {
         return bundleFailure('FORBIDDEN', 'User is not a team member', 'not_team_member');
       }
@@ -5650,6 +5739,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async resolveProjectReferences(referenceInput) {
+      if (!projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Bundle and Selection are disabled');
+      }
       if (!(await repositories.teams.isMember(referenceInput.teamId, referenceInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -5662,6 +5755,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async resolveProjectReferenceOrdinal(referenceInput) {
+      if (!projectCollaborationRollout.bundleSelection) {
+        projectCollaborationMetrics.recordMutationFailure('disabled');
+        return makeFailure('NOT_FOUND', 'Project document Bundle and Selection are disabled');
+      }
       if (!(await repositories.teams.isMember(referenceInput.teamId, referenceInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -6465,6 +6562,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async receiveDispatchResult(resultInput) {
+      if (resultInput.projectDocumentInputSetResult
+        && !projectCollaborationRollout.inputSetOutput) {
+        projectCollaborationMetrics.recordInputSetFailure('result_validation');
+        return makeFailure('NOT_FOUND', 'Project document InputSet output is disabled');
+      }
       const dispatch = await repositories.dispatches.getById(resultInput.dispatchId);
       if (!dispatch) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
@@ -6515,8 +6617,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 managedInvocation,
                 proposal,
                 reportedArtifactIds,
+                inlineArtifacts: resultInput.artifacts,
               });
-              if (!validation.ok) return validation;
+              if (!validation.ok) {
+                projectCollaborationMetrics.recordInputSetFailure('result_validation');
+                return validation;
+              }
               if (await isProjectDocumentInputSetResultAttemptStale({
                 repositories,
                 invocation: managedInvocation,
@@ -6625,6 +6731,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 ...(recoveredRun ? { workspaceRunId: recoveredRun.id } : {}),
               });
               recoveredResult = recovered;
+              recordProjectInputSetResultMetrics(recovered);
             }
             if (recoveredResult) {
               const recoveredRuns = await repositories.workspaceRuns.listByDispatch(dispatch.id);
@@ -6742,8 +6849,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(resultInput.artifactIds ?? []),
             ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
           ]),
+          inlineArtifacts: resultInput.artifacts,
         });
-        if (!validation.ok) return validation;
+        if (!validation.ok) {
+          projectCollaborationMetrics.recordInputSetFailure('result_validation');
+          return validation;
+        }
         if (managedInvocation && await isProjectDocumentInputSetResultAttemptStale({
           repositories,
           invocation: managedInvocation,
@@ -6889,6 +7000,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(workspaceRunId ? { workspaceRunId } : {}),
           })
         : undefined;
+      if (projectDocumentInputSetResult) {
+        recordProjectInputSetResultMetrics(projectDocumentInputSetResult);
+      }
       if (channelFileRollout.markdownEditing) {
         const inputSetResultArtifactIds = new Set(
           resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
@@ -6991,6 +7105,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const now = clock.now();
       const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(errorInput.dispatchId);
+      if (managedAttempt) {
+        const invocation = await repositories.management.invocations.getById(managedAttempt.invocationId);
+        if (invocation?.intent.schemaVersion === 2) {
+          recordProjectInputSetRuntimeFailure(errorInput.error);
+        }
+      }
       const failed = managedAttempt
         ? await invocationGateway.completeAttempt({ dispatchId: errorInput.dispatchId, status: 'failed', error: errorInput.error, actorKind: 'agent', actorId: errorInput.agentId })
         : await repositories.dispatches.markFailed({ dispatchId: errorInput.dispatchId, error: errorInput.error, completedAt: now });
@@ -9051,6 +9171,7 @@ async function buildDispatchRequest(
   now: UnixMs,
   includeRuntimeMemory: boolean,
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver,
+  projectDocumentInputSetEnabled = true,
 ): Promise<DispatchRequestDto & { id: string }> {
   const executionConfig = agent.source === 'custom' || (agent.source === 'scanned' && agent.command)
     ? await repositories.agents.getExecutionConfig(agent.id)
@@ -9061,6 +9182,9 @@ async function buildDispatchRequest(
     ? await repositories.management.invocations.getById(managementAttempt.invocationId)
     : null;
   if (managementInvocation?.intent.schemaVersion === 2) {
+    if (!projectDocumentInputSetEnabled) {
+      throw new Error('PROJECT_DOCUMENT_INPUT_SET_DISABLED');
+    }
     await assertProjectDocumentInputSetDispatchReady(
       repositories,
       managementInvocation.intent,
@@ -9260,7 +9384,9 @@ function parseAgentArtifactSourceRoots(
 }
 
 function isValidArtifactSourceRoot(sourceRoot: ArtifactSourceRootDto): boolean {
-  return /^[A-Za-z0-9_-]{1,128}$/.test(sourceRoot.id)
+  // InputSet uses a namespaced configured-output root (project-document-input-set:<id>).
+  // Colon remains safe here: path separators and control characters stay forbidden.
+  return /^[A-Za-z0-9_:-]{1,128}$/.test(sourceRoot.id)
     && sourceRoot.label.length > 0
     && sourceRoot.label.length <= 120
     && sourceRoot.label !== '.'
@@ -11735,6 +11861,7 @@ async function validateProjectDocumentInputSetResultProposal(input: {
   managedInvocation: AgentInvocationRecordDto | null;
   proposal: ProjectDocumentInputSetResultProposalV1;
   reportedArtifactIds: readonly string[];
+  inlineArtifacts?: readonly ReceiveDispatchArtifactInput[];
 }): Promise<Ack<{ valid: true }>> {
   const { managedInvocation, proposal } = input;
   if (!managedInvocation
@@ -11777,19 +11904,25 @@ async function validateProjectDocumentInputSetResultProposal(input: {
         teamId: input.dispatch.teamId,
         artifactId: item.artifactId,
       });
+      const inlineArtifact = input.inlineArtifacts?.find((candidate) => candidate.id === item.artifactId);
       const artifactIsUnbound = artifact
         && !artifact.messageId
         && !artifact.dispatchId
         && !artifact.workspaceRunId;
       const artifactBelongsToDispatch = artifact?.dispatchId === input.dispatch.id;
+      const candidate = artifact ?? inlineArtifact;
       if (!artifact
-        || artifact.channelId !== input.dispatch.channelId
-        || artifact.sha256 !== item.sha256
-        || !isMarkdownArtifact(artifact)
-        || artifact.role !== 'intermediate'
-        || artifact.sourceRoot?.kind !== 'configured_output'
-        || artifact.sourceRoot.id !== `project-document-input-set:${proposal.inputSetId}`
-        || (!artifactIsUnbound && !artifactBelongsToDispatch)) {
+        && !inlineArtifact) {
+        return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
+      }
+      if (!candidate
+        || (artifact && artifact.channelId !== input.dispatch.channelId)
+        || candidate.sha256 !== item.sha256
+        || !isMarkdownArtifact({ ...candidate, mimeType: candidate.mimeType ?? 'application/octet-stream' })
+        || candidate.role !== 'intermediate'
+        || candidate.sourceRoot?.kind !== 'configured_output'
+        || candidate.sourceRoot.id !== `project-document-input-set:${proposal.inputSetId}`
+        || (artifact && !artifactIsUnbound && !artifactBelongsToDispatch)) {
         return makeFailure('VALIDATION_ERROR', 'Changed InputSet result Artifact is unavailable or invalid');
       }
       continue;

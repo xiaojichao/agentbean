@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { createInvocationGateway } from '../src/application/management/invocation-gateway.js';
 import { createManagementKernel } from '../src/application/management/management-kernel.js';
 import { createServerNextUseCases } from '../src/application/usecases.js';
+import { createProjectCollaborationMetrics } from '../src/application/project-collaboration-rollout.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('managed Dispatch lifecycle bridge', () => {
@@ -437,6 +438,57 @@ describe('managed Dispatch lifecycle bridge', () => {
     });
   });
 
+  test('records bounded InputSet capability and materialization failures', async () => {
+    const capabilityHarness = await createHarness(true);
+    await seedProjectDocumentInputSet(capabilityHarness.repositories);
+    const capabilityInvocation = await capabilityHarness.gateway.invoke(
+      invokeInput(capabilityHarness.authority),
+    );
+    const capabilityDispatchId = capabilityInvocation.view.dispatchAttempts[0]!.dispatchId;
+    await capabilityHarness.repositories.devices.upsertHello({
+      id: 'device-1',
+      teamId: 'team-1',
+      ownerId: 'user-1',
+      status: 'online',
+      capabilities: { projectDocumentInputSetVersions: [] },
+      lastSeenAt: 20,
+      createdAt: 1,
+      updatedAt: 20,
+    });
+    await expect(capabilityHarness.usecases.acceptDispatch({
+      dispatchId: capabilityDispatchId,
+      agentId: 'agent-1',
+      deviceId: 'device-1',
+      quietWindowMs: 0,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    expect(capabilityHarness.metrics.snapshot().inputSet.failuresByReason)
+      .toEqual({ capability: 1 });
+
+    const downloadHarness = await createHarness(true);
+    await seedProjectDocumentInputSet(downloadHarness.repositories);
+    const downloadInvocation = await downloadHarness.gateway.invoke(invokeInput(downloadHarness.authority));
+    await expect(downloadHarness.usecases.receiveDispatchError({
+      dispatchId: downloadInvocation.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      error: 'PROJECT_DOCUMENT_INPUT_SET_DOWNLOAD_FAILED:document-1:503',
+    })).resolves.toMatchObject({ ok: true });
+    expect(downloadHarness.metrics.snapshot().inputSet.failuresByReason)
+      .toEqual({ download: 1 });
+
+    const materializationHarness = await createHarness(true);
+    await seedProjectDocumentInputSet(materializationHarness.repositories);
+    const materializationInvocation = await materializationHarness.gateway.invoke(
+      invokeInput(materializationHarness.authority),
+    );
+    await expect(materializationHarness.usecases.receiveDispatchError({
+      dispatchId: materializationInvocation.view.dispatchAttempts[0]!.dispatchId,
+      agentId: 'agent-1',
+      error: 'PROJECT_DOCUMENT_INPUT_SET_MATERIALIZATION_FAILED',
+    })).resolves.toMatchObject({ ok: true });
+    expect(materializationHarness.metrics.snapshot().inputSet.failuresByReason)
+      .toEqual({ materialization: 1 });
+  });
+
   test.each([
     ['cancelled', async (h: Awaited<ReturnType<typeof createHarness>>, dispatchId: string) => h.usecases.cancelDispatch({ dispatchId, userId: 'user-1' })],
     ['timed_out', async (h: Awaited<ReturnType<typeof createHarness>>) => h.usecases.failTimedOutDispatches({ olderThan: 21 })],
@@ -485,10 +537,17 @@ async function createHarness(withManagementRun: boolean) {
     agentId: 'agent-1', leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint',
     fencingToken: 1, status: 'active', acquiredAt: 1, heartbeatAt: 1, expiresAt: 100,
   });
+  const metrics = createProjectCollaborationMetrics();
   return {
     repositories,
     gateway: createInvocationGateway({ repositories, clock, ids }),
-    usecases: createServerNextUseCases({ repositories, clock, ids }),
+    usecases: createServerNextUseCases({
+      repositories,
+      clock,
+      ids,
+      projectCollaborationMetrics: metrics,
+    }),
+    metrics,
     authority: { managementRunId: run?.id ?? 'unused', workerId: 'worker-1', leaseToken: 'token', fencingToken: 1 },
   };
 }

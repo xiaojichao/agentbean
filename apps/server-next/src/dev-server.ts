@@ -52,6 +52,12 @@ import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-fil
 import { createProjectDocumentBundleBackfill } from './application/project-document-bundle-backfill.js';
 import { createProjectStageAutoAdvance } from './application/project-stage-auto-advance.js';
 import { parseProjectDocumentRolloutConfig, type ProjectDocumentRolloutConfig } from './application/project-document-rollout.js';
+import {
+  createProjectCollaborationMetrics,
+  parseProjectCollaborationRolloutConfig,
+  type ProjectCollaborationRolloutConfig,
+  validateProjectCollaborationRolloutConfig,
+} from './application/project-collaboration-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
 import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
@@ -71,6 +77,8 @@ export interface ServerNextDevConfig {
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
   projectDocumentRollout?: ProjectDocumentRolloutConfig;
+  projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
+  projectCollaborationMetrics?: ReturnType<typeof createProjectCollaborationMetrics>;
   maxArtifactBytes?: number;
   serverWorker?: {
     workerPoolId: string;
@@ -217,18 +225,35 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
     providerCredentialRef: providerCredentialRef!,
     authToken: serverWorkerAuthToken!,
   } : undefined;
-  return { host, port, storage, dataDir, sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret', webEntry,
-    ...(maxArtifactBytes ? { maxArtifactBytes } : {}), ...(serverWorker ? { serverWorker } : {}) };
+  // 启动配置解析阶段先执行依赖校验；非法或乱序项目 rollout 必须在监听端口前 fail closed。
+  const projectCollaborationRollout = parseProjectCollaborationRolloutConfig(env);
+  return {
+    host,
+    port,
+    storage,
+    dataDir,
+    sessionSecret: sessionSecret || 'agentbean-next-dev-session-secret',
+    webEntry,
+    projectCollaborationRollout,
+    ...(maxArtifactBytes ? { maxArtifactBytes } : {}),
+    ...(serverWorker ? { serverWorker } : {}),
+  };
 }
 
 export async function startServerNextDevServer(
   input: StartServerNextDevServerInput = {},
 ): Promise<ServerNextDevServerHandle> {
   const parsedConfig = input.config ?? parseServerNextDevConfig();
+  const projectCollaborationRollout = parsedConfig.projectCollaborationRollout
+    ?? parseProjectCollaborationRolloutConfig();
+  validateProjectCollaborationRolloutConfig(projectCollaborationRollout);
   const config: ServerNextDevConfig = {
     ...parsedConfig,
     channelFileRollout: parsedConfig.channelFileRollout ?? parseChannelFileRolloutConfig(),
     channelFileMetrics: parsedConfig.channelFileMetrics ?? createChannelFileMetrics(),
+    projectCollaborationRollout,
+    projectCollaborationMetrics: parsedConfig.projectCollaborationMetrics
+      ?? createProjectCollaborationMetrics(),
   };
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
@@ -268,6 +293,10 @@ export async function startServerNextDevServer(
         response.end(JSON.stringify({
           ok: true,
           channelFiles: config.channelFileMetrics?.snapshot(),
+          projectCollaboration: {
+            rollout: config.projectCollaborationRollout,
+            metrics: config.projectCollaborationMetrics?.snapshot(),
+          },
           ...(documentBundleBackfill ? { documentBundleBackfill } : {}),
         }));
         return;
@@ -307,6 +336,7 @@ export async function startServerNextDevServer(
     taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
     serverWorkerPool: input.serverWorkerPool ?? appWithCleanup.serverWorkerPool,
     serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
+    projectCollaborationMetrics: config.projectCollaborationMetrics,
     onAgentAvailabilityChanged: async (teamId) => {
       await appWithCleanup.recoverProjectStages?.(teamId);
     },
@@ -1586,6 +1616,10 @@ function createDefaultApp(
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
   const channelFileMetrics = config.channelFileMetrics ?? createChannelFileMetrics();
   const projectDocumentRollout = config.projectDocumentRollout ?? parseProjectDocumentRolloutConfig();
+  const projectCollaborationRollout = config.projectCollaborationRollout
+    ?? parseProjectCollaborationRolloutConfig();
+  const projectCollaborationMetrics = config.projectCollaborationMetrics
+    ?? createProjectCollaborationMetrics();
   if (config.storage === 'memory') {
     const artifactPreviewService = channelFileRollout.previewWorker
       ? createArtifactPreviewService({ outputDir: join(config.dataDir, 'artifact-previews') })
@@ -1609,6 +1643,7 @@ function createDefaultApp(
     const management = createDefaultManagementRuntime(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
       resolvePiHealthy,
+      projectCollaborationRollout.managerAutoAdvance,
       serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
     );
@@ -1620,6 +1655,8 @@ function createDefaultApp(
       artifactContentStore,
       channelFileRollout,
       channelFileMetrics,
+      projectCollaborationRollout,
+      projectCollaborationMetrics,
       ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
       managementRouter: management.router,
       managementKernel: management.kernel,
@@ -1628,9 +1665,13 @@ function createDefaultApp(
       resolvePiHealthy,
       resolveProjectStageCandidates: (taskId, options) =>
         taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
-      onProjectFactsChanged: async (scope) => {
-        await management.advanceProjectStages(scope);
-      },
+      ...(projectCollaborationRollout.managerAutoAdvance
+        ? {
+            onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {
+              await management.advanceProjectStages(scope);
+            },
+          }
+        : {}),
       messageIngestionMode,
     });
     appForPiHealth = app;
@@ -1647,7 +1688,9 @@ function createDefaultApp(
       serverWorkerAuthToken: serverWorker?.authToken,
       bindManagementDispatchEmitter: management.bindDispatchEmitter,
       bindTaskClaimEmitter: management.bindTaskClaimEmitter,
-      recoverProjectStages: management.recoverProjectStages,
+      ...(projectCollaborationRollout.managerAutoAdvance
+        ? { recoverProjectStages: management.recoverProjectStages }
+        : {}),
       reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined,
     };
@@ -1693,6 +1736,7 @@ function createDefaultApp(
   const management = createDefaultManagementRuntime(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
     resolvePiHealthy,
+    projectCollaborationRollout.managerAutoAdvance,
     serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
   );
@@ -1704,6 +1748,8 @@ function createDefaultApp(
     artifactContentStore,
     channelFileRollout,
     channelFileMetrics,
+    projectCollaborationRollout,
+    projectCollaborationMetrics,
     ...artifactPreviewBindings(artifactPreviewService, config.dataDir),
     managementRouter: management.router,
     managementKernel: management.kernel,
@@ -1712,9 +1758,13 @@ function createDefaultApp(
     resolvePiHealthy,
     resolveProjectStageCandidates: (taskId, options) =>
       taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
-    onProjectFactsChanged: async (scope) => {
-      await management.advanceProjectStages(scope);
-    },
+    ...(projectCollaborationRollout.managerAutoAdvance
+      ? {
+          onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {
+            await management.advanceProjectStages(scope);
+          },
+        }
+      : {}),
     messageIngestionMode,
   });
   appForPiHealth = app;
@@ -1732,7 +1782,9 @@ function createDefaultApp(
     serverWorkerAuthToken: serverWorker?.authToken,
     bindManagementDispatchEmitter: management.bindDispatchEmitter,
     bindTaskClaimEmitter: management.bindTaskClaimEmitter,
-    recoverProjectStages: management.recoverProjectStages,
+    ...(projectCollaborationRollout.managerAutoAdvance
+      ? { recoverProjectStages: management.recoverProjectStages }
+      : {}),
     reconcileDisconnectedDevicesOnStart: true,
     async close() {
       globalDb.close();
@@ -1832,6 +1884,7 @@ function createDefaultManagementRuntime(
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
   taskClaimBroker: TaskClaimBroker,
   piHealthy: () => Promise<boolean>,
+  projectStageAutoAdvanceEnabled: boolean,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
 ) {
@@ -1964,7 +2017,9 @@ function createDefaultManagementRuntime(
       await taskClaimEmitter(taskId, options);
     },
   });
-  taskClaimBroker.bindProjectStageClaimGranted(invokeClaimedProjectStage);
+  if (projectStageAutoAdvanceEnabled) {
+    taskClaimBroker.bindProjectStageClaimGranted(invokeClaimedProjectStage);
+  }
   const executeManagementTool = createManagementToolExecutor({
     kernel,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
@@ -1992,6 +2047,7 @@ function createDefaultManagementRuntime(
           await taskClaimEmitter(taskId);
         },
         onTaskAccepted: async (taskId) => {
+          if (!projectStageAutoAdvanceEnabled) return;
           const task = await repositories.tasks.getById(taskId);
           if (!task?.channelId) return;
           await projectStageAutoAdvance.advanceChannel({
@@ -2136,9 +2192,11 @@ function createDefaultManagementRuntime(
     serverScheduler,
     router,
     advanceProjectStages(scope: { teamId: string; channelId: string }) {
+      if (!projectStageAutoAdvanceEnabled) return Promise.resolve([]);
       return projectStageAutoAdvance.advanceChannel(scope);
     },
     async recoverProjectStages(teamId?: string) {
+      if (!projectStageAutoAdvanceEnabled) return;
       const team = teamId ? await repositories.teams.getById(teamId) : null;
       const teams = teamId
         ? team ? [team] : []

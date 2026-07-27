@@ -59,6 +59,20 @@ describe('ProjectDocumentInputSet materialization', () => {
     expect(existsSync(join(root, 'input-set-input-set-1.staging'))).toBe(false);
   });
 
+  test('normalizes transport failures without exposing local paths or credentials', async () => {
+    const root = await tempRoot();
+    const bytes = Buffer.from('# frozen revision\n');
+    await expect(materializeProjectDocumentInputSet({
+      serverUrl: 'https://server.example',
+      token: 'sensitive-device-token',
+      teamId: 'team-1',
+      invocationId: 'invocation-1',
+      inputDir: root,
+      inputSet: inputSet(bytes),
+      fetch: async () => { throw new Error('socket failed with sensitive-device-token'); },
+    })).rejects.toThrow('PROJECT_DOCUMENT_INPUT_SET_DOWNLOAD_FAILED:document-1:network');
+  });
+
   test('submits each result by manifest identity and digest instead of filename or path', async () => {
     const root = await tempRoot();
     const original = Buffer.from('# original\n');
