@@ -2,7 +2,11 @@
 
 import { AlertCircle, CheckCircle2, ChevronDown, Plus, X } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import type { ChannelProjectOverviewDto, ProjectArtifactLibraryDto } from '@agentbean/contracts';
+import type {
+  ChannelProjectOverviewDto,
+  ProjectArtifactLibraryDto,
+  ProjectStageRequiredInputRuleDto,
+} from '@agentbean/contracts';
 
 export interface ProjectTaskOption {
   id: string;
@@ -32,7 +36,7 @@ export interface ProjectStageEdgeDraft {
   upstreamStageId: string;
   downstreamStageId: string;
   semantics: 'blocks_start' | 'provides_context';
-  requiredInputs: { key: string; kind: 'artifact' | 'document'; label: string }[];
+  requiredInputs: ProjectStageRequiredInputRuleDto[];
 }
 
 export function ChannelProjectOverview({
@@ -160,6 +164,28 @@ export function ChannelProjectOverview({
                   依赖或必需输入未满足，暂不能启动执行
                 </div>
               )}
+              <div
+                data-testid={`stage-advance-${stage.id}`}
+                className="mt-2 rounded border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-600"
+              >
+                <div className="font-medium text-neutral-700">
+                  PI 推进：{stageAdvanceLabel(stage.advance.kind)}
+                  {!stage.advance.automatic && '（仅建议）'}
+                </div>
+                {stage.advance.reason && <div>等待原因：{stageAdvanceReasonLabel(stage.advance.reason)}</div>}
+                {stage.advance.stableInputs.length > 0 && (
+                  <div>稳定输入：{stage.advance.stableInputs
+                    .map((input) => `${input.key} · ${input.kind === 'artifact_version' ? input.versionId : input.revisionId}`)
+                    .join('、')}</div>
+                )}
+                {stage.advance.targetAgentId && (
+                  <div>目标 Agent：{participantName(stage.advance.targetAgentId, participants)}</div>
+                )}
+                {!stage.advance.targetAgentId && stage.advance.candidateAgentIds.length > 0 && (
+                  <div>候选 Agent：{stage.advance.candidateAgentIds
+                    .map((id) => participantName(id, participants)).join('、')}</div>
+                )}
+              </div>
               <StageArtifactSummary stageId={stage.id} library={artifactLibrary} />
               <details className="mt-2 text-xs text-neutral-500">
                 <summary className="flex cursor-pointer list-none items-center gap-1">
@@ -341,6 +367,8 @@ function ProjectStageEdgeSection({
   const [semantics, setSemantics] = useState<'blocks_start' | 'provides_context'>('blocks_start');
   const [requiredInputLabels, setRequiredInputLabels] = useState('');
   const [requiredInputKind, setRequiredInputKind] = useState<'artifact' | 'document'>('artifact');
+  const [requiredInputSourceId, setRequiredInputSourceId] = useState('');
+  const [artifactVersionPolicy, setArtifactVersionPolicy] = useState<'final' | 'approved'>('final');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -348,6 +376,10 @@ function ProjectStageEdgeSection({
     event.preventDefault();
     if (!onCreateEdge || !upstreamStageId || !downstreamStageId) return;
     const labels = requiredInputLabels.split('\n').map((item) => item.trim()).filter(Boolean);
+    if (labels.length > 0 && !requiredInputSourceId.trim()) {
+      setError('必需输入必须绑定明确的产物集合或文档包 ID');
+      return;
+    }
     setPending(true);
     setError(null);
     try {
@@ -359,10 +391,23 @@ function ProjectStageEdgeSection({
           key: `${requiredInputKind}-${index + 1}`,
           kind: requiredInputKind,
           label,
+          source: requiredInputKind === 'artifact'
+            ? {
+              kind: 'artifact_collection' as const,
+              collectionId: requiredInputSourceId.trim(),
+              versionPolicy: artifactVersionPolicy,
+            }
+            : {
+              kind: 'document_bundle' as const,
+              bundleId: requiredInputSourceId.trim(),
+            },
         })),
       });
       if (nextError) setError(nextError);
-      else setRequiredInputLabels('');
+      else {
+        setRequiredInputLabels('');
+        setRequiredInputSourceId('');
+      }
     } finally {
       setPending(false);
     }
@@ -481,6 +526,30 @@ function ProjectStageEdgeSection({
                 placeholder={'剧本终稿'}
               />
             </ProjectField>
+            <ProjectField label={requiredInputKind === 'artifact' ? '产物集合 ID' : '文档包 ID'}>
+              <input
+                aria-label="必需输入来源 ID"
+                value={requiredInputSourceId}
+                onChange={(event) => setRequiredInputSourceId(event.target.value)}
+                className={inputClass}
+                placeholder={requiredInputKind === 'artifact' ? 'collection-id' : 'bundle-id'}
+              />
+            </ProjectField>
+            {requiredInputKind === 'artifact' && (
+              <ProjectField label="版本要求">
+                <select
+                  aria-label="产物版本要求"
+                  value={artifactVersionPolicy}
+                  onChange={(event) => setArtifactVersionPolicy(
+                    event.target.value === 'approved' ? 'approved' : 'final',
+                  )}
+                  className={inputClass}
+                >
+                  <option value="final">必须是最终版</option>
+                  <option value="approved">已通过即可（优先最终版）</option>
+                </select>
+              </ProjectField>
+            )}
             <div className="flex items-end">
               <button
                 type="submit"
@@ -542,4 +611,29 @@ function blockingReasonLabel(code: ChannelProjectOverviewDto['stages'][number]['
     case 'stage_dependency_unaccepted': return '前置阶段产出未通过审核';
     case 'required_input_missing': return '缺少必需输入';
   }
+}
+
+function stageAdvanceLabel(kind: ChannelProjectOverviewDto['stages'][number]['advance']['kind']): string {
+  if (kind === 'publish_offer') return '可发布 Agent Offer';
+  if (kind === 'create_invocation') return 'Agent 已接受，可创建 Invocation';
+  if (kind === 'suggest') return '建议推进';
+  return '等待';
+}
+
+function stageAdvanceReasonLabel(
+  reason: NonNullable<ChannelProjectOverviewDto['stages'][number]['advance']['reason']>,
+): string {
+  const labels: Record<typeof reason, string> = {
+    channel_archived: '频道已归档',
+    pi_degraded: 'PI 当前降级或不可用',
+    task_not_pending: 'Task 当前状态不可推进',
+    task_revision_stale: 'Task 或 Stage revision 已变化',
+    execution_gate_blocked: '阶段依赖或审核门禁未满足',
+    required_input_incomplete: '必需稳定输入不完整',
+    stable_input_stale: '稳定输入 revision 已变化',
+    no_eligible_agent: '没有通过公开能力匹配的 Agent',
+    claim_stale: 'Agent claim 已失效',
+    invocation_active: '当前 revision 已有活动 Invocation',
+  };
+  return labels[reason];
 }

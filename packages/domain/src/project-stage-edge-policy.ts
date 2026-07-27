@@ -42,6 +42,18 @@ function hasInvalidRequiredInputs(
   for (const rule of requiredInputs) {
     if (isBlankText(rule?.key) || isBlankText(rule?.label)) return true;
     if (rule.kind !== 'artifact' && rule.kind !== 'document') return true;
+    if (rule.source) {
+      if (rule.kind === 'artifact') {
+        if (rule.source.kind !== 'artifact_collection'
+          || isBlankText(rule.source.collectionId)
+          || (rule.source.versionPolicy !== 'final' && rule.source.versionPolicy !== 'approved')) {
+          return true;
+        }
+      } else if (rule.source.kind !== 'document_bundle'
+        || isBlankText(rule.source.bundleId)) {
+        return true;
+      }
+    }
     const key = rule.key.trim();
     if (seen.has(key)) return true;
     seen.add(key);

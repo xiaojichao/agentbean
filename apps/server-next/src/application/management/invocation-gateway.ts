@@ -10,6 +10,7 @@ import type {
   DispatchStatus,
   MemoryCapsuleRefDto,
   ProjectDocumentInputSetItemV1,
+  ProjectStageStableInputDto,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   canonicalizeAgentInvocationIntent,
@@ -24,6 +25,7 @@ import type {
   ServerNextRepositories,
 } from '../repositories.js';
 import { resolveProjectStageExecutionGate } from '../project-stage-execution-gate.js';
+import { resolveProjectStageStableInputs } from '../project-stage-advance-service.js';
 import {
   appendManagementEventInTransaction,
   authorizeManagementWrite,
@@ -97,18 +99,30 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new ManagementConflictError('MANAGEMENT_RUN_TERMINAL');
         }
 
+        const taskForStableInputs = await repositories.tasks.getById(input.taskId);
+        const stableResolution = taskForStableInputs
+          ? await resolveProjectStageStableInputs(repositories, taskForStableInputs)
+          : { inputs: [] };
+        const stableArtifactIds = stableResolution.inputs
+          .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
+            item.kind === 'artifact_version')
+          .map((item) => item.artifactId);
+        const normalizedInput: InvokeTaskAgentInput = {
+          ...input,
+          attachmentIds: [...new Set([...input.attachmentIds, ...stableArtifactIds])],
+        };
         const existing = await transactionRepositories.management.invocations.getByIdempotencyKey({
           managementRunId: run.id,
           idempotencyKey: input.idempotencyKey,
         });
         if (existing) {
-          assertTaskInvocationReplay(existing, input);
+          assertTaskInvocationReplay(existing, normalizedInput);
           return { disposition: 'existing' as const,
             view: await deriveInvocationView(transactionRepositories.management,
               transactionRepositories.dispatches, existing) };
         }
 
-        const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, input, now);
+        const authority = await resolveTaskInvocationAuthority(transactionRepositories, run, normalizedInput, now);
         if (input.targetAgentId !== undefined && input.targetAgentId !== authority.targetAgentId) {
           throw new InvocationGatewayError('INVOCATION_TARGET_CLAIM_MISMATCH');
         }
@@ -133,7 +147,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           },
           acceptanceCriteria: authority.acceptanceCriteria,
           dependencyResults: authority.dependencyResults,
-          attachmentIds: [...input.attachmentIds],
+          attachmentIds: [...normalizedInput.attachmentIds],
           ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
@@ -141,6 +155,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           repositories,
           baseIntent,
           run,
+          stableResolution.inputs,
         );
         const intentHash = hashIntent(intent);
 
@@ -487,6 +502,17 @@ async function validateAuthoritativeTarget(
     if (intent.schemaVersion === 2 && task.revision !== intent.taskContext.taskRevision) {
       throw new InvocationGatewayError('INVOCATION_TASK_REVISION_STALE');
     }
+    const stable = await resolveProjectStageStableInputs(repositories, task);
+    if (stable.satisfiedRuleKeys.length !== stable.requiredRuleCount) {
+      throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
+    }
+    const stableArtifactIds = stable.inputs
+      .filter((item): item is Extract<ProjectStageStableInputDto, { kind: 'artifact_version' }> =>
+        item.kind === 'artifact_version')
+      .map((item) => item.artifactId);
+    if (stableArtifactIds.some((artifactId) => !intent.attachmentIds.includes(artifactId))) {
+      throw new InvocationGatewayError('INVOCATION_PROJECT_INPUT_STALE');
+    }
   }
 }
 
@@ -637,7 +663,15 @@ async function attachProjectDocumentInputSet(
   repositories: ServerNextRepositories,
   intent: AgentInvocationIntent,
   run: ManagementRunRecord,
+  stableInputs: readonly ProjectStageStableInputDto[] = [],
 ): Promise<AgentInvocationIntent> {
+  const stableDocuments = stableInputs.filter(
+    (item): item is Extract<ProjectStageStableInputDto, { kind: 'document_revision' }> =>
+      item.kind === 'document_revision',
+  );
+  if (stableDocuments.length > 0) {
+    return attachStableProjectDocuments(repositories, intent, stableDocuments);
+  }
   const referenceSet = await repositories.projectReferenceSets.getByMessageId({
     teamId: run.teamId,
     channelId: run.channelId,
@@ -727,6 +761,69 @@ async function attachProjectDocumentInputSet(
   };
 }
 
+async function attachStableProjectDocuments(
+  repositories: ServerNextRepositories,
+  intent: AgentInvocationIntent,
+  stableDocuments: readonly Extract<ProjectStageStableInputDto, { kind: 'document_revision' }>[],
+): Promise<AgentInvocationIntent> {
+  const referenceSetId = `project-stage:${intent.taskContext?.taskId}:${intent.taskContext?.taskRevision}`;
+  const items: ProjectDocumentInputSetItemV1[] = [];
+  for (const stable of stableDocuments) {
+    const document = await repositories.channelDocuments.getForTeam({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      documentId: stable.documentId,
+    });
+    const revision = await repositories.channelDocuments.getRevision({
+      documentId: stable.documentId,
+      revisionId: stable.revisionId,
+    });
+    if (!document || !revision
+      || revision.artifact.id !== stable.artifactId
+      || revision.artifact.teamId !== intent.teamId
+      || revision.artifact.channelId !== intent.channelId
+      || !revision.artifact.sha256) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REVISION_FORBIDDEN');
+    }
+    items.push({
+      documentId: stable.documentId,
+      baseRevisionId: stable.revisionId,
+      revisionNumber: stable.revisionNumber,
+      artifactId: stable.artifactId,
+      displayName: document.filename,
+      summary: `project-stage:${stable.upstreamStageId}:${stable.key}`,
+      relativePath: `documents/${String(items.length + 1).padStart(3, '0')}-${safeInputName(document.filename)}`,
+      mimeType: revision.artifact.mimeType,
+      sizeBytes: revision.artifact.sizeBytes,
+      sha256: revision.artifact.sha256,
+      source: {
+        referenceSetId,
+        selectionId: `project-stage-input:${stable.edgeId}:${stable.key}`,
+        selectionSourceKind: 'document',
+        bundleId: stable.bundleId,
+      },
+    });
+  }
+  const projectDocumentInputSet = {
+    id: `project-document-input-set:${createHash('sha256')
+      .update(`${referenceSetId}:${intent.targetAgentId}:1:${items.map((item) => item.baseRevisionId).join(':')}`)
+      .digest('hex')
+      .slice(0, 24)}`,
+    contractVersion: 1 as const,
+    required: true as const,
+    referenceSetId,
+    items,
+  };
+  if (intent.schemaVersion === 2) {
+    if (canonicalizeAgentInvocationIntent({ ...intent, projectDocumentInputSet })
+      !== canonicalizeAgentInvocationIntent(intent)) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    return intent;
+  }
+  return { ...intent, schemaVersion: 2, projectDocumentInputSet };
+}
+
 async function validateProjectDocumentInputSet(
   repositories: ServerNextRepositories,
   intent: Extract<AgentInvocationIntent, { schemaVersion: 2 }>,
@@ -736,13 +833,34 @@ async function validateProjectDocumentInputSet(
   if (inputSet.contractVersion !== 1 || !inputSet.required || inputSet.items.length === 0) {
     throw new InvocationGatewayError('INVOCATION_INPUT_SET_INVALID');
   }
-  const referenceSet = await repositories.projectReferenceSets.getByMessageId({
-    teamId: intent.teamId,
-    channelId: intent.channelId,
-    messageId: run.rootMessageId,
-  });
-  if (!referenceSet || referenceSet.id !== inputSet.referenceSetId) {
-    throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+  if (inputSet.referenceSetId.startsWith('project-stage:')) {
+    const task = intent.taskContext
+      ? await repositories.tasks.getById(intent.taskContext.taskId)
+      : null;
+    if (!task || task.revision !== intent.taskContext?.taskRevision) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+    const current = await resolveProjectStageStableInputs(repositories, task);
+    const currentDocuments = current.inputs.filter(
+      (item): item is Extract<ProjectStageStableInputDto, { kind: 'document_revision' }> =>
+        item.kind === 'document_revision',
+    );
+    if (currentDocuments.length !== inputSet.items.length
+      || inputSet.items.some((item) => !currentDocuments.some((candidate) =>
+        candidate.documentId === item.documentId
+        && candidate.revisionId === item.baseRevisionId
+        && candidate.artifactId === item.artifactId))) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
+  } else {
+    const referenceSet = await repositories.projectReferenceSets.getByMessageId({
+      teamId: intent.teamId,
+      channelId: intent.channelId,
+      messageId: run.rootMessageId,
+    });
+    if (!referenceSet || referenceSet.id !== inputSet.referenceSetId) {
+      throw new InvocationGatewayError('INVOCATION_INPUT_SET_REFERENCE_STALE');
+    }
   }
   for (const item of inputSet.items) {
     const document = await repositories.channelDocuments.getForTeam({

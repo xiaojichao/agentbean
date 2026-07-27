@@ -332,6 +332,69 @@ describe('Phase 2 claim-bound Invocation Gateway', () => {
       ...phase2InvokeInput(unavailable.authority), memoryCapsuleRef: deniedRef,
     })).rejects.toMatchObject({ code: 'INVOCATION_MEMORY_CAPSULE_REF_INVALID' });
   });
+
+  test('项目阶段推进只把显式绑定的最终 ArtifactVersion 合入下游 Invocation', async () => {
+    const harness = await createPhase2Harness();
+    await seedArtifactStageInput(harness.repositories);
+
+    const created = await harness.gateway.invokeTask(phase2InvokeInput(harness.authority));
+
+    expect(created.view.intent.attachmentIds).toEqual(['artifact-1', 'artifact-stage-final']);
+  });
+
+  test('最终产物的最新审核改变后，Invocation 在提交边界重新校验并 fail closed', async () => {
+    const harness = await createPhase2Harness();
+    await seedArtifactStageInput(harness.repositories);
+    await harness.repositories.channelProjects.appendArtifactReview({
+      review: {
+        id: 'review-stage-invalidated',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        collectionId: 'collection-stage-input',
+        versionId: 'version-stage-final',
+        stageId: 'stage-upstream',
+        decision: 'changes_requested',
+        comment: '需要修改',
+        basis: [],
+        reviewedBy: 'user-1',
+        createdAt: 6,
+      },
+      mutation: {
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        idempotencyKey: 'review-stage-invalidated',
+        requestFingerprint: 'review-stage-invalidated',
+        action: 'review',
+        collectionId: 'collection-stage-input',
+        versionId: 'version-stage-final',
+        resultId: 'review-stage-invalidated',
+        createdAt: 6,
+      },
+    });
+
+    await expect(harness.gateway.invokeTask(phase2InvokeInput(harness.authority)))
+      .rejects.toMatchObject({ code: 'INVOCATION_PROJECT_INPUT_STALE' });
+  });
+
+  test('项目阶段推进把显式文档包的当前 revision 冻结为 InputSet', async () => {
+    const harness = await createPhase2Harness();
+    await seedProjectDocumentInputSet(harness.repositories, true);
+    await seedDocumentStageInput(harness.repositories, harness.authority.managementRunId);
+
+    const created = await harness.gateway.invokeTask(phase2InvokeInput(harness.authority));
+
+    expect(created.view.intent).toMatchObject({
+      schemaVersion: 2,
+      projectDocumentInputSet: {
+        required: true,
+        items: [{
+          documentId: 'document-1',
+          baseRevisionId: 'revision-1',
+          source: { bundleId: 'bundle-stage-input' },
+        }],
+      },
+    });
+  });
 });
 
 async function createHarness() {
@@ -514,4 +577,156 @@ function phase2CapsuleRef(managementRunId: string) {
     authorizationDecisionId: 'decision-1',
     expiresAt: 100,
   };
+}
+
+async function seedProjectStages(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  requiredInputs: Parameters<typeof repositories.channelProjects.createStageEdge>[0]['edge']['requiredInputs'],
+) {
+  await repositories.tasks.create({
+    id: 'task-upstream', teamId: 'team-1', channelId: 'channel-1', title: 'Upstream',
+    status: 'done', creatorId: 'user-1', tags: [], sortOrder: 3, createdAt: 1, updatedAt: 1,
+  });
+  const profile = {
+    id: 'profile-stage-input', teamId: 'team-1', channelId: 'channel-1',
+    projectLeadId: 'user-1', defaultReviewerIds: ['user-1'], revision: 1,
+    createdBy: 'user-1', createdAt: 1, updatedAt: 1,
+  };
+  const upstream = {
+    id: 'stage-upstream', teamId: 'team-1', channelId: 'channel-1',
+    taskId: 'task-upstream', taskRevision: 1, name: 'Upstream', goal: '交付输入',
+    ownerId: 'user-1', reviewerIds: ['user-1'], acceptanceCriteria: ['完成'],
+    createdAt: 1, updatedAt: 1,
+  };
+  await repositories.channelProjects.createInitialStage({
+    expectedRevision: 0, profile, stage: upstream,
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'stage-upstream',
+      requestFingerprint: 'stage-upstream', profileId: profile.id, stageId: upstream.id,
+      resultRevision: 1, resultOverview: {} as never, createdAt: 1,
+    },
+  });
+  const downstream = {
+    id: 'stage-downstream', teamId: 'team-1', channelId: 'channel-1',
+    taskId: 'task-child', taskRevision: 1, name: 'Downstream', goal: '消费输入',
+    ownerId: 'user-1', reviewerIds: ['user-1'], acceptanceCriteria: ['完成'],
+    createdAt: 2, updatedAt: 2,
+  };
+  await repositories.channelProjects.createStage({
+    expectedRevision: 1, nextRevision: 2, updatedAt: 2, stage: downstream,
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'stage-downstream',
+      requestFingerprint: 'stage-downstream', profileId: profile.id, stageId: downstream.id,
+      resultRevision: 2, resultOverview: {} as never, createdAt: 2,
+    },
+  });
+  await repositories.channelProjects.createStageEdge({
+    expectedRevision: 2, nextRevision: 3, updatedAt: 3,
+    edge: {
+      id: 'edge-stage-input', teamId: 'team-1', channelId: 'channel-1',
+      upstreamStageId: upstream.id, downstreamStageId: downstream.id,
+      upstreamTaskId: upstream.taskId, upstreamTaskRevision: 1,
+      downstreamTaskId: downstream.taskId, downstreamTaskRevision: 1,
+      semantics: 'blocks_start', requiredInputs, mirroredTaskDependency: false,
+      createdBy: 'user-1', createdAt: 3, updatedAt: 3,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'edge-stage-input',
+      requestFingerprint: 'edge-stage-input', profileId: profile.id, stageId: downstream.id,
+      resultRevision: 3, resultOverview: {} as never, createdAt: 3,
+    },
+  });
+}
+
+async function seedArtifactStageInput(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+) {
+  await seedProjectStages(repositories, [{
+    key: 'final-artifact', kind: 'artifact', label: '最终产物',
+    source: {
+      kind: 'artifact_collection', collectionId: 'collection-stage-input',
+      versionPolicy: 'final',
+    },
+  }]);
+  await repositories.artifacts.create({
+    id: 'artifact-stage-final', teamId: 'team-1', channelId: 'channel-1',
+    uploaderId: 'user-1', filename: 'final.pdf', mimeType: 'application/pdf',
+    sizeBytes: 8, sha256: 'sha256-stage-final', createdAt: 4,
+  });
+  await repositories.channelProjects.promoteArtifact({
+    teamId: 'team-1', channelId: 'channel-1', createsCollection: true,
+    collection: {
+      id: 'collection-stage-input', teamId: 'team-1', channelId: 'channel-1',
+      name: '最终产物', kind: 'file', revision: 1,
+      currentVersionId: 'version-stage-final', finalVersionId: 'version-stage-final',
+      versionCount: 1, createdBy: 'user-1', createdAt: 4, updatedAt: 4,
+    },
+    version: {
+      id: 'version-stage-final', teamId: 'team-1', channelId: 'channel-1',
+      collectionId: 'collection-stage-input', versionNumber: 1,
+      artifactId: 'artifact-stage-final', stageId: 'stage-upstream',
+      taskId: 'task-upstream', taskRevision: 1, lineage: [],
+      promotedBy: 'user-1', createdAt: 4,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'promote-stage-final',
+      requestFingerprint: 'promote-stage-final', collectionId: 'collection-stage-input',
+      versionId: 'version-stage-final', createdAt: 4,
+    },
+  });
+  await repositories.channelProjects.appendArtifactReview({
+    review: {
+      id: 'review-stage-final', teamId: 'team-1', channelId: 'channel-1',
+      collectionId: 'collection-stage-input', versionId: 'version-stage-final',
+      stageId: 'stage-upstream', decision: 'approved', comment: '通过', basis: [],
+      reviewedBy: 'user-1', createdAt: 5,
+    },
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'review-stage-final',
+      requestFingerprint: 'review-stage-final', action: 'review',
+      collectionId: 'collection-stage-input', versionId: 'version-stage-final',
+      resultId: 'review-stage-final', createdAt: 5,
+    },
+  });
+}
+
+async function seedDocumentStageInput(
+  repositories: ReturnType<typeof createInMemoryRepositories>,
+  managementRunId: string,
+) {
+  await seedProjectStages(repositories, [{
+    key: 'documents', kind: 'document', label: '冻结文档',
+    source: { kind: 'document_bundle', bundleId: 'bundle-stage-input' },
+  }]);
+  await repositories.management.invocations.create({
+    schemaVersion: 1, id: 'invocation-upstream', managementRunId,
+    intent: {
+      schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1',
+      targetAgentId: 'agent-1', targetKind: 'custom', objective: '上游',
+      taskContext: {
+        taskId: 'task-upstream', rootTaskId: 'task-root', taskRevision: 1,
+        taskAttempt: 1, claimLeaseId: 'claim-upstream',
+      },
+      acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+    },
+    intentHash: 'upstream-hash', idempotencyKey: 'upstream', createdAt: 4,
+  });
+  await repositories.projectDocumentBundles.create({
+    bundle: {
+      id: 'bundle-stage-input', teamId: 'team-1', channelId: 'channel-1',
+      name: '上游文档', source: {
+        kind: 'workspace_run', workspaceRunId: 'run-upstream', agentId: 'agent-1',
+        invocationId: 'invocation-upstream', taskId: 'task-upstream', runCreatedAt: 4,
+      },
+      memberCount: 1, createdBy: 'user-1', createdAt: 4,
+    },
+    members: [{
+      bundleId: 'bundle-stage-input', position: 1, documentId: 'document-1',
+      initialRevisionId: 'revision-1', initialRevisionNumber: 1, initialFilename: 'plan.md',
+    }],
+    mutation: {
+      teamId: 'team-1', channelId: 'channel-1', idempotencyKey: 'bundle-stage-input',
+      requestFingerprint: 'bundle-stage-input', bundleId: 'bundle-stage-input', createdAt: 4,
+    },
+  });
 }

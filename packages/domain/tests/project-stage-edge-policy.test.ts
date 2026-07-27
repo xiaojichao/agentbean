@@ -61,6 +61,22 @@ describe('Project Stage edge 创建校验', () => {
       [{ key: ' ', kind: 'artifact' as const, label: '剧本' }],
       [{ key: 'script', kind: 'artifact' as const, label: '  ' }],
       [{ key: 'script', kind: 'video' as unknown as 'artifact', label: '剧本' }],
+      [{
+        key: 'script',
+        kind: 'artifact' as const,
+        label: '剧本',
+        source: { kind: 'document_bundle' as const, bundleId: 'bundle-1' },
+      }],
+      [{
+        key: 'notes',
+        kind: 'document' as const,
+        label: '改稿说明',
+        source: {
+          kind: 'artifact_collection' as const,
+          collectionId: 'collection-1',
+          versionPolicy: 'final' as const,
+        },
+      }],
       [
         { key: 'script', kind: 'artifact' as const, label: '剧本' },
         { key: 'script', kind: 'document' as const, label: '剧本文档' },

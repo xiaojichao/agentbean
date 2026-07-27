@@ -4,10 +4,83 @@ import { createManagementKernel } from '../src/application/management/management
 import { createTaskClaimBroker } from '../src/application/management/task-claim-broker.js';
 import { createTaskCoordinationKernel } from '../src/application/management/task-coordination-kernel.js';
 import { resolveTaskAllocation } from '../src/application/management/task-allocation-service.js';
+import { createProjectStageAutoAdvance } from '../src/application/project-stage-auto-advance.js';
 import type { ServerNextRepositories } from '../src/application/repositories.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Task Claim Broker', () => {
+  test('#829 上游完成后由健康 PI 通过真实候选与 Offer 协议推进下游，降级时 fail closed', async () => {
+    const healthy = await createHarness();
+    await seedAgent(healthy.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await healthy.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: 10 },
+    });
+    await healthy.repositories.tasks.update({
+      taskId: 'root-task',
+      changes: { status: 'done', updatedAt: 10 },
+    });
+    await seedProjectStageEdge(healthy.repositories);
+    const emitted: string[] = [];
+    const autoAdvance = createProjectStageAutoAdvance({
+      repositories: healthy.repositories,
+      broker: healthy.broker,
+      piHealthy: async () => true,
+      emitTaskOffers: async (taskId) => {
+        emitted.push(taskId);
+        await healthy.broker.prepareOffers(taskId);
+      },
+      now: () => healthy.clock.value,
+    });
+
+    await expect(autoAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'offered',
+      targetAgentIds: ['eligible'],
+    }]);
+    expect(emitted).toEqual(['task-a']);
+    await expect(healthy.repositories.taskCoordination.offers.listByTask('task-a'))
+      .resolves.toEqual([expect.objectContaining({
+        taskId: 'task-a',
+        agentId: 'eligible',
+        status: 'open',
+      })]);
+
+    const degraded = await createHarness();
+    await seedAgent(degraded.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await degraded.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: 10 },
+    });
+    await degraded.repositories.tasks.update({
+      taskId: 'root-task',
+      changes: { status: 'done', updatedAt: 10 },
+    });
+    await seedProjectStageEdge(degraded.repositories);
+    const degradedEmit = vi.fn();
+    const degradedAdvance = createProjectStageAutoAdvance({
+      repositories: degraded.repositories,
+      broker: degraded.broker,
+      piHealthy: async () => false,
+      emitTaskOffers: degradedEmit,
+      now: () => degraded.clock.value,
+    });
+
+    await expect(degradedAdvance.advanceChannel({
+      teamId: 'team-1',
+      channelId: 'channel-1',
+    })).resolves.toEqual([{
+      taskId: 'task-a',
+      kind: 'waiting',
+      reason: 'pi_degraded',
+      targetAgentIds: [],
+    }]);
+    expect(degradedEmit).not.toHaveBeenCalled();
+  });
+
   test('候选集对 visibility/readiness/capability/channel 给出明确 diagnostics', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
@@ -512,6 +585,109 @@ async function seedAgent(
       validFrom: 0, validUntil: null, createdBy: 'user-1', now: 0,
     });
   }
+}
+
+async function seedProjectStageEdge(repositories: ServerNextRepositories) {
+  const profile = {
+    id: 'profile-829',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    projectLeadId: 'user-1',
+    defaultReviewerIds: ['user-1'],
+    revision: 1,
+    createdBy: 'user-1',
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  const upstream = {
+    id: 'stage-upstream-829',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    taskId: 'root-task',
+    taskRevision: 1,
+    name: '上游',
+    goal: '完成上游',
+    ownerId: 'user-1',
+    reviewerIds: ['user-1'],
+    acceptanceCriteria: ['完成'],
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await repositories.channelProjects.createInitialStage({
+    expectedRevision: 0,
+    profile,
+    stage: upstream,
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'stage-upstream-829',
+      requestFingerprint: 'stage-upstream-829',
+      profileId: profile.id,
+      stageId: upstream.id,
+      resultRevision: 1,
+      resultOverview: {} as never,
+      createdAt: 1,
+    },
+  });
+  const downstream = {
+    ...upstream,
+    id: 'stage-downstream-829',
+    taskId: 'task-a',
+    name: '下游',
+    goal: '消费上游结果',
+    createdAt: 2,
+    updatedAt: 2,
+  };
+  await repositories.channelProjects.createStage({
+    expectedRevision: 1,
+    nextRevision: 2,
+    updatedAt: 2,
+    stage: downstream,
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'stage-downstream-829',
+      requestFingerprint: 'stage-downstream-829',
+      profileId: profile.id,
+      stageId: downstream.id,
+      resultRevision: 2,
+      resultOverview: {} as never,
+      createdAt: 2,
+    },
+  });
+  await repositories.channelProjects.createStageEdge({
+    expectedRevision: 2,
+    nextRevision: 3,
+    updatedAt: 3,
+    edge: {
+      id: 'edge-829',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      upstreamStageId: upstream.id,
+      downstreamStageId: downstream.id,
+      upstreamTaskId: upstream.taskId,
+      upstreamTaskRevision: upstream.taskRevision,
+      downstreamTaskId: downstream.taskId,
+      downstreamTaskRevision: downstream.taskRevision,
+      semantics: 'blocks_start',
+      requiredInputs: [],
+      mirroredTaskDependency: false,
+      createdBy: 'user-1',
+      createdAt: 3,
+      updatedAt: 3,
+    },
+    mutation: {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      idempotencyKey: 'edge-829',
+      requestFingerprint: 'edge-829',
+      profileId: profile.id,
+      stageId: downstream.id,
+      resultRevision: 3,
+      resultOverview: {} as never,
+      createdAt: 3,
+    },
+  });
 }
 
 function device(id: string, status: 'online' | 'offline') {

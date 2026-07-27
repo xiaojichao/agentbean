@@ -255,6 +255,7 @@ export function createPhase2ManagementToolHandlers(input: {
   readonly kernel: TaskCoordinationKernel;
   readonly acceptanceService: SubtaskAcceptanceService;
   readonly onTaskPublished?: (taskId: string) => Promise<void> | void;
+  readonly onTaskAccepted?: (taskId: string) => Promise<void> | void;
   /** #805 eligibility 服务（可选,未提供时 allocatability stub,向后兼容 #798）。 */
   readonly eligibilityService?: (parentTaskId: string, subtasks: readonly {
     clientKey: string; requiredCapabilities: readonly string[]; requiredSkills?: readonly string[];
@@ -323,6 +324,7 @@ export function createPhase2ManagementToolHandlers(input: {
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         acceptance: request.input.acceptance,
       });
+      if (accepted.status === 'done') await input.onTaskAccepted?.(accepted.taskId);
       return { taskId: accepted.taskId, taskRevision: accepted.taskRevision, status: accepted.status };
     },
     'tasks.report_blocked': async (request) => {

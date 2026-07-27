@@ -45,6 +45,7 @@ import {
 import { createSqliteArtifactPreviewRepository } from './infra/sqlite/artifact-preview-repository.js';
 import { createChannelFileBackfillIfSupported } from './infra/sqlite/channel-file-backfill.js';
 import { createProjectDocumentBundleBackfill } from './application/project-document-bundle-backfill.js';
+import { createProjectStageAutoAdvance } from './application/project-stage-auto-advance.js';
 import { parseProjectDocumentRolloutConfig, type ProjectDocumentRolloutConfig } from './application/project-document-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
@@ -1569,8 +1570,15 @@ function createDefaultApp(
     const serverWorker = createDefaultServerWorker(config, clock, ids);
     // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
     const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+    let appForPiHealth: ServerNextUseCases | undefined;
+    const resolvePiHealthy = async () => {
+      const health = await appForPiHealth?.getPublicPiHealth({});
+      return health?.ok === true && health.health.status === 'normal';
+    };
     const management = createDefaultManagementRuntime(
-      repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
+      repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
+      resolvePiHealthy,
+      serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
     );
     const app = createServerNextUseCases({
@@ -1586,8 +1594,13 @@ function createDefaultApp(
       managementKernel: management.kernel,
       taskCoordinationKernel: management.taskCoordinationKernel,
       serverCapsuleRuntimeContextResolver,
+      resolvePiHealthy,
+      onProjectFactsChanged: async (scope) => {
+        await management.advanceProjectStages(scope);
+      },
       messageIngestionMode,
     });
+    appForPiHealth = app;
     return {
       app,
       artifactPreviewService,
@@ -1636,8 +1649,15 @@ function createDefaultApp(
   const serverWorker = createDefaultServerWorker(config, clock, ids);
   // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
   const taskClaimBroker = createTaskClaimBroker({ repositories, clock, ids });
+  let appForPiHealth: ServerNextUseCases | undefined;
+  const resolvePiHealthy = async () => {
+    const health = await appForPiHealth?.getPublicPiHealth({});
+    return health?.ok === true && health.health.status === 'normal';
+  };
   const management = createDefaultManagementRuntime(
-    repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker, serverWorker?.pool,
+    repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
+    resolvePiHealthy,
+    serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
   );
   const app = createServerNextUseCases({
@@ -1653,8 +1673,13 @@ function createDefaultApp(
     managementKernel: management.kernel,
     taskCoordinationKernel: management.taskCoordinationKernel,
     serverCapsuleRuntimeContextResolver,
+    resolvePiHealthy,
+    onProjectFactsChanged: async (scope) => {
+      await management.advanceProjectStages(scope);
+    },
     messageIngestionMode,
   });
+  appForPiHealth = app;
   return {
     app,
     artifactPreviewService,
@@ -1767,6 +1792,7 @@ function createDefaultManagementRuntime(
   ids: { nextId(): string },
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
   taskClaimBroker: TaskClaimBroker,
+  piHealthy: () => Promise<boolean>,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
 ) {
@@ -1810,6 +1836,16 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const projectStageAutoAdvance = createProjectStageAutoAdvance({
+    repositories,
+    broker: taskClaimBroker,
+    piHealthy,
+    now: clock.now,
+    emitTaskOffers: async (taskId) => {
+      if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
+      await taskClaimEmitter(taskId);
+    },
+  });
   const executeManagementTool = createManagementToolExecutor({
     kernel,
     managementMemoryUnitOfWork: repositories.managementMemoryUnitOfWork,
@@ -1835,6 +1871,14 @@ function createDefaultManagementRuntime(
         onTaskPublished: async (taskId) => {
           if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
           await taskClaimEmitter(taskId);
+        },
+        onTaskAccepted: async (taskId) => {
+          const task = await repositories.tasks.getById(taskId);
+          if (!task?.channelId) return;
+          await projectStageAutoAdvance.advanceChannel({
+            teamId: task.teamId,
+            channelId: task.channelId,
+          }).catch(() => undefined);
         } }),
       ...createPhase2InvocationToolHandlers({
         repositories,
@@ -1972,6 +2016,9 @@ function createDefaultManagementRuntime(
     scheduler,
     serverScheduler,
     router,
+    advanceProjectStages(scope: { teamId: string; channelId: string }) {
+      return projectStageAutoAdvance.advanceChannel(scope);
+    },
     bindDispatchEmitter(emit: (dispatchId: string) => Promise<void>) {
       dispatchEmitter = emit;
     },
