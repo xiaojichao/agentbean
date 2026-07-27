@@ -398,6 +398,23 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         users.set(input.userId, updated);
         return updated;
       },
+      async updateProfile(input) {
+        const user = users.get(input.userId);
+        if (!user) return null;
+        const updated = {
+          ...user,
+          updatedAt: input.updatedAt,
+          ...(input.displayName !== undefined
+            ? { displayName: input.displayName === null || input.displayName === '' ? undefined : input.displayName }
+            : {}),
+          ...(input.email !== undefined
+            ? { email: input.email === null || input.email === '' ? null : input.email }
+            : {}),
+          ...(input.role !== undefined ? { role: input.role } : {}),
+        };
+        users.set(input.userId, updated);
+        return updated;
+      },
       async updatePassword(input) {
         const user = users.get(input.userId);
         if (!user) return null;

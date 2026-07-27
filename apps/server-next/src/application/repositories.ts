@@ -177,6 +177,17 @@ export interface UserRepository {
   listAll(): Promise<UserRecord[]>;
   setCurrentTeam(userId: ID, teamId: ID): Promise<void>;
   updateDescription(input: { userId: ID; description: string | null; updatedAt: UnixMs }): Promise<UserRecord | null>;
+  /**
+   * System-admin profile patch: only provided fields are applied.
+   * `displayName` / `email` null clears the field; `role` replaces system role.
+   */
+  updateProfile(input: {
+    userId: ID;
+    displayName?: string | null;
+    email?: string | null;
+    role?: UserRecord['role'];
+    updatedAt: UnixMs;
+  }): Promise<UserRecord | null>;
   updatePassword(input: { userId: ID; passwordHash: string; updatedAt: UnixMs }): Promise<UserRecord | null>;
   delete(userId: ID): Promise<void>;
 }

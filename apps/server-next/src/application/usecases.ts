@@ -231,6 +231,8 @@ export interface ServerNextUseCases {
   listAdminDevices(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'devices', AdminDeviceDto>>>;
   listAdminAgents(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'agents', AdminAgentDto>>>;
   createAdminUser(input: CreateAdminUserInput): Promise<Ack<CreateAdminUserResult>>;
+  updateAdminUser(input: UpdateAdminUserInput): Promise<Ack<{ user: AdminUserDto }>>;
+  resetAdminUserPassword(input: ResetAdminUserPasswordInput): Promise<Ack<{}>>;
   deleteAdminTeam(input: { userId: string; teamId: string }): Promise<Ack<{}>>;
   deleteAdminUser(input: { adminUserId: string; targetUserId: string }): Promise<Ack<{}>>;
   deleteAdminAgent(input: { userId: string; agentId: string }): Promise<Ack<{}>>;
@@ -522,6 +524,22 @@ export interface CreateAdminUserResult {
   defaultChannel?: ChannelDto;
 }
 
+/** System admin updates display name, email, and/or system role. */
+export interface UpdateAdminUserInput {
+  adminUserId: string;
+  targetUserId: string;
+  displayName?: string | null;
+  email?: string | null;
+  role?: UserRole;
+}
+
+/** System admin sets a new password without knowing the current one. */
+export interface ResetAdminUserPasswordInput {
+  adminUserId: string;
+  targetUserId: string;
+  newPassword: string;
+}
+
 type DeviceAgentListDto = AgentDto & {
   deviceName?: string;
 };
@@ -540,8 +558,11 @@ type AdminTeamDto = Omit<TeamDto, 'currentUserRole'> & {
   members: Array<HumanMemberDto & { joinedAt?: number }>;
 };
 
-type AdminUserDto = UserDto & {
+type AdminUserDto = Omit<UserDto, 'displayName' | 'email'> & {
   createdAt: number;
+  /** Null means cleared; omitted/undefined means unset. Explicit null survives JSON merge on clients. */
+  displayName?: string | null;
+  email?: string | null;
 };
 
 type AdminAgentDto = AgentDto & {
@@ -2029,6 +2050,106 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         team: toTeamDto(team, 'owner'),
         defaultChannel,
       });
+    },
+
+    async updateAdminUser(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.adminUserId);
+      if (!admin.ok) {
+        return admin;
+      }
+      if (adminInput.targetUserId === 'system') {
+        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
+      }
+      const user = await repositories.users.getById(adminInput.targetUserId);
+      if (!user) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+
+      const hasDisplayName = adminInput.displayName !== undefined;
+      const hasEmail = adminInput.email !== undefined;
+      const hasRole = adminInput.role !== undefined;
+      if (!hasDisplayName && !hasEmail && !hasRole) {
+        return makeFailure('VALIDATION_ERROR', 'No fields to update');
+      }
+
+      let nextRole: UserRole | undefined;
+      if (hasRole) {
+        if (adminInput.role !== 'user' && adminInput.role !== 'admin') {
+          return makeFailure('VALIDATION_ERROR', 'Role must be user or admin');
+        }
+        nextRole = adminInput.role;
+        if (user.role === 'admin' && nextRole === 'user') {
+          const admins = (await repositories.users.listAll()).filter((entry) => entry.role === 'admin');
+          if (admins.length <= 1) {
+            return makeFailure('CONFLICT', 'Cannot demote the last admin');
+          }
+        }
+      }
+
+      let nextDisplayName: string | null | undefined;
+      if (hasDisplayName) {
+        if (adminInput.displayName === null) {
+          nextDisplayName = null;
+        } else {
+          const trimmed = String(adminInput.displayName).trim();
+          nextDisplayName = trimmed.length > 0 ? trimmed : null;
+        }
+      }
+
+      let nextEmail: string | null | undefined;
+      if (hasEmail) {
+        if (adminInput.email === null) {
+          nextEmail = null;
+        } else {
+          const trimmed = String(adminInput.email).trim();
+          nextEmail = trimmed.length > 0 ? trimmed : null;
+        }
+      }
+
+      const updated = await repositories.users.updateProfile({
+        userId: user.id,
+        updatedAt: clock.now(),
+        ...(nextDisplayName !== undefined ? { displayName: nextDisplayName } : {}),
+        ...(nextEmail !== undefined ? { email: nextEmail } : {}),
+        ...(nextRole !== undefined ? { role: nextRole } : {}),
+      });
+      if (!updated) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+
+      return makeSuccess({
+        user: {
+          ...toUserDto(updated),
+          // Explicit nulls so JSON/socket clients can clear prior list-row fields on merge.
+          displayName: updated.displayName ?? null,
+          email: updated.email ?? null,
+          createdAt: updated.createdAt,
+        },
+      });
+    },
+
+    async resetAdminUserPassword(adminInput) {
+      const admin = await requireGlobalAdmin(repositories, adminInput.adminUserId);
+      if (!admin.ok) {
+        return admin;
+      }
+      if (adminInput.targetUserId === 'system') {
+        return makeFailure('VALIDATION_ERROR', 'Cannot modify protected user');
+      }
+      const user = await repositories.users.getById(adminInput.targetUserId);
+      if (!user) {
+        return makeFailure('NOT_FOUND', 'User not found');
+      }
+      const newPassword = typeof adminInput.newPassword === 'string' ? adminInput.newPassword : '';
+      if (newPassword.length < 6) {
+        return makeFailure('VALIDATION_ERROR', 'Password must be at least 6 characters');
+      }
+      await repositories.users.updatePassword({
+        userId: user.id,
+        passwordHash: await hashPassword(newPassword),
+        updatedAt: clock.now(),
+      });
+      return makeSuccess({});
     },
 
     async listAdminDevices(adminInput) {

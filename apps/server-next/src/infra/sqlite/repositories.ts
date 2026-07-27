@@ -558,6 +558,23 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.description, input.updatedAt, input.userId);
         return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
       },
+      async updateProfile(input) {
+        const current = mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+        if (!current) return null;
+        const displayName =
+          input.displayName !== undefined
+            ? (input.displayName === null || input.displayName === '' ? null : input.displayName)
+            : (current.displayName ?? null);
+        const email =
+          input.email !== undefined
+            ? (input.email === null || input.email === '' ? null : input.email)
+            : (current.email ?? null);
+        const role = input.role !== undefined ? input.role : current.role;
+        globalDb
+          .prepare('UPDATE users SET display_name = ?, email = ?, role = ?, updated_at = ? WHERE id = ?')
+          .run(displayName, email, role, input.updatedAt, input.userId);
+        return mapUser(globalDb.prepare('SELECT * FROM users WHERE id = ?').get(input.userId));
+      },
       async updatePassword(input) {
         globalDb
           .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
