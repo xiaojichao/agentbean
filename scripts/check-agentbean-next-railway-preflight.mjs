@@ -17,6 +17,7 @@ export function collectAgentBeanNextRailwayPreflightChecks({
   const dataDir = normalizePath(env.AGENTBEAN_NEXT_DATA_DIR);
   const dataDirVariable = variables.get('AGENTBEAN_NEXT_DATA_DIR');
   const sessionSecretVariable = variables.get('AGENTBEAN_NEXT_SESSION_SECRET');
+  const piSecretKeyVariable = variables.get('AGENTBEAN_PI_SECRET_KEY');
   const coveringVolumes = dataDir ? volumes.filter((volume) => volumeCoversPath(volume.mountPath, dataDir)) : [];
 
   return [
@@ -57,6 +58,11 @@ export function collectAgentBeanNextRailwayPreflightChecks({
       'railway-variable-session-secret',
       Boolean(sessionSecretVariable),
       'Railway runtime env must include AGENTBEAN_NEXT_SESSION_SECRET',
+    ),
+    check(
+      'railway-variable-pi-secret-key',
+      Boolean(piSecretKeyVariable),
+      'Railway runtime env must include AGENTBEAN_PI_SECRET_KEY for PI Provider credential encryption',
     ),
     check(
       'railway-volumes-readable',

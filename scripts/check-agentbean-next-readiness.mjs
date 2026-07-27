@@ -143,6 +143,7 @@ export function collectAgentBeanNextReadinessChecks({
       'ci-runs-production-readiness-before-deploy',
       workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET') &&
+        workflow.includes('AGENTBEAN_PI_SECRET_KEY') &&
         workflow.includes('AGENTBEAN_NEXT_DATA_DIR'),
       'CI deploy job must run production readiness checks before server-next deploys',
     ),
@@ -243,6 +244,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}') &&
         workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}') &&
+        workflow.includes('AGENTBEAN_PI_SECRET_KEY: ${{ secrets.AGENTBEAN_PI_SECRET_KEY }}') &&
         workflow.includes('NPM_TOKEN: ${{ secrets.NPM_TOKEN }}') &&
         workflow.includes('RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}') &&
         workflow.indexOf('GH_TOKEN: ${{ github.token }}') <
@@ -395,6 +397,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.sync_railway_next_runtime_env") &&
         workflow.includes('railway variable set "AGENTBEAN_NEXT_DATA_DIR=${AGENTBEAN_NEXT_DATA_DIR}"') &&
         workflow.includes('railway variable set AGENTBEAN_NEXT_SESSION_SECRET') &&
+        workflow.includes('railway variable set AGENTBEAN_PI_SECRET_KEY') &&
         workflow.includes('--stdin') &&
         workflow.includes('--skip-deploys') &&
         workflow.includes('Verify Railway AgentBean Next preflight') &&
@@ -818,6 +821,11 @@ export function collectAgentBeanNextReadinessChecks({
         'production-session-secret-present',
         Boolean(env.AGENTBEAN_NEXT_SESSION_SECRET),
         'AGENTBEAN_NEXT_SESSION_SECRET must be configured for server-next production sessions',
+      ),
+      check(
+        'production-pi-secret-key-present',
+        Boolean(env.AGENTBEAN_PI_SECRET_KEY),
+        'AGENTBEAN_PI_SECRET_KEY must be configured for PI Provider credential encryption',
       ),
       check(
         'production-data-dir-present',

@@ -306,6 +306,7 @@ describe('AgentBean Next readiness checker', () => {
     expect(summary.checks.filter((check) => !check.ok).map((check) => check.id)).toEqual([
       'railway-token-present',
       'production-session-secret-present',
+      'production-pi-secret-key-present',
       'production-data-dir-present',
       'production-data-dir-not-default',
     ]);
@@ -318,6 +319,7 @@ describe('AgentBean Next readiness checker', () => {
         env: {
           RAILWAY_TOKEN: 'token',
           AGENTBEAN_NEXT_SESSION_SECRET: 'session-secret',
+          AGENTBEAN_PI_SECRET_KEY: 'pi-secret-key',
           AGENTBEAN_NEXT_DATA_DIR: '/data/agentbean-next',
         },
       }),

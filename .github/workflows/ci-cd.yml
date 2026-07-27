@@ -196,6 +196,7 @@ jobs:
         if: env.RAILWAY_TOKEN != ''
         env:
           AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+          AGENTBEAN_PI_SECRET_KEY: ${{ secrets.AGENTBEAN_PI_SECRET_KEY }}
           AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
         run: npm run check:agentbean-next-readiness -- --production
 
@@ -243,6 +244,7 @@ jobs:
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
       RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+      AGENTBEAN_PI_SECRET_KEY: ${{ secrets.AGENTBEAN_PI_SECRET_KEY }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
 
     steps:
@@ -277,6 +279,7 @@ jobs:
       RAILWAY_SERVICE_ID: 7b1dce9b-b7e7-4cfb-bb3f-ef86d10e8647
       RAILWAY_ENVIRONMENT: e9c1a221-28b1-49c0-b279-be249a428737
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+      AGENTBEAN_PI_SECRET_KEY: ${{ secrets.AGENTBEAN_PI_SECRET_KEY }}
       AGENTBEAN_NEXT_DATA_DIR: ${{ vars.AGENTBEAN_NEXT_DATA_DIR }}
 
     steps:
@@ -307,6 +310,12 @@ jobs:
             --stdin \
             --skip-deploys
 
+          printf '%s' "$AGENTBEAN_PI_SECRET_KEY" | railway variable set AGENTBEAN_PI_SECRET_KEY \
+            --service "$RAILWAY_SERVICE_ID" \
+            --environment "$RAILWAY_ENVIRONMENT" \
+            --stdin \
+            --skip-deploys
+
       - name: Verify Railway AgentBean Next preflight
         run: npm run check:agentbean-next-railway-preflight
 
@@ -325,6 +334,7 @@ jobs:
       AGENTBEAN_NEXT_AUDIT_ENTRY_URL: ${{ vars.AGENTBEAN_NEXT_ENTRY_URL }}
       AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}
       AGENTBEAN_NEXT_SESSION_SECRET: ${{ secrets.AGENTBEAN_NEXT_SESSION_SECRET }}
+      AGENTBEAN_PI_SECRET_KEY: ${{ secrets.AGENTBEAN_PI_SECRET_KEY }}
       GH_TOKEN: ${{ github.token }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

@@ -27,6 +27,7 @@ describe('AgentBean Next Railway preflight', () => {
             return JSON.stringify([
               { name: 'AGENTBEAN_NEXT_DATA_DIR', value: '/data/agentbean-next' },
               { name: 'AGENTBEAN_NEXT_SESSION_SECRET', value: '********' },
+              { name: 'AGENTBEAN_PI_SECRET_KEY', value: '********' },
             ]);
           }
           return JSON.stringify([{ id: 'volume-id', name: 'agentbean-next-data', mountPath: '/data' }]);
@@ -55,6 +56,7 @@ describe('AgentBean Next Railway preflight', () => {
     expect(summary.checks.filter((check) => !check.ok).map((check) => check.id)).toEqual([
       'railway-variable-next-data-dir',
       'railway-variable-session-secret',
+      'railway-variable-pi-secret-key',
       'railway-volume-covers-data-dir',
     ]);
   });

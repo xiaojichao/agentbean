@@ -77,6 +77,11 @@ export function collectAgentBeanNextCutoverAudit({
       'GitHub secret AGENTBEAN_NEXT_SESSION_SECRET must exist before server-next production deploy',
     ),
     check(
+      'github-secret-pi-secret-key',
+      secretNames.has('AGENTBEAN_PI_SECRET_KEY'),
+      'GitHub secret AGENTBEAN_PI_SECRET_KEY must exist for PI Provider credential encryption',
+    ),
+    check(
       'npm-contracts-next-version',
       registry.contracts,
       `npm registry must contain @agentbean/contracts@${contractsPackage.version}`,
@@ -147,8 +152,9 @@ function readGitHubSecrets(runCommand, env) {
     envSecret(env, 'RAILWAY_TOKEN'),
     envSecret(env, 'NPM_TOKEN'),
     envSecret(env, 'AGENTBEAN_NEXT_SESSION_SECRET'),
+    envSecret(env, 'AGENTBEAN_PI_SECRET_KEY'),
   ].filter(Boolean);
-  if (envItems.length === 3) {
+  if (envItems.length === 4) {
     return { ok: true, items: envItems, error: undefined };
   }
   try {
