@@ -537,7 +537,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         check(
           'webui-admin-dashboard-business-flow',
           true,
-          `Verified admin dashboard teams/users/devices/agents tabs and transferred device ${adminResult.deviceId} from ${adminResult.initialOwnerUsername} to ${adminResult.targetOwnerUsername}`,
+          `Verified System Admin Console middle-nav sections (teams/users/devices/agents/pi), transferred device ${adminResult.deviceId} from ${adminResult.initialOwnerUsername} to ${adminResult.targetOwnerUsername}, and confirmed PI lives at dashboard/pi with settings?tab=pi redirect`,
         ),
       );
     } else {
@@ -2960,15 +2960,23 @@ export async function exerciseWebUiAdminDashboardBusinessSmoke({
     }
 
     await seedWebUiAuthStorage({ page, session: adminSession });
+    // Enter System Admin Console via dashboard root (redirects to /dashboard/teams).
     await page.navigate(new URL(`/${teamPath}/dashboard`, root).toString());
     await waitForWebUiAdminDashboard({ page, timeoutMs });
+    await waitForWebUiAdminConsoleNav({ page, timeoutMs });
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'teams', timeoutMs });
     await waitForWebUiAdminTeam({ page, teamId: adminSession.team.id, timeoutMs });
+
+    // Middle-nav section switch: users
     await page.click('[data-smoke="admin-tab-users"]');
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'users', timeoutMs });
     await waitForWebUiAdminUser({ page, userId: adminSession.user.id, username: adminSession.user.username, timeoutMs });
     await waitForWebUiAdminUser({ page, userId: initialOwner.session.user.id, username: initialOwner.username, timeoutMs });
     await waitForWebUiAdminUser({ page, userId: targetOwner.session.user.id, username: targetOwner.username, timeoutMs });
 
+    // Middle-nav section switch: devices (+ owner transfer)
     await page.click('[data-smoke="admin-tab-devices"]');
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'devices', timeoutMs });
     await waitForWebUiAdminDevice({
       page,
       deviceId: daemon.deviceId,
@@ -3007,13 +3015,17 @@ export async function exerciseWebUiAdminDashboardBusinessSmoke({
     });
 
     await page.click('[data-smoke="admin-tab-devices"]');
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'devices', timeoutMs });
     await waitForWebUiAdminDevice({
       page,
       deviceId: daemon.deviceId,
       ownerId: targetOwner.session.user.id,
       timeoutMs,
     });
+
+    // Middle-nav section switch: agents
     await page.click('[data-smoke="admin-tab-agents"]');
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'agents', timeoutMs });
     await waitForWebUiAdminAgent({
       page,
       agentId,
@@ -3030,12 +3042,34 @@ export async function exerciseWebUiAdminDashboardBusinessSmoke({
       timeoutMs,
     });
 
+    // Middle-nav PI section (new IA entry; not settings)
     await page.click('[data-smoke="admin-tab-pi"]');
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'pi', timeoutMs });
+    await waitForWebUiAdminPiPage({ page, timeoutMs });
+
+    // Deep-link: /dashboard/pi remains the PI entry after refresh-style navigation
+    await page.navigate(new URL(`/${teamPath}/dashboard/pi`, root).toString());
+    await waitForWebUiAdminDashboard({ page, timeoutMs });
+    await waitForWebUiAdminConsoleNav({ page, timeoutMs });
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'pi', timeoutMs });
+    await waitForWebUiAdminPiPage({ page, timeoutMs });
+
+    // Settings is no longer the PI primary entry; legacy ?tab=pi redirects admins to Console
+    await page.navigate(new URL(`/${teamPath}/settings`, root).toString());
     await page.waitForFunction(
-      `Boolean(document.querySelector('[data-smoke="admin-pi-page"]')) && Boolean(document.querySelector('[data-smoke="settings-pi-panel"]'))`,
-      'admin PI Agent management panel to render',
+      `
+      (() => {
+        return Boolean(document.querySelector('[data-smoke="settings-tab-account"]'))
+          && !document.querySelector('[data-smoke="settings-tab-pi"]')
+          && !window.location.pathname.includes('/dashboard/pi');
+      })()
+      `,
+      'settings page without PI as a primary tab',
       timeoutMs,
     );
+    await page.navigate(new URL(`/${teamPath}/settings?tab=pi`, root).toString());
+    await waitForWebUiAdminSectionPath({ page, teamPath, section: 'pi', timeoutMs });
+    await waitForWebUiAdminPiPage({ page, timeoutMs });
 
     return {
       deviceId: daemon.deviceId,
@@ -3162,6 +3196,39 @@ async function waitForWebUiAdminDashboard({ page, timeoutMs }) {
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="admin-dashboard-page"]')) && !document.querySelector('[data-smoke="admin-dashboard-forbidden"]')`,
     'admin dashboard page to render for global admin',
+    timeoutMs,
+  );
+}
+
+/** System Admin Console middle nav: five sections including PI Agent management. */
+async function waitForWebUiAdminConsoleNav({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `
+    (() => {
+      const nav = document.querySelector('[data-smoke="admin-console-nav"]');
+      if (!nav) return false;
+      return ['teams', 'users', 'devices', 'agents', 'pi'].every((key) =>
+        Boolean(document.querySelector('[data-smoke="admin-tab-' + key + '"]'))
+      );
+    })()
+    `,
+    'admin console middle nav with five sections to render',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminSectionPath({ page, teamPath, section, timeoutMs }) {
+  await page.waitForFunction(
+    `window.location.pathname.includes(${JSON.stringify(`/${teamPath}/dashboard/${section}`)})`,
+    `admin console section path /dashboard/${section} to be active`,
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminPiPage({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-pi-page"]')) && Boolean(document.querySelector('[data-smoke="settings-pi-panel"]'))`,
+    'admin PI Agent management panel to render at dashboard/pi',
     timeoutMs,
   );
 }
