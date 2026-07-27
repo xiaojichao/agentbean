@@ -128,7 +128,7 @@ interface AppWithCleanup {
     readonly allowedAgentIds?: readonly string[];
     readonly projectStageAuto?: boolean;
   }) => Promise<void>): void;
-  recoverProjectStages?(): Promise<void>;
+  recoverProjectStages?(teamId?: string): Promise<void>;
   reconcileDisconnectedDevicesOnStart: boolean;
   close(): Promise<void>;
 }
@@ -307,6 +307,9 @@ export async function startServerNextDevServer(
     taskClaimBroker: input.taskClaimBroker ?? appWithCleanup.taskClaimBroker,
     serverWorkerPool: input.serverWorkerPool ?? appWithCleanup.serverWorkerPool,
     serverWorkerAuthToken: input.serverWorkerAuthToken ?? appWithCleanup.serverWorkerAuthToken,
+    onAgentAvailabilityChanged: async (teamId) => {
+      await appWithCleanup.recoverProjectStages?.(teamId);
+    },
   });
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
@@ -1607,6 +1610,7 @@ function createDefaultApp(
       taskCoordinationKernel: management.taskCoordinationKernel,
       serverCapsuleRuntimeContextResolver,
       resolvePiHealthy,
+      resolveProjectStageCandidates: (taskId) => taskClaimBroker.resolveCandidates(taskId),
       onProjectFactsChanged: async (scope) => {
         await management.advanceProjectStages(scope);
       },
@@ -1689,6 +1693,7 @@ function createDefaultApp(
     taskCoordinationKernel: management.taskCoordinationKernel,
     serverCapsuleRuntimeContextResolver,
     resolvePiHealthy,
+    resolveProjectStageCandidates: (taskId) => taskClaimBroker.resolveCandidates(taskId),
     onProjectFactsChanged: async (scope) => {
       await management.advanceProjectStages(scope);
     },
@@ -2115,8 +2120,11 @@ function createDefaultManagementRuntime(
     advanceProjectStages(scope: { teamId: string; channelId: string }) {
       return projectStageAutoAdvance.advanceChannel(scope);
     },
-    async recoverProjectStages() {
-      const teams = await repositories.teams.listAll();
+    async recoverProjectStages(teamId?: string) {
+      const team = teamId ? await repositories.teams.getById(teamId) : null;
+      const teams = teamId
+        ? team ? [team] : []
+        : await repositories.teams.listAll();
       for (const team of teams) {
         const channels = await repositories.channels.listByTeam(team.id);
         for (const channel of channels) {

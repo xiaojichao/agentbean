@@ -1175,6 +1175,10 @@ export interface CreateServerNextUseCasesInput {
   onProjectFactsChanged?: (scope: { teamId: string; channelId: string }) => Promise<void>;
   /** #829 阶段投影与自动推进共用同一条公开 PI 健康判定，避免 UI 显示可推进但 Server fail closed。 */
   resolvePiHealthy?: () => Promise<boolean>;
+  /** #829 Overview 使用与自动推进相同的 Broker 候选事实。 */
+  resolveProjectStageCandidates?: (taskId: string) => Promise<{
+    candidates: readonly { agentId: string; eligible: boolean }[];
+  }>;
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
@@ -4278,6 +4282,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         access.channel,
         await resolveProjectPiHealthy(),
         clock.now(),
+        input.resolveProjectStageCandidates,
       );
       return makeSuccess({ overview });
     },
@@ -4402,6 +4407,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         [],
         await resolveProjectPiHealthy(),
         now,
+        input.resolveProjectStageCandidates,
       );
       const result = await repositories.channelProjects.createInitialStage({
         expectedRevision: projectInput.expectedRevision,
@@ -4489,6 +4495,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         edges,
         await resolveProjectPiHealthy(),
         now,
+        input.resolveProjectStageCandidates,
       );
       const result = await repositories.channelProjects.createStage({
         expectedRevision: stageInput.expectedRevision,
@@ -4594,6 +4601,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         [...edges, edge],
         await resolveProjectPiHealthy(),
         now,
+        input.resolveProjectStageCandidates,
       );
       const result = await repositories.channelProjects.createStageEdge({
         expectedRevision: edgeInput.expectedRevision,
@@ -4639,6 +4647,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         edges.filter((candidate) => candidate.id !== edge.id),
         await resolveProjectPiHealthy(),
         now,
+        input.resolveProjectStageCandidates,
       );
       const result = await repositories.channelProjects.deleteStageEdge({
         teamId: edgeInput.teamId,
@@ -11100,6 +11109,7 @@ async function buildChannelProjectOverview(
   channel: ChannelRecord,
   piHealthy: boolean,
   now: number,
+  resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto | null> {
   const profile = await repositories.channelProjects.getProfile({
     teamId: channel.teamId,
@@ -11110,7 +11120,16 @@ async function buildChannelProjectOverview(
     repositories.channelProjects.listStages({ teamId: channel.teamId, channelId: channel.id }),
     repositories.channelProjects.listEdges({ teamId: channel.teamId, channelId: channel.id }),
   ]);
-  return projectChannelProjectOverview(repositories, channel, profile, records, edges, piHealthy, now);
+  return projectChannelProjectOverview(
+    repositories,
+    channel,
+    profile,
+    records,
+    edges,
+    piHealthy,
+    now,
+    resolveProjectStageCandidates,
+  );
 }
 
 /**
@@ -11127,6 +11146,7 @@ async function projectChannelProjectOverview(
   edgeRecords: readonly ProjectStageEdgeRecord[],
   piHealthy: boolean,
   now: number,
+  resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto> {
   const stageFacts = new Map<string, ProjectStageFacts>();
   for (const record of stageRecords) {
@@ -11143,7 +11163,15 @@ async function projectChannelProjectOverview(
   const stages: ChannelProjectOverviewDto['stages'] = [];
   for (const record of stageRecords) {
     const facts = stageFacts.get(record.id) as ProjectStageFacts;
-    stages.push(await projectStageDto(repositories, facts, stageFacts, edgeRecords, piHealthy, now));
+    stages.push(await projectStageDto(
+      repositories,
+      facts,
+      stageFacts,
+      edgeRecords,
+      piHealthy,
+      now,
+      resolveProjectStageCandidates,
+    ));
   }
   return {
     profile,
@@ -11406,6 +11434,7 @@ async function projectStageDto(
   edgeRecords: readonly ProjectStageEdgeRecord[],
   piHealthy: boolean,
   now: number,
+  resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto['stages'][number]> {
   const { record, task } = facts;
   const inboundEdges = edgeRecords.filter((edge) => edge.downstreamStageId === record.id);
@@ -11495,8 +11524,19 @@ async function projectStageDto(
       now,
     })).current
     : false;
-  const candidateAgentIds = await projectStageCandidateAgentIds(repositories, task, coordination,
-    stableResolution.inputs.some((input) => input.kind === 'document_revision'), now);
+  const brokerEligibleAgentIds = resolveProjectStageCandidates
+    ? (await resolveProjectStageCandidates(task.id)).candidates
+      .filter((candidate) => candidate.eligible)
+      .map((candidate) => candidate.agentId)
+    : undefined;
+  const candidateAgentIds = await projectStageCandidateAgentIds(
+    repositories,
+    task,
+    coordination,
+    stableResolution.inputs.some((stableInput) => stableInput.kind === 'document_revision'),
+    now,
+    brokerEligibleAgentIds,
+  );
   const policy = await repositories.teamPiPolicy.getOrDefault(task.teamId);
   const advanceDecision = evaluateProjectStageAdvance({
     channelWritable: !(await repositories.channels.getById(record.channelId))?.archivedAt,
@@ -11572,8 +11612,20 @@ async function projectStageCandidateAgentIds(
   coordination: Awaited<ReturnType<ServerNextRepositories['taskCoordination']['coordinations']['getByTaskId']>>,
   requiresDocumentInputSet: boolean,
   now: number,
+  brokerEligibleAgentIds?: readonly string[],
 ): Promise<string[]> {
   if (!coordination || !task.channelId) return [];
+  if (brokerEligibleAgentIds) {
+    return filterStrictProjectStageAgentIds(repositories, {
+      teamId: task.teamId,
+      candidateAgentIds: brokerEligibleAgentIds,
+      requiredCapabilities: coordination.requiredCapabilities,
+      ...(requiresDocumentInputSet
+        ? { requiredProjectDocumentInputSetVersion: 1 }
+        : {}),
+      now,
+    });
+  }
   const channel = await repositories.channels.getById(task.channelId);
   if (!channel || channel.archivedAt != null) return [];
   const devices = new Map((await repositories.devices.listByTeam(task.teamId))

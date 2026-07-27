@@ -60,6 +60,7 @@ export interface ServerNextSocketOptions {
   serverWorkerPool?: ServerWorkerPool;
   serverWorkerScheduler?: ServerWorkerScheduler;
   serverWorkerAuthToken?: string;
+  onAgentAvailabilityChanged?: (teamId: string) => Promise<void>;
 }
 
 interface ChannelSubscription {
@@ -785,6 +786,7 @@ export function attachServerNextNamespaces(
           await refreshChannelSubscribers(webSubscribers, app, channelTeamId);
         }
         emitDeviceRuntimes(webSubscribers, teamId, result);
+        await options.onAgentAvailabilityChanged?.(teamId).catch(() => undefined);
       },
       async afterAgentMutation(payload, result) {
         if (!isSuccessAck(result)) {
