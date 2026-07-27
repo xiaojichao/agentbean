@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Globe, Users, Monitor, Bot, Trash2, RefreshCw, X, Save } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { getWebSocket } from '@/lib/socket';
@@ -96,6 +96,9 @@ const SECTION_TITLE: Record<AdminConsoleSection, string> = {
   agents: 'Agent 管理',
 };
 
+/** Default inventory page size for System Admin Console lists. */
+export const ADMIN_LIST_DEFAULT_PAGE_SIZE = 20;
+
 /**
  * Right-pane inventory for System Admin Console.
  * Shell / middle nav live in dashboard layout; this panel only loads and renders one section.
@@ -110,45 +113,82 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
   const [selectedAgent, setSelectedAgent] = useState<AdminAgent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(ADMIN_LIST_DEFAULT_PAGE_SIZE);
+  const [total, setTotal] = useState(0);
+  const loadGenerationRef = useRef(0);
 
-  const loadData = async (t: AdminConsoleSection) => {
+  const loadData = async (t: AdminConsoleSection, pageToLoad = page) => {
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     setError(null);
     const socket = getWebSocket();
     try {
-      const res = await emitWithTimeout(socket, `admin:list-${t}`, {});
+      const res = await emitWithTimeout(socket, `admin:list-${t}`, { page: pageToLoad, pageSize });
+      if (generation !== loadGenerationRef.current) {
+        return;
+      }
       if (res?.ok) {
+        const nextTotal = typeof res.total === 'number' ? res.total : 0;
+        setTotal(nextTotal);
+        const items =
+          t === 'teams' ? (res.teams ?? [])
+            : t === 'users' ? (res.users ?? [])
+              : t === 'devices' ? (res.devices ?? [])
+                : (res.agents ?? []);
+        // After delete, clamp an empty trailing page back into range.
+        if (items.length === 0 && pageToLoad > 1 && nextTotal > 0) {
+          const lastPage = Math.max(1, Math.ceil(nextTotal / pageSize));
+          if (lastPage < pageToLoad) {
+            setPage(lastPage);
+            return;
+          }
+        }
         if (t === 'teams') setTeams(res.teams ?? []);
         if (t === 'users') setUsers(res.users ?? []);
         if (t === 'devices') {
           setDevices(res.devices ?? []);
-          const usersRes = await emitWithTimeout(socket, 'admin:list-users', {});
+          // Owner transfer dropdown needs a wider user sample than the inventory page.
+          // Full searchable user picker is P3; inject current owner in the dialog if missing.
+          const usersRes = await emitWithTimeout(socket, 'admin:list-users', { page: 1, pageSize: 100 });
+          if (generation !== loadGenerationRef.current) {
+            return;
+          }
           if (usersRes?.ok) setUsers(usersRes.users ?? []);
         }
         if (t === 'agents') {
           setAgents(res.agents ?? []);
-          const teamsRes = await emitWithTimeout(socket, 'admin:list-teams', {});
+          const teamsRes = await emitWithTimeout(socket, 'admin:list-teams', { page: 1, pageSize: 100 });
+          if (generation !== loadGenerationRef.current) {
+            return;
+          }
           if (teamsRes?.ok) setTeams(teamsRes.teams ?? []);
         }
       } else {
         setError(res?.error ?? '加载失败');
       }
     } catch {
-      setError('请求超时');
+      if (generation === loadGenerationRef.current) {
+        setError('请求超时');
+      }
     }
-    setLoading(false);
+    if (generation === loadGenerationRef.current) {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     if (conn !== 'open') return;
-    void loadData(section);
-  }, [conn, section]);
+    void loadData(section, page);
+    // section/page/conn drive reloads; loadData closes over latest pageSize.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conn, section, page, pageSize]);
 
   const handleDelete = async (type: string, id: string) => {
     const socket = getWebSocket();
     const res = await emitWithTimeout(socket, `admin:delete-${type}`, { [`${type}Id`]: id });
     if (res?.ok) {
-      void loadData(section);
+      void loadData(section, page);
     } else {
       setError(res?.error ?? '删除失败');
     }
@@ -164,12 +204,14 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
     setSelectedDevice((current) => (current?.id === res.device.id ? res.device : current));
   };
 
+  const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
         <h1 className="text-sm font-semibold">{SECTION_TITLE[section]}</h1>
         <button
-          onClick={() => void loadData(section)}
+          onClick={() => void loadData(section, page)}
           disabled={loading}
           className="inline-flex items-center gap-1.5 rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:opacity-50"
           data-smoke="admin-refresh"
@@ -191,6 +233,15 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
         {!loading && section === 'agents' && (
           <AgentsTable agents={agents} teams={teams} onSelect={setSelectedAgent} onDelete={(id) => handleDelete('agent', id)} />
         )}
+        {!loading && (
+          <AdminListPagination
+            page={page}
+            pageSize={pageSize}
+            total={total}
+            totalPages={totalPages}
+            onPageChange={setPage}
+          />
+        )}
         {selectedDevice && (
           <DeviceDetailDialog
             device={selectedDevice}
@@ -200,6 +251,62 @@ export function AdminConsolePanel({ section }: { section: AdminConsoleSection })
           />
         )}
         {selectedAgent && <AgentDetailDialog agent={selectedAgent} onClose={() => setSelectedAgent(null)} />}
+      </div>
+    </div>
+  );
+}
+
+function AdminListPagination({
+  page,
+  pageSize,
+  total,
+  totalPages,
+  onPageChange,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (total === 0) {
+    return null;
+  }
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+  return (
+    <div
+      className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-4 text-sm text-neutral-600"
+      data-smoke="admin-list-pagination"
+      data-page={page}
+      data-page-size={pageSize}
+      data-total={total}
+    >
+      <span data-smoke="admin-list-pagination-summary">
+        第 {from}–{to} 条，共 {total} 条
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+          className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+          data-smoke="admin-list-prev"
+        >
+          上一页
+        </button>
+        <span className="tabular-nums text-xs text-neutral-500" data-smoke="admin-list-page-label">
+          {page} / {totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+          className="rounded border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+          data-smoke="admin-list-next"
+        >
+          下一页
+        </button>
       </div>
     </div>
   );
@@ -450,9 +557,23 @@ function DeviceDetailDialog({
   const [ownerError, setOwnerError] = useState<string | null>(null);
   const runtimes = device.runtimes ?? [];
   const publicAgents = device.agents ?? [];
-  const ownerOptions = users.length > 0
-    ? users
-    : [{ id: device.userId, username: device.userName ?? '未知用户', email: null, role: 'user', createdAt: 0 }];
+  // Always include the current owner even when they fall outside the capped user page.
+  const ownerOptions = (() => {
+    const byId = new Map(users.map((user) => [user.id, user]));
+    if (device.userId && !byId.has(device.userId)) {
+      byId.set(device.userId, {
+        id: device.userId,
+        username: device.userName ?? '未知用户',
+        email: null,
+        role: 'user',
+        createdAt: 0,
+      });
+    }
+    if (byId.size === 0) {
+      return [{ id: device.userId, username: device.userName ?? '未知用户', email: null, role: 'user', createdAt: 0 }];
+    }
+    return Array.from(byId.values());
+  })();
 
   useEffect(() => {
     setOwnerId(device.userId);

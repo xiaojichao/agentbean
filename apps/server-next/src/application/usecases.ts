@@ -226,10 +226,10 @@ export interface ServerNextUseCases {
   whoami(input: WhoamiInput): Promise<Ack<WhoamiResult>>;
   changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<Ack<{}>>;
   listTeams(input: { userId: string }): Promise<Ack<ListTeamsResult>>;
-  listAdminTeams(input: { userId: string }): Promise<Ack<{ teams: AdminTeamDto[] }>>;
-  listAdminUsers(input: { userId: string }): Promise<Ack<{ users: AdminUserDto[] }>>;
-  listAdminDevices(input: { userId: string }): Promise<Ack<{ devices: AdminDeviceDto[] }>>;
-  listAdminAgents(input: { userId: string }): Promise<Ack<{ agents: AdminAgentDto[] }>>;
+  listAdminTeams(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'teams', AdminTeamDto>>>;
+  listAdminUsers(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'users', AdminUserDto>>>;
+  listAdminDevices(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'devices', AdminDeviceDto>>>;
+  listAdminAgents(input: AdminListQueryInput): Promise<Ack<AdminListPageResult<'agents', AdminAgentDto>>>;
   deleteAdminTeam(input: { userId: string; teamId: string }): Promise<Ack<{}>>;
   deleteAdminUser(input: { adminUserId: string; targetUserId: string }): Promise<Ack<{}>>;
   deleteAdminAgent(input: { userId: string; agentId: string }): Promise<Ack<{}>>;
@@ -531,6 +531,23 @@ type AdminAgentDto = AgentDto & {
   deviceName?: string | null;
   deviceUserId?: string | null;
   deviceUserName?: string | null;
+};
+
+/** System inventory list query: 1-based page, default pageSize 20, clamped to [1, 100]. */
+type AdminListQueryInput = {
+  userId: string;
+  page?: number;
+  pageSize?: number;
+};
+
+type AdminListPageMeta = {
+  page: number;
+  pageSize: number;
+  total: number;
+};
+
+type AdminListPageResult<K extends string, TItem> = AdminListPageMeta & {
+  [P in K]: TItem[];
 };
 
 type AdminDeviceDto = DeviceDto & {
@@ -1860,15 +1877,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      const teams = await repositories.teams.listAll();
+      const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const allTeams = sortAdminInventoryByCreatedAtDesc(await repositories.teams.listAll());
+      const total = allTeams.length;
+      const pageTeams = sliceAdminInventoryPage(allTeams, page, pageSize);
       const result: AdminTeamDto[] = [];
-      for (const team of teams) {
+      for (const team of pageTeams) {
         result.push({
           ...team,
           members: await repositories.teams.listAllMembers(team.id),
         });
       }
-      return makeSuccess({ teams: result });
+      return makeSuccess({ teams: result, page, pageSize, total });
     },
 
     async listAdminUsers(adminInput) {
@@ -1876,13 +1896,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      const users = await repositories.users.listAll();
+      const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const allUsers = sortAdminInventoryByCreatedAtDesc(await repositories.users.listAll());
+      const total = allUsers.length;
+      const pageUsers = sliceAdminInventoryPage(allUsers, page, pageSize);
       return makeSuccess({
-        users: users.map((user) => ({
+        users: pageUsers.map((user) => ({
           ...toUserDto(user),
           email: user.email ?? null,
           createdAt: user.createdAt,
         })),
+        page,
+        pageSize,
+        total,
       });
     },
 
@@ -1891,9 +1917,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
-      return makeSuccess({
-        devices: await listAdminDeviceDtos(repositories),
-      });
+      const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      const allDevices = sortAdminInventoryByCreatedAtDesc(await repositories.devices.listAll());
+      const total = allDevices.length;
+      const pageDevices = sliceAdminInventoryPage(allDevices, page, pageSize);
+      const devices: AdminDeviceDto[] = [];
+      for (const device of pageDevices) {
+        devices.push(await toAdminDeviceDto(repositories, device));
+      }
+      return makeSuccess({ devices, page, pageSize, total });
     },
 
     async listAdminAgents(adminInput) {
@@ -1901,8 +1933,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!admin.ok) {
         return admin;
       }
+      const { page, pageSize } = normalizeAdminListPagination(adminInput);
+      // listAll already excludes soft-deleted agents; keep that as the default inventory filter.
+      const allAgents = sortAdminInventoryByCreatedAtDesc(await repositories.agents.listAll());
+      const total = allAgents.length;
+      const pageAgents = sliceAdminInventoryPage(allAgents, page, pageSize);
       return makeSuccess({
-        agents: await listAdminAgentDtos(repositories),
+        agents: await toAdminAgentDtos(repositories, pageAgents),
+        page,
+        pageSize,
+        total,
       });
     },
 
@@ -8590,23 +8630,67 @@ async function requireGlobalAdmin(
   return { ok: true, user };
 }
 
-async function listAdminDeviceDtos(repositories: ServerNextRepositories): Promise<AdminDeviceDto[]> {
-  const devices = await repositories.devices.listAll();
-  const result: AdminDeviceDto[] = [];
-  for (const device of devices) {
-    result.push(await toAdminDeviceDto(repositories, device));
+const ADMIN_LIST_DEFAULT_PAGE_SIZE = 20;
+const ADMIN_LIST_MAX_PAGE_SIZE = 100;
+
+function normalizeAdminListPagination(input: { page?: number; pageSize?: number }): {
+  page: number;
+  pageSize: number;
+} {
+  const pageRaw = input.page;
+  const page = typeof pageRaw === 'number' && Number.isFinite(pageRaw) && pageRaw >= 1
+    ? Math.floor(pageRaw)
+    : 1;
+  const pageSizeRaw = input.pageSize;
+  if (typeof pageSizeRaw !== 'number' || !Number.isFinite(pageSizeRaw) || pageSizeRaw < 1) {
+    return { page, pageSize: ADMIN_LIST_DEFAULT_PAGE_SIZE };
   }
-  return result;
+  return {
+    page,
+    pageSize: Math.min(ADMIN_LIST_MAX_PAGE_SIZE, Math.floor(pageSizeRaw)),
+  };
 }
 
-async function listAdminAgentDtos(repositories: ServerNextRepositories): Promise<AdminAgentDto[]> {
-  const [agents, devices, users, teams] = await Promise.all([
-    repositories.agents.listAll(),
-    repositories.devices.listAll(),
+function adminInventoryCreatedAt(item: { createdAt?: number | null; lastSeenAt?: number | null }): number {
+  return item.createdAt ?? item.lastSeenAt ?? 0;
+}
+
+function sortAdminInventoryByCreatedAtDesc<T extends { id: string; createdAt?: number | null; lastSeenAt?: number | null }>(
+  items: T[],
+): T[] {
+  return [...items].sort((left, right) => {
+    const createdDelta = adminInventoryCreatedAt(right) - adminInventoryCreatedAt(left);
+    if (createdDelta !== 0) {
+      return createdDelta;
+    }
+    return right.id.localeCompare(left.id);
+  });
+}
+
+function sliceAdminInventoryPage<T>(items: T[], page: number, pageSize: number): T[] {
+  const start = (page - 1) * pageSize;
+  if (start >= items.length) {
+    return [];
+  }
+  return items.slice(start, start + pageSize);
+}
+
+async function toAdminAgentDtos(
+  repositories: ServerNextRepositories,
+  agents: AgentRecord[],
+): Promise<AdminAgentDto[]> {
+  if (agents.length === 0) {
+    return [];
+  }
+  const deviceIds = uniqueIds(agents.map((agent) => agent.deviceId ?? ''));
+  const [devices, users, teams] = await Promise.all([
+    Promise.all(deviceIds.map((deviceId) => repositories.devices.getById(deviceId))),
     repositories.users.listAll(),
     repositories.teams.listAll(),
   ]);
-  const devicesById = new Map(devices.map((device) => [device.id, device]));
+  const devicesById = new Map(
+    devices.filter((device): device is DeviceRecord => Boolean(device)).map((device) => [device.id, device]),
+  );
   const usersById = new Map(users.map((user) => [user.id, user]));
   const teamsById = new Map(teams.map((team) => [team.id, team]));
   return agents.map((agent) => toAdminAgentDto(agent, {
@@ -13189,7 +13273,12 @@ function hasOwn(value: object, key: PropertyKey): boolean {
 }
 
 function toPublicAgent(agent: AgentRecord): AgentDto {
-  const { deletedAt: _deletedAt, nameSource: _nameSource, ...publicAgent } = agent;
+  const {
+    deletedAt: _deletedAt,
+    nameSource: _nameSource,
+    createdAt: _createdAt,
+    ...publicAgent
+  } = agent;
   return publicAgent;
 }
 

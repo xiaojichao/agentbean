@@ -130,7 +130,12 @@ export interface AgentExecutionConfig {
   cwd?: string;
   env?: Record<string, string>;
 }
-export type AgentRecord = AgentDto & { deletedAt?: UnixMs; nameSource?: 'scanned' | 'custom' };
+export type AgentRecord = AgentDto & {
+  deletedAt?: UnixMs;
+  nameSource?: 'scanned' | 'custom';
+  /** Persist-layer create time; used for admin inventory sort. Not part of public AgentDto. */
+  createdAt?: UnixMs;
+};
 export type AgentUpsertRecord = AgentRecord & { env?: Record<string, string> };
 
 export interface AgentConfigUpdate {

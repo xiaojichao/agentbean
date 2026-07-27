@@ -947,8 +947,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             agent.name = existing.name;
           }
           agent.nameSource = existing.nameSource;
+          // createdAt is immutable after first insert (matches SQLite ON CONFLICT leaving created_at).
+          agent.createdAt = existing.createdAt ?? agent.createdAt ?? agent.lastSeenAt ?? 0;
         } else {
           agent.nameSource = agent.nameSource ?? 'scanned';
+          agent.createdAt = agent.createdAt ?? agent.lastSeenAt ?? 0;
         }
         agents.set(input.id, agent);
         if (env) {

@@ -3963,6 +3963,7 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
         'project_document_input_set_versions_json',
       )) as number[] | null) ?? undefined,
     nameSource: sqliteText(row, 'name_source') as AgentRecord['nameSource'],
+    createdAt: sqliteNumber(row, 'created_at'),
     deletedAt,
   };
 }
