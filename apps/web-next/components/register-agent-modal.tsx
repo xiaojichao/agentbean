@@ -74,6 +74,9 @@ export function RegisterAgentModal({
         ...(command ? { command } : {}),
         ...(discoveredAgent.args?.length ? { args: discoveredAgent.args } : {}),
         ...(discoveredAgent.cwd?.trim() ? { cwd: discoveredAgent.cwd.trim() } : {}),
+        ...(discoveredAgent.projectDocumentInputSetVersions?.length
+          ? { projectDocumentInputSetVersions: discoveredAgent.projectDocumentInputSetVersions }
+          : {}),
       });
       if (!res.ok) {
         setError(res.error ?? '注册失败');

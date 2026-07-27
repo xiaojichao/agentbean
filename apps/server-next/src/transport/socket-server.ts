@@ -1372,6 +1372,7 @@ async function emitDiscoveredAgents(
           command: agent.command ?? runtime?.command ?? '',
           args: agent.args,
           cwd: agent.cwd ?? runtime?.cwd,
+          projectDocumentInputSetVersions: agent.projectDocumentInputSetVersions,
         };
       }),
     });
