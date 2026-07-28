@@ -79,13 +79,73 @@ _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任�
 
 ## PI Manager
 
-AgentBean 内置的系统协调者，默认理解每一条人类频道消息，并决定是否忽略、回答系统问题、请求澄清、调用 Agent、创建或调整 Task。它不是 Team 成员，也不替代外部 Agent 完成用户领域工作。
-_Avoid_: PI Agent、普通聊天 Agent、仅用于复杂任务的 Manager、用户任务执行 Agent。
+AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
+_Avoid_: PI Agent、每消息 Channel Coordinator、普通聊天 Agent、用户任务执行 Agent。
 
-## Channel coordination decision
+## PI orchestration trigger
 
-PI Manager 对一条人类频道消息形成的协作意图，决定消息应进入闲聊、系统回答、用户澄清、单 Agent 调用、Task 创建、Task 分解或既有 Task 修订中的哪条路径。形成该决策不等于创建 Task 或 ManagementRun。
-_Avoid_: 每消息建 Task、直接 Dispatch、自然语言自动执行。
+允许 PI Manager 开始根 Task 编排的结构化、可审计事实，来自人类明确动作、合法 Agent 升级或 Team promotion policy；普通自然语言、关键词、@Agent、DM 或 Thread owner 本身都不是 trigger。
+_Avoid_: Channel coordination decision、每消息 coordination job、关键词触发、自然语言自动建单、隐式入口。
+
+## Promotion proposal
+
+在目标、交付、作用域、必要权限与成功标准已经明确后，把一条尚未成为 Task 的 Message 建议提升为根 Task 的授权候选；它保留来源、目标与提出理由，但在被合法确认前不创建 Task，也不产生编排 ownership。
+_Avoid_: Clarification、Root task、PI orchestration trigger、模型分类结果、暗中自动建单。
+
+## Promotion clarification
+
+Message 可能表达工作意图、但尚不能唯一确定目标、交付、作用域、必要权限或成功标准时，对同一来源 lineage 提出的单一关键问题；答案充分前不得生成 Promotion proposal 或 Task。
+_Avoid_: Promotion proposal、一次性表格访谈、预建 Task、澄清即授权。
+
+## Promotion authorization
+
+原始人类 requester 或 Team-owned 入口指定 approver 使用 Server 签发、绑定 proposal revision 与授权边界的 token，对 Promotion proposal 作出的明确接受；成功原子创建唯一根 Task、来源关系、trigger audit 与 PI orchestration claim，但不授予 Task 内高风险或外部副作用的执行权。
+_Avoid_: Action approval、Owner/Admin 代替个人 requester、自然语言同意、过期或跨 revision 授权、accept 后部分建单。
+
+## Agent orchestration escalation
+
+合法责任 Agent 发现当前请求需要持续跟踪或协作时，绑定来源、Freshness basis、目标与理由提交的结构化升级；原授权边界内可形成 PI orchestration trigger，扩大范围、风险、成本或数据权限时只能形成 Promotion proposal。
+_Avoid_: 旁观 Agent 升级、自然语言暗示、升级即获得编排权、借升级扩大授权。
+
+## Team promotion policy
+
+由 Team Owner/Admin 在系统治理上限内管理、以版本化规则把预授权结构化入口提升为根 Task 的 Team 规则；正文关键词、模型语义分类或频道惯例只能命中 Promotion proposal，不能直接 promotion。
+_Avoid_: 每消息自动分类、自然语言自动建单、覆盖 chat-only、突破权限或数据边界、无版本隐式规则。
+
+## Semantic promotion rollout
+
+自然语言或模型 proposal 策略的 Team 运行状态，只允许 `off`、不打扰用户的 `shadow` 与展示可确认建议的 `proposal-only`；语义策略永不进入自动 promotion，确定性结构化入口不属于此阶梯。
+_Avoid_: semantic auto-promote、shadow 建 Task、未审计切换、紧急停用后继续接受旧 proposal token。
+
+## Promotion evaluator
+
+受 Semantic promotion rollout 与消息作用域授权控制、对普通自然语言给出 No promotion、Promotion clarification 或 Promotion proposal 的 Server 无副作用判定器；它不取得 claim、不创建 Task，也不是 PI Manager。
+_Avoid_: 每消息 PI Manager、Channel Coordinator、direct dispatch、模型失败回滚 Message、跨频道或 DM ambient access。
+
+## Message-to-task promotion
+
+由权威 PI orchestration trigger 从来源 Message 派生保留不可变来源关系的唯一根 Task；Message 继续作为沟通事实，Task 成为独立工作事实，同一来源 lineage 不得因重试、回复或并行入口重复创建根 Task。
+_Avoid_: 移动或替换原消息、复制消息为 Task、每条回复新建根 Task、@Agent 自动升级、无来源 Task。
+
+## Promotion source relation
+
+Message-to-task promotion 创建的不可变 provenance，连接来源 Message/target/requester、trigger、创建时目标与作用域快照，并在 proposal accept 入口记录 proposal revision 与确认人；来源后续编辑或删除只产生 attention/tombstone，不静默改写或取消 Task。
+_Avoid_: 为无 proposal 的结构化 trigger 虚构 revision 或确认人、Task 正文副本、可变来源指针、删消息即删 Task、编辑消息即改 Task。
+
+## Promotion gate
+
+Server 接受人类结构化 trigger、Agent escalation、Team promotion policy 与 proposal accept 的唯一根 Task 创建边界；它按 source lineage、Freshness basis、目标和授权快照完成去重、冲突判断与原子 promotion。
+_Avoid_: 多入口各自建 Task、先到先得、客户端直接创建编排根 Task、部分 promotion。
+
+## Promotion conflict
+
+同一 source lineage 的并发 promotion 请求在目标、作用域、风险或权限边界上不一致，因而不能安全收敛时的无副作用结果；必须由原 requester 明确选择或修订，不能由 Server 按到达顺序代决。
+_Avoid_: Freshness hold、静默覆盖、隐式合并、先写入者获胜。
+
+## Orchestration need
+
+请求确实需要多工作单元或跨 Agent 协作、依赖与恢复、结果聚合、持续跟踪或人工审核生命周期的可审计事实；它是 Agent escalation 与 policy direct promotion 的必要门槛。
+_Avoid_: 文本长度、复杂措辞、任务关键词、多个 @、模型主观复杂度、单 Agent 可直接完成的请求。
 
 ## Task allocation
 
@@ -94,13 +154,13 @@ _Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意�
 
 ## Uncoordinated message intake
 
-PI 自动协调关闭、旁路或不可用时，人类频道消息成为 Agent 工作的唯一入口是：显式 @Agent 的定向指派，或已经绑定到既有 Tracked task 的跟进路径。原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
-_Avoid_: 原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
+不存在权威 PI orchestration trigger 时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。Semantic promotion rollout 关闭、旁路或不可用不影响确定性结构化 trigger 进入 Promotion gate；原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
+_Avoid_: evaluator 关闭即禁用结构化 trigger、PI 自动协调总开关、原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
 
 ## Coordinated message intake
 
-PI 自动协调开启时，每条人类频道消息先形成 Channel coordination decision，再进入闲聊忽略、系统回答、澄清、Simple agent request、Tracked task 创建/分解/修订等路径；禁止用「频道内第一在线 Agent」作为未 @ 消息的隐式负责人。
-_Avoid_: legacy 未 @ fallback Dispatch、与协调决策并行的第二套抢单入口。
+Message delivery 之后只有权威 PI orchestration trigger 可以进入根 Task 编排；普通消息、Simple agent request 与既有 Task follow-up 各自保持原语义，不经过每消息协调入口。
+_Avoid_: 每消息 Channel coordination decision、legacy 未 @ fallback Dispatch、asTask/@Agent/DM/Thread owner 并行触发编排。
 
 ## Task offer
 
@@ -109,18 +169,18 @@ _Avoid_: 原始聊天广播、重复 Dispatch、无约束抢答、对原始消�
 
 ## Tracked task
 
-由 PI Manager 为需要持续跟踪、异步等待、多 Agent 协作、明确交付或用户审核的请求创建的持久工作承诺。低风险且意图明确时可以自动创建；高成本、高风险、跨越隐私边界或意图不清时必须先请求用户确认。
-_Avoid_: 每消息 Task、聊天记录别名、未经确认的高风险执行、把单 Agent 低风险请求一律建单。
+由 Promotion gate 从权威 PI orchestration trigger 创建、需要持续跟踪、依赖恢复、多 Agent 协作、结果聚合或人工审核的持久工作承诺；创建它只授权组织工作，不授权其中的高风险执行。
+_Avoid_: 每消息 Task、聊天记录别名、Promotion proposal、Action approval、把单 Agent 请求一律建单。
 
 ## Simple agent request
 
-PI 判定只需一个外部 Agent、且不需要持续跟踪或多方协作的人类请求；默认定向调用该 Agent，不创建 Tracked task。
-_Avoid_: 单人任务必建 Task、把简单请求项目管理化。
+Server message intake 根据显式 @Agent 确定性路由给一个外部 Agent、且不创建 Tracked task 的人类请求；Agent 后续若发现需要编排，只能走结构化 Agent orchestration escalation。
+_Avoid_: PI 每消息判定、未 @ 消息隐式选 Agent、单人任务必建 Task、把简单请求项目管理化。
 
 ## Task creation gate
 
-PI Manager 在创建 Tracked task 前对意图清晰度、持续跟踪需要、交付要求、成本、风险和权限边界进行的产品判断。不满足门槛的消息继续作为聊天或简单单 Agent 请求处理。多 Agent 且意图清晰时，默认可自动建 Tracked task 并生成可取消的分解与派发草案；仅高风险、不可逆或作用域扩大步骤强制先确认。
-_Avoid_: 关键词触发、统一人工确认、模型无约束自动建单、多 Agent 一律整包审批后才允许第一步。
+旧称，统一使用 Promotion gate。
+_Avoid_: 与 Promotion gate 并存的第二套入口、PI Manager 自行判断并创建根 Task。
 
 ## Coordination message
 
@@ -204,19 +264,18 @@ _Avoid_: 隐藏影响、全量 prompt 展示、越权来源引用。
 
 ## Channel Coordinator
 
-默认运行在 AgentBean Server、负责每条人类频道消息理解与 Channel coordination decision 的 PI 能力。它不依赖用户 Device 在线，也不具备本地文件、shell、Workspace 或 Device-local Memory 能力。
-_Avoid_: Manager Worker、聊天成员、Device Agent、外部任务执行器。
+旧称，不再作为产品角色使用；普通消息的升级建议属于 Promotion evaluator，已创建根 Task 的编排属于 PI Manager。
+_Avoid_: 每消息 PI Manager、Channel coordination decision、将 evaluator 与 orchestration 合并。
 
 ## Device-only coordination
 
-Team 为隐私或本地模型需求选择的可选协调方式，Channel Coordinator 只在授权 Device 可用时工作。Device 离线导致的协调能力不可用必须向用户明确展示。
-该能力不进入首个 PI MVP，当前设置页不展示 Device-only 选项。
-_Avoid_: MVP placement、静默降级、Server 协调同义词。
+旧的每消息 Channel Coordinator placement 方案，不进入当前 PI MVP，设置页不展示；Promotion evaluator 与 PI Manager 均为 Server 能力，Device 继续提供本地执行能力。
+_Avoid_: 当前 Team placement、Device-hosted Promotion evaluator、Device-hosted PI Manager、静默降级。
 
 ## PI MVP placement
 
-首个 PI MVP 中 Channel Coordinator 的唯一执行位置：AgentBean Server。全系统 Active PI Model 绑定一个 Server-hosted PI Provider Card 中的模型；Device Agent 继续承担本地文件、Workspace、Shell 和 Device-local Memory 等 Task 执行，不承担本次 MVP 的频道协调模型运行。
-_Avoid_: Device-only coordination、Team placement 选择、Device Agent 被移除。
+首个 PI MVP 中 Promotion evaluator 与 PI Manager 的执行位置均为 AgentBean Server：前者只在授权 rollout 下无副作用评估普通消息，后者只在根 Task 创建后编排。全系统 Active PI Model 绑定一个 Server-hosted PI Provider Card 中的模型；Device Agent 继续承担本地文件、Workspace、Shell 和 Device-local Memory 等 Task 执行。
+_Avoid_: 每消息 Channel Coordinator、Device-only coordination、Team placement 选择、Device Agent 被移除。
 
 ## Supported user device platform
 
@@ -325,13 +384,13 @@ _Avoid_: Team 模型配置、Team Credential、Team 运行方案。
 
 ## PI Rollout State
 
-系统管理员用于紧急停用、旁路评估或正式启用 Channel Coordinator 的系统运行状态。它是发布与故障控制，不属于 Team 的日常产品设置。
-_Avoid_: Team PI 模式、自动化权限、placement。
+系统管理员用于紧急停用、旁路评估或正式启用 PI Manager 编排 runtime 的系统运行状态；普通消息的语义建议另由 Semantic promotion rollout 控制。它是发布与故障控制，不属于 Team 的日常产品设置。
+_Avoid_: Channel Coordinator rollout、Semantic promotion rollout、Team PI 模式、自动化权限、placement。
 
 ## Team PI Automation Policy
 
-Team 对 PI Manager 自动采取低风险协作动作的单一总开关“PI 自动协调”，默认开启，由 Team Owner/Admin 切换。开启时统一允许低风险建 Task、任务分解、发出 Task Offer、开放认领和生成 Memory Candidate；关闭时 PI 仍理解消息，但只建议或等待明确要求。高风险、不可逆和作用域扩大动作始终需要确认。
-_Avoid_: 多个功能开关、direct/shadow/managed、关闭消息理解、Provider 配置。
+旧的每消息 PI 自动协调总开关；它不再控制消息理解或 Message-to-task promotion，promotion 改由 Team promotion policy 与 Semantic promotion rollout 明确治理。
+_Avoid_: 默认开启语义建单、关闭时仍默认理解消息、把 proposal rollout 与 Task 内编排权限混成一个开关。
 
 ## System PI Governance Boundary
 
@@ -341,8 +400,8 @@ _Avoid_: Team 配置、日常 PI 运营、默认偏好。
 
 ## Team PI Governance Ceiling
 
-Team 所有者在系统边界内设定的数据可见范围与最高 Phase。Team 管理员可以在该上限内运营或收紧，但不能扩大它；Team Owner/Admin 都可以切换独立的“PI 自动协调”总开关。任何 Team 角色都不能查看、选择或覆盖 Active PI Model。货币成本属于未来能力，MVP 不提供相关字段。
-_Avoid_: 系统全局边界、管理员日常选择、单次 Run 决策。
+Team 所有者在系统边界内设定的数据可见范围与最高 Phase。Team 管理员可以在该上限内运营或收紧 Team promotion policy 与 Semantic promotion rollout，但不能扩大它；任何 Team 角色都不能查看、选择或覆盖 Active PI Model。货币成本属于未来能力，MVP 不提供相关字段。
+_Avoid_: PI 自动协调总开关、系统全局边界、管理员日常选择、单次 Run 决策。
 
 ## Task-linked message
 
@@ -531,8 +590,8 @@ _Avoid_: Team API key、raw credential、Device credential。
 
 ## Managed task
 
-需要持续跟踪、交付审核或多 Agent 协作，并具有明确根 Task 的复杂请求。普通聊天和简单单 Agent 请求会经过 Channel coordination decision，但不属于 Managed task。
-_Avoid_: every chat、direct dispatch、background retry。
+需要持续跟踪、交付审核或多 Agent 协作，并已通过 Promotion gate 形成明确根 Task 的复杂请求。普通聊天和 Simple agent request 不经过每消息协调，也不属于 Managed task。
+_Avoid_: Channel coordination decision、every chat、direct dispatch、background retry。
 
 ## User-delegated Server Worker
 
