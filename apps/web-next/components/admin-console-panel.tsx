@@ -7,10 +7,10 @@ import { getWebSocket } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
 import { daemonVersionDisplay } from '@/lib/daemon-version';
 
-/** System Admin Console inventory sections (PI lives on dashboard/pi via PiManagementPanel). */
+/** System Admin Console inventory sections (PI / Memory / Runs live on dedicated dashboard routes). */
 export type AdminConsoleSection = 'teams' | 'users' | 'devices' | 'agents';
 
-export type AdminConsoleNavKey = AdminConsoleSection | 'pi';
+export type AdminConsoleNavKey = AdminConsoleSection | 'pi' | 'memory' | 'runs';
 
 export const ADMIN_CONSOLE_NAV: { key: AdminConsoleNavKey; label: string }[] = [
   { key: 'teams', label: '团队管理' },
@@ -18,6 +18,8 @@ export const ADMIN_CONSOLE_NAV: { key: AdminConsoleNavKey; label: string }[] = [
   { key: 'devices', label: '设备管理' },
   { key: 'agents', label: 'Agent 管理' },
   { key: 'pi', label: 'PI Agent 管理' },
+  { key: 'memory', label: 'Memory 管理' },
+  { key: 'runs', label: '执行记录诊断' },
 ];
 
 interface AdminTeam { id: string; ownerId: string; name: string; path: string | null; visibility: string; createdAt: number; members: { userId: string; role: string; username: string }[]; }

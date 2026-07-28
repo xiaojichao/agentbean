@@ -7,7 +7,7 @@ import { useAgentBeanStore } from '@/lib/store';
 /**
  * System Admin Console — PI Agent management section.
  * Hosts system-scope Provider Supply, Active PI Model, health, and System Knowledge.
- * Team Memory governance remains under settings.
+ * Memory management and run diagnostics live on sibling Console sections.
  */
 export default function AdminPiPage() {
   const currentUser = useAgentBeanStore((s) => s.currentUser);

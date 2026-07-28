@@ -373,6 +373,17 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    // Memory / 执行记录诊断已迁入 System Admin Console，仅管理员可见。
+    // 在通用路由 smoke 之后提权，避免 /dashboard 根路径重定向干扰 pathname 断言。
+    // 外部目标（--url / AGENTBEAN_NEXT_WEBUI_URL）没有 dataDir，无法本地提权；
+    // 后续仅在 isAdminSession 时进入 admin-only 页面，否则会稳定超时。
+    if (target.dataDir) {
+      promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
+      seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
+      await seedWebUiAuthStorage({ page, session: seededSession.session });
+    }
+    const isAdminSession = seededSession.session.user?.role === 'admin';
+
     const chatResult = await exerciseWebUiChatBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -441,6 +452,8 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    // 始终创建 workspace run 数据供 project collaboration 使用；
+    // admin UI（/dashboard/runs）仅在管理员会话下验证。
     const runResult = await exerciseWebUiRunsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -449,12 +462,15 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ioFactory,
       suffix: webUiFlowSuffix(suffix, 'runs'),
       timeoutMs,
+      verifyAdminUi: isAdminSession,
     });
     checks.push(
       check(
         'webui-runs-business-flow',
         true,
-        `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`,
+        isAdminSession
+          ? `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`
+          : `Created workspace run "${runResult.command}" data for downstream smoke; skipped admin-only /dashboard/runs UI without local admin promotion`,
       ),
     );
 
@@ -583,20 +599,30 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
-    const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
-      page,
-      baseUrl: target.baseUrl,
-      session: seededSession.session,
-      suffix,
-      timeoutMs,
-    });
-    checks.push(
-      check(
-        'webui-memory-governance-flow',
-        true,
-        `Created collaborative Memory "${memoryResult.content}", restored it after refresh, and rendered governance status`,
-      ),
-    );
+    if (isAdminSession) {
+      const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
+        page,
+        baseUrl: target.baseUrl,
+        session: seededSession.session,
+        suffix,
+        timeoutMs,
+      });
+      checks.push(
+        check(
+          'webui-memory-governance-flow',
+          true,
+          `Created collaborative Memory "${memoryResult.content}", restored it after refresh, and rendered governance status`,
+        ),
+      );
+    } else {
+      checks.push(
+        check(
+          'webui-memory-governance-flow',
+          true,
+          'Skipped Memory governance browser flow for external target without local smoke database admin promotion',
+        ),
+      );
+    }
 
     const agentsResult = await exerciseWebUiAgentsBusinessSmoke({
       page,
@@ -865,7 +891,8 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const teamPath = session.team.path ?? session.team.id;
   const expectedRoutes = routes ?? [
-    { path: `/${teamPath}/dashboard`, label: '仪表盘' },
+    // Console 根路径会重定向到 /dashboard/teams；非管理员停在 forbidden 壳。
+    { path: `/${teamPath}/dashboard`, label: '仪表盘', allowPathPrefix: true },
     { path: `/${teamPath}/chat`, label: '聊天' },
     { path: `/${teamPath}/tasks`, label: '任务' },
     { path: `/${teamPath}/members`, label: '成员' },
@@ -874,7 +901,7 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
   ];
   const rendered = [];
   for (const route of expectedRoutes) {
-    const descriptor = typeof route === 'string' ? { path: route, label: null } : route;
+    const descriptor = typeof route === 'string' ? { path: route, label: null, allowPathPrefix: false } : route;
     const url = new URL(descriptor.path, root);
     await page.navigate(url.toString());
     await page.waitForFunction(
@@ -882,8 +909,11 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
       `authenticated route ${descriptor.path} renders non-empty content`,
       timeoutMs,
     );
+    const pathAssertion = descriptor.allowPathPrefix
+      ? `(location.pathname === ${JSON.stringify(descriptor.path)} || location.pathname.startsWith(${JSON.stringify(`${descriptor.path}/`)}))`
+      : `location.pathname === ${JSON.stringify(descriptor.path)}`;
     await page.waitForFunction(
-      `location.pathname === ${JSON.stringify(descriptor.path)} && localStorage.getItem("agentbean.token") === ${JSON.stringify(session.token)}`,
+      `${pathAssertion} && localStorage.getItem("agentbean.token") === ${JSON.stringify(session.token)}`,
       `authenticated route ${descriptor.path} keeps the seeded session`,
       timeoutMs,
     );
@@ -1920,6 +1950,9 @@ export async function exerciseWebUiRunsBusinessSmoke({
   ioFactory = loadSocketIoClient(),
   suffix,
   timeoutMs,
+  // /dashboard/runs 仅管理员可见。外部目标无法本地提权时传 false：
+  // 仍创建 workspace run 数据供下游 project smoke，但跳过 admin UI 断言。
+  verifyAdminUi = true,
 }) {
   assertSession(session);
   if (!session.channel?.id) {
@@ -2019,8 +2052,19 @@ export async function exerciseWebUiRunsBusinessSmoke({
     }
     await daemon.waitForDispatchResult(dispatchId);
 
-    await page.navigate(new URL(`/${teamPath}/settings`, root).toString());
-    await openWebUiSettingsTab({ page, tab: 'runs', timeoutMs });
+    if (!verifyAdminUi) {
+      return {
+        id: workspaceRunId,
+        command,
+        dispatchId,
+        logArtifactId,
+        summaryArtifactId,
+        adminUiVerified: false,
+      };
+    }
+
+    await page.navigate(new URL(`/${teamPath}/dashboard/runs`, root).toString());
+    await waitForWebUiAdminRunsPage({ page, timeoutMs });
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
     await page.setInputValue('[data-smoke="workspace-runs-filter-status"]', 'succeeded');
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
@@ -2063,7 +2107,14 @@ export async function exerciseWebUiRunsBusinessSmoke({
     await waitForWebUiWorkspaceRunBackToList({ page, teamPath, timeoutMs });
     await page.click('[data-smoke="workspace-run-source-message-link"]');
     await waitForWebUiWorkspaceRunSourceMessage({ page, expectedText: sourceMessageBody, timeoutMs });
-    return { id: workspaceRunId, command, dispatchId, logArtifactId, summaryArtifactId };
+    return {
+      id: workspaceRunId,
+      command,
+      dispatchId,
+      logArtifactId,
+      summaryArtifactId,
+      adminUiVerified: true,
+    };
   } finally {
     daemon.socket.disconnect?.();
   }
@@ -2123,7 +2174,7 @@ async function waitForWebUiWorkspaceRunBackToList({ page, teamPath, timeoutMs })
     (() => {
       const teamPath = ${JSON.stringify(teamPath)};
       const link = document.querySelector('[data-smoke="workspace-run-back-to-list"]');
-      return link?.getAttribute('href') === '/' + teamPath + '/settings?tab=runs';
+      return link?.getAttribute('href') === '/' + teamPath + '/dashboard/runs';
     })()
     `,
     'workspace run detail back link to return to the runs list',
@@ -3512,7 +3563,8 @@ export async function exerciseWebUiMemoryBusinessSmoke({ page, baseUrl, session,
   const teamPath = session.team.path ?? session.team.id;
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-24);
   const content = `WebUI Memory smoke ${safeSuffix}`;
-  await page.navigate(new URL(`/${teamPath}/settings?tab=memory`, root).toString());
+  await page.navigate(new URL(`/${teamPath}/dashboard/memory`, root).toString());
+  await waitForWebUiAdminMemoryPage({ page, timeoutMs });
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="memory-governance-panel"]'))`,
     'Memory governance panel to render',
@@ -4033,19 +4085,19 @@ async function waitForWebUiAdminDashboard({ page, timeoutMs }) {
   );
 }
 
-/** System Admin Console middle nav: five sections including PI Agent management. */
+/** System Admin Console middle nav: inventory + PI + Memory + run diagnostics. */
 async function waitForWebUiAdminConsoleNav({ page, timeoutMs }) {
   await page.waitForFunction(
     `
     (() => {
       const nav = document.querySelector('[data-smoke="admin-console-nav"]');
       if (!nav) return false;
-      return ['teams', 'users', 'devices', 'agents', 'pi'].every((key) =>
+      return ['teams', 'users', 'devices', 'agents', 'pi', 'memory', 'runs'].every((key) =>
         Boolean(document.querySelector('[data-smoke="admin-tab-' + key + '"]'))
       );
     })()
     `,
-    'admin console middle nav with five sections to render',
+    'admin console middle nav with seven sections to render',
     timeoutMs,
   );
 }
@@ -4062,6 +4114,22 @@ async function waitForWebUiAdminPiPage({ page, timeoutMs }) {
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="admin-pi-page"]')) && Boolean(document.querySelector('[data-smoke="settings-pi-panel"]'))`,
     'admin PI Agent management panel to render at dashboard/pi',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminMemoryPage({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-memory-page"]')) && Boolean(document.querySelector('[data-smoke="memory-governance-panel"]'))`,
+    'admin Memory management panel to render at dashboard/memory',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminRunsPage({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-runs-page"]')) && Boolean(document.querySelector('[data-smoke="workspace-runs-page"]'))`,
+    'admin run diagnostics panel to render at dashboard/runs',
     timeoutMs,
   );
 }

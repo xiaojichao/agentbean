@@ -134,15 +134,16 @@ const socketSource = readFileSync(
 );
 
 describe('PI Management console scope', () => {
-  test('system PI lives on dashboard/pi; settings has no PI primary tab and redirects legacy ?tab=pi', () => {
+  test('system PI lives on dashboard/pi; settings has no PI primary tab and redirects legacy console tabs', () => {
     expect(dashboardPiSource).toContain('PiManagementPanel');
     expect(dashboardPiSource).toContain('admin-pi-page');
     expect(settingsSource).not.toContain("label: 'PI Agent'");
     expect(settingsSource).not.toContain("id: 'pi'");
-    expect(settingsSource).toContain('isLegacyPiSettingsTab');
-    expect(settingsSource).toContain('dashboard/pi');
-    expect(settingsSource).toContain('MemoryGovernancePanel');
-    expect(settingsSource).toContain("id: 'memory'");
+    expect(settingsSource).not.toContain("id: 'memory'");
+    expect(settingsSource).not.toContain("id: 'runs'");
+    expect(settingsSource).not.toContain('MemoryGovernancePanel');
+    expect(settingsSource).toContain('legacySettingsConsoleSection');
+    expect(settingsSource).toContain('dashboard/${section}');
   });
 
   test('panel itself remains system-admin scoped', () => {

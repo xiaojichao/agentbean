@@ -7,13 +7,15 @@ import {
 } from '../components/admin-console-panel';
 
 describe('System Admin Console shell', () => {
-  test('exposes five console nav sections including PI Agent management', () => {
+  test('exposes console nav sections including PI, Memory, and run diagnostics', () => {
     expect(ADMIN_CONSOLE_NAV.map((item) => item.key)).toEqual([
       'teams',
       'users',
       'devices',
       'agents',
       'pi',
+      'memory',
+      'runs',
     ]);
     expect(ADMIN_CONSOLE_NAV.map((item) => item.label)).toEqual([
       '团队管理',
@@ -21,6 +23,8 @@ describe('System Admin Console shell', () => {
       '设备管理',
       'Agent 管理',
       'PI Agent 管理',
+      'Memory 管理',
+      '执行记录诊断',
     ]);
   });
 
@@ -39,6 +43,14 @@ describe('System Admin Console shell', () => {
     );
     const piPage = readFileSync(
       new URL('../app/[teamPath]/dashboard/pi/page.tsx', import.meta.url),
+      'utf8',
+    );
+    const memoryPage = readFileSync(
+      new URL('../app/[teamPath]/dashboard/memory/page.tsx', import.meta.url),
+      'utf8',
+    );
+    const runsPage = readFileSync(
+      new URL('../app/[teamPath]/dashboard/runs/page.tsx', import.meta.url),
       'utf8',
     );
     const panel = readFileSync(
@@ -61,6 +73,11 @@ describe('System Admin Console shell', () => {
     expect(piPage).not.toContain('AdminConsolePiPlaceholder');
     expect(panel).not.toContain('AdminConsolePiPlaceholder');
     expect(panel).not.toContain('admin-pi-placeholder');
+
+    expect(memoryPage).toContain('MemoryGovernancePanel');
+    expect(memoryPage).toContain('admin-memory-page');
+    expect(runsPage).toContain('RunsPanel');
+    expect(runsPage).toContain('admin-runs-page');
 
     expect(panel).toContain("section === 'teams'");
     expect(panel).toContain("section === 'users'");

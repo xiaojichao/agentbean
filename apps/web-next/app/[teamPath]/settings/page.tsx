@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw, Terminal, Database } from 'lucide-react';
+import { User, Globe, Server, FileText, LogOut, Check, Copy, Trash2, Bell, Volume2, Keyboard, PanelRight, RotateCcw } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { authEvents, clearStoredAuth, getWebSocket, joinEvents, teamEvents, userMemoryEvents } from '@/lib/socket';
 import { useAgentBeanStore } from '@/lib/store';
@@ -17,13 +17,11 @@ import {
 } from '@/lib/browser-settings';
 import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
-import { RunsPanel } from './RunsPanel';
 import { PiPolicyPanel } from './PiPolicyPanel';
 import { PiTeamCoveragePanel } from '@/components/PiTeamCoveragePanel';
 import { SystemUserMemoryPanel } from '@/components/SystemUserMemoryPanel';
-import { MemoryGovernancePanel } from './MemoryGovernancePanel';
 import {
-  isLegacyPiSettingsTab,
+  legacySettingsConsoleSection,
   resolveSettingsTab,
   settingsTabsForRole,
   type SettingsTab,
@@ -35,8 +33,6 @@ const TAB_META: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'account', label: '账号', icon: <User size={16} /> },
   { id: 'browser', label: '浏览器', icon: <Globe size={16} /> },
   { id: 'server', label: '团队', icon: <Server size={16} /> },
-  { id: 'memory', label: 'Memory 治理', icon: <Database size={16} /> },
-  { id: 'runs', label: '执行记录诊断', icon: <Terminal size={16} /> },
   { id: 'releases', label: '更新日志', icon: <FileText size={16} /> },
 ];
 const JOIN_INTERNAL_ERROR_MESSAGE = '创建失败，请稍后重试';
@@ -59,14 +55,15 @@ export default function SettingsPage() {
   const visibleTabs = TAB_META.filter((t) => settingsTabsForRole(Boolean(isSystemAdmin)).includes(t.id));
   const [tab, setTab] = useState<Tab>(() => resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
 
-  // Old bookmarks: settings?tab=pi → System Admin Console PI section (admins only).
+  // Old bookmarks: settings?tab=pi|memory|runs → System Admin Console (admins only).
   useEffect(() => {
-    if (!isLegacyPiSettingsTab(requestedTab) || !isSystemAdmin || !teamPath) return;
-    router.replace(`/${teamPath}/dashboard/pi`);
+    const section = legacySettingsConsoleSection(requestedTab);
+    if (!section || !isSystemAdmin || !teamPath) return;
+    router.replace(`/${teamPath}/dashboard/${section}`);
   }, [requestedTab, isSystemAdmin, teamPath, router]);
 
   useEffect(() => {
-    if (isLegacyPiSettingsTab(requestedTab) && isSystemAdmin) return;
+    if (legacySettingsConsoleSection(requestedTab) && isSystemAdmin) return;
     setTab(resolveSettingsTab(requestedTab, Boolean(isSystemAdmin)));
   }, [requestedTab, isSystemAdmin]);
 
@@ -93,8 +90,6 @@ export default function SettingsPage() {
         {tab === 'account' && <AccountPanel />}
         {tab === 'browser' && <BrowserPanel />}
         {tab === 'server' && <ServerPanel />}
-        {tab === 'memory' && <MemoryGovernancePanel />}
-        {tab === 'runs' && <RunsPanel />}
         {tab === 'releases' && <ReleasesPanel />}
         </div>
       </div>
