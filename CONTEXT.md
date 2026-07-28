@@ -77,6 +77,11 @@ _Avoid_: Freshness hold、自动重试、失败后已读、部分建立 ownershi
 Inbox item 对特定接收方是否仍需注意或采取动作的状态；它与 Unread 正交，只能由回应、执行、解除责任或明确忽略等业务动作结束。
 _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任。
 
+## System activity projection
+
+Server 从已提交的 Task 或 PI orchestration event 面向特定受众与界面生成的人类可读投影：Task 详情保留完整活动时间线，来源 Thread 使用持久 Task 活动卡呈现稀疏里程碑，Inbox 只投影与接收者责任相关的 attention 或 action_required。它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实；PI Manager 不以成员、头像、聊天气泡或输入状态出现。
+_Avoid_: PI message、PI reply、orchestration chat、客户端从 notice 猜测事实、三处等量复制事件、Read 即处理、原始 audit/prompt/chain-of-thought、跨受众泄露受限内容。
+
 ## PI Manager
 
 AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
