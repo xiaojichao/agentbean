@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # PI Manager 可以自动创建低风险 Tracked task
