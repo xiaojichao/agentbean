@@ -21,6 +21,7 @@ import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedCh
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
+import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
@@ -2410,7 +2411,7 @@ export default function ChatPage() {
               ) ?? undefined}
               onLoadLatest={loadLatestOpenMarkdownDocument}
               onClose={() => setOpenChannelDocument(null)}
-              renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources />}
+              renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
             />
           </div>
         </div>
@@ -4859,6 +4860,7 @@ function MarkdownMessage({
   onOpenMention,
   compact = false,
   safeDocumentResources = false,
+  collapsible = true,
 }: {
   body: string;
   mentionMembers?: MentionProfileMember[];
@@ -4866,13 +4868,21 @@ function MarkdownMessage({
   onOpenMention?: (target: ProfileTarget) => void;
   compact?: boolean;
   safeDocumentResources?: boolean;
+  /** 长消息默认折叠（>10 行）；文档编辑预览可关闭。 */
+  collapsible?: boolean;
 }) {
   const agents = useAgentBeanStore((s) => s.agents);
   const markdownOptions = { mentionMembers, mentions, agents, onOpenMention, safeDocumentResources };
   return (
-    <div className={`${compact ? 'mt-0' : 'mt-1'} space-y-2 break-words text-sm leading-relaxed text-neutral-700`}>
-      {renderMarkdownBlocks(body, markdownOptions)}
-    </div>
+    <CollapsibleMessageBody
+      body={body}
+      enabled={collapsible}
+      className={`${compact ? 'mt-0' : 'mt-1'} break-words text-sm leading-relaxed text-neutral-700`}
+    >
+      <div className="space-y-2">
+        {renderMarkdownBlocks(body, markdownOptions)}
+      </div>
+    </CollapsibleMessageBody>
   );
 }
 

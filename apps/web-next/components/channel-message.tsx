@@ -1,6 +1,7 @@
 import { AlertCircle, Loader2, X } from 'lucide-react';
 import type { ChatMessage, Artifact, DispatchStatus } from '@/lib/schema';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
+import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
@@ -149,13 +150,17 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     return null;
   }
 
+  const bodyText = msg.senderKind === 'agent' ? agentFailureDisplayBody(msg.body) : msg.body;
+
   return (
     <div className={`rounded border ${tone} px-3 py-2`}>
       <div className="flex items-center justify-between text-xs text-neutral-500 mb-1">
         <span className="font-medium">{speaker}</span>
         <span>{time}</span>
       </div>
-      <div className="whitespace-pre-wrap text-sm">{msg.senderKind === 'agent' ? agentFailureDisplayBody(msg.body) : msg.body}</div>
+      <CollapsibleMessageBody body={bodyText} className="text-sm leading-relaxed text-neutral-800">
+        <div className="whitespace-pre-wrap">{bodyText}</div>
+      </CollapsibleMessageBody>
       {msg.teamId && projectDocumentInputSetResultFromMeta(meta) && (
         <ProjectDocumentInputSetResultSummary
           result={projectDocumentInputSetResultFromMeta(meta)!}
