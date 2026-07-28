@@ -79,7 +79,7 @@ _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任�
 
 ## PI Manager
 
-AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。
+AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
 _Avoid_: PI Agent、每消息 Channel Coordinator、普通聊天 Agent、用户任务执行 Agent。
 
 ## PI orchestration trigger
@@ -154,8 +154,8 @@ _Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意�
 
 ## Uncoordinated message intake
 
-PI 自动协调关闭、旁路或不可用时，人类频道消息成为 Agent 工作的唯一入口是：显式 @Agent 的定向指派，或已经绑定到既有 Tracked task 的跟进路径。原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
-_Avoid_: 原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
+没有权威 PI orchestration trigger，或 promotion/evaluator 被停用、旁路或不可用时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
+_Avoid_: PI 自动协调总开关、原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
 
 ## Coordinated message intake
 
@@ -269,14 +269,13 @@ _Avoid_: 每消息 PI Manager、Channel coordination decision、将 evaluator �
 
 ## Device-only coordination
 
-Team 为隐私或本地模型需求选择的可选协调方式，Channel Coordinator 只在授权 Device 可用时工作。Device 离线导致的协调能力不可用必须向用户明确展示。
-该能力不进入首个 PI MVP，当前设置页不展示 Device-only 选项。
-_Avoid_: MVP placement、静默降级、Server 协调同义词。
+旧的每消息 Channel Coordinator placement 方案，不进入当前 PI MVP，设置页不展示；Promotion evaluator 与 PI Manager 均为 Server 能力，Device 继续提供本地执行能力。
+_Avoid_: 当前 Team placement、Device-hosted Promotion evaluator、Device-hosted PI Manager、静默降级。
 
 ## PI MVP placement
 
-首个 PI MVP 中 Channel Coordinator 的唯一执行位置：AgentBean Server。全系统 Active PI Model 绑定一个 Server-hosted PI Provider Card 中的模型；Device Agent 继续承担本地文件、Workspace、Shell 和 Device-local Memory 等 Task 执行，不承担本次 MVP 的频道协调模型运行。
-_Avoid_: Device-only coordination、Team placement 选择、Device Agent 被移除。
+首个 PI MVP 中 Promotion evaluator 与 PI Manager 的执行位置均为 AgentBean Server：前者只在授权 rollout 下无副作用评估普通消息，后者只在根 Task 创建后编排。全系统 Active PI Model 绑定一个 Server-hosted PI Provider Card 中的模型；Device Agent 继续承担本地文件、Workspace、Shell 和 Device-local Memory 等 Task 执行。
+_Avoid_: 每消息 Channel Coordinator、Device-only coordination、Team placement 选择、Device Agent 被移除。
 
 ## Supported user device platform
 
@@ -385,8 +384,8 @@ _Avoid_: Team 模型配置、Team Credential、Team 运行方案。
 
 ## PI Rollout State
 
-系统管理员用于紧急停用、旁路评估或正式启用 Channel Coordinator 的系统运行状态。它是发布与故障控制，不属于 Team 的日常产品设置。
-_Avoid_: Team PI 模式、自动化权限、placement。
+系统管理员用于紧急停用、旁路评估或正式启用 PI Manager 编排 runtime 的系统运行状态；普通消息的语义建议另由 Semantic promotion rollout 控制。它是发布与故障控制，不属于 Team 的日常产品设置。
+_Avoid_: Channel Coordinator rollout、Semantic promotion rollout、Team PI 模式、自动化权限、placement。
 
 ## Team PI Automation Policy
 
@@ -401,8 +400,8 @@ _Avoid_: Team 配置、日常 PI 运营、默认偏好。
 
 ## Team PI Governance Ceiling
 
-Team 所有者在系统边界内设定的数据可见范围与最高 Phase。Team 管理员可以在该上限内运营或收紧，但不能扩大它；Team Owner/Admin 都可以切换独立的“PI 自动协调”总开关。任何 Team 角色都不能查看、选择或覆盖 Active PI Model。货币成本属于未来能力，MVP 不提供相关字段。
-_Avoid_: 系统全局边界、管理员日常选择、单次 Run 决策。
+Team 所有者在系统边界内设定的数据可见范围与最高 Phase。Team 管理员可以在该上限内运营或收紧 Team promotion policy 与 Semantic promotion rollout，但不能扩大它；任何 Team 角色都不能查看、选择或覆盖 Active PI Model。货币成本属于未来能力，MVP 不提供相关字段。
+_Avoid_: PI 自动协调总开关、系统全局边界、管理员日常选择、单次 Run 决策。
 
 ## Task-linked message
 
@@ -591,8 +590,8 @@ _Avoid_: Team API key、raw credential、Device credential。
 
 ## Managed task
 
-需要持续跟踪、交付审核或多 Agent 协作，并具有明确根 Task 的复杂请求。普通聊天和简单单 Agent 请求会经过 Channel coordination decision，但不属于 Managed task。
-_Avoid_: every chat、direct dispatch、background retry。
+需要持续跟踪、交付审核或多 Agent 协作，并已通过 Promotion gate 形成明确根 Task 的复杂请求。普通聊天和 Simple agent request 不经过每消息协调，也不属于 Managed task。
+_Avoid_: Channel coordination decision、every chat、direct dispatch、background retry。
 
 ## User-delegated Server Worker
 
