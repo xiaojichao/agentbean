@@ -15,7 +15,7 @@ _Avoid_: 独立系统服务、Team Daemon、历史邀请命令。
 ## PI Manager
 
 AgentBean 内置的系统协调者，默认理解每一条人类频道消息，并决定是否忽略、回答系统问题、请求澄清、调用 Agent、创建或调整 Task。它不是 Team 成员，也不替代外部 Agent 完成用户领域工作。
-_Avoid_: 普通聊天 Agent、仅用于复杂任务的 Manager、用户任务执行 Agent。
+_Avoid_: PI Agent、普通聊天 Agent、仅用于复杂任务的 Manager、用户任务执行 Agent。
 
 ## Channel coordination decision
 
@@ -24,28 +24,48 @@ _Avoid_: 每消息建 Task、直接 Dispatch、自然语言自动执行。
 
 ## Task allocation
 
-PI Manager 为一个结构化 Task 选择定向指派或开放认领的协作决定；显式 @Agent 必须形成定向指派，多能力任务可以在分解后分别决定分配方式。
-_Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意改写显式目标。
+PI Manager 为一个结构化 Task 选择定向指派或开放认领的协作决定；显式 @Agent 必须形成定向指派，多能力任务可以在分解后分别决定分配方式。显式 @ 是主执行者硬约束：PI 不得静默改派；仅在该 Agent 拒绝、超时或 relinquish 后才可另荐，且改派对用户可见。派发与 Task offer 的候选硬边界是当前频道 agent 成员（且 Team 可见、能力与权限匹配）；不得静默指派或邀请未加入该频道的 Team Agent。
+_Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意改写显式目标、把 @ 当作可静默覆盖的软提示、跨频道静默拉人执行。
+
+## Uncoordinated message intake
+
+PI 自动协调关闭、旁路或不可用时，人类频道消息成为 Agent 工作的唯一入口是：显式 @Agent 的定向指派，或已经绑定到既有 Tracked task 的跟进路径。原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
+_Avoid_: 原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
+
+## Coordinated message intake
+
+PI 自动协调开启时，每条人类频道消息先形成 Channel coordination decision，再进入闲聊忽略、系统回答、澄清、Simple agent request、Tracked task 创建/分解/修订等路径；禁止用「频道内第一在线 Agent」作为未 @ 消息的隐式负责人。
+_Avoid_: legacy 未 @ fallback Dispatch、与协调决策并行的第二套抢单入口。
 
 ## Task offer
 
-向具备所需能力和可见权限的外部 Agent 发布的结构化认领机会；多个 Agent 可以响应，但同一时刻只有一个 Agent 获得有效认领权。
-_Avoid_: 原始聊天广播、重复 Dispatch、无约束抢答。
+向具备所需能力和可见权限的外部 Agent 发布的结构化认领机会；多个 Agent 可以响应，但同一时刻只有一个 Agent 获得有效认领权。无显式 @ 且候选相近或负载不确定时，PI 用 Offer 替代定向指派；候选唯一或明显最优时用定向指派。二者都要求有效接受后才形成 claim，且从不针对原始频道消息开放抢答。
+_Avoid_: 原始聊天广播、重复 Dispatch、无约束抢答、对原始消息的 claim。
 
 ## Tracked task
 
 由 PI Manager 为需要持续跟踪、异步等待、多 Agent 协作、明确交付或用户审核的请求创建的持久工作承诺。低风险且意图明确时可以自动创建；高成本、高风险、跨越隐私边界或意图不清时必须先请求用户确认。
-_Avoid_: 每消息 Task、聊天记录别名、未经确认的高风险执行。
+_Avoid_: 每消息 Task、聊天记录别名、未经确认的高风险执行、把单 Agent 低风险请求一律建单。
+
+## Simple agent request
+
+PI 判定只需一个外部 Agent、且不需要持续跟踪或多方协作的人类请求；默认定向调用该 Agent，不创建 Tracked task。
+_Avoid_: 单人任务必建 Task、把简单请求项目管理化。
 
 ## Task creation gate
 
-PI Manager 在创建 Tracked task 前对意图清晰度、持续跟踪需要、交付要求、成本、风险和权限边界进行的产品判断。不满足门槛的消息继续作为聊天或简单单 Agent 请求处理。
-_Avoid_: 关键词触发、统一人工确认、模型无约束自动建单。
+PI Manager 在创建 Tracked task 前对意图清晰度、持续跟踪需要、交付要求、成本、风险和权限边界进行的产品判断。不满足门槛的消息继续作为聊天或简单单 Agent 请求处理。多 Agent 且意图清晰时，默认可自动建 Tracked task 并生成可取消的分解与派发草案；仅高风险、不可逆或作用域扩大步骤强制先确认。
+_Avoid_: 关键词触发、统一人工确认、模型无约束自动建单、多 Agent 一律整包审批后才允许第一步。
 
 ## Coordination message
 
-PI Manager 以 AgentBean 系统协调身份发出的必要用户可见内容，包括澄清问题、紧凑的 Task 状态和注明贡献 Agent 与来源 Task 的最终汇总。它不是普通 Agent 消息，也不掩盖外部 Agent 原始交付的真实归属。
-_Avoid_: PI 成员消息、伪装成外部 Agent、内部推理展示、冗长计划播报。
+PI Manager 以 AgentBean 系统协调身份发出的必要用户可见内容，包括澄清问题、紧凑的 Task 状态和注明贡献 Agent 与来源 Task 的最终汇总。多 Agent 场景下，各执行者的原始交付仍归原 Agent；PI 汇总并列呈现，不改写、不顶替、不冒充为唯一成品消息。
+_Avoid_: PI 成员消息、伪装成外部 Agent、内部推理展示、冗长计划播报、用 PI 合成正文替换执行者署名交付。
+
+## Progress coordination
+
+PI 对 Tracked task 的进度维护方式：在子任务完成、失败、relinquish、超时或用户追问等事件上更新状态并发紧凑 Coordination message；不在无事件时主动轮询催办。
+_Avoid_: 定时催办刷屏、无事件频道进度播报、仅面板可见而频道对进度完全静默（用户关闭自动协调时除外）。
 
 ## Team-scoped Agent Memory
 
