@@ -359,8 +359,8 @@ _Avoid_: Offer accept 自动等同开工、heartbeat/notice 推断开工、客�
 
 ## Task allocation round
 
-PI 为同一子 Task revision/attempt 寻找并确认执行 Agent 的一次分配轮次；Offer 拒绝、过期、无人接受，或 claim 建立后尚无 Task execution start 事件时 relinquish，只结束当前 allocation round，不递增 execution attempt。
-_Avoid_: Offer 失败等同执行失败、每次候选通知递增 attempt、assignment 即 claim、用 TaskStatus 猜测是否开工、无人领取自动终结根 Task。
+PI 为同一子 Task revision/attempt 寻找并确认执行 Agent 的一次分配轮次；Offer 拒绝、过期、无人接受，或 claim 建立后尚无 Task execution start 事件时 relinquish，只结束当前 allocation round，不递增 execution attempt。allocation round 受独立的轮次或时间窗口上限约束，不能因不消耗 execution attempt 而无限循环。
+_Avoid_: Offer 失败等同执行失败、每次候选通知递增 attempt、assignment 即 claim、用 TaskStatus 猜测是否开工、无人领取自动终结根 Task、无限 Offer 循环。
 
 ## Subtask transition graph
 
@@ -376,6 +376,71 @@ _Avoid_: blocked TaskStatus、heartbeat 猜测已解除、长期阻塞自动取�
 
 一次子 Task execution attempt 或 invocation 未能产生可验收交付的权威结果；它结束相应执行权并触发重试或人类等待，但不是 TaskStatus，也不能由 PI 自动推导为根 Task 终态。
 _Avoid_: failed TaskStatus、失败次数自动取消根 Task、覆盖失败证据、重试复用旧 claim、预算耗尽即 closed。
+
+## Task failure report
+
+Agent 或 daemon 针对当前 claim、Task revision 与 attempt 提交的结构化错误码、可观察事实和 evidence；它是 Server 形成权威失败分类的输入，不授予报告方决定可重试性、改派、延期或扩大权限的权力。
+_Avoid_: 自报 transient 即自动重试、自然语言错误充当分类、daemon 决定改派、缺 attempt provenance、错误报告直接改变 TaskStatus。
+
+## Task failure classification
+
+Server 使用版本化 failure taxonomy 和当前 Task、权限、lease、deadline 事实，对有效 Task failure report 或 Server 自身检测到的超时形成的权威类别；最小类别为 `transient_environment`、`agent_unavailable`、`capability_mismatch`、`invalid_input_or_contract`、`permission_or_policy_blocked`、`deadline_exceeded` 与 `unknown`。PI 只能选择该类别允许的处置，`unknown` 默认不可自动重试。
+_Avoid_: PI 重标失败、模型猜测 transient、Agent 自定 retryable、把权限阻塞改成能力失败、未知即继续。
+
+## Execution retry budget
+
+Executable subtask contract 在发布时绑定的最大已开工 execution attempt 数；Offer 拒绝、过期和 Task execution start 前的 relinquishment/fencing 不消耗预算，开工后的失败、超时、relinquishment 或 fencing 才消耗当前 attempt。预算不会因改派、DAG revision 或 PI 重启自动重置，只能由具备相应 Task 修订权限的人类通过审计命令增加。
+_Avoid_: claim 即扣预算、每轮 Offer 扣预算、PI 重置 maxAttempts、失败归责分数、预算耗尽自动关闭 Task。
+
+## Conditional task reassignment
+
+Server 已形成允许改派的权威失败分类、旧执行权已被 fencing、仍有 execution retry budget，且最新 Task/DAG revision、eligibility、权限、容量、cooldown 与期限门槛全部通过时，由当前 PI driver 以原子 command 发起的新 allocation。该 command 只发布 Offer；后续只有 Agent 明确 acceptance 且 accept/claim 事务复验资格、权限与容量后，才能建立新 claim 并签发 execution grant/fencing token。失败、冲突或不满足门槛不得留下新 Offer、扣减预算或部分调度事实。
+_Avoid_: 任何失败都自动改派、改派直接签发 claim/grant、复用旧 claim/grant、先派后 fencing、PI 本地重试、绕过 cooldown、无预算继续。
+
+## Task execution SLA
+
+Server 持久化并以 Server 时间计算的子 Task 运行健康边界，包括 runnable 到 claim 的 allocation SLA、claim 到 Task execution start 的 start SLA、最后一次有效结构化 progress/checkpoint 后的 progress SLA，以及单次 attempt 的绝对 deadline。只有 Server 已确认且带有限期 wake condition 的 waiting 可以暂停对应时钟；lease heartbeat、离线、notice 丢失或自然语言“处理中”不构成进展或暂停。
+_Avoid_: daemon 本地时钟、heartbeat 刷新进度、离线自动暂停、SLA 超时直接关闭 Task、PI 内存 timer。
+
+## Task progress challenge
+
+progress SLA 首次超时后由 Server 签发、绑定 claim、Task revision、attempt 与 grace deadline 的结构化证明请求，并形成独立的非 TaskStatus `progress_at_risk` SLA 事实；挑战期间子 Task 保持 `in_progress`。grace 内只有有效 progress/checkpoint 可以解除该事实，到期仍无进展时 Server 原子 fencing 并形成 `no_progress_timeout`。权限撤销、安全风险、明确 relinquish 或执行 lease 失效可以跳过 grace。
+_Avoid_: progress_at_risk TaskStatus、挑战时改 Task 状态、notice 已送达即挑战成功、heartbeat 代替 progress、PI 宣布无进展、无限 grace、fencing 后迟到 delivery 生效。
+
+## Task due time
+
+Executable subtask contract 的 `dueAt` 交付目标；超过后形成 overdue attention 与 deadline risk escalation，但不自动撤销仍有效的执行权，也不会因改派或退避自动顺延。
+_Avoid_: dueAt 即 lease expiry、逾期自动取消、PI 自动延期、SLA breach 静默改 dueAt。
+
+## Task hard stop
+
+Executable subtask contract 可选的 `hardStopAt` 绝对执行上限；到达后 Server 必须 fencing 活动 attempt 并禁止自动创建新 attempt。新 allocation 的 `notBefore` 与最小执行窗口明显无法落在 hard stop 前时，必须停止盲目重试并升级。
+_Avoid_: 未声明 hardStopAt 时把 dueAt 当硬停止、PI 忽略执行窗口、退避跨越硬停止、客户端自行延长。
+
+## Retry remediation state
+
+Server 为失败或结束的 attempt 持久化的唯一后续处置 lineage，记录 `retry_pending`、`allocation_blocked`、`escalation_pending` 或 `recovery_pending`、剩余预算、`notBefore`、cooldown、failure fingerprint、排除理由、SLA 与 `nextWakeAt`；PI/Server 重启只能从这些事实恢复并按稳定 idempotency key 去重。
+_Avoid_: PI 模型记忆恢复、重启立即放行全部重试、同一失败多条 remediation、notice 重放重复扣预算、无法解释旧策略时继续。
+
+## Human escalation authority
+
+根 Task 创建时按来源预先确定、负责处理执行阻塞与重试越界的有权人类：个人请求默认是仍具相应权限的 requester，Team integration/workflow 使用入口声明的 approver role。它不同于 Human review authority，且某一 escalation 的确认权不自动授予根 Task 终止、合同修订、期限或风险批准等全部权限。
+_Avoid_: 任意在线成员、PI 自批、Owner/Admin 替个人请求扩权、review authority 自动拥有所有处置权、升级时临时挑 approver。
+
+## Task action escalation
+
+重试预算耗尽、`unknown`、权限/安全/policy 阻塞、没有合格候选、期限违约或需要修改合同、权限、预算时，由 Server 为 Human escalation authority 持久化的独立 `action_required`；它包含失败历史摘要、当前 revision、预算与 deadline 风险、允许的具名动作和确认 token。read/seen、notice 失败或普通消息都不能解决它，重复故障按稳定 escalation key 聚合。
+_Avoid_: 未读提醒、读后自动清除、普通聊天批准、每次重试轰炸人类、proposal token 复用、通知通道充当事实。
+
+## Task remediation command
+
+合法人类使用绑定 Task、attempt、failure 与 escalation revision 的 Server token 提交的具名处置，包括 `retry-attempt`、`increase-attempt-budget`、`revise-subtask-contract`、`extend-deadline`、`cancel-subtask` 或在具备根终止权时 `terminate-root-task`；每个命令分别校验角色、权限、风险与最新 revision，并原子写入处置、审计和调度事实。
+_Avoid_: 通用 resolve 恢复执行、dismiss 清除 blocker、一个 token 执行全部动作、旧 token 跨 revision、失败命令扣预算。
+
+## Retry policy revision
+
+子 Task 发布时绑定的 retry/SLA policy 版本，冻结其预算、时钟、cooldown、failure taxonomy 与升级规则；普通策略更新只作用于新 Task 或显式迁移后的 revision，不能改写历史失败分类。安全撤权、权限收紧与紧急 hard stop 可以立即 fencing，但必须记录触发版本和影响范围；放宽预算、期限或可重试类别不得追溯生效。
+_Avoid_: 活动 Task 静默套用新策略、历史 failure 重分类、放宽规则自动生效、紧急收紧无审计、版本不兼容时猜测执行。
 
 ## Subtask retirement authority
 
