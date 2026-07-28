@@ -169,8 +169,8 @@ _Avoid_: todo/in_progress 直接 done、in_review 退回 todo、终态 reopen、
 
 ## Root Task review readiness
 
-允许 PI 提交根交付并把根 Task 与 run 原子推进到 `in_review` 的权威判断：当前 root Task revision 与 Task DAG revision 下的 required 节点均已被接受、依赖已满足，且根交付绑定完整 contributing deliveries 与 evidence。
-_Avoid_: Agent 自报完成即 ready、只数 done 子 Task、忽略 required dependency、复用旧 revision 交付、可选节点失败伪装 required 完成。
+允许 PI 提交根交付并把根 Task 与 run 原子推进到 `in_review` 的权威判断：当前 root Task revision 与 Task DAG revision 下的 required 节点均已被接受、依赖已满足，所有未完成 optional 节点已被显式退休且不再持有 claim/Offer/invocation，根交付绑定完整 contributing deliveries 与 evidence。
+_Avoid_: Agent 自报完成即 ready、只数 done 子 Task、忽略 required dependency、复用旧 revision 交付、可选节点仍在活动时提交根审核。
 
 ## Root Task review decision
 
@@ -342,24 +342,34 @@ _Avoid_: PI orchestration claim、根 Task ownership、assignment 即 claim、�
 当前 PI driver 依据冻结验收条件与 Server evidence 对子 Task 交付作出接受或退回的受 fencing 权力；需要主观、人类或高风险判断时必须转为等待人类，不能由 PI 或执行 Agent 代验收。
 _Avoid_: Agent 自验收、claim 包含 done 权、模型输出即接受、旧 driver 验收、人类门槛静默降级。
 
+## Subtask human acceptance authority
+
+子 Task 创建时按 acceptance kind 预先绑定的可审计人类验收权：普通主观验收默认属于当前 root Human review authority，高风险或受管动作属于该动作策略预声明 approver；其 Server token 绑定子 Task revision、attempt 与 delivery，只能通过具名 accept/reject command 原子执行 `in_review → done` 或失效旧 claim/delivery、递增 attempt 并退回 `todo`。
+_Avoid_: 任意 Team member 验收、PI 代替人类、复用 root review token、action approval 自动等同交付验收、等待人类但没有合法状态边。
+
 ## Subtask retry attempt
 
 子 Task 交付被退回或一次有效执行失败后形成的新履约轮次；Task 回到 `todo`、旧 claim/delivery 失效并递增 attempt，PI 重新 allocation，只有目标、范围或验收条件变化才同时递增 Task revision。
 _Avoid_: 退回后自动续租旧 claim、attempt 等同 Task revision、原 Agent 永久保留责任、覆盖旧 delivery、失败直接终结根 Task。
 
+## Task execution start
+
+Agent 取得 execution claim 后，Server 首次接受绑定该 claim、Task revision 与 attempt 的显式 `start-execution` command 或首个授权 Invocation 时写入的不可变事件；claim 建立会让子 Task 进入 `in_progress`，但只有该事件证明本轮已实际开工。
+_Avoid_: Offer accept 自动等同开工、heartbeat/notice 推断开工、客户端时间戳、无 claim Invocation、重试覆盖首次开工证据。
+
 ## Task allocation round
 
-PI 为同一子 Task revision/attempt 寻找并确认执行 Agent 的一次分配轮次；Offer 拒绝、过期、无人接受或开工前 relinquish 只结束当前 allocation round，不递增 execution attempt。
-_Avoid_: Offer 失败等同执行失败、每次候选通知递增 attempt、assignment 即 claim、无人领取自动终结根 Task。
+PI 为同一子 Task revision/attempt 寻找并确认执行 Agent 的一次分配轮次；Offer 拒绝、过期、无人接受，或 claim 建立后尚无 Task execution start 事件时 relinquish，只结束当前 allocation round，不递增 execution attempt。
+_Avoid_: Offer 失败等同执行失败、每次候选通知递增 attempt、assignment 即 claim、用 TaskStatus 猜测是否开工、无人领取自动终结根 Task。
 
 ## Subtask transition graph
 
-可执行子 Task 只允许 `created → todo → in_progress → in_review → done`；有效 claim 原子开启执行，交付进入审核，PI 接受后完成，退回或开工后失败以新 attempt 回到 `todo`，授权 PI 或 root cascade 可把任一非终态推进为 `cancelled`/`closed`。
-_Avoid_: Agent 直接 done、无 claim 进入 in_progress、退回保留旧 claim、失败直接终态、终态 reopen、未列出的自由状态更新。
+可执行子 Task 只允许 `created → todo → in_progress → in_review → done`；有效 claim 原子进入 `in_progress`，Task execution start 单独记录实际开工，交付进入审核，合法 PI 或 Subtask human acceptance authority 接受后完成，退回或开工后失败以新 attempt 回到 `todo`；开工前 relinquish 以同一 attempt 回到 `todo`，授权 PI 或 root cascade 可把任一非终态推进为 `cancelled`/`closed`。
+_Avoid_: Agent 直接 done、无 claim 进入 in_progress、用 in_progress 猜测实际开工、退回保留旧 claim、失败直接终态、终态 reopen、未列出的自由状态更新。
 
 ## Task impediment
 
-阻止当前子 Task 继续执行、但不改变 TaskStatus 的结构化事实，记录 blocker、resolution owner 与 wake condition；Agent 若仍负责恢复则 Task/claim 保持 `in_progress`，否则结束 claim 并按是否已开工决定是否递增 attempt。
+阻止当前子 Task 继续执行、但不改变 TaskStatus 的结构化事实，记录 blocker、resolution owner 与 wake condition；Agent 若仍负责恢复则 Task/claim 保持 `in_progress`，否则结束 claim，并以是否存在 Task execution start 事件决定是否递增 attempt。
 _Avoid_: blocked TaskStatus、heartbeat 猜测已解除、长期阻塞自动取消根 Task、无责任人 blocker、报告 blocked 即自动改派。
 
 ## Task execution failure
@@ -379,8 +389,8 @@ _Avoid_: reopen done/cancelled/closed 子 Task、覆盖旧验收、复用旧 cla
 
 ## Root Task cascade closeout
 
-根 Task 进入 `cancelled` 或 `closed` 时对任务树执行的原子收尾：终结所有非终态子 Task 并撤销其 claim、Offer、invocation、deadline 与待执行权，但保持已 `done` 子 Task、历史 delivery/evidence 与 provenance 不变。
-_Avoid_: 把已完成子 Task 改成 cancelled、迟到结果复活任务、分批撤权、删除历史交付、只关根 Task 让子任务继续执行。
+根 Task 进入任一终态时对任务树执行的原子收尾：`done` 要求 review readiness 已退休所有未完成 optional 节点，并防御性撤销任何残留 claim、Offer、invocation、deadline 与待执行权；`cancelled` 或 `closed` 还会终结所有非终态子 Task。三种结果都保持已 `done` 子 Task、历史 delivery/evidence 与 provenance 不变。
+_Avoid_: done 后仍有活动子任务、把已完成子 Task 改成 cancelled、迟到结果复活任务、分批撤权、删除历史交付、只关根 Task 让子任务继续执行。
 
 ## Tracked task
 
