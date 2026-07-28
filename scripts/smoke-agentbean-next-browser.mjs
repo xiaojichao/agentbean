@@ -346,12 +346,6 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       suffix,
       timeoutMs,
     });
-    // Memory / 执行记录诊断已迁入 System Admin Console，仅管理员可见；
-    // WebUI 业务 smoke 需提权后再走 dashboard/memory 与 dashboard/runs。
-    if (target.dataDir) {
-      promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
-      seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
-    }
     cleanup.push(async () => {
       seededSession.socket.disconnect?.();
     });
@@ -378,6 +372,14 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         `Rendered ${publicRoutes.length + authenticatedRoutes.length} App Router pages`,
       ),
     );
+
+    // Memory / 执行记录诊断已迁入 System Admin Console，仅管理员可见。
+    // 在通用路由 smoke 之后提权，避免 /dashboard 根路径重定向干扰 pathname 断言。
+    if (target.dataDir) {
+      promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
+      seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
+      await seedWebUiAuthStorage({ page, session: seededSession.session });
+    }
 
     const chatResult = await exerciseWebUiChatBusinessSmoke({
       page,
@@ -871,7 +873,8 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const teamPath = session.team.path ?? session.team.id;
   const expectedRoutes = routes ?? [
-    { path: `/${teamPath}/dashboard`, label: '仪表盘' },
+    // Console 根路径会重定向到 /dashboard/teams；非管理员停在 forbidden 壳。
+    { path: `/${teamPath}/dashboard`, label: '仪表盘', allowPathPrefix: true },
     { path: `/${teamPath}/chat`, label: '聊天' },
     { path: `/${teamPath}/tasks`, label: '任务' },
     { path: `/${teamPath}/members`, label: '成员' },
@@ -880,7 +883,7 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
   ];
   const rendered = [];
   for (const route of expectedRoutes) {
-    const descriptor = typeof route === 'string' ? { path: route, label: null } : route;
+    const descriptor = typeof route === 'string' ? { path: route, label: null, allowPathPrefix: false } : route;
     const url = new URL(descriptor.path, root);
     await page.navigate(url.toString());
     await page.waitForFunction(
@@ -888,8 +891,11 @@ export async function exerciseWebUiAuthenticatedRouteSmoke({
       `authenticated route ${descriptor.path} renders non-empty content`,
       timeoutMs,
     );
+    const pathAssertion = descriptor.allowPathPrefix
+      ? `(location.pathname === ${JSON.stringify(descriptor.path)} || location.pathname.startsWith(${JSON.stringify(`${descriptor.path}/`)}))`
+      : `location.pathname === ${JSON.stringify(descriptor.path)}`;
     await page.waitForFunction(
-      `location.pathname === ${JSON.stringify(descriptor.path)} && localStorage.getItem("agentbean.token") === ${JSON.stringify(session.token)}`,
+      `${pathAssertion} && localStorage.getItem("agentbean.token") === ${JSON.stringify(session.token)}`,
       `authenticated route ${descriptor.path} keeps the seeded session`,
       timeoutMs,
     );
