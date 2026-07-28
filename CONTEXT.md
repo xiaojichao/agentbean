@@ -154,8 +154,8 @@ _Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意�
 
 ## Uncoordinated message intake
 
-没有权威 PI orchestration trigger，或 promotion/evaluator 被停用、旁路或不可用时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
-_Avoid_: PI 自动协调总开关、原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
+不存在权威 PI orchestration trigger 时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。Semantic promotion rollout 关闭、旁路或不可用不影响确定性结构化 trigger 进入 Promotion gate；原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
+_Avoid_: evaluator 关闭即禁用结构化 trigger、PI 自动协调总开关、原始消息抢答、隐式 fallback 负责人、谁先 claim 谁负责（针对聊天消息）、把未 @ 直派当作日常默认。
 
 ## Coordinated message intake
 
