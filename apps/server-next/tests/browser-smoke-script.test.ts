@@ -896,6 +896,7 @@ describe('AgentBean Next browser smoke script', () => {
       dispatchId: 'dispatch-1',
       logArtifactId: 'webui-log-runs-smoke',
       summaryArtifactId: 'webui-summary-runs-smoke',
+      adminUiVerified: true,
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/dashboard/runs']);
     const runsPageReadyIndex = calls.findIndex(
@@ -952,6 +953,83 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('data-message-selected'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('finished WebUI workspace run smoke'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('token='))).toBe(true);
+  });
+
+  test('skips admin-only /dashboard/runs UI when verifyAdminUi is false but still seeds workspace run data', async () => {
+    const { exerciseWebUiRunsBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const calls: Array<[string, unknown]> = [];
+    const daemonHandlers = new Map<string, (payload: any) => void | Promise<void>>();
+    const page = {
+      async navigate(url: string) {
+        calls.push(['navigate', url]);
+      },
+      async waitForFunction(expression: string, description: string) {
+        calls.push(['waitForFunction', { expression, description }]);
+      },
+      async evaluateJson() {
+        return true;
+      },
+      async click() {},
+      async setInputValue() {},
+      async reload() {},
+    };
+    const webSocket = {
+      async emitWithAck(event: string, payload: unknown) {
+        if (event === 'agent:create') return { ok: true, agent: { id: 'agent-1' } };
+        if (event === 'message:send') {
+          void daemonHandlers.get('dispatch:request')?.({
+            id: 'dispatch-1',
+            agentId: 'agent-1',
+            prompt: '@WebUIRununsmoke produce workspace run',
+          });
+          return { ok: true, dispatches: [{ id: 'dispatch-1' }] };
+        }
+        return { ok: true };
+      },
+    };
+    const ioFactory = () => {
+      let onConnect: (() => void) | undefined;
+      return {
+        on(event: string, handler: (payload?: unknown) => void | Promise<void>) {
+          daemonHandlers.set(event, handler);
+          if (event === 'connect') onConnect = handler;
+        },
+        off() {},
+        connect() {
+          onConnect?.();
+        },
+        disconnect() {},
+        async emitWithAck() {
+          return { ok: true, device: { id: 'device-1' }, runtimes: [{ id: 'runtime-1' }] };
+        },
+      };
+    };
+
+    const result = await exerciseWebUiRunsBusinessSmoke({
+      page,
+      baseUrl: 'http://127.0.0.1:4100/',
+      webSocket,
+      session: {
+        token: 'token-1',
+        user: { id: 'user-1', username: 'alice', role: 'user' },
+        team: { id: 'team-1', name: 'Team One', path: 'team-one' },
+        channel: { id: 'channel-1', name: 'general' },
+      },
+      ioFactory,
+      suffix: 'runs-skip-admin',
+      timeoutMs: 1000,
+      verifyAdminUi: false,
+    });
+
+    expect(result).toEqual({
+      id: 'webui-run-runs-skip-admin',
+      command: 'agentbean-webui-smoke workspace runs-skip-admin',
+      dispatchId: 'dispatch-1',
+      logArtifactId: 'webui-log-runs-skip-admin',
+      summaryArtifactId: 'webui-summary-runs-skip-admin',
+      adminUiVerified: false,
+    });
+    expect(calls.some((call) => call[0] === 'navigate')).toBe(false);
   });
 
   test('exercises WebUI settings account, browser preferences, team rename, and join link create/revoke', async () => {

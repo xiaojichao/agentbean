@@ -375,11 +375,14 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
 
     // Memory / 执行记录诊断已迁入 System Admin Console，仅管理员可见。
     // 在通用路由 smoke 之后提权，避免 /dashboard 根路径重定向干扰 pathname 断言。
+    // 外部目标（--url / AGENTBEAN_NEXT_WEBUI_URL）没有 dataDir，无法本地提权；
+    // 后续仅在 isAdminSession 时进入 admin-only 页面，否则会稳定超时。
     if (target.dataDir) {
       promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
       seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
       await seedWebUiAuthStorage({ page, session: seededSession.session });
     }
+    const isAdminSession = seededSession.session.user?.role === 'admin';
 
     const chatResult = await exerciseWebUiChatBusinessSmoke({
       page,
@@ -449,6 +452,8 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    // 始终创建 workspace run 数据供 project collaboration 使用；
+    // admin UI（/dashboard/runs）仅在管理员会话下验证。
     const runResult = await exerciseWebUiRunsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -457,12 +462,15 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ioFactory,
       suffix: webUiFlowSuffix(suffix, 'runs'),
       timeoutMs,
+      verifyAdminUi: isAdminSession,
     });
     checks.push(
       check(
         'webui-runs-business-flow',
         true,
-        `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`,
+        isAdminSession
+          ? `Created workspace run "${runResult.command}" and verified list, detail route, full log artifact, artifact tree, inline log search, and source message jump`
+          : `Created workspace run "${runResult.command}" data for downstream smoke; skipped admin-only /dashboard/runs UI without local admin promotion`,
       ),
     );
 
@@ -591,20 +599,30 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
-    const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
-      page,
-      baseUrl: target.baseUrl,
-      session: seededSession.session,
-      suffix,
-      timeoutMs,
-    });
-    checks.push(
-      check(
-        'webui-memory-governance-flow',
-        true,
-        `Created collaborative Memory "${memoryResult.content}", restored it after refresh, and rendered governance status`,
-      ),
-    );
+    if (isAdminSession) {
+      const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
+        page,
+        baseUrl: target.baseUrl,
+        session: seededSession.session,
+        suffix,
+        timeoutMs,
+      });
+      checks.push(
+        check(
+          'webui-memory-governance-flow',
+          true,
+          `Created collaborative Memory "${memoryResult.content}", restored it after refresh, and rendered governance status`,
+        ),
+      );
+    } else {
+      checks.push(
+        check(
+          'webui-memory-governance-flow',
+          true,
+          'Skipped Memory governance browser flow for external target without local smoke database admin promotion',
+        ),
+      );
+    }
 
     const agentsResult = await exerciseWebUiAgentsBusinessSmoke({
       page,
@@ -1932,6 +1950,9 @@ export async function exerciseWebUiRunsBusinessSmoke({
   ioFactory = loadSocketIoClient(),
   suffix,
   timeoutMs,
+  // /dashboard/runs 仅管理员可见。外部目标无法本地提权时传 false：
+  // 仍创建 workspace run 数据供下游 project smoke，但跳过 admin UI 断言。
+  verifyAdminUi = true,
 }) {
   assertSession(session);
   if (!session.channel?.id) {
@@ -2031,6 +2052,17 @@ export async function exerciseWebUiRunsBusinessSmoke({
     }
     await daemon.waitForDispatchResult(dispatchId);
 
+    if (!verifyAdminUi) {
+      return {
+        id: workspaceRunId,
+        command,
+        dispatchId,
+        logArtifactId,
+        summaryArtifactId,
+        adminUiVerified: false,
+      };
+    }
+
     await page.navigate(new URL(`/${teamPath}/dashboard/runs`, root).toString());
     await waitForWebUiAdminRunsPage({ page, timeoutMs });
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
@@ -2075,7 +2107,14 @@ export async function exerciseWebUiRunsBusinessSmoke({
     await waitForWebUiWorkspaceRunBackToList({ page, teamPath, timeoutMs });
     await page.click('[data-smoke="workspace-run-source-message-link"]');
     await waitForWebUiWorkspaceRunSourceMessage({ page, expectedText: sourceMessageBody, timeoutMs });
-    return { id: workspaceRunId, command, dispatchId, logArtifactId, summaryArtifactId };
+    return {
+      id: workspaceRunId,
+      command,
+      dispatchId,
+      logArtifactId,
+      summaryArtifactId,
+      adminUiVerified: true,
+    };
   } finally {
     daemon.socket.disconnect?.();
   }
