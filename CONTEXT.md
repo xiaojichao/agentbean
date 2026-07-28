@@ -64,8 +64,8 @@ _Avoid_: 全 Team 最新状态、所有未读消息、普通无关频道闲聊�
 
 ## Freshness hold
 
-Freshness basis 之后出现相关并发变化时，Server 在不产生发送、领取或 Read acknowledgement 副作用的前提下暂停操作，并返回增量上下文与新的 Read candidate；草稿可以保留，待接收方修订、重试或明确放弃。
-_Avoid_: 失败后自动已读、静默重试、无关消息阻塞、hold 即提交。
+Freshness basis 之后出现相关消息或上下文变化、但操作本身仍然有效时，Server 在不产生发送、领取或 Read acknowledgement 副作用的前提下暂停操作，并返回增量上下文与新的 Read candidate；草稿可以保留，待接收方修订、重试或明确放弃。Task 权威状态已经使 claim 失效时，优先返回 Claim conflict。
+_Avoid_: 已失效 claim、失败后自动已读、静默重试、无关消息阻塞、hold 即提交。
 
 ## Claim conflict
 
