@@ -72,6 +72,48 @@ describe('human message coordination enqueue', () => {
     });
   });
 
+  test('durable-job still immediately dispatches explicit @Agent while enqueueing a job', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds([
+        'user-1', 'team-1', 'channel-1',
+        'message-1', 'job-1', 'task-1', 'dispatch-1', 'request-1', 'ack-1',
+      ]) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.registerAgent({
+      id: 'agent-writer',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Writer',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 100,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '@Writer 帮我写一个剧本',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', agentId: 'agent-writer' }],
+      route: { kind: 'dispatch', agentId: 'agent-writer', reason: 'mention' },
+      task: { id: 'task-1', assigneeId: 'agent-writer' },
+    });
+
+    await expect(repositories.channelCoordination.jobs.getByMessageId('message-1')).resolves.toMatchObject({
+      id: 'job-1',
+      status: 'pending',
+    });
+  });
+
   test('uses the same durable enqueue boundary for human direct messages', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
