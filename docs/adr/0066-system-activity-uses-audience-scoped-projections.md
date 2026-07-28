@@ -4,7 +4,7 @@ status: accepted
 
 # 系统活动使用受众与界面分层投影
 
-PI Manager 是 Server-hosted 内置编排运行时，不是 Team 成员、普通 Agent 或消息发送者。自动提升、拆解、等待、改派、失败、汇总与 Freshness hold 不得以 PI 头像、在线状态、输入状态、聊天气泡或可回复身份呈现。用户看到的是 Server 从已提交 Task 或 PI orchestration event 生成的 `System activity projection`：它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实。lease、fencing、checkpoint、模型调用、重试尝试和 chain-of-thought 等内部过程不直接进入用户活动流。
+PI Manager 是 Server-hosted 内置编排运行时，不是 Team 成员、普通 Agent 或消息发送者。自动提升、拆解、等待、改派、失败与汇总等已提交事实不得以 PI 头像、在线状态、输入状态、聊天气泡或可回复身份呈现。用户看到的是 Server 从已提交 Task 或 PI orchestration event 生成的 `System activity projection`：它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实。Freshness hold 不属于此类活动，只作为当前调用方的 command response；lease、fencing、checkpoint、模型调用、重试尝试和 chain-of-thought 等内部过程也不直接进入用户活动流。
 
 同一权威事件按受众与界面用途分层投影。Task 详情是完整的人类可读工作时间线，并把权威 TaskStatus 与分诊、拆解、派发、等待、汇总等 run progress 分栏展示；来源 Thread 在原 Message 不变的前提下挂载持久 Task 活动卡，只呈现稀疏里程碑、当前进展与 Task 入口；Inbox 通过独立 `System attention item` 只投影与接收者责任相关的 attention 或 action_required。System attention item 是 Server 从已提交 event 或独立 attention 事实持久化的非 Message 条目，使用稳定 attention identity 去重并独立维护 unread/seen；它不进入 Message target 的 Read boundary，notice 仍只是可恢复唤醒。三处不得等量复制事件或各自创造状态。原型验证采用 Task 驾驶舱、Thread 锚定卡和责任收件箱三种互补结构，它们分别验证三类界面职责，不构成必须照搬的像素布局。
 
