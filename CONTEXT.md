@@ -79,8 +79,8 @@ _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任�
 
 ## System attention item
 
-Server 从已提交的 Task/orchestration event 或独立 attention 事实面向特定接收者持久化的非 Message Inbox 条目，绑定稳定 attention identity、来源事实、revision 与当前责任状态；持久化成功构成 authoritative delivery，notice 仍只是可丢失、可重放的唤醒信号。它独立维护 unread/seen acknowledgement，读取只清 unread，不推进任何 Message target 的 Read boundary，也不结束 attention/action_required；同一 attention identity 的提醒更新既有条目而不复制责任。
-_Avoid_: Message Inbox item、Message Read boundary、每个 reminder 新建责任、notice delivered 即权威送达、Read 即 resolved、客户端从原始 event 自行生成。
+Server 从已提交的 Task/orchestration event 或独立 attention 事实面向特定接收者持久化的非 Message Inbox 条目，绑定稳定 attention identity、来源事实、revision 与当前责任状态；持久化成功构成 authoritative delivery，notice 仍只是可丢失、可重放的唤醒信号。它独立维护绑定 revision 的 unread/seen acknowledgement，读取只清当前 revision 的 unread，不推进任何 Message target 的 Read boundary，也不结束 attention/action_required。等级升级为 action_required，或责任人、期限/SLA、所需动作、风险/影响发生实质变化时递增 revision 并重新 unread；相同事实的重复 reminder 只更新提醒时间和 notice，不递增 revision、不重置 seen，也不复制责任。
+_Avoid_: Message Inbox item、Message Read boundary、每个 reminder 新建责任、旧 seen 覆盖实质升级、每次 reminder 都重置 unread、notice delivered 即权威送达、Read 即 resolved、客户端从原始 event 自行生成。
 
 ## System activity projection
 
