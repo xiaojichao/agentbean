@@ -30,6 +30,10 @@ import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket,
 import { WEB_EVENTS, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
+import {
+  OrchestrationVisibilityPrototype,
+  resolveOrchestrationPrototype,
+} from '@/components/prototypes/OrchestrationVisibilityPrototype';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { acceptTaskDagSnapshot } from '@/lib/task-dag';
@@ -95,6 +99,7 @@ export default function TasksPage() {
   const np = useCurrentTeamPath();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const orchestrationPrototype = resolveOrchestrationPrototype(searchParams.get('orchestrationPrototype'));
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskDag, setTaskDag] = useState<TaskDagViewDto | null>(null);
@@ -576,7 +581,9 @@ export default function TasksPage() {
         )}
       </main>
 
-      {selectedTask && (
+      {process.env.NODE_ENV !== 'production' && orchestrationPrototype ? (
+        <OrchestrationVisibilityPrototype variant={orchestrationPrototype} />
+      ) : selectedTask && (
         <TaskThreadPanel
           task={selectedTask}
           root={threadRoot}

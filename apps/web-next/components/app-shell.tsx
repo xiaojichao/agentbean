@@ -25,6 +25,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const conn = useAgentBeanStore((s) => s.conn);
   const pathname = usePathname();
   const router = useRouter();
+  const throwawayPrototype = process.env.NODE_ENV !== 'production'
+    && pathname.startsWith('/prototype/orchestration-visibility');
 
   // Hydrate auth token from localStorage
   useEffect(() => {
@@ -60,7 +62,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [authToken, conn]);
 
   const marketing = MARKETING_ROUTES.includes(pathname);
-  const networked = isTeamRoute(pathname);
+  const networked = !throwawayPrototype && isTeamRoute(pathname);
 
   useEffect(() => {
     if (!hydrated) return;
