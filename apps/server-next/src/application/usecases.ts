@@ -1257,7 +1257,10 @@ export interface CreateServerNextUseCasesInput {
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
-  /** Production uses durable-job; legacy exists only for explicitly unmigrated callers. */
+  /**
+   * Default is durable-job (ADR 0061 Coordinated message intake).
+   * Pass `legacy` only for unmigrated tests or emergency env override at the host.
+   */
   messageIngestionMode?: 'legacy' | 'durable-job';
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
@@ -1294,10 +1297,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const artifactContentStore = input.artifactContentStore;
   const resolveArtifactPreview = input.resolveArtifactPreview;
   const onArtifactCommitted = input.onArtifactCommitted;
-  // #706 已为 durable-job 入队接好 Channel Coordinator 消费者：消费 Job、调 Active PI Model、
-  // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
-  // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
-  const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
+  // #706 Channel Coordinator 消费 durable Job。默认 durable-job（ADR 0061）；
+  // legacy 仅用于显式未迁移调用方 / 紧急旁路（见 host resolveMessageIngestionMode）。
+  const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
     // Directly constructed use cases preserve the pre-rollout behavior. Production

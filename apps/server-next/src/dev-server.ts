@@ -255,13 +255,15 @@ export async function startServerNextDevServer(
     projectCollaborationMetrics: parsedConfig.projectCollaborationMetrics
       ?? createProjectCollaborationMetrics(),
   };
+  // ADR 0061: production host defaults to durable-job so Channel Coordinator runs.
+  const messageIngestionMode = resolveMessageIngestionMode(input.messageIngestionMode);
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, input.messageIngestionMode);
+    : createDefaultApp(config, input.Database, messageIngestionMode);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
@@ -353,7 +355,7 @@ export async function startServerNextDevServer(
   );
   const coordinationScheduler = startCoordinationScheduler(
     app,
-    input.messageIngestionMode === 'durable-job',
+    messageIngestionMode === 'durable-job',
     input.coordination ?? { intervalMs: 1000 },
   );
 
@@ -1607,10 +1609,27 @@ function findWebNextDir(): string {
   throw new Error('web-next app directory not found');
 }
 
+export type MessageIngestionMode = 'legacy' | 'durable-job';
+
+/** Resolve host ingestion mode: explicit arg > env > durable-job (production default). */
+export function resolveMessageIngestionMode(
+  explicit?: MessageIngestionMode,
+  env: NodeJS.ProcessEnv = process.env,
+): MessageIngestionMode {
+  if (explicit === 'legacy' || explicit === 'durable-job') {
+    return explicit;
+  }
+  const fromEnv = env.AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE?.trim();
+  if (fromEnv === 'legacy' || fromEnv === 'durable-job') {
+    return fromEnv;
+  }
+  return 'durable-job';
+}
+
 function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
-  messageIngestionMode: 'legacy' | 'durable-job' = 'legacy',
+  messageIngestionMode: MessageIngestionMode = 'durable-job',
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();

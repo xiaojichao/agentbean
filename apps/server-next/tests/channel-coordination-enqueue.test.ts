@@ -46,6 +46,32 @@ describe('human message coordination enqueue', () => {
     });
   });
 
+  test('defaults to durable-job when messageIngestionMode is omitted', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'job-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      body: '帮我写一个剧本，主题是AI陪伴机器人',
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [],
+    });
+
+    await expect(repositories.channelCoordination.jobs.getByMessageId('message-1')).resolves.toMatchObject({
+      id: 'job-1',
+      messageId: 'message-1',
+      status: 'pending',
+    });
+  });
+
   test('uses the same durable enqueue boundary for human direct messages', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({

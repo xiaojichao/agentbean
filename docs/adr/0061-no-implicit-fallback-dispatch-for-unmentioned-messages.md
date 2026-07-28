@@ -8,6 +8,12 @@ AgentBean 将人类频道消息的工作入口收敛为两条：开启「PI 自�
 
 该决策废止以 latency 为理由的 legacy 未 @ 直派日常默认。隐式 fallback 会把协作退回「谁在线谁做」，挖空 PI Manager「先理解再组织」的价值，并已在生产中表现为非预期 Agent 接管（即便已限制为频道成员）。紧急旁路若仍需保留，只能挂在系统级 PI Rollout State，不得作为 Team 日常产品行为。Claim 仍只发生在结构化 Task Offer 被 Agent 接受之后；它解决唯一负责人，不解决原始消息的抢答。
 
+## Consequences
+
+- Server 宿主默认 `messageIngestionMode: durable-job`，并启动 Channel Coordinator 消费循环，使开启「PI 自动协调」时走 Coordinated message intake。
+- 紧急回退可设 `AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE=legacy`（或显式 host 入参）；不得把未 @ fallback 当作日常产品路径。
+- 无 Active PI Model 时 Job 仍会以 unavailable 落库，消息照常展示；不回落隐式 Dispatch。
+
 ## Considered Options
 
 - **废止日常 legacy 未 @ fallback（采纳）**：与 PI Manager、Task offer、Uncoordinated intake 语言一致；未 @ 延迟由协调路径承担。
