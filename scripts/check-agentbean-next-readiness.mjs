@@ -737,9 +737,9 @@ export function collectAgentBeanNextReadinessChecks({
         webNextSettingsTabs.includes('isLegacyPiSettingsTab') &&
         webNextSettingsTabs.includes('legacySettingsConsoleSection') &&
         webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'releases'") &&
-        !webNextSettingsTabs.includes("| 'pi'") &&
-        !webNextSettingsTabs.includes("| 'memory'") &&
-        !webNextSettingsTabs.includes("| 'runs'") &&
+        !webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'memory'") &&
+        !webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'pi'") &&
+        webNextSettingsTabs.includes("export type LegacySettingsConsoleTab = 'pi' | 'memory' | 'runs'") &&
         verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
         verificationMatrix.includes('System Admin Console') &&
         verificationMatrix.includes('dashboard/pi') &&
