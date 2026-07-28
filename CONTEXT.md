@@ -127,6 +127,71 @@ _Avoid_: 每消息 PI Manager、Channel Coordinator、direct dispatch、模型�
 由权威 PI orchestration trigger 从来源 Message 派生保留不可变来源关系的唯一根 Task；Message 继续作为沟通事实，Task 成为独立工作事实，同一来源 lineage 不得因重试、回复或并行入口重复创建根 Task。
 _Avoid_: 移动或替换原消息、复制消息为 Task、每条回复新建根 Task、@Agent 自动升级、无来源 Task。
 
+## Root Task responsibility
+
+根 Task 上由来源 requester、PI orchestration claim、人类验收权与各子 Task 的 Agent execution claim 分别承担的责任关系；根 Task 本身没有单一 owner、assignee 或普通 Agent claim。
+_Avoid_: root Task ownership、根 Task assignee、创建者即执行者、PI claim 等同人类验收权、普通 Agent 认领根 Task。
+
+## Human review authority
+
+允许对根 Task 交付执行接受或退回的可审计权力：人类来源默认属于原 requester，Team-owned workflow 属于入口预声明 approver，也可通过显式 delegation 转交；PI Manager 与普通 Owner/Admin 角色本身都不取得该权力。
+_Avoid_: PI 自动验收、任意 Team member 改 done、Owner/Admin 默认代验收、创建者字段即授权、proposal approver token 跨阶段复用。
+
+## Root Task terminal outcome
+
+根 Task 停止继续工作的权威结果，区分经合法验收的 `done`、对仍有效未完成工作明确叫停的 `cancelled`，以及因重复、替代、错误创建或行政原因不表达执行取消的 `closed`。
+_Avoid_: cancelled 与 closed 混用、failed 自动终结根 Task、waiting/blocked 充当终态、未验收直接 done、删除 Task 表示收口。
+
+## Root Task termination authority
+
+允许把非终态根 Task 推进为 `cancelled` 或 `closed` 的人类治理权，属于原 requester、当前 Human review authority 或有合法治理原因的 Team Owner/Admin；PI Manager 与普通 Agent 只能建议、等待、报告 blocked 或 relinquish。
+_Avoid_: PI 因 deadline/失败/预算自动终结、Agent 取消根 Task、无 reason close、取消不做 orchestration closeout、删除历史与 provenance。
+
+## Root Task terminal immutability
+
+根 Task 一旦进入 `done`、`cancelled` 或 `closed` 就不再恢复为非终态；后续工作通过保留 lineage 的 follow-up、continuation 或 replacement root Task 表达，错误终态只能追加保留原事件的行政纠正。
+_Avoid_: reopen terminal Task、删除终态事件、复用旧 claim/run、cancelled 改回 in_progress、把 `in_review → in_progress` 退回称为终态 reopen。
+
+## Root Task activation
+
+根 Task 从 `todo` 进入 `in_progress` 的唯一边界：当前 PI driver 首次成功提交会改变工作事实的 orchestration command，例如确认分诊、建立首版 Task DAG 或创建首个子 Task；排队、读取、模型调用、获取 lease 或失败命令都不构成激活。
+_Avoid_: promotion 即 in_progress、driver lease 即开工、planning attempt 即进度、失败命令推进状态、waiting 把根 Task 退回 todo。
+
+## Root Task lifecycle
+
+根 Task 的最小权威状态集合为 `todo`、`in_progress`、`in_review`、`done`、`cancelled` 与 `closed`；分诊、拆解、派发、执行、等待和汇总属于 PI orchestration run 的 phase/event 投影，不增加 TaskStatus。
+_Avoid_: triaging/decomposing/aggregating TaskStatus、waiting 根状态、Task 与 run 两套阶段锁步、failed 根状态、UI 展示阶段充当权威事实。
+
+## Root Task transition graph
+
+根 Task 只允许 `promotion → todo → in_progress → in_review → done`，其中人类退回以新 revision 执行 `in_review → in_progress`；任一非终态可经合法权力进入 `cancelled` 或 `closed`，三种终态都没有普通出边。
+_Avoid_: todo/in_progress 直接 done、in_review 退回 todo、终态 reopen、未列出的自由状态更新、跨过 review、失败自动终结。
+
+## Root Task review readiness
+
+允许 PI 提交根交付并把根 Task 与 run 原子推进到 `in_review` 的权威判断：当前 root Task revision 与 Task DAG revision 下的 required 节点均已被接受、依赖已满足，所有未完成 optional 节点已被显式退休且不再持有 claim/Offer/invocation，根交付绑定完整 contributing deliveries 与 evidence。
+_Avoid_: Agent 自报完成即 ready、只数 done 子 Task、忽略 required dependency、复用旧 revision 交付、可选节点仍在活动时提交根审核。
+
+## Root Task review decision
+
+Human review authority 对当前 root Task revision、Task DAG revision 与 review delivery 作出的原子接受或退回：接受推进 `done` 并完成 orchestration closeout；退回记录理由、递增 Task revision、使旧交付与受影响权利失效，并以同一 orchestration claim 恢复 `in_progress`。
+_Avoid_: PI 代替人类决定、覆盖旧交付、退回即新根 Task、旧 token 跨 revision 使用、Task/run/claim 分步提交。
+
+## Root Task review wait
+
+根 Task 与 run 在 `in_review` 等待合法 Human review authority 决定的非终态；review deadline 只能产生 attention/reminder 与唤醒，不能自动接受，等待期间保留 orchestration claim 但不占 PI driver lease。
+_Avoid_: 超时自动 done、Owner/Admin 默认代验收、等待占用 worker、提醒改变状态、无 review decision 完成 closeout。
+
+## Task transition authority
+
+Server 为一次 Task 状态变化校验的角色化并发依据：PI 使用 run revision、driver lease/fencing 与 expected Task/DAG revision，Agent 使用 claim lease、Task revision 与 attempt，人类使用绑定 review 或 termination authority 和当前 revision 的 Server token。
+_Avoid_: 通用 updateTask 任意改状态、只凭登录身份、不同角色共用 token、过期凭证推进、冲突时部分写入、状态失败推进 Read boundary。
+
+## Task transition command
+
+表达一条合法 Task 状态边的具名 Server 领域命令，例如接受 claim、提交/验收交付、取消或关闭；它携带对应 Task transition authority，并原子写入状态、event、audit 与必要 closeout，通用 Task 编辑不能直接指定目标状态。
+_Avoid_: `updateTask(status=...)`、客户端 PATCH 状态、只写 Task 不写 event、一个万能 transition API、UI 权限替代领域门禁。
+
 ## Promotion source relation
 
 Message-to-task promotion 创建的不可变 provenance，连接来源 Message/target/requester、trigger、创建时目标与作用域快照，并在 proposal accept 入口记录 proposal revision 与确认人；来源后续编辑或删除只产生 attention/tombstone，不静默改写或取消 Task。
@@ -247,6 +312,11 @@ _Avoid_: daemon 版本即 claim revision、升级后自动重做、为旧 daemon
 PI Manager 为一个结构化 Task 选择定向指派或开放认领的协作决定；显式 @Agent 必须形成定向指派，多能力任务可以在分解后分别决定分配方式。显式 @ 是主执行者硬约束：PI 不得静默改派；仅在该 Agent 拒绝、超时或 relinquish 后才可另荐，且改派对用户可见。派发与 Task offer 的候选硬边界是当前频道 agent 成员（且 Team 可见、能力与权限匹配）；不得静默指派或邀请未加入该频道的 Team Agent。
 _Avoid_: Agent 争抢原始频道消息、所有任务统一抢占、PI 任意改写显式目标、把 @ 当作可静默覆盖的软提示、跨频道静默拉人执行。
 
+## Task assignment projection
+
+子 Task 当前定向邀请或优先候选的可重建展示事实，不授予执行权；根 Task 不存在 assignment，子 Task 只有 active Agent execution claim 才表示当前履约责任，兼容 `assigneeId` 不能用于授权。
+_Avoid_: assignee 即 claim、根 Task assignee、残留 assignee 表示仍负责、用 projection 校验 invocation、显式 @ 自动建立 claim。
+
 ## Uncoordinated message intake
 
 不存在权威 PI orchestration trigger 时，人类频道消息进入 Agent 工作的路径只有：显式 @Agent 的 Simple agent request，或已经绑定到既有 Tracked task 的跟进。Semantic promotion rollout 关闭、旁路或不可用不影响确定性结构化 trigger 进入 Promotion gate；原始消息本身不可被 Agent claim，也不因「频道内谁先在线」而隐式指定负责人。
@@ -261,6 +331,66 @@ _Avoid_: 每消息 Channel coordination decision、legacy 未 @ fallback Dispatc
 
 向具备所需能力和可见权限的外部 Agent 发布的结构化认领机会；多个 Agent 可以响应，但同一时刻只有一个 Agent 获得有效认领权。无显式 @ 且候选相近或负载不确定时，PI 用 Offer 替代定向指派；候选唯一或明显最优时用定向指派。二者都要求有效接受后才形成 claim，且从不针对原始频道消息开放抢答。
 _Avoid_: 原始聊天广播、重复 Dispatch、无约束抢答、对原始消息的 claim。
+
+## Agent execution claim
+
+Agent 明确接受仍有效的 Task offer 后取得、绑定子 Task revision 与 attempt 的限时履约责任，只授权执行、提交交付、报告 blocked 或 relinquish；它不授予修改 Task DAG、认领根 Task 或把自身交付标记为 `done` 的权力。
+_Avoid_: PI orchestration claim、根 Task ownership、assignment 即 claim、自报完成即验收、跨 revision 复用、claim 自动改 DAG。
+
+## Subtask acceptance authority
+
+当前 PI driver 依据冻结验收条件与 Server evidence 对子 Task 交付作出接受或退回的受 fencing 权力；需要主观、人类或高风险判断时必须转为等待人类，不能由 PI 或执行 Agent 代验收。
+_Avoid_: Agent 自验收、claim 包含 done 权、模型输出即接受、旧 driver 验收、人类门槛静默降级。
+
+## Subtask human acceptance authority
+
+子 Task 创建时按 acceptance kind 预先绑定的可审计人类验收权：普通主观验收默认属于当前 root Human review authority，高风险或受管动作属于该动作策略预声明 approver；其 Server token 绑定子 Task revision、attempt 与 delivery，只能通过具名 accept/reject command 原子执行 `in_review → done` 或失效旧 claim/delivery、递增 attempt 并退回 `todo`。
+_Avoid_: 任意 Team member 验收、PI 代替人类、复用 root review token、action approval 自动等同交付验收、等待人类但没有合法状态边。
+
+## Subtask retry attempt
+
+子 Task 交付被退回或一次有效执行失败后形成的新履约轮次；Task 回到 `todo`、旧 claim/delivery 失效并递增 attempt，PI 重新 allocation，只有目标、范围或验收条件变化才同时递增 Task revision。
+_Avoid_: 退回后自动续租旧 claim、attempt 等同 Task revision、原 Agent 永久保留责任、覆盖旧 delivery、失败直接终结根 Task。
+
+## Task execution start
+
+Agent 取得 execution claim 后，Server 首次接受绑定该 claim、Task revision 与 attempt 的显式 `start-execution` command 或首个授权 Invocation 时写入的不可变事件；claim 建立会让子 Task 进入 `in_progress`，但只有该事件证明本轮已实际开工。
+_Avoid_: Offer accept 自动等同开工、heartbeat/notice 推断开工、客户端时间戳、无 claim Invocation、重试覆盖首次开工证据。
+
+## Task allocation round
+
+PI 为同一子 Task revision/attempt 寻找并确认执行 Agent 的一次分配轮次；Offer 拒绝、过期、无人接受，或 claim 建立后尚无 Task execution start 事件时 relinquish，只结束当前 allocation round，不递增 execution attempt。
+_Avoid_: Offer 失败等同执行失败、每次候选通知递增 attempt、assignment 即 claim、用 TaskStatus 猜测是否开工、无人领取自动终结根 Task。
+
+## Subtask transition graph
+
+可执行子 Task 只允许 `created → todo → in_progress → in_review → done`；有效 claim 原子进入 `in_progress`，Task execution start 单独记录实际开工，交付进入审核，合法 PI 或 Subtask human acceptance authority 接受后完成，退回或开工后失败以新 attempt 回到 `todo`；开工前 relinquish 以同一 attempt 回到 `todo`，授权 PI 或 root cascade 可把任一非终态推进为 `cancelled`/`closed`。
+_Avoid_: Agent 直接 done、无 claim 进入 in_progress、用 in_progress 猜测实际开工、退回保留旧 claim、失败直接终态、终态 reopen、未列出的自由状态更新。
+
+## Task impediment
+
+阻止当前子 Task 继续执行、但不改变 TaskStatus 的结构化事实，记录 blocker、resolution owner 与 wake condition；Agent 若仍负责恢复则 Task/claim 保持 `in_progress`，否则结束 claim，并以是否存在 Task execution start 事件决定是否递增 attempt。
+_Avoid_: blocked TaskStatus、heartbeat 猜测已解除、长期阻塞自动取消根 Task、无责任人 blocker、报告 blocked 即自动改派。
+
+## Task execution failure
+
+一次子 Task execution attempt 或 invocation 未能产生可验收交付的权威结果；它结束相应执行权并触发重试或人类等待，但不是 TaskStatus，也不能由 PI 自动推导为根 Task 终态。
+_Avoid_: failed TaskStatus、失败次数自动取消根 Task、覆盖失败证据、重试复用旧 claim、预算耗尽即 closed。
+
+## Subtask retirement authority
+
+当前 PI driver 在既有根目标、授权范围与 Task DAG revision 内取消、关闭或等价替换不再需要的子 Task 的编排权；若会删除 required 工作、降低验收标准或改变根目标，必须先形成 root Task revision，并在越界时取得人类确认。
+_Avoid_: PI 终结根 Task、静默删 required 节点、保留旧 claim/invocation、删除历史交付、用子 Task 调整绕过 scope approval。
+
+## Subtask replacement
+
+当前 root/DAG revision 不再能使用某个已终态子 Task 时，由 PI 创建并通过 DAG relation 显式替代它的新子 Task；旧 Task、acceptance 与 evidence 保持不可变，但不计入当前 root review readiness。
+_Avoid_: reopen done/cancelled/closed 子 Task、覆盖旧验收、复用旧 claim/attempt、删除原节点、静默把旧结果计入新 revision。
+
+## Root Task cascade closeout
+
+根 Task 进入任一终态时对任务树执行的原子收尾：`done` 要求 review readiness 已退休所有未完成 optional 节点，并防御性撤销任何残留 claim、Offer、invocation、deadline 与待执行权；`cancelled` 或 `closed` 还会终结所有非终态子 Task。三种结果都保持已 `done` 子 Task、历史 delivery/evidence 与 provenance 不变。
+_Avoid_: done 后仍有活动子任务、把已完成子 Task 改成 cancelled、迟到结果复活任务、分批撤权、删除历史交付、只关根 Task 让子任务继续执行。
 
 ## Tracked task
 
@@ -507,6 +637,11 @@ _Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
 
 对已开始执行的 Task 目标、范围或验收要求所做的可追溯新版本。它保留旧要求与交付历史，并使受影响的旧认领、调用或验收失去当前效力，而不是原地覆盖。
 _Avoid_: 编辑覆盖、隐藏变更、复用旧执行权。
+
+## Task revision impact set
+
+一次 root Task revision 明确列出的受影响目标、验收条件、DAG 节点与依赖；受影响子 Task 的旧权利失效，已证明不受影响的已验收结果可以显式 carry forward，无法证明时默认重新验证。
+_Avoid_: revision 后全树静默复用、无差别全量重做、模型主观声称不受影响、carry forward 丢 provenance、旧 claim 跨影响集继续执行。
 
 ## Artifact source root
 
