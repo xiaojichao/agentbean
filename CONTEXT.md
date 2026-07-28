@@ -77,6 +77,16 @@ _Avoid_: Freshness hold、自动重试、失败后已读、部分建立 ownershi
 Inbox item 对特定接收方是否仍需注意或采取动作的状态；它与 Unread 正交，只能由回应、执行、解除责任或明确忽略等业务动作结束。
 _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任。
 
+## System attention item
+
+Server 从已提交的 Task/orchestration event 或独立 attention 事实面向特定接收者持久化的非 Message Inbox 条目，绑定稳定 attention identity、来源事实、revision 与当前责任状态；持久化成功构成 authoritative delivery，notice 仍只是可丢失、可重放的唤醒信号。它独立维护绑定 revision 的 unread/seen acknowledgement，读取只清当前 revision 的 unread，不推进任何 Message target 的 Read boundary，也不结束 attention/action_required。等级升级为 action_required，或责任人、期限/SLA、所需动作、风险/影响发生实质变化时递增 revision 并重新 unread；相同事实的重复 reminder 只更新提醒时间和 notice，不递增 revision、不重置 seen，也不复制责任。
+_Avoid_: Message Inbox item、Message Read boundary、每个 reminder 新建责任、旧 seen 覆盖实质升级、每次 reminder 都重置 unread、notice delivered 即权威送达、Read 即 resolved、客户端从原始 event 自行生成。
+
+## System activity projection
+
+Server 从已提交的 Task 或 PI orchestration event 面向特定受众与界面生成的人类可读投影：Task 详情保留完整活动时间线，来源 Thread 使用持久 Task 活动卡呈现稀疏里程碑，Inbox 通过 System attention item 只投影与接收者责任相关的 attention 或 action_required。它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实；PI Manager 不以成员、头像、聊天气泡或输入状态出现。
+_Avoid_: PI message、PI reply、orchestration chat、客户端从 notice 猜测事实、三处等量复制事件、Read 即处理、原始 audit/prompt/chain-of-thought、跨受众泄露受限内容。
+
 ## PI Manager
 
 AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
@@ -474,13 +484,13 @@ _Avoid_: 与 Promotion gate 并存的第二套入口、PI Manager 自行判断�
 
 ## Coordination message
 
-PI Manager 以 AgentBean 系统协调身份发出的必要用户可见内容，包括澄清问题、紧凑的 Task 状态和注明贡献 Agent 与来源 Task 的最终汇总。多 Agent 场景下，各执行者的原始交付仍归原 Agent；PI 汇总并列呈现，不改写、不顶替、不冒充为唯一成品消息。
-_Avoid_: PI 成员消息、伪装成外部 Agent、内部推理展示、冗长计划播报、用 PI 合成正文替换执行者署名交付。
+已废止的 PI 输出术语。PI Manager 不是 Message sender：澄清或授权需求使用具名 Server command response 与 System attention item，Task 状态使用 System activity projection，多 Agent 汇总形成可审核的 Task delivery revision。各执行者的原始交付仍归原 Agent；聚合结果保留贡献 Agent 与来源 Task，不改写或顶替原交付。
+_Avoid_: 新建 PI/AgentBean 系统聊天身份、可回复 PI 气泡、把投影序列化成 Message、用 PI 合成正文替换执行者署名交付。
 
 ## Progress coordination
 
-PI 对 Tracked task 的进度维护方式：在子任务完成、失败、relinquish、超时或用户追问等事件上更新状态并发紧凑 Coordination message；不在无事件时主动轮询催办。
-_Avoid_: 定时催办刷屏、无事件频道进度播报、仅面板可见而频道对进度完全静默（用户关闭自动协调时除外）。
+PI 对 Tracked task 的进度维护方式：在子任务完成、失败、relinquish、超时或用户查询等事件上提交权威编排事实，由 Server 更新 Task/Thread 的 System activity projection，并在责任相关时创建或更新 System attention item；不发送 Coordination message，也不在无事件时主动轮询催办。
+_Avoid_: 定时催办刷屏、无事件频道进度播报、用聊天消息复制 Task 活动、仅有瞬时面板状态而没有可恢复投影。
 
 ## Team-scoped Agent Memory
 
@@ -695,8 +705,8 @@ _Avoid_: PI 自动协调总开关、系统全局边界、管理员日常选择�
 
 ## Task-linked message
 
-通过 Task 详情、Task 讨论串、回复 Task 系统消息或明确 Task 引用而与现有 Task 强绑定的用户消息。缺少强绑定时，PI 只能在高置信的小范围补充中自动建议关联，模糊或重大变更必须请求用户确认。
-_Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
+通过 Task 详情、Task 讨论串、明确 Task 引用，或从 System activity projection 发起且携带 Server 签发 Task linkage 的结构化 follow-up command，与现有 Task 强绑定的用户消息。PI 不创建可回复的 Task 系统消息；历史 `meta.coordination.taskId` 只作为迁移期只读兼容证据。缺少强绑定时，PI 只能在高置信的小范围补充中自动建议关联，模糊或重大变更必须请求用户确认。
+_Avoid_: 回复 PI/Task 系统消息、同频道自动归属、最近 Task 猜测、任意语义合并、继续生成 legacy coordination metadata。
 
 ## Task revision
 
