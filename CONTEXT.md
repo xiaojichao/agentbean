@@ -129,8 +129,8 @@ _Avoid_: 移动或替换原消息、复制消息为 Task、每条回复新建根
 
 ## Promotion source relation
 
-Message-to-task promotion 创建的不可变 provenance，连接来源 Message/target/requester、trigger 与 proposal revision、确认人以及创建时目标和作用域快照；来源后续编辑或删除只产生 attention/tombstone，不静默改写或取消 Task。
-_Avoid_: Task 正文副本、可变来源指针、删消息即删 Task、编辑消息即改 Task。
+Message-to-task promotion 创建的不可变 provenance，连接来源 Message/target/requester、trigger、创建时目标与作用域快照，并在 proposal accept 入口记录 proposal revision 与确认人；来源后续编辑或删除只产生 attention/tombstone，不静默改写或取消 Task。
+_Avoid_: 为无 proposal 的结构化 trigger 虚构 revision 或确认人、Task 正文副本、可变来源指针、删消息即删 Task、编辑消息即改 Task。
 
 ## Promotion gate
 
@@ -174,8 +174,8 @@ _Avoid_: 每消息 Task、聊天记录别名、Promotion proposal、Action appro
 
 ## Simple agent request
 
-PI 判定只需一个外部 Agent、且不需要持续跟踪或多方协作的人类请求；默认定向调用该 Agent，不创建 Tracked task。
-_Avoid_: 单人任务必建 Task、把简单请求项目管理化。
+Server message intake 根据显式 @Agent 确定性路由给一个外部 Agent、且不创建 Tracked task 的人类请求；Agent 后续若发现需要编排，只能走结构化 Agent orchestration escalation。
+_Avoid_: PI 每消息判定、未 @ 消息隐式选 Agent、单人任务必建 Task、把简单请求项目管理化。
 
 ## Task creation gate
 
