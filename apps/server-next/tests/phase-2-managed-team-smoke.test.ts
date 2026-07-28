@@ -207,8 +207,12 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
       userId, teamId, autoCoordinationEnabled: true,
     })).resolves.toMatchObject({ ok: true, autoCoordinationEnabled: true });
 
+    // ADR 0061: root messages no longer implicit-fallback to a channel agent.
+    // Phase 3 managed multi-agent still needs a device placement target for this
+    // smoke (device worker host); @Agent A only seeds routing — open/targeted
+    // claims remain driven by the manager worker.
     const sent = await webSocket.emitWithAck(WEB_EVENTS.message.send, {
-      userId, teamId, channelId, body: '请按依赖顺序完成 Phase 3 跨 Agent Memory smoke',
+      userId, teamId, channelId, body: '@Agent A 请按依赖顺序完成 Phase 3 跨 Agent Memory smoke',
       asTask: true, clientMessageId: 'phase-3-managed-memory-message',
     }) as { ok: boolean; task?: { id: string }; management?: { managementPhase?: number } };
     expect(sent).toMatchObject({
