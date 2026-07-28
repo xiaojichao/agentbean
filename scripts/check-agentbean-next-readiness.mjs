@@ -61,6 +61,8 @@ export function collectAgentBeanNextReadinessChecks({
     readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/page.tsx'), 'utf8'),
     readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/layout.tsx'), 'utf8'),
     readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/pi/page.tsx'), 'utf8'),
+    readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/memory/page.tsx'), 'utf8'),
+    readFileSync(join(root, 'apps/web-next/app/[teamPath]/dashboard/runs/page.tsx'), 'utf8'),
     readFileSync(join(root, 'apps/web-next/components/admin-console-panel.tsx'), 'utf8'),
   ].join('\n');
   const webNextChatPage = readFileSync(join(root, 'apps/web-next/app/[teamPath]/chat/page.tsx'), 'utf8');
@@ -699,8 +701,12 @@ export function collectAgentBeanNextReadinessChecks({
         browserSmokeScript.includes('waitForWebUiAdminPiPage') &&
         browserSmokeScript.includes('admin-tab-pi') &&
         browserSmokeScript.includes('admin-pi-page') &&
+        browserSmokeScript.includes('admin-memory-page') &&
+        browserSmokeScript.includes('admin-runs-page') &&
         browserSmokeScript.includes('settings-pi-panel') &&
         browserSmokeScript.includes('dashboard/pi') &&
+        browserSmokeScript.includes('dashboard/memory') &&
+        browserSmokeScript.includes('dashboard/runs') &&
         browserSmokeScript.includes('settings?tab=pi') &&
         browserSmokeScript.includes('settings-tab-pi') &&
         webNextDashboardPage.includes('data-smoke="admin-dashboard-page"') &&
@@ -709,6 +715,8 @@ export function collectAgentBeanNextReadinessChecks({
         webNextDashboardPage.includes("key: 'devices'") &&
         webNextDashboardPage.includes("key: 'agents'") &&
         webNextDashboardPage.includes("key: 'pi'") &&
+        webNextDashboardPage.includes("key: 'memory'") &&
+        webNextDashboardPage.includes("key: 'runs'") &&
         webNextDashboardPage.includes('data-smoke={`admin-tab-${item.key}`}') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-select"') &&
         webNextDashboardPage.includes('data-smoke="admin-device-owner-save"') &&
@@ -716,18 +724,27 @@ export function collectAgentBeanNextReadinessChecks({
         webNextDashboardPage.includes("dashboard/${item.key}") &&
         webNextDashboardPage.includes("section === 'teams'") &&
         webNextDashboardPage.includes('admin-pi-page') &&
+        webNextDashboardPage.includes('admin-memory-page') &&
+        webNextDashboardPage.includes('admin-runs-page') &&
         webNextDashboardPage.includes('PiManagementPanel') &&
-        webNextSettingsPage.includes('isLegacyPiSettingsTab') &&
-        webNextSettingsPage.includes('dashboard/pi') &&
+        webNextDashboardPage.includes('MemoryGovernancePanel') &&
+        webNextDashboardPage.includes('RunsPanel') &&
+        webNextSettingsPage.includes('legacySettingsConsoleSection') &&
+        webNextSettingsPage.includes('dashboard/${section}') &&
         !webNextSettingsPage.includes("id: 'pi'") &&
+        !webNextSettingsPage.includes("id: 'memory'") &&
+        !webNextSettingsPage.includes("id: 'runs'") &&
         webNextSettingsTabs.includes('isLegacyPiSettingsTab') &&
-        webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'memory' | 'runs' | 'releases'") &&
+        webNextSettingsTabs.includes('legacySettingsConsoleSection') &&
+        webNextSettingsTabs.includes("export type SettingsTab = 'account' | 'browser' | 'server' | 'releases'") &&
         !webNextSettingsTabs.includes("| 'pi'") &&
+        !webNextSettingsTabs.includes("| 'memory'") &&
+        !webNextSettingsTabs.includes("| 'runs'") &&
         verificationMatrix.includes('webui-admin-dashboard-business-flow') &&
         verificationMatrix.includes('System Admin Console') &&
         verificationMatrix.includes('dashboard/pi') &&
         parityBackfillAudit.includes('| `dashboard` / `admin` | Green |'),
-      'Admin Console parity must stay covered by browser smoke for middle-nav sections, inventory rows, owner transfer, PI at dashboard/pi, and settings without a PI primary entry',
+      'Admin Console parity must stay covered by browser smoke for middle-nav sections, inventory rows, owner transfer, PI/Memory/runs at dashboard sections, and settings without those primary entries',
     ),
     check(
       'phase-0-management-boundary-regression',

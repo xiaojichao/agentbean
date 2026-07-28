@@ -5,5 +5,5 @@ export default function Page({
 }: {
   params: { teamPath: string };
 }) {
-  redirect(`/${params.teamPath}/settings?tab=runs`);
+  redirect(`/${params.teamPath}/dashboard/runs`);
 }

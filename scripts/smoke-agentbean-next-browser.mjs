@@ -2019,8 +2019,8 @@ export async function exerciseWebUiRunsBusinessSmoke({
     }
     await daemon.waitForDispatchResult(dispatchId);
 
-    await page.navigate(new URL(`/${teamPath}/settings`, root).toString());
-    await openWebUiSettingsTab({ page, tab: 'runs', timeoutMs });
+    await page.navigate(new URL(`/${teamPath}/dashboard/runs`, root).toString());
+    await waitForWebUiAdminRunsPage({ page, timeoutMs });
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
     await page.setInputValue('[data-smoke="workspace-runs-filter-status"]', 'succeeded');
     await waitForWebUiWorkspaceRunCard({ page, command, timeoutMs });
@@ -2123,7 +2123,7 @@ async function waitForWebUiWorkspaceRunBackToList({ page, teamPath, timeoutMs })
     (() => {
       const teamPath = ${JSON.stringify(teamPath)};
       const link = document.querySelector('[data-smoke="workspace-run-back-to-list"]');
-      return link?.getAttribute('href') === '/' + teamPath + '/settings?tab=runs';
+      return link?.getAttribute('href') === '/' + teamPath + '/dashboard/runs';
     })()
     `,
     'workspace run detail back link to return to the runs list',
@@ -3512,7 +3512,8 @@ export async function exerciseWebUiMemoryBusinessSmoke({ page, baseUrl, session,
   const teamPath = session.team.path ?? session.team.id;
   const safeSuffix = suffix.replace(/[^a-zA-Z0-9-]/g, '').slice(-24);
   const content = `WebUI Memory smoke ${safeSuffix}`;
-  await page.navigate(new URL(`/${teamPath}/settings?tab=memory`, root).toString());
+  await page.navigate(new URL(`/${teamPath}/dashboard/memory`, root).toString());
+  await waitForWebUiAdminMemoryPage({ page, timeoutMs });
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="memory-governance-panel"]'))`,
     'Memory governance panel to render',
@@ -4033,19 +4034,19 @@ async function waitForWebUiAdminDashboard({ page, timeoutMs }) {
   );
 }
 
-/** System Admin Console middle nav: five sections including PI Agent management. */
+/** System Admin Console middle nav: inventory + PI + Memory + run diagnostics. */
 async function waitForWebUiAdminConsoleNav({ page, timeoutMs }) {
   await page.waitForFunction(
     `
     (() => {
       const nav = document.querySelector('[data-smoke="admin-console-nav"]');
       if (!nav) return false;
-      return ['teams', 'users', 'devices', 'agents', 'pi'].every((key) =>
+      return ['teams', 'users', 'devices', 'agents', 'pi', 'memory', 'runs'].every((key) =>
         Boolean(document.querySelector('[data-smoke="admin-tab-' + key + '"]'))
       );
     })()
     `,
-    'admin console middle nav with five sections to render',
+    'admin console middle nav with seven sections to render',
     timeoutMs,
   );
 }
@@ -4062,6 +4063,22 @@ async function waitForWebUiAdminPiPage({ page, timeoutMs }) {
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="admin-pi-page"]')) && Boolean(document.querySelector('[data-smoke="settings-pi-panel"]'))`,
     'admin PI Agent management panel to render at dashboard/pi',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminMemoryPage({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-memory-page"]')) && Boolean(document.querySelector('[data-smoke="memory-governance-panel"]'))`,
+    'admin Memory management panel to render at dashboard/memory',
+    timeoutMs,
+  );
+}
+
+async function waitForWebUiAdminRunsPage({ page, timeoutMs }) {
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="admin-runs-page"]')) && Boolean(document.querySelector('[data-smoke="workspace-runs-page"]'))`,
+    'admin run diagnostics panel to render at dashboard/runs',
     timeoutMs,
   );
 }

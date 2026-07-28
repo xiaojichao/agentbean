@@ -209,7 +209,7 @@ export default function RunDetailPage() {
           </div>
         </div>
         <Link
-          href={`/${np}/settings?tab=runs`}
+          href={`/${np}/dashboard/runs`}
           className="mt-4 inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
         >
           <ArrowLeft className="w-4 h-4" /> 返回执行记录
@@ -300,7 +300,7 @@ export default function RunDetailPage() {
       {/* Header */}
       <div className="flex items-center gap-3">
         <Link
-          href={`/${np}/settings?tab=runs`}
+          href={`/${np}/dashboard/runs`}
           className="text-neutral-400 hover:text-neutral-600"
           data-smoke="workspace-run-back-to-list"
         >
@@ -577,7 +577,7 @@ export default function RunDetailPage() {
         <section className="rounded-lg border border-blue-100 bg-blue-50 p-4" data-smoke="workspace-run-memory-provenance">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-blue-900">Memory provenance</h2>
-            <Link href={`/${np}/settings?tab=memory`} className="text-xs font-medium text-blue-700 hover:underline">打开 Memory 治理</Link>
+            <Link href={`/${np}/dashboard/memory`} className="text-xs font-medium text-blue-700 hover:underline">打开 Memory 管理</Link>
           </div>
           {run.managementInvocationId && <p className="mt-2 text-xs text-blue-800">Invocation：<span className="font-mono">{run.managementInvocationId}</span></p>}
           {run.memoryCapsuleRef && <div className="mt-2 text-xs text-blue-800">

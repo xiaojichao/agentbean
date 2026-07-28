@@ -897,21 +897,16 @@ describe('AgentBean Next browser smoke script', () => {
       logArtifactId: 'webui-log-runs-smoke',
       summaryArtifactId: 'webui-summary-runs-smoke',
     });
-    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/settings']);
-    expect(calls).toContainEqual(['click', '[data-smoke="settings-tab-runs"]']);
-    const runsTabReadyIndex = calls.findIndex(
+    expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/dashboard/runs']);
+    const runsPageReadyIndex = calls.findIndex(
       (call) => call[0] === 'waitForFunction'
         && typeof call[1] === 'object'
         && call[1] !== null
         && 'expression' in call[1]
         && typeof call[1].expression === 'string'
-        && call[1].expression.includes('settings-tab-runs'),
+        && call[1].expression.includes('admin-runs-page'),
     );
-    const runsTabClickIndex = calls.findIndex(
-      (call) => call[0] === 'click' && call[1] === '[data-smoke="settings-tab-runs"]',
-    );
-    expect(runsTabReadyIndex).toBeGreaterThanOrEqual(0);
-    expect(runsTabClickIndex).toBeGreaterThan(runsTabReadyIndex);
+    expect(runsPageReadyIndex).toBeGreaterThanOrEqual(0);
     expect(calls).toContainEqual(['reload', undefined]);
     expect(calls).toContainEqual([
       'setInputValue',
@@ -947,7 +942,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-full-log'))).toHaveLength(5);
     expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-source-message-link'))).toHaveLength(2);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('workspace-run-back-to-list'))).toBe(true);
-    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('/settings?tab=runs'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('/dashboard/runs'))).toBe(true);
     expect(waitForFunctionCalls.filter((call) => call[1].expression.includes('workspace-run-artifact-tree'))).toHaveLength(2);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('logs/workspace-run.log'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('outputs/summary.md'))).toBe(true);

@@ -1,18 +1,16 @@
-export type SettingsTab = 'account' | 'browser' | 'server' | 'memory' | 'runs' | 'releases';
+export type SettingsTab = 'account' | 'browser' | 'server' | 'releases';
 
-/** Legacy system-PI tab id; no longer a settings primary tab (see ADR 0060). */
-export type LegacySettingsPiTab = 'pi';
+/** Legacy settings tab ids that now live under System Admin Console (see ADR 0060). */
+export type LegacySettingsConsoleTab = 'pi' | 'memory' | 'runs';
 
 export const ALL_SETTINGS_TABS: readonly SettingsTab[] = [
   'account',
   'browser',
   'server',
-  'memory',
-  'runs',
   'releases',
 ] as const;
 
-/** 设置侧栏 tab：系统级 PI 已迁出，角色不再影响可见 tab 集合。 */
+/** 设置侧栏 tab：系统级运维入口已迁出 Console，角色不再影响可见 tab 集合。 */
 export function settingsTabsForRole(_isSystemAdmin: boolean): readonly SettingsTab[] {
   return ALL_SETTINGS_TABS;
 }
@@ -22,8 +20,6 @@ export function normalizeSettingsTab(value: string | null): SettingsTab | null {
     value === 'account'
     || value === 'browser'
     || value === 'server'
-    || value === 'memory'
-    || value === 'runs'
     || value === 'releases'
   ) {
     return value;
@@ -40,7 +36,19 @@ export function isLegacyPiSettingsTab(value: string | null): boolean {
 }
 
 /**
- * 解析设置页当前 tab。`?tab=pi` 不再作为有效设置 tab（由页面层重定向或回退）。
+ * 已迁出到 System Admin Console 的旧设置 tab。
+ * 返回对应 dashboard section；非此类 tab 返回 null。
+ */
+export function legacySettingsConsoleSection(
+  value: string | null,
+): LegacySettingsConsoleTab | null {
+  if (value === 'pi' || value === 'memory' || value === 'runs') return value;
+  return null;
+}
+
+/**
+ * 解析设置页当前 tab。
+ * `?tab=pi|memory|runs` 不再作为有效设置 tab（由页面层重定向或回退）。
  */
 export function resolveSettingsTab(
   requested: string | null,
