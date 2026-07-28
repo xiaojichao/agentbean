@@ -33,6 +33,7 @@ export function createInMemoryServerNext(input: CreateInMemoryServerNextInput = 
           return `id-${fallbackId}`;
         }),
     },
+    // Unit/integration harnesses still use legacy sync dispatch; production host defaults to durable-job.
     messageIngestionMode: 'legacy',
     ...(input.joinCodes ? { joinCodes: { nextCode: input.joinCodes } } : {}),
     ...(input.deviceInviteCodes ? { deviceInviteCodes: { nextCode: input.deviceInviteCodes } } : {}),

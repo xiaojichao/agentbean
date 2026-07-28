@@ -1257,7 +1257,10 @@ export interface CreateServerNextUseCasesInput {
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
-  /** Production uses durable-job; legacy exists only for explicitly unmigrated callers. */
+  /**
+   * Default is durable-job (ADR 0061 Coordinated message intake).
+   * Pass `legacy` only for unmigrated tests or emergency env override at the host.
+   */
   messageIngestionMode?: 'legacy' | 'durable-job';
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
@@ -1294,10 +1297,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const artifactContentStore = input.artifactContentStore;
   const resolveArtifactPreview = input.resolveArtifactPreview;
   const onArtifactCommitted = input.onArtifactCommitted;
-  // #706 已为 durable-job 入队接好 Channel Coordinator 消费者：消费 Job、调 Active PI Model、
-  // 产出无副作用 Decision。生产默认仍走 legacy（rollout 待后续切换）；durable-job+Coordinator
-  // 作为完整可用的可选路径，经 messageIngestionMode:'durable-job' 激活。
-  const messageIngestionMode = input.messageIngestionMode ?? 'legacy';
+  // #706 Channel Coordinator 消费 durable Job。默认 durable-job（ADR 0061）；
+  // legacy 仅用于显式未迁移调用方 / 紧急旁路（见 host resolveMessageIngestionMode）。
+  const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
     // Directly constructed use cases preserve the pre-rollout behavior. Production
@@ -3964,7 +3966,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               messageId: existingMessage.id,
             });
             return {
-              kind: 'saved' as const,
+              kind: 'replay' as const,
               message: existingMessage,
               artifacts: replayArtifacts,
               referenceSet: replayReferenceSet ? toProjectReferenceSetDto(replayReferenceSet) : undefined,
@@ -4051,19 +4053,207 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
       }
 
+      // Replay: return already-created dispatches/tasks without re-executing side effects.
+      if (outcome.kind === 'replay') {
+        const contextOwner = messageInput.threadId
+          ? await resolveRoutingContextAgentId(repositories, {
+              teamId: messageInput.teamId,
+              channel,
+              threadId: messageInput.threadId,
+            })
+          : undefined;
+        const route = routeMessageForChannel({
+          channel,
+          visibleAgents,
+          teamId: messageInput.teamId,
+          body: messageInput.body,
+          mentions,
+          contextOwner,
+          connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+          dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+        });
+        const message = outcome.artifacts.length > 0
+          ? {
+            ...outcome.message,
+            artifacts: outcome.artifacts.map(toArtifactDto),
+            ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+          }
+          : {
+            ...outcome.message,
+            ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+          };
+        const existingDispatches = (await repositories.dispatches.listByMessage(outcome.message.id))
+          .map(toDispatchDto);
+        const existingTaskId = typeof outcome.message.meta?.taskId === 'string'
+          ? outcome.message.meta.taskId
+          : undefined;
+        const existingTask = existingTaskId
+          ? await repositories.tasks.getById(existingTaskId)
+          : null;
+        return makeSuccess({
+          message,
+          dispatches: existingDispatches,
+          route,
+          // Do not re-create management runs on idempotent replay.
+          management: { kind: 'direct' as const, mode: 'direct' as const },
+          ...(existingTask ? { task: existingTask } : {}),
+          ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
+        });
+      }
+
+      // Immediate execution bridge (until Coordinator owns full dispatch lifecycle):
+      // hard-constrained paths (@mention / DM / thread owner) and asTask management still
+      // run synchronously. Unmentioned root messages stay job-only (ADR 0061).
+      const contextOwner = messageInput.threadId
+        ? await resolveRoutingContextAgentId(repositories, {
+            teamId: messageInput.teamId,
+            channel,
+            threadId: messageInput.threadId,
+          })
+        : undefined;
+      const route = routeMessageForChannel({
+        channel,
+        visibleAgents,
+        teamId: messageInput.teamId,
+        body: messageInput.body,
+        mentions,
+        contextOwner,
+        connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+        dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+      });
+      const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
+        body: messageInput.body,
+        channel,
+        route,
+        threadId: messageInput.threadId,
+      });
+      let taskId = shouldCreateTask ? ids.nextId() : undefined;
+      if (messageInput.clientMessageId) {
+        const reservation = await repositories.management.reservations.getByRequestKey({
+          teamId: messageInput.teamId,
+          requestKey: `${messageInput.teamId}:${messageInput.userId}:${messageInput.clientMessageId.trim()}`,
+        });
+        const reservedRun = reservation
+          ? await repositories.management.runs.getById(reservation.managementRunId)
+          : null;
+        if (reservedRun
+          && reservedRun.teamId === messageInput.teamId
+          && reservedRun.channelId === messageInput.channelId
+          && shouldCreateTask
+          && reservedRun.rootTaskId) {
+          taskId = reservedRun.rootTaskId;
+        }
+      }
+      let management: ManagementRoutingResult = await managementRouter.route({
+        userId: messageInput.userId,
+        teamId: messageInput.teamId,
+        channelId: messageInput.channelId,
+        rootMessageId: outcome.message.id,
+        ...(taskId ? { rootTaskId: taskId } : {}),
+        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+        body: messageInput.body,
+        ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+      });
+      if (management.kind === 'unavailable') {
+        return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
+      }
+      const coordinatedManagedRoot = management.kind === 'managed' && management.managementPhase >= 2;
+      let task: TaskRecord | null = null;
+      if (shouldCreateTask && taskId) {
+        task = await repositories.tasks.create({
+          id: taskId,
+          teamId: messageInput.teamId,
+          title: messageInput.body.trim() || '附件',
+          description: undefined,
+          status: route.kind === 'dispatch' || coordinatedManagedRoot ? 'in_progress' : 'todo',
+          creatorId: messageInput.userId,
+          assigneeId: route.kind === 'dispatch' && !coordinatedManagedRoot ? route.agentId : undefined,
+          channelId: messageInput.channelId,
+          tags: [],
+          sortOrder: now,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await repositories.messages.setTaskIdIfAbsent({ messageId: outcome.message.id, taskId: task.id });
+      }
+      if (task && management.kind === 'managed' && management.managementPhase >= 2) {
+        await taskCoordinationKernel.bootstrapRootCoordination({
+          managementRunId: management.managementRunId,
+          taskId: task.id,
+          idempotencyKey: `bootstrap-root:${task.id}`,
+          acceptanceCriteria: [{
+            id: `root-completion:${task.id}`,
+            description: '根任务目标已完成并可供用户审核',
+            evidenceRequired: false,
+          }],
+          maxAttempts: 1,
+        });
+      }
+
+      const dispatches: DispatchDto[] = [];
+      let acknowledgementMessage: MessageDto | undefined;
+      if (route.kind === 'dispatch' && management.kind !== 'managed') {
+        const dispatch = await repositories.dispatches.create({
+          id: ids.nextId(),
+          teamId: messageInput.teamId,
+          channelId: messageInput.channelId,
+          messageId: outcome.message.id,
+          agentId: route.agentId,
+          status: 'queued',
+          requestId: ids.nextId(),
+          prompt: messageInput.body,
+          createdAt: now,
+          updatedAt: now,
+        });
+        dispatches.push(toDispatchDto(dispatch));
+        await repositories.agents.updateStatus({ agentId: dispatch.agentId, status: 'busy', lastSeenAt: now });
+        if (task) {
+          acknowledgementMessage = await appendTaskClaimAcknowledgementMessage(repositories, {
+            id: ids.nextId(),
+            message: outcome.message,
+            task,
+            dispatch: toDispatchDto(dispatch),
+            createdAt: now,
+          });
+        }
+      }
+      if (management.kind === 'managed') {
+        management = await managementRouter.scheduleManaged(management);
+      }
+      if (management.mode === 'shadow' && management.shadowRequestKey) {
+        void managementRouter.recordShadowDecision({
+          shadowRequestKey: management.shadowRequestKey,
+          body: messageInput.body,
+          ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+        }).catch(() => undefined);
+      }
+
+      const routeReason = toRouteReason(route);
+      const messageWithMeta = {
+        ...outcome.message,
+        meta: {
+          ...outcome.message.meta,
+          ...(task ? { taskId: task.id } : {}),
+          ...(routeReason ? { routeReason } : {}),
+        },
+      };
       const message = outcome.artifacts.length > 0
         ? {
-          ...outcome.message,
+          ...messageWithMeta,
           artifacts: outcome.artifacts.map(toArtifactDto),
           ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
         }
         : {
-          ...outcome.message,
+          ...messageWithMeta,
           ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
         };
       return makeSuccess({
         message,
-        dispatches: [],
+        dispatches,
+        route,
+        ...(task ? { task } : {}),
+        ...(acknowledgementMessage ? { acknowledgementMessage } : {}),
+        management,
         ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
       });
     },

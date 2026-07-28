@@ -200,9 +200,11 @@ describe('server-next Socket.IO namespaces', () => {
       ok: true,
       message: { id: 'message-1', senderKind: 'human', body: '@离线Agent 仍然先保存' },
       dispatches: [],
+      // Offline @ is unknown-mention: no dispatch, but durable path still reports route/management shape.
+      route: { kind: 'no-dispatch' },
+      management: { kind: 'direct', mode: 'direct' },
     });
     expect(ack).not.toHaveProperty('task');
-    expect(ack).not.toHaveProperty('management');
     await expect(repositories.channelCoordination.jobs.getByMessageId('message-1')).resolves.toMatchObject({
       id: 'job-1', status: 'pending', activeModel: { availability: 'unavailable' },
     });

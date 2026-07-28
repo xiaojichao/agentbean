@@ -1796,6 +1796,37 @@ describe('server-next dev server entry', () => {
       expect(runCoordinationCycle).toHaveBeenCalledWith({ limit: 7 });
     });
   });
+
+  test('defaults to durable-job and starts the coordination consumer without an explicit mode', async () => {
+    const runCoordinationCycle = vi.fn(async () => ({ processed: 0, outcomes: [] }));
+    const app = { runCoordinationCycle } as unknown as ServerNextUseCases;
+    const server = await startServerNextDevServer({
+      app,
+      Server,
+      config: {
+        host: '127.0.0.1',
+        port: 0,
+        storage: 'memory',
+        dataDir: '.agentbean-next-test',
+        sessionSecret: 'test-secret',
+      },
+      coordination: { intervalMs: 5, limit: 3 },
+      dispatchTimeout: { timeoutMs: 0, intervalMs: 0 },
+    });
+    cleanups.push(() => server.close());
+
+    await eventually(() => {
+      expect(runCoordinationCycle).toHaveBeenCalledWith({ limit: 3 });
+    });
+  });
+
+  test('resolveMessageIngestionMode prefers explicit then env then durable-job', async () => {
+    const { resolveMessageIngestionMode } = await import('../src/dev-server.js');
+    expect(resolveMessageIngestionMode(undefined, {})).toBe('durable-job');
+    expect(resolveMessageIngestionMode(undefined, { AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE: 'legacy' })).toBe('legacy');
+    expect(resolveMessageIngestionMode('durable-job', { AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE: 'legacy' })).toBe('durable-job');
+    expect(resolveMessageIngestionMode('legacy', { AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE: 'durable-job' })).toBe('legacy');
+  });
 });
 
 async function connectClient(url: string): Promise<ClientSocket> {
