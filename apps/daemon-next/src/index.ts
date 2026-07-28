@@ -72,8 +72,16 @@ export { createDeviceControlClient } from './device-control-client.js';
 export type { DeviceControlClient } from './device-control-client.js';
 export { runDeviceCli, formatDeviceServiceState, DEVICE_CLI_EXIT } from './device-cli.js';
 export type { DeviceCliCommand, DeviceCliDeps } from './device-cli.js';
-export { runUpdateCli, readInstalledAgentBeanPackage, UPDATE_CLI_EXIT } from './update-cli.js';
-export type { InstalledAgentBeanPackage, UpdateCliDeps } from './update-cli.js';
+export {
+  runUpdateCli,
+  readInstalledAgentBeanPackage,
+  verifyInstalledPackage,
+  fenceDeviceServiceForPackageSwap,
+  readServiceErrorSummary,
+  UPDATE_CLI_EXIT,
+  SERVICE_INSTALL_DEADLINE_MS,
+} from './update-cli.js';
+export type { InstalledAgentBeanPackage, UpdateCliDeps, PackageInstallResult } from './update-cli.js';
 export { runDeviceService } from './device-service-runtime.js';
 export type { RunDeviceServiceInput } from './device-service-runtime.js';
 export {
