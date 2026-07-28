@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # PI rollout 模式不属于 Team 产品设置

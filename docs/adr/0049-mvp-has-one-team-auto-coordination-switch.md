@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # MVP 每个 Team 只有一个 PI 自动协调开关

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # MVP 只支持 Server-hosted PI Coordination

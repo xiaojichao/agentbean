@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # 未 @ 消息禁止隐式 fallback Dispatch

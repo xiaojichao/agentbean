@@ -147,6 +147,101 @@ _Avoid_: Freshness hold、静默覆盖、隐式合并、先写入者获胜。
 请求确实需要多工作单元或跨 Agent 协作、依赖与恢复、结果聚合、持续跟踪或人工审核生命周期的可审计事实；它是 Agent escalation 与 policy direct promotion 的必要门槛。
 _Avoid_: 文本长度、复杂措辞、任务关键词、多个 @、模型主观复杂度、单 Agent 可直接完成的请求。
 
+## PI orchestration run
+
+与一个根 Task 一一对应、由 Server 持久维护的编排生命周期事实，汇集当前 orchestration claim、Task DAG 进度、deadline 与恢复位置；PI Manager 只取得可替换、带 fencing 的临时驱动权，不拥有本地权威状态。
+_Avoid_: 多个 run 竞争同一根 Task、PI 本地 session、daemon orchestration、worker 进程记忆、重启后重新拆解。
+
+## PI driver
+
+在 AgentBean Server 受控环境中临时驱动一个 PI orchestration run 的可替换执行单元，只能读取 Server-authorized context，并须以有效 lease/fencing 提交命令；它不是 Team 成员、普通 Agent 或 Device 进程。
+_Avoid_: Manager Worker、Device Worker、根 Task owner、daemon、永久进程身份、本地权威状态。
+
+## PI orchestration claim
+
+Server 持久记录的系统级编排归属，表示一个非终态根 Task 由 PI Manager 负责组织工作；它跨 worker 与 Server 重启存在，不属于具体进程，也不允许普通 Agent 抢占根 Task。
+_Avoid_: PI driver lease、根 Task assignee、Agent execution claim、worker ownership、进程退出即释放。
+
+## PI driver lease
+
+Server 向当前 PI worker 授予的限时编排驱动权，携带单调递增的 fencing token；lease 过期只允许新 worker 接管 PI orchestration run，不结束 PI orchestration claim。
+_Avoid_: PI orchestration claim、永久 worker ownership、无 fencing 接管、daemon lease、普通 Agent Task claim。
+
+## PI scheduling state
+
+Server 持久维护的 run 调度资格与恢复条件，区分 `queued`、`runnable`、`waiting`，并记录可调度时间、入队时间、优先级与 scheduling revision；runnable 顺序是这些事实的确定性投影，不是独立的队列位置事实。
+_Avoid_: 当前第 N 位、进程内 heap、consumer cursor、不可重建队列、waiting run 占用 worker。
+
+## PI orchestration wait
+
+PI orchestration run 在等待子 Task、外部条件、deadline 或人类 review 时保留恢复条件与 orchestration claim、但释放 PI driver lease 的非终态；条件满足后由 Server 重新投影为 `runnable`。
+_Avoid_: worker heartbeat 保活等待、waiting 占用 capacity、释放系统责任、旧 fencing token 恢复写入。
+
+## PI orchestration closeout
+
+根 Task 确认终态、取消/关闭或明确终止编排时，Server 原子结束 orchestration claim、关闭 run 并撤销未完成 lease、deadline 与 Offer 的收尾事实；历史 Task、event、audit 与 provenance 继续保留，迟到输入不能自动重启。
+_Avoid_: 删除历史、进程退出即 closeout、迟到 notice 复活 run、waiting 等同终态、隐式 reopen。
+
+## PI reconciliation
+
+任一 Server 副本根据持久事实重复发现非终态 run、过期 lease/deadline、可运行调度项、待投递 outbox 与恢复异常，并以 revision、幂等身份、唯一约束和 fencing 只提交一次修复的恢复过程；单例 leader 可以降噪，但不是正确性前提。
+_Avoid_: 单进程内存恢复、多副本重复提交、leader 丢失即停摆、按 daemon 在线状态猜进度、重做已有 event。
+
+## Task DAG revision
+
+Server-owned Task DAG 的不可变结构版本，PI 只有携带当前预期 revision 与有效 driver lease 才能原子新增或替代节点、依赖与验收关系；Agent 子 Task 状态仍由各自 claim/revision 推进，并通过 Server event 唤醒 PI 重新评估。
+_Avoid_: PI lease 锁住所有 Task 写入、原地删除已执行节点、Agent 修改 DAG、并发状态静默覆盖、无关子 Task 阻塞整图。
+
+## PI orchestration command
+
+当前 PI driver 携带 run revision、有效 lease/fencing 与 idempotency key 向 Server 提交的一次原子编排变更；Server 在同一事务中校验并提交 Task/DAG、run、调度、deadline、event、audit 与 outbox，失败不产生部分事实。
+_Avoid_: PI 本地写状态、拆分事务、先发 notice 后落库、重复派发、部分 DAG、过期 driver 写入。
+
+## PI orchestration event
+
+只描述已成功提交的 PI orchestration command 所产生权威变化的不可变 Server 事实，用于恢复、重放与投影；失败或被拒绝的命令不产生此类 event。
+_Avoid_: 命令尝试日志、失败即事件、notice delivery、模型推理、重复请求产生第二条业务事实。
+
+## Orchestration attempt audit
+
+Server 对编排命令或恢复动作的发起者、依据、revision/lease/fencing、幂等身份与成功或拒绝原因保存的最小可审计记录；拒绝 audit 可以存在，但不得推进 Task、DAG 或 run 事实。
+_Avoid_: PI orchestration event、完整 prompt、secret、越权上下文副本、失败 audit 触发业务 outbox。
+
+## PI planning attempt
+
+PI worker 基于特定 run revision 与 driver lease/fencing 发起的非权威管理模型调用，可因超时或接管而重复或失效；模型响应只有经当前 driver 重新验证并成功提交 PI orchestration command 后才形成编排事实。
+_Avoid_: 模型响应即 Task/DAG、exactly-once provider call、旧 lease 响应写入、prompt cache 充当 checkpoint、chain-of-thought 恢复事实。
+
+## PI recovery checkpoint
+
+绑定 run revision、最后 event sequence、schema version 与内容校验值的 Server 编排快照，只用于加速重放；它可以被丢弃或重建，不能包含未提交事实，也不能覆盖权威 Task/DAG/run 与 domain events。
+_Avoid_: 第二事实源、PI 内存快照、daemon cache、未提交草稿、checkpoint 缺失即丢失编排。
+
+## PI recovery pending
+
+Server 无法用当前兼容规则安全恢复一个非终态 PI orchestration run 时的显式停写状态；它保留既有事实、停止新编排并等待兼容恢复或人工处理，不允许猜测进度继续执行。
+_Avoid_: 自动跳过未知 event、从模型上下文补事实、静默重启、带不完整状态继续派发。
+
+## Protocol expiry
+
+Server 对 driver lease、Offer、acceptance 或授权 token 等限时协议权利执行的权威失效；到期可以直接、幂等地撤销继续使用该权利的资格，不需要 PI Manager 作业务判断。
+_Avoid_: Task SLA、业务失败、PI 自报到期、客户端本地 timer、到期后继续写入。
+
+## PI deadline wake
+
+业务 deadline 到期时由 Server 只产生一次、使等待中的 PI orchestration run 重新可调度的事实；它记录到期并触发恢复，不直接把 Task 判为失败、取消或改派。
+_Avoid_: Protocol expiry、timer 直接改变业务结果、重复 deadline event、进程内 timer、Server 自动创建替代 claim。
+
+## Orchestration outbox item
+
+与 PI orchestration command 同事务创建、要求某个 PI worker、daemon 或 Agent 重新检查 Server 最新事实的持久唤醒意图；派生 notice 可以重复或丢失，收到或确认通知都不授予 lease、claim 或业务进度。
+_Avoid_: 权威 job payload、exactly-once notice、notice ack 即已处理、daemon 本地队列、推送失败回滚编排事实。
+
+## Task execution compatibility baseline
+
+Agent acceptance 时由 Server 固定的子 Task 执行协议与必要 capability revision，用于判断 daemon 版本变化后当前 claim 是否仍可安全履行；版本字符串变化本身不取消 claim，不兼容或安全撤权才阻断新的执行写入并唤醒 PI 恢复。
+_Avoid_: daemon 版本即 claim revision、升级后自动重做、为旧 daemon 降级 Server 事实、本地兼容性自判、迟到结果绕过 claim 校验。
+
 ## Task allocation
 
 PI Manager 为一个结构化 Task 选择定向指派或开放认领的协作决定；显式 @Agent 必须形成定向指派，多能力任务可以在分解后分别决定分配方式。显式 @ 是主执行者硬约束：PI 不得静默改派；仅在该 Agent 拒绝、超时或 relinquish 后才可另荐，且改派对用户可见。派发与 Task offer 的候选硬边界是当前频道 agent 成员（且 Team 可见、能力与权限匹配）；不得静默指派或邀请未加入该频道的 Team Agent。
@@ -545,43 +640,43 @@ _Avoid_: 只按 Agent 名称认领、Skill 与 Capability 混用、经验直接�
 
 ## Manager Worker
 
-负责驱动一次 ManagementRun 的 PI Manager 执行单元，可以运行在用户授权的 Device 上，也可以运行在 AgentBean Server 的受控环境中。
-_Avoid_: Agent、普通执行 Agent、Daemon。
+旧的可选 placement 执行单元称呼，统一使用 PI driver；目标合同不允许 Device 进程持有 PI orchestration authority。
+_Avoid_: 现行产品角色、PI driver 的同义现行入口、Device PI、普通执行 Agent。
 
 ## Device Worker
 
-运行在用户授权 Device Service 中的 Manager Worker，能够使用 Device-local credentials 和 local-only context。
-_Avoid_: local Agent、Daemon Worker。
+旧的 Device-hosted PI placement 称呼，不再作为目标编排角色；Device Agent 只执行已领取的子 Task，并受 Task execution compatibility baseline 约束。
+_Avoid_: PI driver、daemon orchestration、Device 接管根 Task、local-only context 补编排事实。
 
 ## Server-hosted Worker
 
-运行在 AgentBean Server 受控环境中的 Manager Worker，只能使用明确允许进入 Server 的上下文与凭据引用。
-_Avoid_: cloud Agent、remote Device。
+旧的 Manager Worker placement 称呼，目标术语统一为 PI driver。
+_Avoid_: 独立产品角色、Device Worker 对偶选项、cloud Agent、remote Device。
 
 ## Placement
 
-一次 ManagementRun 对 Manager Worker 执行位置的明确选择；Phase 4 第一阶段只开放受控 `managed` placement，`auto` 仍不进入生产默认路径。
-_Avoid_: routing、failover（除非明确指 lease 接管）。
+旧的 PI 执行位置选择；目标合同固定由 Server-hosted PI driver 编排，不提供 Team 或单次 run 的 Device/Server placement。
+_Avoid_: 现行 Team 设置、managed/auto、Device fallback、以 placement 表示 lease 接管。
 
 ## Server-authorized context
 
-允许 Server-hosted Worker 使用的、严格继承发起用户当前 Team/Task/Channel 权限后的上下文；私聊和私有频道可以进入，但不得向原 scope 外扩散。它不包含 Device-local Memory、cwd、local files、Device token 或本地模型凭据。
+允许 PI driver 使用的、严格继承来源 requester 当前 Team/Task/Channel 权限后的上下文；私聊和私有频道可以进入，但不得向原 scope 外扩散。它不包含 Device-local Memory、cwd、local files、Device token 或本地模型凭据。
 _Avoid_: full Team context、Device context、shared secret。
 
 ## Server credential reference
 
-由 Server 管理、可撤销且不把 secret material 写入 ManagementRun、Event 或 checkpoint 的 provider 凭据引用。
+由 Server 管理、可撤销且不把 secret material 写入 PI orchestration run、event 或 checkpoint 的 provider 凭据引用。
 _Avoid_: API key、Device credential、auth token（除非讨论 secret material 本身）。
 
 ## Lease takeover
 
-原 Manager Worker 的租约过期后，由另一合法 Worker 以更高 fencing token 接手未完成的 ManagementRun；已完成的事实不重做，未完成部分从 Server checkpoint 继续。
-_Avoid_: forced takeover、duplicate retry。
+旧称，统一使用 PI driver lease 与 PI reconciliation；新 driver 只从 Server 事实恢复 PI orchestration run，不能重做已提交 event。
+_Avoid_: forced takeover、无 fencing 接管、从 worker 内存恢复、duplicate command。
 
 ## Managed opt-in
 
-Team owner/admin 显式开启后，Team 才允许使用 Server-hosted Worker；默认不启用，普通成员不能通过单次请求绕过 Team 设置。
-_Avoid_: implicit managed、member-level placement override。
+旧的 Server-hosted Worker placement 开关，不再控制 PI authority；根 Task 创建由 Promotion gate、Team promotion policy 与 Promotion authorization 控制。
+_Avoid_: 现行 placement 权限、关闭即转 Device PI、member-level placement override。
 
 ## Deployment-managed provider credential
 
@@ -595,30 +690,30 @@ _Avoid_: Channel coordination decision、every chat、direct dispatch、backgrou
 
 ## User-delegated Server Worker
 
-Server-hosted Worker 不拥有独立 Team 成员身份，而是作为发起用户在单个 ManagementRun 内的受限代理；每次读取都绑定并复验 `userId + managementRunId` 的当前权限。
-_Avoid_: global Server member、permanent worker identity、ambient authority。
+旧称；PI driver 不拥有 Team 成员身份，其每次读取都通过 Server-authorized context 绑定并复验来源 requester 与当前 run 的权限。
+_Avoid_: global Server member、permanent worker identity、ambient authority、Device placement。
 
 ## Managed content consent
 
-用户开启 `managed` 即同意本次 ManagementRun 将完成任务所需的、其当前有权限看到的最小内容发送给 Server provider；该内容不因此成为长期 Memory，也不得扩散给无关 Agent。
-_Avoid_: blanket consent、long-term retention、cross-scope broadcast。
+旧的 placement consent 术语，不作为 PI authority 或 promotion authorization；Server provider 的数据处理授权必须由独立治理合同约束。
+_Avoid_: promotion 即模型数据同意、blanket consent、long-term retention、cross-scope broadcast。
 
 ## Managed unavailable
 
-`managed` 请求在 Server provider/Worker 不可用时等待或失败，不自动切回 Device；placement 一旦确定，不能因故障改变隐私边界。
-_Avoid_: silent fallback、cross-placement retry。
+旧的 placement 故障术语；PI driver 不可用时 run 依据 PI scheduling state 等待或进入明确恢复状态，永不切到 Device PI。
+_Avoid_: silent fallback、cross-placement retry、daemon 接管编排。
 
 ## Managed capacity
 
-Server Worker 使用固定并发上限；容量满时 ManagementRun 排队，超过等待上限后失败，不进行动态成本或价格调度。
-_Avoid_: unbounded queue、implicit cost optimization。
+旧的固定 Server Worker 容量策略；目标合同只冻结可恢复 PI scheduling state，Team 公平性、配额与 backpressure 另行决策。
+_Avoid_: 现行队列权威、瞬时队列名次、未经决策的固定失败阈值、implicit cost optimization。
 
 ## Server Manager runtime
 
-Server Worker 复用现有 PI management runtime，只提供模型协调与受控工具协议，不具备 shell、cwd、文件读写、浏览器或 Device 能力。
+PI driver 使用的 Server 受控运行环境，只提供模型规划与 PI orchestration command 协议，不具备 shell、cwd、文件读写、浏览器或 Device 能力。
 _Avoid_: second runtime、server shell、remote Device。
 
 ## Managed queue timeout
 
-Server Worker 满载时，ManagedRun 最多等待 5 分钟；期间无可用 Worker 则失败并明确告知用户，不无限排队。
-_Avoid_: infinite queue、silent drop。
+旧的固定等待失败策略，不再作为目标合同；run 的恢复调度由 PI scheduling state 表示，具体公平性、配额与 backpressure 等待后续决策。
+_Avoid_: 现行五分钟承诺、进程内 timeout、silent drop、以超时替代可恢复状态。
