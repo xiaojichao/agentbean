@@ -705,8 +705,8 @@ _Avoid_: PI 自动协调总开关、系统全局边界、管理员日常选择�
 
 ## Task-linked message
 
-通过 Task 详情、Task 讨论串、回复 Task 系统消息或明确 Task 引用而与现有 Task 强绑定的用户消息。缺少强绑定时，PI 只能在高置信的小范围补充中自动建议关联，模糊或重大变更必须请求用户确认。
-_Avoid_: 同频道自动归属、最近 Task 猜测、任意语义合并。
+通过 Task 详情、Task 讨论串、明确 Task 引用，或从 System activity projection 发起且携带 Server 签发 Task linkage 的结构化 follow-up command，与现有 Task 强绑定的用户消息。PI 不创建可回复的 Task 系统消息；历史 `meta.coordination.taskId` 只作为迁移期只读兼容证据。缺少强绑定时，PI 只能在高置信的小范围补充中自动建议关联，模糊或重大变更必须请求用户确认。
+_Avoid_: 回复 PI/Task 系统消息、同频道自动归属、最近 Task 猜测、任意语义合并、继续生成 legacy coordination metadata。
 
 ## Task revision
 
