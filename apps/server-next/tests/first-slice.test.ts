@@ -4853,7 +4853,8 @@ describe('server-next first-slice use cases', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
-      body: 'hello',
+      // ADR 0061: unmentioned root messages no longer implicit-fallback dispatch.
+      body: '@Custom Codex hello',
     });
     expect(sendAck).toMatchObject({
       ok: true,
@@ -5338,7 +5339,8 @@ describe('server-next first-slice use cases', () => {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
-      body: 'hello from renamed config',
+      // ADR 0061: require explicit @ for root-message dispatch.
+      body: '@Renamed Codex hello from renamed config',
     });
     await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
       ok: true,
@@ -5383,7 +5385,7 @@ describe('server-next first-slice use cases', () => {
     });
     await expect(app.listChannelMessages({ channelId: 'channel-1', limit: 10 })).resolves.toMatchObject({
       ok: true,
-      messages: [{ id: 'message-1', body: 'hello from renamed config' }],
+      messages: [{ id: 'message-1', body: '@Renamed Codex hello from renamed config' }],
     });
   });
 

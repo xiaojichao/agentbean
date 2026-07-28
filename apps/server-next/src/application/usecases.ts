@@ -10102,10 +10102,17 @@ function routeMessageForChannel(input: {
     return { kind: 'no-dispatch', reason: 'human-assignee' };
   }
   if (contextOwner?.kind === 'agent') {
+    // Thread / Tracked-task follow-up may continue with the existing owner.
     const contextAgent = channelAgents.find((agent) => agent.id === contextOwner.agentId);
     return contextAgent && isDispatchEligibleAgent(contextAgent, input) && isSocketReachable(contextAgent)
       ? { kind: 'dispatch', agentId: contextAgent.id, reason: 'fallback' }
       : { kind: 'no-dispatch', reason: 'no-online-agent' };
+  }
+  // ADR 0061: unmentioned root messages never get an implicit channel owner
+  // (no "first online member" fallback). Coordinated intake uses PI; uncoordinated
+  // intake requires explicit @Agent or an existing task/thread owner above.
+  if (route.kind === 'dispatch' && route.reason === 'fallback') {
+    return { kind: 'no-dispatch', reason: 'no-online-agent' };
   }
   return route;
 }

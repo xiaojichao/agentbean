@@ -2780,7 +2780,13 @@ describe('server-next SQLite repositories', () => {
         env: { OPENAI_API_KEY: 'new-secret' },
         currentDeviceId: 'device-1',
       });
-      await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello from renamed config' });
+      await app.sendMessage({
+        userId: 'user-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        // ADR 0061: require explicit @ for root-message dispatch.
+        body: '@Renamed Codex hello from renamed config',
+      });
       const request = await app.getDispatchRequest({ dispatchId: 'dispatch-1' });
       expect(request.ok).toBe(true);
       if (request.ok) {
@@ -2800,7 +2806,7 @@ describe('server-next SQLite repositories', () => {
       });
       expect(globalDb.prepare('SELECT COUNT(*) AS count FROM agent_publications WHERE agent_id = ?').get('agent-1')).toEqual({ count: 0 });
       expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({
-        body: 'hello from renamed config',
+        body: '@Renamed Codex hello from renamed config',
       });
       expect(teamDb.prepare('SELECT agent_id AS agentId, status FROM dispatches WHERE id = ?').get('dispatch-1')).toEqual({
         agentId: 'agent-1',
