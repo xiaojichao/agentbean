@@ -346,6 +346,12 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       suffix,
       timeoutMs,
     });
+    // Memory / 执行记录诊断已迁入 System Admin Console，仅管理员可见；
+    // WebUI 业务 smoke 需提权后再走 dashboard/memory 与 dashboard/runs。
+    if (target.dataDir) {
+      promoteSmokeUserToAdmin({ dataDir: target.dataDir, userId: seededSession.session.user.id });
+      seededSession.session.user = { ...seededSession.session.user, role: 'admin' };
+    }
     cleanup.push(async () => {
       seededSession.socket.disconnect?.();
     });
