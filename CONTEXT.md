@@ -723,6 +723,11 @@ _Avoid_: 静默离线、Offer 拒绝、Manifest 撤回。
 PI 根据 Agent Exposure Manifest 向候选 Agent 发出的结构化协作请求，包含目标、输入、交付物、约束、required Capabilities、required Skills、时限和风险。Offer 不等于分配；Agent 可以接受、拒绝、请求补充信息或提出调整建议，只有明确接受后才产生有效 claim/lease。
 _Avoid_: 强制指派、已认领 Task、原始频道消息广播。
 
+## Requirement-confirmation Offer
+
+用户确认后向 required Capability/Skill 状态为 unknown 的显式目标发出的受限 targeted Offer，是普通 Offer 发布资格门槛的唯一例外；发布时仍须复验 Channel membership、Team visibility、Task preview 权限、operation restriction、状态确为 unknown 且不存在明确不满足事实。它只能请求 Agent 更新 Manifest 或随 acceptance 提交 Per-Task requirement attestation，在 accept/claim 事务完成全部 requirement 与容量复验前不得建立 claim、签发 execution context grant 或披露执行输入。
+_Avoid_: unknown 自动 eligible、用户代 Agent 声明能力、权限例外、明确不满足仍发 Offer、确认 Offer 直接执行、候选集广播。
+
 ## Task allocation mode
 
 PI 在同一 Task Offer / Agent acceptance 协议内选择的请求路由方式：用户明确指定合格 Agent、只有一个合格候选、确定性排序存在可审计的明显赢家，或敏感上下文要求最小披露时使用 `targeted Offer`；多个相近候选或负载未知时使用有界 `candidate-set Offer`。它只决定向谁请求，不得绕过 eligibility、acceptance 或原子 claim。
@@ -835,7 +840,7 @@ _Avoid_: PI Skill 管理器、Team 修改 Agent 供给、内部 Skill 浏览器�
 
 ## Agent eligibility
 
-Server 先以当前 Channel membership、Team visibility、未删除状态、Task 与 input refs 的读取权限以及 Team/System operation restriction 建立不可覆盖的硬门槛，再由 PI 根据 required Capabilities 与 required Skills 过滤公开声明或有效 per-Task requirement attestation，最后使用 preferred Skills、Team 内经验、负载和可用性排序。Offer 发布与 Agent accept/claim 必须分别原子复验硬门槛；Offer 只记录 eligibility basis，不授予权限。用户显式 `@Agent` 但其 requirement 状态 unknown 时，PI 必须提示并取得 requirement-confirmation 授权；明确不满足或权限不合法时不能继续。
+Server 先以当前 Channel membership、Team visibility、未删除状态、Task 与 input refs 的读取权限以及 Team/System operation restriction 建立不可覆盖的硬门槛，再由 PI 根据 required Capabilities 与 required Skills 过滤公开声明或有效 per-Task requirement attestation，最后使用 preferred Skills、Team 内经验、负载和可用性排序。普通 Offer 发布与所有 accept/claim 必须分别原子复验完整硬门槛；Requirement-confirmation Offer 发布时只允许暂缺其用途所对应的 unknown requirement，并在 accept/claim 时用 Agent attestation 补齐。Offer 只记录 eligibility basis，不授予权限；明确不满足或权限不合法时不能继续。
 _Avoid_: 公开频道等同成员资格、Offer 充当授权、先匹配 Skill 后检查权限、用户覆盖权限或明确不满足项、频道外直接派发、只按 Agent 名称认领、经验直接授予资格。
 
 ## Per-Task requirement attestation
