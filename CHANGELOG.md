@@ -21,6 +21,35 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-28] - 2026-07-28
+### Added
+- 将 Memory 管理与执行记录诊断迁入系统管理 Console
+### Changed
+- 文档：冻结隐藏 PI 下的系统活动分层可见性合同
+- 冻结子任务失败改派、SLA 与人工升级合同
+- 为频道聊天长消息增加展开/折叠
+- 冻结子任务合同、Agent eligibility 与派发边界
+- 冻结根 Task 生命周期与角色门禁合同
+- 冻结复杂任务触发与消息提升术语
+- 冻结消息投递、已读边界与新鲜度术语
+- 生产默认 durable-job：启用 PI 频道分诊入口
+- 废止未 @ 消息的隐式 fallback Dispatch（ADR 0061）
+- 锁定 PI Manager 协作入口语言并记录废止未 @ fallback
+- 记录 2026-07-27 每日更新日志
+- daemon 发版 0.3.20：将 0.3.19 后设备侧能力推到 npm latest
+- 加固 DeepSeek 生产探测：usage/finish_reason/args 兼容与强制 tool_choice
+### Fixed
+- 修复外部 WebUI smoke：无本地提权时跳过 admin-only Memory/Runs UI
+- 修复 WebUI smoke：dashboard 路径前缀与延后管理员提权
+- 修复 browser smoke：WebUI 会话提权后再访问执行记录诊断
+- 修复 readiness 对 LegacySettingsConsoleTab 的误判
+- 冻结 Server 与 PI Manager 的编排权威及恢复合同
+- daemon 发版 0.3.21：修复 update 换包竞态与安装校验
+- 修复非频道成员 Agent 抢接未 @ 消息
+### Security
+- 修复远程 Claude Code 与 Codex CLI 写入权限阻塞
+- 修复文件标签页缩略图鉴权与安全回退回归
+
 ## [Daily 2026-07-27] - 2026-07-27
 ### Added
 - 实现管理员添加用户（默认个人 Team）
