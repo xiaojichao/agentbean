@@ -394,8 +394,8 @@ _Avoid_: claim 即扣预算、每轮 Offer 扣预算、PI 重置 maxAttempts、�
 
 ## Conditional task reassignment
 
-Server 已形成允许改派的权威失败分类、旧执行权已被 fencing、仍有 execution retry budget，且最新 Task/DAG revision、eligibility、权限、容量、cooldown 与期限门槛全部通过时，由当前 PI driver 以原子 command 发起的新 allocation。失败、冲突或不满足门槛不得留下新 Offer、扣减预算或部分调度事实。
-_Avoid_: 任何失败都自动改派、复用旧 claim/grant、先派后 fencing、PI 本地重试、绕过 cooldown、无预算继续。
+Server 已形成允许改派的权威失败分类、旧执行权已被 fencing、仍有 execution retry budget，且最新 Task/DAG revision、eligibility、权限、容量、cooldown 与期限门槛全部通过时，由当前 PI driver 以原子 command 发起的新 allocation。该 command 只发布 Offer；后续只有 Agent 明确 acceptance 且 accept/claim 事务复验资格、权限与容量后，才能建立新 claim 并签发 execution grant/fencing token。失败、冲突或不满足门槛不得留下新 Offer、扣减预算或部分调度事实。
+_Avoid_: 任何失败都自动改派、改派直接签发 claim/grant、复用旧 claim/grant、先派后 fencing、PI 本地重试、绕过 cooldown、无预算继续。
 
 ## Task execution SLA
 
@@ -404,8 +404,8 @@ _Avoid_: daemon 本地时钟、heartbeat 刷新进度、离线自动暂停、SLA
 
 ## Task progress challenge
 
-progress SLA 首次超时后由 Server 签发、绑定 claim、Task revision、attempt 与 grace deadline 的结构化证明请求；grace 内只有有效 progress/checkpoint 可以解除 `progress_at_risk`，到期仍无进展时 Server 原子 fencing 并形成 `no_progress_timeout`。权限撤销、安全风险、明确 relinquish 或执行 lease 失效可以跳过 grace。
-_Avoid_: notice 已送达即挑战成功、heartbeat 代替 progress、PI 宣布无进展、无限 grace、fencing 后迟到 delivery 生效。
+progress SLA 首次超时后由 Server 签发、绑定 claim、Task revision、attempt 与 grace deadline 的结构化证明请求，并形成独立的非 TaskStatus `progress_at_risk` SLA 事实；挑战期间子 Task 保持 `in_progress`。grace 内只有有效 progress/checkpoint 可以解除该事实，到期仍无进展时 Server 原子 fencing 并形成 `no_progress_timeout`。权限撤销、安全风险、明确 relinquish 或执行 lease 失效可以跳过 grace。
+_Avoid_: progress_at_risk TaskStatus、挑战时改 Task 状态、notice 已送达即挑战成功、heartbeat 代替 progress、PI 宣布无进展、无限 grace、fencing 后迟到 delivery 生效。
 
 ## Task due time
 
