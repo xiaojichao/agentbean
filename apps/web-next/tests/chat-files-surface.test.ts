@@ -46,7 +46,7 @@ describe('chat files surface', () => {
   test('保存后用服务端固定资源后的 revision 内容刷新编辑器且不改变普通聊天图片语义', () => {
     expect(source).toContain("messageArtifactUrl(savedArtifact, 'preview', savedArtifact.teamId)");
     expect(source).toContain('content: savedContent');
-    expect(source).toContain('<MarkdownMessage body={content} safeDocumentResources />');
+    expect(source).toContain('<MarkdownMessage body={content} safeDocumentResources collapsible={false} />');
     expect(source).toContain('options.safeDocumentResources && token.startsWith');
     expect(source).toContain('collectSafeMarkdownReferenceDefinitions(body)');
     expect(source).toContain('options.resourceReferences?.get');
