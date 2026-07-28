@@ -484,13 +484,13 @@ _Avoid_: 与 Promotion gate 并存的第二套入口、PI Manager 自行判断�
 
 ## Coordination message
 
-PI Manager 以 AgentBean 系统协调身份发出的必要用户可见内容，包括澄清问题、紧凑的 Task 状态和注明贡献 Agent 与来源 Task 的最终汇总。多 Agent 场景下，各执行者的原始交付仍归原 Agent；PI 汇总并列呈现，不改写、不顶替、不冒充为唯一成品消息。
-_Avoid_: PI 成员消息、伪装成外部 Agent、内部推理展示、冗长计划播报、用 PI 合成正文替换执行者署名交付。
+已废止的 PI 输出术语。PI Manager 不是 Message sender：澄清或授权需求使用具名 Server command response 与 System attention item，Task 状态使用 System activity projection，多 Agent 汇总形成可审核的 Task delivery revision。各执行者的原始交付仍归原 Agent；聚合结果保留贡献 Agent 与来源 Task，不改写或顶替原交付。
+_Avoid_: 新建 PI/AgentBean 系统聊天身份、可回复 PI 气泡、把投影序列化成 Message、用 PI 合成正文替换执行者署名交付。
 
 ## Progress coordination
 
-PI 对 Tracked task 的进度维护方式：在子任务完成、失败、relinquish、超时或用户追问等事件上更新状态并发紧凑 Coordination message；不在无事件时主动轮询催办。
-_Avoid_: 定时催办刷屏、无事件频道进度播报、仅面板可见而频道对进度完全静默（用户关闭自动协调时除外）。
+PI 对 Tracked task 的进度维护方式：在子任务完成、失败、relinquish、超时或用户查询等事件上提交权威编排事实，由 Server 更新 Task/Thread 的 System activity projection，并在责任相关时创建或更新 System attention item；不发送 Coordination message，也不在无事件时主动轮询催办。
+_Avoid_: 定时催办刷屏、无事件频道进度播报、用聊天消息复制 Task 活动、仅有瞬时面板状态而没有可恢复投影。
 
 ## Team-scoped Agent Memory
 

@@ -18,4 +18,4 @@ Promotion 成功只显示结构化触发来源、可审计 orchestration need �
 
 普通活动时间线提供可理解的工作历史；授权治理者可以从已提交 event 展开 event-linked audit，包括 event id、触发来源、command、revision、策略版本与授权人。未产生业务 event 的拒绝命令、恢复尝试或权限/fencing 失败使用独立 Orchestration attempt audit identity，并通过按 Task/run/command/idempotency key 查询的治理 audit 入口访问，不挂到虚构事件上。拒绝的 command 不伪装为已发生的业务活动，来源编辑或删除也不静默改写历史。两类 audit 都不得暴露 secret、完整 prompt、chain-of-thought、无关个人数据或其他频道/DM 的受限正文。
 
-该决策细化 ADR-0062 的隐藏 PI 与 Server authority、ADR-0063 的角色门禁状态机、ADR-0064 的原子 DAG/Offer 以及 ADR-0065 的等待、失败和条件改派合同；它不决定生产组件实现、具体视觉样式或普通 Agent 的聊天呈现。
+该决策取代 ADR-0004 中 PI Manager 以 AgentBean 系统协调身份“发言”的合同，并废止 `Coordination message` 作为 PI 输出通道：澄清或授权需求使用具名 Server command response 与 `System attention item`，Task 状态和多 Agent 汇总使用 `System activity projection` 与 Task delivery revision；只有普通人类或外部 Agent 的聊天内容进入 Message 模型。该决策同时细化 ADR-0062 的隐藏 PI 与 Server authority、ADR-0063 的角色门禁状态机、ADR-0064 的原子 DAG/Offer 以及 ADR-0065 的等待、失败和条件改派合同；它不决定生产组件实现、具体视觉样式或普通 Agent 的聊天呈现。
