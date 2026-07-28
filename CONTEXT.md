@@ -12,6 +12,71 @@ _Avoid_: 每 Team Daemon、前台连接进程、系统级 root 服务。
 Device Service 中一份 Team 范围的本地连接身份与凭据；同一用户可以保存多个 Profile，由同一个 Device Service 统一运行。
 _Avoid_: 独立系统服务、Team Daemon、历史邀请命令。
 
+## Message delivery
+
+AgentBean 在 Server 侧原子提交 Message 与必要的接收方 Inbox 投影，并允许接收方按权威顺序拉取的底层能力；它不解释消息意图，也不创建执行 ownership。
+_Avoid_: PI coordination、Task promotion、notice 发送、消息即任务、投递即执行。
+
+## Message visibility
+
+用户或 Agent 基于成员关系与权限读取频道、Thread 或 DM 内容的授权边界；可见不表示消息会进入其 Inbox。
+_Avoid_: Inbox membership、Unread、频道成员必须接收每条消息。
+
+## Inbox item
+
+Message 产生时按当时权限、关注与通知规则，面向特定接收方形成的不可追溯改写的待处理投影；发送者自己的 Message 不进入其自身 Inbox。
+_Avoid_: 可见消息全集、频道历史副本、状态变化后重算历史投影、自己的消息成为自己的 Unread、隐式工作 ownership。
+
+## Message target
+
+Message delivery 中独立排序并独立维护 Read boundary 的会话范围，至少区分频道主时间线、每个 Thread、每个 DM 与 DM Thread。
+_Avoid_: Team 全局消息流、成员全局游标、频道与其全部 Thread 共用边界。
+
+## Delivered
+
+Server 已为接收方持久化 Inbox item 的权威投递状态；它不表示任何 notice 通道成功，也不表示接收方已经读取、理解或准备处理。
+_Avoid_: Notice delivered、Read、Seen、Acknowledged、已处理。
+
+## Notice delivery
+
+daemon、websocket、push 或系统通知等通道携带稳定 inbox item 身份发出的派生唤醒信号；它允许延迟、失败、重复与重放，接收方以 message check 恢复权威 Inbox。
+_Avoid_: Delivered、权威消息事实、Read、notice 失败撤销 Message、notice 成功即已读。
+
+## Read boundary
+
+每个接收方通过明确的 message check/read，在某个 Message target 对应的 Inbox 投影上连续确认到的 Server 权威位置；它只能单调推进，且不能跨过未确认的 Inbox item。
+_Avoid_: target 全量消息游标、Delivered boundary、稀疏已读集合、跨过未读 Inbox item、客户端本地未读状态、打开页面即已读、收到 notice 即已读。
+
+## Read candidate
+
+Server 为 message check 实际返回的连续 Inbox 前缀签发，并绑定接收方、Message target 与 Inbox 投影位置的不透明 token；它证明 Server 返回了哪些上下文，但在接收方确认前不改变权威边界。
+_Avoid_: Read boundary、客户端提交任意 target seq、跳页确认、拉取即已读、未确认的游标推进。
+
+## Read acknowledgement
+
+接收方确认已纳入某个 Read candidate 后提交的显式幂等动作；有效旧 token 可以成功 no-op，新增 Inbox item 不影响推进到原 candidate，过期、篡改或身份与 target 不匹配的 token 不产生副作用。
+_Avoid_: Delivery acknowledgement、网络接收成功、任意游标写入、以 token 有效替代 freshness 校验、隐式页面访问。
+
+## Freshness basis
+
+一次 send 或 claim 明确声明并经 Server 校验的决策依据，包括对应 Message target 的 Read candidate，以及可选的依据 Message 或关联 Task；只有与这些依据相关的并发变化才影响本次操作的新鲜度。
+_Avoid_: 全 Team 最新状态、所有未读消息、普通无关频道闲聊、隐式客户端快照。
+
+## Freshness hold
+
+Freshness basis 之后出现相关消息或上下文变化、但操作本身仍然有效时，Server 在不产生发送、领取或 Read acknowledgement 副作用的前提下暂停操作，并返回增量上下文与新的 Read candidate；草稿可以保留，待接收方修订、重试或明确放弃。Task 权威状态已经使 claim 失效时，优先返回 Claim conflict。
+_Avoid_: 已失效 claim、失败后自动已读、静默重试、无关消息阻塞、hold 即提交。
+
+## Claim conflict
+
+Task 的权威状态已经使旧 claim 不再成立时返回的并发结果，例如 Task 已被领取、关闭、取消、归档或调用方失去权限；它不改变责任状态，也不推进 Read boundary。
+_Avoid_: Freshness hold、自动重试、失败后已读、部分建立 ownership。
+
+## Attention state
+
+Inbox item 对特定接收方是否仍需注意或采取动作的状态；它与 Unread 正交，只能由回应、执行、解除责任或明确忽略等业务动作结束。
+_Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任。
+
 ## PI Manager
 
 AgentBean 内置的系统协调者，默认理解每一条人类频道消息，并决定是否忽略、回答系统问题、请求澄清、调用 Agent、创建或调整 Task。它不是 Team 成员，也不替代外部 Agent 完成用户领域工作。
