@@ -282,6 +282,56 @@ _Avoid_: 命令尝试日志、失败即事件、notice delivery、模型推理�
 Server 对编排命令或恢复动作的发起者、依据、revision/lease/fencing、幂等身份与成功或拒绝原因保存的最小可审计记录；拒绝 audit 可以存在，但不得推进 Task、DAG 或 run 事实。
 _Avoid_: PI orchestration event、完整 prompt、secret、越权上下文副本、失败 audit 触发业务 outbox。
 
+## Server command
+
+由 human、PI driver、Agent 或 daemon 之一经 Server 门禁提交的一次具名写操作；名称使用 `human.*` / `pi.*` / `agent.*` / `daemon.*` 角色命名空间，并携带该角色凭证与声明的 CAS。它是消息投递与协作编排的权威写路径，通用资源状态更新不是 Server command。
+_Avoid_: updateTask(status)、REST CRUD 状态机、PI 本地写、私有进程内写 API、无角色前缀的隐式 action。
+
+## Server query
+
+向 Server 读取权威快照或受众投影的具名读操作；编排真相类 query 对同一 actor 在成功写后提供 read-your-writes，Inbox/system activity 等投影 query 使用 cursor 或 asOf sequence，且不得作为客户端重放 event 的替代写模型。
+_Avoid_: 通用 ad-hoc join、客户端拼 domain fact 当官方读模型、投影与权威快照混为同一无版本列表。
+
+## Command envelope
+
+所有写 Server command 共享的瘦公共信封，至少包含 schemaVersion、command、commandId、idempotencyKey、actor、作用域键以及该 command 声明的 CAS 字段；角色凭证与 freshnessBasis 等只作为 per-command 扩展。
+_Avoid_: 全字段胖信封、无共享信封、Server 代发 commandId、把业务幂等键与传输实例 id 合成一个字段。
+
+## Command identity
+
+客户端生成的 `commandId`，标识一次传输或重试实例，用于日志、排障与 in-flight 去重关联；它不单独承担跨点击的业务意图去重。
+_Avoid_: idempotencyKey、eventId、把每次用户点击强制复用同一 commandId。
+
+## Business idempotency key
+
+在 `actor × command 族 × 主资源` 作用域内标识同一业务意图的键；同键同 payload 指纹回放首次结果，同键不同指纹冲突失败，并随相关资源 revision 世代失效。
+_Avoid_: 全局 Team 唯一键、仅短 TTL 飞行中去重、用 commandId 代替业务键、revision 后静默复用旧键成功。
+
+## Domain fact event
+
+Server 在写 command 成功提交后追加的不可变业务事实，带 eventId、commandId、sequence 与资源 revision，供恢复、outbox、机读驱动与治理展开；拒绝或 hold 的命令不产生 domain fact event。
+_Avoid_: notice、system activity projection、失败即业务事件、改写历史 event、完整 prompt 或 secret。
+
+## Command outcome
+
+写 command 的同步三维结果：outcome 为 accepted、rejected 或 held，附稳定机器 code 与 retryClass；held 表示未提交业务事实但保留操作者侧等待或草稿语义，与明确否定的 rejected 区分。
+_Avoid_: 只有 success/error、把 Freshness hold 当作普通 rejected、业务结果只出现在异步 event 通道。
+
+## Resource ref
+
+跨 command 与 event 的统一资源引用 `{ kind, id, teamId? }`，可选 pin（revision、eventId、seq、contentHash 等）在需要防漂移时使用；fact event 在提交瞬间物化 pin，之后不可变。
+_Avoid_: 无 kind 的裸 UUID、各资源完全不互通的引用形状、所有读路径强制满 pin。
+
+## Server capability catalog
+
+按能力族列出的必有具名 Server command/query 清单，声明角色归属、关键 CAS/凭证、主 Resource ref 与典型错误码；它冻结合同边界，不代替完整字段级 OpenAPI schema。
+_Avoid_: 一次写死全量 JSON schema、只写横切原则不列能力族、按端拆分同义不同名的三套目录。
+
+## Transport-independent command contract
+
+Server command/query 的语义、信封、幂等、错误/hold、domain fact 与 Resource ref 不依赖 HTTP、WebSocket 或进程内传输；传输只负责会话、分帧与投递，通知通道不等于 domain fact event。
+_Avoid_: Socket 与 HTTP 两套字段合同、仅 WebSocket 权威、PI 进程内走私有写路径。
+
 ## PI planning attempt
 
 PI worker 基于特定 run revision 与 driver lease/fencing 发起的非权威管理模型调用，可因超时或接管而重复或失效；模型响应只有经当前 driver 重新验证并成功提交 PI orchestration command 后才形成编排事实。
