@@ -1025,11 +1025,45 @@ describe('daemon-next command executor', () => {
     expect(output.body).not.toContain('Use a small example.');
     // The command line carries -p but never the prompt (it travels on stdin, not argv).
     expect(output.workspaceRun?.command).toContain('-p');
+    expect(output.workspaceRun?.command).toContain('--dangerously-skip-permissions');
     expect(output.workspaceRun?.command).not.toContain('explain closures');
     expect(output.workspaceRun?.command).not.toContain('what is a callback?');
     expect(output.workspaceRun?.command).not.toContain('Use a small example.');
     expect(output.workspaceRun?.status).toBe('succeeded');
     expect(output.workspaceRun?.exitCode).toBe(0);
+  });
+
+  test('claude-code does not duplicate the maximum-permission flag', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'fake-claude-permissions.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `process.stdin.resume();`,
+        `process.stdin.on('end', () => process.stdout.write(JSON.stringify(process.argv.slice(2))));`,
+      ].join('\n'),
+    );
+
+    const executor = createCommandExecutor({ clock: createClock([1000, 1010]) });
+    const output = await executor({
+      id: 'dispatch-claude-permissions',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'write files',
+      customAgent: {
+        adapterKind: 'claude-code',
+        command: process.execPath,
+        args: [scriptPath, '--dangerously-skip-permissions'],
+        cwd,
+      },
+    });
+
+    if (typeof output !== 'object') throw new Error('expected structured result');
+    const args = JSON.parse(output.body) as string[];
+    expect(args.filter((arg) => arg === '--dangerously-skip-permissions')).toHaveLength(1);
   });
 
   test('claude-code surfaces stderr (not just the exit code) when the agent command fails, so the real error reaches the user', async () => {

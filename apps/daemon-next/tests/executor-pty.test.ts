@@ -17,6 +17,7 @@ describe('daemon-next codex PTY executor', () => {
     const result = normalizeCodexExecArgs([], '/tmp/last-message.txt');
     expect(result.args).toEqual([
       'exec',
+      '--dangerously-bypass-approvals-and-sandbox',
       '--skip-git-repo-check',
       '--output-last-message', '/tmp/last-message.txt',
       '--json',
@@ -32,9 +33,18 @@ describe('daemon-next codex PTY executor', () => {
     expect(result.args).toContain('--json');
     expect(result.args.filter((a) => a === '--skip-git-repo-check')).toHaveLength(1);
     expect(result.args.filter((a) => a === '--output-last-message')).toHaveLength(1);
+    expect(result.args.filter((a) => a === '--dangerously-bypass-approvals-and-sandbox')).toHaveLength(1);
     const outIdx = result.args.indexOf('--output-last-message');
     expect(result.args[outIdx + 1]).toBe('/custom/out.txt');
     expect(result.outputLastMessagePath).toBe('/custom/out.txt');
+  });
+
+  test('normalizeCodexExecArgs does not duplicate the maximum-permission flag', () => {
+    const result = normalizeCodexExecArgs(
+      ['exec', '--dangerously-bypass-approvals-and-sandbox'],
+      '/tmp/default.txt',
+    );
+    expect(result.args.filter((a) => a === '--dangerously-bypass-approvals-and-sandbox')).toHaveLength(1);
   });
 
   test('normalizeCodexExecArgs leaves a non-exec subcommand untouched (no flag injection)', () => {
@@ -109,7 +119,13 @@ describe('daemon-next codex PTY executor', () => {
       expect(typeof output).toBe('object');
       if (typeof output !== 'object') throw new Error('expected structured result');
       expect(capturedCommand).toBe('codex');
-      expect(capturedArgs).toEqual(expect.arrayContaining(['exec', '--skip-git-repo-check', '--output-last-message', '--json']));
+      expect(capturedArgs).toEqual(expect.arrayContaining([
+        'exec',
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--skip-git-repo-check',
+        '--output-last-message',
+        '--json',
+      ]));
       // The joined prompt travels as the trailing positional argument.
       expect(capturedArgs?.[capturedArgs.length - 1]).toMatch(
         /# user\n## AgentBean 运行时记忆[\s\S]*当前 Device 本地记忆[\s\S]*Run the matching build\.[\s\S]*write a function/,
