@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0062
 ---
 
 # Server 承载默认 Channel Coordinator
