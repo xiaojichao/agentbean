@@ -535,11 +535,15 @@ function claudeCodeRuntimeArgs(args: string[]): string[] {
 
 function buildClaudeCodeArgs(baseArgs: string[], _prompt: string): string[] {
   const runtime = claudeCodeRuntimeArgs(baseArgs);
-  const hasPrint = runtime.includes('-p') || runtime.includes('--print');
+  const withMaximumPermissions = runtime.includes('--dangerously-skip-permissions')
+    ? runtime
+    : [...runtime, '--dangerously-skip-permissions'];
+  const hasPrint = withMaximumPermissions.includes('-p') || withMaximumPermissions.includes('--print');
   // claude-code defaults to an interactive TUI; -p puts it in print (non-interactive) mode so it
   // reads the prompt from stdin and exits after replying. The prompt itself travels on stdin
-  // (see promptOnStdin), so buildArgs only ensures the flag is present.
-  return hasPrint ? runtime : [...runtime, '-p'];
+  // (see promptOnStdin). AgentBean dispatches have no interactive approval channel, so every
+  // remote Claude Code run also receives the explicit maximum-permission mode.
+  return hasPrint ? withMaximumPermissions : [...withMaximumPermissions, '-p'];
 }
 
 interface AgentAdapterSpec {

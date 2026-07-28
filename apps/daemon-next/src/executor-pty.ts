@@ -61,6 +61,9 @@ export function normalizeCodexExecArgs(
   if (subcommand === 'exec' || subcommand === 'e') {
     const rest = baseArgs.slice(1);
     const normalized = [subcommand];
+    if (!hasFlag(rest, '--dangerously-bypass-approvals-and-sandbox')) {
+      normalized.push('--dangerously-bypass-approvals-and-sandbox');
+    }
     if (!hasFlag(rest, '--skip-git-repo-check')) {
       normalized.push('--skip-git-repo-check');
     }
