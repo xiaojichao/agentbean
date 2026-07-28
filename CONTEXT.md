@@ -329,7 +329,7 @@ _Avoid_: 每消息 Channel coordination decision、legacy 未 @ fallback Dispatc
 
 ## Task offer
 
-向通过当前 Channel eligibility 硬门槛的 Agent 发布的结构化认领机会；候选唯一、用户明确指定合格 Agent 或敏感上下文要求最小披露时使用 targeted Offer，多个相近候选时使用有界 candidate-set Offer。两种模式都要求有效接受后才原子形成唯一 claim，且从不针对原始频道消息开放抢答。
+向通过当前 Channel eligibility 硬门槛的 Agent 发布的结构化认领机会；候选唯一、用户明确指定合格 Agent、排名存在可审计的明显赢家，或敏感上下文要求最小披露时使用 targeted Offer，多个相近候选时使用有界 candidate-set Offer。两种模式都要求有效接受后才原子形成唯一 claim，且从不针对原始频道消息开放抢答。
 _Avoid_: 原始聊天广播、强制定向指派、重复 Dispatch、无约束抢答、频道外 Offer、对原始消息的 claim。
 
 ## Agent execution claim
@@ -725,7 +725,7 @@ _Avoid_: 强制指派、已认领 Task、原始频道消息广播。
 
 ## Task allocation mode
 
-PI 在同一 Task Offer / Agent acceptance 协议内选择的请求路由方式：用户明确指定合格 Agent、只有一个合格候选或敏感上下文要求最小披露时使用 `targeted Offer`；多个相近合格候选时使用有界 `candidate-set Offer`。它只决定向谁请求，不得绕过 eligibility、acceptance 或原子 claim。
+PI 在同一 Task Offer / Agent acceptance 协议内选择的请求路由方式：用户明确指定合格 Agent、只有一个合格候选、确定性排序存在可审计的明显赢家，或敏感上下文要求最小披露时使用 `targeted Offer`；多个相近候选或负载未知时使用有界 `candidate-set Offer`。它只决定向谁请求，不得绕过 eligibility、acceptance 或原子 claim。
 _Avoid_: PI 强制 claim、`@Agent` 等同分配、无界广播、派发模式改变 Task contract、targeted 绕过权限。
 
 ## Candidate-set Offer
@@ -750,8 +750,8 @@ _Avoid_: Offer 即访问权、ambient Channel history、整个 Task DAG、跨 at
 
 ## Task attempt
 
-Agent acceptance 成功后为某个 task revision 建立的一次独立履约尝试，绑定唯一 claim、lease/fencing、execution context grant、deadline、delivery 与审计。拒绝或 Offer 超时不创建 attempt；失败、执行超时、relinquishment 或 fencing 终止当前 attempt，且不得解析 output slot，重派必须创建新 attempt。
-_Avoid_: 复用旧 claim、跨 attempt grant、迟到 delivery 覆盖当前执行、失败 attempt 解除 dependency、修改 attempt 冒充 Task revision。
+某个 task revision 的一次独立执行轮次，绑定其 execution claims、lease/fencing、execution context grants、deadline、delivery 与审计；Agent acceptance 只把当前 allocation round 的 claim 绑定到现有 attempt，不自动证明开工或递增 attempt。拒绝、Offer 超时以及尚无 Task execution start 时的 relinquishment/fencing 只结束 allocation round；实际开工后的失败、执行超时、relinquishment 或 fencing 才终止当前 attempt，且不得解析 output slot，重派必须创建新 attempt。
+_Avoid_: acceptance 自动递增 attempt、开工前 relinquish 算执行失败、复用旧 claim、跨 attempt grant、迟到 delivery 覆盖当前执行、失败 attempt 解除 dependency、修改 attempt 冒充 Task revision。
 
 ## Unaccepted handoff material
 
@@ -760,8 +760,8 @@ _Avoid_: 部分结果自动继承、失败 delivery 当 output、无 provenance 
 
 ## Unknown Skill status
 
-Agent 未暴露 Skill 维度、公开声明已过期或无法得到当前响应时的外部状态。PI 只能说“未声明”或“未知”，不能据此断言 Agent 内部没有该 Skill；需要该 Skill 的任务只能通过用户确认继续交给该 Agent。
-_Avoid_: 未安装、内部缺失、模型猜测。
+Agent 未暴露 Skill 维度、公开声明已过期或无法得到当前响应时的外部状态。PI 只能说“未声明”或“未知”，不能据此断言 Agent 内部没有该 Skill；用户确认只能授权向显式目标发出受限的 requirement-confirmation Offer，Agent 必须更新 Manifest 或在 acceptance 中提交绑定 task revision 的 per-Task requirement attestation，Server 复验后才可建立 claim。
+_Avoid_: 未安装、内部缺失、模型猜测、用户替 Agent 声明 Skill、确认直接等同 eligible、权限覆盖。
 
 ## High-risk Agent operation
 
@@ -770,8 +770,8 @@ _Avoid_: 管理 Agent 内部 Skill、安装即授权、PI 内部探测。
 
 ## Task Skill Requirement Resolution
 
-PI 先分解任务，再将每个可执行 Task 与当前 Team 可见的 Agent Exposure Manifest 中真实声明的稳定 Skill ID 匹配。只有缺少某 Skill 就无法正确或安全完成时才写入 `requiredSkills`；只改善质量、速度或流程规范时写入 `preferredSkills`。PI 必须保留可见的匹配理由，歧义或会排除用户显式指定 Agent 时请求确认。
-_Avoid_: PI 创造 Skill 名称、所有任务强制 Skill、质量偏好升级为资格门槛。
+PI 先分解任务，再将每个可执行 Task 与当前 Team 可见的 Agent Exposure Manifest 中真实声明的稳定 Skill ID 匹配。只有缺少某 Skill 就无法正确或安全完成时才写入 `requiredSkills`；只改善质量、速度或流程规范时写入 `preferredSkills`。PI 必须保留可见的匹配理由；歧义或会排除用户显式指定 Agent 时请求确认，但确认不得删除真实硬要求，只能修订错误 requirement，或授权向 unknown 目标请求 per-Task requirement attestation。
+_Avoid_: PI 创造 Skill 名称、所有任务强制 Skill、质量偏好升级为资格门槛、用户确认伪造资格、为适配目标静默删除硬要求。
 
 ## Task Skill Coverage Plan
 
@@ -835,8 +835,13 @@ _Avoid_: PI Skill 管理器、Team 修改 Agent 供给、内部 Skill 浏览器�
 
 ## Agent eligibility
 
-Server 先以当前 Channel membership、Team visibility、未删除状态、Task 与 input refs 的读取权限以及 Team/System operation restriction 建立硬门槛，再由 PI 根据 required Capabilities 与 required Skills 过滤公开声明，最后使用 preferred Skills、Team 内经验、负载和可用性排序。Offer 发布与 Agent accept/claim 必须分别原子复验硬门槛；Offer 只记录 eligibility basis，不授予权限。用户显式 `@Agent` 但其不满足硬门槛时，PI 必须提示，不能静默改派或断言其内部能力。
-_Avoid_: 公开频道等同成员资格、Offer 充当授权、先匹配 Skill 后检查权限、频道外直接派发、只按 Agent 名称认领、经验直接授予资格。
+Server 先以当前 Channel membership、Team visibility、未删除状态、Task 与 input refs 的读取权限以及 Team/System operation restriction 建立不可覆盖的硬门槛，再由 PI 根据 required Capabilities 与 required Skills 过滤公开声明或有效 per-Task requirement attestation，最后使用 preferred Skills、Team 内经验、负载和可用性排序。Offer 发布与 Agent accept/claim 必须分别原子复验硬门槛；Offer 只记录 eligibility basis，不授予权限。用户显式 `@Agent` 但其 requirement 状态 unknown 时，PI 必须提示并取得 requirement-confirmation 授权；明确不满足或权限不合法时不能继续。
+_Avoid_: 公开频道等同成员资格、Offer 充当授权、先匹配 Skill 后检查权限、用户覆盖权限或明确不满足项、频道外直接派发、只按 Agent 名称认领、经验直接授予资格。
+
+## Per-Task requirement attestation
+
+Agent 在用户已授权的 requirement-confirmation Offer 中对特定 task revision 的 required Capability/Skill 作出的结构化、自主且可审计声明，只解决其 Manifest 缺失、过期或未覆盖造成的 unknown，不修改 Agent Exposure Manifest，也不能覆盖 Channel/Team 权限、operation restriction 或明确不满足事实。Server 只有在 accept/claim 事务中验证 attestation 与全部其他硬门槛后才建立 claim。
+_Avoid_: 用户代签、永久 Skill 声明、跨 Task 复用、权限 token、unknown 自动变 eligible、明确不满足改成满足。
 
 ## Agent eligibility basis
 
@@ -866,7 +871,7 @@ _Avoid_: 跨频道派发、自动邀请、Agent 身份枚举、泄露 Task 输�
 ## Allocation blocked
 
 一个 runnable 子 Task 因当前 Channel 内没有同时满足资格、权限、容量与时限门槛的 Agent 而无法发布有效 Offer 的非终态调度事实，包含结构化原因与所依据 revision。PI 可以为确实可分离的工作提出保持根目标、风险边界和验收覆盖的新 DAG revision，但不得为制造候选而降低硬要求；有权人类可以据脱敏 gap suggestion 决定邀请、授权、修订范围或延期。
-_Avoid_: Task failed、自动取消、unknown 当 eligible、删除 required Skill、放宽 acceptance、不可分工作强拆、自动跨频道派发。
+_Avoid_: Task failed、自动取消、unknown 未经 Agent attestation 即当 eligible、删除 required Skill、放宽 acceptance、不可分工作强拆、自动跨频道派发。
 
 ## Manager Worker
 
