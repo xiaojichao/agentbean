@@ -329,8 +329,8 @@ _Avoid_: 每消息 Channel coordination decision、legacy 未 @ fallback Dispatc
 
 ## Task offer
 
-向具备所需能力和可见权限的外部 Agent 发布的结构化认领机会；多个 Agent 可以响应，但同一时刻只有一个 Agent 获得有效认领权。无显式 @ 且候选相近或负载不确定时，PI 用 Offer 替代定向指派；候选唯一或明显最优时用定向指派。二者都要求有效接受后才形成 claim，且从不针对原始频道消息开放抢答。
-_Avoid_: 原始聊天广播、重复 Dispatch、无约束抢答、对原始消息的 claim。
+向通过当前 Channel eligibility 硬门槛的 Agent 发布的结构化认领机会；候选唯一、用户明确指定合格 Agent 或敏感上下文要求最小披露时使用 targeted Offer，多个相近候选时使用有界 candidate-set Offer。两种模式都要求有效接受后才原子形成唯一 claim，且从不针对原始频道消息开放抢答。
+_Avoid_: 原始聊天广播、强制定向指派、重复 Dispatch、无约束抢答、频道外 Offer、对原始消息的 claim。
 
 ## Agent execution claim
 
@@ -723,10 +723,40 @@ _Avoid_: 静默离线、Offer 拒绝、Manifest 撤回。
 PI 根据 Agent Exposure Manifest 向候选 Agent 发出的结构化协作请求，包含目标、输入、交付物、约束、required Capabilities、required Skills、时限和风险。Offer 不等于分配；Agent 可以接受、拒绝、请求补充信息或提出调整建议，只有明确接受后才产生有效 claim/lease。
 _Avoid_: 强制指派、已认领 Task、原始频道消息广播。
 
+## Task allocation mode
+
+PI 在同一 Task Offer / Agent acceptance 协议内选择的请求路由方式：用户明确指定合格 Agent、只有一个合格候选或敏感上下文要求最小披露时使用 `targeted Offer`；多个相近合格候选时使用有界 `candidate-set Offer`。它只决定向谁请求，不得绕过 eligibility、acceptance 或原子 claim。
+_Avoid_: PI 强制 claim、`@Agent` 等同分配、无界广播、派发模式改变 Task contract、targeted 绕过权限。
+
+## Candidate-set Offer
+
+针对同一 Task revision 向一个有界合格候选集签发的互斥 Offer 集合；每个候选只获得判断是否接受所需的最小 contract，首个通过最新资格复验的 acceptance 原子建立唯一 claim，并在同一事务关闭其余 Offer。拒绝、超时或关闭的候选不得获得后续输入或 Invocation。
+_Avoid_: 多个成功 acceptance、多个有效 claim、完整上下文广播、失败候选继续收到更新、先到先执行后补事务。
+
+## Task offer preview
+
+Task Offer 向候选 Agent 披露的最小决策视图，包含目标、交付物、硬要求、约束、风险、deadline 以及输入类型和敏感性摘要，但不默认展开完整 input bindings；候选必须已获当前读取权限，Offer/token 本身不授予数据访问。
+_Avoid_: 完整执行上下文、Offer token 下载敏感输入、整个根 Task、兄弟 Task、PI 内部上下文、先披露后检查权限。
+
 ## Agent acceptance
 
 Agent 对一个仍有效的 Task Offer 作出的明确接受承诺，是 PI 将候选关系转换为正式 claim/lease 的必要条件。用户显式 `@Agent` 只决定优先询问对象，不能替代 Agent acceptance；Offer 超时或 Task revision 后，旧 acceptance 失效。
 _Avoid_: Manifest 匹配、消息已送达、PI 单方面分配。
+
+## Task execution context grant
+
+Server 在 Agent acceptance 原子建立 claim 后签发的限域执行访问事实，绑定 Agent、task revision、attempt 与 claim，只解析该 Executable subtask contract 已冻结的 input bindings。relinquishment、fencing、安全撤权或 revision impact 会使旧 grant 失效；新的执行责任必须取得新 grant。
+_Avoid_: Offer 即访问权、ambient Channel history、整个 Task DAG、跨 attempt 复用、落选候选持续拉取、Agent 自行扩展输入范围。
+
+## Task attempt
+
+Agent acceptance 成功后为某个 task revision 建立的一次独立履约尝试，绑定唯一 claim、lease/fencing、execution context grant、deadline、delivery 与审计。拒绝或 Offer 超时不创建 attempt；失败、执行超时、relinquishment 或 fencing 终止当前 attempt，且不得解析 output slot，重派必须创建新 attempt。
+_Avoid_: 复用旧 claim、跨 attempt grant、迟到 delivery 覆盖当前执行、失败 attempt 解除 dependency、修改 attempt 冒充 Task revision。
+
+## Unaccepted handoff material
+
+失败或终止 attempt 留下、尚未通过 Task acceptance contract 的部分 artifact，只能作为带原 attempt provenance 与未验收标记的来源事实保存；新 attempt 经过权限校验并在 contract 中显式绑定后可以参考，但它不能解析 Task output slot 或被下游当作已完成结果。
+_Avoid_: 部分结果自动继承、失败 delivery 当 output、无 provenance 复制、跨 Agent 静默披露、用 handoff 绕过 acceptance。
 
 ## Unknown Skill status
 
@@ -747,6 +777,41 @@ _Avoid_: PI 创造 Skill 名称、所有任务强制 Skill、质量偏好升级�
 
 根 Task 所需 Skills 在任务树中的覆盖关系。根 Task 可以由多个 Agent 的 Skills 共同覆盖，但每个可执行子 Task 必须由一个同时满足该子 Task 全部 required Capabilities 与 required Skills 的 Agent 认领；PI 同时定义子 Task 间的输入、输出、依赖与验收。语义上不可安全拆分的工作不能只为适配现有 Agent 而强拆。
 _Avoid_: 全能 Agent 要求、父 Task 直接认领、跨 Agent 拼接一个不可分割操作。
+
+## Executable subtask contract
+
+PI 在任何 allocation 前为一个可执行子 Task 冻结的完整责任边界，绑定唯一目标、来源与上游已验收 output 的输入引用、预期交付、依赖、验收及 evidence/authority、硬资格要求、约束、风险、deadline 与重试上限；只有全部依赖解析为绑定 snapshot 的输入后，该 Task 才可 runnable。
+_Avoid_: 标题或描述充当合同、Invocation prompt 补字段、隐式输入、未验收上游结果、悬空依赖、先派发后补验收标准。
+
+## Task acceptance contract
+
+Executable subtask contract 中由稳定 criterion ID、明确 pass condition、必需 evidence 与允许 evidence kind 组成的全量阻塞标准；Agent delivery 必须逐项作答，全部通过才能接受，任一标准需要主观或高风险判断时，整份 delivery 使用预声明的 Subtask human acceptance authority。
+_Avoid_: 整体自报完成、通过率、平均分、缺 evidence 验收、PI 绕过人工 criterion、修改标准不产生 Task revision。
+
+## Task quality preference
+
+只改善交付质量但不决定 Task 是否完成的非阻塞期望；它可以参与指导与候选排序，但不能混入 acceptance criteria 或在交付后被提升为拒绝理由。
+_Avoid_: 可选验收项、隐藏标准、事后加门槛、偏好未满足即失败、评分替代 acceptance。
+
+## Task DAG publication
+
+PI 可以在无执行副作用的 planning draft 中逐步构建子 Task 与依赖；Server 只有在整张 graph revision 通过无环、coverage、完整 contract、输入可解析与 allocation 可行性校验后，才原子发布该 revision，并仅把依赖已满足的节点投影为 runnable。
+_Avoid_: 创建节点即派发、部分发布、draft Offer、悬空依赖、逐节点绕过整图校验、发布失败留下 claim 或 Invocation。
+
+## Task dependency
+
+同一 Task DAG revision 内要求下游 Task 等待上游 Task 被合法验收的控制关系；它只决定 runnable 门禁，不自动把上游 delivery 或上下文注入下游。
+_Avoid_: 隐式数据传递、最近结果、消息顺序猜测依赖、跨 root 悬空边、dependency 等同 input。
+
+## Task output slot
+
+Executable subtask contract 声明的具名输出位置，只有当前 Task revision/attempt 的 delivery 被合法验收后才解析为不可变 output snapshot，供根汇总或显式下游 binding 使用。
+_Avoid_: 任意附件即输出、未验收结果、整份 Agent 上下文、latest output 指针、覆盖旧 snapshot。
+
+## Task input binding
+
+下游 Executable subtask contract 的具名输入与来源事实 snapshot 或特定上游 Task output slot 之间的显式关系；上游输出失效时，Server 必须撤回尚未开始的 runnable 投影，已开工 Task 则进入 revision impact 处理。
+_Avoid_: dependency 自动注入、自然语言“使用上一步”、动态 latest、静默换源、复制未验收 delivery。
 
 ## Agent Experience Signal
 
@@ -770,8 +835,38 @@ _Avoid_: PI Skill 管理器、Team 修改 Agent 供给、内部 Skill 浏览器�
 
 ## Agent eligibility
 
-PI 根据 Task 的 required Capabilities 与 required Skills 对 Agent 的公开声明做候选过滤，再使用 preferred Skills、Team 内经验、负载和可用性排序的判断结果。该判断只表示“根据当前暴露信息是否适合请求”，不证明 Agent 内部真实实现。用户显式 `@Agent` 但其未声明必要 Skill 时，PI 必须提示并请求决定，不能静默改派或断言该 Agent 不会。
-_Avoid_: 只按 Agent 名称认领、Skill 与 Capability 混用、经验直接授予资格。
+Server 先以当前 Channel membership、Team visibility、未删除状态、Task 与 input refs 的读取权限以及 Team/System operation restriction 建立硬门槛，再由 PI 根据 required Capabilities 与 required Skills 过滤公开声明，最后使用 preferred Skills、Team 内经验、负载和可用性排序。Offer 发布与 Agent accept/claim 必须分别原子复验硬门槛；Offer 只记录 eligibility basis，不授予权限。用户显式 `@Agent` 但其不满足硬门槛时，PI 必须提示，不能静默改派或断言其内部能力。
+_Avoid_: 公开频道等同成员资格、Offer 充当授权、先匹配 Skill 后检查权限、频道外直接派发、只按 Agent 名称认领、经验直接授予资格。
+
+## Agent eligibility basis
+
+Server 在一次 Task Offer 中记录的候选判断审计快照，绑定 task revision、manifest revision、Channel membership 与权限/限制版本以及匹配理由；它供 accept/claim 时检测变化，但不能替代当前权限复验。成员或权限变化会使未接受 Offer 失效，安全撤权还可 fencing 已接受的 claim/Invocation；普通负载或在线状态变化不追溯撤销既有 claim。
+_Avoid_: 权限 token、永久资格、Offer 后不复验、负载变化强制撤权、Manifest snapshot 暴露 Agent 内部信息。
+
+## Agent load signal
+
+由 Agent 主动暴露且未过期的 availability/capacity 与 Server 可见的 active claims、Offer reservations、deadline 冲突形成的可审计排序事实；普通负载只影响合格候选的确定性、版本化排序，不授予或撤销资格。未知负载只能降低排序置信度或促使使用 Candidate-set Offer，不能被解释为忙碌或空闲。
+_Avoid_: 设备 CPU、内部队列、模型上下文、PI 探测、模型猜测空闲、负载直接授予 Skill、普通负载撤销 claim。
+
+## Agent execution capacity admission
+
+Agent 明确暴露的 hard concurrency/capacity limit 所形成的 Server admission gate；Server 在 Agent accept/claim 事务中重新计算并原子占用容量，冲突时不创建 claim。Offer reservation 只能是有 TTL 的有界临时事实，拒绝、超时或落选后释放，不等同执行权。
+_Avoid_: Offer 即占用永久容量、并发超配、PI 本地计数、过期 reservation、accept 后补容量校验。
+
+## Agent candidate ranking
+
+PI 对已经通过全部硬门槛的候选应用的可解释、版本化确定性排序，使用 preferred Skills、Team 内经验、Agent load signal、deadline 风险与稳定公平 tie-break，并记录每项依据；排序不得以模型直觉补造 eligibility、负载或内部能力事实。
+_Avoid_: 黑箱“最佳 Agent”、同分长期集中、经验替代 required Skill、未知信号伪造数值、排序结果充当 claim。
+
+## Outside-channel capability gap suggestion
+
+当前 Channel 内没有合格候选时，PI 向有权的人类展示的脱敏能力缺口与可选协作建议；它不得向频道外 Agent 发送 Task、Offer 或上下文，也不得自动改变 membership、权限或数据边界。
+_Avoid_: 跨频道派发、自动邀请、Agent 身份枚举、泄露 Task 输入、建议即授权。
+
+## Allocation blocked
+
+一个 runnable 子 Task 因当前 Channel 内没有同时满足资格、权限、容量与时限门槛的 Agent 而无法发布有效 Offer 的非终态调度事实，包含结构化原因与所依据 revision。PI 可以为确实可分离的工作提出保持根目标、风险边界和验收覆盖的新 DAG revision，但不得为制造候选而降低硬要求；有权人类可以据脱敏 gap suggestion 决定邀请、授权、修订范围或延期。
+_Avoid_: Task failed、自动取消、unknown 当 eligible、删除 required Skill、放宽 acceptance、不可分工作强拆、自动跨频道派发。
 
 ## Manager Worker
 
