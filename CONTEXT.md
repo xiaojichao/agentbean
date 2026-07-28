@@ -77,9 +77,14 @@ _Avoid_: Freshness hold、自动重试、失败后已读、部分建立 ownershi
 Inbox item 对特定接收方是否仍需注意或采取动作的状态；它与 Unread 正交，只能由回应、执行、解除责任或明确忽略等业务动作结束。
 _Avoid_: Read、Unread、读过即处理、Read boundary 推进即完成责任。
 
+## System attention item
+
+Server 从已提交的 Task/orchestration event 或独立 attention 事实面向特定接收者持久化的非 Message Inbox 条目，绑定稳定 attention identity、来源事实、revision 与当前责任状态；持久化成功构成 authoritative delivery，notice 仍只是可丢失、可重放的唤醒信号。它独立维护 unread/seen acknowledgement，读取只清 unread，不推进任何 Message target 的 Read boundary，也不结束 attention/action_required；同一 attention identity 的提醒更新既有条目而不复制责任。
+_Avoid_: Message Inbox item、Message Read boundary、每个 reminder 新建责任、notice delivered 即权威送达、Read 即 resolved、客户端从原始 event 自行生成。
+
 ## System activity projection
 
-Server 从已提交的 Task 或 PI orchestration event 面向特定受众与界面生成的人类可读投影：Task 详情保留完整活动时间线，来源 Thread 使用持久 Task 活动卡呈现稀疏里程碑，Inbox 只投影与接收者责任相关的 attention 或 action_required。它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实；PI Manager 不以成员、头像、聊天气泡或输入状态出现。
+Server 从已提交的 Task 或 PI orchestration event 面向特定受众与界面生成的人类可读投影：Task 详情保留完整活动时间线，来源 Thread 使用持久 Task 活动卡呈现稀疏里程碑，Inbox 通过 System attention item 只投影与接收者责任相关的 attention 或 action_required。它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实；PI Manager 不以成员、头像、聊天气泡或输入状态出现。
 _Avoid_: PI message、PI reply、orchestration chat、客户端从 notice 猜测事实、三处等量复制事件、Read 即处理、原始 audit/prompt/chain-of-thought、跨受众泄露受限内容。
 
 ## PI Manager
