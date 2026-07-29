@@ -5,6 +5,7 @@ import type {
   MessageTargetKind,
   MessageTargetRefV1,
   MessageTracerCommandEnvelopeV1,
+  MessageTracerCommandName,
   MessageTracerCommandResponseV1,
   ReadCandidateTokenV1,
   UnixMs,
@@ -85,6 +86,20 @@ export function issueReadCandidate(input: {
   return { ...token, proof } as ReadCandidateTokenV1;
 }
 
+/** ReadCandidate 默认最大有效期（1h）；过期 token 必须拒绝（合同要求）。 */
+const DEFAULT_READ_CANDIDATE_MAX_AGE_MS = 60 * 60 * 1000;
+
+/** ReadCandidate 是否过期（issuedAt + maxAge < now）。 */
+function isReadCandidateExpired(issuedAt: UnixMs, now: UnixMs, maxAgeMs: number): boolean {
+  return now - issuedAt > maxAgeMs;
+}
+
+/** 计算 command 的 canonical hash（canonicalize 排除 idempotencyKey/clientMessageId/provenance；sha256 在 server）。 */
+function computeCommandHash(commandName: MessageTracerCommandName, commandSchemaVersion: number, payload: unknown): string {
+  const canonical = canonicalizeMessageTracerCommand(commandName, commandSchemaVersion, payload);
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+}
+
 // ---------------------------------------------------------------------------
 // send-message handler
 // ---------------------------------------------------------------------------
@@ -96,6 +111,8 @@ export interface SendMessageCommandHandlerDeps {
   readonly clock: { now(): UnixMs };
   /** HMAC 密钥（仿 sessionSecret）。 */
   readonly sessionSecret: string;
+  /** ReadCandidate 最大有效期（默认 1h）；过期 token 拒绝。 */
+  readonly readCandidateMaxAgeMs?: number;
   /** UoW 提交后的投递钩子（C-send 默认 no-op；C-wire 接真实 socket emit）。 */
   readonly deliverOutbox?: () => void | Promise<void>;
 }
@@ -122,8 +139,7 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
     const input = parseMessageTracerInputV1('send-message', rawPayload);
 
     // 2. canonical command hash（canonicalize 排除 idempotencyKey/clientMessageId/provenance；sha256 在 server 算）。
-    const canonical = canonicalizeMessageTracerCommand('send-message', envelope.commandSchemaVersion, rawPayload);
-    const commandHash = `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
+    const commandHash = computeCommandHash('send-message', envelope.commandSchemaVersion, rawPayload);
 
     const response = await deps.unitOfWork.run(async (tx) => {
       // 3. 幂等查重（事务内 getReceiptByIdempotencyKey + 后续 createReceipt 同事务，防并发双写）。
@@ -134,18 +150,20 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
           return replayResponse(existing);
         }
         // conflict：同 key 异 hash，无副作用。
-        return conflictResponse('idempotency_conflict');
+        return conflictResponse('send-message', 'idempotency_conflict');
       }
 
       // 4. freshness 校验（send 携带 Freshness basis）。
-      const rejected = await checkFreshnessRequest(tx, input, senderId, deps.sessionSecret, deps.clock);
+      const rejected = await checkFreshnessRequest(
+        tx, input, senderId, deps.sessionSecret, deps.clock, deps.readCandidateMaxAgeMs ?? DEFAULT_READ_CANDIDATE_MAX_AGE_MS,
+      );
       if (rejected) return rejected;
 
       // 5. recipient 解析 + 原子提交（不建 coordination Job）。
       const channel = await tx.channels.getById(input.channelId);
       if (!channel) {
         // precondition 失败 → rejected（非 conflict；conflict 专指同 key 异 hash，ADR-0067）。
-        return rejectedResponse('CHANNEL_NOT_FOUND', 'reread_then_new_command');
+        return rejectedResponse('send-message', 'CHANNEL_NOT_FOUND', 'reread_then_new_command');
       }
       const targetKind = resolveTargetKind(channel.kind, input.threadId);
       const threadId = input.threadId ?? null;
@@ -273,7 +291,7 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
 
       // 不调用 tx.jobs.create —— 与 usecases.ts modern 路径的核心区别（ADR-0069 场景 1）。
 
-      return buildResponse('applied', 'MESSAGE_APPLIED', 'none', {
+      return buildResponse('send-message', 'applied', 'MESSAGE_APPLIED', 'none', {
         receipt,
         result: {
           commandName: 'send-message',
@@ -289,6 +307,223 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
       await deps.deliverOutbox?.();
     }
     return response;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// check-inbox handler（candidate-producing read：无副作用，不写 receipt/outbox，不推进 read boundary）
+// ---------------------------------------------------------------------------
+
+/** 共享 handler 依赖（check-inbox / ack 复用；与 SendMessageCommandHandlerDeps 同形状）。 */
+export interface MessageTracerHandlerDeps {
+  readonly unitOfWork: ChannelCoordinationUnitOfWork;
+  readonly ids: { nextId(): string };
+  readonly clock: { now(): UnixMs };
+  readonly sessionSecret: string;
+  /** ReadCandidate 最大有效期（默认 1h）；过期 token 拒绝。 */
+  readonly readCandidateMaxAgeMs?: number;
+}
+
+export interface CheckInboxCommandInput {
+  readonly envelope: unknown;
+  readonly payload: unknown;
+  /** Server 推导的请求者身份（须即 recipient，收件人只查自己的 inbox）。 */
+  readonly requesterId: ID;
+  readonly teamId: ID;
+}
+
+export type CheckInboxCommandHandler = (input: CheckInboxCommandInput) => Promise<MessageTracerCommandResponseV1>;
+
+export function createCheckInboxCommandHandler(deps: MessageTracerHandlerDeps): CheckInboxCommandHandler {
+  return async ({ envelope: rawEnvelope, payload: rawPayload, requesterId }) => {
+    const envelope = parseMessageTracerCommandEnvelopeV1(rawEnvelope) as MessageTracerCommandEnvelopeV1;
+    if (envelope.commandName !== 'check-inbox') {
+      throw new Error(`MESSAGE_TRACER_COMMAND_MISMATCH: expected check-inbox, got ${envelope.commandName}`);
+    }
+    const input = parseMessageTracerInputV1('check-inbox', rawPayload);
+
+    // authority：收件人只能查自己的 inbox。
+    if (input.recipientId !== requesterId) {
+      return rejectedResponse('check-inbox', 'RECIPIENT_MISMATCH', 'reread_then_new_command');
+    }
+    const threadId = input.target.threadId ?? null;
+    const now = deps.clock.now();
+    // check-inbox 是查询：不写 receipt/outbox，不推进 read boundary（ADR-0067 §13）。
+    const checked = await deps.unitOfWork.run(async (tx) => {
+      const items = await tx.inbox.listItems({
+        recipientId: input.recipientId,
+        channelId: input.target.channelId,
+        threadId,
+        afterSeq: input.afterSeq ?? -1,
+        limit: input.limit,
+      });
+      const maxSeq = await tx.inbox.getMaxTargetSeq({
+        recipientId: input.recipientId,
+        channelId: input.target.channelId,
+        threadId,
+      });
+      return { items, candidateSeq: maxSeq + 1 };
+    });
+
+    // targetSeq 为 exclusive「下一未读位置」：maxSeq+1（空 inbox 为 0 = 未读任何）。
+    // 这样空 inbox 的 candidate(0) ack 后 readSeq=0，首条消息(seq 0) 仍是未读（0 < 0 为假），不会静默跳过。
+    const readCandidate = issueReadCandidate({
+      recipientId: input.recipientId,
+      target: input.target,
+      targetSeq: checked.candidateSeq,
+      issuedAt: now,
+      secret: deps.sessionSecret,
+    });
+
+    return buildResponse('check-inbox', 'applied', 'INBOX_CHECKED', 'none', {
+      result: {
+        commandName: 'check-inbox',
+        recipientId: input.recipientId,
+        target: input.target,
+        items: checked.items.map((item) => ({
+          messageId: item.messageId,
+          targetSeq: item.targetSeq,
+          senderKind: item.senderKind,
+          senderId: item.senderId,
+        })),
+        readCandidate,
+        // audienceScope：该投影的受众边界（inbox 是 recipient 的私有投影）。
+        audienceScope: `recipient:${input.recipientId}`,
+        asOf: now,
+      },
+    });
+  };
+}
+
+// ---------------------------------------------------------------------------
+// ack-read-candidate handler（推进权威 Read boundary：幂等、单调；有 receipt）
+// ---------------------------------------------------------------------------
+
+export interface AckReadCandidateCommandInput {
+  readonly envelope: unknown;
+  readonly payload: unknown;
+  /** Server 推导的请求者身份（须即 readCandidate.recipientId）。 */
+  readonly requesterId: ID;
+  readonly teamId: ID;
+}
+
+export type AckReadCandidateCommandHandler = (input: AckReadCandidateCommandInput) => Promise<MessageTracerCommandResponseV1>;
+
+export function createAckReadCandidateCommandHandler(deps: MessageTracerHandlerDeps): AckReadCandidateCommandHandler {
+  return async ({ envelope: rawEnvelope, payload: rawPayload, requesterId, teamId }) => {
+    const envelope = parseMessageTracerCommandEnvelopeV1(rawEnvelope) as MessageTracerCommandEnvelopeV1;
+    if (envelope.commandName !== 'ack-read-candidate') {
+      throw new Error(`MESSAGE_TRACER_COMMAND_MISMATCH: expected ack-read-candidate, got ${envelope.commandName}`);
+    }
+    const input = parseMessageTracerInputV1('ack-read-candidate', rawPayload);
+    const rc = input.readCandidate;
+    const commandHash = computeCommandHash('ack-read-candidate', envelope.commandSchemaVersion, rawPayload);
+
+    return deps.unitOfWork.run(async (tx) => {
+      // 幂等查重（同事务；ADR-0067 §18 顺序：幂等查重先于 precondition）。
+      const existing = await tx.commandReceipts.getReceiptByIdempotencyKey(envelope.idempotencyKey);
+      if (existing) {
+        return existing.commandHash === commandHash
+          ? replayResponse(existing)
+          : conflictResponse('ack-read-candidate', 'idempotency_conflict');
+      }
+
+      const now = deps.clock.now();
+      // proof 校验 + recipient 绑定 + 过期校验（token 不得伪造/挪用/陈旧）。
+      if (!verifyReadCandidateProof(rc, deps.sessionSecret)
+        || rc.recipientId !== requesterId
+        || isReadCandidateExpired(rc.issuedAt, now, deps.readCandidateMaxAgeMs ?? DEFAULT_READ_CANDIDATE_MAX_AGE_MS)) {
+        return rejectedResponse('ack-read-candidate', 'READ_CANDIDATE_REJECTED', 'reread_then_new_command');
+      }
+
+      const threadId = rc.target.threadId ?? null;
+      const prior = await tx.inbox.getReadBoundary({
+        recipientId: rc.recipientId,
+        channelId: rc.target.channelId,
+        threadId,
+      });
+      const priorSeq = prior?.readSeq ?? 0;
+      // 单调推进（advanceReadBoundary 内部仅 newSeq > 当前才更新；ack 幂等不可回退）。
+      const boundary = await tx.inbox.advanceReadBoundary({
+        id: deps.ids.nextId(),
+        teamId,
+        recipientId: rc.recipientId,
+        channelId: rc.target.channelId,
+        threadId,
+        targetKind: rc.target.kind,
+        newSeq: rc.targetSeq,
+        now,
+      });
+      // applied = 首次建立 boundary（prior 为 null）或 readSeq 实际推进；否则 no_op。
+      const advanced = prior === null || boundary.readSeq > priorSeq;
+      const outcome: CommandReceiptV1['outcome'] = advanced ? 'applied' : 'no_op';
+
+      const receiptId = deps.ids.nextId();
+      // committedRevisions 仅在 applied 时记录该 read 流的新 revision；no_op 不重复认领既有 revision（§24）。
+      const committedRevisions = advanced
+        ? [{ streamKind: 'read', streamId: `${rc.recipientId}|${rc.target.channelId}|${threadId ?? ''}`, revision: boundary.readSeq }]
+        : [];
+      const receipt: CommandReceiptV1 = {
+        schemaVersion: 1,
+        receiptId,
+        commandName: 'ack-read-candidate',
+        commandSchemaVersion: envelope.commandSchemaVersion,
+        idempotencyKey: envelope.idempotencyKey,
+        commandHash,
+        outcome,
+        committedRevisions,
+        eventRefs: [],
+        commitTime: now,
+        resultAvailable: true,
+      };
+      await tx.commandReceipts.createReceipt({
+        receiptId,
+        teamId,
+        commandName: 'ack-read-candidate',
+        commandSchemaVersion: envelope.commandSchemaVersion,
+        idempotencyKey: envelope.idempotencyKey,
+        commandHash,
+        outcome,
+        committedRevisions,
+        eventRefs: [],
+        resultAvailable: true,
+        resultJson: JSON.stringify({
+          commandName: 'ack-read-candidate',
+          recipientId: rc.recipientId,
+          target: rc.target,
+          advancedToSeq: boundary.readSeq,
+        }),
+        commitTime: now,
+        createdAt: now,
+      });
+      await tx.commandReceipts.createTombstone({
+        id: deps.ids.nextId(),
+        teamId,
+        commandName: 'ack-read-candidate',
+        idempotencyKey: envelope.idempotencyKey,
+        commandHash,
+        receiptId,
+        outcome,
+        resultAvailable: true,
+        createdAt: now,
+      });
+
+      return buildResponse(
+        'ack-read-candidate',
+        outcome,
+        advanced ? 'READ_BOUNDARY_ADVANCED' : 'READ_BOUNDARY_NOOP',
+        'none',
+        {
+          receipt,
+          result: {
+            commandName: 'ack-read-candidate',
+            recipientId: rc.recipientId,
+            target: rc.target,
+            advancedToSeq: boundary.readSeq,
+          },
+        },
+      );
+    });
   };
 }
 
@@ -314,16 +549,19 @@ async function checkFreshnessRequest(
   senderId: ID,
   secret: string,
   clock: { now(): UnixMs },
+  maxAgeMs: number,
 ): Promise<MessageTracerCommandResponseV1 | null> {
   const rc = input.freshnessBasis.readCandidate;
   if (!rc) return null; // 无 readCandidate → 无 freshness 约束，继续提交。
 
-  // proof 校验 + recipient/target 绑定（禁止跨 recipient/target 伪造或挪用 token）。
+  const now = clock.now();
+  // proof 校验 + recipient/target 绑定 + 过期（禁止伪造/挪用/陈旧 token）。
   if (!verifyReadCandidateProof(rc, secret)
     || rc.recipientId !== senderId
     || rc.target.channelId !== input.channelId
-    || (rc.target.threadId ?? null) !== (input.threadId ?? null)) {
-    return rejectedResponse('READ_CANDIDATE_REJECTED', 'reread_then_new_command');
+    || (rc.target.threadId ?? null) !== (input.threadId ?? null)
+    || isReadCandidateExpired(rc.issuedAt, now, maxAgeMs)) {
+    return rejectedResponse('send-message', 'READ_CANDIDATE_REJECTED', 'reread_then_new_command');
   }
 
   // 发送者作为该 target 接收方的当前水位（发送者对来自他人的消息有 inbox 行）。
@@ -332,16 +570,18 @@ async function checkFreshnessRequest(
     channelId: input.channelId,
     threadId: input.threadId ?? null,
   });
-  if (rc.targetSeq < currentMax) {
+  // exclusive 语义：readCandidate.targetSeq = 发送者上次 check 时的「下一未读」(oldMax+1)。
+  // 若 currentMax >= targetSeq（即 currentMax+1 > targetSeq），说明有新消息到达 → hold。
+  if (currentMax >= rc.targetSeq) {
     // 存在未读相关消息 → freshness_hold（不写 Message/inbox/outbox，不推进 read boundary）。
     const newReadCandidate = issueReadCandidate({
       recipientId: senderId,
       target: rc.target,
-      targetSeq: currentMax,
-      issuedAt: clock.now(),
+      targetSeq: currentMax + 1, // 推到当前水位的「下一未读」
+      issuedAt: now,
       secret,
     });
-    return buildResponse('freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
+    return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
       heldTarget: input.freshnessBasis.target,
       heldReason: 'unread_messages_on_target',
       newReadCandidate,
@@ -350,8 +590,9 @@ async function checkFreshnessRequest(
   return null;
 }
 
-/** 统一构造 response 骨架（防 schemaVersion/commandName 字段漂移）。 */
+/** 统一构造 response 骨架（commandName 显式传入，防字段漂移）。 */
 function buildResponse(
+  commandName: MessageTracerCommandName,
   outcome: MessageTracerCommandResponseV1['outcome'],
   stableCode: string,
   retryDirective: MessageTracerCommandResponseV1['retryDirective'],
@@ -359,7 +600,7 @@ function buildResponse(
 ): MessageTracerCommandResponseV1 {
   return {
     schemaVersion: MESSAGE_TRACER_ENVELOPE_SCHEMA_VERSION,
-    commandName: 'send-message',
+    commandName,
     outcome,
     retryDirective,
     stableCode,
@@ -386,13 +627,17 @@ function toReceiptV1(record: CommandReceiptRecord): CommandReceiptV1 {
 }
 
 function replayResponse(receipt: CommandReceiptRecord): MessageTracerCommandResponseV1 {
-  return buildResponse('replayed', 'MESSAGE_REPLAYED', 'none', { receipt: toReceiptV1(receipt) });
+  return buildResponse(receipt.commandName, 'replayed', 'MESSAGE_REPLAYED', 'none', { receipt: toReceiptV1(receipt) });
 }
 
-function conflictResponse(reason: string): MessageTracerCommandResponseV1 {
-  return buildResponse('conflict', 'IDEMPOTENCY_CONFLICT', 'reread_then_new_command', { conflictReason: reason });
+function conflictResponse(commandName: MessageTracerCommandName, reason: string): MessageTracerCommandResponseV1 {
+  return buildResponse(commandName, 'conflict', 'IDEMPOTENCY_CONFLICT', 'reread_then_new_command', { conflictReason: reason });
 }
 
-function rejectedResponse(stableCode: string, retryDirective: MessageTracerCommandResponseV1['retryDirective']): MessageTracerCommandResponseV1 {
-  return buildResponse('rejected', stableCode, retryDirective);
+function rejectedResponse(
+  commandName: MessageTracerCommandName,
+  stableCode: string,
+  retryDirective: MessageTracerCommandResponseV1['retryDirective'],
+): MessageTracerCommandResponseV1 {
+  return buildResponse(commandName, 'rejected', stableCode, retryDirective);
 }
