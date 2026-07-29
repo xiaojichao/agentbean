@@ -4,7 +4,7 @@ status: accepted
 
 # Server 使用封闭的具名 Command registry
 
-Web、daemon、PI runtime 与普通 Agent 的所有权威写入统一经过 Server-owned `Command registry`：每个具名 command 使用共享、transport-independent envelope 与 exact-key runtime schema，固定 authority、目标、精确 revision/freshness/fencing preconditions、逻辑业务幂等范围、成功事实、outcome、audit 与 audience。客户端不能使用通用 mutation、批量事务、自报 actor/role 或 system-only 数据库旁路；具体 REST path、dispatcher、队列和存储结构不是领域合同。
+Web、daemon、PI runtime 与普通 Agent 的所有权威写入统一经过 Server-owned `Command registry`：每个具名 command 使用共享、transport-independent envelope 与 exact-key runtime schema，固定 authority、目标、适用于该 command 的精确 revision/freshness/fencing preconditions、逻辑业务幂等范围、成功事实、outcome、audit 与 audience。Envelope 固定包含 command/schema identity 与 idempotency key；expected revisions、Freshness basis 和来源引用只在 registry 声明适用时出现，非 send/claim command 不得伪造 Message Freshness basis。客户端不能使用通用 mutation、批量事务、自报 actor/role 或 system-only 数据库旁路；具体 REST path、dispatcher、队列和存储结构不是领域合同。
 
 Server 在确认调用方有权访问目标后，以 tenant/scope、command type、目标 lineage/aggregate 与逻辑 authority subject 查找幂等身份。同 scope/key/hash 返回首次 `Command receipt`；其结果 payload 已按治理压缩时，返回稳定的 tombstone-backed receipt projection，明确 `result_available=false`、原 outcome/references 与不可重试 `receipt_result_retired` code，不能恢复内容或重新执行。不同 hash 返回无副作用 idempotency conflict；去重绑定业务命令而非网络请求、临时 worker 或 lease holder。成功 command 在一个事务中共同提交 current state、`0..N` 个不可变 domain events、receipt、required audit 与 outbox；no-op 不制造 event，replay 不重新执行。结果 payload 可以按治理压缩，但每个已终结的 `applied` 或 `no_op` receipt 都必须保留足以识别 replay/conflict 的 Idempotency tombstone。
 

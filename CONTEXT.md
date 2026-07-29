@@ -94,8 +94,8 @@ _Avoid_: 通用 mutation、客户端自定义 command、handler 私有写语义�
 
 ## Command envelope
 
-所有具名 command 共用的 transport-independent 外层合同，携带 command/schema identity、idempotency key、expected revisions、Freshness basis 与来源引用；具体 payload 由 command type 的 exact-key schema 定义，authority 由 Server 推导。
-_Avoid_: REST path 充当领域语义、客户端自报 actor/role、任意 patch、未知字段容错、临时 credential 进入语义 payload。
+所有具名 command 共用的 transport-independent 外层合同，固定携带 command/schema identity 与 idempotency key，并只按 registry 对该 command 的声明携带 expected revisions、Freshness basis 与来源引用；具体 payload 由 command type 的 exact-key schema 定义，authority 由 Server 推导。
+_Avoid_: 所有 command 强制 Message Freshness basis、REST path 充当领域语义、客户端自报 actor/role、任意 patch、未知字段容错、临时 credential 进入语义 payload。
 
 ## Idempotency scope
 
