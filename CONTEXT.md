@@ -199,7 +199,7 @@ _Avoid_: Action approval、Owner/Admin 代替个人 requester、自然语言同�
 
 ## Agent orchestration escalation
 
-合法责任 Agent 发现当前请求需要持续跟踪或协作时，绑定来源、Freshness basis、目标与理由提交的结构化升级；原授权边界内可形成 PI orchestration trigger，扩大范围、风险、成本或数据权限时只能形成 Promotion proposal。
+合法责任 Agent 发现当前请求需要持续跟踪或协作时，绑定来源、Freshness basis、目标与理由提交的结构化升级；原授权边界内可形成 PI orchestration trigger，扩大范围、风险、成本或数据权限时只能形成 Promotion proposal。Simple agent request 的 direct escalation 成功时必须同时完成 Simple request escalation handoff。
 _Avoid_: 旁观 Agent 升级、自然语言暗示、升级即获得编排权、借升级扩大授权。
 
 ## Team promotion policy
@@ -561,6 +561,11 @@ _Avoid_: 每消息 Task、聊天记录别名、Promotion proposal、Action appro
 
 Server message intake 根据显式 @Agent 确定性路由给一个外部 Agent、且不创建 Tracked task 的人类请求；Agent 后续若发现需要编排，只能走结构化 Agent orchestration escalation。
 _Avoid_: PI 每消息判定、未 @ 消息隐式选 Agent、单人任务必建 Task、把简单请求项目管理化。
+
+## Simple request escalation handoff
+
+Simple agent request 的 direct Agent orchestration escalation 成功时，Server 在创建唯一 root Task、PI orchestration run 与 orchestration claim 的同一事务中，终结原请求的独立执行权并 fencing 尚未提交的旧 Invocation；原始 @Agent 约束转为相关主子 Task 的 targeted Offer，仍须 Agent acceptance 才建立新的 execution claim。旧执行产生的部分材料只作为 Unaccepted handoff material 保留；仅生成 proposal 或 escalation 失败时不发生 handoff。
+_Avoid_: 旧直派与新 Task 双轨执行、升级即自动 claim、部分材料自动成为 Task delivery、proposal 创建即终结原请求、失败后留下半次 handoff。
 
 ## Task creation gate
 
@@ -965,7 +970,7 @@ _Avoid_: acceptance 自动递增 attempt、开工前 relinquish 算执行失败�
 
 ## Unaccepted handoff material
 
-失败或终止 attempt 留下、尚未通过 Task acceptance contract 的部分 artifact，只能作为带原 attempt provenance 与未验收标记的来源事实保存；新 attempt 经过权限校验并在 contract 中显式绑定后可以参考，但它不能解析 Task output slot 或被下游当作已完成结果。
+失败或终止 attempt，或完成 Simple request escalation handoff 的旧执行所留下、尚未通过 Task acceptance contract 的部分 artifact，只能作为带原执行 provenance 与未验收标记的来源事实保存；新 attempt 经过权限校验并在 contract 中显式绑定后可以参考，但它不能解析 Task output slot 或被下游当作已完成结果。
 _Avoid_: 部分结果自动继承、失败 delivery 当 output、无 provenance 复制、跨 Agent 静默披露、用 handoff 绕过 acceptance。
 
 ## Unknown Skill status
