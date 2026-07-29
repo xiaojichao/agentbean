@@ -250,6 +250,50 @@ describe('send-message command handler', () => {
     expect(res.outcome).toBe('applied'); // basis 未变 + 无未读提及 → 不阻塞
   });
 
+  test('basis relevance：basis Task 自上次 check 后被编辑（updatedAt>issuedAt）→ hold', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+    // basis Task（user-2 创建）：先以旧时间落库，再编辑（updatedAt 推到 NOW+1，晚于 user-1 上次 check=NOW）
+    await repos.tasks.create({ id: 'basis-task-1', teamId: 'team-1', title: 'basis task', status: 'todo', creatorId: 'user-2', tags: [], sortOrder: 0, createdAt: NOW - 1, updatedAt: NOW - 1 });
+    await repos.tasks.update({ taskId: 'basis-task-1', changes: { updatedAt: NOW + 1 } });
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('k-basis-task-edited'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc, basisTaskId: 'basis-task-1' } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.outcome).toBe('freshness_hold');
+    expect(res.heldReason).toBe('basis_task_changed');
+  });
+
+  test('basis relevance：basis Task 被删除（getById=null）→ hold', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+    // basis Task 不存在（已删除/从未创建）→ getById 返回 null
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('k-basis-task-deleted'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc, basisTaskId: 'task-gone' } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.outcome).toBe('freshness_hold');
+    expect(res.heldReason).toBe('basis_task_changed');
+  });
+
+  test('basis relevance：basis Task 未编辑（updatedAt<=issuedAt）且无未读提及 → 不阻塞', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+    // basis Task 未编辑（updatedAt = NOW，不晚于 issuedAt = NOW）；TaskDto.updatedAt 必填故用 <= 判定
+    await repos.tasks.create({ id: 'basis-task-2', teamId: 'team-1', title: 'basis task', status: 'todo', creatorId: 'user-2', tags: [], sortOrder: 0, createdAt: NOW, updatedAt: NOW });
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('k-basis-task-clean'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc, basisTaskId: 'basis-task-2' } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.outcome).toBe('applied'); // basis Task 未变 + 无未读提及 → 不阻塞
+  });
+
   test('rejected：篡改 proof 的 readCandidate 被拒，无副作用', async () => {
     const { repos, handle } = setup();
     await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
