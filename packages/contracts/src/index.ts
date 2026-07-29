@@ -5,6 +5,7 @@ export * from './agent.js';
 export * from './device.js';
 export * from './channel.js';
 export * from './message.js';
+export * from './message-tracer.js';
 export * from './dispatch.js';
 export * from './dispatch-failure.js';
 export * from './artifact.js';
