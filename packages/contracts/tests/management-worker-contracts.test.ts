@@ -241,6 +241,32 @@ describe('Phase 1 management Worker contracts', () => {
     });
   });
 
+  test('checkpoint result accepts the #924 orchestration integrity binding fields', () => {
+    const payload = structuredClone(validPayloads['checkpoint-result']) as Record<string, unknown>;
+    const checkpoint = payload.checkpoint as Record<string, unknown>;
+    checkpoint.authoritative = {
+      ...(checkpoint.authoritative as Record<string, unknown>),
+      runRevision: 4,
+      eventSchemaVersion: 1,
+      contentHash: 'a'.repeat(64),
+    };
+
+    expect(parseManagementWorkerPayload('checkpoint-result', payload)).toEqual(payload);
+    const invalid = structuredClone(payload) as Record<string, unknown>;
+    const invalidCheckpoint = invalid.checkpoint as Record<string, unknown>;
+    invalidCheckpoint.authoritative = {
+      ...(invalidCheckpoint.authoritative as Record<string, unknown>),
+      eventSchemaVersion: 2,
+    };
+    expect(safeParseManagementWorkerPayload('checkpoint-result', invalid)).toEqual({
+      ok: false,
+      error: {
+        code: 'MANAGEMENT_WORKER_PAYLOAD_INVALID',
+        path: '$.checkpoint.authoritative.eventSchemaVersion',
+      },
+    });
+  });
+
   test('freezes the eleven Phase 1 tools and rejects later-phase tools', () => {
     expect(PHASE_1_MANAGEMENT_WORKER_TOOL_NAMES).toEqual([
       'context.get_root_message',

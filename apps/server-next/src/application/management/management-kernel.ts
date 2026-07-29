@@ -163,6 +163,8 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
           status: 'queued' as const,
           placementPolicy: input.placementPolicy,
           checkpointRevision: 0,
+          orchestrationRevision: input.managementPhase === 2 || input.managementPhase === 3 ? 1 : undefined,
+          recoveryState: input.managementPhase === 2 || input.managementPhase === 3 ? 'healthy' as const : undefined,
           budget: input.budget,
           createdAt: now,
           updatedAt: now,
@@ -196,6 +198,25 @@ export function createManagementKernel(dependencies: ManagementKernelDependencie
         });
         await transactionRepositories.reservations.create({ id: ids.nextId(), teamId: input.teamId, requestKey: input.requestKey, requestHash: input.requestHash, managementRunId, createdAt: now });
         await transactionRepositories.runs.create(run);
+        if ((input.managementPhase === 2 || input.managementPhase === 3) && input.rootTaskId) {
+          await transactionRepositories.orchestrationClaims.create({
+            managementRunId,
+            rootTaskId: input.rootTaskId,
+            state: 'active',
+            revision: 1,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await transactionRepositories.scheduling.create({
+            managementRunId,
+            state: 'runnable',
+            eligibleAt: now,
+            enqueuedAt: now,
+            priority: 0,
+            revision: 1,
+            updatedAt: now,
+          });
+        }
         await transactionRepositories.events.append({ event, payloadHash: hashManagementEventPayload(event) });
         return { run, disposition: 'created' as const };
       });

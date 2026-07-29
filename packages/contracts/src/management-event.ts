@@ -35,6 +35,17 @@ export interface ManagementEventPayloadMapV1 {
     readonly checkpointRevision: number;
     readonly lastEventSequence: number;
   };
+  readonly 'orchestration-command-committed': {
+    readonly commandName: 'wait' | 'wake';
+    readonly runRevision: number;
+    readonly schedulingRevision: number;
+    readonly receiptId: ID;
+  };
+  readonly 'orchestration-recovery-pending': {
+    readonly runRevision: number;
+    readonly schedulingRevision: number;
+    readonly reasonCode: string;
+  };
   readonly 'memory-tool-completed': {
     readonly toolName: 'memory.create_capsule' | 'memory.propose_candidate' | 'memory.link_sources';
     readonly resultReferenceId: ID;

@@ -121,7 +121,11 @@ describe('Server Collaboration Kernel', () => {
       const persistence = createSqliteManagementPersistence(db);
       let id = 0;
       const kernel = createManagementKernel({ ...persistence, clock: { now: () => 10 }, ids: { nextId: () => `sqlite-${++id}` } });
-      const { run } = await kernel.createOrResumeRun(runInput());
+      const { run } = await kernel.createOrResumeRun({ ...runInput(), managementPhase: 2 });
+      await expect(persistence.repositories.orchestrationClaims.getByRunId(run.id))
+        .resolves.toMatchObject({ rootTaskId: 'task-1', state: 'active', revision: 1 });
+      await expect(persistence.repositories.scheduling.get(run.id))
+        .resolves.toMatchObject({ state: 'runnable', revision: 1 });
       await kernel.acquireLease({ managementRunId: run.id, workerId: 'worker-1', host: { deviceId: 'device-1', profileId: 'profile-1' }, leaseToken: 'token', ttlMs: 100 });
       const authority = { managementRunId: run.id, workerId: 'worker-1', leaseToken: 'token', fencingToken: 1 };
       const event = await kernel.appendEvent({ authority, type: 'run-failed', actorKind: 'manager', idempotencyKey: 'failure-1', payload: { errorCode: 'PROVIDER_DOWN', recoverable: true } });

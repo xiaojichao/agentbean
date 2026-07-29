@@ -15,12 +15,15 @@ describe('management checkpoint', () => {
 
     const checkpoint = await harness.checkpoints.save({ authority: harness.authority, idempotencyKey: 'checkpoint-1', contextHints: { objective: 'finish root task', planSummary: 'one pending', completedInvocationSummaries: [], unresolvedQuestions: [] } });
     expect(checkpoint.authoritative).toMatchObject({
+      runRevision: 0,
+      eventSchemaVersion: 1,
       openTaskIds: ['task-1'],
       waitingInvocationIds: ['invocation-waiting'],
       completedInvocationIds: ['invocation-completed'],
       memoryCapsuleIds: [],
       lastEventSequence: 3,
     });
+    expect(checkpoint.authoritative.contentHash).toMatch(/^[0-9a-f]{64}$/);
     expect(new Set([...checkpoint.authoritative.waitingInvocationIds, ...checkpoint.authoritative.completedInvocationIds]).size).toBe(2);
     await expect(harness.checkpoints.save({ authority: harness.authority, idempotencyKey: 'checkpoint-2', contextHints: { ...checkpoint.contextHints, planSummary: 'second snapshot' } })).resolves.toMatchObject({ revision: 2 });
     await expect(harness.checkpoints.save({ authority: harness.authority, idempotencyKey: 'checkpoint-1', contextHints: checkpoint.contextHints })).resolves.toEqual(checkpoint);
@@ -41,6 +44,37 @@ describe('management checkpoint', () => {
     expect(result.kind).toBe('rebuilt');
     expect(result.checkpoint.contextHints).toEqual({ objective: 'authoritative objective', planSummary: '', completedInvocationSummaries: [], unresolvedQuestions: [] });
     expect(JSON.stringify(result.checkpoint.contextHints)).not.toContain('stale');
+  });
+
+  test('rebuilds from Server facts when a checkpoint content hash is tampered', async () => {
+    const harness = await createHarness();
+    const checkpoint = await harness.checkpoints.save({
+      authority: harness.authority,
+      idempotencyKey: 'checkpoint-tamper-source',
+      contextHints: {
+        objective: 'trusted objective',
+        planSummary: '',
+        completedInvocationSummaries: [],
+        unresolvedQuestions: [],
+      },
+    });
+    const run = await harness.repositories.runs.getById(harness.authority.managementRunId);
+    if (!run) throw new Error('missing run');
+    const facts = await collectManagementCheckpointFacts(harness.repositories, run);
+    const result = restoreOrRebuildManagementCheckpoint({
+      checkpoint: {
+        ...checkpoint,
+        authoritative: { ...checkpoint.authoritative, contentHash: 'tampered' },
+      },
+      facts,
+      objective: 'authoritative objective',
+      now: 30,
+    });
+
+    expect(result.kind).toBe('rebuilt');
+    if (result.kind === 'rebuilt') {
+      expect(result.reasons).toContain('checkpoint-hash-mismatch');
+    }
   });
 
   test('captures the complete Phase 2 DAG, revisions, active claims and Invocation sets from one authoritative snapshot', async () => {

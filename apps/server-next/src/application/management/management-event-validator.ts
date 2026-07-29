@@ -10,6 +10,8 @@ export const PHASE_1_WRITABLE_MANAGEMENT_EVENT_TYPES = [
   'worker-leased',
   'worker-lost',
   'checkpoint-updated',
+  'orchestration-command-committed',
+  'orchestration-recovery-pending',
   'invocation-created',
   'dispatch-attempt-started',
   'dispatch-attempt-completed',
@@ -53,6 +55,12 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'worker-leased': { required: ['workerId', 'leaseFingerprint', 'expiresAt'] },
   'worker-lost': { required: ['workerId', 'lastHeartbeatAt', 'reasonCode'] },
   'checkpoint-updated': { required: ['checkpointRevision', 'lastEventSequence'] },
+  'orchestration-command-committed': {
+    required: ['commandName', 'runRevision', 'schedulingRevision', 'receiptId'],
+  },
+  'orchestration-recovery-pending': {
+    required: ['runRevision', 'schedulingRevision', 'reasonCode'],
+  },
   'memory-tool-completed': { required: ['toolName', 'resultReferenceId', 'requestHash'], optional: ['output'] },
   'invocation-created': { required: ['invocationId', 'intentHash'], optional: ['taskRevision'] },
   'dispatch-attempt-started': { required: ['invocationId', 'dispatchId', 'attemptNumber'] },
@@ -137,6 +145,17 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       string(payload.workerId, 'payload.workerId'); nonNegativeInteger(payload.lastHeartbeatAt, 'payload.lastHeartbeatAt'); string(payload.reasonCode, 'payload.reasonCode'); return;
     case 'checkpoint-updated':
       positiveInteger(payload.checkpointRevision, 'payload.checkpointRevision'); nonNegativeInteger(payload.lastEventSequence, 'payload.lastEventSequence'); return;
+    case 'orchestration-command-committed':
+      if (!['wait', 'wake'].includes(string(payload.commandName, 'payload.commandName'))) fail('payload.commandName');
+      positiveInteger(payload.runRevision, 'payload.runRevision');
+      positiveInteger(payload.schedulingRevision, 'payload.schedulingRevision');
+      string(payload.receiptId, 'payload.receiptId');
+      return;
+    case 'orchestration-recovery-pending':
+      positiveInteger(payload.runRevision, 'payload.runRevision');
+      positiveInteger(payload.schedulingRevision, 'payload.schedulingRevision');
+      string(payload.reasonCode, 'payload.reasonCode');
+      return;
     case 'memory-tool-completed':
       if (!['memory.create_capsule', 'memory.propose_candidate', 'memory.link_sources']
         .includes(string(payload.toolName, 'payload.toolName'))) fail('payload.toolName');

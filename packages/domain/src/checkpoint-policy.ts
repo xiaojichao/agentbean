@@ -5,6 +5,7 @@ import type {
 
 export interface ManagementCheckpointFacts {
   readonly managementRunId: string;
+  readonly runRevision: number;
   readonly lastEventSequence: number;
   readonly taskGraphRevision: number;
   readonly openTaskIds: readonly string[];
@@ -22,6 +23,9 @@ export interface EvaluateManagementCheckpointInput {
 
 export type ManagementCheckpointRebuildReason =
   | 'management-run-mismatch'
+  | 'run-revision-mismatch'
+  | 'checkpoint-schema-mismatch'
+  | 'checkpoint-hash-mismatch'
   | 'event-sequence-mismatch'
   | 'task-graph-revision-mismatch'
   | 'missing-open-task'
@@ -51,6 +55,12 @@ export function evaluateManagementCheckpoint(
 
   if (input.checkpoint.managementRunId !== input.facts.managementRunId) {
     reasons.add('management-run-mismatch');
+  }
+  if (authoritative.runRevision !== undefined && authoritative.runRevision !== input.facts.runRevision) {
+    reasons.add('run-revision-mismatch');
+  }
+  if (authoritative.eventSchemaVersion !== undefined && authoritative.eventSchemaVersion !== 1) {
+    reasons.add('checkpoint-schema-mismatch');
   }
   if (authoritative.lastEventSequence !== input.facts.lastEventSequence) {
     reasons.add('event-sequence-mismatch');

@@ -9,6 +9,12 @@ import type {
   ManagementRepositories,
   ManagementRunRecord,
   ManagementShadowDecisionRecord,
+  PiOrchestrationAttemptAuditRecord,
+  PiOrchestrationClaimRecord,
+  PiOrchestrationCommandReceiptRecord,
+  PiOrchestrationDeadlineRecord,
+  PiOrchestrationOutboxRecord,
+  PiSchedulingRecord,
 } from '../../application/management-repositories.js';
 import { createManagementUnitOfWork, serializeManagementTransactions, type ManagementUnitOfWork } from '../../application/management-unit-of-work.js';
 
@@ -17,6 +23,12 @@ interface ManagementMemoryState {
   reservations: Map<string, ManagedRequestReservationRecord>;
   runs: Map<string, ManagementRunRecord>;
   leases: Map<string, ManagerLeaseRecord>;
+  orchestrationClaims: Map<string, PiOrchestrationClaimRecord>;
+  scheduling: Map<string, PiSchedulingRecord>;
+  deadlines: Map<string, PiOrchestrationDeadlineRecord>;
+  commandReceipts: Map<string, PiOrchestrationCommandReceiptRecord>;
+  attemptAudits: Map<string, PiOrchestrationAttemptAuditRecord>;
+  outbox: Map<string, PiOrchestrationOutboxRecord>;
   events: Map<string, ManagementEventRecord>;
   accessAudits: Map<string, ManagementAccessAuditRecord>;
   checkpoints: Map<string, ManagementCheckpointV1>;
@@ -70,6 +82,102 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
     leases: {
       async get(managementRunId) { return state.leases.get(managementRunId) ?? null; },
       async put(record) { state.leases.set(record.managementRunId, record); return record; },
+    },
+    orchestrationClaims: {
+      async create(record) {
+        if (state.orchestrationClaims.has(record.managementRunId)
+          || [...state.orchestrationClaims.values()].some((claim) =>
+            claim.rootTaskId === record.rootTaskId && claim.state === 'active')) {
+          throw new Error('active PI orchestration claim already exists');
+        }
+        state.orchestrationClaims.set(record.managementRunId, record);
+        return record;
+      },
+      async getByRunId(managementRunId) { return state.orchestrationClaims.get(managementRunId) ?? null; },
+      async getByRootTaskId(rootTaskId) {
+        return [...state.orchestrationClaims.values()]
+          .find((claim) => claim.rootTaskId === rootTaskId && claim.state === 'active') ?? null;
+      },
+      async update(record) {
+        if (!state.orchestrationClaims.has(record.managementRunId)) {
+          throw new Error('PI orchestration claim does not exist');
+        }
+        if (record.state === 'active' && [...state.orchestrationClaims.values()].some((claim) =>
+          claim.managementRunId !== record.managementRunId
+          && claim.rootTaskId === record.rootTaskId
+          && claim.state === 'active')) {
+          throw new Error('active PI orchestration claim already exists');
+        }
+        state.orchestrationClaims.set(record.managementRunId, record);
+        return record;
+      },
+    },
+    scheduling: {
+      async create(record) {
+        if (state.scheduling.has(record.managementRunId)) throw new Error('PI scheduling already exists');
+        state.scheduling.set(record.managementRunId, record);
+        return record;
+      },
+      async get(managementRunId) { return state.scheduling.get(managementRunId) ?? null; },
+      async update(record) {
+        if (!state.scheduling.has(record.managementRunId)) throw new Error('PI scheduling does not exist');
+        state.scheduling.set(record.managementRunId, record);
+        return record;
+      },
+      async listRunnable(now) {
+        return [...state.scheduling.values()]
+          .filter((record) => record.state === 'runnable' && record.eligibleAt <= now)
+          .sort(compareScheduling);
+      },
+    },
+    deadlines: {
+      async put(record) {
+        state.deadlines.set(`${record.managementRunId}:${record.kind}`, record);
+        return record;
+      },
+      async list(managementRunId) {
+        return [...state.deadlines.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((left, right) => left.dueAt - right.dueAt || left.kind.localeCompare(right.kind));
+      },
+    },
+    commandReceipts: {
+      async create(record) {
+        const key = `${record.managementRunId}:${record.idempotencyKey}`;
+        if (state.commandReceipts.has(key)) throw new Error('PI command receipt already exists');
+        state.commandReceipts.set(key, record);
+        return record;
+      },
+      async getByIdempotencyKey(input) {
+        return state.commandReceipts.get(`${input.managementRunId}:${input.idempotencyKey}`) ?? null;
+      },
+      async list(managementRunId) {
+        return [...state.commandReceipts.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+    },
+    attemptAudits: {
+      async append(record) { state.attemptAudits.set(record.id, record); return record; },
+      async list(managementRunId) {
+        return [...state.attemptAudits.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      },
+    },
+    outbox: {
+      async create(record) {
+        if (record.receiptId && [...state.outbox.values()].some((item) => item.receiptId === record.receiptId)) {
+          throw new Error('PI outbox receipt already exists');
+        }
+        state.outbox.set(record.id, record);
+        return record;
+      },
+      async list(managementRunId) {
+        return [...state.outbox.values()]
+          .filter((record) => record.managementRunId === managementRunId)
+          .sort((left, right) => left.eventSequence - right.eventSequence);
+      },
     },
     events: {
       async append(record) {
@@ -145,6 +253,12 @@ function createRepositories(state: ManagementMemoryState): ManagementRepositorie
 function isActive(status: string): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }
-function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), events: new Map(), accessAudits: new Map(), checkpoints: new Map(), invocations: new Map(), collaborationProposals: new Map(), handoffs: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
-function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), events: new Map(state.events), accessAudits: new Map(state.accessAudits), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), collaborationProposals: new Map(state.collaborationProposals), handoffs: new Map(state.handoffs), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
+function compareScheduling(left: PiSchedulingRecord, right: PiSchedulingRecord): number {
+  return right.priority - left.priority
+    || left.eligibleAt - right.eligibleAt
+    || left.enqueuedAt - right.enqueuedAt
+    || left.managementRunId.localeCompare(right.managementRunId);
+}
+function emptyState(): ManagementMemoryState { return { policies: new Map(), reservations: new Map(), runs: new Map(), leases: new Map(), orchestrationClaims: new Map(), scheduling: new Map(), deadlines: new Map(), commandReceipts: new Map(), attemptAudits: new Map(), outbox: new Map(), events: new Map(), accessAudits: new Map(), checkpoints: new Map(), invocations: new Map(), collaborationProposals: new Map(), handoffs: new Map(), attempts: new Map(), shadowDecisions: new Map() }; }
+function cloneState(state: ManagementMemoryState): ManagementMemoryState { return { policies: new Map(state.policies), reservations: new Map(state.reservations), runs: new Map(state.runs), leases: new Map(state.leases), orchestrationClaims: new Map(state.orchestrationClaims), scheduling: new Map(state.scheduling), deadlines: new Map(state.deadlines), commandReceipts: new Map(state.commandReceipts), attemptAudits: new Map(state.attemptAudits), outbox: new Map(state.outbox), events: new Map(state.events), accessAudits: new Map(state.accessAudits), checkpoints: new Map(state.checkpoints), invocations: new Map(state.invocations), collaborationProposals: new Map(state.collaborationProposals), handoffs: new Map(state.handoffs), attempts: new Map(state.attempts), shadowDecisions: new Map(state.shadowDecisions) }; }
 function restoreState(target: ManagementMemoryState, source: ManagementMemoryState): void { for (const key of Object.keys(source) as (keyof ManagementMemoryState)[]) { target[key].clear(); for (const [id, value] of source[key]) target[key].set(id, value as never); } }

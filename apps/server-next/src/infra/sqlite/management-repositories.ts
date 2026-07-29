@@ -77,8 +77,8 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
           (id, team_id, channel_id, root_task_id, root_message_id, status, placement_policy_json,
            active_worker_id, checkpoint_revision, budget_json, created_at, updated_at, completed_at,
            target_agent_id, target_kind, management_phase, main_agent_id, active_agent_id, collaboration_mode,
-           initiated_by_user_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           initiated_by_user_id, orchestration_revision, recovery_state)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.channelId, record.rootTaskId ?? null, record.rootMessageId,
             record.status, json(record.placementPolicy), record.activeWorkerId ?? null, record.checkpointRevision,
             json(record.budget), record.createdAt, record.updatedAt, record.completedAt ?? null,
@@ -87,7 +87,9 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
             'mainAgentId' in record ? record.mainAgentId ?? null : null,
             'activeAgentId' in record ? record.activeAgentId ?? null : null,
             'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent',
-            record.initiatedByUserId ?? null);
+            record.initiatedByUserId ?? null,
+            'orchestrationRevision' in record ? record.orchestrationRevision ?? 0 : 0,
+            'recoveryState' in record ? record.recoveryState ?? 'healthy' : 'healthy');
         return record;
       },
       async getById(id) {
@@ -99,12 +101,15 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
       async update(record) {
         const result = db.prepare(`UPDATE management_runs SET status = ?, placement_policy_json = ?,
           active_worker_id = ?, checkpoint_revision = ?, budget_json = ?, updated_at = ?, completed_at = ?,
-          main_agent_id = ?, active_agent_id = ?, collaboration_mode = ? WHERE id = ?`)
+          main_agent_id = ?, active_agent_id = ?, collaboration_mode = ?, orchestration_revision = ?,
+          recovery_state = ? WHERE id = ?`)
           .run(record.status, json(record.placementPolicy), record.activeWorkerId ?? null,
             record.checkpointRevision, json(record.budget), record.updatedAt, record.completedAt ?? null,
             'mainAgentId' in record ? record.mainAgentId ?? null : null,
             'activeAgentId' in record ? record.activeAgentId ?? null : null,
-            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent', record.id);
+            'collaborationMode' in record ? record.collaborationMode ?? 'single-agent' : 'single-agent',
+            'orchestrationRevision' in record ? record.orchestrationRevision ?? 0 : 0,
+            'recoveryState' in record ? record.recoveryState ?? 'healthy' : 'healthy', record.id);
         if ((result as { changes?: number }).changes === 0) throw new Error('management run does not exist');
         return record;
       },
@@ -131,6 +136,132 @@ export function createSqliteManagementRepositories(db: SqliteDatabase): Manageme
             record.leaseTokenHash, record.leaseFingerprint, record.fencingToken, record.acquiredAt,
             record.heartbeatAt, record.expiresAt, record.releasedAt ?? null);
         return record;
+      },
+    },
+    orchestrationClaims: {
+      async create(record) {
+        db.prepare(`INSERT INTO pi_orchestration_claims
+          (management_run_id, root_task_id, state, revision, created_at, updated_at, closed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.managementRunId, record.rootTaskId, record.state, record.revision,
+            record.createdAt, record.updatedAt, record.closedAt ?? null);
+        return record;
+      },
+      async getByRunId(managementRunId) {
+        return mapOrchestrationClaim(db.prepare(
+          'SELECT * FROM pi_orchestration_claims WHERE management_run_id = ?',
+        ).get(managementRunId));
+      },
+      async getByRootTaskId(rootTaskId) {
+        return mapOrchestrationClaim(db.prepare(
+          `SELECT * FROM pi_orchestration_claims
+           WHERE root_task_id = ? AND state = 'active' LIMIT 1`,
+        ).get(rootTaskId));
+      },
+      async update(record) {
+        const result = db.prepare(`UPDATE pi_orchestration_claims SET state = ?, revision = ?,
+          updated_at = ?, closed_at = ? WHERE management_run_id = ?`)
+          .run(record.state, record.revision, record.updatedAt, record.closedAt ?? null,
+            record.managementRunId);
+        if ((result as { changes?: number }).changes === 0) throw new Error('PI orchestration claim does not exist');
+        return record;
+      },
+    },
+    scheduling: {
+      async create(record) {
+        db.prepare(`INSERT INTO pi_orchestration_scheduling
+          (management_run_id, state, eligible_at, enqueued_at, priority, revision, waiting_reason, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.managementRunId, record.state, record.eligibleAt, record.enqueuedAt,
+            record.priority, record.revision, record.waitingReason ?? null, record.updatedAt);
+        return record;
+      },
+      async get(managementRunId) {
+        return mapScheduling(db.prepare(
+          'SELECT * FROM pi_orchestration_scheduling WHERE management_run_id = ?',
+        ).get(managementRunId));
+      },
+      async update(record) {
+        const result = db.prepare(`UPDATE pi_orchestration_scheduling SET state = ?, eligible_at = ?,
+          enqueued_at = ?, priority = ?, revision = ?, waiting_reason = ?, updated_at = ?
+          WHERE management_run_id = ?`)
+          .run(record.state, record.eligibleAt, record.enqueuedAt, record.priority, record.revision,
+            record.waitingReason ?? null, record.updatedAt, record.managementRunId);
+        if ((result as { changes?: number }).changes === 0) throw new Error('PI scheduling does not exist');
+        return record;
+      },
+      async listRunnable(now) {
+        return db.prepare(`SELECT * FROM pi_orchestration_scheduling
+          WHERE state = 'runnable' AND eligible_at <= ?
+          ORDER BY priority DESC, eligible_at, enqueued_at, management_run_id`)
+          .all(now).map((value) => mapScheduling(value)!);
+      },
+    },
+    deadlines: {
+      async put(record) {
+        db.prepare(`INSERT INTO pi_orchestration_deadlines
+          (management_run_id, kind, due_at, state, revision, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(management_run_id, kind) DO UPDATE SET due_at=excluded.due_at,
+            state=excluded.state, revision=excluded.revision, updated_at=excluded.updated_at`)
+          .run(record.managementRunId, record.kind, record.dueAt, record.state, record.revision,
+            record.createdAt, record.updatedAt);
+        return record;
+      },
+      async list(managementRunId) {
+        return db.prepare(`SELECT * FROM pi_orchestration_deadlines
+          WHERE management_run_id = ? ORDER BY due_at, kind`).all(managementRunId).map(mapDeadline);
+      },
+    },
+    commandReceipts: {
+      async create(record) {
+        db.prepare(`INSERT INTO pi_orchestration_command_receipts
+          (id, management_run_id, idempotency_key, command_hash, outcome, run_revision,
+           scheduling_revision, event_sequence, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.managementRunId, record.idempotencyKey, record.commandHash,
+            record.outcome, record.runRevision, record.schedulingRevision, record.eventSequence,
+            record.createdAt);
+        return record;
+      },
+      async getByIdempotencyKey(input) {
+        return mapCommandReceipt(db.prepare(`SELECT * FROM pi_orchestration_command_receipts
+          WHERE management_run_id = ? AND idempotency_key = ?`)
+          .get(input.managementRunId, input.idempotencyKey));
+      },
+      async list(managementRunId) {
+        return db.prepare(`SELECT * FROM pi_orchestration_command_receipts
+          WHERE management_run_id = ? ORDER BY created_at, id`)
+          .all(managementRunId).map(mapCommandReceipt).filter(isPresent);
+      },
+    },
+    attemptAudits: {
+      async append(record) {
+        db.prepare(`INSERT INTO pi_orchestration_attempt_audits
+          (id, management_run_id, command_name, idempotency_key, worker_id, fencing_token,
+           decision, reason_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.managementRunId, record.commandName, record.idempotencyKey,
+            record.workerId ?? null, record.fencingToken ?? null, record.decision,
+            record.reasonCode ?? null, record.createdAt);
+        return record;
+      },
+      async list(managementRunId) {
+        return db.prepare(`SELECT * FROM pi_orchestration_attempt_audits
+          WHERE management_run_id = ? ORDER BY created_at, id`).all(managementRunId).map(mapAttemptAudit);
+      },
+    },
+    outbox: {
+      async create(record) {
+        db.prepare(`INSERT INTO pi_orchestration_outbox
+          (id, management_run_id, receipt_id, event_sequence, state, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.managementRunId, record.receiptId ?? null, record.eventSequence,
+            record.state, record.createdAt);
+        return record;
+      },
+      async list(managementRunId) {
+        return db.prepare(`SELECT * FROM pi_orchestration_outbox
+          WHERE management_run_id = ? ORDER BY event_sequence, id`).all(managementRunId).map(mapOrchestrationOutbox);
       },
     },
     events: {
@@ -318,6 +449,8 @@ function mapRun(value: unknown): ManagementRunRecord | null {
     status: text(value, 'status') as ManagementRunRecord['status'],
     placementPolicy: parseJson<ManagerPlacementPolicyDto>(text(value, 'placement_policy_json')),
     activeWorkerId: nullableText(value, 'active_worker_id'), checkpointRevision: number(value, 'checkpoint_revision'),
+    orchestrationRevision: number(value, 'orchestration_revision'),
+    recoveryState: text(value, 'recovery_state') as 'healthy' | 'recovery_pending',
     budget: parseJson<ManagementBudgetDto>(text(value, 'budget_json')), createdAt: number(value, 'created_at'),
     updatedAt: number(value, 'updated_at'), completedAt: nullableNumber(value, 'completed_at'),
   };
@@ -354,3 +487,10 @@ function mapProposal(value: unknown): AgentCollaborationProposalRecordDto | null
 function mapHandoff(value: unknown): AgentHandoffRecordDto | null { const resultJson = value ? nullableText(value, 'result_json') : undefined; return value ? { schemaVersion: 1, id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), intent: parseJson(text(value, 'intent_json')), intentHash: text(value, 'intent_hash'), idempotencyKey: text(value, 'idempotency_key'), invocationId: nullableText(value, 'invocation_id'), status: text(value, 'status') as AgentHandoffRecordDto['status'], ...(resultJson ? { result: parseJson(resultJson) } : {}), acceptedAt: nullableNumber(value, 'accepted_at'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at') } : null; }
 function mapAttempt(value: unknown): InvocationDispatchAttemptRecord { return { id: text(value, 'id'), invocationId: text(value, 'invocation_id'), dispatchId: text(value, 'dispatch_id'), attemptNumber: number(value, 'attempt_number'), status: text(value, 'status') as InvocationDispatchAttemptRecord['status'], startedAt: number(value, 'started_at'), completedAt: nullableNumber(value, 'completed_at') }; }
 function mapShadowDecision(value: unknown): ManagementShadowDecisionRecord { return { id: text(value, 'id'), shadowRequestKey: text(value, 'shadow_request_key'), inputHash: text(value, 'input_hash'), objectiveHash: text(value, 'objective_hash'), argumentHash: text(value, 'argument_hash'), target: parseJson(text(value, 'target_json')), toolSequence: parseJson(text(value, 'tool_sequence_json')), diagnostics: parseJson(text(value, 'diagnostics_json')), createdAt: number(value, 'created_at') }; }
+function mapOrchestrationClaim(value: unknown) { return value ? { managementRunId: text(value, 'management_run_id'), rootTaskId: text(value, 'root_task_id'), state: text(value, 'state') as 'active' | 'closed', revision: number(value, 'revision'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'), closedAt: nullableNumber(value, 'closed_at') } : null; }
+function mapScheduling(value: unknown) { return value ? { managementRunId: text(value, 'management_run_id'), state: text(value, 'state') as 'queued' | 'runnable' | 'waiting' | 'recovery_pending', eligibleAt: number(value, 'eligible_at'), enqueuedAt: number(value, 'enqueued_at'), priority: number(value, 'priority'), revision: number(value, 'revision'), waitingReason: nullableText(value, 'waiting_reason'), updatedAt: number(value, 'updated_at') } : null; }
+function mapDeadline(value: unknown) { return { managementRunId: text(value, 'management_run_id'), kind: text(value, 'kind'), dueAt: number(value, 'due_at'), state: text(value, 'state') as 'active' | 'satisfied' | 'cancelled', revision: number(value, 'revision'), createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at') }; }
+function mapCommandReceipt(value: unknown) { return value ? { id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), idempotencyKey: text(value, 'idempotency_key'), commandHash: text(value, 'command_hash'), outcome: text(value, 'outcome') as 'applied' | 'no_op', runRevision: number(value, 'run_revision'), schedulingRevision: number(value, 'scheduling_revision'), eventSequence: number(value, 'event_sequence'), createdAt: number(value, 'created_at') } : null; }
+function mapAttemptAudit(value: unknown) { return { id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), commandName: text(value, 'command_name'), idempotencyKey: text(value, 'idempotency_key'), workerId: nullableText(value, 'worker_id'), fencingToken: nullableNumber(value, 'fencing_token'), decision: text(value, 'decision') as 'applied' | 'rejected', reasonCode: nullableText(value, 'reason_code'), createdAt: number(value, 'created_at') }; }
+function mapOrchestrationOutbox(value: unknown) { return { id: text(value, 'id'), managementRunId: text(value, 'management_run_id'), receiptId: nullableText(value, 'receipt_id'), eventSequence: number(value, 'event_sequence'), state: text(value, 'state') as 'pending' | 'delivered', createdAt: number(value, 'created_at') }; }
+function isPresent<T>(value: T | null): value is T { return value !== null; }

@@ -546,6 +546,8 @@ export function createPromotionGateHandler(
             requireLocalModelCredentials: false,
           },
           checkpointRevision: 0,
+          orchestrationRevision: 1,
+          recoveryState: 'healthy',
           budget: { maxSubtasks: 20, maxDepth: 3, maxExternalInvocations: 20 },
           collaborationMode: 'manager-orchestrated',
           createdAt: now,
@@ -593,17 +595,23 @@ export function createPromotionGateHandler(
         };
         await repos.promotion.sourceRelations.create(sourceRelation);
 
-        // Scheduling intent（最小占位，#894 §10）
-        await repos.promotion.schedulingIntents.create({
-          id: ids.nextId(),
-          teamId,
+        // #924 canonical Server-owned orchestration claim 与可重建 scheduling facts。
+        await repos.management.orchestrationClaims.create({
           managementRunId,
-          intent: 'queue',
-          profileHint: null,
-          deadline: null,
-          attempt: 0,
-          state: 'pending',
+          rootTaskId: taskId,
+          state: 'active',
+          revision: 1,
           createdAt: now,
+          updatedAt: now,
+        });
+        await repos.management.scheduling.create({
+          managementRunId,
+          state: 'runnable',
+          eligibleAt: now,
+          enqueuedAt: now,
+          priority: 0,
+          revision: 1,
+          updatedAt: now,
         });
 
         // 先持久化真实 management event，再引用其 stream/sequence（禁止悬空 eventRef）

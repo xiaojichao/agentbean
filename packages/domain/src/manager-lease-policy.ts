@@ -46,7 +46,12 @@ export type ManagerLeaseAcquireRejection =
 export type ManagerLeaseAcquireDecision =
   | {
       readonly kind: 'granted';
-      readonly reason: 'initial' | 'expired-same-host' | 'expired-cross-host' | 'released-same-host';
+      readonly reason:
+        | 'initial'
+        | 'expired-same-host'
+        | 'expired-cross-host'
+        | 'released-same-host'
+        | 'released-cross-host';
       readonly lease: ManagerLeaseRecord;
     }
   | { readonly kind: 'existing'; readonly lease: ManagerLeaseRecord }
@@ -157,6 +162,10 @@ function sameHost(left: ManagerLeaseHost, right: ManagerLeaseHost): boolean {
   return left.deviceId === right.deviceId;
 }
 
+function isServerHost(host: ManagerLeaseHost): host is Extract<ManagerLeaseHost, { readonly kind: 'server' }> {
+  return 'workerPoolId' in host && host.kind === 'server';
+}
+
 function normalizeHost(host: ManagerLeaseHost): Extract<ManagerLeaseHost, { readonly kind: 'device' }> | Extract<ManagerLeaseHost, { readonly kind: 'server' }> {
   return 'workerPoolId' in host
     ? { kind: 'server', workerPoolId: host.workerPoolId, profileId: host.profileId }
@@ -230,7 +239,11 @@ export function evaluateManagerLeaseAcquire(
   if (status.kind !== 'expired' && status.kind !== 'released') {
     return { kind: 'rejected', reason: 'invalid-lease-state' };
   }
-  if (status.kind === 'released' && !sameHost(current.host, input.host)) {
+  const acquiringOnSameHost = sameHost(current.host, input.host);
+  const releasedServerDriverCanMove = status.kind === 'released'
+    && isServerHost(current.host)
+    && isServerHost(input.host);
+  if (status.kind === 'released' && !acquiringOnSameHost && !releasedServerDriverCanMove) {
     return { kind: 'rejected', reason: 'cross-host-recovery-not-supported' };
   }
   if (current.fencingToken === Number.MAX_SAFE_INTEGER) {
@@ -239,8 +252,8 @@ export function evaluateManagerLeaseAcquire(
   return {
     kind: 'granted',
     reason: status.kind === 'expired'
-      ? (sameHost(current.host, input.host) ? 'expired-same-host' : 'expired-cross-host')
-      : 'released-same-host',
+      ? (acquiringOnSameHost ? 'expired-same-host' : 'expired-cross-host')
+      : (acquiringOnSameHost ? 'released-same-host' : 'released-cross-host'),
     lease: grantedLease(input, current.fencingToken + 1),
   };
 }

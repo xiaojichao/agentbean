@@ -240,6 +240,32 @@ describe('Phase 1 Manager lease policy', () => {
     });
   });
 
+  test('released Server PI driver lease can move to another worker pool with a higher fence', () => {
+    const first = evaluateManagerLeaseAcquire(acquireInput(undefined, {
+      workerId: 'server-worker-1',
+      host: { kind: 'server', workerPoolId: 'pool-1', profileId: 'profile-1' },
+    }));
+    if (first.kind !== 'granted') throw new Error('expected first server lease');
+    const released = evaluateManagerLeaseRelease({
+      lease: first.lease,
+      proof: proof(first.lease),
+      now: 130,
+    });
+    if (released.kind !== 'released') throw new Error('expected release');
+
+    expect(evaluateManagerLeaseAcquire(acquireInput(released.lease, {
+      workerId: 'server-worker-2',
+      host: { kind: 'server', workerPoolId: 'pool-2', profileId: 'profile-2' },
+      leaseTokenHash: 'hash-token-2',
+      leaseFingerprint: 'fingerprint-2',
+      now: 131,
+    }))).toMatchObject({
+      kind: 'granted',
+      reason: 'released-cross-host',
+      lease: { fencingToken: 2, host: { kind: 'server', workerPoolId: 'pool-2' } },
+    });
+  });
+
   test('invalid duration, clock regression, and fencing overflow are rejected', () => {
     for (const ttlMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(evaluateManagerLeaseAcquire(acquireInput(undefined, { ttlMs })))
