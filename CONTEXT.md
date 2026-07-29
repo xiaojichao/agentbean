@@ -99,8 +99,8 @@ _Avoid_: 所有 command 强制 Message Freshness basis、REST path 充当领域�
 
 ## Idempotency scope
 
-Server 以 tenant/scope、command type、目标 lineage/aggregate 与逻辑 authority subject 为同一 key 划定的去重边界；它绑定业务命令而非网络请求或短命 worker。
-_Avoid_: 全系统裸 key、worker-local cache、lease holder identity、随机重试 key、客户端自行选择 scope。
+Server 以 tenant/scope、command type、目标 lineage/aggregate 与逻辑 authority subject 为同一 key 划定的去重边界；每个可 replay command version 的最小 identity locator/extractor 与 canonical hash 规则必须和对应 receipt/tombstone 同寿命保留，使 schema/handler 退役后仍能定位原结果。它绑定业务命令而非网络请求或短命 worker。
+_Avoid_: 只保留 hash 不保留寻址规则、全系统裸 key、worker-local cache、lease holder identity、随机重试 key、客户端自行选择 scope。
 
 ## Command receipt
 
