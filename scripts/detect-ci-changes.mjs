@@ -28,9 +28,11 @@ export const BROWSER_SMOKE_PATH_RE =
 export const PUBLISH_PATH_RE =
   /^(?:apps\/daemon-next\/|packages\/(?:contracts|pi-management-runtime)\/|scripts\/prepare-agentbean-next-daemon-release|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
 
-/** Paths that require Railway production deploy on main. */
+/** Paths that require Railway production deploy on main.
+ * Includes web-next: production server hosts the Web UI and railway build runs build:web-next.
+ */
 export const DEPLOY_PATH_RE =
-  /^(?:apps\/server-next\/|packages\/(?:contracts|domain|pi-management-runtime)\/|scripts\/(?:check-agentbean-next-readiness|check-agentbean-next-railway-preflight|audit-agentbean-next-cutover|smoke-agentbean-next-.*)\.mjs$|railway\.json$|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
+  /^(?:apps\/(?:server-next|web-next)\/|packages\/(?:contracts|domain|pi-management-runtime)\/|scripts\/(?:check-agentbean-next-readiness|check-agentbean-next-railway-preflight|audit-agentbean-next-cutover|smoke-agentbean-next-.*)\.mjs$|railway\.json$|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
 
 export function normalizePath(filePath) {
   return String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');

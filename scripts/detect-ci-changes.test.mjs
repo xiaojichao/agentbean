@@ -36,11 +36,11 @@ test('server-only changes validate, browser-smoke, and deploy without npm publis
   assert.equal(result.should_deploy, true);
 });
 
-test('web-next changes require browser smoke', () => {
+test('web-next changes require browser smoke and production deploy', () => {
   const result = classifyChangedFiles(['apps/web-next/app/page.tsx']);
   assert.equal(result.should_validate, true);
   assert.equal(result.should_browser_smoke, true);
-  assert.equal(result.should_deploy, false);
+  assert.equal(result.should_deploy, true);
 });
 
 test('workflow changes force full validate publish and deploy surfaces', () => {
