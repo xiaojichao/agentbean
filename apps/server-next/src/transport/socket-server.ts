@@ -43,6 +43,8 @@ export interface SocketServerLike {
 
 export interface ServerNextRealtime {
   emitDispatchStatus(dispatch: unknown): void;
+  /** #921 outbox 投递：通知能看到该 channel 的订阅者「有新消息，去 fetch」（轻量通知，无正文）。 */
+  emitMessageDelivered(input: { teamId: string; channelId: string; messageId: string }): Promise<void>;
   dispatchRequest(dispatchId: string): Promise<void>;
   refreshAgents(teamId: string): Promise<void>;
   scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
@@ -930,6 +932,9 @@ export function attachServerNextNamespaces(
     emitDispatchStatus(dispatch) {
       emitDispatchStatus(webSubscribers, dispatch);
     },
+    async emitMessageDelivered(delivery) {
+      await emitDeliveredToSubscribers(webSubscribers, app, delivery);
+    },
     async dispatchRequest(dispatchId) {
       const result = await app.getDispatchRequest({ dispatchId });
       if (!result.ok) throw new Error(`MANAGEMENT_DISPATCH_REQUEST_${result.error}`);
@@ -1210,6 +1215,30 @@ async function emitChannelMessageSubscribers(
       if (dms.ok && dms.dms.some((dm) => dm.channel.id === message.channelId)) {
         subscriber.socket.emit?.(WEB_EVENTS.channel.message, message);
       }
+    }
+  }
+}
+
+/** #921 通知能看到该 channel 的订阅者「有新消息，去 fetch」（轻量通知，无正文）。 */
+async function emitDeliveredToSubscribers(
+  subscribers: Set<WebSocketSubscription>,
+  app: ServerNextUseCases,
+  delivery: { teamId: string; channelId: string; messageId: string },
+): Promise<void> {
+  for (const subscriber of subscribers) {
+    if (subscriber.channels?.teamId !== delivery.teamId) continue;
+    const channels = await app.listChannels(subscriber.channels);
+    const visibleChannelIds = new Set(channels.ok ? channels.channels.map((c) => c.id) : []);
+    let canSee = visibleChannelIds.has(delivery.channelId);
+    if (!canSee) {
+      const dms = await app.listDirectMessages(subscriber.channels);
+      canSee = dms.ok && dms.dms.some((dm) => dm.channel.id === delivery.channelId);
+    }
+    if (canSee) {
+      subscriber.socket.emit?.(WEB_EVENTS.message.messageTracer.delivered, {
+        messageId: delivery.messageId,
+        channelId: delivery.channelId,
+      });
     }
   }
 }
