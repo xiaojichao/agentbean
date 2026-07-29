@@ -556,10 +556,23 @@ async function isBasisMessageChanged(
   return basis == null || (basis.updatedAt != null && basis.updatedAt > sinceIssuedAt);
 }
 
+/** #893 §4：basis Task 是否自发送者上次 check（readCandidate.issuedAt）后被编辑或删除。 */
+async function isBasisTaskChanged(
+  tx: Parameters<Parameters<ChannelCoordinationUnitOfWork['run']>[0]>[0],
+  basisTaskId: ID | undefined,
+  sinceIssuedAt: UnixMs,
+): Promise<boolean> {
+  if (!basisTaskId) return false;
+  const basis = await tx.tasks.getById(basisTaskId);
+  // 删除（getById 返回 null）或编辑（updatedAt > 上次 check）→ basis 已变。
+  // TaskDto.updatedAt 虽必填，仍保留 != null 守卫以与 isBasisMessageChanged 对称、防御未来可选化。
+  return basis == null || (basis.updatedAt != null && basis.updatedAt > sinceIssuedAt);
+}
+
 /** freshness 校验：仅 readCandidate gate（#893 §4 relevance）。返回非 null = hold/reject。 */
 async function checkFreshnessRequest(
   tx: Parameters<Parameters<ChannelCoordinationUnitOfWork['run']>[0]>[0],
-  input: { readonly channelId: ID; readonly threadId?: ID; readonly freshnessBasis: { readonly readCandidate?: ReadCandidateTokenV1; readonly target: MessageTargetRefV1; readonly basisMessageId?: ID } },
+  input: { readonly channelId: ID; readonly threadId?: ID; readonly freshnessBasis: { readonly readCandidate?: ReadCandidateTokenV1; readonly target: MessageTargetRefV1; readonly basisMessageId?: ID; readonly basisTaskId?: ID } },
   senderId: ID,
   secret: string,
   clock: { now(): UnixMs },
@@ -591,6 +604,15 @@ async function checkFreshnessRequest(
     });
     return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
       heldTarget: input.freshnessBasis.target, heldReason: 'basis_message_changed', newReadCandidate,
+    });
+  }
+  // #893 §4：basis Task 被编辑或删除同样始终 relevant——即使无未读，basis 变了也 hold。
+  if (await isBasisTaskChanged(tx, input.freshnessBasis.basisTaskId, rc.issuedAt)) {
+    const newReadCandidate = issueReadCandidate({
+      recipientId: senderId, target: rc.target, targetSeq: currentMax + 1, issuedAt: now, secret,
+    });
+    return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
+      heldTarget: input.freshnessBasis.target, heldReason: 'basis_task_changed', newReadCandidate,
     });
   }
   // exclusive 语义：currentMax >= targetSeq 表示有新消息到达（target_seq >= 下一未读位）。
