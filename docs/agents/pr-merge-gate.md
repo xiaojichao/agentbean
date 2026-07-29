@@ -26,10 +26,23 @@ npm run check:pr-merge-readiness -- <PR号> --json
 
 - PR 是 Draft、存在冲突或已经关闭；
 - 最新提交的 CI/check 尚未完成或失败；
-- Codex Review 尚未覆盖最新提交；
+- Codex Review 尚未覆盖最新提交（见下方文档豁免）；
 - 仍有 requested reviewer、blocking change request 或未解决 Review thread。
 
-该命令不会自行合并 PR。修复 Review finding 并 push 新提交后，必须重新触发 Review；旧提交上的 Review 不满足门禁。
+该命令不会自行合并 PR。修复 **代码** Review finding 并 push 新提交后，必须重新触发 Review；仅文档路径的后续提交可沿用上次 Codex Review。
+
+### Codex Review 文档豁免
+
+合并门禁对 `chatgpt-codex-connector` 的 head 覆盖要求支持路径豁免，避免「只改 CHANGELOG / ADR 也再等 10–30 分钟」：
+
+- **整 PR 仅为文档路径**（`docs/**`、`CONTEXT.md`、`CHANGELOG.md`、`README.md`、`AGENTS.md` / `Agents.md`、`.github/**/*.md`）：不要求 Codex Review。
+- **上次 Codex Review 之后的 delta 仅为上述路径**：不要求重新 Review（`CODEX_REVIEW_STALE` 豁免）。
+- **delta 或全量文件列表无法完整取得**（分页截断、compare 失败）：失败关闭，仍要求覆盖最新提交。
+- **任何非文档代码 / workflow / 脚本改动**：仍要求 Codex 覆盖最新 head。
+
+流程建议：保持 Draft 直到 CI 绿 → 一次 `gh pr ready` 触发 Review → 把 finding 与文档收尾攒成尽量少的 push → 再跑合并门禁。不要在每个小 commit 后重复 `@codex review`。
+
+Cloud 侧建议（需在 [Codex GitHub settings](https://chatgpt.com/codex/cloud/settings/general) 人工确认）：自动 Review 优先绑定 `ready_for_review`，避免每个 `synchronize` push 都全量重评。
 
 前置门禁同样是只读命令：它要求 PR 仍是 Draft、当前 Head 的 CI/check 已全部通过且查询结果完整，但不要求 Codex Review。CI 仍在运行、失败或缺失时保持 Draft，先修复再重跑，避免 Review 结果在新 push 后立刻过期。
 
