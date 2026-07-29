@@ -104,7 +104,7 @@ _Avoid_: 全系统裸 key、worker-local cache、lease holder identity、随机�
 
 ## Command receipt
 
-Server 为一条幂等 command 持久保存的最终结果事实，绑定 canonical command hash、`applied` 或 `no_op` outcome、提交后的 revisions、event references 与 commit position；同 key 同 hash 的 replay 返回同一 receipt，不重新执行。
+Server 为一条幂等 command 持久保存的最终结果事实，绑定 canonical command hash、不可变的 `applied` 或 `no_op` outcome、提交后的 revisions、event references 与 commit position；同 key 同 hash 的 replay 返回同一 receipt，不重新执行，外层 response 使用 `replayed` disposition 但不改写 receipt outcome。
 _Avoid_: HTTP response cache、domain event、attempt audit、每次重试新结果、用当前 schema 改写旧结果。
 
 ## Idempotency tombstone
@@ -114,7 +114,7 @@ _Avoid_: 只保留 applied、可重新执行的过期缓存、永久保存原文
 
 ## Command outcome
 
-具名 command 的结构化结果分类，固定区分 `applied`、`no_op`、`replayed`、`freshness_hold`、`conflict`、`rejected`、`temporarily_unavailable` 与 `outcome_unknown`，并携带稳定 code 与 retry directive。
+具名 command response 的结构化结果分类，固定区分 `applied`、`no_op`、`replayed`、`freshness_hold`、`conflict`、`rejected`、`temporarily_unavailable` 与 `outcome_unknown`，并携带稳定 code 与 retry directive；`replayed` 只表示本次 response 命中既有 receipt，嵌套 receipt 仍保留首次 `applied` 或 `no_op` outcome。
 _Avoid_: 只靠 HTTP status、异常字符串、所有失败可重试、hold 等同 conflict、未知结果等同未提交。
 
 ## Outcome unknown
@@ -139,8 +139,8 @@ _Avoid_: 普通 Query 自动已读、候选签发即 ack、domain event、跳页
 
 ## Causation reference
 
-一条 command 唯一的直接原因引用，绑定来源 kind、stable identity、revision/sequence、scope 与适用 hash；没有上游领域事实的根 command 引用 Server 在认证入口签发、先于 command identity 存在的 external action/request fact，避免自引用。它解释为何此刻执行，但不授予读取或执行权限。
-_Avoid_: 多个直接原因、自然语言理由、authority token、command 自引用、复制完整来源 payload、system triggered 无权威事实。
+一条 command 唯一的直接原因引用，绑定来源 kind、stable identity、revision/sequence、scope 与适用 hash；没有上游领域事实的根 command 引用 Server 根据 idempotency scope/key 唯一创建并跨 transport retry 复用、先于 command identity 存在的 external action/request fact，避免自引用与 retry hash 漂移。它解释为何此刻执行，但不授予读取或执行权限。
+_Avoid_: 每次 retry 新建根原因、多个直接原因、自然语言理由、authority token、command 自引用、复制完整来源 payload、system triggered 无权威事实。
 
 ## Source reference
 
