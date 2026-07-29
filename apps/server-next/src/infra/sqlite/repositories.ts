@@ -46,6 +46,7 @@ import { createSqliteSystemUserMemoryRepositories } from './system-user-memory-r
 import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
 import { createSqliteAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
 import { createSqliteMessageTracerRepositories } from './message-tracer-repositories.js';
+import { createSqlitePromotionGateRepositories } from './promotion-gate-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -217,6 +218,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0057_message_tracer_outbox.sql');
   // #921 切片 C-wire：inbox_items.mentions_recipient（频道主线 freshness relevance）。
   applyMigration(db, 'team/0058_inbox_mentions_recipient.sql');
+  // #922 Promotion gate：source relation / scheduling / outbox / receipt / tombstone。
+  applyMigration(db, 'team/0059_promotion_gate.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -460,6 +463,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const projectReferenceSets = createSqliteProjectReferenceSetRepository(teamDb);
   const projectDocumentInputSetResults = createSqliteProjectDocumentInputSetResultRepository(teamDb);
   const messageTracer = createSqliteMessageTracerRepositories(teamDb);
+  const promotion = createSqlitePromotionGateRepositories(teamDb);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -515,6 +519,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           coordination: taskCoordination,
           management: managementRepositories,
           channels: repositories.channels,
+          promotion,
         })),
     ),
     memory,
