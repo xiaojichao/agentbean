@@ -7,6 +7,7 @@ import type {
 } from '../../../../packages/contracts/src/index.js';
 import type { ArtifactRepository, ChannelRepository, MessageRepository, TaskRepository } from './repositories.js';
 import type { ProjectReferenceSetRepository } from './project-repositories.js';
+import type { MessageInboxRepository, CommandReceiptRepository } from './message-tracer-repositories.js';
 
 export interface ChannelCoordinationJobRepository {
   create(input: ChannelCoordinationJobRecord): Promise<ChannelCoordinationJobRecord>;
@@ -59,6 +60,13 @@ export interface ChannelCoordinationTransactionRepositories extends ChannelCoord
   readonly tasks: TaskRepository;
   readonly channels: ChannelRepository;
   readonly projectReferenceSets: ProjectReferenceSetRepository;
+  /**
+   * #921 Message tracer 持久化：inbox 投影、Read boundary、receipt 与 tombstone。
+   * 与 messages 共享同一 channel coordination UoW 单 teamDb 事务，使 send-message 能原子提交
+   * Message + InboxItem + receipt + tombstone（新路径默认不触碰 legacy 入口，见 #921 切片 D）。
+   */
+  readonly inbox: MessageInboxRepository;
+  readonly commandReceipts: CommandReceiptRepository;
 }
 
 export interface ChannelCoordinationUnitOfWork {

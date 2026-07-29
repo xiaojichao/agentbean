@@ -51,6 +51,12 @@ import {
   type ChannelCoordinationRepositories,
 } from '../../application/channel-coordination-unit-of-work.js';
 import type { ChannelCoordinationDecisionRecord, ChannelCoordinationJobRecord } from '../../../../../packages/contracts/src/index.js';
+import {
+  cloneMessageTracerMemoryState,
+  createInMemoryMessageTracerRepositories,
+  createMessageTracerMemoryState,
+  restoreMessageTracerMemoryState,
+} from './message-tracer-repositories.js';
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
@@ -137,6 +143,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const reactions = new Map<string, { id: string; messageId: string; userId: string; emoji: string; createdAt: number }>();
   const savedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
   const pinnedMessages = new Map<string, { id: string; messageId: string; userId: string; teamId: string; channelId: string; createdAt: number }>();
+  // #921 Message tracer 内存投影。
+  const messageTracerState = createMessageTracerMemoryState();
+  const messageTracer = createInMemoryMessageTracerRepositories(messageTracerState);
 
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -315,6 +324,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const referenceSelectionSnapshot = new Map(projectReferenceSelections);
         const referenceItemSnapshot = new Map(projectReferenceItems);
         const referenceMutationSnapshot = new Map(projectReferenceSetMutations);
+        const messageTracerSnapshot = cloneMessageTracerMemoryState(messageTracerState);
         try {
           return await operation({
             messages: repositories.messages,
@@ -324,6 +334,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             tasks: repositories.tasks,
             channels: repositories.channels,
             projectReferenceSets: repositories.projectReferenceSets,
+            inbox: messageTracer.inbox,
+            commandReceipts: messageTracer.commandReceipts,
           });
         } catch (error) {
           messages.clear();
@@ -340,6 +352,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           restoreMap(projectReferenceSelections, referenceSelectionSnapshot);
           restoreMap(projectReferenceItems, referenceItemSnapshot);
           restoreMap(projectReferenceSetMutations, referenceMutationSnapshot);
+          restoreMessageTracerMemoryState(messageTracerState, messageTracerSnapshot);
           throw error;
         }
       })),

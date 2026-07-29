@@ -45,6 +45,7 @@ import { createSqlitePiProviderPersistence } from './pi-provider-repositories.js
 import { createSqliteSystemUserMemoryRepositories } from './system-user-memory-repositories.js';
 import { createSqliteAgentExposurePersistence } from './agent-exposure-repositories.js';
 import { createSqliteAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
+import { createSqliteMessageTracerRepositories } from './message-tracer-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -210,6 +211,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   applyMigration(db, 'team/0054_project_reference_sets.sql');
   applyMigration(db, 'team/0055_project_document_input_set_results.sql');
+  // #921 切片 B：Message tracer 的 Inbox 投影 / Read boundary / Command receipt / 幂等 tombstone。
+  applyMigration(db, 'team/0056_message_tracer_inbox_receipts.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -452,6 +455,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const managementMemoryContext = new AsyncLocalStorage<ManagementMemoryTransactionRepositories>();
   const projectReferenceSets = createSqliteProjectReferenceSetRepository(teamDb);
   const projectDocumentInputSetResults = createSqliteProjectDocumentInputSetResultRepository(teamDb);
+  const messageTracer = createSqliteMessageTracerRepositories(teamDb);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -491,6 +495,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         tasks: repositories.tasks,
         channels: repositories.channels,
         projectReferenceSets,
+        inbox: messageTracer.inbox,
+        commandReceipts: messageTracer.commandReceipts,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
