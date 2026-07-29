@@ -336,6 +336,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             projectReferenceSets: repositories.projectReferenceSets,
             inbox: messageTracer.inbox,
             commandReceipts: messageTracer.commandReceipts,
+            outbox: messageTracer.outbox,
           });
         } catch (error) {
           messages.clear();

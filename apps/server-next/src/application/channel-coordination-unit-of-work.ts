@@ -7,7 +7,7 @@ import type {
 } from '../../../../packages/contracts/src/index.js';
 import type { ArtifactRepository, ChannelRepository, MessageRepository, TaskRepository } from './repositories.js';
 import type { ProjectReferenceSetRepository } from './project-repositories.js';
-import type { MessageInboxRepository, CommandReceiptRepository } from './message-tracer-repositories.js';
+import type { MessageInboxRepository, CommandReceiptRepository, MessageTracerOutboxRepository } from './message-tracer-repositories.js';
 
 export interface ChannelCoordinationJobRepository {
   create(input: ChannelCoordinationJobRecord): Promise<ChannelCoordinationJobRecord>;
@@ -67,6 +67,8 @@ export interface ChannelCoordinationTransactionRepositories extends ChannelCoord
    */
   readonly inbox: MessageInboxRepository;
   readonly commandReceipts: CommandReceiptRepository;
+  /** #921 持久 outbox：send-message 单事务原子入队的投递事件（见 MessageTracerOutboxRepository）。 */
+  readonly outbox: MessageTracerOutboxRepository;
 }
 
 export interface ChannelCoordinationUnitOfWork {

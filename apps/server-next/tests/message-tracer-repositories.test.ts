@@ -7,6 +7,8 @@ import type {
   IdempotencyTombstoneRecord,
   InboxItemRecord,
   MessageInboxRepository,
+  MessageTracerOutboxRecord,
+  MessageTracerOutboxRepository,
 } from '../src/application/message-tracer-repositories.js';
 import { applyTeamMigrations, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
 import { createSqliteMessageTracerRepositories } from '../src/infra/sqlite/message-tracer-repositories.js';
@@ -26,6 +28,7 @@ const Database = createRequire(import.meta.url)('better-sqlite3') as DatabaseCon
 interface Repos {
   readonly inbox: MessageInboxRepository;
   readonly commandReceipts: CommandReceiptRepository;
+  readonly outbox: MessageTracerOutboxRepository;
 }
 
 let seq = 0;
@@ -74,6 +77,23 @@ function tombstone(overrides: Partial<IdempotencyTombstoneRecord> & { id: string
     receiptId: 'receipt-1',
     outcome: 'applied',
     resultAvailable: false,
+    createdAt: 1000,
+    ...overrides,
+  };
+}
+
+function outboxRecord(overrides: Partial<MessageTracerOutboxRecord> & { id: string; receiptId: string }): MessageTracerOutboxRecord {
+  return {
+    teamId: 'team-1',
+    commandName: 'send-message',
+    eventKind: 'message-delivered',
+    targetKind: 'channel-mainline',
+    channelId: 'c-1',
+    threadId: null,
+    audienceRecipientIds: ['r-1', 'r-2'],
+    payloadJson: '{"messageId":"m-1"}',
+    deliveredAt: null,
+    attempts: 0,
     createdAt: 1000,
     ...overrides,
   };
@@ -208,6 +228,26 @@ function runMessageTracerRepositorySuite(label: string, makeRepos: () => Repos):
       await expect(commandReceipts.createTombstone(tombstone({ id: uniqueId('t'), idempotencyKey: 'k-1', commandHash: 'hash-A' })))
         .rejects.toThrow();
     });
+
+    test('outbox 入队 + 幂等(同 receipt+eventKind 不重复) + listPending/markDelivered/incrementAttempts', async () => {
+      const { outbox } = makeRepos();
+      await outbox.enqueue(outboxRecord({ id: uniqueId('o'), receiptId: 'rcpt-1', createdAt: 2000 }));
+      await outbox.enqueue(outboxRecord({ id: uniqueId('o'), receiptId: 'rcpt-2', createdAt: 1000 }));
+      // 同 (receiptId, eventKind) 幂等：command replay 不重复入队
+      await expect(outbox.enqueue(outboxRecord({ id: uniqueId('o'), receiptId: 'rcpt-1', createdAt: 3000 })))
+        .rejects.toThrow();
+
+      // listPending：未投递按 createdAt 升序
+      const pending = await outbox.listPending({ limit: 10 });
+      expect(pending.map((r) => r.receiptId)).toEqual(['rcpt-2', 'rcpt-1']);
+
+      // incrementAttempts + markDelivered
+      await outbox.incrementAttempts({ id: pending[0].id });
+      await outbox.markDelivered({ id: pending[0].id, now: 9000 });
+      const remaining = await outbox.listPending({ limit: 10 });
+      expect(remaining.map((r) => r.receiptId)).toEqual(['rcpt-1']);
+      expect(remaining.length).toBe(1);
+    });
   });
 }
 
@@ -216,7 +256,7 @@ function makeSqliteRepos(): Repos {
   const db = new Database(':memory:');
   applyTeamMigrations(db);
   const repos = createSqliteMessageTracerRepositories(db);
-  return { inbox: repos.inbox, commandReceipts: repos.commandReceipts };
+  return { inbox: repos.inbox, commandReceipts: repos.commandReceipts, outbox: repos.outbox };
 }
 
 runMessageTracerRepositorySuite('SQLite message-tracer repositories', () => makeSqliteRepos());
@@ -241,5 +281,5 @@ describe('SQLite message-tracer schema (migration team/0056)', () => {
 runMessageTracerRepositorySuite('内存 message-tracer repositories', () => {
   const state = createMessageTracerMemoryState();
   const repos = createInMemoryMessageTracerRepositories(state);
-  return { inbox: repos.inbox, commandReceipts: repos.commandReceipts };
+  return { inbox: repos.inbox, commandReceipts: repos.commandReceipts, outbox: repos.outbox };
 });

@@ -5,6 +5,8 @@ import type {
   InboxItemRecord,
   InboxReadBoundaryRecord,
   MessageInboxRepository,
+  MessageTracerOutboxRecord,
+  MessageTracerOutboxRepository,
   MessageTracerRepositories,
 } from '../../application/message-tracer-repositories.js';
 
@@ -16,6 +18,7 @@ export interface MessageTracerMemoryState {
   readonly inboxReadBoundaries: Map<string, InboxReadBoundaryRecord>;
   readonly commandReceipts: Map<string, CommandReceiptRecord>;
   readonly idempotencyTombstones: Map<string, IdempotencyTombstoneRecord>;
+  readonly outbox: Map<string, MessageTracerOutboxRecord>;
 }
 
 export function createMessageTracerMemoryState(): MessageTracerMemoryState {
@@ -24,6 +27,7 @@ export function createMessageTracerMemoryState(): MessageTracerMemoryState {
     inboxReadBoundaries: new Map(),
     commandReceipts: new Map(),
     idempotencyTombstones: new Map(),
+    outbox: new Map(),
   };
 }
 
@@ -33,6 +37,7 @@ export function cloneMessageTracerMemoryState(state: MessageTracerMemoryState): 
     inboxReadBoundaries: new Map(state.inboxReadBoundaries),
     commandReceipts: new Map(state.commandReceipts),
     idempotencyTombstones: new Map(state.idempotencyTombstones),
+    outbox: new Map(state.outbox),
   };
 }
 
@@ -48,6 +53,8 @@ export function restoreMessageTracerMemoryState(
   for (const [id, record] of snapshot.commandReceipts) state.commandReceipts.set(id, record);
   state.idempotencyTombstones.clear();
   for (const [id, record] of snapshot.idempotencyTombstones) state.idempotencyTombstones.set(id, record);
+  state.outbox.clear();
+  for (const [id, record] of snapshot.outbox) state.outbox.set(id, record);
 }
 
 function threadKey(threadId: string | null): string {
@@ -168,5 +175,34 @@ export function createInMemoryMessageTracerRepositories(
     },
   };
 
-  return { inbox, commandReceipts };
+  const outbox: MessageTracerOutboxRepository = {
+    async enqueue(input) {
+      for (const existing of state.outbox.values()) {
+        // (receiptId, eventKind) 幂等：command replay 不重复入队（对齐 SQLite 唯一索引）。
+        if (existing.receiptId === input.receiptId && existing.eventKind === input.eventKind) {
+          throw new Error(
+            `MESSAGE_TRACER_UNIQUE: outbox receipt_id=${input.receiptId} event_kind=${input.eventKind}`,
+          );
+        }
+      }
+      state.outbox.set(input.id, input);
+      return input;
+    },
+    async listPending(input) {
+      return Array.from(state.outbox.values())
+        .filter((row) => row.deliveredAt === null)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .slice(0, input.limit);
+    },
+    async markDelivered(input) {
+      const existing = state.outbox.get(input.id);
+      if (existing) state.outbox.set(input.id, { ...existing, deliveredAt: input.now });
+    },
+    async incrementAttempts(input) {
+      const existing = state.outbox.get(input.id);
+      if (existing) state.outbox.set(input.id, { ...existing, attempts: existing.attempts + 1 });
+    },
+  };
+
+  return { inbox, commandReceipts, outbox };
 }
