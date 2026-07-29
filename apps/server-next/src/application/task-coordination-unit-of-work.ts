@@ -8,6 +8,7 @@ import type {
   WorkspaceRunRepository,
 } from './repositories.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
+import type { PromotionGateRepositories } from './promotion-gate-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -18,6 +19,12 @@ export interface TaskCoordinationTransactionRepositories {
   readonly coordination: TaskCoordinationRepositories;
   readonly management: ManagementRepositories;
   readonly channels: ChannelRepository;
+  /**
+   * #922 Promotion gate：source relation / scheduling intent / outbox / receipt。
+   * 挂在本 UoW 上，使 `promote-to-task` 能在单 teamDb 事务里原子提交
+   * root Task + source relation + run + event + audit + scheduling + outbox + receipt/tombstone（#894 §10）。
+   */
+  readonly promotion: PromotionGateRepositories;
 }
 
 export interface TaskCoordinationUnitOfWork {

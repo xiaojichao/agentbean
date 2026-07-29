@@ -57,6 +57,12 @@ import {
   createMessageTracerMemoryState,
   restoreMessageTracerMemoryState,
 } from './message-tracer-repositories.js';
+import {
+  clonePromotionGateMemoryState,
+  createInMemoryPromotionGateRepositories,
+  createPromotionGateMemoryState,
+  restorePromotionGateMemoryState,
+} from './promotion-gate-repositories.js';
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
@@ -146,6 +152,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   // #921 Message tracer 内存投影。
   const messageTracerState = createMessageTracerMemoryState();
   const messageTracer = createInMemoryMessageTracerRepositories(messageTracerState);
+  // #922 Promotion gate 内存投影。
+  const promotionState = createPromotionGateMemoryState();
+  const promotion = createInMemoryPromotionGateRepositories(promotionState);
 
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -362,6 +371,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       management.unitOfWork.run(async (managementRepositories) => {
         const taskSnapshot = new Map(tasks);
         const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
+        const promotionSnapshot = clonePromotionGateMemoryState(promotionState);
         try {
           return await operation({
             tasks: repositories.tasks,
@@ -372,11 +382,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             coordination: taskCoordination,
             management: managementRepositories,
             channels: repositories.channels,
+            promotion,
           });
         } catch (error) {
           tasks.clear();
           for (const [id, task] of taskSnapshot) tasks.set(id, task);
           restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
+          restorePromotionGateMemoryState(promotionState, promotionSnapshot);
           throw error;
         }
       }),
