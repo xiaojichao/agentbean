@@ -109,8 +109,8 @@ _Avoid_: HTTP response cache、domain event、attempt audit、每次重试新结
 
 ## Idempotency tombstone
 
-Command receipt 的敏感或大型结果被合法压缩后仍保留的最小去重事实，足以识别 replay、不同 payload conflict 与原 event/aggregate 引用，但不能恢复已删除内容；后续 replay 返回稳定的 tombstone-backed receipt projection，明确 `result_available=false`、原 outcome/references 与不可重试 code，不重新执行 command。
-_Avoid_: 可重新执行的过期缓存、永久保存原文、客户端释放 key、删除 receipt 即允许重做。
+每个已终结 `applied` 或 `no_op` Command receipt 的敏感或大型结果被合法压缩后仍保留的最小去重事实，足以识别 replay、不同 payload conflict 与原 event/aggregate 引用，但不能恢复已删除内容；后续 replay 返回稳定的 tombstone-backed receipt projection，明确 `result_available=false`、原 outcome/references 与不可重试 code，不重新执行 command。
+_Avoid_: 只保留 applied、可重新执行的过期缓存、永久保存原文、客户端释放 key、删除 receipt 即允许重做。
 
 ## Command outcome
 
