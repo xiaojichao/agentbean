@@ -1287,7 +1287,7 @@ export interface CreateServerNextUseCasesInput {
    * Default is durable-job (ADR 0061 Coordinated message intake).
    * Pass `legacy` only for unmigrated tests or emergency env override at the host.
    */
-  messageIngestionMode?: 'legacy' | 'durable-job';
+  messageIngestionMode?: 'legacy' | 'durable-job' | 'message-tracer';
   /** #921 Message tracer command 路径开关（默认 false；true 时暴露 dispatchMessageTracerCommand）。 */
   messageTracerEnabled?: boolean;
   /** #921 outbox 投递回调：send-message 提交后排空 pending outbox，逐条调用以推送至订阅者。 */
@@ -1331,7 +1331,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // legacy 仅用于显式未迁移调用方 / 紧急旁路（见 host resolveMessageIngestionMode）。
   const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
   // #921 Message tracer command 路径（默认关闭；ADR-0067 registry）。启用时构造 3 handler + dispatcher。
-  const messageTracerEnabled = input.messageTracerEnabled ?? false;
+  // mode='message-tracer' 自动启用（sendMessage 路由到新路径）。
+  const messageTracerEnabled = (input.messageTracerEnabled ?? false) || messageIngestionMode === 'message-tracer';
   // #921 outbox 投递：send-message 提交后排空 pending outbox，逐条回调推送 + markDelivered（at-least-once）。
   const deliverMessageTracerOutbox = input.onMessageTracerDelivered
     ? async (): Promise<void> => {
@@ -1587,6 +1588,68 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // 来源失效是 best-effort；任何异常都不得影响删除主路径。
     }
   };
+
+  // #921 slice D：mode='message-tracer' 时，sendMessage 路由到 message-tracer handler（cutover 路由层）。
+  // 翻译 SendMessageInput → command envelope + payload → dispatch → 翻译回 SendMessageResult。
+  async function sendMessageViaMessageTracer(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
+    const threadId = messageInput.threadId;
+    const result = await dispatchMessageTracerCommand({
+      envelope: {
+        schemaVersion: 1,
+        commandName: 'send-message',
+        commandSchemaVersion: 1,
+        idempotencyKey: messageInput.clientMessageId ?? ids.nextId(),
+      },
+      payload: {
+        channelId: messageInput.channelId,
+        threadId,
+        senderKind: (messageInput.senderKind ?? 'human') as 'human' | 'agent' | 'system',
+        body: messageInput.body,
+        mentions: messageInput.meta?.mentions,
+        attachmentIds: messageInput.artifactIds ?? messageInput.meta?.attachments,
+        clientMessageId: messageInput.clientMessageId,
+        freshnessBasis: {
+          schemaVersion: 1,
+          target: {
+            schemaVersion: 1,
+            kind: threadId ? 'thread' as const : 'channel-mainline' as const,
+            channelId: messageInput.channelId,
+            ...(threadId ? { threadId } : {}),
+          },
+        },
+      },
+      userId: messageInput.userId,
+      teamId: messageInput.teamId,
+    });
+    if (!result.ok) return makeFailure('INTERNAL_ERROR', `Message tracer: ${result.error}`);
+    const response = result.response;
+    // applied → fetch message → SendMessageResult（dispatches 为空：message-tracer 不建 coordination job）
+    if (response.outcome === 'applied' && response.result?.commandName === 'send-message') {
+      const message = await repositories.messages.getById(response.result.messageId);
+      if (!message) return makeFailure('INTERNAL_ERROR', 'Message not found after send');
+      return makeSuccess({ message, dispatches: [] });
+    }
+    // replay → response 仅含 wire receipt（V1 投影白名单不含 resultJson，ADR-0067）；
+    // result 属 applied 不重发，故查存储层 receipt.resultJson 恢复 messageId。
+    if (response.outcome === 'replayed' && response.receipt) {
+      const receiptRecord = await repositories.channelCoordinationUnitOfWork.run((tx) =>
+        tx.commandReceipts.getReceiptById(response.receipt!.receiptId));
+      if (receiptRecord?.resultJson) {
+        try {
+          const data = JSON.parse(receiptRecord.resultJson) as { messageId?: string };
+          if (data.messageId) {
+            const message = await repositories.messages.getById(data.messageId);
+            if (message) return makeSuccess({ message, dispatches: [] });
+          }
+        } catch { /* fall through */ }
+      }
+    }
+    // freshness_hold / conflict / rejected → failure ack（映射到已知错误码）
+    const errorCode = response.outcome === 'conflict' || response.outcome === 'freshness_hold'
+      ? 'CONFLICT'
+      : response.outcome === 'rejected' ? 'BAD_REQUEST' : 'INTERNAL_ERROR';
+    return makeFailure(errorCode, response.stableCode);
+  }
 
   async function sendLegacyMessage(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
     if ((messageInput.selections?.length ?? 0) > 0
@@ -3983,6 +4046,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
+      if (messageIngestionMode === 'message-tracer') return sendMessageViaMessageTracer(messageInput);
       if ((messageInput.selections?.length ?? 0) > 0
         && !projectCollaborationRollout.bundleSelection) {
         projectCollaborationMetrics.recordMutationFailure('disabled');
