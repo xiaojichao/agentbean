@@ -1080,6 +1080,9 @@ function hasMainPushPublishGate(publishJob, workflow) {
 }
 
 function ciDetectsPhase0Changes(changeDetection) {
+  // Token checks must honor the provided changeDetection string so unit tests can
+  // fail-closed by stripping markers. Do not call classifyChangedFiles here —
+  // that would read the on-disk detector and ignore synthetic fixtures.
   const legacyTokens = [
     '^packages/',
     '^agentbean-next/',
@@ -1092,21 +1095,25 @@ function ciDetectsPhase0Changes(changeDetection) {
   ];
   if (legacyTokens.every((token) => changeDetection.includes(token))) return true;
 
-  // Detector-backed surface: require both path tokens and behavioral classify coverage.
-  const samples = [
-    'packages/contracts/src/index.ts',
-    'agentbean-next/docs/readme.md',
-    'scripts/check-phase-0-pi-boundary.mjs',
-    'scripts/check-pi-management-sea.mjs',
-    'scripts/build-pi-management-sea.mjs',
-    '.nvmrc',
-    'package-lock.json',
-    '.github/workflows/pi-sea-compatibility.yml',
-  ];
-  return samples.every((file) => classifyChangedFiles([file]).should_validate) &&
+  // Detector-backed layout (VALIDATE_PATH_RE lives in detect-ci-changes.mjs).
+  // Regex sources escape slashes as `packages\/`, so accept both raw and escaped forms.
+  const hasPackages = changeDetection.includes('packages/') ||
+    changeDetection.includes('packages\\/') ||
+    changeDetection.includes('^packages/');
+  const hasAgentbeanNext = changeDetection.includes('agentbean-next/') ||
+    changeDetection.includes('agentbean-next\\/') ||
+    changeDetection.includes('^agentbean-next/');
+  const hasNvmrc = changeDetection.includes('.nvmrc') || changeDetection.includes('^\\.nvmrc$');
+  const hasPackageLock = changeDetection.includes('package(-lock)?') ||
+    changeDetection.includes('package(?:-lock)?') ||
+    changeDetection.includes('package-lock');
+  return hasPackages &&
+    hasAgentbeanNext &&
     changeDetection.includes('check-phase-0-pi-boundary') &&
     changeDetection.includes('check-pi-management-sea') &&
     changeDetection.includes('build-pi-management-sea') &&
+    hasNvmrc &&
+    hasPackageLock &&
     changeDetection.includes('pi-sea-compatibility');
 }
 
