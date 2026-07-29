@@ -17,6 +17,7 @@ import type {
   PromotionSourceRelationRecord,
 } from './promotion-gate-repositories.js';
 import type { TaskCoordinationUnitOfWork } from './task-coordination-unit-of-work.js';
+import { appendManagementEventInTransaction } from './management/management-kernel.js';
 import {
   canonicalizePromotionObjectiveSnapshot,
   classifyPromotionOutcome,
@@ -47,6 +48,9 @@ const STABLE_CODE_REPLAYED = 'PROMOTION_REPLAYED';
 const STABLE_CODE_CONFLICT = 'PROMOTION_CONFLICT';
 const STABLE_CODE_FRESHNESS_HOLD = 'PROMOTION_FRESHNESS_HOLD';
 const STABLE_CODE_REJECTED = 'PROMOTION_REJECTED';
+const STABLE_CODE_ROOT_MESSAGE_NOT_FOUND = 'PROMOTION_ROOT_MESSAGE_NOT_FOUND';
+const STABLE_CODE_ROOT_MESSAGE_SCOPE_MISMATCH = 'PROMOTION_ROOT_MESSAGE_SCOPE_MISMATCH';
+const STABLE_CODE_ROOT_MESSAGE_UNRESOLVED = 'PROMOTION_ROOT_MESSAGE_UNRESOLVED';
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -119,9 +123,34 @@ function buildResult(
   };
 }
 
-function snapshotFromObjective(snapshot: PromotionObjectiveSnapshotV1): PromotionObjectiveSnapshotV1 {
-  // 读回 source relation 时从 canonical JSON parse；这里直接用 input snapshot 原样传给纯函数。
-  return snapshot;
+// ---------------------------------------------------------------------------
+// Root message 解析与校验
+// ---------------------------------------------------------------------------
+
+type RootMessageResolution =
+  | { readonly ok: true; readonly rootMessageId: ID }
+  | { readonly ok: false; readonly stableCode: string; readonly reason: string };
+
+/**
+ * 解析 ManagementRun 所需的真实 root Message：
+ * - 显式 `rootMessageId` 优先；
+ * - 否则仅当 source lineage 为 `message` 时用 lineage.id；
+ * - 其它 lineage（task/artifact/workspace-run/invocation）必须显式带 rootMessageId。
+ */
+function resolveRootMessageId(
+  input: PromotionGateCommandInputMapV1['promote-to-task'],
+): RootMessageResolution {
+  if (input.rootMessageId) {
+    return { ok: true, rootMessageId: input.rootMessageId };
+  }
+  if (input.freshnessBasis.sourceLineage.kind === 'message') {
+    return { ok: true, rootMessageId: input.freshnessBasis.sourceLineage.id };
+  }
+  return {
+    ok: false,
+    stableCode: STABLE_CODE_ROOT_MESSAGE_UNRESOLVED,
+    reason: 'root-message-unresolved',
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +214,7 @@ export function createPromotionGateHandler(
         const existingRelation = await repos.promotion.sourceRelations.getByLineageKey(lineageKey);
         const convergence = evaluatePromotionConvergence({
           sourceLineageKey: lineageKey,
-          requestedSnapshot: snapshotFromObjective(input.objectiveSnapshot),
+          requestedSnapshot: input.objectiveSnapshot,
           ...(existingRelation
             ? {
                 existing: {
@@ -298,12 +327,43 @@ export function createPromotionGateHandler(
           };
         }
 
-        // --- applied（create）：原子创建全链（#894 §10） ---
+        // --- applied（create）：先校验可执行 root Message，再原子创建全链（#894 §10） ---
+        const resolvedRoot = resolveRootMessageId(input);
+        if (!resolvedRoot.ok) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: resolvedRoot.stableCode,
+          };
+        }
+
+        const rootMessage = await repos.messages.getById(resolvedRoot.rootMessageId);
+        if (!rootMessage) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: STABLE_CODE_ROOT_MESSAGE_NOT_FOUND,
+          };
+        }
+        if (rootMessage.teamId !== teamId || rootMessage.channelId !== input.channelId) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: STABLE_CODE_ROOT_MESSAGE_SCOPE_MISMATCH,
+          };
+        }
+        const rootMessageId = rootMessage.id;
+
         const now = clock.now();
         const taskId = ids.nextId();
         const managementRunId = ids.nextId();
         const sourceRelationId = ids.nextId();
-        const rootMessageId = input.rootMessageId ?? input.freshnessBasis.sourceLineage.id;
 
         // root Task：status 'todo'，绝不推进（#896 §4）
         const task = await repos.tasks.create({
@@ -408,12 +468,32 @@ export function createPromotionGateHandler(
           createdAt: now,
         });
 
-        // Outbox（最小占位，#894 §10 / #900 §15）
-        // management event 不独立创建（用 receipt.eventRefs 引用）；
-        // 独立 management event 流接入是 PI driver 切片 follow-up。
+        // 先持久化真实 management event，再引用其 stream/sequence（禁止悬空 eventRef）
+        const eventRecord = await appendManagementEventInTransaction(
+          repos.management,
+          {
+            managementRunId,
+            type: 'run-started',
+            actorKind: 'human',
+            actorId: requesterId,
+            idempotencyKey: `run-started:${requestKey}`,
+            payload: {
+              rootMessageId,
+              rootTaskId: taskId,
+              mode: 'managed',
+            },
+          },
+          now,
+          ids,
+        );
+        const eventRefs = [{
+          streamKind: 'management-run',
+          streamId: managementRunId,
+          sequence: eventRecord.event.sequence,
+        }];
+
         const result = buildResult(taskId, managementRunId, sourceRelationId, 'created');
         const receiptId = ids.nextId();
-        const eventRefs = [{ streamKind: 'promotion', streamId: taskId, sequence: 1 }];
         await repos.promotion.outbox.create({
           id: ids.nextId(),
           teamId,

@@ -8,13 +8,13 @@ import type { ServerNextRepositories } from '../src/application/repositories.js'
 import type {
   PromotionGateCommandEnvelopeV1,
   PromotionGateCommandInputMapV1,
-  PromotionGateCommandResponseV1,
   PromotionObjectiveSnapshotV1,
 } from '../../../packages/contracts/src/index.js';
 
 // #922 Promotion gate handler 测试套件。
 // 用 in-memory repositories + 内建 taskCoordinationUnitOfWork（含 snapshot/restore 回滚），
-// 覆盖幂等 replay / idempotency conflict / convergence / lineage 冲突 / 原子回滚 / 不推进 todo / 非-human-trigger。
+// 覆盖幂等 replay / idempotency conflict / convergence / lineage 冲突 / 原子回滚 / 不推进 todo /
+// 非-human-trigger / root Message 校验 / 真实 management event 引用。
 
 let idSeq = 0;
 let idemSeq = 0;
@@ -71,6 +71,36 @@ function makeInput(overrides?: Partial<PromoteInput>): PromoteInput {
   };
 }
 
+async function seedRootMessage(
+  repositories: ServerNextRepositories,
+  messageId: string,
+  overrides?: { channelId?: string; teamId?: string },
+): Promise<void> {
+  await repositories.messages.append({
+    id: messageId,
+    teamId: overrides?.teamId ?? 'team-1',
+    channelId: overrides?.channelId ?? 'channel-1',
+    senderKind: 'human',
+    senderId: 'user-1',
+    body: `promote source ${messageId}`,
+    createdAt: tick,
+  });
+}
+
+/** 为 input 解析出的 root Message 预置消息（message lineage 或显式 rootMessageId）。 */
+async function seedForInput(
+  repositories: ServerNextRepositories,
+  input: PromoteInput,
+): Promise<void> {
+  const rootMessageId = input.rootMessageId
+    ?? (input.freshnessBasis.sourceLineage.kind === 'message'
+      ? input.freshnessBasis.sourceLineage.id
+      : undefined);
+  if (rootMessageId) {
+    await seedRootMessage(repositories, rootMessageId, { channelId: input.channelId });
+  }
+}
+
 function makeHandler(repositories: ServerNextRepositories) {
   return createPromotionGateHandler({
     teamId: 'team-1',
@@ -89,6 +119,7 @@ describe('#922 Promotion gate handler', () => {
 
     const env = makeEnvelope({ idempotencyKey: 'idem-same' });
     const input = makeInput();
+    await seedForInput(repositories, input);
 
     const first = await handler.promoteToTask(env, input);
     expect(first.outcome).toBe('applied');
@@ -105,7 +136,7 @@ describe('#922 Promotion gate handler', () => {
     expect(replayed.result?.rootTaskId).toBe(firstTaskId);
     expect(replayed.result?.disposition).toBe('created');
 
-    // 只写了一个 receipt
+    // 只写了一个 Task
     const receiptCount = await repositories.tasks.list({
       teamId: 'team-1',
       channelIds: ['channel-1'],
@@ -121,10 +152,11 @@ describe('#922 Promotion gate handler', () => {
 
     const env = makeEnvelope({ idempotencyKey: 'idem-conflict' });
     const inputA = makeInput({ objectiveSnapshot: objective({ objective: '任务 A' }) });
+    await seedForInput(repositories, inputA);
     const first = await handler.promoteToTask(env, inputA);
     expect(first.outcome).toBe('applied');
 
-    // 同 key 异内容 → conflict
+    // 同 key 异内容 → conflict（不需要新 root Message，不会创建）
     const inputB = makeInput({ objectiveSnapshot: objective({ objective: '任务 B' }) });
     const conflicted = await handler.promoteToTask(env, inputB);
     expect(conflicted.outcome).toBe('conflict');
@@ -149,6 +181,7 @@ describe('#922 Promotion gate handler', () => {
 
     const lineage = { kind: 'message' as const, id: 'msg-shared' };
     const snap = objective();
+    await seedRootMessage(repositories, 'msg-shared');
 
     const first = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-1' }),
@@ -187,16 +220,25 @@ describe('#922 Promotion gate handler', () => {
     const repositories = createInMemoryRepositories();
     const handler = makeHandler(repositories);
 
+    const inputA = makeInput({
+      freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-lineage-A' } },
+    });
+    const inputB = makeInput({
+      freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-lineage-B' } },
+    });
+    await seedForInput(repositories, inputA);
+    await seedForInput(repositories, inputB);
+
     const first = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-A' }),
-      makeInput({ freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-lineage-A' } } }),
+      inputA,
     );
     expect(first.outcome).toBe('applied');
     expect(first.result?.disposition).toBe('created');
 
     const second = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-B' }),
-      makeInput({ freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-lineage-B' } } }),
+      inputB,
     );
     expect(second.outcome).toBe('applied');
     expect(second.result?.disposition).toBe('created');
@@ -216,6 +258,7 @@ describe('#922 Promotion gate handler', () => {
     const handler = makeHandler(repositories);
 
     const sourceLineage = { kind: 'message' as const, id: 'msg-conflict-lineage' };
+    await seedRootMessage(repositories, 'msg-conflict-lineage');
 
     const first = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-first' }),
@@ -292,6 +335,7 @@ describe('#922 Promotion gate handler', () => {
     const input = makeInput({
       freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-rollback' } },
     });
+    await seedForInput(repositories, input);
 
     await expect(handler.promoteToTask(env, input)).rejects.toThrow('INJECTED_RECEIPT_FAILURE');
 
@@ -325,9 +369,11 @@ describe('#922 Promotion gate handler', () => {
     const repositories = createInMemoryRepositories();
     const handler = makeHandler(repositories);
 
+    const input = makeInput();
+    await seedForInput(repositories, input);
     const response = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-todo' }),
-      makeInput(),
+      input,
     );
     expect(response.outcome).toBe('applied');
 
@@ -364,14 +410,128 @@ describe('#922 Promotion gate handler', () => {
     expect(tasks).toHaveLength(0);
   });
 
-  test('response 结构可被 parsePromotionGateCommandResponseV1 验通过（合同 conformance）', async () => {
+  test('root Message 不存在 → rejected，无副作用', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const handler = makeHandler(repositories);
+
+    // 不 seed 消息
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-missing-msg' }),
+      makeInput({
+        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-missing' } },
+      }),
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('PROMOTION_ROOT_MESSAGE_NOT_FOUND');
+    expect(response.receipt).toBeUndefined();
+    expect(response.result).toBeUndefined();
+
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(0);
+  });
+
+  test('root Message 跨频道 → rejected，无副作用', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const handler = makeHandler(repositories);
+
+    await seedRootMessage(repositories, 'msg-other-channel', { channelId: 'channel-other' });
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-scope' }),
+      makeInput({
+        channelId: 'channel-1',
+        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-other-channel' } },
+      }),
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('PROMOTION_ROOT_MESSAGE_SCOPE_MISMATCH');
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(0);
+  });
+
+  test('非 message lineage 且缺 rootMessageId → rejected', async () => {
     resetCounters();
     const repositories = createInMemoryRepositories();
     const handler = makeHandler(repositories);
 
     const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-unresolved' }),
+      makeInput({
+        freshnessBasis: {
+          schemaVersion: 1,
+          sourceLineage: { kind: 'task', id: 'task-source-1' },
+        },
+      }),
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('PROMOTION_ROOT_MESSAGE_UNRESOLVED');
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(0);
+  });
+
+  test('applied 持久化可读取的 management run-started 事件，eventRefs 非悬空', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const handler = makeHandler(repositories);
+
+    const input = makeInput({
+      freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-event' } },
+    });
+    await seedForInput(repositories, input);
+
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-event' }),
+      input,
+    );
+    expect(response.outcome).toBe('applied');
+    expect(response.receipt?.eventRefs).toHaveLength(1);
+    const eventRef = response.receipt!.eventRefs[0]!;
+    expect(eventRef.streamKind).toBe('management-run');
+    expect(eventRef.streamId).toBe(response.result!.managementRunId);
+    expect(eventRef.sequence).toBe(1);
+
+    const events = await repositories.management.events.list(response.result!.managementRunId);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.event.type).toBe('run-started');
+    expect(events[0]!.event.sequence).toBe(eventRef.sequence);
+    expect(events[0]!.event.payload).toMatchObject({
+      rootMessageId: 'msg-event',
+      rootTaskId: response.result!.rootTaskId,
+      mode: 'managed',
+    });
+
+    // run.rootMessageId 指向真实消息
+    const run = await repositories.management.runs.getById(response.result!.managementRunId);
+    expect(run?.rootMessageId).toBe('msg-event');
+    expect(await repositories.messages.getById('msg-event')).not.toBeNull();
+  });
+
+  test('response 结构可被 parsePromotionGateCommandResponseV1 验通过（合同 conformance）', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const handler = makeHandler(repositories);
+
+    const input = makeInput();
+    await seedForInput(repositories, input);
+    const response = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-parse' }),
-      makeInput(),
+      input,
     );
 
     // 引入 contracts runtime parser 验证 response 结构完全合规
