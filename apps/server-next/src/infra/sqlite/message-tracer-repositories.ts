@@ -15,6 +15,8 @@ import type {
   InboxReadBoundaryRecord,
   InboxTargetKey,
   MessageInboxRepository,
+  MessageTracerOutboxRecord,
+  MessageTracerOutboxRepository,
   MessageTracerRepositories,
 } from '../../application/message-tracer-repositories.js';
 
@@ -74,6 +76,22 @@ interface TombstoneRow {
   receipt_id: string;
   outcome: MessageTracerReceiptOutcome;
   result_available: number;
+  created_at: number;
+}
+
+interface OutboxRow {
+  id: string;
+  team_id: string;
+  receipt_id: string;
+  command_name: MessageTracerCommandName;
+  event_kind: 'message-delivered';
+  target_kind: MessageTargetKind;
+  channel_id: string;
+  thread_id: string | null;
+  audience_recipient_ids_json: string;
+  payload_json: string;
+  delivered_at: number | null;
+  attempts: number;
   created_at: number;
 }
 
@@ -140,6 +158,25 @@ function mapTombstone(row: TombstoneRow | undefined): IdempotencyTombstoneRecord
     receiptId: row.receipt_id,
     outcome: row.outcome,
     resultAvailable: row.result_available === 1,
+    createdAt: row.created_at,
+  };
+}
+
+function mapOutbox(row: OutboxRow | undefined): MessageTracerOutboxRecord | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    teamId: row.team_id,
+    receiptId: row.receipt_id,
+    commandName: row.command_name,
+    eventKind: row.event_kind,
+    targetKind: row.target_kind,
+    channelId: row.channel_id,
+    threadId: row.thread_id,
+    audienceRecipientIds: JSON.parse(row.audience_recipient_ids_json) as string[],
+    payloadJson: row.payload_json,
+    deliveredAt: row.delivered_at,
+    attempts: row.attempts,
     createdAt: row.created_at,
   };
 }
@@ -323,9 +360,59 @@ export function createSqliteCommandReceiptRepository(teamDb: SqliteDatabase): Co
   };
 }
 
+export function createSqliteMessageTracerOutboxRepository(teamDb: SqliteDatabase): MessageTracerOutboxRepository {
+  const COLUMNS = `id, team_id, receipt_id, command_name, event_kind, target_kind, channel_id, thread_id,
+    audience_recipient_ids_json, payload_json, delivered_at, attempts, created_at`;
+  return {
+    async enqueue(input) {
+      teamDb.prepare(`INSERT INTO message_tracer_outbox (
+          id, team_id, receipt_id, command_name, event_kind, target_kind, channel_id, thread_id,
+          audience_recipient_ids_json, payload_json, delivered_at, attempts, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(
+          input.id,
+          input.teamId,
+          input.receiptId,
+          input.commandName,
+          input.eventKind,
+          input.targetKind,
+          input.channelId,
+          input.threadId,
+          JSON.stringify(input.audienceRecipientIds),
+          input.payloadJson,
+          input.deliveredAt,
+          input.attempts,
+          input.createdAt,
+        );
+      return input;
+    },
+
+    async listPending(input) {
+      const rows = teamDb.prepare(
+        `SELECT ${COLUMNS} FROM message_tracer_outbox
+         WHERE delivered_at IS NULL ORDER BY created_at ASC LIMIT ?`,
+      ).all(input.limit) as OutboxRow[];
+      return rows
+        .map(mapOutbox)
+        .filter((row): row is MessageTracerOutboxRecord => row !== null);
+    },
+
+    async markDelivered(input) {
+      teamDb.prepare('UPDATE message_tracer_outbox SET delivered_at = ? WHERE id = ?')
+        .run(input.now, input.id);
+    },
+
+    async incrementAttempts(input) {
+      teamDb.prepare('UPDATE message_tracer_outbox SET attempts = attempts + 1 WHERE id = ?')
+        .run(input.id);
+    },
+  };
+}
+
 export function createSqliteMessageTracerRepositories(teamDb: SqliteDatabase): MessageTracerRepositories {
   return {
     inbox: createSqliteMessageInboxRepository(teamDb),
     commandReceipts: createSqliteCommandReceiptRepository(teamDb),
+    outbox: createSqliteMessageTracerOutboxRepository(teamDb),
   };
 }

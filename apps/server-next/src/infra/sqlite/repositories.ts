@@ -213,6 +213,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0055_project_document_input_set_results.sql');
   // #921 切片 B：Message tracer 的 Inbox 投影 / Read boundary / Command receipt / 幂等 tombstone。
   applyMigration(db, 'team/0056_message_tracer_inbox_receipts.sql');
+  // #921 切片 C：Message tracer 持久 outbox（send-message 单事务原子提交）。
+  applyMigration(db, 'team/0057_message_tracer_outbox.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -497,6 +499,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         projectReferenceSets,
         inbox: messageTracer.inbox,
         commandReceipts: messageTracer.commandReceipts,
+        outbox: messageTracer.outbox,
       }))),
     taskCoordination,
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>

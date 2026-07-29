@@ -157,7 +157,45 @@ export interface CommandReceiptRepository {
   getTombstoneByIdempotencyKey(idempotencyKey: string): Promise<IdempotencyTombstoneRecord | null>;
 }
 
+/**
+ * 持久 outbox 记录（message_tracer_outbox）：send-message 单事务原子入队的投递事件。
+ * 与 receipt 同事务写；投递（socket emit / daemon wake）是 post-commit 关注，由 worker 拉 pending 行处理。
+ */
+export interface MessageTracerOutboxRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly receiptId: ID;
+  readonly commandName: MessageTracerCommandName;
+  readonly eventKind: 'message-delivered';
+  readonly targetKind: MessageTargetKind;
+  readonly channelId: ID;
+  readonly threadId: ID | null;
+  /** 受众 recipient id 快照（脱敏无 body）。 */
+  readonly audienceRecipientIds: readonly ID[];
+  /** 投递载荷 JSON（messageId/targetSeq/senderKind/senderId 等定位与摘要，不含全文）。 */
+  readonly payloadJson: string;
+  readonly deliveredAt: UnixMs | null;
+  readonly attempts: number;
+  readonly createdAt: UnixMs;
+}
+
+/**
+ * Message tracer outbox 仓储：持久投递队列。幂等入队（同 receipt+eventKind 不重复）；
+ * worker 拉 pending、标记已投递、自增尝试计数（完整投递 worker 属 C-wire，C-send 先入队）。
+ */
+export interface MessageTracerOutboxRepository {
+  /** 入队一条投递事件。重复 (receiptId, eventKind) 抛约束错（command replay 不重复入队）。 */
+  enqueue(input: MessageTracerOutboxRecord): Promise<MessageTracerOutboxRecord>;
+  /** 拉取未投递行（deliveredAt 为 null），按 createdAt 升序，至多 limit 条。 */
+  listPending(input: { limit: number }): Promise<MessageTracerOutboxRecord[]>;
+  /** 标记已投递（置 deliveredAt）。 */
+  markDelivered(input: { id: ID; now: UnixMs }): Promise<void>;
+  /** 自增尝试计数（worker 重试跟踪）。 */
+  incrementAttempts(input: { id: ID }): Promise<void>;
+}
+
 export interface MessageTracerRepositories {
   readonly inbox: MessageInboxRepository;
   readonly commandReceipts: CommandReceiptRepository;
+  readonly outbox: MessageTracerOutboxRepository;
 }
