@@ -122,6 +122,11 @@ _Avoid_: 只靠 HTTP status、异常字符串、所有失败可重试、hold 等
 Server 或调用方因网络、存储或响应中断无法确认事务是否提交的 command outcome；调用方必须保留原 idempotency key，通过 receipt query 或同 key replay 收敛，不能换 key 重做。
 _Avoid_: 普通失败、自动换 key、乐观回滚、客户端超时即未提交、外部效果未知时自动重试。
 
+## External effect unknown
+
+Invocation 已由 Server 提交、但不支持幂等或结果查询的第三方调用在 timeout/断连后无法确认效果是否发生的持久事实；记录该事实及 `action_required` 的 Server command 自身返回 `applied`，后续必须人工核对或走专门 reconciliation，不能用 receipt replay 推断外部结果。
+_Avoid_: Command outcome unknown、自动重试第三方调用、回滚已提交 Invocation、把 receipt applied 当作外部成功、生成新 Effect identity 猜测执行。
+
 ## Consistency token
 
 Command receipt 为受影响权威 stream 返回的 commit positions 集合，供后续 Query 要求最低可见位置并获得 read-your-writes；投影未追上时必须明确返回 not-ready，不能伪装成满足 token。
@@ -164,8 +169,8 @@ _Avoid_: Promotion authorization、root review token、自然语言同意、一�
 
 ## Effect identity
 
-Server 从已提交 command/Invocation identity 派生、用于对外部副作用进行去重与结果核对的稳定身份；外部系统无法保证幂等且结果不明时，系统必须进入 action_required 而不是自动重试。
-_Avoid_: 每次调用随机 key、Task ID 复用所有效果、客户端时间、外部 outcome unknown 自动重放、本地 daemon 记忆。
+Server 从已提交 command/Invocation identity 派生、用于对外部副作用进行去重与结果核对的稳定身份；外部系统无法保证幂等且结果不明时，系统必须记录 External effect unknown 并进入 action_required，而不是自动重试。
+_Avoid_: 每次调用随机 key、Task ID 复用所有效果、客户端时间、External effect unknown 自动重放、本地 daemon 记忆。
 
 ## PI Manager
 
