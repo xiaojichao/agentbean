@@ -101,11 +101,8 @@ test('ignores generated TypeScript build metadata during recursive scans', () =>
   }
 });
 
-test('CI change detection covers the default scan roots and checker files', () => {
-  const workflow = readFileSync(new URL('../.github/workflows/ci-cd.yml', import.meta.url), 'utf8');
-  const regexSource = workflow.match(/next_changed_files=.*grep -E '([^']+)' \|\| true\)"/)?.[1];
-  assert.ok(regexSource, 'AgentBean Next changed-files regex should be extractable');
-
+test('CI change detection covers the default scan roots and checker files', async () => {
+  const { classifyChangedFiles } = await import('./detect-ci-changes.mjs');
   for (const path of [
     'packages/contracts/src/index.ts',
     'packages/contracts/tests/contracts.test.ts',
@@ -129,7 +126,10 @@ test('CI change detection covers the default scan roots and checker files', () =
     'agentbean-next/docs/verification-matrix.md',
     'docs/superpowers/specs/current.md',
   ]) {
-    const result = spawnSync('grep', ['-E', regexSource, '-'], { input: `${path}\n`, encoding: 'utf8' });
-    assert.equal(result.status, 0, `${path} must trigger AgentBean Next validation: ${result.stderr}`);
+    assert.equal(
+      classifyChangedFiles([path]).should_validate,
+      true,
+      `${path} must trigger AgentBean Next validation`,
+    );
   }
 });

@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 const CODEX_REVIEWER = 'chatgpt-codex-connector';
 const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
+/** Paths that do not require a fresh Codex Review after a prior review (or at all when the whole PR is only these). */
+export const CODEX_EXEMPT_PATH_RE =
+  /^(?:docs\/|CONTEXT\.md$|CHANGELOG\.md$|README\.md$|AGENTS\.md$|Agents\.md$|\.github\/.+\.md$)/;
+
 const query = `
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -19,6 +23,11 @@ query($owner: String!, $name: String!, $number: Int!) {
       createdAt
       mergedAt
       headRefOid
+      baseRefOid
+      files(first: 100) {
+        pageInfo { hasNextPage }
+        nodes { path }
+      }
       commits(last: 1) {
         nodes {
           commit {
@@ -112,7 +121,34 @@ function formatDuration(totalSeconds) {
   return minutes > 0 ? `${minutes}分${seconds}秒` : `${seconds}秒`;
 }
 
-export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = {}) {
+export function normalizeRepoPath(filePath) {
+  return String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+export function isCodexExemptPath(filePath) {
+  return CODEX_EXEMPT_PATH_RE.test(normalizeRepoPath(filePath));
+}
+
+/** True when every changed path is documentation-only (and the set is non-empty). */
+export function isCodexExemptFileSet(files) {
+  return Array.isArray(files) && files.length > 0 && files.every(isCodexExemptPath);
+}
+
+function latestCodexReview(candidates) {
+  return [...candidates].sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
+}
+
+/**
+ * @param {object} pr
+ * @param {Date} [now]
+ * @param {{ stage?: 'review'|'merge', changedFiles?: string[]|null, filesSinceCodexReview?: string[]|null, filesTruncated?: boolean }} [options]
+ */
+export function evaluatePullRequest(pr, now = new Date(), {
+  stage = 'merge',
+  changedFiles = null,
+  filesSinceCodexReview = null,
+  filesTruncated = false,
+} = {}) {
   if (stage !== 'review' && stage !== 'merge') throw new Error(`未知门禁阶段：${stage}`);
   const commit = pr.commits?.nodes?.at(-1)?.commit;
   const headOid = pr.headRefOid ?? commit?.oid ?? null;
@@ -139,6 +175,19 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
   const currentCodexReview = codexReviewCandidates
     .filter((item) => matchesHead(item.commit, headOid))
     .sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
+  const lastCodexReview = latestCodexReview(codexReviewCandidates);
+
+  let codexWaived = null;
+  if (stage === 'merge' && !currentCodexReview) {
+    if (!lastCodexReview) {
+      if (!filesTruncated && isCodexExemptFileSet(changedFiles)) {
+        codexWaived = 'docs_only_pr';
+      }
+    } else if (!filesTruncated && isCodexExemptFileSet(filesSinceCodexReview)) {
+      codexWaived = 'docs_only_delta';
+    }
+  }
+  const codexSatisfied = Boolean(currentCodexReview || codexWaived);
 
   const blockers = [];
   const truncatedConnections = [
@@ -188,12 +237,14 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
     code: 'THREADS_UNRESOLVED',
     detail: `仍有 ${unresolvedThreads.length} 个未解决 Review thread`,
   });
-  if (stage === 'merge' && !currentCodexReview) blockers.push({
-    code: codexReviewCandidates.length > 0 ? 'CODEX_REVIEW_STALE' : 'CODEX_REVIEW_MISSING',
-    detail: codexReviewCandidates.length > 0
-      ? 'Codex Review 尚未覆盖最新提交'
-      : '尚未收到 Codex Review',
-  });
+  if (stage === 'merge' && !codexSatisfied) {
+    blockers.push({
+      code: codexReviewCandidates.length > 0 ? 'CODEX_REVIEW_STALE' : 'CODEX_REVIEW_MISSING',
+      detail: codexReviewCandidates.length > 0
+        ? 'Codex Review 尚未覆盖最新提交（自上次 Review 以来存在非文档改动，或无法证明仅为文档改动）'
+        : '尚未收到 Codex Review（PR 含非文档改动，或无法证明仅为文档改动）',
+    });
+  }
 
   return {
     ready: blockers.length === 0,
@@ -219,7 +270,9 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
     },
     review: {
       codexCurrent: Boolean(currentCodexReview),
-      codexReviewedAt: currentCodexReview?.at ?? null,
+      codexSatisfied,
+      codexWaived,
+      codexReviewedAt: currentCodexReview?.at ?? lastCodexReview?.at ?? null,
       unresolvedThreads: unresolvedThreads.length,
       pendingReviewers,
     },
@@ -232,13 +285,21 @@ export function evaluatePullRequest(pr, now = new Date(), { stage = 'merge' } = 
   };
 }
 
+function codexStatusLine(result) {
+  if (result.stage === 'review') return '此阶段不要求';
+  if (result.review.codexCurrent) return '已覆盖最新提交';
+  if (result.review.codexWaived === 'docs_only_pr') return '已豁免（PR 仅为文档路径）';
+  if (result.review.codexWaived === 'docs_only_delta') return '已豁免（相对上次 Review 仅为文档路径）';
+  return '未覆盖最新提交';
+}
+
 export function formatReadiness(result) {
   const stageLabel = result.stage === 'review' ? 'Review 前置门禁' : '合并门禁';
   const lines = [
     `${result.ready ? 'READY ✅' : 'BLOCKED ⏳'} [${stageLabel}] PR #${result.pullRequest.number} ${result.pullRequest.title}`,
     `最新提交：${result.head.oid?.slice(0, 10) ?? 'unknown'}`,
     `检查：${result.checks.passing}/${result.checks.total} 通过`,
-    `Codex Review：${result.stage === 'review' ? '此阶段不要求' : result.review.codexCurrent ? '已覆盖最新提交' : '未覆盖最新提交'}`,
+    `Codex Review：${codexStatusLine(result)}`,
     `未解决线程：${result.review.unresolvedThreads}`,
     `PR 已持续：${formatDuration(result.timing.prAgeSeconds)}`,
     `最新提交到 Codex Review：${formatDuration(result.timing.headToCodexReviewSeconds)}`,
@@ -278,6 +339,25 @@ function parseArgs(argv) {
   return options;
 }
 
+function fetchCompareFiles(owner, name, base, head) {
+  if (!base || !head) return { files: null, truncated: true };
+  try {
+    const raw = runGh([
+      'api',
+      `repos/${owner}/${name}/compare/${base}...${head}`,
+      '--jq',
+      '{files:[.files[].filename], truncated:(.files|length)>=300}',
+    ]);
+    const payload = JSON.parse(raw);
+    return {
+      files: Array.isArray(payload.files) ? payload.files : [],
+      truncated: Boolean(payload.truncated),
+    };
+  } catch {
+    return { files: null, truncated: true };
+  }
+}
+
 function fetchPullRequest({ number, repo }) {
   const nameWithOwner = repo || runGh(['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner']);
   const [owner, name, ...rest] = nameWithOwner.split('/');
@@ -293,13 +373,50 @@ function fetchPullRequest({ number, repo }) {
   if (payload.errors?.length) throw new Error(payload.errors.map((error) => error.message).join('; '));
   const pr = payload.data?.repository?.pullRequest;
   if (!pr) throw new Error(`找不到 PR #${number}`);
-  return pr;
+
+  const fileNodes = pr.files?.nodes ?? [];
+  const filesTruncated = Boolean(pr.files?.pageInfo?.hasNextPage);
+  let changedFiles = fileNodes.map((node) => node.path).filter(Boolean);
+  if (filesTruncated || changedFiles.length === 0) {
+    // Fall back to compare for completeness / empty GraphQL files edge cases.
+    const compare = fetchCompareFiles(owner, name, pr.baseRefOid, pr.headRefOid);
+    if (compare.files) {
+      changedFiles = compare.files;
+    }
+  }
+
+  const codexCandidates = [
+    ...(pr.reviews?.nodes ?? [])
+      .filter((review) => review.author?.login === CODEX_REVIEWER)
+      .map((review) => ({ commit: review.commit?.oid, at: review.submittedAt })),
+    ...(pr.comments?.nodes ?? [])
+      .map((comment) => ({ commit: reviewedCommitFromComment(comment), at: comment.createdAt }))
+      .filter((item) => item.commit),
+  ];
+  const lastCodex = latestCodexReview(codexCandidates);
+  let filesSinceCodexReview = null;
+  let deltaTruncated = false;
+  if (lastCodex?.commit && pr.headRefOid && !matchesHead(lastCodex.commit, pr.headRefOid)) {
+    const compare = fetchCompareFiles(owner, name, lastCodex.commit, pr.headRefOid);
+    filesSinceCodexReview = compare.files;
+    deltaTruncated = compare.truncated || compare.files == null;
+  }
+
+  return {
+    pr,
+    evaluateOptions: {
+      changedFiles,
+      filesSinceCodexReview,
+      filesTruncated: filesTruncated || deltaTruncated,
+    },
+  };
 }
 
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
-    const result = evaluatePullRequest(fetchPullRequest(options), new Date(), { stage: options.stage });
+    const { pr, evaluateOptions } = fetchPullRequest(options);
+    const result = evaluatePullRequest(pr, new Date(), { stage: options.stage, ...evaluateOptions });
     console.log(options.json ? JSON.stringify(result, null, 2) : formatReadiness(result));
     process.exitCode = result.ready ? 0 : 2;
   } catch (error) {

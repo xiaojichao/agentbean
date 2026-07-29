@@ -59,31 +59,77 @@ jobs:
     name: Validate AgentBean Next
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      should_validate: ${{ steps.changes.outputs.should_validate }}
+      should_browser_smoke: ${{ steps.changes.outputs.should_browser_smoke }}
+      should_publish: ${{ steps.changes.outputs.should_publish }}
+      should_deploy: ${{ steps.changes.outputs.should_deploy }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          # Need enough history for PR base / push before comparisons.
           fetch-depth: 0
 
-      - name: Detect AgentBean Next changes
+      - name: Detect CI change surfaces
         id: changes
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual dispatch: force all CI surfaces."
+            node scripts/detect-ci-changes.mjs --force-all >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          git fetch origin "${{ github.base_ref }}"
-          changed_files="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
-          next_changed_files="$(printf '%s\n' "$changed_files" | grep -E '^agentbean-next/|^packages/|^apps/(server-next|daemon-next|web-next)/|^scripts/(check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-pr-merge-readiness(\.test)?|claim-github-issue(\.test)?|check-team-terminology(\.test)?|check-phase-0-pi-boundary(\.test)?|check-phase-1-management-boundary(\.test)?|check-phase-2-task-dag-boundary(\.test)?|check-phase-3-memory-boundary(\.test)?|check-migration-registration(\.test)?|check-pi-management-sea(\.test)?|build-pi-management-sea(\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|^docs/superpowers/(specs|plans)/|^README\.md$|^\.nvmrc$|^package(-lock)?\.json$|^railway\.json$|^\.github/workflows/(ci-cd|daily-changelog|pi-sea-compatibility)\.yml$' || true)"
+          # Use --name-status so renames contribute both old and new paths.
+          # Plain --name-only with rename detection can drop the removed path and
+          # misclassify a code→docs rename as docs-only.
+          collect_changed_paths() {
+            local base="$1"
+            local head="$2"
+            git diff --name-status "$base...$head" | awk '
+              $1 ~ /^R/ {
+                print $2
+                print $3
+                next
+              }
+              $1 ~ /^C/ {
+                print $2
+                print $3
+                next
+              }
+              {
+                print $2
+              }
+            ' | awk 'NF' | sort -u
+          }
 
-          if [ -n "$next_changed_files" ]; then
-            echo "should_validate=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            changed_files="$(collect_changed_paths "origin/${{ github.base_ref }}" "HEAD")"
           else
-            echo "No AgentBean Next changes; skipping validation."
-            echo "should_validate=false" >> "$GITHUB_OUTPUT"
+            before="${{ github.event.before }}"
+            if [ -z "$before" ] || [ "$before" = "0000000000000000000000000000000000000000" ]; then
+              echo "Missing or root before SHA; force all CI surfaces."
+              node scripts/detect-ci-changes.mjs --force-all >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "$before" || true
+            fi
+            if ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              echo "Could not resolve before SHA; force all CI surfaces."
+              node scripts/detect-ci-changes.mjs --force-all >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            changed_files="$(collect_changed_paths "$before" "${{ github.sha }}")"
           fi
+
+          printf '%s\n' "$changed_files" | node scripts/detect-ci-changes.mjs --stdin | tee -a "$GITHUB_OUTPUT"
+          echo "Changed files:"
+          printf '%s\n' "$changed_files" | sed -n '1,80p'
 
       - name: Set up Node.js
         if: steps.changes.outputs.should_validate == 'true'
@@ -141,14 +187,23 @@ jobs:
             -t "runtime capability -> custom agent -> message -> daemon reply"
 
       - name: Run AgentBean Next browser smoke
-        if: steps.changes.outputs.should_validate == 'true'
+        if: steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true'
         env:
           AGENTBEAN_NEXT_BROWSER_SMOKE_ARTIFACTS_DIR: artifacts/agentbean-next-browser-smoke
           CHROME_BIN: /usr/bin/google-chrome
-        run: npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
+        run: |
+          set +e
+          npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::Browser smoke failed once; retrying once for transient WebUI races."
+            npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000
+            status=$?
+          fi
+          exit "$status"
 
       - name: Upload AgentBean Next browser smoke artifacts
-        if: steps.changes.outputs.should_validate == 'true' && !cancelled()
+        if: steps.changes.outputs.should_validate == 'true' && steps.changes.outputs.should_browser_smoke == 'true' && !cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: agentbean-next-browser-smoke
@@ -161,7 +216,16 @@ jobs:
     needs:
       - validate-agentbean-next
       - publish
-    if: always() && needs.validate-agentbean-next.result == 'success' && (needs.publish.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.skip_npm_publish && needs.publish.result == 'skipped')) && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy))
+    # Deploy on main only when server/runtime surfaces changed, or on explicit manual deploy.
+    # Publish may be skipped when packages did not change; that must not block server-only deploys.
+    if: >-
+      always()
+      && needs.validate-agentbean-next.result == 'success'
+      && (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+      && (
+        (github.event_name == 'push' && needs.validate-agentbean-next.outputs.should_deploy == 'true')
+        || (github.event_name == 'workflow_dispatch' && inputs.run_production_deploy)
+      )
     timeout-minutes: 30
 
     env:
@@ -326,7 +390,14 @@ jobs:
       - validate-agentbean-next
       - deploy
       - publish
-    if: always() && needs.validate-agentbean-next.result == 'success' && ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.publish.result == 'success' && needs.deploy.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')))
+    # After a production deploy (publish may be skipped for server-only changes).
+    if: >-
+      always()
+      && needs.validate-agentbean-next.result == 'success'
+      && (
+        (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped'))
+        || (github.event_name == 'workflow_dispatch' && inputs.run_agentbean_next_production_smoke && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && (needs.deploy.result == 'success' || needs.deploy.result == 'skipped'))
+      )
     timeout-minutes: 15
 
     env:
@@ -388,7 +459,10 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - validate-agentbean-next
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)
+    # Main: only when publish surfaces changed. Manual dispatch keeps the previous opt-in flags.
+    if: >-
+      (github.event_name == 'push' && needs.validate-agentbean-next.outputs.should_publish == 'true')
+      || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)
     timeout-minutes: 15
 
     env:

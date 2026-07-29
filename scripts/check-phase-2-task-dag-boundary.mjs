@@ -39,6 +39,7 @@ const taskDagPanel = read('apps/web-next/components/TaskDagPanel.tsx');
 const taskDagRevisionGuard = read('apps/web-next/lib/task-dag.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
+const changeDetection = `${workflow}\n${read('scripts/detect-ci-changes.mjs')}`;
 
 const hasPhase2Checklist = [...Array(18)].every((_, index) =>
   matrix.includes(`| P2-${String(index + 1).padStart(2, '0')} |`));
@@ -168,7 +169,7 @@ if (scripts['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phas
   || workflow.includes('run: npm run test:phase2-task-dag')
   || workflow.includes('run: npm run test:phase2-closeout')
   || workflow.includes('run: npm run build:phase2-task-dag')
-  || !workflow.includes('check-phase-2-task-dag-boundary')) {
+  || !changeDetection.includes('check-phase-2-task-dag-boundary')) {
   violations.push('P2_ROOT_CI_GATE_INVALID: Phase 2 root scripts and ordered CI gates are required');
 }
 

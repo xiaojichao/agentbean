@@ -68,6 +68,7 @@ const managementToolCatalog = read('packages/pi-management-runtime/src/managemen
 const runtimeTypes = read('packages/pi-management-runtime/src/types.ts');
 const packageJson = JSON.parse(read('package.json') || '{}');
 const workflow = read('.github/workflows/ci-cd.yml');
+const changeDetection = `${workflow}\n${read('scripts/detect-ci-changes.mjs')}`;
 
 const hasGreenChecklist = [...Array(18)].every((_, index) =>
   matrix.includes(`| P3-${String(index + 1).padStart(2, '0')} | Green |`));
@@ -395,7 +396,7 @@ if (scripts['test:phase3-memory-boundary'] !== 'node --test scripts/check-phase-
   || !String(scripts['test:retained-boundaries']).includes('test:phase3-memory-boundary')
   || !String(scripts['test:retained-boundaries']).includes('check:phase3-memory-boundary')
   || !workflow.includes('npm run test:ci')
-  || !workflow.includes('check-phase-3-memory-boundary')) {
+  || !changeDetection.includes('check-phase-3-memory-boundary')) {
   violations.push('P3_ROOT_CI_GATE_INVALID: Phase 3 root scripts and retained CI boundary are required');
 }
 

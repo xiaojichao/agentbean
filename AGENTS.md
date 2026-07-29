@@ -38,6 +38,14 @@ When using the GitHub publish/yeet workflow, the PR title must be a natural Chin
 **禁止**：不在连续 push 上重复粘贴未变化的旧建议；不把 P2 风格项升级为阻塞项。
 目的是让作者能快速分辨「必须改」与「可合后处理」。
 
+**合并门禁与 Cloud bot 注意**：
+
+- `npm run check:pr-merge-readiness` 对文档-only 路径豁免「必须覆盖最新 head」
+  （详见 `docs/agents/pr-merge-gate.md`）。代码改动后的 head 仍需 Codex Review。
+- 外部 `chatgpt-codex-connector` 的触发策略在 Codex Cloud 设置，**不会**自动读取
+  本文件。请在 Cloud 中优先只在 ready-for-review 时自动 Review，减少每个 push
+  全量重评；需要时用 `@codex review` 显式召唤。
+
 ## Worktree 协作约定
 
 多个 agent/会话并行工作时**不要共用主 worktree（`/Users/shaw/AgentBean`）**，各自用独立 worktree 目录。共用主 worktree 会导致互相切换对方的 HEAD、把 commit 落到错的分支（实际事故：一个会话的 commit 被切到另一个会话正在用的分支；rebase/test 中途工作区文件被换成别的分支的内容）。

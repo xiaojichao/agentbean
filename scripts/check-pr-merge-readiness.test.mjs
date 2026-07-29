@@ -143,6 +143,83 @@ test('blocks when Codex Review only covers an older commit', () => {
   assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_STALE']);
 });
 
+test('waives a missing Codex Review when the whole PR is documentation-only', () => {
+  const result = evaluatePullRequest(
+    fixture({ reviews: { nodes: [] } }),
+    new Date(),
+    {
+      changedFiles: [
+        'docs/adr/0066-system-activity-uses-audience-scoped-projections.md',
+        'CONTEXT.md',
+        'CHANGELOG.md',
+      ],
+    },
+  );
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexWaived, 'docs_only_pr');
+  assert.equal(result.review.codexSatisfied, true);
+  assert.match(formatReadiness(result), /已豁免（PR 仅为文档路径）/);
+});
+
+test('waives a stale Codex Review when only documentation paths changed after it', () => {
+  const result = evaluatePullRequest(
+    fixture({
+      reviews: {
+        nodes: [{
+          state: 'COMMENTED',
+          submittedAt: '2026-07-15T00:04:00Z',
+          author: { login: 'chatgpt-codex-connector' },
+          commit: { oid: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+        }],
+      },
+    }),
+    new Date(),
+    {
+      filesSinceCodexReview: ['CHANGELOG.md', 'docs/adr/0001-example.md'],
+    },
+  );
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexWaived, 'docs_only_delta');
+  assert.equal(result.review.codexCurrent, false);
+  assert.equal(result.review.codexSatisfied, true);
+  assert.match(formatReadiness(result), /已豁免（相对上次 Review 仅为文档路径）/);
+});
+
+test('does not waive a stale Codex Review when non-doc files changed after it', () => {
+  const result = evaluatePullRequest(
+    fixture({
+      reviews: {
+        nodes: [{
+          state: 'COMMENTED',
+          submittedAt: '2026-07-15T00:04:00Z',
+          author: { login: 'chatgpt-codex-connector' },
+          commit: { oid: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+        }],
+      },
+    }),
+    new Date(),
+    {
+      filesSinceCodexReview: ['CHANGELOG.md', 'apps/server-next/src/bin.ts'],
+    },
+  );
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_STALE']);
+  assert.equal(result.review.codexWaived, null);
+});
+
+test('fails closed on docs waiver when the changed-file list is truncated', () => {
+  const result = evaluatePullRequest(
+    fixture({ reviews: { nodes: [] } }),
+    new Date(),
+    {
+      changedFiles: ['docs/adr/0066.md'],
+      filesTruncated: true,
+    },
+  );
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_MISSING']);
+});
+
 test('blocks pending and failed checks with their names', () => {
   const pr = fixture();
   pr.commits.nodes[0].commit.statusCheckRollup.contexts.nodes = [
