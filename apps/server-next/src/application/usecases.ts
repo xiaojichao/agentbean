@@ -1629,7 +1629,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!message) return makeFailure('INTERNAL_ERROR', 'Message not found after send');
       return makeSuccess({ message, dispatches: [] });
     }
-    // replay → fetch 原 message via 存储记录（V1 receipt 无 resultJson，需查存储）
+    // replay → response 仅含 wire receipt（V1 投影白名单不含 resultJson，ADR-0067）；
+    // result 属 applied 不重发，故查存储层 receipt.resultJson 恢复 messageId。
     if (response.outcome === 'replayed' && response.receipt) {
       const receiptRecord = await repositories.channelCoordinationUnitOfWork.run((tx) =>
         tx.commandReceipts.getReceiptById(response.receipt!.receiptId));
