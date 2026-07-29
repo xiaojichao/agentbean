@@ -119,4 +119,34 @@ describe('dispatchMessageTracerCommand usecase 方法 + flag 门禁', () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toBe('MESSAGE_TRACER_PAYLOAD_INVALID');
   });
+
+  test('outbox 投递：send 后 deliverOutbox 排空 pending + 调 onMessageTracerDelivered + markDelivered', async () => {
+    const repos = createInMemoryRepositories();
+    await seedChannel(repos);
+    let n = 0;
+    const delivered: Array<{ teamId: string; channelId: string; messageId: string }> = [];
+    const app = createServerNextUseCases({
+      repositories: repos,
+      clock: { now: () => NOW },
+      ids: { nextId: () => `id-${++n}` },
+      messageTracerEnabled: true,
+      onMessageTracerDelivered: (d) => { delivered.push({ teamId: d.teamId, channelId: d.channelId, messageId: d.messageId }); },
+    });
+    const res = await app.dispatchMessageTracerCommand({
+      envelope: { schemaVersion: 1, commandName: 'send-message', commandSchemaVersion: 1, idempotencyKey: 'k-deliver' },
+      payload: {
+        channelId: 'channel-1', senderKind: 'human', body: 'hi',
+        freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' } },
+      },
+      userId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.ok).toBe(true);
+    // 投递回调被调用，携带 messageId
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].channelId).toBe('channel-1');
+    expect(delivered[0].messageId).toBeTruthy();
+    // outbox pending 已排空（markDelivered）
+    const pending = await repos.channelCoordinationUnitOfWork.run((tx) => tx.outbox.listPending({ limit: 10 }));
+    expect(pending).toHaveLength(0);
+  });
 });

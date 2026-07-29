@@ -260,13 +260,20 @@ export async function startServerNextDevServer(
   // ADR 0061: production host defaults to durable-job so Channel Coordinator runs.
   const messageIngestionMode = resolveMessageIngestionMode(input.messageIngestionMode);
   const messageTracerEnabled = resolveMessageTracerEnabled(input.messageTracerEnabled);
+  // #921 outbox 投递 late-bind：realtime 在 attachServerNextNamespaces 后才创建，用 ref 闭包延迟接通。
+  let realtimeRef: ServerNextRealtime | undefined;
+  const onMessageTracerDelivered = messageTracerEnabled
+    ? async (delivery: { teamId: string; channelId: string; messageId: string }) => {
+        await realtimeRef?.emitMessageDelivered(delivery);
+      }
+    : undefined;
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled);
+    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled, onMessageTracerDelivered);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
@@ -346,6 +353,7 @@ export async function startServerNextDevServer(
       await appWithCleanup.recoverProjectStages?.(teamId);
     },
   });
+  realtimeRef = realtime; // #921 接通 outbox 投递 late-bind
   appWithCleanup.bindManagementDispatchEmitter?.((dispatchId) => realtime.dispatchRequest(dispatchId));
   appWithCleanup.bindTaskClaimEmitter?.(async (taskId, options) => {
     await realtime.offerTaskClaims(taskId, options);
@@ -1644,6 +1652,7 @@ function createDefaultApp(
   Database: BetterSqlite3Constructor | undefined,
   messageIngestionMode: MessageIngestionMode = 'durable-job',
   messageTracerEnabled: boolean = false,
+  onMessageTracerDelivered?: (delivery: { teamId: string; channelId: string; messageId: string }) => Promise<void> | void,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
@@ -1707,6 +1716,7 @@ function createDefaultApp(
         : {}),
       messageIngestionMode,
       messageTracerEnabled,
+      onMessageTracerDelivered,
     });
     appForPiHealth = app;
     return {
@@ -1801,6 +1811,7 @@ function createDefaultApp(
       : {}),
     messageIngestionMode,
     messageTracerEnabled,
+    onMessageTracerDelivered,
   });
   appForPiHealth = app;
   return {

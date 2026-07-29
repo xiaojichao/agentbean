@@ -1250,6 +1250,14 @@ export interface DeleteTeamInput {
   teamId: string;
 }
 
+/** #921 outbox 投递事件（send-message 提交后排空 pending outbox 时逐条产出）。 */
+export interface MessageTracerDelivery {
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly messageId: string;
+  readonly audienceRecipientIds: readonly string[];
+}
+
 export interface CreateServerNextUseCasesInput {
   repositories: ServerNextRepositories;
   clock: ServerNextClock;
@@ -1282,6 +1290,8 @@ export interface CreateServerNextUseCasesInput {
   messageIngestionMode?: 'legacy' | 'durable-job';
   /** #921 Message tracer command 路径开关（默认 false；true 时暴露 dispatchMessageTracerCommand）。 */
   messageTracerEnabled?: boolean;
+  /** #921 outbox 投递回调：send-message 提交后排空 pending outbox，逐条调用以推送至订阅者。 */
+  onMessageTracerDelivered?: (delivery: MessageTracerDelivery) => Promise<void> | void;
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
   projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
@@ -1322,6 +1332,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
   // #921 Message tracer command 路径（默认关闭；ADR-0067 registry）。启用时构造 3 handler + dispatcher。
   const messageTracerEnabled = input.messageTracerEnabled ?? false;
+  // #921 outbox 投递：send-message 提交后排空 pending outbox，逐条回调推送 + markDelivered（at-least-once）。
+  const deliverMessageTracerOutbox = input.onMessageTracerDelivered
+    ? async (): Promise<void> => {
+        const unitOfWork = repositories.channelCoordinationUnitOfWork;
+        const pending = await unitOfWork.run((tx) => tx.outbox.listPending({ limit: 100 }));
+        for (const row of pending) {
+          const payload = JSON.parse(row.payloadJson) as { messageId?: string };
+          if (!payload.messageId) continue;
+          try {
+            await input.onMessageTracerDelivered!({
+              teamId: row.teamId,
+              channelId: row.channelId,
+              messageId: payload.messageId,
+              audienceRecipientIds: row.audienceRecipientIds,
+            });
+          } catch {
+            // 投递失败不阻断：保留 pending 供重试（at-least-once），继续下一条。
+            continue;
+          }
+          await unitOfWork.run((tx) => tx.outbox.markDelivered({ id: row.id, now: clock.now() }));
+        }
+      }
+    : undefined;
   const messageTracerDispatcher = messageTracerEnabled
     ? createMessageTracerCommandDispatcher({
         send: createSendMessageCommandHandler({
@@ -1329,6 +1362,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ids,
           clock,
           sessionSecret,
+          deliverOutbox: deliverMessageTracerOutbox,
         }),
         checkInbox: createCheckInboxCommandHandler({
           unitOfWork: repositories.channelCoordinationUnitOfWork,
