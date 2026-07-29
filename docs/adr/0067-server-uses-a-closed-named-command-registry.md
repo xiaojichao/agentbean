@@ -1,0 +1,23 @@
+---
+status: accepted
+---
+
+# Server 使用封闭的具名 Command registry
+
+Web、daemon、PI runtime 与普通 Agent 的所有权威写入统一经过 Server-owned `Command registry`：每个具名 command 使用共享、transport-independent envelope 与 exact-key runtime schema，固定 authority、目标、精确 revision/freshness/fencing preconditions、逻辑业务幂等范围、成功事实、outcome、audit 与 audience。客户端不能使用通用 mutation、批量事务、自报 actor/role 或 system-only 数据库旁路；具体 REST path、dispatcher、队列和存储结构不是领域合同。
+
+Server 在确认调用方有权访问目标后，以 tenant/scope、command type、目标 lineage/aggregate 与逻辑 authority subject 查找幂等身份。同 scope/key/hash 返回首次 `Command receipt`，不同 hash 返回无副作用 idempotency conflict；去重绑定业务命令而非网络请求、临时 worker 或 lease holder。成功 command 在一个事务中共同提交 current state、`0..N` 个不可变 domain events、receipt、required audit 与 outbox；no-op 不制造 event，replay 不重新执行。结果 payload 可以按治理压缩，但改变持久事实的 command 必须保留足以识别 replay/conflict 的 Idempotency tombstone。
+
+Domain event 只记录已经成立的过去式领域事实，按 `streamKind + streamId + sequence` 与 aggregate revision 保证流内顺序；跨 stream 的原子 event batch 使用共同 command/transaction identity，不建立系统全局总序。Command request/attempt、Freshness hold、conflict、拒绝、notice、模型调用和 UI 卡片都不是业务 event。Receipt、domain event、command attempt audit 与安全诊断分别回答最终结果、权威变化、治理尝试与运行异常，不能互相替代；registry 为每个 command 标记 transactional audit、required rejection audit 或 diagnostic-only。
+
+Query 默认无业务副作用，并返回 schema version、audience scope、`asOf` watermark 与绑定查询条件的 opaque cursor。Command receipt 返回受影响 stream 的 Consistency token；投影未满足 minimum position 时只能有界等待后返回 projection-not-ready，不能把旧结果伪装成 read-your-writes。`message check` 是 candidate-producing read operation，只签发连续 Inbox 前缀的 Read candidate；`ack-read-candidate` 才推进 Read boundary。对外 change feed 是当前受众范围内、至少一次投递的投影流，websocket、daemon notice 与 outbox delivery 只负责唤醒；cursor acknowledgement 不推进 Message Read、attention 或 Task 责任。
+
+Command outcome 固定区分 `applied`、`no_op`、`replayed`、`freshness_hold`、`conflict`、`rejected`、`temporarily_unavailable` 与 `outcome_unknown`，并给出稳定 code 与 `none / same_key / reread_then_new_command / user_action` retry directive。网络断开、客户端取消或 timeout 只停止等待，不证明事务未提交；outcome unknown 必须通过 receipt query 或原 key replay 收敛，严禁换 key。业务取消、Offer withdrawal、Task termination 与 Invocation cancellation 必须各自使用具名 command 并参与正常 revision/fencing 仲裁。
+
+每条 command 只有一个绑定版本的 Causation reference，并可带多个 Source references；引用保存 provenance，不授予权限，来源后续编辑或删除也不静默改写既有事实。Server 按认证与协议、目标作用域、authority 推导、幂等查重、新 command 的精确 preconditions、事务内复验提交、受众裁剪的顺序执行；所有权威 ID、sequence、revision、fencing token 与时间由 Server 生成。并发控制使用 registry 声明的专项 read/write set，Message freshness、Task/DAG/attempt/delivery、attention、policy 与 PI run/lease 分别维护必要 revision，禁止粗粒度 last-write-wins。
+
+Command、Query、event、receipt 与 opaque token 分别版本化，同一版本内不得改变字段、权限、默认值或重试语义。Event 永不原地改写；确定性 upcaster 只产生读取视图，无法安全解释时进入 recovery-pending。Server 从 registry 公开只读 Contract capabilities；后续实施必须在共享 contracts package 中提供 discriminated runtime schemas、canonical serialization/hash 与跨端 conformance vectors，CI 同时验证 registry、capabilities、SDK、handler wiring 与保留 event versions，TypeScript interface 或文档声明不能单独构成运行时支持。
+
+最小 registry 覆盖 Message/Read/attention、Promotion gate、PI run/driver lease/scheduling、Task DAG/Offer/claim、子 Task execution/delivery、failure/SLA/reassignment/remediation、根 Task review/termination，以及 Invocation/Action approval。Task claim 只授权承担责任，Invocation authorization 只授权一次限域操作，Action approval 只授权绑定当前 revision 与 Effect identity 的高风险效果；外部系统不支持幂等且调用结果不明时必须形成 `outcome_unknown` 与 `action_required`，禁止自动重试。
+
+该决策细化 ADR-0062 的 Server authority 与原子编排、ADR-0063 的具名状态转换、ADR-0064 的 DAG/Offer/acceptance、ADR-0065 的失败与改派，以及 ADR-0066 的受众投影和非 Message 系统活动。它不决定旧 Channel Coordinator/API/数据的迁移和 rollout（由 #899 决定），也不决定多个根 Task 的全局公平性、优先级、配额、饥饿保护、backpressure、具体 transport、数据库或部署实现。

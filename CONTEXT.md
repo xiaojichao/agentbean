@@ -87,6 +87,86 @@ _Avoid_: Message Inbox item、Message Read boundary、每个 reminder 新建责�
 Server 从已提交的 Task 或 PI orchestration event 面向特定受众与界面生成的人类可读投影：Task 详情保留完整活动时间线，来源 Thread 使用持久 Task 活动卡呈现稀疏里程碑，Inbox 通过 System attention item 只投影与接收者责任相关的 attention 或 action_required。它绑定稳定 event identity、revision 与 sequence，但不是 Message、发送者或新的业务事实；PI Manager 不以成员、头像、聊天气泡或输入状态出现。
 _Avoid_: PI message、PI reply、orchestration chat、客户端从 notice 猜测事实、三处等量复制事件、Read 即处理、原始 audit/prompt/chain-of-thought、跨受众泄露受限内容。
 
+## Command registry
+
+Server-owned 的封闭写合同目录，为每个具名 command 固定 initiator/authority、目标、runtime schema、并发依据、幂等范围、成功事实、outcome、audit 与可见级别；未登记 command 不得修改权威状态。
+_Avoid_: 通用 mutation、客户端自定义 command、handler 私有写语义、system-only 直接写数据库、文档与 runtime schema 分叉。
+
+## Command envelope
+
+所有具名 command 共用的 transport-independent 外层合同，携带 command/schema identity、idempotency key、expected revisions、Freshness basis 与来源引用；具体 payload 由 command type 的 exact-key schema 定义，authority 由 Server 推导。
+_Avoid_: REST path 充当领域语义、客户端自报 actor/role、任意 patch、未知字段容错、临时 credential 进入语义 payload。
+
+## Idempotency scope
+
+Server 以 tenant/scope、command type、目标 lineage/aggregate 与逻辑 authority subject 为同一 key 划定的去重边界；它绑定业务命令而非网络请求或短命 worker。
+_Avoid_: 全系统裸 key、worker-local cache、lease holder identity、随机重试 key、客户端自行选择 scope。
+
+## Command receipt
+
+Server 为一条幂等 command 持久保存的最终结果事实，绑定 canonical command hash、`applied` 或 `no_op` outcome、提交后的 revisions、event references 与 commit position；同 key 同 hash 的 replay 返回同一 receipt，不重新执行。
+_Avoid_: HTTP response cache、domain event、attempt audit、每次重试新结果、用当前 schema 改写旧结果。
+
+## Idempotency tombstone
+
+Command receipt 的敏感或大型结果被合法压缩后仍保留的最小去重事实，足以识别 replay、不同 payload conflict 与原 event/aggregate 引用，但不能恢复已删除内容。
+_Avoid_: 可重新执行的过期缓存、永久保存原文、客户端释放 key、删除 receipt 即允许重做。
+
+## Command outcome
+
+具名 command 的结构化结果分类，固定区分 `applied`、`no_op`、`replayed`、`freshness_hold`、`conflict`、`rejected`、`temporarily_unavailable` 与 `outcome_unknown`，并携带稳定 code 与 retry directive。
+_Avoid_: 只靠 HTTP status、异常字符串、所有失败可重试、hold 等同 conflict、未知结果等同未提交。
+
+## Outcome unknown
+
+Server 或调用方因网络、存储或响应中断无法确认事务是否提交的 command outcome；调用方必须保留原 idempotency key，通过 receipt query 或同 key replay 收敛，不能换 key 重做。
+_Avoid_: 普通失败、自动换 key、乐观回滚、客户端超时即未提交、外部效果未知时自动重试。
+
+## Consistency token
+
+Command receipt 为受影响权威 stream 返回的 commit positions 集合，供后续 Query 要求最低可见位置并获得 read-your-writes；投影未追上时必须明确返回 not-ready，不能伪装成满足 token。
+_Avoid_: websocket cursor、notice 到达位置、全系统全局 sequence、客户端本地时间、旧投影静默成功。
+
+## Candidate-producing read operation
+
+读取权威状态并签发后续确认 token、但不提交业务变化的特殊 Server read；`message check` 只返回连续 Inbox 前缀与 Read candidate，`ack-read-candidate` 才推进 Read boundary。
+_Avoid_: 普通 Query 自动已读、候选签发即 ack、domain event、跳页 boundary、页面打开即 Read。
+
+## Causation reference
+
+一条 command 唯一的直接原因引用，绑定来源 kind、stable identity、revision/sequence、scope 与适用 hash；它解释为何此刻执行，但不授予读取或执行权限。
+_Avoid_: 多个直接原因、自然语言理由、authority token、复制完整来源 payload、system triggered 无权威事实。
+
+## Source reference
+
+Command 除直接原因外使用的零到多个支持事实引用，保持各来源当时 revision/hash 的 provenance；来源后续编辑或删除不静默改写已提交 command、Task 或 event。
+_Avoid_: ambient context、权限继承、latest 指针、来源删除级联删除派生事实、跨 scope 正文副本。
+
+## Audience-scoped change feed
+
+Server 面向特定 consumer 依据当前权限生成、使用 opaque resume cursor 的至少一次投递增量流；cursor acknowledgement 只确认 feed delivery，不推进 Message Read、attention 或 Task 责任。
+_Avoid_: 原始 event 广播、全局总序、notice 即事实、cursor 授予历史权限、客户端先收完整 payload 再隐藏。
+
+## Contract capabilities
+
+Server 从 Command registry 与共享 runtime schemas 公开的只读兼容视图，列出当前支持的 command/query/event versions 与退役窗口；调用方不得把缺失能力静默降级到相似操作。
+_Avoid_: 静态文档、Provider capability、自动 fallback、TypeScript interface 即 runtime 支持、声明存在但 handler 未接线。
+
+## Invocation authorization
+
+Server 为某次 Agent operation 签发的限域执行许可，绑定 execution claim、Task revision、attempt、Agent、operation、input snapshot、risk、deadline 与 Effect identity；Task claim 本身不自动授权所有工具或外部副作用。
+_Avoid_: Task claim、Agent acceptance、Action approval、Offer token、ambient execution access、跨 attempt 复用。
+
+## Action approval
+
+合法人类 approver 对某个绑定 revision、risk、scope 与 Effect identity 的高风险 Agent operation 作出的显式授权；它不由 Promotion authorization、Task claim、Invocation authorization 或交付验收自动推导。
+_Avoid_: Promotion authorization、root review token、自然语言同意、一次批准覆盖后续 revision、Task 目标包含发布即已批准发布。
+
+## Effect identity
+
+Server 从已提交 command/Invocation identity 派生、用于对外部副作用进行去重与结果核对的稳定身份；外部系统无法保证幂等且结果不明时，系统必须进入 action_required 而不是自动重试。
+_Avoid_: 每次调用随机 key、Task ID 复用所有效果、客户端时间、外部 outcome unknown 自动重放、本地 daemon 记忆。
+
 ## PI Manager
 
 AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
