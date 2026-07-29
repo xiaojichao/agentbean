@@ -109,6 +109,10 @@ describe('evaluatePromotionFreshness', () => {
     expect(evaluatePromotionFreshness({ requestedSourceRevision: 3, currentSourceRevision: 3 }))
       .toEqual({ ok: true });
   });
+  test('requested revision 无法由当前来源验证 → hold', () => {
+    expect(evaluatePromotionFreshness({ requestedSourceRevision: 3 }))
+      .toEqual({ hold: true, reason: 'source-revision-unavailable' });
+  });
   test('source explicitly changed → hold (stale token cannot cross revision, #894 §5)', () => {
     const decision = evaluatePromotionFreshness({ sourceChanged: true });
     expect('hold' in decision).toBe(true);

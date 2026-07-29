@@ -370,6 +370,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     taskCoordinationUnitOfWork: createTaskCoordinationUnitOfWork((operation) =>
       management.unitOfWork.run(async (managementRepositories) => {
         const taskSnapshot = new Map(tasks);
+        const taskCoordinationDispatchSnapshot = new Map(dispatches);
         const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
         const promotionSnapshot = clonePromotionGateMemoryState(promotionState);
         try {
@@ -387,6 +388,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         } catch (error) {
           tasks.clear();
           for (const [id, task] of taskSnapshot) tasks.set(id, task);
+          dispatches.clear();
+          for (const [id, dispatch] of taskCoordinationDispatchSnapshot) dispatches.set(id, dispatch);
           restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
           restorePromotionGateMemoryState(promotionState, promotionSnapshot);
           throw error;

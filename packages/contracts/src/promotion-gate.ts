@@ -13,8 +13,8 @@ import { COMMAND_PROVENANCE_KINDS, type CommandProvenanceKind, type CommandProve
  * promotion authorization 只授权创建 root Task 与启动 PI orchestration，不授予删除、发布、付款、
  * 外发数据或生产变更等高风险 action（#894 §8）。
  *
- * 本票只实现结构化 human trigger（`promote-to-task`）；proposal accept/reject/cancel/expire、
- * Agent escalation、policy 与语义 evaluator 属后续切片，不在 #922 范围。
+ * #922 先实现结构化 human trigger；#923 扩展 proposal accept、Agent escalation 与确定性
+ * Team policy。非 human trigger 只能由 Server 内部经过各自授权策略后调用，transport 不能自报 authority。
  *
  * 本文件只提供 runtime schemas、discriminated unions、contract capabilities、canonical serialization
  * 与跨端 conformance 基础；具体 handler、存储与接线属于 server-next 切片。
@@ -44,7 +44,9 @@ export const PROMOTION_GATE_COMMAND_HASH_VERSION = 1;
  * 普通自然语言、@Agent、DM、Thread owner 都不是 trigger，永远不能调用本 gate。
  * #922 只实现 human-structured；proposal accept / Agent escalation / policy 留后续切片。
  */
-export const PROMOTION_TRIGGER_KINDS = ['human-structured'] as const;
+export const PROMOTION_TRIGGER_KINDS = [
+  'human-structured', 'proposal-accept', 'team-policy', 'agent-escalation',
+] as const;
 
 export type PromotionTriggerKind = (typeof PROMOTION_TRIGGER_KINDS)[number];
 
@@ -126,7 +128,7 @@ export interface PromotionGateCommandInputMapV1 {
    * receipt/event/audit/outbox（#894 §10）；排队/lease/模型调用不把 root Task 推进为 in_progress。
    */
   readonly 'promote-to-task': {
-    readonly triggerKind: 'human-structured';
+    readonly triggerKind: PromotionTriggerKind;
     readonly channelId: ID;
     readonly rootMessageId?: ID;
     readonly objectiveSnapshot: PromotionObjectiveSnapshotV1;
