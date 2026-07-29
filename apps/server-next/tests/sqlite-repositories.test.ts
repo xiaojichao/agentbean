@@ -17,6 +17,7 @@ import {
   type SqliteDatabase,
 } from '../src/infra/sqlite/repositories';
 import { createSqliteArtifactPreviewRepository } from '../src/infra/sqlite/artifact-preview-repository';
+import { createSqlitePromotionGateRepositories } from '../src/infra/sqlite/promotion-gate-repositories';
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
@@ -60,8 +61,125 @@ describe('server-next SQLite repositories', () => {
           'pinned_messages',
           'artifact_preview_jobs',
           'project_document_input_set_results',
+          'semantic_promotion_evaluations',
+          'semantic_promotion_rollouts',
+          'promotion_proposals',
+          'promotion_proposal_action_receipts',
+          'team_promotion_policies',
+          'simple_request_escalation_handoffs',
         ]),
       );
+    } finally {
+      close();
+    }
+  });
+
+  test('persists #923 proposal policy and simple-request handoff records', async () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      const promotion = createSqlitePromotionGateRepositories(teamDb);
+      await promotion.semanticRollout.upsert({
+        schemaVersion: 1,
+        teamId: 'team-1',
+        mode: 'proposal-only',
+        revision: 1,
+        updatedAt: 90,
+      });
+      expect(await promotion.semanticRollout.get('team-1')).toMatchObject({ mode: 'proposal-only', revision: 1 });
+      expect(await promotion.semanticRollout.get('team-2')).toBeNull();
+      expect(await promotion.semanticRollout.upsert({
+        schemaVersion: 1,
+        teamId: 'team-1',
+        mode: 'off',
+        revision: 1,
+        updatedAt: 91,
+      })).toBeNull();
+      await promotion.teamPolicy.upsert({
+        schemaVersion: 1,
+        teamId: 'team-1',
+        revision: 1,
+        enabled: true,
+        ruleId: 'structured-workflow',
+        preauthorized: true,
+        requireOrchestrationNeed: true,
+        updatedAt: 100,
+      });
+      expect(await promotion.teamPolicy.upsert({
+        schemaVersion: 1,
+        teamId: 'team-1',
+        revision: 1,
+        enabled: false,
+        ruleId: 'structured-workflow',
+        preauthorized: true,
+        requireOrchestrationNeed: true,
+        updatedAt: 101,
+      })).toBeNull();
+      await promotion.teamPolicy.upsert({
+        schemaVersion: 1,
+        teamId: 'team-1',
+        revision: 2,
+        enabled: true,
+        ruleId: 'structured-workflow',
+        preauthorized: true,
+        requireOrchestrationNeed: true,
+        updatedAt: 102,
+      });
+      expect(await promotion.teamPolicy.get('team-1')).toMatchObject({
+        revision: 2,
+        ruleId: 'structured-workflow',
+      });
+      expect(await promotion.teamPolicy.get('team-2')).toBeNull();
+      await promotion.proposals.create({
+        id: 'proposal-1',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        sourceLineageKey: 'team-1:message:message-1',
+        sourceLineageJson: JSON.stringify({ kind: 'message', id: 'message-1' }),
+        sourceRevision: 1,
+        requesterId: 'user-1',
+        approverId: 'user-1',
+        objectiveSnapshotJson: JSON.stringify({
+          schemaVersion: 1,
+          objective: '协调多个 Agent',
+          scope: '当前频道',
+          riskLevel: 'low',
+        }),
+        status: 'open',
+        revision: 1,
+        authorizationTokenHash: 'token-hash',
+        expiresAt: 2_000,
+        rootTaskId: null,
+        managementRunId: null,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      });
+      expect(await promotion.proposals.updateStatus({
+        proposalId: 'proposal-1',
+        expectedRevision: 1,
+        status: 'accepted',
+        rootTaskId: 'task-1',
+        managementRunId: 'run-1',
+        updatedAt: 1_100,
+      })).toMatchObject({ status: 'accepted', revision: 2, rootTaskId: 'task-1' });
+      await promotion.handoffs.create({
+        id: 'handoff-1',
+        teamId: 'team-1',
+        sourceMessageId: 'message-1',
+        sourceDispatchId: 'dispatch-1',
+        targetAgentId: 'agent-1',
+        rootTaskId: 'task-1',
+        managementRunId: 'run-1',
+        status: 'applied',
+        targetedOfferRequired: true,
+        targetedOfferId: 'offer-1',
+        materialJson: '{"kind":"unaccepted-handoff-material"}',
+        createdAt: 1_100,
+      });
+      expect(await promotion.handoffs.getBySourceDispatchId('dispatch-1')).toMatchObject({
+        targetAgentId: 'agent-1',
+        targetedOfferRequired: true,
+        targetedOfferId: 'offer-1',
+      });
     } finally {
       close();
     }

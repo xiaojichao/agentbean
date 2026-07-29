@@ -151,6 +151,15 @@ import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runti
 import { createPiProviderService, getEmergencyStopActive } from './pi-provider-service.js';
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
+import { createPromotionModesService } from './promotion-modes-service.js';
+import {
+  parseAgentOrchestrationEscalationCommandV1,
+  parsePromotionProposalActionV1,
+  parseSemanticPromotionEvaluateCommandV1,
+  parseSemanticPromotionRolloutStateV1,
+  parseTeamPromotionPolicyApplicationV1,
+  parseTeamPromotionPolicyV1,
+} from '../../../../packages/contracts/src/index.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import {
   compareChannelFileSnapshots,
@@ -307,6 +316,38 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }>;
+  /** #923 模型评估入口：只产 clarification/proposal/audit，永远不 direct promote。 */
+  evaluateSemanticPromotion(input: {
+    userId: string;
+    teamId: string;
+    command: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
+  /** #923 已认证 Human 对 Server 签发 proposal 执行动作。 */
+  actOnPromotionProposal(input: {
+    userId: string;
+    teamId: string;
+    action: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
+  updateSemanticPromotionRollout(input: {
+    userId: string;
+    teamId: string;
+    state: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
+  updateTeamPromotionPolicy(input: {
+    userId: string;
+    teamId: string;
+    policy: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
+  applyTeamPromotionPolicy(input: {
+    userId: string;
+    teamId: string;
+    command: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
+  /** #923 daemon 认证设备上的责任 Agent 才能请求 escalation。 */
+  escalateAgentOrchestration(input: {
+    deviceId: string;
+    command: unknown;
+  }): Promise<Ack<{ result: unknown }>>;
   /** Channel Coordinator（#706）：处理单个 Coordination Job。供测试与生产 driver 调用。 */
   processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome>;
   /** Channel Coordinator（#706）：串行消费所有到期 Job。供测试与生产 driver 调用。 */
@@ -1379,6 +1420,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         }),
       })
     : null;
+  const promotionModesForTeam = (teamId: string) => createPromotionModesService({
+    teamId,
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock,
+    ids,
+    issueAuthorizationToken(tokenInput) {
+      const payload = Buffer.from(JSON.stringify(tokenInput), 'utf8').toString('base64url');
+      const signature = createHmac('sha256', sessionSecret).update(payload).digest('base64url');
+      return `${payload}.${signature}`;
+    },
+    async canApproveProposal({ teamId: approvalTeamId, userId }) {
+      const role = await repositories.teams.getMemberRole(approvalTeamId, userId);
+      return role === 'owner' || role === 'admin';
+    },
+    async resolveActiveManifestRevision({ teamId: manifestTeamId, agentId, now }) {
+      const manifest = await repositories.agentExposure.manifests
+        .getActiveByTeamAgent(manifestTeamId, agentId);
+      return manifest && (manifest.validUntil === null || manifest.validUntil > now)
+        ? manifest.revision
+        : null;
+    },
+  });
   async function dispatchMessageTracerCommand(input: {
     envelope: unknown;
     payload: unknown;
@@ -1928,6 +1991,150 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
     processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome> {
       return channelCoordinator.processJob(jobId);
+    },
+    async evaluateSemanticPromotion(promotionInput) {
+      if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
+        return makeFailure('FORBIDDEN', 'Requester is not a team member');
+      }
+      let command: ReturnType<typeof parseSemanticPromotionEvaluateCommandV1>;
+      try {
+        command = parseSemanticPromotionEvaluateCommandV1(promotionInput.command);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Promotion evaluation payload invalid');
+      }
+      try {
+        const result = await promotionModesForTeam(promotionInput.teamId).evaluateSemantic({
+          channelId: command.channelId,
+          requesterId: promotionInput.userId,
+          approverId: command.approverId,
+          ...(command.evaluation ? { evaluation: command.evaluation } : {}),
+          ...(command.evaluatorFailed ? { evaluatorFailed: true } : {}),
+          ...(command.exclusion ? { exclusion: command.exclusion } : {}),
+        });
+        return makeSuccess({ result });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Promotion evaluation failed');
+      }
+    },
+    async actOnPromotionProposal(promotionInput) {
+      if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      let action: ReturnType<typeof parsePromotionProposalActionV1>;
+      try {
+        action = parsePromotionProposalActionV1(promotionInput.action);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Promotion proposal action invalid');
+      }
+      try {
+        const result = await promotionModesForTeam(promotionInput.teamId).actOnProposal({
+          actorId: promotionInput.userId,
+          action,
+        });
+        return makeSuccess({ result });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Promotion proposal action failed');
+      }
+    },
+    async updateSemanticPromotionRollout(promotionInput) {
+      const role = await repositories.teams.getMemberRole(promotionInput.teamId, promotionInput.userId);
+      if (role !== 'owner' && role !== 'admin') {
+        return makeFailure('FORBIDDEN', 'Team owner or admin required');
+      }
+      let state: ReturnType<typeof parseSemanticPromotionRolloutStateV1>;
+      try {
+        state = parseSemanticPromotionRolloutStateV1(promotionInput.state);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Promotion rollout payload invalid');
+      }
+      if (state.teamId !== promotionInput.teamId) {
+        return makeFailure('FORBIDDEN', 'Promotion rollout team mismatch');
+      }
+      try {
+        return makeSuccess({
+          result: await promotionModesForTeam(promotionInput.teamId).upsertSemanticRollout(state),
+        });
+      } catch (error) {
+        return error instanceof Error && error.message === 'SEMANTIC_PROMOTION_ROLLOUT_REVISION_CONFLICT'
+          ? makeFailure('CONFLICT', error.message)
+          : makeFailure('INTERNAL_ERROR', 'Promotion rollout update failed');
+      }
+    },
+    async updateTeamPromotionPolicy(promotionInput) {
+      const role = await repositories.teams.getMemberRole(promotionInput.teamId, promotionInput.userId);
+      if (role !== 'owner' && role !== 'admin') {
+        return makeFailure('FORBIDDEN', 'Team owner or admin required');
+      }
+      let policy: ReturnType<typeof parseTeamPromotionPolicyV1>;
+      try {
+        policy = parseTeamPromotionPolicyV1(promotionInput.policy);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Promotion policy payload invalid');
+      }
+      if (policy.teamId !== promotionInput.teamId) {
+        return makeFailure('FORBIDDEN', 'Promotion policy team mismatch');
+      }
+      try {
+        return makeSuccess({
+          result: await promotionModesForTeam(promotionInput.teamId).upsertTeamPolicy(policy),
+        });
+      } catch (error) {
+        return error instanceof Error && error.message === 'TEAM_PROMOTION_POLICY_REVISION_CONFLICT'
+          ? makeFailure('CONFLICT', error.message)
+          : makeFailure('INTERNAL_ERROR', 'Promotion policy update failed');
+      }
+    },
+    async applyTeamPromotionPolicy(promotionInput) {
+      if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
+        return makeFailure('FORBIDDEN', 'Requester is not a team member');
+      }
+      let command: ReturnType<typeof parseTeamPromotionPolicyApplicationV1>;
+      try {
+        command = parseTeamPromotionPolicyApplicationV1(promotionInput.command);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Promotion policy application invalid');
+      }
+      try {
+        const result = await promotionModesForTeam(promotionInput.teamId).applyTeamPolicy({
+          requesterId: promotionInput.userId,
+          channelId: command.channelId,
+          ruleId: command.ruleId,
+          orchestrationNeed: command.orchestrationNeed,
+          ...(command.exclusion ? { exclusion: command.exclusion } : {}),
+          objectiveSnapshot: command.objectiveSnapshot,
+          freshnessBasis: command.freshnessBasis,
+          idempotencyKey: command.idempotencyKey,
+        });
+        return makeSuccess({ result });
+      } catch {
+        return makeFailure('INTERNAL_ERROR', 'Promotion policy application failed');
+      }
+    },
+    async escalateAgentOrchestration(promotionInput) {
+      let command;
+      try {
+        command = parseAgentOrchestrationEscalationCommandV1(promotionInput.command);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Agent escalation payload invalid');
+      }
+      const simple = command.escalation.simpleRequest;
+      if (!simple) return makeFailure('VALIDATION_ERROR', 'Simple request context required');
+      const [agent, dispatch] = await Promise.all([
+        repositories.agents.getById(command.escalation.agentId),
+        repositories.dispatches.getById(simple.dispatchId),
+      ]);
+      if (!agent || agent.deviceId !== promotionInput.deviceId || !dispatch
+        || dispatch.agentId !== agent.id || dispatch.messageId !== simple.messageId) {
+        return makeFailure('FORBIDDEN', 'Agent escalation authority mismatch');
+      }
+      const team = await repositories.teams.getById(dispatch.teamId);
+      if (!team) return makeFailure('NOT_FOUND', 'Team not found');
+      const result = await promotionModesForTeam(dispatch.teamId).escalateAgent({
+        escalation: command.escalation,
+        idempotencyKey: command.idempotencyKey,
+        approverId: team.ownerId,
+      });
+      return makeSuccess({ result });
     },
     async registerUser(registerInput) {
       const existing = await repositories.users.getByUsername(registerInput.username);

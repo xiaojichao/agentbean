@@ -6,6 +6,10 @@ import type {
   PromotionRiskLevel,
   PromotionRevisionRefV1,
   PromotionEventRefV1,
+  PromotionProposalStatus,
+  SemanticPromotionRolloutMode,
+  SemanticPromotionRolloutStateV1,
+  TeamPromotionPolicyV1,
 } from '../../../../packages/contracts/src/index.js';
 
 /**
@@ -126,6 +130,69 @@ export interface PromotionIdempotencyTombstoneRecord {
 }
 
 // ---------------------------------------------------------------------------
+// #923 Promotion modes / proposal / simple request handoff
+// ---------------------------------------------------------------------------
+
+export interface SemanticPromotionEvaluationRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly sourceLineageKey: string;
+  readonly rollout: SemanticPromotionRolloutMode;
+  readonly pathKind: string;
+  readonly evaluationJson: string | null;
+  readonly createdAt: UnixMs;
+}
+
+export interface PromotionProposalRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly sourceLineageKey: string;
+  readonly sourceLineageJson: string;
+  readonly sourceRevision: number | null;
+  readonly requesterId: ID;
+  readonly approverId: ID;
+  readonly objectiveSnapshotJson: string;
+  readonly status: PromotionProposalStatus;
+  readonly revision: number;
+  readonly authorizationTokenHash: string;
+  readonly expiresAt: UnixMs;
+  readonly rootTaskId: ID | null;
+  readonly managementRunId: ID | null;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+export interface PromotionProposalActionReceiptRecord {
+  readonly id: ID;
+  readonly proposalId: ID;
+  readonly authoritySubject: string;
+  readonly idempotencyKey: string;
+  readonly action: 'accept' | 'reject' | 'cancel' | 'expire';
+  readonly commandHash: string;
+  readonly outcome: 'applied' | 'no_op';
+  readonly resultJson: string;
+  readonly createdAt: UnixMs;
+}
+
+export interface SimpleRequestEscalationHandoffRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly sourceMessageId: ID;
+  readonly sourceDispatchId: ID;
+  readonly targetAgentId: ID;
+  readonly rootTaskId: ID;
+  readonly managementRunId: ID;
+  readonly status: 'applied';
+  readonly targetedOfferRequired: true;
+  /** 原始 @Agent 主执行者约束转换出的真实 hard-specified Task Offer。 */
+  readonly targetedOfferId: ID;
+  readonly materialJson: string;
+  readonly createdAt: UnixMs;
+}
+
+// ---------------------------------------------------------------------------
 // 仓储接口
 // ---------------------------------------------------------------------------
 
@@ -154,9 +221,52 @@ export interface PromotionCommandReceiptRepository {
   getTombstoneByIdempotencyKey(idempotencyKey: string): Promise<PromotionIdempotencyTombstoneRecord | null>;
 }
 
+export interface SemanticPromotionEvaluationRepository {
+  create(input: SemanticPromotionEvaluationRecord): Promise<SemanticPromotionEvaluationRecord>;
+  listBySourceLineageKey(sourceLineageKey: string): Promise<SemanticPromotionEvaluationRecord[]>;
+}
+
+export interface SemanticPromotionRolloutRepository {
+  get(teamId: ID): Promise<SemanticPromotionRolloutStateV1 | null>;
+  /** 首次必须 revision=1；后续只接受相同内容重放或 current+1。 */
+  upsert(input: SemanticPromotionRolloutStateV1): Promise<SemanticPromotionRolloutStateV1 | null>;
+}
+
+export interface PromotionProposalRepository {
+  create(input: PromotionProposalRecord): Promise<PromotionProposalRecord>;
+  getById(id: ID): Promise<PromotionProposalRecord | null>;
+  getOpenBySourceLineageKey(sourceLineageKey: string): Promise<PromotionProposalRecord | null>;
+  updateStatus(input: {
+    readonly proposalId: ID;
+    readonly expectedRevision: number;
+    readonly status: Exclude<PromotionProposalStatus, 'open'>;
+    readonly rootTaskId?: ID;
+    readonly managementRunId?: ID;
+    readonly updatedAt: UnixMs;
+  }): Promise<PromotionProposalRecord | null>;
+  createActionReceipt(input: PromotionProposalActionReceiptRecord): Promise<PromotionProposalActionReceiptRecord>;
+  getActionReceiptByIdempotencyKey(idempotencyKey: string): Promise<PromotionProposalActionReceiptRecord | null>;
+}
+
+export interface TeamPromotionPolicyRepository {
+  get(teamId: ID): Promise<TeamPromotionPolicyV1 | null>;
+  /** 首次必须 revision=1；后续只接受相同内容重放或 current+1。 */
+  upsert(input: TeamPromotionPolicyV1): Promise<TeamPromotionPolicyV1 | null>;
+}
+
+export interface SimpleRequestEscalationHandoffRepository {
+  create(input: SimpleRequestEscalationHandoffRecord): Promise<SimpleRequestEscalationHandoffRecord>;
+  getBySourceDispatchId(sourceDispatchId: ID): Promise<SimpleRequestEscalationHandoffRecord | null>;
+}
+
 export interface PromotionGateRepositories {
   readonly sourceRelations: PromotionSourceRelationRepository;
   readonly schedulingIntents: PromotionSchedulingIntentRepository;
   readonly outbox: PromotionOutboxRepository;
   readonly receipts: PromotionCommandReceiptRepository;
+  readonly evaluations: SemanticPromotionEvaluationRepository;
+  readonly semanticRollout: SemanticPromotionRolloutRepository;
+  readonly proposals: PromotionProposalRepository;
+  readonly teamPolicy: TeamPromotionPolicyRepository;
+  readonly handoffs: SimpleRequestEscalationHandoffRepository;
 }

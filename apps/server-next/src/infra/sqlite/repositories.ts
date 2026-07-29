@@ -220,6 +220,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0058_inbox_mentions_recipient.sql');
   // #922 Promotion gate：source relation / scheduling / outbox / receipt / tombstone。
   applyMigration(db, 'team/0059_promotion_gate.sql');
+  applyMigration(db, 'team/0060_promotion_modes.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

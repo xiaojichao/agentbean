@@ -297,6 +297,26 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.deviceInvite.complete, app, 'completeDeviceInvite', (payload, result) =>
     options.afterDeviceInviteComplete?.(payload, result), { authenticatedUser: options.authenticatedUser },
   );
+  bind(socket, WEB_EVENTS.promotion.semanticEvaluate, app, 'evaluateSemanticPromotion', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.promotion.proposalAction, app, 'actOnPromotionProposal', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.promotion.semanticRolloutUpdate, app, 'updateSemanticPromotionRollout', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.promotion.teamPolicyUpdate, app, 'updateTeamPromotionPolicy', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.promotion.teamPolicyApply, app, 'applyTeamPromotionPolicy', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   bind(socket, WEB_EVENTS.device.list, app, 'listDevices', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.agentsList, app, 'listDeviceAgents', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.device.get, app, 'getDevice', undefined, { authenticatedUser: options.authenticatedUser });
@@ -888,6 +908,14 @@ export function registerAgentSocketHandlers(
   };
   bind(socket, AGENT_EVENTS.agent.registerBatch, app, 'registerDiscoveredAgents', afterAgentMutation);
   bind(socket, AGENT_EVENTS.agent.reportCustomSkills, app, 'reportCustomSkills', afterAgentMutation);
+  bind(socket, AGENT_EVENTS.promotion.escalate, app, 'escalateAgentOrchestration', undefined, {
+    augmentInput(payload) {
+      return {
+        deviceId: options.connectedDeviceId?.() ?? '',
+        command: payload,
+      };
+    },
+  });
   bind(socket, AGENT_EVENTS.dispatch.accepted, app, 'acceptDispatch', undefined, {
     augmentInput(payload) {
       const base = payload && typeof payload === 'object' ? payload : {};

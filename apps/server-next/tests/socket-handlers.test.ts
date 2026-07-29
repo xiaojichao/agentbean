@@ -121,6 +121,11 @@ describe('server-next socket handlers', () => {
       acceptMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
       rejectMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
       mergeMemoryCandidate: vi.fn(async (payload) => makeSuccess({ payload })),
+      evaluateSemanticPromotion: vi.fn(async (payload) => makeSuccess({ payload })),
+      actOnPromotionProposal: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateSemanticPromotionRollout: vi.fn(async (payload) => makeSuccess({ payload })),
+      updateTeamPromotionPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
+      applyTeamPromotionPolicy: vi.fn(async (payload) => makeSuccess({ payload })),
       deleteTeam: vi.fn(async (payload) => makeSuccess({ payload })),
     } as unknown as ServerNextUseCases;
 
@@ -170,6 +175,11 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.join.revoke,
       WEB_EVENTS.deviceInvite.create,
       WEB_EVENTS.deviceInvite.complete,
+      WEB_EVENTS.promotion.semanticEvaluate,
+      WEB_EVENTS.promotion.proposalAction,
+      WEB_EVENTS.promotion.semanticRolloutUpdate,
+      WEB_EVENTS.promotion.teamPolicyUpdate,
+      WEB_EVENTS.promotion.teamPolicyApply,
       WEB_EVENTS.device.list,
       WEB_EVENTS.device.agentsList,
       WEB_EVENTS.device.get,
@@ -1434,6 +1444,7 @@ describe('server-next socket handlers', () => {
       deviceHello: vi.fn(async (payload) => makeSuccess({ payload })),
       reportDeviceRuntimes: vi.fn(async (payload) => makeSuccess({ payload })),
       registerDiscoveredAgents: vi.fn(async (payload) => makeSuccess({ payload })),
+      escalateAgentOrchestration: vi.fn(async (payload) => makeSuccess({ payload })),
       acceptDispatch: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchResult: vi.fn(async (payload) => makeSuccess({ payload })),
       receiveDispatchError: vi.fn(async (payload) => makeSuccess({ payload })),
@@ -1447,6 +1458,7 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.device.runtimes,
       AGENT_EVENTS.agent.registerBatch,
       AGENT_EVENTS.agent.reportCustomSkills,
+      AGENT_EVENTS.promotion.escalate,
       AGENT_EVENTS.dispatch.accepted,
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
@@ -1523,6 +1535,26 @@ describe('server-next socket handlers', () => {
       ],
     });
     expect(app.receiveDispatchError).toHaveBeenCalledWith({ dispatchId: 'dispatch-1' });
+  });
+
+  test('Agent promotion escalation 注入已认证连接的 deviceId', async () => {
+    const socket = new FakeSocket();
+    const app = {
+      escalateAgentOrchestration: vi.fn(async (payload) => makeSuccess({ payload })),
+    } as unknown as ServerNextUseCases;
+    registerAgentSocketHandlers(socket, app, { connectedDeviceId: () => 'device-1' });
+    const command = {
+      schemaVersion: 1,
+      idempotencyKey: 'escalate-1',
+      escalation: { schemaVersion: 1 },
+    };
+
+    await socket.trigger(AGENT_EVENTS.promotion.escalate, command);
+
+    expect(app.escalateAgentOrchestration).toHaveBeenCalledWith({
+      deviceId: 'device-1',
+      command,
+    });
   });
 
   test('enriches agent management refresh payloads without changing client acknowledgements', async () => {
