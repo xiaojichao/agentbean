@@ -39,6 +39,8 @@ export interface InboxItemRecord {
   readonly targetSeq: number;
   readonly senderKind: MessageSenderKind;
   readonly senderId: ID;
+  /** 该消息是否 @提及了该 recipient（频道主线 freshness relevance，#893 §4）。 */
+  readonly mentionsRecipient: boolean;
   /** 该消息在事务里提交的时间。 */
   readonly committedAt: UnixMs;
   readonly createdAt: UnixMs;
@@ -125,6 +127,11 @@ export interface MessageInboxRepository {
   listItems(input: InboxTargetKey & { afterSeq: number; limit: number }): Promise<InboxItemRecord[]>;
   /** 当前 recipient × target 的最大 target_seq（无项则 -1）。handler 用其分配下一条 seq（事务内序列化，安全）。 */
   getMaxTargetSeq(input: InboxTargetKey): Promise<number>;
+  /**
+   * 是否存在「自 sinceSeq 起、@提及该 recipient」的未读项（频道主线 freshness relevance，#893 §4）。
+   * sinceSeq 为 readCandidate.targetSeq（exclusive 下一未读位）；target_seq >= sinceSeq 即未读。
+   */
+  hasUnreadMention(input: InboxTargetKey & { sinceSeq: number }): Promise<boolean>;
   /** 读取当前权威 Read boundary；无记录返回 null。 */
   getReadBoundary(input: InboxTargetKey): Promise<InboxReadBoundaryRecord | null>;
   /**

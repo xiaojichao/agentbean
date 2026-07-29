@@ -211,6 +211,8 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
         targetSeq,
         senderKind: input.senderKind,
         senderId,
+        // 该消息是否 @提及该 recipient（频道主线 freshness relevance，#893 §4）。
+        mentionsRecipient: input.mentions?.some((m) => m.id === recipientId) ?? false,
         committedAt: now,
         createdAt: now,
       })));
@@ -542,7 +544,7 @@ function resolveRecipients(humanMemberIds: readonly ID[], agentMemberIds: readon
   return Array.from(set);
 }
 
-/** freshness 校验：仅 readCandidate gate（basisMessageId/basisTaskId 暂作信息性，最小 C-send）。返回非 null = hold/reject。 */
+/** freshness 校验：仅 readCandidate gate（#893 §4 relevance）。返回非 null = hold/reject。 */
 async function checkFreshnessRequest(
   tx: Parameters<Parameters<ChannelCoordinationUnitOfWork['run']>[0]>[0],
   input: { readonly channelId: ID; readonly threadId?: ID; readonly freshnessBasis: { readonly readCandidate?: ReadCandidateTokenV1; readonly target: MessageTargetRefV1 } },
@@ -570,24 +572,31 @@ async function checkFreshnessRequest(
     channelId: input.channelId,
     threadId: input.threadId ?? null,
   });
-  // exclusive 语义：readCandidate.targetSeq = 发送者上次 check 时的「下一未读」(oldMax+1)。
-  // 若 currentMax >= targetSeq（即 currentMax+1 > targetSeq），说明有新消息到达 → hold。
-  if (currentMax >= rc.targetSeq) {
-    // 存在未读相关消息 → freshness_hold（不写 Message/inbox/outbox，不推进 read boundary）。
-    const newReadCandidate = issueReadCandidate({
-      recipientId: senderId,
-      target: rc.target,
-      targetSeq: currentMax + 1, // 推到当前水位的「下一未读」
-      issuedAt: now,
-      secret,
-    });
-    return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
-      heldTarget: input.freshnessBasis.target,
-      heldReason: 'unread_messages_on_target',
-      newReadCandidate,
-    });
-  }
-  return null;
+  // exclusive 语义：currentMax >= targetSeq 表示有新消息到达（target_seq >= 下一未读位）。
+  if (currentMax < rc.targetSeq) return null; // 无未读 → fresh，继续提交。
+
+  // #893 §4 relevance：DM/DM-thread/Thread 中同 target 所有新非本人消息 relevant；
+  // 频道主线仅 @提及（及后续的 basis Message/Task）relevant，普通无关聊天不阻塞。
+  const relevant = rc.target.kind === 'channel-mainline'
+    ? await tx.inbox.hasUnreadMention({
+        recipientId: senderId, channelId: input.channelId, threadId: input.threadId ?? null, sinceSeq: rc.targetSeq,
+      })
+    : true;
+  if (!relevant) return null; // 主线无关未读 → 不阻塞
+
+  // 存在未读相关消息 → freshness_hold（不写 Message/inbox/outbox，不推进 read boundary）。
+  const newReadCandidate = issueReadCandidate({
+    recipientId: senderId,
+    target: rc.target,
+    targetSeq: currentMax + 1, // 推到当前水位的「下一未读」
+    issuedAt: now,
+    secret,
+  });
+  return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
+    heldTarget: input.freshnessBasis.target,
+    heldReason: 'unread_relevant_message',
+    newReadCandidate,
+  });
 }
 
 /** 统一构造 response 骨架（commandName 显式传入，防字段漂移）。 */
