@@ -4,6 +4,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { classifyChangedFiles } from './detect-ci-changes.mjs';
+
 const rootDir = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
 export function collectAgentBeanNextReadinessChecks({
@@ -22,8 +24,12 @@ export function collectAgentBeanNextReadinessChecks({
   const nvmrc = readFileSync(join(root, '.nvmrc'), 'utf8');
   const piSeaChecker = readFileSync(join(root, 'scripts/check-pi-management-sea.mjs'), 'utf8');
   const piSeaBuilder = readFileSync(join(root, 'scripts/build-pi-management-sea.mjs'), 'utf8');
-  const publishJobCondition =
-    "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
+  const changeDetectionScriptPath = join(root, 'scripts/detect-ci-changes.mjs');
+  const changeDetectionScript = existsSync(changeDetectionScriptPath)
+    ? readFileSync(changeDetectionScriptPath, 'utf8')
+    : '';
+  // Path-token checks may live in the dedicated detector or the legacy inline workflow regex.
+  const changeDetection = `${workflow}\n${changeDetectionScript}`;
   const publishJob = workflow.slice(
     workflow.indexOf('\n  publish:'),
     workflow.indexOf('\n  promote-agentbean-daemon-latest:'),
@@ -32,6 +38,7 @@ export function collectAgentBeanNextReadinessChecks({
     workflow.indexOf('\n  deploy:'),
     workflow.indexOf('\n  railway-next-preflight:'),
   );
+  const publishesOnMainPush = hasMainPushPublishGate(publishJob, workflow);
   const cutoverRunbook = readFileSync(join(root, 'agentbean-next/docs/production-cutover-runbook.md'), 'utf8');
   const verificationMatrix = readFileSync(join(root, 'agentbean-next/docs/verification-matrix.md'), 'utf8');
   const parityBackfillAudit = readFileSync(join(root, 'agentbean-next/docs/parity-backfill-audit.md'), 'utf8');
@@ -105,7 +112,9 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-validates-root-railway-config',
-      workflow.includes('^railway\\.json$'),
+      (changeDetection.includes('railway.json') || changeDetection.includes('railway\\.json')) &&
+        classifyChangedFiles(['railway.json']).should_validate &&
+        classifyChangedFiles(['railway.json']).should_deploy,
       'AgentBean Next CI change detection must include root railway.json',
     ),
     check(
@@ -129,8 +138,18 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-detects-pr-merge-readiness-changes',
-      workflow.includes('check-pr-merge-readiness(\\.test)?') &&
-        workflow.includes('claim-github-issue(\\.test)?') &&
+      changeDetectionIncludesAny(changeDetection, [
+        'check-pr-merge-readiness(\\.test)?',
+        'check-pr-merge-readiness(?:\\.test)?',
+        'check-pr-merge-readiness',
+      ]) &&
+        changeDetectionIncludesAny(changeDetection, [
+          'claim-github-issue(\\.test)?',
+          'claim-github-issue(?:\\.test)?',
+          'claim-github-issue',
+        ]) &&
+        classifyChangedFiles(['scripts/check-pr-merge-readiness.mjs']).should_validate &&
+        classifyChangedFiles(['scripts/claim-github-issue.test.mjs']).should_validate &&
         packageJson.scripts?.['test:issue-claim'] === 'node --test scripts/claim-github-issue.test.mjs',
       'CI change detection must cover PR readiness and Session Claim guards and run their tests',
     ),
@@ -388,7 +407,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('Railway Next preflight') &&
         workflow.includes('npm run check:agentbean-next-railway-preflight') &&
         workflow.includes("if: github.event_name == 'workflow_dispatch' && inputs.run_railway_preflight") &&
-        workflow.includes(publishJobCondition) &&
+        publishesOnMainPush &&
         workflow.includes('run: npm run check:agentbean-next-readiness -- --production'),
       'CI must allow read-only Railway Next preflight without running production deploy',
     ),
@@ -409,7 +428,7 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'ci-publishes-on-main-push',
       workflow.includes('skip_npm_publish') &&
-        workflow.includes(publishJobCondition) &&
+        publishesOnMainPush &&
         workflow.includes('Publish agent to npm') &&
         workflow.includes('NPM_TOKEN') &&
         cutoverRunbook.includes('推送 `main` 触发生产部署'),
@@ -770,17 +789,18 @@ export function collectAgentBeanNextReadinessChecks({
         'node --test scripts/check-phase-1-management-boundary.test.mjs' &&
         packageJson.scripts?.['check:phase1-management-boundary'] ===
           'node scripts/check-phase-1-management-boundary.mjs' &&
-        workflow.includes('check-phase-1-management-boundary'),
+        (changeDetection.includes('check-phase-1-management-boundary') ||
+          classifyChangedFiles(['scripts/check-phase-1-management-boundary.mjs']).should_validate),
       'Phase 1 must expose a fail-closed management boundary checker and include it in CI change detection',
     ),
     check(
       'phase-1-management-root-and-ci-gates',
-      hasPhase1ManagementCiGate({ scripts: packageJson.scripts, workflow }),
+      hasPhase1ManagementCiGate({ scripts: packageJson.scripts, workflow, changeDetection }),
       'Phase 1 management must expose and run complete root test/build gates while retaining Phase 0 and product gates',
     ),
     check(
       'phase-2-task-dag-boundary-and-ci-gates',
-      hasPhase2TaskDagCiGate({ scripts: packageJson.scripts, workflow }),
+      hasPhase2TaskDagCiGate({ scripts: packageJson.scripts, workflow, changeDetection }),
       'Phase 2 must expose fail-closed boundary, test, build, and ordered CI gates while retaining Phase 1',
     ),
     check(
@@ -821,7 +841,7 @@ export function collectAgentBeanNextReadinessChecks({
     ),
     check(
       'ci-detects-phase-0-changes',
-      ciDetectsPhase0Changes(workflow),
+      ciDetectsPhase0Changes(changeDetection),
       'AgentBean Next CI change detection must cover Phase 0 scripts, lockfile, matrix, packages, and SEA workflow',
     ),
     check(
@@ -931,7 +951,7 @@ export function hasPhase0CiGate({ scripts, workflow, seaWorkflow }) {
     seaWorkflowConsumesRootVerdictCheck(seaWorkflow);
 }
 
-export function hasPhase1ManagementCiGate({ scripts, workflow }) {
+export function hasPhase1ManagementCiGate({ scripts, workflow, changeDetection = workflow }) {
   const expectedTest = 'npm run test:phase1-management-boundary && npm run check:phase1-management-boundary && npm run test:pi-management-runtime && npm run test:phase1';
   const expectedBuild = 'npm run build:packages';
   if (scripts?.['test:phase1-management'] !== expectedTest
@@ -940,10 +960,10 @@ export function hasPhase1ManagementCiGate({ scripts, workflow }) {
   }
 
   return hasDeduplicatedPackageCi({ scripts, workflow }) &&
-    workflow.includes('check-phase-1-management-boundary');
+    changeDetection.includes('check-phase-1-management-boundary');
 }
 
-export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
+export function hasPhase2TaskDagCiGate({ scripts, workflow, changeDetection = workflow }) {
   const expectedTest = 'npm run test:phase2-task-dag-boundary && npm run check:phase2-task-dag-boundary && npm run test:contracts -- --api.host 127.0.0.1 && npm run test:pi-management-runtime && npm run test:domain -- --api.host 127.0.0.1 && npm run test:server-next -- --api.host 127.0.0.1';
   const expectedBuild = 'npm run build:contracts && npm run build:domain && npm run build:pi-management-runtime && npm run build:daemon-next && npm run build:server-next';
   if (scripts?.['test:phase2-task-dag-boundary'] !== 'node --test scripts/check-phase-2-task-dag-boundary.test.mjs'
@@ -955,7 +975,7 @@ export function hasPhase2TaskDagCiGate({ scripts, workflow }) {
   }
   return hasDeduplicatedPackageCi({ scripts, workflow }) &&
     !workflow.includes('run: npm run test:phase2-closeout') &&
-    workflow.includes('check-phase-2-task-dag-boundary');
+    changeDetection.includes('check-phase-2-task-dag-boundary');
 }
 
 export function hasNode24Toolchain({ packageJson, nvmrc, workflows, piSeaChecker, piSeaBuilder }) {
@@ -1041,8 +1061,26 @@ function workflowRunsScript(workflow, script) {
   return new RegExp(`^\\s*(?:-\\s*)?(?:run:\\s*)?npm (?:run|run-script) ${escaped}(?:\\s|$)`, 'mu').test(workflow);
 }
 
-function ciDetectsPhase0Changes(workflow) {
-  return [
+function changeDetectionIncludesAny(source, tokens) {
+  return tokens.some((token) => source.includes(token));
+}
+
+function hasMainPushPublishGate(publishJob, workflow) {
+  const legacy =
+    "if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.skip_npm_publish && !inputs.run_railway_preflight && !inputs.sync_railway_next_runtime_env && !inputs.promote_agentbean_daemon_latest)";
+  if (workflow.includes(legacy)) return true;
+  // Path-gated main publish: still auto-runs on push when publish surfaces change,
+  // and keeps the previous workflow_dispatch exclusion flags.
+  return publishJob.includes("github.event_name == 'push'") &&
+    publishJob.includes('should_publish') &&
+    publishJob.includes('!inputs.skip_npm_publish') &&
+    publishJob.includes('!inputs.run_railway_preflight') &&
+    publishJob.includes('!inputs.sync_railway_next_runtime_env') &&
+    publishJob.includes('!inputs.promote_agentbean_daemon_latest');
+}
+
+function ciDetectsPhase0Changes(changeDetection) {
+  const legacyTokens = [
     '^packages/',
     '^agentbean-next/',
     'check-phase-0-pi-boundary',
@@ -1051,7 +1089,25 @@ function ciDetectsPhase0Changes(workflow) {
     '^\\.nvmrc$',
     'package(-lock)?\\.json',
     'pi-sea-compatibility',
-  ].every((token) => workflow.includes(token));
+  ];
+  if (legacyTokens.every((token) => changeDetection.includes(token))) return true;
+
+  // Detector-backed surface: require both path tokens and behavioral classify coverage.
+  const samples = [
+    'packages/contracts/src/index.ts',
+    'agentbean-next/docs/readme.md',
+    'scripts/check-phase-0-pi-boundary.mjs',
+    'scripts/check-pi-management-sea.mjs',
+    'scripts/build-pi-management-sea.mjs',
+    '.nvmrc',
+    'package-lock.json',
+    '.github/workflows/pi-sea-compatibility.yml',
+  ];
+  return samples.every((file) => classifyChangedFiles([file]).should_validate) &&
+    changeDetection.includes('check-phase-0-pi-boundary') &&
+    changeDetection.includes('check-pi-management-sea') &&
+    changeDetection.includes('build-pi-management-sea') &&
+    changeDetection.includes('pi-sea-compatibility');
 }
 
 function seaWorkflowConsumesRootVerdictCheck(seaWorkflow) {
