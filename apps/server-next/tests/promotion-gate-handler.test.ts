@@ -71,11 +71,39 @@ function makeInput(overrides?: Partial<PromoteInput>): PromoteInput {
   };
 }
 
+async function seedChannel(
+  repositories: ServerNextRepositories,
+  overrides?: {
+    id?: string;
+    teamId?: string;
+    visibility?: 'public' | 'private';
+    humanMemberIds?: string[];
+    archivedAt?: number | null;
+  },
+): Promise<void> {
+  const id = overrides?.id ?? 'channel-1';
+  if (await repositories.channels.getById(id)) return;
+  await repositories.channels.create({
+    id,
+    teamId: overrides?.teamId ?? 'team-1',
+    kind: 'channel',
+    name: id,
+    title: id,
+    visibility: overrides?.visibility ?? 'private',
+    humanMemberIds: overrides?.humanMemberIds ?? ['user-1'],
+    agentMemberIds: [],
+    createdAt: tick,
+    updatedAt: tick,
+    ...(overrides?.archivedAt != null ? { archivedAt: overrides.archivedAt } : {}),
+  });
+}
+
 async function seedRootMessage(
   repositories: ServerNextRepositories,
   messageId: string,
-  overrides?: { channelId?: string; teamId?: string },
+  overrides?: { channelId?: string; teamId?: string; meta?: Record<string, unknown> },
 ): Promise<void> {
+  await seedChannel(repositories, { id: overrides?.channelId ?? 'channel-1' });
   await repositories.messages.append({
     id: messageId,
     teamId: overrides?.teamId ?? 'team-1',
@@ -84,6 +112,7 @@ async function seedRootMessage(
     senderId: 'user-1',
     body: `promote source ${messageId}`,
     createdAt: tick,
+    ...(overrides?.meta ? { meta: overrides.meta } : {}),
   });
 }
 
@@ -92,6 +121,7 @@ async function seedForInput(
   repositories: ServerNextRepositories,
   input: PromoteInput,
 ): Promise<void> {
+  await seedChannel(repositories, { id: input.channelId });
   const rootMessageId = input.rootMessageId
     ?? (input.freshnessBasis.sourceLineage.kind === 'message'
       ? input.freshnessBasis.sourceLineage.id
@@ -413,13 +443,19 @@ describe('#922 Promotion gate handler', () => {
   test('root Message 不存在 → rejected，无副作用', async () => {
     resetCounters();
     const repositories = createInMemoryRepositories();
+    await seedChannel(repositories);
     const handler = makeHandler(repositories);
 
-    // 不 seed 消息
+    // 不 seed 消息；频道存在但消息缺失
+    // 注意：missing message 在 freshness 阶段先判 source-changed → freshness_hold
+    // 为落到 ROOT_MESSAGE_NOT_FOUND，用显式 rootMessageId 指向不存在的消息，
+    // 且 lineage 指向现存消息以通过 freshness。
+    await seedRootMessage(repositories, 'msg-lineage-ok');
     const response = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-missing-msg' }),
       makeInput({
-        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-missing' } },
+        rootMessageId: 'msg-missing',
+        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-lineage-ok' } },
       }),
     );
 
@@ -441,15 +477,20 @@ describe('#922 Promotion gate handler', () => {
     const repositories = createInMemoryRepositories();
     const handler = makeHandler(repositories);
 
+    await seedChannel(repositories, { id: 'channel-1' });
+    await seedChannel(repositories, { id: 'channel-other' });
     await seedRootMessage(repositories, 'msg-other-channel', { channelId: 'channel-other' });
     const response = await handler.promoteToTask(
       makeEnvelope({ idempotencyKey: 'idem-scope' }),
       makeInput({
         channelId: 'channel-1',
+        rootMessageId: 'msg-other-channel',
         freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-other-channel' } },
       }),
     );
 
+    // lineage 消息在 channel-other：freshness 不看 channel；root message scope 在 applied 前校验
+    // 但 source message 属于不同 channel 仍 team 内存在 → freshness ok；rootMessage scope 失败
     expect(response.outcome).toBe('rejected');
     expect(response.stableCode).toBe('PROMOTION_ROOT_MESSAGE_SCOPE_MISMATCH');
     const tasks = await repositories.tasks.list({
@@ -463,6 +504,20 @@ describe('#922 Promotion gate handler', () => {
   test('非 message lineage 且缺 rootMessageId → rejected', async () => {
     resetCounters();
     const repositories = createInMemoryRepositories();
+    await seedChannel(repositories);
+    // task lineage 无真实 task → freshness source-changed；先创建一个 task 让 freshness 通过
+    await repositories.tasks.create({
+      id: 'task-source-1',
+      teamId: 'team-1',
+      title: 'source',
+      status: 'todo',
+      creatorId: 'user-1',
+      channelId: 'channel-1',
+      tags: [],
+      sortOrder: 0,
+      createdAt: tick,
+      updatedAt: tick,
+    });
     const handler = makeHandler(repositories);
 
     const response = await handler.promoteToTask(
@@ -482,7 +537,9 @@ describe('#922 Promotion gate handler', () => {
       channelIds: ['channel-1'],
       includeGlobal: true,
     });
-    expect(tasks).toHaveLength(0);
+    // 仅 seed 的 source task，无 promotion 新建
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.id).toBe('task-source-1');
   });
 
   test('applied 持久化可读取的 management run-started 事件，eventRefs 非悬空', async () => {
@@ -541,5 +598,83 @@ describe('#922 Promotion gate handler', () => {
     expect(parsed.schemaVersion).toBe(1);
     expect(parsed.commandName).toBe('promote-to-task');
     expect(parsed.outcome).toBe('applied');
+  });
+
+  test('private 频道非成员 → rejected CHANNEL_FORBIDDEN，无副作用', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    await seedChannel(repositories, {
+      id: 'channel-private',
+      visibility: 'private',
+      humanMemberIds: ['other-user'],
+    });
+    await seedRootMessage(repositories, 'msg-private', { channelId: 'channel-private' });
+
+    const handler = makeHandler(repositories);
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-forbidden' }),
+      makeInput({
+        channelId: 'channel-private',
+        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-private' } },
+      }),
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('PROMOTION_CHANNEL_FORBIDDEN');
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-private'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(0);
+  });
+
+  test('来源消息已删除 → freshness_hold，无副作用', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    await seedRootMessage(repositories, 'msg-deleted', {
+      meta: { deletedAt: tick },
+    });
+    const handler = makeHandler(repositories);
+
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-freshness-deleted' }),
+      makeInput({
+        freshnessBasis: { schemaVersion: 1, sourceLineage: { kind: 'message', id: 'msg-deleted' } },
+      }),
+    );
+
+    expect(response.outcome).toBe('freshness_hold');
+    expect(response.stableCode).toBe('PROMOTION_FRESHNESS_HOLD');
+    expect(response.freshnessReason).toBe('source-changed');
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(0);
+  });
+
+  test('sourceRevision 落后于 message.meta.revision → freshness_hold', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    await seedRootMessage(repositories, 'msg-rev', {
+      meta: { revision: 3 },
+    });
+    const handler = makeHandler(repositories);
+
+    const response = await handler.promoteToTask(
+      makeEnvelope({ idempotencyKey: 'idem-freshness-rev' }),
+      makeInput({
+        freshnessBasis: {
+          schemaVersion: 1,
+          sourceLineage: { kind: 'message', id: 'msg-rev' },
+          sourceRevision: 1,
+        },
+      }),
+    );
+
+    expect(response.outcome).toBe('freshness_hold');
+    expect(response.freshnessReason).toBe('source-revision-advanced');
   });
 });

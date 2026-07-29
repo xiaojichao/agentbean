@@ -383,7 +383,10 @@ export function parsePromotionGateCommandEnvelopeV1(value: unknown): PromotionGa
     ['schemaVersion', 'commandName', 'commandSchemaVersion', 'idempotencyKey']);
   if (value.schemaVersion !== PROMOTION_GATE_ENVELOPE_SCHEMA_VERSION) throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
   if (value.commandName !== 'promote-to-task') throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
-  assertInteger(value.commandSchemaVersion, 1);
+  // 本切片只实现 V1：未知/未来 commandSchemaVersion 必须拒绝，禁止按 V1 静默执行。
+  if (value.commandSchemaVersion !== PROMOTION_GATE_COMMAND_SCHEMA_VERSION) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
   assertId(value.idempotencyKey);
   if (value.causationRef !== undefined) assertCommandProvenanceRef(value.causationRef);
   if (value.sourceRefs !== undefined) {

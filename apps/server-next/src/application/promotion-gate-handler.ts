@@ -51,6 +51,10 @@ const STABLE_CODE_REJECTED = 'PROMOTION_REJECTED';
 const STABLE_CODE_ROOT_MESSAGE_NOT_FOUND = 'PROMOTION_ROOT_MESSAGE_NOT_FOUND';
 const STABLE_CODE_ROOT_MESSAGE_SCOPE_MISMATCH = 'PROMOTION_ROOT_MESSAGE_SCOPE_MISMATCH';
 const STABLE_CODE_ROOT_MESSAGE_UNRESOLVED = 'PROMOTION_ROOT_MESSAGE_UNRESOLVED';
+const STABLE_CODE_CHANNEL_NOT_FOUND = 'PROMOTION_CHANNEL_NOT_FOUND';
+const STABLE_CODE_CHANNEL_FORBIDDEN = 'PROMOTION_CHANNEL_FORBIDDEN';
+const STABLE_CODE_CHANNEL_ARCHIVED = 'PROMOTION_CHANNEL_ARCHIVED';
+const STABLE_CODE_SCHEMA_UNSUPPORTED = 'PROMOTION_COMMAND_SCHEMA_UNSUPPORTED';
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -153,6 +157,104 @@ function resolveRootMessageId(
   };
 }
 
+function isDeletedMessage(message: { readonly meta?: Record<string, unknown> }): boolean {
+  return Boolean(message.meta?.deletedAt);
+}
+
+type ChannelAccessDecision =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly stableCode: string };
+
+/**
+ * 校验 requester 对目标频道的访问权：频道须属于当前 team；private 须是 human 成员。
+ * public 允许 team 内请求者（team 边界由 deps.teamId 已由 Server 推导）。
+ */
+async function evaluateChannelAccess(
+  repos: { readonly channels: { getById(channelId: ID): Promise<{
+    readonly teamId: ID;
+    readonly visibility: string;
+    readonly humanMemberIds: readonly ID[];
+    readonly archivedAt?: UnixMs | null;
+  } | null> } },
+  input: { readonly teamId: ID; readonly requesterId: ID; readonly channelId: ID },
+): Promise<ChannelAccessDecision> {
+  const channel = await repos.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) {
+    return { ok: false, stableCode: STABLE_CODE_CHANNEL_NOT_FOUND };
+  }
+  if (channel.archivedAt != null) {
+    return { ok: false, stableCode: STABLE_CODE_CHANNEL_ARCHIVED };
+  }
+  if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.requesterId)) {
+    return { ok: false, stableCode: STABLE_CODE_CHANNEL_FORBIDDEN };
+  }
+  return { ok: true };
+}
+
+/**
+ * 在事务内读取 source lineage 的当前状态，喂入 freshness 策略。
+ * 删除/不存在 → sourceChanged；有 revision 的来源（task / message.meta.revision）提供 currentSourceRevision。
+ */
+async function resolveSourceFreshness(
+  repos: {
+    readonly messages: { getById(id: ID): Promise<{
+      readonly teamId: ID;
+      readonly meta?: Record<string, unknown>;
+    } | null> };
+    readonly tasks: { getById(id: ID): Promise<{
+      readonly teamId: ID;
+      readonly revision: number;
+    } | null> };
+    readonly artifacts: { getForTeam(input: { teamId: ID; artifactId: ID }): Promise<unknown | null> };
+  },
+  input: {
+    readonly teamId: ID;
+    readonly freshnessBasis: PromotionGateCommandInputMapV1['promote-to-task']['freshnessBasis'];
+  },
+): Promise<{
+  readonly requestedSourceRevision?: number;
+  readonly currentSourceRevision?: number;
+  readonly sourceChanged?: boolean;
+}> {
+  const lineage = input.freshnessBasis.sourceLineage;
+  const requestedSourceRevision = input.freshnessBasis.sourceRevision;
+  const base = requestedSourceRevision === undefined ? {} : { requestedSourceRevision };
+
+  if (lineage.kind === 'message') {
+    const message = await repos.messages.getById(lineage.id);
+    if (!message || message.teamId !== input.teamId || isDeletedMessage(message)) {
+      return { ...base, sourceChanged: true };
+    }
+    const metaRevision = message.meta?.revision;
+    if (typeof metaRevision === 'number' && Number.isSafeInteger(metaRevision)) {
+      return { ...base, currentSourceRevision: metaRevision, sourceChanged: false };
+    }
+    return { ...base, sourceChanged: false };
+  }
+
+  if (lineage.kind === 'task') {
+    const task = await repos.tasks.getById(lineage.id);
+    if (!task || task.teamId !== input.teamId) {
+      return { ...base, sourceChanged: true };
+    }
+    return { ...base, currentSourceRevision: task.revision, sourceChanged: false };
+  }
+
+  if (lineage.kind === 'artifact') {
+    const artifact = await repos.artifacts.getForTeam({
+      teamId: input.teamId,
+      artifactId: lineage.id,
+    });
+    if (!artifact) {
+      return { ...base, sourceChanged: true };
+    }
+    return { ...base, sourceChanged: false };
+  }
+
+  // workspace-run / invocation：本切片无 revision 投影，仅当客户端声明了 revision 时仍可按策略比较（无 current 则不 hold）。
+  return { ...base, sourceChanged: false };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -169,6 +271,19 @@ export function createPromotionGateHandler(
       );
 
       return unitOfWork.run(async (repos) => {
+        // -------------------------------------------------------------------
+        // 0. 仅接受本切片实现的 command schema 版本
+        // -------------------------------------------------------------------
+        if (envelope.commandSchemaVersion !== 1) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: STABLE_CODE_SCHEMA_UNSUPPORTED,
+          };
+        }
+
         // -------------------------------------------------------------------
         // 1. 幂等 receipt 查重（#900 §1.5/§6）
         // -------------------------------------------------------------------
@@ -203,12 +318,43 @@ export function createPromotionGateHandler(
         }
 
         // -------------------------------------------------------------------
-        // 2. Authorization（#894 §1/§8 / #900 §18）
+        // 2. Authorization（#894 §1/§8 / #900 §18）：trigger + 频道访问权
         // -------------------------------------------------------------------
-        const authorization = evaluatePromotionAuthorization({ triggerKind: input.triggerKind });
+        const triggerAuthorization = evaluatePromotionAuthorization({ triggerKind: input.triggerKind });
+        if ('denied' in triggerAuthorization) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: STABLE_CODE_REJECTED,
+          };
+        }
+        const channelAccess = await evaluateChannelAccess(repos, {
+          teamId,
+          requesterId,
+          channelId: input.channelId,
+        });
+        if (!channelAccess.ok) {
+          return {
+            schemaVersion: 1,
+            commandName: 'promote-to-task',
+            outcome: 'rejected',
+            retryDirective: 'user_action',
+            stableCode: channelAccess.stableCode,
+          };
+        }
+        const authorization = { allowed: true as const };
 
         // -------------------------------------------------------------------
-        // 3. Convergence（#894 §6）
+        // 3. Freshness（#894 §5）：事务内读取真实来源状态
+        // -------------------------------------------------------------------
+        const freshness = evaluatePromotionFreshness(
+          await resolveSourceFreshness(repos, { teamId, freshnessBasis: input.freshnessBasis }),
+        );
+
+        // -------------------------------------------------------------------
+        // 4. Convergence（#894 §6）
         // -------------------------------------------------------------------
         const lineageKey = buildLineageKey(teamId, input.freshnessBasis.sourceLineage);
         const existingRelation = await repos.promotion.sourceRelations.getByLineageKey(lineageKey);
@@ -224,14 +370,6 @@ export function createPromotionGateHandler(
                 },
               }
             : {}),
-        });
-
-        // -------------------------------------------------------------------
-        // 4. Freshness（#894 §5）
-        // -------------------------------------------------------------------
-        const freshness = evaluatePromotionFreshness({
-          requestedSourceRevision: input.freshnessBasis.sourceRevision,
-          sourceChanged: false,
         });
 
         // -------------------------------------------------------------------
