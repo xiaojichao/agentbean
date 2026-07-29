@@ -21,6 +21,29 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-29] - 2026-07-29
+### Changed
+- server: Message tracer slice D — cutover 路由层（#921）
+- server: Message tracer outbox 真实投递（#921 切片 C-wire）
+- 实现 #922 唯一 Promotion gate 与结构化 root Task 创建
+- server: 频道主线 freshness relevance 过滤（#921 切片 C-wire，解 blocker）
+- server: Message tracer 命令 dispatcher + socket 接线（#921 切片 C-wire，默认关闭）
+- server: Message tracer check-inbox + ack-read-candidate 切片 C-read (#921)
+- server: Message tracer send-message handler 切片 C-send (#921)
+- server: Message tracer 持久化切片 B (#921)
+- contracts: 建立 Message tracer 命令族 (#921 切片 A)
+- 文档：固化消息与 PI 编排端到端合同
+- 文档：冻结 PI 权威迁移与兼容合同
+- 优化 CI 路径门控与 Codex 文档 Review 豁免
+- 文档：冻结 Server Command registry 与幂等事件合同
+- 记录 2026-07-28 每日更新日志
+### Removed
+- server: basis Task 编辑/删除的 freshness relevance（#921 切片 C-wire）
+- server: basis 消息编辑/删除的 freshness relevance（#921 切片 C-wire）
+### Fixed
+- 修复 #938 review P1：频道访问权、Freshness 真源、migration 0059
+- 修复 #938 review：校验 root Message 并持久化 run-started 事件
+
 ## [Daily 2026-07-28] - 2026-07-28
 ### Added
 - 将 Memory 管理与执行记录诊断迁入系统管理 Console
