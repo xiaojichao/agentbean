@@ -110,6 +110,8 @@ export interface StartServerNextDevServerInput {
   webApp?: WebAppHandler;
   /** Test/rollout injection; durable-job also starts the background coordination consumer. */
   messageIngestionMode?: 'legacy' | 'durable-job';
+  /** #921 Message tracer command 路径开关（env AGENTBEAN_NEXT_MESSAGE_TRACER_ENABLED，默认 false）。 */
+  messageTracerEnabled?: boolean;
 }
 
 export interface ServerNextDevServerHandle {
@@ -257,13 +259,14 @@ export async function startServerNextDevServer(
   };
   // ADR 0061: production host defaults to durable-job so Channel Coordinator runs.
   const messageIngestionMode = resolveMessageIngestionMode(input.messageIngestionMode);
+  const messageTracerEnabled = resolveMessageTracerEnabled(input.messageTracerEnabled);
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, messageIngestionMode);
+    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
@@ -1626,10 +1629,21 @@ export function resolveMessageIngestionMode(
   return 'durable-job';
 }
 
+/** #921 Message tracer command 路径开关（默认 false）。explicit > env `AGENTBEAN_NEXT_MESSAGE_TRACER_ENABLED`。 */
+export function resolveMessageTracerEnabled(
+  explicit?: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (typeof explicit === 'boolean') return explicit;
+  const fromEnv = env.AGENTBEAN_NEXT_MESSAGE_TRACER_ENABLED?.trim().toLowerCase();
+  return fromEnv === '1' || fromEnv === 'true';
+}
+
 function createDefaultApp(
   config: ServerNextDevConfig,
   Database: BetterSqlite3Constructor | undefined,
   messageIngestionMode: MessageIngestionMode = 'durable-job',
+  messageTracerEnabled: boolean = false,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
@@ -1692,6 +1706,7 @@ function createDefaultApp(
           }
         : {}),
       messageIngestionMode,
+      messageTracerEnabled,
     });
     appForPiHealth = app;
     return {
@@ -1785,6 +1800,7 @@ function createDefaultApp(
         }
       : {}),
     messageIngestionMode,
+    messageTracerEnabled,
   });
   appForPiHealth = app;
   return {
