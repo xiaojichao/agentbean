@@ -109,7 +109,7 @@ export interface StartServerNextDevServerInput {
   coordination?: CoordinationSchedulerConfig;
   webApp?: WebAppHandler;
   /** Test/rollout injection; durable-job also starts the background coordination consumer. */
-  messageIngestionMode?: 'legacy' | 'durable-job';
+  messageIngestionMode?: 'legacy' | 'durable-job' | 'message-tracer';
   /** #921 Message tracer command 路径开关（env AGENTBEAN_NEXT_MESSAGE_TRACER_ENABLED，默认 false）。 */
   messageTracerEnabled?: boolean;
 }
@@ -1620,18 +1620,18 @@ function findWebNextDir(): string {
   throw new Error('web-next app directory not found');
 }
 
-export type MessageIngestionMode = 'legacy' | 'durable-job';
+export type MessageIngestionMode = 'legacy' | 'durable-job' | 'message-tracer';
 
 /** Resolve host ingestion mode: explicit arg > env > durable-job (production default). */
 export function resolveMessageIngestionMode(
   explicit?: MessageIngestionMode,
   env: NodeJS.ProcessEnv = process.env,
 ): MessageIngestionMode {
-  if (explicit === 'legacy' || explicit === 'durable-job') {
+  if (explicit === 'legacy' || explicit === 'durable-job' || explicit === 'message-tracer') {
     return explicit;
   }
   const fromEnv = env.AGENTBEAN_NEXT_MESSAGE_INGESTION_MODE?.trim();
-  if (fromEnv === 'legacy' || fromEnv === 'durable-job') {
+  if (fromEnv === 'legacy' || fromEnv === 'durable-job' || fromEnv === 'message-tracer') {
     return fromEnv;
   }
   return 'durable-job';

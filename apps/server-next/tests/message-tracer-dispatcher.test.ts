@@ -141,12 +141,36 @@ describe('dispatchMessageTracerCommand usecase 方法 + flag 门禁', () => {
       userId: 'user-1', teamId: 'team-1',
     });
     expect(res.ok).toBe(true);
-    // 投递回调被调用，携带 messageId
     expect(delivered).toHaveLength(1);
     expect(delivered[0].channelId).toBe('channel-1');
     expect(delivered[0].messageId).toBeTruthy();
-    // outbox pending 已排空（markDelivered）
     const pending = await repos.channelCoordinationUnitOfWork.run((tx) => tx.outbox.listPending({ limit: 10 }));
     expect(pending).toHaveLength(0);
+  });
+
+  test('slice D：mode=message-tracer 时 sendMessage 路由到 message-tracer（不建 Job，dispatches 空）', async () => {
+    const repos = createInMemoryRepositories();
+    await seedChannel(repos);
+    let n = 0;
+    const app = createServerNextUseCases({
+      repositories: repos,
+      clock: { now: () => NOW },
+      ids: { nextId: () => `id-${++n}` },
+      messageIngestionMode: 'message-tracer',
+    });
+    const result = await app.sendMessage({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: 'hello via tracer',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.message.body).toBe('hello via tracer');
+      expect(result.dispatches).toEqual([]); // 不建 coordination Job / dispatch
+    }
+    // 消息已入 inbox（user-2 作为 recipient）
+    const inbox = await repos.channelCoordinationUnitOfWork.run((tx) =>
+      tx.inbox.listItems({ recipientId: 'user-2', channelId: 'channel-1', threadId: null, afterSeq: -1, limit: 10 }));
+    expect(inbox).toHaveLength(1);
+    // 不建 coordination Job
+    expect(await repos.channelCoordination.jobs.listByChannel('channel-1', 10)).toHaveLength(0);
   });
 });
