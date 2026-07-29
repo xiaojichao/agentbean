@@ -188,7 +188,7 @@ describe('send-message command handler', () => {
     expect(res.outcome).toBe('freshness_hold');
     expect(res.retryDirective).toBe('same_key');
     expect(res.heldTarget?.channelId).toBe('channel-1');
-    expect(res.newReadCandidate?.targetSeq).toBe(1); // 推到当前水位
+    expect(res.newReadCandidate?.targetSeq).toBe(2); // exclusive 推到当前水位的「下一未读」（currentMax=1 → 2）
     expect(res.newReadCandidate?.recipientId).toBe('user-1');
 
     // 未写 Message：outbox 仍只有 user-2 那两条
