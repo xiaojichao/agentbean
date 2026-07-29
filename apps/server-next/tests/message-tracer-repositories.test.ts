@@ -46,6 +46,7 @@ function inboxItem(overrides: Partial<InboxItemRecord> & { id: string; messageId
     targetSeq: 0,
     senderKind: 'human',
     senderId: 'sender-1',
+    mentionsRecipient: false,
     committedAt: 1000,
     createdAt: 1000,
     ...overrides,
@@ -151,6 +152,20 @@ function runMessageTracerRepositorySuite(label: string, makeRepos: () => Repos):
       await inbox.insertItem(inboxItem({ id: uniqueId('i'), messageId: 'm-a', recipientId: 'r-1', channelId: 'c-1', threadId: null, targetSeq: 0 }));
       await expect(inbox.insertItem(inboxItem({ id: uniqueId('i'), messageId: 'm-b', recipientId: 'r-1', channelId: 'c-1', threadId: null, targetSeq: 0 })))
         .rejects.toThrow();
+    });
+
+    test('hasUnreadMention：自 sinceSeq 起是否存在提及该 recipient 的未读项', async () => {
+      const { inbox } = makeRepos();
+      const target = { recipientId: 'r-1', channelId: 'c-1', threadId: null };
+      await inbox.insertItem(inboxItem({ id: uniqueId('i'), messageId: 'm-0', recipientId: 'r-1', channelId: 'c-1', targetSeq: 0 })); // 无提及
+      await inbox.insertItem(inboxItem({ id: uniqueId('i'), messageId: 'm-1', recipientId: 'r-1', channelId: 'c-1', targetSeq: 1, mentionsRecipient: true })); // 提及
+      await inbox.insertItem(inboxItem({ id: uniqueId('i'), messageId: 'm-2', recipientId: 'r-1', channelId: 'c-1', targetSeq: 2 })); // 无提及
+      // sinceSeq=0（exclusive 下一未读）：未读含 m-1 提及 → true
+      expect(await inbox.hasUnreadMention({ ...target, sinceSeq: 0 })).toBe(true);
+      // sinceSeq=2（m-1 已读）：未读仅 m-2 无提及 → false
+      expect(await inbox.hasUnreadMention({ ...target, sinceSeq: 2 })).toBe(false);
+      // 无提及的 recipient：false
+      expect(await inbox.hasUnreadMention({ recipientId: 'r-2', channelId: 'c-1', threadId: null, sinceSeq: 0 })).toBe(false);
     });
 
     test('Read boundary 单调推进：插入后仅严格更大的 seq 才推进，回退/相等为幂等 no-op', async () => {

@@ -105,6 +105,15 @@ export function createInMemoryMessageTracerRepositories(
           && threadKey(item.threadId) === key)
         .reduce((max, item) => Math.max(max, item.targetSeq), -1);
     },
+    async hasUnreadMention(input) {
+      const key = threadKey(input.threadId);
+      return Array.from(state.inboxItems.values())
+        .some((item) => item.recipientId === input.recipientId
+          && item.channelId === input.channelId
+          && threadKey(item.threadId) === key
+          && item.targetSeq >= input.sinceSeq
+          && item.mentionsRecipient);
+    },
     async getReadBoundary(input) {
       const key = threadKey(input.threadId);
       return Array.from(state.inboxReadBoundaries.values())

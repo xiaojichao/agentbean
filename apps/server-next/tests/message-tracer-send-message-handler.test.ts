@@ -172,9 +172,9 @@ describe('send-message command handler', () => {
     const { repos, handle } = setup();
     await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
 
-    // user-2 发两条 → user-1 收到 inbox seq 0、1（currentMax=1）
+    // user-2 发两条，第二条 @提及 user-1 → user-1 主线有未读提及（relevant，#893 §4）
     await handle({ envelope: envelope('k-a'), payload: sendPayload(), senderId: 'user-2', teamId: 'team-1' });
-    await handle({ envelope: envelope('k-b'), payload: sendPayload({ body: 'second' }), senderId: 'user-2', teamId: 'team-1' });
+    await handle({ envelope: envelope('k-b'), payload: sendPayload({ body: '@user-1 second', mentions: [{ id: 'user-1', kind: 'human', name: 'User One', start: 0, end: 7 }] }), senderId: 'user-2', teamId: 'team-1' });
 
     // user-1 带陈旧 readCandidate(targetSeq=0) 发送 → hold
     const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
@@ -194,6 +194,30 @@ describe('send-message command handler', () => {
     // 未写 Message：outbox 仍只有 user-2 那两条
     await repos.channelCoordinationUnitOfWork.run(async (tx) => {
       expect(await tx.outbox.listPending({ limit: 10 })).toHaveLength(2);
+    });
+  });
+
+  test('主线 relevance：未读但非 @提及的无关聊天不阻塞（#893 §4，解 C-wire blocker）', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+
+    // user-2 发两条无关聊天（不 @提及 user-1）→ user-1 主线有未读，但非 relevant
+    await handle({ envelope: envelope('n-a'), payload: sendPayload({ body: 'chatter' }), senderId: 'user-2', teamId: 'team-1' });
+    await handle({ envelope: envelope('n-b'), payload: sendPayload({ body: 'more chatter' }), senderId: 'user-2', teamId: 'team-1' });
+
+    // user-1 带陈旧 readCandidate(targetSeq=0) 发送 → 无关未读不阻塞，正常 applied
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('n-send'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc } }),
+      senderId: 'user-1',
+      teamId: 'team-1',
+    });
+
+    expect(res.outcome).toBe('applied'); // 不被无关未读阻塞
+    // 三条消息全部投递（user-2 两条 + user-1 一条）
+    await repos.channelCoordinationUnitOfWork.run(async (tx) => {
+      expect(await tx.outbox.listPending({ limit: 10 })).toHaveLength(3);
     });
   });
 

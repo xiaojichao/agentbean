@@ -215,6 +215,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0056_message_tracer_inbox_receipts.sql');
   // #921 切片 C：Message tracer 持久 outbox（send-message 单事务原子提交）。
   applyMigration(db, 'team/0057_message_tracer_outbox.sql');
+  // #921 切片 C-wire：inbox_items.mentions_recipient（频道主线 freshness relevance）。
+  applyMigration(db, 'team/0058_inbox_mentions_recipient.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

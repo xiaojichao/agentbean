@@ -35,6 +35,7 @@ interface InboxItemRow {
   target_seq: number;
   sender_kind: MessageSenderKind;
   sender_id: string;
+  mentions_recipient: number;
   committed_at: number;
   created_at: number;
 }
@@ -108,6 +109,7 @@ function mapInboxItem(row: InboxItemRow | undefined): InboxItemRecord | null {
     targetSeq: row.target_seq,
     senderKind: row.sender_kind,
     senderId: row.sender_id,
+    mentionsRecipient: row.mentions_recipient === 1,
     committedAt: row.committed_at,
     createdAt: row.created_at,
   };
@@ -194,8 +196,8 @@ export function createSqliteMessageInboxRepository(teamDb: SqliteDatabase): Mess
     async insertItem(input) {
       teamDb.prepare(`INSERT INTO inbox_items (
           id, team_id, message_id, recipient_id, channel_id, thread_id, target_kind, target_seq,
-          sender_kind, sender_id, committed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          sender_kind, sender_id, mentions_recipient, committed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(
           input.id,
           input.teamId,
@@ -207,6 +209,7 @@ export function createSqliteMessageInboxRepository(teamDb: SqliteDatabase): Mess
           input.targetSeq,
           input.senderKind,
           input.senderId,
+          input.mentionsRecipient ? 1 : 0,
           input.committedAt,
           input.createdAt,
         );
@@ -217,7 +220,7 @@ export function createSqliteMessageInboxRepository(teamDb: SqliteDatabase): Mess
       const where = targetKeyClause(input);
       const rows = teamDb.prepare(
         `SELECT id, team_id, message_id, recipient_id, channel_id, thread_id, target_kind, target_seq,
-           sender_kind, sender_id, committed_at, created_at
+           sender_kind, sender_id, mentions_recipient, committed_at, created_at
          FROM inbox_items
          WHERE ${where.sql} AND target_seq > ?
          ORDER BY target_seq ASC
@@ -234,6 +237,15 @@ export function createSqliteMessageInboxRepository(teamDb: SqliteDatabase): Mess
         `SELECT COALESCE(MAX(target_seq), -1) AS max_seq FROM inbox_items WHERE ${where.sql}`,
       ).get(...where.params) as { max_seq: number } | undefined;
       return row?.max_seq ?? -1;
+    },
+
+    async hasUnreadMention(input) {
+      const where = targetKeyClause(input);
+      const row = teamDb.prepare(
+        `SELECT 1 AS hit FROM inbox_items
+         WHERE ${where.sql} AND target_seq >= ? AND mentions_recipient = 1 LIMIT 1`,
+      ).get(...where.params, input.sinceSeq) as { hit?: number } | undefined;
+      return row?.hit === 1;
     },
 
     async getReadBoundary(input) {
