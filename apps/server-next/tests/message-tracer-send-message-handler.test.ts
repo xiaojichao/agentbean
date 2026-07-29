@@ -221,6 +221,35 @@ describe('send-message command handler', () => {
     });
   });
 
+  test('basis relevance：basis 消息自上次 check 后被编辑（updatedAt>issuedAt）→ hold', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+    // 一条 basis 消息（user-2 发），updatedAt > NOW 表示在 user-1 上次 check 后被编辑
+    await repos.messages.append({ id: 'basis-1', teamId: 'team-1', channelId: 'channel-1', senderKind: 'human', senderId: 'user-2', body: 'basis', createdAt: NOW, updatedAt: NOW + 1, meta: {} });
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('k-basis-edited'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc, basisMessageId: 'basis-1' } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.outcome).toBe('freshness_hold');
+    expect(res.heldReason).toBe('basis_message_changed');
+  });
+
+  test('basis relevance：basis 未编辑（updatedAt 缺失）且无未读提及 → 不阻塞', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
+    // basis 消息无 updatedAt（未编辑）
+    await repos.messages.append({ id: 'basis-2', teamId: 'team-1', channelId: 'channel-1', senderKind: 'human', senderId: 'user-2', body: 'basis', createdAt: NOW, meta: {} });
+    const rc = readCandidate({ recipientId: 'user-1', channelId: 'channel-1', targetSeq: 0, kind: 'channel-mainline' });
+    const res = await handle({
+      envelope: envelope('k-basis-clean'),
+      payload: sendPayload({ body: 'reply', freshnessBasis: { schemaVersion: 1, target: { schemaVersion: 1, kind: 'channel-mainline', channelId: 'channel-1' }, readCandidate: rc, basisMessageId: 'basis-2' } }),
+      senderId: 'user-1', teamId: 'team-1',
+    });
+    expect(res.outcome).toBe('applied'); // basis 未变 + 无未读提及 → 不阻塞
+  });
+
   test('rejected：篡改 proof 的 readCandidate 被拒，无副作用', async () => {
     const { repos, handle } = setup();
     await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });

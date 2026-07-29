@@ -544,10 +544,22 @@ function resolveRecipients(humanMemberIds: readonly ID[], agentMemberIds: readon
   return Array.from(set);
 }
 
+/** #893 §4：basis 消息是否自发送者上次 check（readCandidate.issuedAt）后被编辑或删除。 */
+async function isBasisMessageChanged(
+  tx: Parameters<Parameters<ChannelCoordinationUnitOfWork['run']>[0]>[0],
+  basisMessageId: ID | undefined,
+  sinceIssuedAt: UnixMs,
+): Promise<boolean> {
+  if (!basisMessageId) return false;
+  const basis = await tx.messages.getById(basisMessageId);
+  // 删除（getById 返回 null，如 deleteMessage 软删）或编辑（updatedAt > 上次 check）→ basis 已变。
+  return basis == null || (basis.updatedAt != null && basis.updatedAt > sinceIssuedAt);
+}
+
 /** freshness 校验：仅 readCandidate gate（#893 §4 relevance）。返回非 null = hold/reject。 */
 async function checkFreshnessRequest(
   tx: Parameters<Parameters<ChannelCoordinationUnitOfWork['run']>[0]>[0],
-  input: { readonly channelId: ID; readonly threadId?: ID; readonly freshnessBasis: { readonly readCandidate?: ReadCandidateTokenV1; readonly target: MessageTargetRefV1 } },
+  input: { readonly channelId: ID; readonly threadId?: ID; readonly freshnessBasis: { readonly readCandidate?: ReadCandidateTokenV1; readonly target: MessageTargetRefV1; readonly basisMessageId?: ID } },
   senderId: ID,
   secret: string,
   clock: { now(): UnixMs },
@@ -572,6 +584,15 @@ async function checkFreshnessRequest(
     channelId: input.channelId,
     threadId: input.threadId ?? null,
   });
+  // #893 §4：依据消息被编辑或删除始终 relevant——即使无未读，basis 变了也 hold。
+  if (await isBasisMessageChanged(tx, input.freshnessBasis.basisMessageId, rc.issuedAt)) {
+    const newReadCandidate = issueReadCandidate({
+      recipientId: senderId, target: rc.target, targetSeq: currentMax + 1, issuedAt: now, secret,
+    });
+    return buildResponse('send-message', 'freshness_hold', 'FRESHNESS_HOLD', 'same_key', {
+      heldTarget: input.freshnessBasis.target, heldReason: 'basis_message_changed', newReadCandidate,
+    });
+  }
   // exclusive 语义：currentMax >= targetSeq 表示有新消息到达（target_seq >= 下一未读位）。
   if (currentMax < rc.targetSeq) return null; // 无未读 → fresh，继续提交。
 
