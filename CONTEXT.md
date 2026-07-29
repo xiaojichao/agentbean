@@ -174,7 +174,7 @@ _Avoid_: 每次调用随机 key、Task ID 复用所有效果、客户端时间�
 
 ## PI Manager
 
-AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；与之冲突的每消息协调 accepted ADR 在被显式 supersede 前仍约束当前 runtime，本 glossary 不授权静默迁移实现。
+AgentBean 内置的系统协调者，只在权威 PI orchestration trigger 成立后编排根 Task；它不是 Team 成员，也不监听或默认理解每一条普通消息，不替代外部 Agent 完成用户领域工作。本条冻结 #894 决议后的目标术语；ADR-0062 已取代旧的每消息协调合同，旧事实与兼容行为只按 ADR-0068 的迁移边界保留，不能继续授权当前 runtime。
 _Avoid_: PI Agent、每消息 Channel Coordinator、普通聊天 Agent、用户任务执行 Agent。
 
 ## PI orchestration trigger
@@ -651,6 +651,51 @@ _Avoid_: 隐藏影响、全量 prompt 展示、越权来源引用。
 
 旧称，不再作为产品角色使用；普通消息的升级建议属于 Promotion evaluator，已创建根 Task 的编排属于 PI Manager。
 _Avoid_: 每消息 PI Manager、Channel coordination decision、将 evaluator 与 orchestration 合并。
+
+## PI authority epoch
+
+Server 为一个 Team 持久记录的单调迁移版本，决定某个 source lineage 使用 legacy coordination 还是当前 Promotion gate / PI orchestration 合同；lineage 创建时绑定该 epoch，后续异步处理与重试不能重新解释。Team 内消息提交与 cutover 在同一 migration revision 上线性化，不能按消息比例、用户或 worker 随机分流。
+_Avoid_: 进程环境变量、请求时动态重选、同一 lineage 双轨、回退旧 writer、全局瞬时开关。
+
+## PI authority cutover
+
+合法 Team Owner/Admin 使用 Server readiness token，把 Team 的 PI authority epoch 从 legacy 单向推进到新权威合同的原子动作；它同时 fencing legacy writer 并记录 audit/outbox。cutover 只能前进，故障时进入保护状态并前滚恢复，不能重新启用旧 Coordinator。
+_Avoid_: 部署即切换、自动 rollout 直接确认、未通过 readiness 强切、语义回滚、dual-write。
+
+## Legacy coordination fact
+
+cutover 前由 Channel Coordinator、coordination job/cycle、Device-only coordination 或旧 intake 合同形成的不可变历史事实；它可以被审计和只读投影，但不得批量改写成 root Task、PI run 或新 event，也不向新命令授予权限。
+_Avoid_: 当前 PI orchestration fact、事实级批量转换、继承旧授权、通过改写历史制造连续性。
+
+## Legacy drain lineage
+
+cutover 时已经派发或执行、获准在隔离边界和 deadline 内完成当前执行单元的旧 coordination lineage；它不得吸收新消息、继续拆解或派发。未开始的旧 job 被取消，超过期限或无法安全解释的 lineage 进入 Legacy recovery pending。
+_Avoid_: 新 legacy work、无限 drain、跨 lineage 写入、继续编排、自动 promotion。
+
+## Legacy drain bridge
+
+Server 接收有效 drain lineage 迟到结果的受限兼容入口；它要求 drain lease/fencing token 与幂等键，并把合法结果作为带 legacy provenance 的当前 `Message + InboxItem` 事务事实提交。结果不得自动触发 Promotion evaluator、root Task 或新 coordination job。
+_Avoid_: legacy writer、重试或再派发入口、无 fencing 结果、结果消息自动建单、过期结果改写权威状态。
+
+## Legacy compatibility projection
+
+Server 从 Legacy coordination fact 生成的只读兼容视图；它可以在迁移期支持查询和审计，但不能接受写入、伪造新 Task/run/event 或充当第二事实源。旧写请求必须明确返回 `LEGACY_COORDINATION_RETIRED`，不能静默转译。
+_Avoid_: 双写适配器、旧 API 自动 promotion、projection 回写、永久兼容层、失败 fallback。
+
+## Legacy migration proposal
+
+对仍需继续工作的 legacy lineage 提出的结构化授权候选；合法确认后才创建唯一的新 root Task 与 Legacy migration relation。确认前不创建 Task，也不改变旧 lineage。
+_Avoid_: 批量迁移、自动 root Task、旧 job 原地升级、跨 revision 授权、重复建单。
+
+## Legacy migration relation
+
+Legacy migration proposal 被合法确认后，由 Server 建立的不可变来源关系，绑定旧 lineage、cutover version、确认人、scope snapshot 与唯一的新 root Task；它只表示接续与 provenance，不表示新旧对象是同一事实，也不继承旧权限、claim、Invocation authorization 或 Action approval。
+_Avoid_: 对象同一性、权限继承、旧事实改写、一个 lineage 多个 root Task、来源删除级联删除 Task。
+
+## Legacy recovery pending
+
+legacy lineage 超出 drain deadline、迟到结果失去有效 fencing，或历史事实无法安全解释时的隔离状态；它阻止继续编排和权威写入，只允许诊断与合法人工恢复。
+_Avoid_: 猜测迁移、自动重试、重新启用旧 Coordinator、丢弃 provenance、无限期活跃 drain。
 
 ## Device-only coordination
 
