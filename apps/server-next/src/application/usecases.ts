@@ -9,6 +9,13 @@ import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from '
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
+  createAckReadCandidateCommandHandler,
+  createCheckInboxCommandHandler,
+  createSendMessageCommandHandler,
+} from './message-tracer-handlers.js';
+import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
+import { parseMessageTracerCommandEnvelopeV1, type MessageTracerCommandResponseV1 } from '../../../../packages/contracts/src/index.js';
+import {
   initialChannelDocumentIds,
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
@@ -289,6 +296,17 @@ export interface ServerNextUseCases {
   snapshotDirectMessage(input: SnapshotDirectMessageInput): Promise<Ack<{ dm: DmChannelDto; messages: MessageDto[] }>>;
   registerAgent(input: AgentDto): Promise<Ack<{ agent: AgentDto }>>;
   sendMessage(input: SendMessageInput): Promise<Ack<SendMessageResult>>;
+  /**
+   * #921 Message tracer command 派发（ADR-0067 封闭 registry）。默认关闭——messageTracerEnabled=false 时返回
+   * disabled；=true 时按 envelope.commandName 路由到 send-message/check-inbox/ack-read-candidate handler。
+   * authority（userId/teamId）由 socket session 注入。freshness_hold/conflict/rejected 是合法 outcome（ok:true）。
+   */
+  dispatchMessageTracerCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }>;
   /** Channel Coordinator（#706）：处理单个 Coordination Job。供测试与生产 driver 调用。 */
   processCoordinationJob(jobId: string): Promise<CoordinationJobOutcome>;
   /** Channel Coordinator（#706）：串行消费所有到期 Job。供测试与生产 driver 调用。 */
@@ -1262,6 +1280,8 @@ export interface CreateServerNextUseCasesInput {
    * Pass `legacy` only for unmigrated tests or emergency env override at the host.
    */
   messageIngestionMode?: 'legacy' | 'durable-job';
+  /** #921 Message tracer command 路径开关（默认 false；true 时暴露 dispatchMessageTracerCommand）。 */
+  messageTracerEnabled?: boolean;
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
   projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
@@ -1300,6 +1320,53 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // #706 Channel Coordinator 消费 durable Job。默认 durable-job（ADR 0061）；
   // legacy 仅用于显式未迁移调用方 / 紧急旁路（见 host resolveMessageIngestionMode）。
   const messageIngestionMode = input.messageIngestionMode ?? 'durable-job';
+  // #921 Message tracer command 路径（默认关闭；ADR-0067 registry）。启用时构造 3 handler + dispatcher。
+  const messageTracerEnabled = input.messageTracerEnabled ?? false;
+  const messageTracerDispatcher = messageTracerEnabled
+    ? createMessageTracerCommandDispatcher({
+        send: createSendMessageCommandHandler({
+          unitOfWork: repositories.channelCoordinationUnitOfWork,
+          ids,
+          clock,
+          sessionSecret,
+        }),
+        checkInbox: createCheckInboxCommandHandler({
+          unitOfWork: repositories.channelCoordinationUnitOfWork,
+          ids,
+          clock,
+          sessionSecret,
+        }),
+        ack: createAckReadCandidateCommandHandler({
+          unitOfWork: repositories.channelCoordinationUnitOfWork,
+          ids,
+          clock,
+          sessionSecret,
+        }),
+      })
+    : null;
+  async function dispatchMessageTracerCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }> {
+    if (!messageTracerDispatcher) {
+      return { ok: false, error: 'MESSAGE_TRACER_DISABLED' };
+    }
+    let commandName: ReturnType<typeof parseMessageTracerCommandEnvelopeV1>['commandName'];
+    try {
+      commandName = parseMessageTracerCommandEnvelopeV1(input.envelope).commandName;
+    } catch {
+      return { ok: false, error: 'MESSAGE_TRACER_PAYLOAD_INVALID' };
+    }
+    const response = await messageTracerDispatcher.dispatch({
+      commandName,
+      envelope: input.envelope,
+      payload: input.payload,
+      authority: { actorId: input.userId, teamId: input.teamId },
+    });
+    return { ok: true, response };
+  }
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
     // Directly constructed use cases preserve the pre-rollout behavior. Production
@@ -3877,6 +3944,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       return makeSuccess({ agent: toPublicAgent(agent) });
     },
+
+    dispatchMessageTracerCommand,
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);

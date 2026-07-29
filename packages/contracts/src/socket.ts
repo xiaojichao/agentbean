@@ -226,6 +226,8 @@ export const WEB_EVENTS = {
     delete: 'message:delete',
     pinnedUpdated: 'message:pinned-updated',
     convertToTask: 'message:convert-to-task',
+    // #921 Message tracer command 路径（ADR-0067 registry；envelope.commandName 路由 send/check-inbox/ack）。
+    messageTracer: { command: 'message-tracer:command' },
   },
   dispatch: {
     cancel: 'dispatch:cancel',
