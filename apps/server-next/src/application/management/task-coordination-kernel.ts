@@ -25,6 +25,7 @@ import type {
   TaskAcceptanceCriterionRecord,
   TaskClaimLeaseRecord,
   TaskCoordinationRecord,
+  TaskOfferRecord,
 } from '../task-coordination-repositories.js';
 import type {
   TaskCoordinationTransactionRepositories,
@@ -52,6 +53,18 @@ type TaskCoordinationEventType =
 interface CommandReplay {
   readonly events: readonly ManagementEventRecord[];
   readonly lastSequence: number;
+}
+
+/** #948-B ADR-0064：项目阶段自动推进约束标记（与 broker 共享的 sentinel 值）。 */
+const PROJECT_STAGE_AUTO_CONSTRAINT = 'agentbean:project-stage-auto';
+
+/** #948-B ADR-0064：publishForClaim 的预解算 offer candidate（UoW 内原子创建 offer）。 */
+export interface OfferCandidateForPublish {
+  readonly agentId: string;
+  readonly manifestRevision: number;
+  readonly hardSpecified: boolean;
+  readonly requirementConfirmation: boolean;
+  readonly projectStageAuto: boolean;
 }
 
 export interface TaskCoordinationKernelDependencies {
@@ -436,12 +449,24 @@ export function createTaskCoordinationKernel(
       taskId: string; expectedTaskRevision: number;
       /** #807 allocation:executor handler 传的 claimPolicy/targetAgentId 覆写(可选,默认强转 open 向后兼容)。 */
       readonly allocation?: { readonly claimPolicy: 'targeted' | 'open'; readonly targetAgentId?: string };
+      /**
+       * #948-B ADR-0064：预解算的 offer candidate 列表（事务外 IO 预解算，事务内原子创建）。
+       * 缺省/空数组时向后兼容（旧 publish-for-claim 行为不变）。
+       */
+      readonly offerCandidates?: readonly OfferCandidateForPublish[];
+      /** #948-B：offer TTL（ms），缺省 15_000（与 broker 默认值一致）。 */
+      readonly offerTtlMs?: number;
     }) {
       return unitOfWork.run(async (repositories) => {
         const now = clock.now();
         const run = await authorizeCommand(repositories, input.authority, now);
         const commandHash = hashManagementCommandInput({ command: 'publish-for-claim',
-          taskId: input.taskId, expectedTaskRevision: input.expectedTaskRevision });
+          taskId: input.taskId, expectedTaskRevision: input.expectedTaskRevision,
+          // #948-B：不同 candidate 集产生不同的幂等哈希——防止「先发 2 个 offer 后发 3 个」
+          // 的第二次调用被 findReplay 误判为幂等重放。
+          ...(input.offerCandidates?.length
+            ? { offerCandidates: input.offerCandidates } : {}),
+        });
         const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
         if (replay) {
           const event = requireReplayEvent(replay, 'task-published-for-claim');
@@ -499,6 +524,45 @@ export function createTaskCoordinationKernel(
             requiredCapabilities: currentCoordination.requiredCapabilities },
         }, now, ids, commandHash);
         taskGraphRevision = published.event.sequence;
+        // #948-B ADR-0064：整图原子发布含 Offer——在 task-published-for-claim 事件同一事务内
+        // 为每个预解算 candidate 创建持久化 TaskOfferRecord。任一个创建失败（如唯一约束冲突）
+        // 整个事务回滚，不残留 published 事件无 offer 的中间态。
+        const candidates = input.offerCandidates ?? [];
+        if (candidates.length > 0) {
+          const offerTtlMs = input.offerTtlMs ?? 15_000;
+          const activeCriterionList = activeCriteria(
+            await repositories.coordination.criteria.list(currentTask.id), currentTask.revision);
+          for (const candidate of candidates) {
+            const record: TaskOfferRecord = {
+              id: ids.nextId(),
+              teamId: currentTask.teamId,
+              taskId: currentTask.id,
+              agentId: candidate.agentId,
+              taskRevision: currentTask.revision,
+              taskAttempt: currentCoordination.attempt,
+              manifestRevision: candidate.manifestRevision,
+              objective: {
+                objective: currentTask.description ?? currentTask.title,
+                inputs: [],
+                deliverables: activeCriterionList.map((criterion) => criterion.description),
+                constraints: candidate.projectStageAuto ? [PROJECT_STAGE_AUTO_CONSTRAINT] : [],
+                riskLevel: 'low',
+                requiredCapabilities: [...currentCoordination.requiredCapabilities],
+                requiredSkills: [...(currentCoordination.requiredSkills ?? [])],
+                preferredSkills: [...(currentCoordination.preferredSkills ?? [])],
+              },
+              offerTtlMs,
+              offerExpiresAt: now + offerTtlMs,
+              hardSpecified: candidate.hardSpecified,
+              requirementConfirmation: candidate.requirementConfirmation,
+              status: 'open',
+              response: null,
+              createdAt: now,
+              updatedAt: now,
+            };
+            await repositories.coordination.offers.create(record);
+          }
+        }
         return { taskId: currentTask.id, taskRevision: currentTask.revision,
           status: currentTask.status, taskGraphRevision, disposition: 'updated' as const };
       });

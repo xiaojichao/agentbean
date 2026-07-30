@@ -27,7 +27,7 @@ import type { MemoryCapsuleRefRecord } from '../memory-repositories.js';
 import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-work.js';
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
-import type { createTaskCoordinationKernel } from './task-coordination-kernel.js';
+import type { createTaskCoordinationKernel, OfferCandidateForPublish } from './task-coordination-kernel.js';
 import type { createSubtaskAcceptanceService } from './subtask-acceptance-service.js';
 import { createSubtaskDeliveryService, deliveryOutput } from './subtask-delivery-service.js';
 import { createCollaborationService } from './collaboration-service.js';
@@ -262,8 +262,16 @@ export function createPhase2ManagementToolHandlers(input: {
   }[]) => Promise<ExecutableSubtaskCoverageResult>;
   /** #807 allocation 服务:可选,解析任务 published 时的 claimPolicy/targetAgentId。 */
   readonly allocationService?: (taskId: string) => Promise<{ claimPolicy: 'targeted' | 'open'; targetAgentId?: string } | null>;
+  /**
+   * #948-B ADR-0064：publish 前预解算 offer candidate 列表 + offerTtlMs。
+   * 返回 null/undefined 时跳过原子 offer 创建（向后兼容旧路径）。
+   */
+  readonly publishOfferResolutionService?: (taskId: string) => Promise<{
+    candidates: readonly OfferCandidateForPublish[];
+    offerTtlMs: number;
+  } | null>;
 }): Phase2ToolHandlers {
-  const { kernel, eligibilityService, allocationService } = input;
+  const { kernel, eligibilityService, allocationService, publishOfferResolutionService } = input;
   return {
     'tasks.create_subtasks': async (request) => {
       const drafts = request.input.subtasks.map((draft) => ({
@@ -300,10 +308,18 @@ export function createPhase2ManagementToolHandlers(input: {
       const allocation = allocationService
         ? await allocationService(request.input.taskId).catch(() => null)
         : null;
+      // #948-B ADR-0064：事务外 IO 预解算 offer candidate 列表（agent/manifest lookup），
+      // 传给 kernel 在事务内原子创建 offer。null/undefined 向后兼容。
+      const offerResolution = publishOfferResolutionService
+        ? await publishOfferResolutionService(request.input.taskId).catch(() => null)
+        : null;
       const published = await kernel.publishForClaim({
         authority: authority(request), idempotencyKey: request.idempotencyKey,
         ...request.input,
         ...(allocation ? { allocation } : {}),
+        ...(offerResolution?.candidates?.length
+          ? { offerCandidates: offerResolution.candidates, offerTtlMs: offerResolution.offerTtlMs }
+          : {}),
       });
       await input.onTaskPublished?.(published.taskId);
       return { taskId: published.taskId, taskRevision: published.taskRevision, status: 'todo' };

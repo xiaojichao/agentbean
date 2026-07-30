@@ -518,7 +518,36 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         });
         return [];
       }
-      for (const candidate of eligibleCandidates) {
+      // #948-B ADR-0064：整图原子发布含 Offer——优先从持久化读取 kernel UoW 内原子创建的 offer
+      // （避免 broker publishOffer 重复创建）。无持久化 offer 或 projectStageAuto 路径时
+      // 回退到既有 broker 创建逻辑（legacy / 项目阶段自动推进兼容）。
+      const persistedOffers = options?.projectStageAuto
+        ? [] : await input.repositories.taskCoordination.offers.listByTask(taskId);
+      const openPersisted = persistedOffers.filter((po) =>
+        po.status === 'open' && po.offerExpiresAt > now);
+      if (openPersisted.length > 0) {
+        for (const po of openPersisted) {
+          const candidate = resolution.candidates.find((c) => c.agentId === po.agentId);
+          if (!candidate?.deviceId) continue;
+          prepared.push({
+            schemaVersion: 1,
+            offerId: po.id,
+            deviceId: candidate.deviceId,
+            taskId,
+            taskRevision: resolution.taskRevision,
+            taskAttempt: resolution.taskAttempt,
+            agentId: po.agentId,
+            requiredCapabilities: [...coordination.requiredCapabilities],
+            // #948-B：持久化 offer 的原始 expiresAt 可能已过期（多次 prepareOffers 间 clock 推进），
+            // 用当前时间重算 TTL 使 StoredOffer 在本次分配轮有效。
+            offerExpiresAt: now + offerTtlMs,
+            manifestRevision: po.manifestRevision,
+            ancestorAgentIds: resolution.ancestorAgentIds,
+            projectStageAuto: po.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT),
+          });
+        }
+      } else {
+        for (const candidate of eligibleCandidates) {
         const offerId = input.ids.nextId();
         // C-2b-ii：为 manifest-having 候选持久化完整 TaskOffer（新 respond 路径的 substrate，
         // wire offerId = 持久化 record.id）。legacy（无 active manifest）→ publishOffer 抛
@@ -553,6 +582,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           projectStageAuto: options?.projectStageAuto === true,
         });
       }
+      } // #948-B: end of legacy offer creation fallback
       for (const offer of prepared) offers.set(offer.offerId, offer);
       return prepared.map(({
         ancestorAgentIds: _ancestorAgentIds,
@@ -562,7 +592,39 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }) => offer);
     },
     async acquire(payload) {
-      const offer = offers.get(payload.offerId);
+      let offer = offers.get(payload.offerId);
+      // #948-B ADR-0064：Map miss → 持久化兜底（kernel UoW 内原子创建的 offer 在 prepareOffers
+      // 填充 Map 之前或之后都可能到达——hydrate 前需从持久化读，hydrate 后直接命中 Map）。
+      if (!offer) {
+        const persisted = await input.repositories.taskCoordination.offers.getById(payload.offerId);
+        if (persisted && persisted.agentId === payload.agentId && persisted.status === 'open') {
+          const now = input.clock.now();
+          if (now >= persisted.offerExpiresAt) {
+            return failure('UNAVAILABLE', 'TASK_CLAIM_OFFER_EXPIRED', true);
+          }
+          const agent = await input.repositories.agents.getById(persisted.agentId);
+          if (!agent?.deviceId) {
+            return failure('INVALID_REQUEST', 'TASK_CLAIM_OFFER_INVALID', false);
+          }
+          const ancestorAgentIds = await collectAncestorAgentIds(
+            persisted.taskId, input.repositories, now);
+          offer = {
+            schemaVersion: 1,
+            offerId: persisted.id,
+            deviceId: agent.deviceId,
+            taskId: persisted.taskId,
+            taskRevision: persisted.taskRevision,
+            taskAttempt: persisted.taskAttempt,
+            agentId: persisted.agentId,
+            requiredCapabilities: persisted.objective.requiredCapabilities,
+            offerExpiresAt: persisted.offerExpiresAt,
+            ancestorAgentIds,
+            projectStageAuto: persisted.objective.constraints
+              .includes(PROJECT_STAGE_AUTO_CONSTRAINT),
+            manifestRevision: persisted.manifestRevision,
+          };
+        }
+      }
       if (!offer || offer.agentId !== payload.agentId) return failure('INVALID_REQUEST', 'TASK_CLAIM_OFFER_INVALID', false);
       if (input.clock.now() >= offer.offerExpiresAt) {
         offers.delete(offer.offerId);
