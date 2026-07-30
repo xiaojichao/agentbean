@@ -517,6 +517,19 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  // #967 大文件暂存：begin / get / commit（put 走 usecase/HTTP，避免大包经 socket）。
+  bind(socket, WEB_EVENTS.project.beginWorkspacePublishStaging, app, 'beginWorkspacePublishStaging', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.getWorkspacePublishStaging, app, 'getWorkspacePublishStaging', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.commitWorkspacePublishStaging, app, 'commitWorkspacePublishStaging', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.project.importWorkspace, async (payload, ack) => {
     try {
       const result = await app.importProjectChannelWorkspace(payload as ImportProjectChannelWorkspaceInput);

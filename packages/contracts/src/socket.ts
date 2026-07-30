@@ -230,6 +230,12 @@ export const WEB_EVENTS = {
     exportWorkspace: 'project:export-workspace',
     /** #969 列出 workspace 全部 revision（默认最新在前）。 */
     workspaceRevisions: 'project:workspace-revisions',
+    /** #967 以稳定 publish identity 开启/续用暂存会话。 */
+    beginWorkspacePublishStaging: 'project:begin-workspace-publish-staging',
+    /** #967 查询暂存进度或已提交的最终结果（幂等）。 */
+    getWorkspacePublishStaging: 'project:get-workspace-publish-staging',
+    /** #967 原子提交暂存 → 新 revision（重复调用不重复创建 revision）。 */
+    commitWorkspacePublishStaging: 'project:commit-workspace-publish-staging',
   },
   dm: {
     start: 'dm:start',

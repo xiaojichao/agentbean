@@ -114,6 +114,55 @@ export interface WorkspaceApplyFileEntryDto {
   sha256?: string;
 }
 
+/**
+ * #967 Workspace 大文件暂存会话状态。
+ * - open: 接受续传，内容对频道不可见
+ * - committed: 已原子发布，可幂等查询最终 revision
+ * - failed: 不可再提交（例如过期清理前标记）
+ */
+export type WorkspacePublishStagingStatusDto = 'open' | 'committed' | 'failed';
+
+/** #967 暂存清单中的单个文件进度（上传中不出现在 revision / 频道文件索引）。 */
+export interface WorkspacePublishStagingFileDto {
+  path: string;
+  filename: string;
+  mimeType: string;
+  expectedSizeBytes: number;
+  expectedSha256: string;
+  receivedBytes: number;
+  complete: boolean;
+}
+
+/**
+ * #967 以稳定 publish identity 标识的暂存会话。
+ * 成员只能通过该 identity 查询进度或最终结果；上传中内容不进入 Workspace revision。
+ */
+export interface WorkspacePublishStagingDto {
+  publishId: ID;
+  teamId: ID;
+  channelId: ID;
+  baselineRevisionId: ID;
+  status: WorkspacePublishStagingStatusDto;
+  files: WorkspacePublishStagingFileDto[];
+  createdBy: ID;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+  /** 提交成功后写入；幂等查询最终 revision 用。 */
+  committedRevisionId?: ID;
+  committedWorkspaceId?: ID;
+  /** 可选 Agent publish provenance（commit 时写入 revision）。 */
+  provenance?: {
+    agentId: ID;
+    taskId: ID;
+    taskAttempt: number;
+  };
+}
+
+/** #967 单文件 / 单次 publish 大小上限（Server 配置；超限明确拒绝）。 */
+export const DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES = 250 * 1024 * 1024;
+export const DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES = 1024 * 1024 * 1024;
+export const DEFAULT_WORKSPACE_STAGING_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 /** #968 Why a revision file cannot be applied at its path. */
 export type WorkspaceApplyConflictReasonDto = 'LOCAL_FILE_EXISTS';
 

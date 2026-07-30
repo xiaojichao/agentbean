@@ -6,7 +6,7 @@ import type {
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type WorkspacePublishStagingDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   createAckReadCandidateCommandHandler,
@@ -20,10 +20,10 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
 import {
   PROJECT_REFERENCE_SET_CONTRACT_VERSION,
   type ProjectReferenceFailureDetailsDto,
@@ -393,6 +393,22 @@ export interface ServerNextUseCases {
   exportProjectChannelWorkspace(input: ExportProjectChannelWorkspaceInput): Promise<Ack<{ manifest: ArchiveExportManifestDto }>>;
   /** #969 列出 workspace 全部 revision（最新在前）。 */
   listProjectChannelWorkspaceRevisions(input: ListProjectChannelWorkspaceInput): Promise<Ack<{ revisions: ProjectChannelWorkspaceRevisionDto[] }>>;
+  /**
+   * #967 开启或续用稳定 publish identity 的暂存会话。
+   * 上传中内容不进 revision / 频道索引；同 identity + 兼容 plan 幂等返回现有会话。
+   */
+  beginWorkspacePublishStaging(input: BeginWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /** #967 字节续传：同 publishId 可断点续传；已完成文件幂等成功。 */
+  putWorkspacePublishStagingFile(input: PutWorkspacePublishStagingFileInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /** #967 查询暂存进度或已提交最终结果（幂等）。 */
+  getWorkspacePublishStaging(input: GetWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /**
+   * #967 原子提交暂存 → 新 revision。
+   * 重复 commit 同一 publishId 不重复创建 revision；超限/未完成/冲突均无部分结果。
+   */
+  commitWorkspacePublishStaging(input: CommitWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto; workspace?: ProjectChannelWorkspaceDto }>>;
+  /** #967 清理过期未提交暂存（committed 结果保留可查询）。 */
+  cleanupExpiredWorkspacePublishStaging(input?: CleanupWorkspacePublishStagingInput): Promise<Ack<{ cleaned: number }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
@@ -1027,6 +1043,59 @@ export interface MaterializeProjectChannelWorkspaceInput {
   channelId: string;
   /** Specific revision to materialize; defaults to the workspace's current revision. */
   revisionId?: string;
+}
+
+/** #967 begin：稳定 publish identity + 计划文件清单（size/sha 用于上限与完整性校验）。 */
+export interface BeginWorkspacePublishStagingInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  baselineRevisionId: string;
+  files: Array<{
+    path: string;
+    filename?: string;
+    mimeType?: string;
+    expectedSizeBytes: number;
+    expectedSha256: string;
+  }>;
+  provenance?: { agentId: string; taskId: string; taskAttempt: number };
+  /** 可选覆盖 Server 默认上限（测试用）；生产由配置注入。 */
+  limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
+export interface PutWorkspacePublishStagingFileInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  path: string;
+  /** 严格串行续传偏移，必须等于当前 receivedBytes。 */
+  offset: number;
+  /** 原始字节（测试与 usecase 直调）；HTTP 层可先读入再传入。 */
+  content: Buffer | Uint8Array | string;
+  limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
+export interface GetWorkspacePublishStagingInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+}
+
+export interface CommitWorkspacePublishStagingInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
+export interface CleanupWorkspacePublishStagingInput {
+  retentionMs?: number;
+  limit?: number;
+  now?: number;
 }
 
 export interface SearchMessagesInput {
@@ -5091,6 +5160,504 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // The manifest returned is the immutable file list (paths + artifact refs + size/sha).
       // The server never receives the local target directory (no absolute-path leakage).
       return resolveProjectChannelWorkspaceRevision(repositories, workspace, materializeInput.revisionId);
+    },
+
+    // #967 Workspace 大文件暂存 / 断网续传 / 可恢复原子发布
+    async beginWorkspacePublishStaging(beginInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, beginInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const publishId = normalizeWorkspacePublishId(beginInput.publishId);
+      if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
+      if (!beginInput.baselineRevisionId?.trim()) {
+        return makeFailure('VALIDATION_ERROR', 'baselineRevisionId is required');
+      }
+      if (!Array.isArray(beginInput.files) || beginInput.files.length === 0) {
+        return makeFailure('VALIDATION_ERROR', 'Workspace staging must declare files');
+      }
+      const limits = resolveWorkspaceStagingLimits(beginInput.limits);
+      const planFiles: WorkspacePublishStagingFileRecord[] = [];
+      const seen = new Set<string>();
+      let totalBytes = 0;
+      for (const entry of beginInput.files) {
+        const path = normalizeWorkspacePath(entry.path);
+        if (!path) return makeFailure('VALIDATION_ERROR', 'Workspace paths must be unique and relative');
+        if (seen.has(path)) return makeFailure('VALIDATION_ERROR', 'Duplicate workspace path');
+        seen.add(path);
+        const expectedSizeBytes = Number(entry.expectedSizeBytes);
+        const expectedSha256 = String(entry.expectedSha256 ?? '').trim().toLowerCase();
+        if (!/^[a-f0-9]{64}$/.test(expectedSha256)) {
+          return makeFailure('VALIDATION_ERROR', 'expectedSha256 must be a sha256 hex digest');
+        }
+        totalBytes += expectedSizeBytes;
+        const sizeDecision = evaluateWorkspaceStagingSizeLimits({
+          fileBytes: expectedSizeBytes,
+          totalBytesAfter: totalBytes,
+          limits,
+        });
+        if (sizeDecision.kind === 'rejected') {
+          return makeFailure(
+            'VALIDATION_ERROR',
+            sizeDecision.reason === 'file-too-large' ? 'Workspace staging file exceeds size limit'
+              : sizeDecision.reason === 'publish-too-large' ? 'Workspace staging publish exceeds size limit'
+              : 'Invalid workspace staging size',
+            { reason: sizeDecision.reason },
+          );
+        }
+        const filename = (entry.filename?.trim() || path.split('/').pop() || 'file.bin').slice(0, 255);
+        const mimeType = entry.mimeType?.trim() || 'application/octet-stream';
+        planFiles.push({
+          path,
+          filename,
+          mimeType,
+          expectedSizeBytes,
+          expectedSha256,
+          receivedBytes: 0,
+          complete: false,
+        });
+      }
+      const existing = await repositories.workspacePublishStagings.getByPublishId({
+        teamId: beginInput.teamId,
+        publishId,
+      });
+      if (existing) {
+        if (existing.channelId !== beginInput.channelId) {
+          return makeFailure('CONFLICT', 'Publish identity already used for another channel');
+        }
+        if (existing.status === 'committed') {
+          return makeSuccess({ staging: toWorkspacePublishStagingDto(existing) });
+        }
+        const compatible = isCompatibleWorkspaceStagingBegin({
+          existing: {
+            teamId: existing.teamId,
+            channelId: existing.channelId,
+            baselineRevisionId: existing.baselineRevisionId,
+            files: existing.files.map((f) => ({
+              path: f.path,
+              expectedSizeBytes: f.expectedSizeBytes,
+              expectedSha256: f.expectedSha256,
+            })),
+          },
+          requested: {
+            teamId: beginInput.teamId,
+            channelId: beginInput.channelId,
+            baselineRevisionId: beginInput.baselineRevisionId,
+            files: planFiles.map((f) => ({
+              path: f.path,
+              expectedSizeBytes: f.expectedSizeBytes,
+              expectedSha256: f.expectedSha256,
+            })),
+          },
+        });
+        if (!compatible) {
+          return makeFailure('CONFLICT', 'Publish identity already used with a different staging plan');
+        }
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(existing) });
+      }
+      const now = clock.now();
+      const created = await repositories.workspacePublishStagings.create({
+        publishId,
+        teamId: beginInput.teamId,
+        channelId: beginInput.channelId,
+        baselineRevisionId: beginInput.baselineRevisionId,
+        status: 'open',
+        files: planFiles,
+        createdBy: beginInput.userId,
+        createdAt: now,
+        updatedAt: now,
+        ...(beginInput.provenance ? { provenance: beginInput.provenance } : {}),
+      });
+      if (!created) {
+        // 竞态：另一请求刚创建。再读一次做幂等收敛。
+        const raced = await repositories.workspacePublishStagings.getByPublishId({
+          teamId: beginInput.teamId,
+          publishId,
+        });
+        if (raced) return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
+        return makeFailure('CONFLICT', 'Failed to create workspace publish staging');
+      }
+      return makeSuccess({ staging: toWorkspacePublishStagingDto(created) });
+    },
+
+    async putWorkspacePublishStagingFile(putInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, putInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const publishId = normalizeWorkspacePublishId(putInput.publishId);
+      if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
+      const path = normalizeWorkspacePath(putInput.path);
+      if (!path) return makeFailure('VALIDATION_ERROR', 'Workspace paths must be unique and relative');
+      const staging = await repositories.workspacePublishStagings.getByPublishId({
+        teamId: putInput.teamId,
+        publishId,
+      });
+      if (!staging || staging.channelId !== putInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Workspace publish staging not found');
+      }
+      if (staging.status === 'committed') {
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(staging) });
+      }
+      if (staging.status !== 'open') {
+        return makeFailure('CONFLICT', 'Workspace publish staging is not open');
+      }
+      const fileIndex = staging.files.findIndex((f) => f.path === path);
+      if (fileIndex < 0) return makeFailure('NOT_FOUND', 'Staging file path not in plan');
+      const file = staging.files[fileIndex]!;
+      const chunk = coerceStagingContent(putInput.content);
+      const uploadDecision = evaluateWorkspaceStagingUpload({
+        expectedSizeBytes: file.expectedSizeBytes,
+        receivedBytes: file.receivedBytes,
+        complete: file.complete,
+        offset: putInput.offset,
+        chunkLength: chunk.length,
+      });
+      if (uploadDecision.kind === 'already-complete') {
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(staging) });
+      }
+      if (uploadDecision.kind === 'rejected') {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          uploadDecision.reason === 'invalid-offset' ? 'Staging upload offset mismatch'
+            : uploadDecision.reason === 'overflow' ? 'Staging upload exceeds declared file size'
+            : uploadDecision.reason === 'empty-chunk' ? 'Staging upload chunk is empty'
+            : 'Staging upload rejected',
+          { reason: uploadDecision.reason },
+        );
+      }
+      const nextContent = Buffer.concat([file.content ? Buffer.from(file.content) : Buffer.alloc(0), chunk]);
+      // 上限双检：单文件 + 会话总接收量（含本 chunk）。
+      const limits = resolveWorkspaceStagingLimits(putInput.limits);
+      const totalAfter = staging.files.reduce((sum, entry, index) => {
+        if (index === fileIndex) return sum + uploadDecision.nextReceivedBytes;
+        return sum + entry.receivedBytes;
+      }, 0);
+      const sizeDecision = evaluateWorkspaceStagingSizeLimits({
+        fileBytes: uploadDecision.nextReceivedBytes,
+        totalBytesAfter: totalAfter,
+        limits,
+      });
+      if (sizeDecision.kind === 'rejected') {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          sizeDecision.reason === 'file-too-large' ? 'Workspace staging file exceeds size limit'
+            : sizeDecision.reason === 'publish-too-large' ? 'Workspace staging publish exceeds size limit'
+            : 'Invalid workspace staging size',
+          { reason: sizeDecision.reason },
+        );
+      }
+      let complete = uploadDecision.complete;
+      if (complete) {
+        const digest = createHash('sha256').update(nextContent).digest('hex');
+        if (digest !== file.expectedSha256.toLowerCase()) {
+          // 完整但哈希不匹配：不标记 complete，拒绝本次完成态（调用方可重传）。
+          return makeFailure('VALIDATION_ERROR', 'Staging file sha256 mismatch', {
+            reason: 'hash-mismatch',
+            path,
+          });
+        }
+      }
+      const nextFiles = staging.files.map((entry, index) => {
+        if (index !== fileIndex) return entry;
+        return {
+          ...entry,
+          receivedBytes: uploadDecision.nextReceivedBytes,
+          complete,
+          content: nextContent,
+        };
+      });
+      const updated = await repositories.workspacePublishStagings.update({
+        ...staging,
+        files: nextFiles,
+        updatedAt: clock.now(),
+      });
+      return makeSuccess({ staging: toWorkspacePublishStagingDto(updated) });
+    },
+
+    async getWorkspacePublishStaging(getInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, getInput);
+      if (!access.ok) return access;
+      const publishId = normalizeWorkspacePublishId(getInput.publishId);
+      if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
+      const staging = await repositories.workspacePublishStagings.getByPublishId({
+        teamId: getInput.teamId,
+        publishId,
+      });
+      if (!staging || staging.channelId !== getInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Workspace publish staging not found');
+      }
+      // 过期未提交：查询时安全清理，不返回半成品为可提交态。
+      if (staging.status !== 'committed') {
+        const expiry = evaluateWorkspaceStagingExpiry({
+          status: staging.status,
+          createdAt: staging.createdAt,
+          now: clock.now(),
+          retentionMs: DEFAULT_WORKSPACE_STAGING_RETENTION_MS,
+        });
+        if (expiry.kind === 'expired-cleanable') {
+          await repositories.workspacePublishStagings.delete({
+            teamId: staging.teamId,
+            publishId: staging.publishId,
+          });
+          return makeFailure('NOT_FOUND', 'Workspace publish staging expired');
+        }
+      }
+      return makeSuccess({ staging: toWorkspacePublishStagingDto(staging) });
+    },
+
+    async commitWorkspacePublishStaging(commitInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, commitInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const publishId = normalizeWorkspacePublishId(commitInput.publishId);
+      if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
+      const staging = await repositories.workspacePublishStagings.getByPublishId({
+        teamId: commitInput.teamId,
+        publishId,
+      });
+      if (!staging || staging.channelId !== commitInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Workspace publish staging not found');
+      }
+      // 幂等：已提交 → 返回同一最终结果，不重复创建 revision。
+      if (staging.status === 'committed' && staging.committedRevisionId) {
+        const workspace = await repositories.projectChannelWorkspaces.getForTeam({
+          teamId: commitInput.teamId,
+          channelId: commitInput.channelId,
+        });
+        if (workspace && workspace.currentRevisionId === staging.committedRevisionId) {
+          return makeSuccess({ staging: toWorkspacePublishStagingDto(staging), workspace });
+        }
+        const revision = await repositories.projectChannelWorkspaces.getRevision({
+          teamId: commitInput.teamId,
+          channelId: commitInput.channelId,
+          revisionId: staging.committedRevisionId,
+        });
+        if (workspace && revision) {
+          return makeSuccess({
+            staging: toWorkspacePublishStagingDto(staging),
+            workspace: { ...workspace, currentRevisionId: revision.id, currentRevision: revision },
+          });
+        }
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(staging) });
+      }
+      if (staging.status !== 'open') {
+        return makeFailure('CONFLICT', 'Workspace publish staging is not open');
+      }
+      const readiness = evaluateWorkspaceStagingCommitReadiness(
+        staging.files.map((file) => {
+          const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+          const digest = content.length === file.expectedSizeBytes && file.complete
+            ? createHash('sha256').update(content).digest('hex')
+            : '';
+          return {
+            path: file.path,
+            complete: file.complete,
+            expectedSizeBytes: file.expectedSizeBytes,
+            receivedBytes: file.receivedBytes,
+            sha256Match: digest === file.expectedSha256.toLowerCase(),
+          };
+        }),
+      );
+      if (readiness.kind === 'rejected') {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          readiness.reason === 'incomplete' ? 'Workspace staging files are incomplete'
+            : readiness.reason === 'hash-mismatch' ? 'Workspace staging file sha256 mismatch'
+            : readiness.reason === 'empty-files' ? 'Workspace staging has no files'
+            : 'Workspace staging is not ready to commit',
+          {
+            reason: readiness.reason,
+            ...(readiness.incompletePaths ? { incompletePaths: readiness.incompletePaths } : {}),
+            ...(readiness.hashMismatchPaths ? { hashMismatchPaths: readiness.hashMismatchPaths } : {}),
+          },
+        );
+      }
+      const limits = resolveWorkspaceStagingLimits(commitInput.limits);
+      const totalBytes = staging.files.reduce((sum, f) => sum + f.expectedSizeBytes, 0);
+      for (const file of staging.files) {
+        const sizeDecision = evaluateWorkspaceStagingSizeLimits({
+          fileBytes: file.expectedSizeBytes,
+          totalBytesAfter: totalBytes,
+          limits,
+        });
+        if (sizeDecision.kind === 'rejected') {
+          return makeFailure(
+            'VALIDATION_ERROR',
+            sizeDecision.reason === 'file-too-large' ? 'Workspace staging file exceeds size limit'
+              : sizeDecision.reason === 'publish-too-large' ? 'Workspace staging publish exceeds size limit'
+              : 'Invalid workspace staging size',
+            { reason: sizeDecision.reason },
+          );
+        }
+      }
+      const workspace = await repositories.projectChannelWorkspaces.getForTeam({
+        teamId: commitInput.teamId,
+        channelId: commitInput.channelId,
+      });
+      if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+
+      // 预判基线/空清单：在创建任何公开 artifact 之前失败，避免冲突后残留频道可见半成品。
+      // 提交清单用占位 artifactId（仅用于路径集合冲突计算；真实 id 在通过后分配）。
+      const provisionalEntries = staging.files.map((file) => ({
+        path: file.path,
+        artifactId: `staging:${publishId}:${file.path}`,
+      }));
+      const toEntries = (list: Array<{ path: string; artifactId: string }>) =>
+        list.map((f) => ({ path: f.path, artifactId: f.artifactId }));
+      const preDecision = evaluateWorkspacePublish({
+        current: {
+          revisionId: workspace.currentRevision.id,
+          revision: workspace.currentRevision.revision,
+          files: toEntries(workspace.currentRevision.files),
+        },
+        baselineRevisionId: staging.baselineRevisionId,
+        files: provisionalEntries,
+      });
+      if (preDecision.kind === 'rejected') {
+        return makeFailure(
+          'VALIDATION_ERROR',
+          preDecision.reason === 'revision-overflow' ? 'Workspace revision overflow' : 'Workspace publish must contain files',
+        );
+      }
+      if (preDecision.kind === 'conflict') {
+        // 基线落后 / 同路径竞争：明确冲突，不自动合并、不写 revision、不创建 artifact。
+        return makeFailure('CONFLICT', 'Workspace baseline changed', {
+          currentRevisionId: preDecision.currentRevisionId,
+          currentRevision: preDecision.currentRevision,
+          conflictingPaths: preDecision.conflictingPaths,
+        });
+      }
+
+      // 通过预判后再物化 artifacts（commit 前它们不在 revision；无 message/run 时频道索引也不收录）。
+      const publishedFiles: ProjectChannelWorkspaceFileDto[] = [];
+      for (const file of staging.files) {
+        const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+        const artifactId = ids.nextId();
+        let storagePath: string | undefined;
+        let sha256 = file.expectedSha256;
+        if (content.length > 0 && artifactContentStore) {
+          const stored = await artifactContentStore.writeContent({
+            teamId: commitInput.teamId,
+            artifactId,
+            filename: file.filename,
+            content,
+          });
+          storagePath = stored.storagePath;
+          sha256 = stored.sha256;
+        }
+        const artifact = await repositories.artifacts.create({
+          id: artifactId,
+          teamId: commitInput.teamId,
+          channelId: commitInput.channelId,
+          uploaderId: commitInput.userId,
+          filename: file.filename,
+          mimeType: file.mimeType,
+          sizeBytes: file.expectedSizeBytes,
+          pathKind: 'workspace',
+          role: 'deliverable',
+          relativePath: file.path,
+          sha256,
+          createdAt: clock.now(),
+          ...(storagePath ? { storagePath } : {}),
+        });
+        publishedFiles.push({
+          path: file.path,
+          artifactId: artifact.id,
+          filename: artifact.filename,
+          mimeType: artifact.mimeType,
+          sizeBytes: artifact.sizeBytes,
+          ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
+        });
+      }
+
+      const now = clock.now();
+      const outcome = await repositories.projectChannelWorkspaces.publishRevision({
+        teamId: commitInput.teamId,
+        channelId: commitInput.channelId,
+        baselineRevisionId: staging.baselineRevisionId,
+        newRevision: {
+          id: ids.nextId(),
+          files: publishedFiles,
+          createdBy: commitInput.userId,
+          createdAt: now,
+          ...(staging.provenance
+            ? {
+                provenance: {
+                  kind: 'publish' as const,
+                  agentId: staging.provenance.agentId,
+                  taskId: staging.provenance.taskId,
+                  taskAttempt: staging.provenance.taskAttempt,
+                  baselineRevisionId: staging.baselineRevisionId,
+                  publishedAt: now,
+                },
+              }
+            : {}),
+        },
+      });
+      if (outcome.kind === 'conflict') {
+        // CAS 竞态：基线在预判后被并发更新。不标 committed；artifact 无 message/run，频道索引不可见。
+        const conflictDecision = evaluateWorkspacePublish({
+          current: {
+            revisionId: outcome.current.currentRevision.id,
+            revision: outcome.current.currentRevision.revision,
+            files: toEntries(outcome.current.currentRevision.files),
+          },
+          baselineRevisionId: staging.baselineRevisionId,
+          files: toEntries(publishedFiles),
+        });
+        const conflictingPaths = conflictDecision.kind === 'conflict' ? conflictDecision.conflictingPaths : [];
+        return makeFailure('CONFLICT', 'Workspace baseline changed', {
+          currentRevisionId: outcome.current.currentRevision.id,
+          currentRevision: outcome.current.currentRevision.revision,
+          conflictingPaths,
+        });
+      }
+      const committed = await repositories.workspacePublishStagings.update({
+        ...staging,
+        status: 'committed',
+        committedRevisionId: outcome.workspace.currentRevisionId,
+        committedWorkspaceId: outcome.workspace.id,
+        // 提交后剥离私有 content，避免暂存区长期持有大文件。
+        files: staging.files.map((f) => ({
+          path: f.path,
+          filename: f.filename,
+          mimeType: f.mimeType,
+          expectedSizeBytes: f.expectedSizeBytes,
+          expectedSha256: f.expectedSha256,
+          receivedBytes: f.receivedBytes,
+          complete: true,
+        })),
+        updatedAt: now,
+      });
+      return makeSuccess({
+        staging: toWorkspacePublishStagingDto(committed),
+        workspace: outcome.workspace,
+      });
+    },
+
+    async cleanupExpiredWorkspacePublishStaging(cleanupInput = {}) {
+      const retentionMs = cleanupInput.retentionMs ?? DEFAULT_WORKSPACE_STAGING_RETENTION_MS;
+      const now = cleanupInput.now ?? clock.now();
+      const olderThan = now - retentionMs;
+      const expired = await repositories.workspacePublishStagings.listExpiredOpen({
+        olderThan,
+        limit: cleanupInput.limit ?? 100,
+      });
+      let cleaned = 0;
+      for (const row of expired) {
+        const decision = evaluateWorkspaceStagingExpiry({
+          status: row.status,
+          createdAt: row.createdAt,
+          now,
+          retentionMs,
+        });
+        if (decision.kind !== 'expired-cleanable') continue;
+        await repositories.workspacePublishStagings.delete({
+          teamId: row.teamId,
+          publishId: row.publishId,
+        });
+        cleaned += 1;
+      }
+      return makeSuccess({ cleaned });
     },
 
     async listChannelDocuments(documentInput) {
@@ -10304,6 +10871,45 @@ async function toWorkspaceRunDto(
     ...(dispatch?.messageId && dispatch.messageId !== run.messageId ? { sourceMessageId: dispatch.messageId } : {}),
     ...(invocation ? { managementInvocationId: invocation.id } : {}),
     ...(memoryCapsuleRef && canReadCapsule ? { memoryCapsuleRef } : {}),
+  };
+}
+
+function resolveWorkspaceStagingLimits(limits?: { maxFileBytes?: number; maxPublishBytes?: number }) {
+  return {
+    maxFileBytes: limits?.maxFileBytes ?? DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES,
+    maxPublishBytes: limits?.maxPublishBytes ?? DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES,
+  };
+}
+
+function coerceStagingContent(content: Buffer | Uint8Array | string): Buffer {
+  if (Buffer.isBuffer(content)) return content;
+  if (content instanceof Uint8Array) return Buffer.from(content);
+  return Buffer.from(content, 'base64');
+}
+
+/** #967 DTO 剥离私有 content，确保上传中字节不经 API 泄漏到频道侧。 */
+function toWorkspacePublishStagingDto(record: WorkspacePublishStagingRecord): WorkspacePublishStagingDto {
+  return {
+    publishId: record.publishId,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    baselineRevisionId: record.baselineRevisionId,
+    status: record.status,
+    files: record.files.map((file) => ({
+      path: file.path,
+      filename: file.filename,
+      mimeType: file.mimeType,
+      expectedSizeBytes: file.expectedSizeBytes,
+      expectedSha256: file.expectedSha256,
+      receivedBytes: file.receivedBytes,
+      complete: file.complete,
+    })),
+    createdBy: record.createdBy,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(record.committedRevisionId ? { committedRevisionId: record.committedRevisionId } : {}),
+    ...(record.committedWorkspaceId ? { committedWorkspaceId: record.committedWorkspaceId } : {}),
+    ...(record.provenance ? { provenance: record.provenance } : {}),
   };
 }
 
