@@ -1137,7 +1137,7 @@ function replayTaskRevisionResult(replay: CommandReplay) {
     taskGraphRevision: replay.lastSequence, disposition: 'existing' as const };
 }
 
-async function appendTaskEvent<T extends TaskCoordinationEventType>(
+export async function appendTaskEvent<T extends TaskCoordinationEventType>(
   repositories: TransactionRepositories,
   input: { managementRunId: string; type: T;
     actorKind: 'manager' | 'system' | 'human'; actorId: string;
@@ -1264,7 +1264,7 @@ async function reviseInTransaction(repositories: TransactionRepositories,
     claim };
 }
 
-async function invalidateCapturedClaim(repositories: TransactionRepositories,
+export async function invalidateCapturedClaim(repositories: TransactionRepositories,
   managementRunId: string, actorId: string, idempotencyKey: string, commandHash: string,
   claim: TaskClaimLeaseRecord | null, reasonCode: string, now: number,
   ids: { nextId(): string }, actorKind: 'manager' | 'system' = 'manager') {
@@ -1311,7 +1311,7 @@ async function moveRunToWaitingForUser(
   }
 }
 
-async function inspectRootDeliveryReadiness(
+export async function inspectRootDeliveryReadiness(
   repositories: TransactionRepositories,
   run: NonNullable<Awaited<ReturnType<TransactionRepositories['management']['runs']['getById']>>>,
 ) {
@@ -1413,7 +1413,7 @@ async function createCriteria(repositories: TransactionRepositories, taskId: str
   }
 }
 
-function activeCriteria(criteria: readonly TaskAcceptanceCriterionRecord[], revision: number) {
+export function activeCriteria(criteria: readonly TaskAcceptanceCriterionRecord[], revision: number) {
   return criteria.filter((criterion) => criterion.introducedRevision <= revision
     && (criterion.retiredRevision === undefined || criterion.retiredRevision > revision));
 }
@@ -1478,20 +1478,20 @@ async function requireTask(repositories: TransactionRepositories, taskId: string
   return task;
 }
 
-async function requireCoordination(repositories: TransactionRepositories, taskId: string) {
+export async function requireCoordination(repositories: TransactionRepositories, taskId: string) {
   const coordination = await repositories.coordination.coordinations.getByTaskId(taskId);
   if (!coordination) conflict('TASK_COORDINATION_NOT_FOUND');
   return coordination;
 }
 
-async function requireCoordinationForRun(repositories: TransactionRepositories, taskId: string,
+export async function requireCoordinationForRun(repositories: TransactionRepositories, taskId: string,
   managementRunId: string) {
   const coordination = await requireCoordination(repositories, taskId);
   if (coordination.managementRunId !== managementRunId) conflict('TASK_MANAGEMENT_RUN_MISMATCH');
   return coordination;
 }
 
-async function requireSubtaskCoordination(repositories: TransactionRepositories, taskId: string,
+export async function requireSubtaskCoordination(repositories: TransactionRepositories, taskId: string,
   managementRunId: string) {
   const coordination = await requireCoordinationForRun(repositories, taskId, managementRunId);
   if (coordination.nodeKind !== 'subtask') conflict('TASK_SUBTASK_REQUIRED');
@@ -1511,7 +1511,7 @@ function objectiveOf(task: TaskRecord): string { return task.description ?? task
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort());
 }
-function requiresHumanIntervention(reasonCode: string): boolean {
+export function requiresHumanIntervention(reasonCode: string): boolean {
   const codeValue = reasonCode.toUpperCase();
   return ['NO_CANDIDATE', 'NO_CANDIDATES', 'BUDGET_EXHAUSTED', 'EVIDENCE_CONFLICT',
     'RESULT_CONFLICT', 'CONFLICTING_RESULT', 'USER_CANCELLED']
