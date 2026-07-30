@@ -215,7 +215,120 @@ describe('Project Channel Workspace', () => {
     await expect(repositories.projectChannelWorkspaces.getForTeam({ teamId: 'team-1', channelId: privateChannel.channel.id })).resolves.toBeNull();
   });
 
-  // #969 AC#4：治理者导出封存清单——最后 revision + deliverable + provenance，只读不改状态。
+  // #968 materialize: apply a published revision back to a local directory.
+  test('materialize 由非导入设备发起仍返回清单 —— 来源 Device 无关（AC#1/#4）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'device-2', 'workspace-1', 'revision-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+
+    const hello1 = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'dev-1' });
+    const hello2 = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-2', hostname: 'dev-2' });
+    if (!hello1.ok || !hello2.ok || !hello1.credentials || !hello2.credentials) throw new Error('device hello failed');
+
+    await repositories.artifacts.create({
+      id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1',
+      filename: 'index.ts', mimeType: 'text/typescript', sizeBytes: 100, pathKind: 'workspace', createdAt: 90,
+    });
+
+    // device-1 imports → provenance.sourceDeviceId = device-1
+    const imported = await app.importProjectChannelWorkspace({
+      token: hello1.credentials.token, teamId: 'team-1', channelId: cid,
+      files: [{ path: 'src/index.ts', artifactId: 'artifact-1' }],
+    });
+    if (!imported.ok) throw new Error(imported.error);
+    expect(imported.workspace.currentRevision.provenance?.sourceDeviceId).toBe('device-1');
+    // 清单不含本地绝对路径（AC#3 / #964 provenance 设计）
+    const provenanceKeys = Object.keys(imported.workspace.currentRevision.provenance ?? {});
+    expect(provenanceKeys).not.toContain('sourcePath');
+
+    // device-2（≠ 导入设备 device-1）materialize 同一 revision —— 来源 Device 无关（AC#4）
+    const materialized = await app.materializeProjectChannelWorkspace({
+      token: hello2.credentials.token, teamId: 'team-1', channelId: cid,
+    });
+    expect(materialized).toMatchObject({
+      ok: true,
+      workspace: { currentRevision: { revision: 1, files: [{ path: 'src/index.ts', artifactId: 'artifact-1', filename: 'index.ts' }] } },
+    });
+  });
+
+  test('materialize 拒绝无效 device token —— 远程 Agent 不可发起（AC#1）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    await expect(app.materializeProjectChannelWorkspace({
+      token: 'abn_device.invalid.signature', teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+  });
+
+  test('materialize 对无权查看的私有频道拒绝（AC#3）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'workspace-1', 'revision-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'private', humanMemberIds: ['user-1'] });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'dev-1' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    const imported = await app.importProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'artifact-1' }] });
+    if (!imported.ok) throw new Error(imported.error);
+
+    // 移除 owner 的频道成员资格 → materialize 拒绝
+    await repositories.channels.update({ channelId: cid, changes: { humanMemberIds: [] } });
+    await expect(app.materializeProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  test('materialize 归档频道仍可读取清单（归档只读，发布才拒绝）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'workspace-1', 'revision-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'dev-1' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await app.importProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'artifact-1' }] });
+
+    // 归档后 materialize（读清单）仍允许 —— 归档冻结发布，不冻结读取已发布成果。
+    await repositories.channels.update({ channelId: cid, changes: { archivedAt: 200 } });
+    await expect(app.materializeProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid })).resolves.toMatchObject({ ok: true });
+  });
+
+  test('materialize 指定不存在的 revisionId 返回 NOT_FOUND', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'workspace-1', 'revision-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'dev-1' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await app.importProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'artifact-1' }] });
+
+    await expect(app.materializeProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid, revisionId: 'no-such-revision' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
   test('频道治理者导出封存清单：含最后 revision 与 deliverable，排除非交付物，只读', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({
@@ -338,6 +451,12 @@ describe('Project Channel Workspace', () => {
       files: [{ path: 'a.txt', artifactId: 'artifact-1' }],
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
+});
+
+function createIds(values: string[]) {
+  let index = 0;
+  return () => values[index++] ?? `generated-${index}`;
+}
 });
 
 function createIds(values: string[]) {

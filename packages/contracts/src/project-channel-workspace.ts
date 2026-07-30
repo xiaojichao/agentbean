@@ -100,3 +100,34 @@ export interface ArchiveExportManifestDto {
   /** 已发布交付物（role=deliverable），按当前授权可读。 */
   deliverables: ArchiveExportDeliverableDto[];
 }
+
+/**
+ * #968 One file a local user has chosen to apply back to a local directory.
+ * Mirrors the relevant subset of ProjectChannelWorkspaceFileDto (no mimeType needed
+ * for a disk write). The server never learns the target absolute path.
+ */
+export interface WorkspaceApplyFileEntryDto {
+  path: string;
+  artifactId: ID;
+  filename: string;
+  sizeBytes: number;
+  sha256?: string;
+}
+
+/** #968 Why a revision file cannot be applied at its path. */
+export type WorkspaceApplyConflictReasonDto = 'LOCAL_FILE_EXISTS';
+
+export interface WorkspaceApplyConflictDto {
+  path: string;
+  reason: WorkspaceApplyConflictReasonDto;
+}
+
+/**
+ * #968 Preview of applying a published revision to a local directory.
+ * Pure result of diffing a revision manifest against a local listing — no I/O,
+ * no device provenance, so it is source-Device independent by construction.
+ */
+export interface WorkspaceApplyPlanDto {
+  toWrite: WorkspaceApplyFileEntryDto[];
+  conflicts: WorkspaceApplyConflictDto[];
+}

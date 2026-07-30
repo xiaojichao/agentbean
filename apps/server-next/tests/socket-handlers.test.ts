@@ -227,6 +227,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.exportWorkspace,
       WEB_EVENTS.project.workspaceRevisions,
       WEB_EVENTS.project.importWorkspace,
+      WEB_EVENTS.project.materializeWorkspace,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,

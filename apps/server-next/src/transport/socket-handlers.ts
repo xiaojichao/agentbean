@@ -19,7 +19,7 @@ import {
   type TaskClaimRenewV1,
   type TaskClaimRespondV1,
 } from '../../../../packages/contracts/src/index.js';
-import type { ServerNextUseCases, ImportProjectChannelWorkspaceInput } from '../application/usecases.js';
+import type { ServerNextUseCases, ImportProjectChannelWorkspaceInput, MaterializeProjectChannelWorkspaceInput } from '../application/usecases.js';
 
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
@@ -523,6 +523,15 @@ export function registerWebSocketHandlers(
       ack?.(result);
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.project.importWorkspace));
+    }
+  });
+  // #968 Device-initiated workspace materialization (apply published revision to local dir).
+  socket.on(WEB_EVENTS.project.materializeWorkspace, async (payload, ack) => {
+    try {
+      const result = await app.materializeProjectChannelWorkspace(payload as MaterializeProjectChannelWorkspaceInput);
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.project.materializeWorkspace));
     }
   });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
