@@ -214,6 +214,8 @@ export const WEB_EVENTS = {
     resolveReferences: 'project:resolve-references',
     resolveReferenceOrdinal: 'project:resolve-reference-ordinal',
     referencesUpdated: 'project:references-updated',
+    workspace: 'project:workspace',
+    createWorkspace: 'project:create-workspace',
   },
   dm: {
     start: 'dm:start',

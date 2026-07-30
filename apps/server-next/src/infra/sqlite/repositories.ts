@@ -235,6 +235,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0065_output_slots_and_snapshots.sql');
   // #947 PR2（AC3）：Task Offer accepted response 的 per-Task requirement attestation（ADR-0064 §3）。
   applyMigration(db, 'team/0066_task_offer_response_attestation.sql');
+  // #962 Project Channel Workspace：Server 权威的不可变完整 revision。
+  applyMigration(db, 'team/0067_project_channel_workspaces.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2163,8 +2165,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           });
           tx();
           return input.workspace;
-        } catch {
-          return null;
+        } catch (error) {
+          if (error instanceof Error && error.message.includes('UNIQUE constraint failed: project_channel_workspaces.channel_id')) return null;
+          throw error;
         }
       },
       async getForTeam(input) {

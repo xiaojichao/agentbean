@@ -23,6 +23,9 @@ describe('Project Channel Workspace', () => {
     if (!created.ok) throw new Error(created.error);
     created.workspace.currentRevision.files[0]!.path = 'tampered';
     await repositories.channels.update({ channelId: 'channel-2', changes: { archivedAt: 200 } });
+    await expect(app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'README.md', artifactId: 'artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
     const reread = await app.getProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' });
     expect(reread).toMatchObject({ ok: true, workspace: { currentRevision: { files: [{ path: 'README.md' }] } } });
   });

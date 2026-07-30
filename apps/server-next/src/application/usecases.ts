@@ -4777,6 +4777,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async createProjectChannelWorkspace(workspaceInput) {
       const access = await ensureUserCanViewProjectWorkspace(repositories, workspaceInput);
       if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       if (workspaceInput.files.length === 0) return makeFailure('VALIDATION_ERROR', 'Workspace revision must contain files');
       const paths = new Set<string>();
       const files: ProjectChannelWorkspaceFileDto[] = [];
