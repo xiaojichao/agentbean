@@ -3807,7 +3807,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async getMemoryAttribution(input) {
       // #965 AC#4：定位 decision 并在读取时复验频道读权限，fail-closed 返回 null。
       if (!input.jobId && !input.messageId) {
-        return makeFailure('INVALID_REQUEST', 'jobId or messageId is required');
+        return makeFailure('BAD_REQUEST', 'jobId or messageId is required');
       }
       const decision = input.jobId
         ? await repositories.channelCoordination.decisions.getByJobId(input.jobId)
