@@ -401,6 +401,8 @@ export interface TaskClaimExecutionSnapshotV1 {
   readonly taskId: string;
   readonly taskRevision: number;
   readonly taskAttempt: number;
+  /** #925 execution context grant id：claim 成功同事务签发的输入访问凭证。 */
+  readonly grantId: string;
   readonly title: string;
   readonly objective: string;
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];

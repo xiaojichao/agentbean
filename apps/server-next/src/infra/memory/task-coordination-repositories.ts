@@ -8,6 +8,7 @@ import type {
   TaskCoordinationRecord,
   TaskCoordinationRepositories,
   TaskDependencyRecord,
+  TaskExecutionGrantRecord,
   TaskOfferRecord,
 } from '../../application/task-coordination-repositories.js';
 
@@ -20,6 +21,7 @@ export interface TaskCoordinationMemoryState {
   deliveries: Map<string, SubtaskDeliveryRecord>;
   acceptances: Map<string, SubtaskAcceptanceRecord>;
   offers: Map<string, TaskOfferRecord>;
+  executionGrants: Map<string, TaskExecutionGrantRecord>;
 }
 
 export function createTaskCoordinationMemoryState(): TaskCoordinationMemoryState {
@@ -27,6 +29,7 @@ export function createTaskCoordinationMemoryState(): TaskCoordinationMemoryState
     coordinations: new Map(), criteria: new Map(), dependencies: new Map(),
     claimLeases: new Map(), evidenceSnapshots: new Map(), deliveries: new Map(),
     acceptances: new Map(), offers: new Map(),
+    executionGrants: new Map(),
   };
 }
 
@@ -38,6 +41,7 @@ export function cloneTaskCoordinationMemoryState(
     dependencies: new Map(state.dependencies), claimLeases: new Map(state.claimLeases),
     evidenceSnapshots: new Map(state.evidenceSnapshots), deliveries: new Map(state.deliveries),
     acceptances: new Map(state.acceptances), offers: new Map(state.offers),
+    executionGrants: new Map(state.executionGrants),
   };
 }
 
@@ -278,6 +282,35 @@ export function createInMemoryTaskCoordinationRepositories(
           ...current, status: input.status, response: input.response, updatedAt: input.now,
         };
         state.offers.set(input.id, updated);
+        return updated;
+      },
+    },
+    executionGrants: {
+      async create(record) {
+        if (state.executionGrants.has(record.id)) throw new Error('task execution grant already exists');
+        state.executionGrants.set(record.id, record);
+        return record;
+      },
+      async getById(id) { return state.executionGrants.get(id) ?? null; },
+      async getActiveByTaskAttempt({ taskId, taskAttempt }) {
+        return [...state.executionGrants.values()].find((grant) =>
+          grant.taskId === taskId && grant.taskAttempt === taskAttempt && grant.state === 'active') ?? null;
+      },
+      async listActiveByTask(taskId) {
+        return [...state.executionGrants.values()].filter((grant) =>
+          grant.taskId === taskId && grant.state === 'active');
+      },
+      async listActiveByClaimLease(claimLeaseId) {
+        return [...state.executionGrants.values()].filter((grant) =>
+          grant.claimLeaseId === claimLeaseId && grant.state === 'active');
+      },
+      async revoke({ id, reason, revokedAt, now }) {
+        const current = state.executionGrants.get(id);
+        if (!current || current.state !== 'active') return null;
+        const updated: TaskExecutionGrantRecord = {
+          ...current, state: 'revoked', revokedAt, revocationReason: reason,
+        };
+        state.executionGrants.set(id, updated);
         return updated;
       },
     },

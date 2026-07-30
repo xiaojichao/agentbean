@@ -11,6 +11,52 @@ import type { ServerNextRepositories } from '../src/application/repositories.js'
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Task Claim Broker', () => {
+  test('#925 ADR-0063: root Task node rejects Agent execution claim on both acquire and accept paths', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: harness.clock.value },
+    });
+    // prepareOffers/publishOffer 不按 nodeKind 门禁；claim 决策（acquire/accept）才是 root 硬防线。
+    const [acquireOffer] = await harness.broker.prepareOffers('root-task');
+    expect(acquireOffer).toBeDefined();
+    await expect(harness.broker.acquire({
+      schemaVersion: 1, offerId: acquireOffer!.offerId, agentId: 'eligible',
+    })).resolves.toMatchObject({ ok: false, diagnosticCode: 'TASK_CLAIM_ROOT_NOT_CLAIMABLE' });
+
+    const [acceptOffer] = await harness.broker.prepareOffers('root-task');
+    await expect(harness.broker.respondToOffer({
+      offerId: acceptOffer!.offerId, agentId: 'eligible', kind: 'accepted',
+    })).resolves.toMatchObject({ kind: 'not_accepted' });
+
+    // 防线落在 claim 决策：root Task 不产生任何 active claim lease。
+    await expect(harness.repositories.taskCoordination.claimLeases.listActive())
+      .resolves.toEqual([]);
+  });
+
+  test('#925 ADR-0064: successful claim issues an execution context grant; release revokes it', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const claim = await claimFirst(harness);
+    expect(typeof claim.execution.grantId).toBe('string');
+
+    const grant = await harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 });
+    expect(grant).toMatchObject({
+      state: 'active', agentId: 'agent-1',
+      claimLeaseId: claim.lease.claimLeaseId, taskRevision: claim.lease.taskRevision,
+    });
+
+    harness.clock.value = 60;
+    await expect(harness.broker.release({ ...claim.lease, reasonCode: 'YIELD' }))
+      .resolves.toMatchObject({ ok: true });
+    const after = await harness.repositories.taskCoordination.executionGrants.getById(grant!.id);
+    expect(after).toMatchObject({ state: 'revoked', revocationReason: 'claim-released' });
+  });
+
   test('#829 文档 InputSet 候选必须同时声明 Agent 与 Device 合同版本', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);

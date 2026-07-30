@@ -19,6 +19,49 @@ describe.each([
     return { repositories: createSqliteRepositories({ globalDb: db, teamDb: db }), close: () => db.close() };
   }],
 ] as const)('Task Coordination Kernel (%s)', (_name, createFixture) => {
+  test('#925 ADR-0064: createSubtasks publishes subtask nodes and control edges atomically', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      const created = await harness.kernel.createSubtasks({
+        ...subtasksInput(harness.authority),
+        idempotencyKey: 'create-subtasks-edges',
+        edges: [{ taskId: 'task-b', dependencyTaskId: 'task-a' }],
+      });
+      expect(created.disposition).toBe('created');
+      // task-b 依赖 task-a 的 control edge 已随子 Task 同事务建立。
+      await expect(fixture.repositories.taskCoordination.dependencies.list('task-b'))
+        .resolves.toEqual([expect.objectContaining({ taskId: 'task-b', dependencyTaskId: 'task-a' })]);
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('#925 ADR-0064: cyclic control edges roll back the whole subtask batch (no half DAG)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      // task-a→task-b 与 task-b→task-a 形成环；validateRunDag 拒绝 → 整批回滚。
+      await expect(harness.kernel.createSubtasks({
+        ...subtasksInput(harness.authority),
+        idempotencyKey: 'create-subtasks-cycle',
+        edges: [
+          { taskId: 'task-b', dependencyTaskId: 'task-a' },
+          { taskId: 'task-a', dependencyTaskId: 'task-b' },
+        ],
+      })).rejects.toMatchObject({ code: 'TASK_DAG_DEPENDENCY_CYCLE' });
+      // 无残留：仅 root coordination，无 subtask 节点、无 control edge。
+      await expect(fixture.repositories.taskCoordination.coordinations.listByManagementRun('run-1'))
+        .resolves.toEqual([expect.objectContaining({ taskId: 'root-task' })]);
+      await expect(fixture.repositories.taskCoordination.dependencies.list('task-a')).resolves.toEqual([]);
+      await expect(fixture.repositories.taskCoordination.dependencies.list('task-b')).resolves.toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('creates root coordination and a bounded subtask batch with idempotent typed events', async () => {
     const fixture = createFixture();
     try {

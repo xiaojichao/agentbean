@@ -31,6 +31,7 @@ function initialAcquire(taskId: string, agentId: string): TaskClaimAcquireInput 
     taskId,
     taskRevision: 1,
     taskAttempt: 1,
+    nodeKind: 'subtask',
     agentId,
     leaseTokenHash: `lease-${agentId}`,
     leaseFingerprint: `fp-${agentId}`,
