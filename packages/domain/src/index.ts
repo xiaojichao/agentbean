@@ -8,6 +8,7 @@ export * from './auto-placement.js';
 export * from './management-budget.js';
 export * from './management-run-usage.js';
 export * from './invocation-policy.js';
+export * from './invocation-authorization-policy.js';
 export * from './collaboration-policy.js';
 export * from './checkpoint-policy.js';
 export * from './manager-lease-policy.js';
