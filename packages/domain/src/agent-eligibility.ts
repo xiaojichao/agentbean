@@ -283,6 +283,42 @@ export function resolveHardSpecifiedTarget(
   return fullyCapable ? 'eligible' : 'ineligible';
 }
 
+// ── ADR-0064 §3：硬指定目标 Offer 种类（细化 needs_confirmation） ──
+
+/**
+ * 硬指定 (@Agent) 目标应发布的 Offer 种类。是对 `resolveHardSpecifiedTarget` 的
+ * `'needs_confirmation'` 按 ADR-0064 §3 两层 eligibility 模型做的细化：
+ * - `qualified` + `available` → `normal_targeted`：manifest 公开声明覆盖全部硬门槛，正常定向 Offer。
+ * - `unknown` → `requirement_confirmation`：manifest 不可得（未声明/过期/不可达），required
+ *   requirement 状态未知 → 受限 Requirement-confirmation Offer（不当作 eligible，claim 需 manifest
+ *   更新或 per-Task attestation 复验通过）。unknown 优先于 capacity：即使 unavailable 也先发确认 Offer，
+ *   因为瓶颈是「requirement 未知」而非容量。
+ * - `not_qualified` 或 `qualified`-but-`unavailable` → `ineligible`：当前 manifest 明确缺失硬门槛
+ *   （= 明确不满足事实，ADR 禁止发确认 Offer），或容量不足（hard capacity 门槛）→ 不发 Offer。
+ *
+ * **前置条件**：调用方（server）必须先确认「不可覆盖硬门槛」（Channel membership / Team visibility /
+ * Task/input 权限 / operation restriction / hard capacity 中的设备/渠道/依赖类门槛）已通过——本函数
+ * 只消费已解析的 manifest eligibility 三态，不复查那些门槛。
+ */
+export type HardSpecifiedOfferKind =
+  | 'normal_targeted'
+  | 'requirement_confirmation'
+  | 'ineligible';
+
+export interface DecideHardSpecifiedOfferKindInput {
+  /** 来自 `evaluateAgentEligibility` 的判定（仅需 state + available）。 */
+  readonly eligibility: { readonly state: AgentEligibilityState; readonly available: boolean };
+}
+
+export function decideHardSpecifiedOfferKind(
+  input: DecideHardSpecifiedOfferKindInput,
+): HardSpecifiedOfferKind {
+  const { state, available } = input.eligibility;
+  if (state === 'unknown') return 'requirement_confirmation';
+  if (state === 'qualified' && available) return 'normal_targeted';
+  return 'ineligible';
+}
+
 // ── AC#3：preferred Skill / Experience / 负载 / 可用性 仅在合格候选间排序 ──
 
 export interface QualifiedCandidate extends PreferredSkillCandidate {

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { ELIGIBILITY_REASON_CODE } from '@agentbean/contracts';
 
 import {
+  decideHardSpecifiedOfferKind,
   evaluateAgentEligibility,
   evaluateCapabilityMatch,
   evaluateSkillCoverage,
@@ -330,6 +331,39 @@ describe('resolveHardSpecifiedTarget (AC#6 不静默改派)', () => {
         isHardSpecified: true,
       }),
     ).toBe('needs_confirmation');
+  });
+});
+
+describe('decideHardSpecifiedOfferKind (ADR-0064 §3 细化 needs_confirmation)', () => {
+  // 调用方(server)已先确认不可覆盖硬门槛通过；本函数只据 eligibility 三态决定 Offer 种类。
+  test('qualified + available → normal_targeted（正常定向 Offer）', () => {
+    expect(
+      decideHardSpecifiedOfferKind({ eligibility: { state: 'qualified', available: true } }),
+    ).toBe('normal_targeted');
+  });
+
+  test('unknown（manifest 不可得，required requirement 状态未知）→ requirement_confirmation（AC#2）', () => {
+    expect(
+      decideHardSpecifiedOfferKind({ eligibility: { state: 'unknown', available: true } }),
+    ).toBe('requirement_confirmation');
+  });
+
+  test('unknown + unavailable → 仍 requirement_confirmation（unknown 优先于 capacity）', () => {
+    expect(
+      decideHardSpecifiedOfferKind({ eligibility: { state: 'unknown', available: false } }),
+    ).toBe('requirement_confirmation');
+  });
+
+  test('not_qualified（当前 manifest 明确缺失硬门槛 = 明确不满足事实）→ ineligible（不发确认 Offer）', () => {
+    expect(
+      decideHardSpecifiedOfferKind({ eligibility: { state: 'not_qualified', available: true } }),
+    ).toBe('ineligible');
+  });
+
+  test('qualified but unavailable（capacity 不足）→ ineligible（不发 Offer）', () => {
+    expect(
+      decideHardSpecifiedOfferKind({ eligibility: { state: 'qualified', available: false } }),
+    ).toBe('ineligible');
   });
 });
 

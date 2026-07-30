@@ -6837,6 +6837,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             agentId: offer.agentId,
             status: offer.status,
             hardSpecified: offer.hardSpecified,
+            requirementConfirmation: offer.requirementConfirmation,
             offerExpiresAt: offer.offerExpiresAt,
             response: offer.response,
             createdAt: offer.createdAt,

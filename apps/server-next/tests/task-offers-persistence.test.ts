@@ -38,6 +38,7 @@ function makeOffer(over: Partial<TaskOfferRecord> = {}): TaskOfferRecord {
     offerTtlMs: 15_000,
     offerExpiresAt: 1_000 + 15_000,
     hardSpecified: false,
+    requirementConfirmation: false,
     status: 'open',
     response: null,
     createdAt: 1_000,
@@ -71,6 +72,21 @@ describe.each([
         status: 'open', response: null,
       });
       expect(got?.objective).toEqual(objective); // JSON 列无损
+    } finally { fixture.close(); }
+  });
+
+  test('requirementConfirmation flag round-trips（#947 PR1 ADR-0064 §3）', async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.repositories.taskCoordination.offers.create(
+        makeOffer({ id: 'offer-conf', requirementConfirmation: true, manifestRevision: 0 }),
+      );
+      const got = await fixture.repositories.taskCoordination.offers.getById('offer-conf');
+      expect(got).toMatchObject({ requirementConfirmation: true, manifestRevision: 0 });
+      // 对照：默认 offer 仍为普通 Offer（非确认）
+      await fixture.repositories.taskCoordination.offers.create(makeOffer({ id: 'offer-plain' }));
+      const plain = await fixture.repositories.taskCoordination.offers.getById('offer-plain');
+      expect(plain?.requirementConfirmation).toBe(false);
     } finally { fixture.close(); }
   });
 

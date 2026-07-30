@@ -15,6 +15,7 @@ import type {
   TaskOfferStatus,
 } from '../../../../../packages/contracts/src/index.js';
 import {
+  decideHardSpecifiedOfferKind,
   evaluateExecutionGrantIssuance,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
@@ -32,7 +33,7 @@ import {
   resolveProjectStageStableInputs,
 } from '../project-stage-advance-service.js';
 import type { AgentRecord, ServerNextRepositories, TaskRecord } from '../repositories.js';
-import type { TaskClaimLeaseRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
+import type { TaskClaimLeaseRecord, TaskCoordinationRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
 } from './management-kernel.js';
@@ -91,6 +92,12 @@ export interface TaskOfferPublishInput {
   readonly offerTtlMs: number;
   /** 显式 @Agent（AC#8 仅元数据，不强迫接受）。 */
   readonly hardSpecified: boolean;
+  /**
+   * ADR-0064 §3 Requirement-confirmation Offer（#947 PR1）：向「硬指定 + required requirement 状态
+   * unknown」目标发的受限 Offer。true 时 publishOffer 跳过 active-manifest 要求（manifestRevision 占位 0）
+   * 并做发布复验；该 Offer 不当作 eligible，accepted 在 attestation 路径（PR2）落地前 fail-closed。
+   */
+  readonly requirementConfirmation?: boolean;
   /**
    * 可选：显式指定 offer id（prepareOffers 持久化时与 wire TaskClaimOfferV1.offerId 共享，
    * 使 daemon 用同一 offerId 既能 respond（新路径）也能 acquire（旧兼容路径）。
@@ -346,6 +353,51 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
     });
   }
 
+  // #947 PR1（ADR-0064 §3）：硬指定 (@Agent) 目标的 Offer 种类解析。prepareOffers 的 targeted 分支据此
+  // 决定：正常定向 Offer / Requirement-confirmation Offer（仅持久化，不当作 eligible，claim 需 PR2
+  // attestation）/ 不发 Offer。复用 resolveCandidates 的硬门槛 diagnosticCodes + active Manifest 的
+  // eligibility 三态（domain evaluateAgentEligibility + decideHardSpecifiedOfferKind）。
+  type TargetedOfferDecision =
+    | { readonly kind: 'normal'; readonly agentId: string; readonly deviceId: string }
+    | { readonly kind: 'confirmation'; readonly agentId: string; readonly deviceId?: string }
+    | {
+        readonly kind: 'no_offer';
+        readonly reason: 'target_not_candidate' | 'hard_gate_failed' | 'explicit_unsatisfied';
+      };
+
+  async function resolveTargetedOfferKind(
+    task: TaskRecord,
+    coordination: TaskCoordinationRecord,
+    resolution: TaskClaimCandidateResolution,
+  ): Promise<TargetedOfferDecision> {
+    const targetId = task.assigneeId;
+    if (!targetId) return { kind: 'no_offer', reason: 'target_not_candidate' };
+    const candidate = resolution.candidates.find((item) => item.agentId === targetId);
+    if (!candidate) return { kind: 'no_offer', reason: 'target_not_candidate' };
+    // 不可覆盖硬门槛：仅允许 CAPABILITY_MISSING（manifest/legacy 派生软门槛）缺席；任一硬门槛码 → 不发 Offer。
+    if (candidate.diagnosticCodes.some((code) => code !== 'CAPABILITY_MISSING')) {
+      return { kind: 'no_offer', reason: 'hard_gate_failed' };
+    }
+    // 合格候选（active manifest 或 legacy skill 覆盖 required + 全硬门槛通过）→ 正常定向 Offer。
+    // 保留 legacy 兼容：无 active manifest 但 skills 覆盖的 agent 仍走正常 wire/claim，不被误判为 confirmation
+    //（candidate.eligible 由 resolveCandidates 经 resolveEffectiveCapabilities 综合判定，含 manifest 与 legacy 兜底）。
+    if (candidate.eligible && candidate.deviceId) {
+      return { kind: 'normal', agentId: targetId, deviceId: candidate.deviceId };
+    }
+    // 非合格（此处仅 CAPABILITY_MISSING）：按 active Exposure Manifest 区分 ADR-0064 §3 两子类——
+    // 无 active manifest → required requirement 状态 unknown → Requirement-confirmation Offer；
+    // 有 active manifest 但明确缺失 → not_qualified（明确不满足事实）→ 不发 Offer。
+    const now = input.clock.now();
+    const active = await input.repositories.agentExposure.manifests.getActiveByTeamAgent(task.teamId, targetId);
+    const hasActiveManifest = !!active && (active.validUntil === null || active.validUntil > now);
+    const state = hasActiveManifest ? 'not_qualified' : 'unknown';
+    const offerKind = decideHardSpecifiedOfferKind({ eligibility: { state, available: false } });
+    if (offerKind === 'requirement_confirmation') {
+      return { kind: 'confirmation', agentId: targetId, deviceId: candidate.deviceId };
+    }
+    return { kind: 'no_offer', reason: 'explicit_unsatisfied' };
+  }
+
   return {
     resolveCandidates,
     resolveProjectStageCandidates,
@@ -363,12 +415,57 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       });
       if (current && current.expiresAt > input.clock.now()) return [];
       const now = input.clock.now();
-      const prepared: StoredOffer[] = [];
-      // #811 fan-out:targeted 任务仅向 targetAgent 发 1 个 offer,open 向全部 eligible 发
+      // #947 PR1（ADR-0064 §3）：targeted（显式 @Agent）走硬指定 Offer 种类解析；open 走既有 fan-out。
       const isTargeted = coordination.claimPolicy === 'targeted' && task.assigneeId;
+      if (isTargeted) {
+        const decision = await resolveTargetedOfferKind(task, coordination, resolution);
+        if (decision.kind === 'normal') {
+          const offerId = input.ids.nextId();
+          let manifestRevision = 0;
+          try {
+            const published = await this.publishOffer({
+              taskId, agentId: decision.agentId, offerTtlMs, hardSpecified: true,
+              id: offerId, projectStageAuto: options?.projectStageAuto,
+            });
+            manifestRevision = published.manifestRevision;
+          } catch (error) {
+            if (!(error instanceof Error && error.message === 'TASK_CLAIM_MANIFEST_NOT_ACTIVE')) throw error;
+            // legacy（无 active manifest）：grant 无 manifest 绑定，manifestRevision 保持 0。
+          }
+          const stored: StoredOffer = {
+            schemaVersion: 1, offerId, deviceId: decision.deviceId, taskId,
+            taskRevision: resolution.taskRevision, taskAttempt: resolution.taskAttempt,
+            agentId: decision.agentId, requiredCapabilities: [...coordination.requiredCapabilities],
+            offerExpiresAt: now + offerTtlMs, manifestRevision,
+            ancestorAgentIds: resolution.ancestorAgentIds, projectStageAuto: options?.projectStageAuto === true,
+          };
+          offers.set(offerId, stored);
+          return [{
+            schemaVersion: 1, offerId, deviceId: decision.deviceId, taskId,
+            taskRevision: resolution.taskRevision, taskAttempt: resolution.taskAttempt,
+            agentId: decision.agentId, requiredCapabilities: [...coordination.requiredCapabilities],
+            offerExpiresAt: now + offerTtlMs,
+          }];
+        }
+        if (decision.kind === 'confirmation') {
+          // Requirement-confirmation Offer：仅持久化（Task/Agent 视图可见、PI 据此请求确认），
+          // 不下发 wire、不入内存 offers map——设备无法执行，attestation 路径（PR2）落地前 claim fail-closed。
+          try {
+            await this.publishOffer({
+              taskId, agentId: decision.agentId, offerTtlMs, hardSpecified: true,
+              requirementConfirmation: true, id: input.ids.nextId(), projectStageAuto: options?.projectStageAuto,
+            });
+          } catch (error) {
+            if (!(error instanceof Error && error.message === 'TASK_CLAIM_REQUIREMENT_CONFIRMATION_INVALID')) throw error;
+          }
+        }
+        // no_offer（hard_gate_failed / explicit_unsatisfied / target_not_candidate）→ 不发 Offer（allocation_blocked）。
+        return [];
+      }
+      const prepared: StoredOffer[] = [];
+      // 非 targeted（open）fan-out：向全部 eligible 候选发 offer。targeted 已在上方分支提前 return。
       const eligibleCandidates = resolution.candidates.filter((item) => {
         if (!item.eligible || !item.deviceId) return false;
-        if (isTargeted && item.agentId !== task.assigneeId) return false;
         if (options?.allowedAgentIds && !options.allowedAgentIds.includes(item.agentId)) return false;
         return true;
       });
@@ -684,7 +781,17 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         task.teamId, params.agentId,
       );
       const now = input.clock.now();
-      if (!activeManifest || (activeManifest.validUntil !== null && activeManifest.validUntil <= now)) {
+      const requirementConfirmation = params.requirementConfirmation === true;
+      const hasActiveManifest = !!activeManifest
+        && (activeManifest.validUntil === null || activeManifest.validUntil > now);
+      if (requirementConfirmation) {
+        // #947 PR1（ADR-0064 §3 发布复验）：Requirement-confirmation Offer 只向 required requirement
+        // 状态 unknown（无 active manifest）的目标发。此刻若已有 active manifest → 不再 unknown
+        //（qualified 应走正常 Offer，not_qualified 为明确不满足事实）→ 拒绝发布，避免用确认 Offer 绕过
+        // requirement 门槛。不可覆盖硬门槛（channel/visibility/device/dependency…）与最小 preview 由调用方
+        // resolveTargetedOfferKind 查 diagnosticCodes 保证；Offer objective 本就只披露 required cap/skill 名。
+        if (hasActiveManifest) throw new Error('TASK_CLAIM_REQUIREMENT_CONFIRMATION_INVALID');
+      } else if (!hasActiveManifest) {
         throw new Error('TASK_CLAIM_MANIFEST_NOT_ACTIVE');
       }
       const projectStageFence = params.projectStageAuto
@@ -717,7 +824,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         agentId: params.agentId,
         taskRevision: task.revision,
         taskAttempt: coordination.attempt,
-        manifestRevision: activeManifest.revision,
+        manifestRevision: requirementConfirmation ? 0 : activeManifest!.revision,
         // 过渡派生：decision 的结构化 objective/inputs/constraints 属后续切片（计划 §6.3）。
         objective: {
           objective: task.description ?? task.title,
@@ -732,6 +839,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         offerTtlMs: params.offerTtlMs,
         offerExpiresAt: now + params.offerTtlMs,
         hardSpecified: params.hardSpecified,
+        requirementConfirmation: params.requirementConfirmation === true,
         status: 'open',
         response: null,
         createdAt: now,
@@ -785,6 +893,15 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
 
       // accepted
+      // #947 PR1（ADR-0064 §3）：Requirement-confirmation Offer 不当作 eligible——accepted 在 attestation
+      // 路径（PR2）落地前 fail-closed，不产 Claim。Agent 可改走 decline（rejected/needs_info）或先更新 Manifest
+      //（→ 旧确认 Offer fence 失效，PI 发新正常 Offer）。此处不消费 validity，确认 Offer 的 accepted 一律拒绝。
+      if (offer.requirementConfirmation) {
+        return {
+          kind: 'not_accepted', reason: 'offer_invalid',
+          diagnosticCode: 'TASK_CLAIM_REQUIREMENT_ATTESTATION_REQUIRED',
+        };
+      }
       if (!validity.acceptable) {
         return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: offerValidityCode(validity.reason) };
       }
