@@ -58,3 +58,4 @@ export * from './allocation-blocked-policy.js';
 export * from './output-slot-resolution-policy.js';
 export * from './workspace-import-policy.js';
 export * from './device-agent-lifecycle-policy.js';
+export * from './task-failure-remediation-policy.js';
