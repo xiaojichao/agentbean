@@ -872,6 +872,111 @@ describe('Task Offer respondToOffer（#712 切片 C-1：显式接受事务接线
   });
 });
 
+describe('#947 PR1：@Agent 硬指定 Offer 路由 + Requirement-confirmation Offer（ADR-0064 §3）', () => {
+  type Harness = Awaited<ReturnType<typeof createHarness>>;
+  async function seedTargetedTask(
+    harness: Harness, taskId: string, targetAgentId: string, requiredCapabilities = ['code-review'],
+  ) {
+    await harness.coordination.createSubtasks({ authority: harness.authority,
+      idempotencyKey: `subtasks-${taskId}`, parentTaskId: 'root-task',
+      subtasks: [{ taskId, clientKey: taskId, title: taskId, description: `objective ${taskId}`,
+        claimPolicy: 'targeted', targetAgentId, requiredCapabilities,
+        acceptanceCriteria: [{ id: `criterion-${taskId}`, description: `${taskId} accepted`, evidenceRequired: false }],
+        maxAttempts: 3 }] });
+  }
+
+  test('targeted + 合格目标（active manifest 覆盖）→ 正常定向 wire Offer（AC1）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await seedTargetedTask(harness, 'task-t1', 'agent-1');
+
+    const wireOffers = await harness.broker.prepareOffers('task-t1');
+    expect(wireOffers).toHaveLength(1);
+    expect(wireOffers[0]!.agentId).toBe('agent-1');
+    const persisted = await harness.repositories.taskCoordination.offers.listByTask('task-t1');
+    expect(persisted[0]).toMatchObject({
+      requirementConfirmation: false, hardSpecified: true, manifestRevision: 1, status: 'open',
+    });
+  });
+
+  test('targeted + 无 active manifest（required requirement unknown）→ Requirement-confirmation Offer 持久化，不下发 wire（AC2）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', []); // 空 capability → 无 manifest
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await seedTargetedTask(harness, 'task-t2', 'agent-1');
+
+    const wireOffers = await harness.broker.prepareOffers('task-t2');
+    expect(wireOffers).toEqual([]); // 确认 Offer 不下发设备（不可执行）
+    const persisted = await harness.repositories.taskCoordination.offers.listByTask('task-t2');
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]).toMatchObject({
+      requirementConfirmation: true, hardSpecified: true, manifestRevision: 0, status: 'open', agentId: 'agent-1',
+    });
+  });
+
+  test('targeted + active manifest 明确缺失硬门槛（not_qualified = 明确不满足事实）→ 不发 Offer', async () => {
+    const harness = await createHarness();
+    // manifest 声明 other-cap，task 要求 code-review → 当前 manifest 明确不满足（非 unknown）
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['other-cap']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await seedTargetedTask(harness, 'task-t3', 'agent-1');
+
+    expect(await harness.broker.prepareOffers('task-t3')).toEqual([]);
+    expect(await harness.repositories.taskCoordination.offers.listByTask('task-t3')).toEqual([]);
+  });
+
+  test('targeted + 不可覆盖硬门槛失败（设备离线）→ 不发 Offer', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-2', 'online', []); // device-2 离线
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await seedTargetedTask(harness, 'task-t4', 'agent-1');
+
+    expect(await harness.broker.prepareOffers('task-t4')).toEqual([]);
+    expect(await harness.repositories.taskCoordination.offers.listByTask('task-t4')).toEqual([]);
+  });
+
+  test('publishOffer 发布复验：requirementConfirmation 但已有 active manifest → 拒绝（不再 unknown）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await expect(harness.broker.publishOffer({
+      taskId: 'task-a', agentId: 'agent-1', offerTtlMs: 20, hardSpecified: true, requirementConfirmation: true,
+    })).rejects.toThrow('TASK_CLAIM_REQUIREMENT_CONFIRMATION_INVALID');
+  });
+
+  test('respondToOffer：确认 Offer accepted fail-closed（不产 Claim）；rejected 仍可记录（不当作 eligible）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // 直接持久化确认 Offer（模拟 prepareOffers confirmation 分支产物；manifestRevision=1 使 validity 可接受）
+    const confirmation = await publishOffer(harness, 'agent-1',
+      { requirementConfirmation: true, hardSpecified: true });
+
+    const accepted = await harness.broker.respondToOffer({
+      offerId: confirmation.id, agentId: 'agent-1', kind: 'accepted',
+    });
+    expect(accepted).toMatchObject({
+      kind: 'not_accepted', diagnosticCode: 'TASK_CLAIM_REQUIREMENT_ATTESTATION_REQUIRED',
+    });
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+
+    // decline 路径对确认 Offer 仍生效（显式 @Agent 不强迫接受，被点名 Agent 可拒绝）
+    const confirmation2 = await publishOffer(harness, 'agent-1',
+      { requirementConfirmation: true, hardSpecified: true, id: 'offer-conf-2' });
+    const rejected = await harness.broker.respondToOffer({
+      offerId: confirmation2.id, agentId: 'agent-1', kind: 'rejected',
+    });
+    expect(rejected).toMatchObject({ kind: 'response_recorded', status: 'rejected' });
+  });
+});
+
 async function publishOffer(
   harness: Awaited<ReturnType<typeof createHarness>>,
   agentId: string,
@@ -885,6 +990,7 @@ async function publishOffer(
     objective: { objective: 'objective a', inputs: [], deliverables: [], constraints: [],
       riskLevel: 'low' as const, requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [] },
     offerTtlMs: 20, offerExpiresAt: harness.clock.value + 20, hardSpecified: false,
+    requirementConfirmation: false,
     status: 'open', response: null,
     createdAt: harness.clock.value, updatedAt: harness.clock.value,
     ...over,

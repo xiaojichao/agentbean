@@ -534,6 +534,7 @@ export function createPromotionModesService(dependencies: PromotionModesServiceD
         offerTtlMs,
         offerExpiresAt: context.now + offerTtlMs,
         hardSpecified: true,
+        requirementConfirmation: false,
         status: 'open',
         response: null,
         createdAt: context.now,

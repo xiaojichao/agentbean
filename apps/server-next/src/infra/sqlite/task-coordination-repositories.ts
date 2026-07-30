@@ -276,12 +276,13 @@ export function createSqliteTaskCoordinationRepositories(
       async create(record) {
         db.prepare(`INSERT INTO task_offers
           (id, team_id, task_id, agent_id, task_revision, task_attempt, manifest_revision,
-           objective_json, offer_ttl_ms, offer_expires_at, hard_specified, status,
-           response_kind, response_detail, responded_at, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           objective_json, offer_ttl_ms, offer_expires_at, hard_specified, requirement_confirmation,
+           status, response_kind, response_detail, responded_at, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.taskId, record.agentId, record.taskRevision,
             record.taskAttempt, record.manifestRevision, json(record.objective), record.offerTtlMs,
-            record.offerExpiresAt, record.hardSpecified ? 1 : 0, record.status,
+            record.offerExpiresAt, record.hardSpecified ? 1 : 0, record.requirementConfirmation ? 1 : 0,
+            record.status,
             ...responseColumns(record.response), record.createdAt, record.updatedAt);
         return record;
       },
@@ -451,6 +452,7 @@ function mapOffer(value: unknown): TaskOfferRecord | null {
     objective: parse<TaskOfferObjectiveDto>(text(value, 'objective_json')),
     offerTtlMs: number(value, 'offer_ttl_ms'), offerExpiresAt: number(value, 'offer_expires_at'),
     hardSpecified: number(value, 'hard_specified') === 1,
+    requirementConfirmation: number(value, 'requirement_confirmation') === 1,
     status: text(value, 'status') as TaskOfferStatus,
     response: responseKind ? {
       offerId: text(value, 'id'), agentId: text(value, 'agent_id'),

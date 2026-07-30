@@ -378,6 +378,15 @@ export interface TaskOfferDto {
    * hardSpecified=true 的 Offer 仍需 Agent 显式 accepted 才产 Claim，仍可被 rejected。
    */
   readonly hardSpecified: boolean;
+  /**
+   * ADR-0064 §3 Requirement-confirmation Offer：向「硬指定 + required requirement 状态 unknown」
+   * （manifest 不可得）的目标发出的受限 Offer。发布时已复验不可覆盖硬门槛通过、unknown 状态、不存在
+   * 明确不满足事实，且只披露最小 preview。**不当作 eligible**：只有 Agent 更新 Manifest 或随 acceptance
+   * 提交绑定 task revision 的 per-Task requirement attestation，并在 accept/claim 事务通过完整 requirement
+   * 与容量复验后才能建立 claim。requirementConfirmation=true 的 Offer 在 attestation 路径落地前对 accepted
+   * fail-closed（不产 Claim）。manifestRevision 此时为占位 0（无 active manifest）。
+   */
+  readonly requirementConfirmation: boolean;
   readonly status: TaskOfferStatus;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
@@ -424,6 +433,8 @@ export interface TaskOfferProjectionDto {
   readonly agentId: ID;
   readonly status: TaskOfferStatus;
   readonly hardSpecified: boolean;
+  /** ADR-0064 §3 Requirement-confirmation Offer 标记（Task 视图据此展示「确认中」）。 */
+  readonly requirementConfirmation: boolean;
   readonly offerExpiresAt: UnixMs;
   readonly response: TaskOfferResponseRecordDto | null;
   readonly createdAt: UnixMs;

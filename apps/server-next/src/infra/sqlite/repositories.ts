@@ -226,6 +226,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0062_task_execution_grants.sql');
   // #946：grant 绑定 manifest_revision + 扩撤销归因（authority-revoked / manifest-superseded）。
   applyMigration(db, 'team/0063_task_execution_grants_manifest_revision.sql');
+  // #947 PR1：Task Offer Requirement-confirmation 标记（ADR-0064 §3）。
+  applyMigration(db, 'team/0064_task_offer_requirement_confirmation.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

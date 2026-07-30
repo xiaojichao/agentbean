@@ -126,6 +126,8 @@ export interface TaskOfferRecord {
   readonly offerTtlMs: UnixMs;
   readonly offerExpiresAt: UnixMs;
   readonly hardSpecified: boolean;
+  /** ADR-0064 §3 Requirement-confirmation Offer 标记（#947 PR1）。 */
+  readonly requirementConfirmation: boolean;
   readonly status: TaskOfferStatus;
   readonly response: TaskOfferResponseRecordDto | null;
   readonly createdAt: UnixMs;
