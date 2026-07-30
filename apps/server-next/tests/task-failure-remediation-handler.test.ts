@@ -205,6 +205,41 @@ describe('handleClassifyFailure', () => {
     const open = [...state.remediations.values()].filter((r) => r.taskId === 'task-1' && r.state !== 'resolved');
     expect(open).toHaveLength(1);
   });
+
+  test('同一 attempt 二次 classify 不重复扣预算', async () => {
+    const { deps, state } = createDeps({ remainingBudget: 3 });
+    await deps.unitOfWork.runInTransaction(async (repos) => {
+      await repos.executionStarts.create({
+        taskId: 'task-1', taskAttempt: 1, claimLeaseId: 'lease-1', startedAt: 1,
+      });
+    });
+    await handleClassifyFailure(
+      deps,
+      { schemaVersion: 1, commandName: 'classify-failure', commandSchemaVersion: 1, idempotencyKey: 'once-1' },
+      { taskId: 'task-1', taskRevision: 2, taskAttempt: 1, claimLeaseId: 'lease-1', report },
+    );
+    await handleClassifyFailure(
+      deps,
+      { schemaVersion: 1, commandName: 'classify-failure', commandSchemaVersion: 1, idempotencyKey: 'once-2' },
+      { taskId: 'task-1', taskRevision: 2, taskAttempt: 1, claimLeaseId: 'lease-1', report },
+    );
+    expect(state.budgets.get('task-1')?.startedAttemptsConsumed).toBe(1);
+    expect([...state.classifications.values()].filter((c) => c.taskAttempt === 1)).toHaveLength(1);
+  });
+
+  test('graceDeadline 必须严格晚于 now', async () => {
+    const { deps } = createDeps();
+    const res = await handleIssueProgressChallenge(
+      deps,
+      { schemaVersion: 1, commandName: 'issue-progress-challenge', commandSchemaVersion: 1, idempotencyKey: 'past' },
+      {
+        taskId: 'task-1', taskRevision: 2, taskAttempt: 1, claimLeaseId: 'lease-1',
+        graceDeadlineAt: 9999, // clock.now() === 10000
+      },
+    );
+    expect(res.outcome).toBe('rejected');
+    expect(res.rejectReason).toBe('grace_deadline_must_be_future');
+  });
 });
 
 describe('progress challenge + fencing reconciliation', () => {

@@ -282,19 +282,36 @@ export async function handleClassifyFailure(
       ?? meta?.startedAttemptsConsumed
       ?? 0;
 
-    const consumption = evaluateAttemptConsumption({
-      hasExecutionStart: start !== null,
-      event: 'failure',
-      maxStartedAttempts: maxAttempts,
-      startedAttemptsConsumed: consumed,
+    // 同一 attempt 已分类过则不再二次扣预算（防不同 idempotency key 重复消耗）。
+    const priorClassification = await repos.classifications.getByTaskAttempt({
+      taskId: input.taskId,
+      taskAttempt: input.taskAttempt,
     });
+
+    const consumption = priorClassification
+      ? {
+          kind: 'allocation_round_only' as const,
+          budget: {
+            schemaVersion: 1 as const,
+            maxStartedAttempts: maxAttempts,
+            startedAttemptsConsumed: consumed,
+            remaining: budgetRemaining(maxAttempts, consumed),
+          },
+          endsAllocationRoundOnly: true as const,
+        }
+      : evaluateAttemptConsumption({
+          hasExecutionStart: start !== null,
+          event: 'failure',
+          maxStartedAttempts: maxAttempts,
+          startedAttemptsConsumed: consumed,
+        });
     if (consumption.kind === 'rejected') {
       return buildResponse('classify-failure', 'rejected', 'INVALID_BUDGET', 'user_action', {
         rejectReason: consumption.reason,
       });
     }
 
-    // 权威预算回写：开工后 failure 才消耗；allocation-round-only 保持原值。
+    // 权威预算回写：开工后 failure 才消耗；allocation-round-only / 已分类 保持原值。
     const nextBudget = consumption.kind === 'consume'
       ? consumption.budget
       : { maxStartedAttempts: maxAttempts, startedAttemptsConsumed: consumed, remaining: budgetRemaining(maxAttempts, consumed) };
@@ -312,22 +329,25 @@ export async function handleClassifyFailure(
       errorCodeMap: deps.errorCodeMap,
     });
 
-    const classificationId = deps.ids.nextId();
-    await repos.classifications.create({
-      id: classificationId,
-      taskId: input.taskId,
-      taskRevision: input.taskRevision,
-      taskAttempt: input.taskAttempt,
-      claimLeaseId: input.claimLeaseId,
-      taxonomyVersion: classification.taxonomyVersion,
-      failureClass: classification.failureClass,
-      autoRetryAllowed: classification.autoRetryAllowed,
-      excludeSameAgent: classification.excludeSameAgent,
-      requiresHumanEscalation: classification.requiresHumanEscalation,
-      fingerprint: classification.fingerprint,
-      reportJson: JSON.stringify(input.report),
-      classifiedAt: now,
-    });
+    // 同一 attempt 复用既有 classificationId，避免重复行；分类结果以最新权威 taxonomy 为准时仍更新内容。
+    const classificationId = priorClassification?.id ?? deps.ids.nextId();
+    if (!priorClassification) {
+      await repos.classifications.create({
+        id: classificationId,
+        taskId: input.taskId,
+        taskRevision: input.taskRevision,
+        taskAttempt: input.taskAttempt,
+        claimLeaseId: input.claimLeaseId,
+        taxonomyVersion: classification.taxonomyVersion,
+        failureClass: classification.failureClass,
+        autoRetryAllowed: classification.autoRetryAllowed,
+        excludeSameAgent: classification.excludeSameAgent,
+        requiresHumanEscalation: classification.requiresHumanEscalation,
+        fingerprint: classification.fingerprint,
+        reportJson: JSON.stringify(input.report),
+        classifiedAt: now,
+      });
+    }
 
     const remaining = nextBudget.remaining;
 
@@ -389,16 +409,15 @@ export async function handleClassifyFailure(
     if (existingRemediation) await repos.remediations.update(remediationRecord);
     else await repos.remediations.create(remediationRecord);
 
-    // 子任务失败不得改写 root 终态/状态（#928 AC）
+    // 子任务失败不得改写 root 终态/状态（#928 AC）。
+    // 纯策略恒为 root_unchanged；在此断言，避免未来接线误把 root 写穿。
     if (meta) {
       const rootImpact = evaluateRootImpactFromSubtaskFailure({
         subtaskFailed: true,
         rootStatus: meta.rootStatus,
       });
       if (rootImpact.kind !== 'root_unchanged') {
-        return buildResponse('classify-failure', 'rejected', 'ROOT_IMPACT_FORBIDDEN', 'user_action', {
-          rejectReason: rootImpact.kind === 'rejected' ? rootImpact.reason : 'root_must_stay_unchanged',
-        });
+        throw new Error(`ROOT_IMPACT_FORBIDDEN:${rootImpact.kind === 'rejected' ? rootImpact.reason : 'unexpected'}`);
       }
     }
 
@@ -525,6 +544,12 @@ export async function handleIssueProgressChallenge(
       });
     }
 
+    // 调用方给出绝对 graceDeadlineAt 时必须严格使用；不得把已过期 deadline 悄悄改成 defaultGrace。
+    if (!Number.isSafeInteger(input.graceDeadlineAt) || input.graceDeadlineAt <= now) {
+      return buildResponse('issue-progress-challenge', 'rejected', 'INVALID_GRACE_DEADLINE', 'user_action', {
+        rejectReason: 'grace_deadline_must_be_future',
+      });
+    }
     const challenge = buildProgressChallenge({
       challengeId: deps.ids.nextId(),
       taskId: input.taskId,
@@ -532,7 +557,7 @@ export async function handleIssueProgressChallenge(
       taskAttempt: input.taskAttempt,
       claimLeaseId: input.claimLeaseId,
       now,
-      graceMs: Math.max(0, input.graceDeadlineAt - now) || (deps.defaultGraceMs ?? 60_000),
+      graceMs: input.graceDeadlineAt - now,
     });
 
     await repos.challenges.create({
