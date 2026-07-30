@@ -595,6 +595,108 @@ describe.each([
       fixture.close();
     }
   });
+
+  test('#948-G: accepted delivery resolves declared output slots to immutable snapshots', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await harness.kernel.createSubtasks(slotsGraphInput(harness.authority));
+      await fixture.repositories.taskCoordination.claimLeases.create(claim());
+      await fixture.repositories.management.invocations.create(invocation());
+      await fixture.repositories.taskCoordination.evidenceSnapshots.create({
+        id: 'evidence-a', teamId: 'team-1', taskId: 'task-a', taskRevision: 1, taskAttempt: 1,
+        invocationId: 'invocation-a', kind: 'message', sourceId: 'msg-1', snapshotHash: 'msg-hash',
+        snapshot: { id: 'msg-1' }, capturedAt: 50,
+      });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'start-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'review-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'in_progress', to: 'in_review' });
+      const messageRef = { kind: 'message' as const, id: 'msg-1', snapshotHash: 'msg-hash', capturedAt: 50 };
+      await fixture.repositories.taskCoordination.deliveries.create({ schemaVersion: 1, id: 'delivery-a',
+        teamId: 'team-1', taskId: 'task-a', taskRevision: 1, taskAttempt: 1,
+        claimLeaseId: 'claim-a', invocationId: 'invocation-a', summary: 'done', claims: [],
+        evidenceRefs: [messageRef], idempotencyKey: 'delivery-key', createdAt: 90 });
+      await harness.kernel.acceptSubtask({ authority: harness.authority, idempotencyKey: 'accept-a',
+        acceptance: { schemaVersion: 1, taskId: 'task-a', deliveryId: 'delivery-a',
+          expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a', decision: 'accepted',
+          criteriaResults: [{ criterionId: 'criterion-a', passed: true, evidenceRefs: [] }],
+          reason: 'accepted', decidedBy: 'manager', decidedAt: 100 } });
+      // 验收后：output snapshot 落库，绑定 revision 1/attempt 1/slot 'result'，含 message 证据。
+      await expect(fixture.repositories.taskCoordination.outputSnapshots.listByTask('task-a'))
+        .resolves.toEqual([expect.objectContaining({ taskId: 'task-a', taskRevision: 1,
+          taskAttempt: 1, slotName: 'result', resolvedDeliveryId: 'delivery-a',
+          resolvedEvidenceRefs: [messageRef] })]);
+      // 下游 task-b 可发布：依赖 done + input binding 已解析（snapshot 存在）。
+      await expect(harness.kernel.publishForClaim({ authority: harness.authority,
+        idempotencyKey: 'publish-b', taskId: 'task-b', expectedTaskRevision: 1 }))
+        .resolves.toMatchObject({ disposition: 'updated' });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('#948-G: unaccepted artifact does not unblock downstream dependency (ADR-0064)', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await harness.kernel.createSubtasks(slotsGraphInput(harness.authority));
+      // task-a 经 transitionTaskState 直推 done，绕过验收 → 无 output snapshot。
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'force-done-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'todo', to: 'done' });
+      await expect(fixture.repositories.taskCoordination.outputSnapshots.listByTask('task-a'))
+        .resolves.toEqual([]);
+      // 下游 task-b publish：控制门禁通过（task-a done），但数据门禁阻断（snapshot 缺失）。
+      await expect(harness.kernel.publishForClaim({ authority: harness.authority,
+        idempotencyKey: 'publish-b', taskId: 'task-b', expectedTaskRevision: 1 }))
+        .rejects.toMatchObject({ code: 'TASK_INPUT_BINDING_NOT_RESOLVED' });
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('#948-G: revising upstream keeps the resolved snapshot immutable and carries slots forward', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      await harness.kernel.createSubtasks(slotsGraphInput(harness.authority));
+      await fixture.repositories.taskCoordination.claimLeases.create(claim());
+      await fixture.repositories.management.invocations.create(invocation());
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'start-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'todo', to: 'in_progress' });
+      await harness.kernel.transitionTaskState({ authority: harness.authority, idempotencyKey: 'review-a',
+        taskId: 'task-a', expectedTaskRevision: 1, from: 'in_progress', to: 'in_review' });
+      await fixture.repositories.taskCoordination.deliveries.create({ schemaVersion: 1, id: 'delivery-a',
+        teamId: 'team-1', taskId: 'task-a', taskRevision: 1, taskAttempt: 1,
+        claimLeaseId: 'claim-a', invocationId: 'invocation-a', summary: 'done', claims: [],
+        evidenceRefs: [], idempotencyKey: 'delivery-key', createdAt: 90 });
+      await harness.kernel.acceptSubtask({ authority: harness.authority, idempotencyKey: 'accept-a',
+        acceptance: { schemaVersion: 1, taskId: 'task-a', deliveryId: 'delivery-a',
+          expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-a', decision: 'accepted',
+          criteriaResults: [{ criterionId: 'criterion-a', passed: true, evidenceRefs: [] }],
+          reason: 'accepted', decidedBy: 'manager', decidedAt: 100 } });
+      expect((await fixture.repositories.taskCoordination.outputSnapshots.listByTask('task-a')))
+        .toHaveLength(1);
+      // revise task-a → revision 2；rev1 的 output snapshot 必须原样留存（不可变）。
+      await harness.kernel.reviseTask({ authority: harness.authority, idempotencyKey: 'revise-a',
+        taskId: 'task-a', expectedTaskRevision: 1, objective: 'objective a revised',
+        acceptanceCriteria: [{ id: 'criterion-a', description: 'A accepted', evidenceRequired: false }],
+        requiredCapabilities: [], claimPolicy: 'open', maxAttempts: 1,
+        reasonCode: 'requirements_changed' });
+      const snapshotsAfter = await fixture.repositories.taskCoordination.outputSnapshots.listByTask('task-a');
+      expect(snapshotsAfter).toEqual([expect.objectContaining({ taskRevision: 1, taskAttempt: 1,
+        slotName: 'result', resolvedEvidenceRefs: [] })]);
+      // outputSlots 经 reviseInTransaction 的 ...coordination spread 携带到新 revision。
+      await expect(fixture.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+        .resolves.toMatchObject({ taskRevision: 2,
+          outputSlots: [{ name: 'result', evidenceKind: 'message' }] });
+    } finally {
+      fixture.close();
+    }
+  });
 });
 
 function rootInput(authority: Authority) {
@@ -619,6 +721,26 @@ function subtasksInput(authority: Authority) {
         acceptanceCriteria: [{ id: 'criterion-b', description: 'B accepted', evidenceRequired: false }],
         maxAttempts: 2 },
     ],
+  };
+}
+
+/** #948-G：task-a 声明 outputSlot 'result'（message kind），task-b 声明 input binding 引用之 + 依赖边。 */
+function slotsGraphInput(authority: Authority) {
+  return {
+    authority, idempotencyKey: 'create-slots-graph', parentTaskId: 'root-task',
+    subtasks: [
+      { taskId: 'task-a', clientKey: 'a', title: 'Task A', description: 'objective a',
+        claimPolicy: 'open' as const, requiredCapabilities: [],
+        acceptanceCriteria: [{ id: 'criterion-a', description: 'A accepted', evidenceRequired: false }],
+        outputSlots: [{ name: 'result', evidenceKind: 'message' as const }],
+        maxAttempts: 1 },
+      { taskId: 'task-b', clientKey: 'b', title: 'Task B', description: 'objective b',
+        claimPolicy: 'open' as const, requiredCapabilities: [],
+        acceptanceCriteria: [{ id: 'criterion-b', description: 'B accepted', evidenceRequired: false }],
+        inputBindings: [{ name: 'upstream-result', upstreamTaskId: 'task-a', slotName: 'result' }],
+        maxAttempts: 1 },
+    ],
+    edges: [{ taskId: 'task-b', dependencyTaskId: 'task-a' }],
   };
 }
 

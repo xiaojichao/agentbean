@@ -1,7 +1,10 @@
 import type {
   AcceptanceCriterionDto,
   EvidenceKind,
+  EvidenceRefDto,
   ID,
+  InputBindingDeclarationDto,
+  OutputSlotDeclarationDto,
   SubtaskAcceptanceV1,
   SubtaskDeliveryV1,
   TaskCoordinationDto,
@@ -94,6 +97,23 @@ export interface EvidenceSnapshotRecord {
   readonly snapshotRevision?: number;
   readonly snapshot: Readonly<Record<string, unknown>>;
   readonly capturedAt: UnixMs;
+}
+
+/**
+ * ADR-0064 #948-G：上游 delivery 合法验收时解析的具名 output snapshot（不可变）。
+ * 绑定 (taskRevision, taskAttempt, slotName)；resolvedEvidenceRefs 指向已冻结的
+ * evidence_snapshots（含 snapshotHash），故 snapshot 天然不可变。无 update 路径。
+ */
+export interface OutputSnapshotRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly taskId: ID;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly slotName: string;
+  readonly resolvedDeliveryId: ID;
+  readonly resolvedEvidenceRefs: readonly EvidenceRefDto[];
+  readonly resolvedAt: UnixMs;
 }
 
 export interface SubtaskDeliveryRecord extends SubtaskDeliveryV1 {
@@ -190,6 +210,21 @@ export interface TaskCoordinationRepositories {
     create(record: EvidenceSnapshotRecord): Promise<EvidenceSnapshotRecord>;
     getById(id: ID): Promise<EvidenceSnapshotRecord | null>;
     listByTask(taskId: ID): Promise<EvidenceSnapshotRecord[]>;
+  };
+  /**
+   * ADR-0064 #948-G：不可变 output snapshot。create 仅在验收时调用一次；无 update
+   * （不可变）。getByTaskSlot 供下游 input binding 门禁按 (upstreamTaskId, revision,
+   * attempt, slotName) 查上游已解析 snapshot。
+   */
+  outputSnapshots: {
+    create(record: OutputSnapshotRecord): Promise<OutputSnapshotRecord>;
+    getByTaskSlot(input: {
+      taskId: ID;
+      taskRevision: number;
+      taskAttempt: number;
+      slotName: string;
+    }): Promise<OutputSnapshotRecord | null>;
+    listByTask(taskId: ID): Promise<OutputSnapshotRecord[]>;
   };
   deliveries: {
     create(record: SubtaskDeliveryRecord): Promise<SubtaskDeliveryRecord>;
