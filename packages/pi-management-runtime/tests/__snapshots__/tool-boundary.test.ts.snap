@@ -99,6 +99,18 @@ exports[`management tool boundary > freezes effect, earliest phase, and schema v
     "phase": 2,
   },
   {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.cancel",
+    "phase": 2,
+  },
+  {
+    "effect": "write",
+    "inputSchemaVersion": 1,
+    "name": "tasks.close",
+    "phase": 2,
+  },
+  {
     "effect": "read",
     "inputSchemaVersion": 1,
     "name": "agents.list_available",
