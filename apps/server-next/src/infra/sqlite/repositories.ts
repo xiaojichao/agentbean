@@ -237,6 +237,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0066_task_offer_response_attestation.sql');
   // #962 Project Channel Workspace：Server 权威的不可变完整 revision。
   applyMigration(db, 'team/0067_project_channel_workspaces.sql');
+  // #964 Workspace import provenance：记录导入来源设备，不暴露设备绝对路径。
+  applyMigration(db, 'team/0068_workspace_import_provenance.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2158,8 +2160,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       async createInitial(input) {
         try {
           const tx = teamDb.transaction(() => {
-            teamDb.prepare(`INSERT INTO project_channel_workspace_revisions (id, team_id, channel_id, revision, files_json, created_by, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`).run(input.revision.id, input.revision.teamId, input.revision.channelId, input.revision.revision, JSON.stringify(input.revision.files), input.revision.createdBy, input.revision.createdAt);
+            teamDb.prepare(`INSERT INTO project_channel_workspace_revisions (id, team_id, channel_id, revision, files_json, provenance_json, created_by, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(input.revision.id, input.revision.teamId, input.revision.channelId, input.revision.revision, JSON.stringify(input.revision.files), input.revision.provenance ? JSON.stringify(input.revision.provenance) : null, input.revision.createdBy, input.revision.createdAt);
             teamDb.prepare(`INSERT INTO project_channel_workspaces (id, team_id, channel_id, current_revision_id, created_by, created_at)
               VALUES (?, ?, ?, ?, ?, ?)`).run(input.workspace.id, input.workspace.teamId, input.workspace.channelId, input.workspace.currentRevisionId, input.revision.createdBy, input.revision.createdAt);
           });
@@ -2171,17 +2173,17 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         }
       },
       async getForTeam(input) {
-        const row = teamDb.prepare(`SELECT w.*, r.revision, r.files_json, r.created_by AS revision_created_by, r.created_at AS revision_created_at
+        const row = teamDb.prepare(`SELECT w.*, r.revision, r.files_json, r.provenance_json, r.created_by AS revision_created_by, r.created_at AS revision_created_at
           FROM project_channel_workspaces w JOIN project_channel_workspace_revisions r ON r.id = w.current_revision_id
           WHERE w.team_id = ? AND w.channel_id = ?`).get(input.teamId, input.channelId) as Record<string, unknown> | undefined;
         if (!row) return null;
-        const revision: ProjectChannelWorkspaceRevisionRecord = { id: String(row.current_revision_id), teamId: input.teamId, channelId: input.channelId, revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.revision_created_by), createdAt: Number(row.revision_created_at) };
+        const revision: ProjectChannelWorkspaceRevisionRecord = { id: String(row.current_revision_id), teamId: input.teamId, channelId: input.channelId, revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.revision_created_by), createdAt: Number(row.revision_created_at), ...(row.provenance_json ? { provenance: JSON.parse(String(row.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) };
         return { id: String(row.id), teamId: input.teamId, channelId: input.channelId, currentRevisionId: String(row.current_revision_id), currentRevision: revision };
       },
       async getRevision(input) {
         const row = teamDb.prepare(`SELECT * FROM project_channel_workspace_revisions WHERE id = ? AND team_id = ? AND channel_id = ?`).get(input.revisionId, input.teamId, input.channelId) as Record<string, unknown> | undefined;
         if (!row) return null;
-        return { id: String(row.id), teamId: String(row.team_id), channelId: String(row.channel_id), revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.created_by), createdAt: Number(row.created_at) };
+        return { id: String(row.id), teamId: String(row.team_id), channelId: String(row.channel_id), revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.created_by), createdAt: Number(row.created_at), ...(row.provenance_json ? { provenance: JSON.parse(String(row.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) };
       },
       async deleteByChannel(channelId) {
         const remove = teamDb.transaction(() => {

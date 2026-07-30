@@ -10,6 +10,17 @@ export interface ProjectChannelWorkspaceFileDto {
   sha256?: string;
 }
 
+/**
+ * Minimal provenance for a workspace import.
+ * Records which device initiated the import without exposing device absolute paths.
+ */
+export interface WorkspaceImportProvenanceDto {
+  /** Device that performed the import. */
+  sourceDeviceId: ID;
+  /** When the import happened (server-assigned timestamp). */
+  importedAt: UnixMs;
+}
+
 export interface ProjectChannelWorkspaceRevisionDto {
   id: ID;
   teamId: ID;
@@ -18,6 +29,8 @@ export interface ProjectChannelWorkspaceRevisionDto {
   files: ProjectChannelWorkspaceFileDto[];
   createdBy: ID;
   createdAt: UnixMs;
+  /** Set when this revision was created via device import; absent for purely server-side creations. */
+  provenance?: WorkspaceImportProvenanceDto;
 }
 
 export interface ProjectChannelWorkspaceDto {

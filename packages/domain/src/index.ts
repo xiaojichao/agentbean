@@ -52,4 +52,5 @@ export * from './project-reference-policy.js';
 export * from './project-document-bundle-backfill-policy.js';
 export * from './allocation-blocked-policy.js';
 export * from './output-slot-resolution-policy.js';
+export * from './workspace-import-policy.js';
 export * from './device-agent-lifecycle-policy.js';
