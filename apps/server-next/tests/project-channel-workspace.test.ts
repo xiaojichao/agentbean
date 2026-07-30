@@ -36,6 +36,88 @@ describe('Project Channel Workspace', () => {
     expect(reread).toMatchObject({ ok: true, workspace: { currentRevision: { files: [{ path: 'README.md' }] } } });
   });
 
+  // #964: Device-initiated import with provenance
+  test('设备导入创建 Workspace revision 并记录最小 provenance', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'workspace-1', 'revision-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'test-device' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+
+    await repositories.artifacts.create({
+      id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1',
+      filename: 'index.ts', mimeType: 'text/typescript', sizeBytes: 100, pathKind: 'workspace', createdAt: 90,
+    });
+
+    const imported = await app.importProjectChannelWorkspace({
+      token: hello.credentials.token, teamId: 'team-1', channelId: cid,
+      files: [{ path: 'src/index.ts', artifactId: 'artifact-1' }],
+    });
+    expect(imported).toMatchObject({
+      ok: true,
+      workspace: { currentRevision: { revision: 1, files: [{ path: 'src/index.ts', artifactId: 'artifact-1', filename: 'index.ts' }] } },
+    });
+    if (!imported.ok) throw new Error(imported.error);
+
+    expect(imported.workspace.currentRevision.provenance).toBeDefined();
+    expect(imported.workspace.currentRevision.provenance!.sourceDeviceId).toBe('device-1');
+    expect(imported.workspace.currentRevision.provenance!.importedAt).toBe(100);
+    const provenance = imported.workspace.currentRevision.provenance!;
+    expect(Object.keys(provenance)).not.toContain('sourcePath');
+    expect(Object.keys(provenance)).not.toContain('absolutePath');
+
+    const read = await app.getProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid });
+    expect(read).toMatchObject({ ok: true });
+    if (!read.ok) throw new Error(read.error);
+    expect(read.workspace.currentRevision.provenance).toBeDefined();
+  });
+
+  // #964: Import rejects invalid device tokens
+  test('设备导入拒绝无效 token', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({ repositories, clock: { now: () => 100 }, ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1']) } });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    await expect(app.importProjectChannelWorkspace({
+      token: 'abn_device.invalid.signature', teamId: 'team-1', channelId: 'channel-1',
+      files: [{ path: 'README.md', artifactId: 'artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
+  });
+
+  // #964: Import validates paths
+  test('设备导入拒绝非法路径（绝对路径、遍历、重复、空）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'artifact-1', 'artifact-2']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'test-device' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+    const token = hello.credentials.token;
+
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await repositories.artifacts.create({ id: 'artifact-2', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'b.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+
+    await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [{ path: '/etc/secret.txt', artifactId: 'artifact-1' }] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [{ path: 'C:\\Users\\secret.txt', artifactId: 'artifact-1' }] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [{ path: '../outside/secret.txt', artifactId: 'artifact-1' }] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [{ path: 'same.txt', artifactId: 'artifact-1' }, { path: 'same.txt', artifactId: 'artifact-2' }] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+  });
+
   test('#all、DM、私有频道成员移除均拒绝且不暴露 Workspace 文件', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({ repositories, clock: { now: () => 100 }, ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-2', 'channel-3']) } });

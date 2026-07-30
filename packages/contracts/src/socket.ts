@@ -216,6 +216,10 @@ export const WEB_EVENTS = {
     referencesUpdated: 'project:references-updated',
     workspace: 'project:workspace',
     createWorkspace: 'project:create-workspace',
+    /** #964 设备导入本地目录为 Workspace 首版。 */
+    importWorkspace: 'project:import-workspace',
+    /** #964 设备获取 Workspace revision 本地 snapshot。 */
+    materializeWorkspace: 'project:materialize-workspace',
   },
   dm: {
     start: 'dm:start',
