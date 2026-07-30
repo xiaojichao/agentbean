@@ -13021,7 +13021,7 @@ async function ensureUserCanViewChannel(
 
 function normalizeWorkspacePath(value: string): string | null {
   const path = value.trim().replaceAll('\\', '/');
-  if (!path || path.startsWith('/') || /^[a-zA-Z]:\//.test(path) || /[\u0000-\u001f\u007f]/.test(path)
+  if (!path || path.startsWith('/') || /^[a-zA-Z]:/.test(path) || /[\u0000-\u001f\u007f]/.test(path)
     || path.split('/').some((part) => part === '' || part === '.' || part === '..')) return null;
   return path;
 }

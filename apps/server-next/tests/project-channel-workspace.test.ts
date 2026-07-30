@@ -24,6 +24,9 @@ describe('Project Channel Workspace', () => {
     await expect(app.createProjectChannelWorkspace({
       userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'C:/outside/secret.txt', artifactId: 'artifact-1' }],
     })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    await expect(app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'C:outside\\secret.txt', artifactId: 'artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
     created.workspace.currentRevision.files[0]!.path = 'tampered';
     await repositories.channels.update({ channelId: 'channel-2', changes: { archivedAt: 200 } });
     await expect(app.createProjectChannelWorkspace({
