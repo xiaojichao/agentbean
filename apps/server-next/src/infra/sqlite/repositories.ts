@@ -254,6 +254,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0071_workspace_publish_staging.sql');
   // #929 audience-scoped System activity / attention / change feed。
   applyMigration(db, 'team/0072_system_activity.sql');
+  // #930 Team PI authority cutover 与 legacy 兼容退役。
+  applyMigration(db, 'team/0073_pi_authority_cutover.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
