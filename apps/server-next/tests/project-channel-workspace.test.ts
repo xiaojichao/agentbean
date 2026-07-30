@@ -329,6 +329,134 @@ describe('Project Channel Workspace', () => {
 
     await expect(app.materializeProjectChannelWorkspace({ token: hello.credentials.token, teamId: 'team-1', channelId: cid, revisionId: 'no-such-revision' })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
+  test('频道治理者导出封存清单：含最后 revision 与 deliverable，排除非交付物，只读', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'revision-1', 'workspace-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+
+    await repositories.artifacts.create({ id: 'art-deliv', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'final.zip', mimeType: 'application/zip', sizeBytes: 256, pathKind: 'workspace', role: 'deliverable', sha256: 'abc123', workspaceRunId: 'run-1', createdAt: 200 });
+    await repositories.artifacts.create({ id: 'art-inter', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'scratch.tmp', mimeType: 'application/octet-stream', sizeBytes: 10, pathKind: 'workspace', role: 'intermediate', createdAt: 201 });
+
+    const created = await app.createProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid, files: [{ path: 'final.zip', artifactId: 'art-deliv' }] });
+    if (!created.ok) throw new Error(created.error);
+
+    const exported = await app.exportProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid });
+    expect(exported).toMatchObject({ ok: true, manifest: { teamId: 'team-1', channelId: cid, exportedByUserId: 'user-1', exportedAt: 500 } });
+    if (!exported.ok) throw new Error(exported.error);
+    expect(exported.manifest.revision.revision).toBe(1);
+    // 只有 deliverable 进入清单；intermediate 被排除。
+    expect(exported.manifest.deliverables).toHaveLength(1);
+    expect(exported.manifest.deliverables[0]).toMatchObject({ artifactId: 'art-deliv', role: 'deliverable', sha256: 'abc123', workspaceRunId: 'run-1' });
+    // 只读：导出未改变频道状态（未归档）。
+    expect((await repositories.channels.getById(cid))?.archivedAt ?? null).toBeNull();
+  });
+
+  // #969 AC#4：非治理者（非创建者成员）被拒绝；治理者仍可导出。
+  test('非频道创建者成员导出被拒绝 FORBIDDEN', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'revision-1', 'workspace-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    await repositories.artifacts.create({ id: 'art-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', role: 'deliverable', createdAt: 1 });
+    await app.createProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'art-1' }] });
+
+    // user-2 是团队成员但非频道创建者。
+    await repositories.users.create({ id: 'user-2', username: 'bob', role: 'user', passwordHash: 'x', createdAt: 1, updatedAt: 1 });
+    await repositories.teams.addMember({ teamId: 'team-1', userId: 'user-2', username: 'bob', role: 'member', joinedAt: 1 });
+
+    await expect(app.exportProjectChannelWorkspace({ userId: 'user-2', teamId: 'team-1', channelId: cid })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await expect(app.exportProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid })).resolves.toMatchObject({ ok: true });
+  });
+
+  // #969 AC#4：导出不依赖归档状态，也不恢复频道——归档频道仍可被治理者导出且导出后仍归档。
+  test('归档频道仍可被治理者导出（导出不恢复频道）', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'revision-1', 'workspace-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    await repositories.artifacts.create({ id: 'art-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', role: 'deliverable', createdAt: 1 });
+    await app.createProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'art-1' }] });
+    await repositories.channels.update({ channelId: cid, changes: { archivedAt: 400 } });
+
+    const exported = await app.exportProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid });
+    expect(exported).toMatchObject({ ok: true });
+    // 导出不恢复频道：仍处于归档。
+    expect((await repositories.channels.getById(cid))?.archivedAt).toBe(400);
+  });
+
+  // #969 AC#2：列出 workspace 全部 revision（最新在前），按授权读取。
+  test('列出 workspace revision 历史（最新在前），非成员拒绝', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'revision-1', 'workspace-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    await repositories.artifacts.create({ id: 'art-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await app.createProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: cid, files: [{ path: 'a.txt', artifactId: 'art-1' }] });
+
+    const list = await app.listProjectChannelWorkspaceRevisions({ userId: 'user-1', teamId: 'team-1', channelId: cid });
+    expect(list).toMatchObject({ ok: true });
+    if (!list.ok) throw new Error(list.error);
+    expect(list.revisions.map((r) => r.revision)).toEqual([1]);
+    expect(list.revisions[0]).toMatchObject({ files: [{ path: 'a.txt', artifactId: 'art-1' }] });
+
+    // 非成员拒绝。
+    await expect(app.listProjectChannelWorkspaceRevisions({ userId: 'outsider', teamId: 'team-1', channelId: cid })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
+
+  // #969 AC#1 回归：归档后拒绝 workspace 写入（create），历史仍按授权只读（已在首测覆盖 create；
+  // 此处显式锁定 import 路径同样归档即拒）。
+  test('归档后拒绝 import（本地应用）写入', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 500 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'all-1', 'channel-1', 'device-1', 'artifact-1']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    const hello = await app.deviceHello({ teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', hostname: 'test-device' });
+    if (!hello.ok || !hello.credentials) throw new Error('device hello failed');
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: cid, uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await repositories.channels.update({ channelId: cid, changes: { archivedAt: 400 } });
+
+    await expect(app.importProjectChannelWorkspace({
+      token: hello.credentials.token, teamId: 'team-1', channelId: cid,
+      files: [{ path: 'a.txt', artifactId: 'artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+  });
+});
+
+function createIds(values: string[]) {
+  let index = 0;
+  return () => values[index++] ?? `generated-${index}`;
+}
 });
 
 function createIds(values: string[]) {

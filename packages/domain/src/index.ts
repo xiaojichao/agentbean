@@ -59,5 +59,6 @@ export * from './output-slot-resolution-policy.js';
 export * from './workspace-import-policy.js';
 export * from './workspace-publish-policy.js';
 export * from './workspace-apply-policy.js';
+export * from './archive-export-policy.js';
 export * from './device-agent-lifecycle-policy.js';
 export * from './task-failure-remediation-policy.js';

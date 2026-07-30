@@ -6,7 +6,7 @@ import type {
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   createAckReadCandidateCommandHandler,
@@ -20,7 +20,7 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord } from './repositories.js';
@@ -389,6 +389,10 @@ export interface ServerNextUseCases {
    * Source-Device independent: any device whose owner can view the channel may materialize.
    */
   materializeProjectChannelWorkspace(input: MaterializeProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
+  /** #969 导出归档封存清单（仅频道治理者，只读，不恢复频道/不扩权）。 */
+  exportProjectChannelWorkspace(input: ExportProjectChannelWorkspaceInput): Promise<Ack<{ manifest: ArchiveExportManifestDto }>>;
+  /** #969 列出 workspace 全部 revision（最新在前）。 */
+  listProjectChannelWorkspaceRevisions(input: ListProjectChannelWorkspaceInput): Promise<Ack<{ revisions: ProjectChannelWorkspaceRevisionDto[] }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
@@ -974,6 +978,20 @@ export interface GetProjectChannelWorkspaceInput {
   teamId: string;
   channelId: string;
   revisionId?: string;
+}
+
+/** #969 归档导出输入（治理者授权在 usecases 内用 canApplyChannelUpdate 判定，与 archiveChannel 同）。 */
+export interface ExportProjectChannelWorkspaceInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+}
+
+/** #969 列出 workspace 全部 revision 输入。 */
+export interface ListProjectChannelWorkspaceInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
 }
 
 /** #964 Device-initiated workspace import. Auth via device token in payload. */
@@ -4910,6 +4928,38 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const workspace = await repositories.projectChannelWorkspaces.getForTeam(workspaceInput);
       if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
       return resolveProjectChannelWorkspaceRevision(repositories, workspace, workspaceInput.revisionId);
+    },
+
+    // #969 AC#4：归档导出——频道治理者（创建者）只读装配封存清单。不恢复频道、不扩权、零状态变更。
+    async exportProjectChannelWorkspace(exportInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, exportInput);
+      if (!access.ok) return access;
+      const channel = access.channel;
+      // 治理授权：与 archiveChannel 同一判断（不传 archivedAt → 归档与否均可导出，导出不依赖归档状态）。
+      if (!canApplyChannelUpdate(channel, exportInput.userId, {})) {
+        return makeFailure('FORBIDDEN', 'Only channel governors can export the workspace archive');
+      }
+      const workspace = await repositories.projectChannelWorkspaces.getForTeam(exportInput);
+      if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      // 只读装配：频道 artifact 由 domain 过滤 role=deliverable；revision 含 import provenance。
+      const artifacts = await repositories.artifacts.listByChannel({ teamId: exportInput.teamId, channelId: exportInput.channelId });
+      const manifest = assembleArchiveExportManifest({
+        teamId: exportInput.teamId,
+        channelId: exportInput.channelId,
+        exportedByUserId: exportInput.userId,
+        now: clock.now(),
+        revision: workspace.currentRevision,
+        artifacts,
+      });
+      return makeSuccess({ manifest });
+    },
+
+    // #969 AC#2：列出 workspace 全部 revision（repo 已按 revision 倒序，最新在前 = 默认最后成果）。
+    async listProjectChannelWorkspaceRevisions(listInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, listInput);
+      if (!access.ok) return access;
+      const revisions = await repositories.projectChannelWorkspaces.listRevisions(listInput);
+      return makeSuccess({ revisions });
     },
 
     async importProjectChannelWorkspace(importInput) {

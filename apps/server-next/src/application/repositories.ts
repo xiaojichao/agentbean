@@ -435,6 +435,8 @@ export interface ProjectChannelWorkspaceRepository {
       provenance?: ProjectChannelWorkspaceRevisionRecord['provenance'];
     };
   }): Promise<PublishWorkspaceRevisionOutcome>;
+  /** #969 列出频道 workspace 全部 revision（实现层按 revision 倒序，最新在前）。 */
+  listRevisions(input: { teamId: ID; channelId: ID }): Promise<ProjectChannelWorkspaceRevisionRecord[]>;
   deleteByChannel(channelId: ID): Promise<void>;
 }
 

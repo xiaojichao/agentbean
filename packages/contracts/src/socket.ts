@@ -226,6 +226,10 @@ export const WEB_EVENTS = {
     importWorkspace: 'project:import-workspace',
     publishWorkspace: 'project:publish-workspace',
     materializeWorkspace: 'project:materialize-workspace',
+    /** #969 导出归档封存清单（仅频道治理者）。 */
+    exportWorkspace: 'project:export-workspace',
+    /** #969 列出 workspace 全部 revision（默认最新在前）。 */
+    workspaceRevisions: 'project:workspace-revisions',
   },
   dm: {
     start: 'dm:start',

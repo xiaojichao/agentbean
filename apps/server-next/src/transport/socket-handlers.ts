@@ -502,7 +502,18 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  // #966 原子发布
   bind(socket, WEB_EVENTS.project.publishWorkspace, app, 'publishProjectChannelWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  // #969 AC#4：归档导出（仅频道治理者）。
+  bind(socket, WEB_EVENTS.project.exportWorkspace, app, 'exportProjectChannelWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  // #969 AC#2：列出 workspace 全部 revision（最新在前）。
+  bind(socket, WEB_EVENTS.project.workspaceRevisions, app, 'listProjectChannelWorkspaceRevisions', undefined, {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
