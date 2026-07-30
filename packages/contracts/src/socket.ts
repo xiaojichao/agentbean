@@ -224,6 +224,7 @@ export const WEB_EVENTS = {
     workspace: 'project:workspace',
     createWorkspace: 'project:create-workspace',
     importWorkspace: 'project:import-workspace',
+    publishWorkspace: 'project:publish-workspace',
     materializeWorkspace: 'project:materialize-workspace',
   },
   dm: {
@@ -417,6 +418,8 @@ export interface TaskClaimExecutionSnapshotV1 {
   readonly taskAttempt: number;
   /** #925 execution context grant id：claim 成功同事务签发的输入访问凭证。 */
   readonly grantId: string;
+  /** #966 claim 时冻结的 Project Channel Workspace revisionId；Agent 据此读取固定输入版本。undefined=频道无 workspace。 */
+  readonly workspaceRevisionId?: string;
   readonly title: string;
   readonly objective: string;
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];

@@ -30,6 +30,8 @@ export interface TaskExecutionGrantRecord {
   readonly taskAttempt: number;
   /** #946：签发时冻结的 Agent Exposure Manifest revision；manifest 变化时据此精确撤销。 */
   readonly manifestRevision: number;
+  /** #966：签发时冻结的 Project Channel Workspace revisionId；Agent 据此读取固定输入版本。undefined=频道无 workspace。 */
+  readonly workspaceRevisionId?: string;
   readonly claimLeaseId: string;
   readonly agentId: string;
   readonly state: ExecutionGrantState;
@@ -49,6 +51,8 @@ export interface EvaluateExecutionGrantIssuanceInput {
   readonly agentId: string;
   /** #946：claim 时冻结的 manifest revision，写入 grant 供后续精确撤销。 */
   readonly manifestRevision: number;
+  /** #966：claim 时冻结的 workspace revisionId（频道当前 currentRevisionId；无 workspace 则 undefined）。 */
+  readonly workspaceRevisionId?: string;
   /** ADR-0063：root Task 不持有 Agent execution claim，永不签发 grant。 */
   readonly nodeKind: 'root' | 'subtask';
   readonly grantedAt: number;
@@ -77,6 +81,7 @@ export function evaluateExecutionGrantIssuance(
       taskRevision: input.taskRevision,
       taskAttempt: input.taskAttempt,
       manifestRevision: input.manifestRevision,
+      ...(input.workspaceRevisionId !== undefined ? { workspaceRevisionId: input.workspaceRevisionId } : {}),
       claimLeaseId: input.claimLeaseId,
       agentId: input.agentId,
       state: 'active',

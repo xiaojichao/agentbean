@@ -20,7 +20,7 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord } from './repositories.js';
@@ -379,6 +379,8 @@ export interface ServerNextUseCases {
   createProjectChannelWorkspace(input: CreateProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   /** #964 Device-initiated import with provenance tracking. */
   importProjectChannelWorkspace(input: ImportProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
+  /** #966 Atomic publish: 基线匹配则整体创建下一 revision；基线落后返回 CONFLICT（当前版本+冲突路径）。 */
+  publishProjectChannelWorkspace(input: PublishProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getProjectChannelWorkspace(input: GetProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
@@ -973,6 +975,21 @@ export interface ImportProjectChannelWorkspaceInput {
   teamId: string;
   channelId: string;
   files: Array<Pick<ProjectChannelWorkspaceFileDto, 'path' | 'artifactId'>>;
+}
+
+/**
+ * #966 Atomic workspace publish. 以基线 revision 为依据整体发布下一 revision。
+ * 基线落后 → CONFLICT（返回当前版本 + 冲突路径，不写、不合 publish）。权限撤销/校验失败/冲突均无部分结果。
+ */
+export interface PublishProjectChannelWorkspaceInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  /** 调用方读取的固定输入 revision（基线）。 */
+  baselineRevisionId: string;
+  files: Array<Pick<ProjectChannelWorkspaceFileDto, 'path' | 'artifactId'>>;
+  /** #966 交付 Agent 身份，写入 publish provenance（AC#4）。省略=非 Agent 发布（无 provenance）。 */
+  provenance?: { agentId: string; taskId: string; taskAttempt: number };
 }
 
 export interface SearchMessagesInput {
@@ -4914,7 +4931,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const revision: ProjectChannelWorkspaceRevisionRecord = {
         id: ids.nextId(), teamId: importInput.teamId, channelId: importInput.channelId,
         revision: 1, files, createdBy: actor.userId, createdAt: now,
-        provenance: { sourceDeviceId, importedAt: now },
+        provenance: { kind: 'import', sourceDeviceId, importedAt: now },
       };
       const workspace: ProjectChannelWorkspaceRecord = {
         id: ids.nextId(), teamId: importInput.teamId, channelId: importInput.channelId,
@@ -4923,6 +4940,67 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const created = await repositories.projectChannelWorkspaces.createInitial({ workspace, revision });
       if (!created) return makeFailure('CONFLICT', 'Project Channel Workspace already exists');
       return makeSuccess({ workspace: created });
+    },
+
+    async publishProjectChannelWorkspace(publishInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, publishInput);
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const validated = validateWorkspaceImportFiles(publishInput.files);
+      if (!validated.ok) {
+        return makeFailure('VALIDATION_ERROR',
+          validated.error === 'EMPTY_FILES' ? 'Workspace publish must contain files'
+          : validated.error === 'INVALID_PATH' ? 'Workspace paths must be unique and relative'
+          : 'Duplicate workspace path');
+      }
+      const files: ProjectChannelWorkspaceFileDto[] = [];
+      for (const { path, artifactId } of validated.value.files) {
+        const artifact = await repositories.artifacts.getForTeam({ teamId: publishInput.teamId, artifactId });
+        if (!artifact || artifact.channelId !== publishInput.channelId) {
+          return makeFailure('NOT_FOUND', 'Workspace artifact not found');
+        }
+        files.push({
+          path, artifactId: artifact.id,
+          filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes,
+          ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
+        });
+      }
+      const current = await repositories.projectChannelWorkspaces.getForTeam(publishInput);
+      if (!current) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      // 域规则预判：overflow 直接拒（empty 已由 validateWorkspaceImportFiles 兜底）。
+      const toEntries = (list: ProjectChannelWorkspaceFileDto[]) => list.map((f) => ({ path: f.path, artifactId: f.artifactId }));
+      const preDecision = evaluateWorkspacePublish({
+        current: { revisionId: current.currentRevision.id, revision: current.currentRevision.revision, files: toEntries(current.currentRevision.files) },
+        baselineRevisionId: publishInput.baselineRevisionId,
+        files: validated.value.files,
+      });
+      if (preDecision.kind === 'rejected') {
+        return makeFailure('VALIDATION_ERROR', preDecision.reason === 'revision-overflow' ? 'Workspace revision overflow' : 'Workspace publish must contain files');
+      }
+      const now = clock.now();
+      // repo 在事务内做 CAS 终判（消除 read→commit 竞态）：基线匹配才整体写下一 revision。
+      const outcome = await repositories.projectChannelWorkspaces.publishRevision({
+        teamId: publishInput.teamId,
+        channelId: publishInput.channelId,
+        baselineRevisionId: publishInput.baselineRevisionId,
+        newRevision: {
+          id: ids.nextId(), files, createdBy: publishInput.userId, createdAt: now,
+          ...(publishInput.provenance ? { provenance: { kind: 'publish', agentId: publishInput.provenance.agentId, taskId: publishInput.provenance.taskId, taskAttempt: publishInput.provenance.taskAttempt, baselineRevisionId: publishInput.baselineRevisionId, publishedAt: now } } : {}),
+        },
+      });
+      if (outcome.kind === 'published') return makeSuccess({ workspace: outcome.workspace });
+      // conflict：基线在 read→commit 间被并发发布。用域规则据权威 current 算冲突路径范围（AC#3）。
+      const conflictDecision = evaluateWorkspacePublish({
+        current: { revisionId: outcome.current.currentRevision.id, revision: outcome.current.currentRevision.revision, files: toEntries(outcome.current.currentRevision.files) },
+        baselineRevisionId: publishInput.baselineRevisionId,
+        files: validated.value.files,
+      });
+      const conflictingPaths = conflictDecision.kind === 'conflict' ? conflictDecision.conflictingPaths : [];
+      return makeFailure('CONFLICT', 'Workspace baseline changed', {
+        currentRevisionId: outcome.current.currentRevision.id,
+        currentRevision: outcome.current.currentRevision.revision,
+        conflictingPaths,
+      });
     },
 
     async listChannelDocuments(documentInput) {

@@ -422,8 +422,26 @@ export interface ProjectChannelWorkspaceRepository {
   }): Promise<ProjectChannelWorkspaceRecord | null>;
   getForTeam(input: { teamId: ID; channelId: ID }): Promise<ProjectChannelWorkspaceRecord | null>;
   getRevision(input: { teamId: ID; channelId: ID; revisionId: ID }): Promise<ProjectChannelWorkspaceRevisionRecord | null>;
+  /** #966 原子发布：事务内对 current_revision_id 做 CAS（基线匹配才写），revision 号由 repo 在事务内计算。基线落后 → conflict（不写）。 */
+  publishRevision(input: {
+    teamId: ID;
+    channelId: ID;
+    baselineRevisionId: ID;
+    newRevision: {
+      id: ID;
+      files: ProjectChannelWorkspaceRevisionRecord['files'];
+      createdBy: ID;
+      createdAt: UnixMs;
+      provenance?: ProjectChannelWorkspaceRevisionRecord['provenance'];
+    };
+  }): Promise<PublishWorkspaceRevisionOutcome>;
   deleteByChannel(channelId: ID): Promise<void>;
 }
+
+/** #966 publishRevision 结果：整体发布成功，或基线落后返回当前版本供冲突反馈。 */
+export type PublishWorkspaceRevisionOutcome =
+  | { readonly kind: 'published'; readonly workspace: ProjectChannelWorkspaceRecord }
+  | { readonly kind: 'conflict'; readonly current: ProjectChannelWorkspaceRecord };
 
 export interface TaskRepository {
   create(input: NewTaskRecord): Promise<TaskRecord>;

@@ -22,6 +22,7 @@ import type {
   WorkspaceRunRecord,
   ProjectChannelWorkspaceRecord,
   ProjectChannelWorkspaceRevisionRecord,
+  PublishWorkspaceRevisionOutcome,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
@@ -1626,6 +1627,25 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         projectChannelWorkspaceRevisions.set(revision.id, revision);
         projectChannelWorkspaces.set(key, workspace);
         return structuredClone(workspace);
+      },
+      async publishRevision(input): Promise<PublishWorkspaceRevisionOutcome> {
+        const key = `${input.teamId}:${input.channelId}`;
+        const workspace = projectChannelWorkspaces.get(key);
+        if (!workspace) throw new Error('Project Channel Workspace not found');
+        if (workspace.currentRevisionId !== input.baselineRevisionId) {
+          return { kind: 'conflict', current: structuredClone(workspace) };
+        }
+        const nextRevision = workspace.currentRevision.revision + 1;
+        const newRevision: ProjectChannelWorkspaceRevisionRecord = {
+          id: input.newRevision.id, teamId: input.teamId, channelId: input.channelId,
+          revision: nextRevision, files: structuredClone(input.newRevision.files),
+          createdBy: input.newRevision.createdBy, createdAt: input.newRevision.createdAt,
+          ...(input.newRevision.provenance ? { provenance: structuredClone(input.newRevision.provenance) } : {}),
+        };
+        projectChannelWorkspaceRevisions.set(newRevision.id, newRevision);
+        const updated: ProjectChannelWorkspaceRecord = { ...workspace, currentRevisionId: newRevision.id, currentRevision: newRevision };
+        projectChannelWorkspaces.set(key, updated);
+        return { kind: 'published', workspace: structuredClone(updated) };
       },
       async getForTeam(input) {
         const workspace = projectChannelWorkspaces.get(`${input.teamId}:${input.channelId}`);
