@@ -16,6 +16,8 @@ export const PHASE_2_TASK_WORKER_TOOL_NAMES = [
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'tasks.cancel',
+  'tasks.close',
 ] as const;
 
 export const PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES = [
@@ -134,6 +136,8 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
   readonly 'tasks.retry': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
   readonly 'tasks.accept_subtask': { readonly acceptance: SubtaskAcceptanceV1 };
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reasonCode: string };
+  readonly 'tasks.cancel': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reason: string };
+  readonly 'tasks.close': { readonly taskId: ID; readonly expectedTaskRevision: number; readonly reason: string };
 }
 
 /**
@@ -242,6 +246,8 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
   readonly 'tasks.retry': { readonly taskId: ID; readonly taskRevision: number; readonly attempt: number };
   readonly 'tasks.accept_subtask': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'done' | 'in_review' };
   readonly 'tasks.report_blocked': { readonly taskId: ID; readonly status: 'todo'; readonly reportedAt: UnixMs };
+  readonly 'tasks.cancel': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'cancelled'; readonly cancelledSubtaskIds: readonly ID[] };
+  readonly 'tasks.close': { readonly taskId: ID; readonly taskRevision: number; readonly status: 'closed'; readonly closedSubtaskIds: readonly ID[] };
 }
 
 interface Phase2TaskToolResultBaseV2<K extends keyof Phase2ManagementWorkerToolOutputMapV1> {
@@ -518,6 +524,12 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
     }
     return;
   }
+  if (toolName === 'tasks.cancel' || toolName === 'tasks.close') {
+    assertExactKeys(value, ['taskId', 'expectedTaskRevision', 'reason'], ['taskId', 'expectedTaskRevision', 'reason']);
+    if (!nonEmpty(value.taskId) || !nonEmpty(value.reason)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.expectedTaskRevision, 1);
+    return;
+  }
   const withAgent = toolName === 'tasks.assign';
   const withDependency = toolName === 'tasks.add_dependency';
   const withReason = toolName === 'tasks.retry' || toolName === 'tasks.report_blocked';
@@ -631,6 +643,16 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
     assertInteger(value.taskRevision, 1); return;
+  }
+  if (toolName === 'tasks.cancel') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'status', 'cancelledSubtaskIds'], ['taskId', 'taskRevision', 'status', 'cancelledSubtaskIds']);
+    if (!nonEmpty(value.taskId) || value.status !== 'cancelled') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); assertStringArray(value.cancelledSubtaskIds); return;
+  }
+  if (toolName === 'tasks.close') {
+    assertExactKeys(value, ['taskId', 'taskRevision', 'status', 'closedSubtaskIds'], ['taskId', 'taskRevision', 'status', 'closedSubtaskIds']);
+    if (!nonEmpty(value.taskId) || value.status !== 'closed') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    assertInteger(value.taskRevision, 1); assertStringArray(value.closedSubtaskIds); return;
   }
   assertExactKeys(value, ['taskId', 'status', 'reportedAt'], ['taskId', 'status', 'reportedAt']);
   if (!nonEmpty(value.taskId) || value.status !== 'todo') throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
