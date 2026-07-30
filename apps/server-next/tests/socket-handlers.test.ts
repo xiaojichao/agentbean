@@ -250,6 +250,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.admin.transferDeviceOwner,
       WEB_EVENTS.message.send,
       WEB_EVENTS.message.messageTracer.command,
+      WEB_EVENTS.systemActivity.command,
+      WEB_EVENTS.systemActivity.query,
       WEB_EVENTS.message.search,
       WEB_EVENTS.message.context,
       WEB_EVENTS.message.react,
