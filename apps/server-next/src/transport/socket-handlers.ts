@@ -791,6 +791,9 @@ export function registerWebSocketHandlers(
   });
   // #921 Message tracer command 路径（默认关闭：app.dispatchMessageTracerCommand 在 flag 关闭时返回 disabled）。
   bind(socket, WEB_EVENTS.message.messageTracer.command, app, 'dispatchMessageTracerCommand', undefined, { authenticatedUser: options.authenticatedUser });
+  // #929 System activity command/query（audience-scoped projection / attention / change feed）。
+  bind(socket, WEB_EVENTS.systemActivity.command, app, 'dispatchSystemActivityCommand', undefined, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.systemActivity.query, app, 'dispatchSystemActivityQuery', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.context, app, 'getMessageContext', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });

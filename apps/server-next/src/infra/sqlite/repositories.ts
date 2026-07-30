@@ -248,6 +248,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0070_task_execution_grant_workspace_revision.sql');
   // #967 Workspace 大文件暂存：稳定 publish identity、续传与超时清理。
   applyMigration(db, 'team/0071_workspace_publish_staging.sql');
+  // #929 audience-scoped System activity / attention / change feed。
+  applyMigration(db, 'team/0072_system_activity.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

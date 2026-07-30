@@ -15,6 +15,19 @@ import {
 } from './message-tracer-handlers.js';
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
 import { parseMessageTracerCommandEnvelopeV1, type MessageTracerCommandResponseV1 } from '../../../../packages/contracts/src/index.js';
+import type {
+  SystemActivityCommandResponseV1,
+  SystemActivityQueryName,
+  SystemActivityQueryResponseV1,
+} from '../../../../packages/contracts/src/system-activity.js';
+import { createSystemActivityDispatcher } from './system-activity-dispatcher.js';
+import { createMemorySystemActivityUnitOfWork } from './system-activity-unit-of-work.js';
+import {
+  cloneSystemActivityMemoryState,
+  createInMemorySystemActivityRepositories,
+  createSystemActivityMemoryState,
+  restoreSystemActivityMemoryState,
+} from '../infra/memory/system-activity-repositories.js';
 import {
   initialChannelDocumentIds,
   isMarkdownArtifact,
@@ -330,6 +343,23 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }>;
+  /**
+   * #929 System activity command 派发（audience-scoped projection / attention / change-feed ack）。
+   * authority（userId/teamId）由 socket session 注入。
+   */
+  dispatchSystemActivityCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: SystemActivityCommandResponseV1 } | { ok: false; error: string }>;
+  /** #929 System activity query（task timeline / thread card / attention inbox / change feed）。 */
+  dispatchSystemActivityQuery(input: {
+    queryName: SystemActivityQueryName;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: SystemActivityQueryResponseV1 } | { ok: false; error: string }>;
   /** #923 模型评估入口：只产 clarification/proposal/audit，永远不 direct promote。 */
   evaluateSemanticPromotion(input: {
     userId: string;
@@ -1644,6 +1674,70 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       authority: { actorId: input.userId, teamId: input.teamId },
     });
     return { ok: true, response };
+  }
+
+  /** #929 per-team memory-backed System activity service（投影/attention/change-feed）。 */
+  const systemActivityByTeam = new Map<string, ReturnType<typeof createSystemActivityDispatcher>>();
+  function systemActivityDispatcherFor(teamId: string) {
+    let dispatcher = systemActivityByTeam.get(teamId);
+    if (dispatcher) return dispatcher;
+    const state = createSystemActivityMemoryState();
+    const repos = createInMemorySystemActivityRepositories(state);
+    dispatcher = createSystemActivityDispatcher({
+      teamId,
+      unitOfWork: createMemorySystemActivityUnitOfWork({
+        repos,
+        snapshot: () => cloneSystemActivityMemoryState(state),
+        restore: (snap) => restoreSystemActivityMemoryState(
+          state,
+          snap as ReturnType<typeof createSystemActivityMemoryState>,
+        ),
+      }),
+      ids,
+      clock,
+    });
+    systemActivityByTeam.set(teamId, dispatcher);
+    return dispatcher;
+  }
+
+  async function dispatchSystemActivityCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: SystemActivityCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    try {
+      const response = await systemActivityDispatcherFor(input.teamId).dispatchCommand({
+        envelope: input.envelope,
+        payload: input.payload,
+      });
+      return { ok: true, response };
+    } catch {
+      return { ok: false, error: 'SYSTEM_ACTIVITY_PAYLOAD_INVALID' };
+    }
+  }
+
+  async function dispatchSystemActivityQuery(input: {
+    queryName: SystemActivityQueryName;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: SystemActivityQueryResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    try {
+      const response = await systemActivityDispatcherFor(input.teamId).dispatchQuery({
+        queryName: input.queryName,
+        payload: input.payload,
+      });
+      return { ok: true, response };
+    } catch {
+      return { ok: false, error: 'SYSTEM_ACTIVITY_PAYLOAD_INVALID' };
+    }
   }
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
@@ -4486,6 +4580,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     dispatchMessageTracerCommand,
+    dispatchSystemActivityCommand,
+    dispatchSystemActivityQuery,
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);

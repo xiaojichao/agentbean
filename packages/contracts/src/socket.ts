@@ -275,6 +275,17 @@ export const WEB_EVENTS = {
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },
+  /**
+   * #929 System activity / attention / change feed。
+   * notice 只是可丢失唤醒；权威事实走 query/pull-change-feed。
+   * review/remediation 仍走各自具名 lifecycle/remediation command。
+   */
+  systemActivity: {
+    command: 'system-activity:command',
+    query: 'system-activity:query',
+    notice: 'system-activity:notice',
+  },
+
   memory: {
     snapshot: 'memory:snapshot',
     changed: 'memory:changed',
