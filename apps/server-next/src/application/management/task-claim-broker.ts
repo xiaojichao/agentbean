@@ -140,6 +140,7 @@ export type TaskOfferRespondResult =
         readonly taskRevision: number;
         readonly taskAttempt: number;
         readonly grantId: string;
+        readonly workspaceRevisionId?: string;
         readonly title: string;
         readonly objective: string;
         readonly acceptanceCriteria: readonly unknown[];
@@ -731,6 +732,11 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               expiresAt: decision.lease.expiresAt,
             };
             await repositories.coordination.claimLeases.create(lease);
+            // #966：claim 时冻结频道当前 workspace revision，写入 grant 供 Agent 读取固定输入版本（AC#1）。
+            // 经 input.repositories 读（快照读取，无需与 claim 同事务）；transaction 内 repositories 无此 repo。
+            const workspaceRevisionId = task.channelId
+              ? (await input.repositories.projectChannelWorkspaces.getForTeam({ teamId: task.teamId, channelId: task.channelId }))?.currentRevisionId
+              : undefined;
             const grantDecision = evaluateExecutionGrantIssuance({
               teamId: task.teamId,
               managementRunId: coordination.managementRunId,
@@ -740,6 +746,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               claimLeaseId: lease.id,
               agentId: offer.agentId,
               manifestRevision: offer.manifestRevision,
+              workspaceRevisionId,
               nodeKind: coordination.nodeKind,
               grantedAt: now,
             });
@@ -783,7 +790,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
             const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
               .map((dependency) => dependency.dependencyTaskId);
-            return { lease, task, coordination, criteria, dependencyTaskIds, grantId };
+            return { lease, task, coordination, criteria, dependencyTaskIds, grantId, workspaceRevisionId };
           });
           consumeTaskOffers(offers, offer.taskId);
           const response = {
@@ -797,6 +804,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               taskRevision: result.task.revision,
               taskAttempt: result.coordination.attempt,
               grantId: result.grantId,
+              ...(result.workspaceRevisionId ? { workspaceRevisionId: result.workspaceRevisionId } : {}),
               title: result.task.title,
               objective: result.task.description ?? result.task.title,
               acceptanceCriteria: result.criteria,
@@ -1211,6 +1219,11 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               heartbeatAt: decision.lease.renewedAt, expiresAt: decision.lease.expiresAt,
             };
             await repositories.coordination.claimLeases.create(lease);
+            // #966：claim 时冻结频道当前 workspace revision，写入 grant 供 Agent 读取固定输入版本（AC#1）。
+            // 经 input.repositories 读（快照读取，无需与 claim 同事务）；transaction 内 repositories 无此 repo。
+            const workspaceRevisionId = task.channelId
+              ? (await input.repositories.projectChannelWorkspaces.getForTeam({ teamId: task.teamId, channelId: task.channelId }))?.currentRevisionId
+              : undefined;
             const grantDecision = evaluateExecutionGrantIssuance({
               teamId: task.teamId,
               managementRunId: coordination.managementRunId,
@@ -1220,6 +1233,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               claimLeaseId: lease.id,
               agentId: offer.agentId,
               manifestRevision: offer.manifestRevision,
+              workspaceRevisionId,
               nodeKind: coordination.nodeKind,
               grantedAt: now,
             });
@@ -1259,7 +1273,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
             const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
               .map((dependency) => dependency.dependencyTaskId);
-            return { lease, task, coordination, criteria, dependencyTaskIds, grantId };
+            return { lease, task, coordination, criteria, dependencyTaskIds, grantId, workspaceRevisionId };
           });
           if ('overtaken' in result) return { kind: 'overtaken' };
           const response = {
@@ -1268,7 +1282,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             execution: {
               schemaVersion: 1, managementRunId: result.coordination.managementRunId,
               taskId: result.task.id, taskRevision: result.task.revision,
-              taskAttempt: result.coordination.attempt, grantId: result.grantId, title: result.task.title,
+              taskAttempt: result.coordination.attempt, grantId: result.grantId,
+              ...(result.workspaceRevisionId ? { workspaceRevisionId: result.workspaceRevisionId } : {}),
+              title: result.task.title,
               objective: result.task.description ?? result.task.title,
               acceptanceCriteria: result.criteria, dependencyTaskIds: result.dependencyTaskIds,
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),

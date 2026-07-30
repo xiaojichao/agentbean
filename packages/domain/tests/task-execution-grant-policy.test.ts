@@ -56,6 +56,22 @@ describe('#925 execution context grant policy', () => {
       const decision = evaluateExecutionGrantIssuance({ ...issuanceInput, nodeKind: 'root' });
       expect(decision).toEqual({ kind: 'refused', reason: 'root-not-executable' });
     });
+
+    test('#966 颁发的 grant 透传 workspaceRevisionId（Agent 执行输入的固定 revision）', () => {
+      const decision = evaluateExecutionGrantIssuance({
+        ...issuanceInput, nodeKind: 'subtask', workspaceRevisionId: 'ws-rev-1',
+      });
+      expect(decision.kind).toBe('issued');
+      if (decision.kind !== 'issued') return;
+      expect(decision.grant.workspaceRevisionId).toBe('ws-rev-1');
+    });
+
+    test('#966 workspaceRevisionId 可选：频道无 workspace 时为 undefined', () => {
+      const decision = evaluateExecutionGrantIssuance({ ...issuanceInput, nodeKind: 'subtask' });
+      expect(decision.kind).toBe('issued');
+      if (decision.kind !== 'issued') return;
+      expect(decision.grant.workspaceRevisionId).toBeUndefined();
+    });
   });
 
   describe('evaluateExecutionGrantRevocation', () => {

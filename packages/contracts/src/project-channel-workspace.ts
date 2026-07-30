@@ -11,15 +11,37 @@ export interface ProjectChannelWorkspaceFileDto {
 }
 
 /**
- * Minimal provenance for a workspace import.
+ * Provenance for a workspace revision created via device import.
  * Records which device initiated the import without exposing device absolute paths.
  */
 export interface WorkspaceImportProvenanceDto {
+  readonly kind: 'import';
   /** Device that performed the import. */
-  sourceDeviceId: ID;
+  readonly sourceDeviceId: ID;
   /** When the import happened (server-assigned timestamp). */
-  importedAt: UnixMs;
+  readonly importedAt: UnixMs;
 }
+
+/**
+ * #966 Provenance for a workspace revision created via atomic publish by an Agent.
+ * Records the delivering Agent/Task attempt and the baseline revision it was based on,
+ * so members can trace any published file back to its source Task/Agent.
+ */
+export interface WorkspacePublishProvenanceDto {
+  readonly kind: 'publish';
+  /** Agent that delivered this revision. */
+  readonly agentId: ID;
+  /** Task attempt that produced this delivery. */
+  readonly taskId: ID;
+  readonly taskAttempt: number;
+  /** Workspace revision the Agent read as its fixed input (baseline). */
+  readonly baselineRevisionId: ID;
+  /** When the publish happened (server-assigned timestamp). */
+  readonly publishedAt: UnixMs;
+}
+
+/** Discriminated provenance for a workspace revision. */
+export type WorkspaceRevisionProvenanceDto = WorkspaceImportProvenanceDto | WorkspacePublishProvenanceDto;
 
 export interface ProjectChannelWorkspaceRevisionDto {
   id: ID;
@@ -29,8 +51,8 @@ export interface ProjectChannelWorkspaceRevisionDto {
   files: ProjectChannelWorkspaceFileDto[];
   createdBy: ID;
   createdAt: UnixMs;
-  /** Set when this revision was created via device import; absent for purely server-side creations. */
-  provenance?: WorkspaceImportProvenanceDto;
+  /** Set when this revision was created via device import (#964) or atomic Agent publish (#966). */
+  provenance?: WorkspaceRevisionProvenanceDto;
 }
 
 export interface ProjectChannelWorkspaceDto {

@@ -118,6 +118,82 @@ describe('Project Channel Workspace', () => {
     await expect(app.importProjectChannelWorkspace({ token, teamId: 'team-1', channelId: cid, files: [] })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
   });
 
+  // #966: Atomic publish creates next revision with publish provenance
+  test('原子发布：基线匹配则整体创建下一 revision 并记录 publish provenance', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 200 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-2', 'ws-1', 'rev-1', 'rev-2', 'rev-3']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: 'channel-2', uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await repositories.artifacts.create({ id: 'artifact-2', teamId: 'team-1', channelId: 'channel-2', uploaderId: 'user-1', filename: 'b.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+
+    const created = await app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'a.txt', artifactId: 'artifact-1' }],
+    });
+    if (!created.ok) throw new Error(created.error);
+    const baselineRevisionId = created.workspace.currentRevision.id;
+
+    const published = await app.publishProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', baselineRevisionId,
+      files: [{ path: 'a.txt', artifactId: 'artifact-1' }, { path: 'b.txt', artifactId: 'artifact-2' }],
+      provenance: { agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1 },
+    });
+    expect(published).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 2 } } });
+    if (!published.ok) throw new Error(published.error);
+    expect(published.workspace.currentRevision.files.map((f) => f.path).sort()).toEqual(['a.txt', 'b.txt']);
+    const provenance = published.workspace.currentRevision.provenance;
+    expect(provenance?.kind).toBe('publish');
+    if (provenance?.kind === 'publish') {
+      expect(provenance).toMatchObject({ agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, baselineRevisionId });
+    }
+    // 旧 revision 仍可按 id 读取（不可变）
+    const oldRevision = await app.getProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', revisionId: baselineRevisionId });
+    expect(oldRevision).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 1 } } });
+  });
+
+  // #966: Baseline mismatch returns current version + conflict paths, no partial write
+  test('冲突反馈：基线落后返回当前版本与冲突路径，不写、不合 publish', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 300 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-2', 'ws-1', 'rev-1', 'rev-2', 'rev-3', 'rev-4']) },
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public' });
+    await repositories.artifacts.create({ id: 'artifact-1', teamId: 'team-1', channelId: 'channel-2', uploaderId: 'user-1', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+    await repositories.artifacts.create({ id: 'artifact-2', teamId: 'team-1', channelId: 'channel-2', uploaderId: 'user-1', filename: 'b.txt', mimeType: 'text/plain', sizeBytes: 1, pathKind: 'workspace', createdAt: 1 });
+
+    const created = await app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'a.txt', artifactId: 'artifact-1' }],
+    });
+    if (!created.ok) throw new Error(created.error);
+    const staleBaseline = created.workspace.currentRevision.id;
+
+    // 第一次发布成功（current → rev2），staleBaseline 仍是 rev1
+    const first = await app.publishProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', baselineRevisionId: staleBaseline,
+      files: [{ path: 'a.txt', artifactId: 'artifact-2' }],
+    });
+    expect(first).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 2 } } });
+
+    // 用过时的 rev1 基线再发布 → 冲突，current 已是 rev2
+    const conflict = await app.publishProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', baselineRevisionId: staleBaseline,
+      files: [{ path: 'a.txt', artifactId: 'artifact-1' }],
+    });
+    expect(conflict).toMatchObject({ ok: false, error: 'CONFLICT' });
+    if (conflict.ok) throw new Error('expected conflict');
+    expect(conflict.details).toMatchObject({ currentRevision: 2 });
+    expect((conflict.details as { conflictingPaths: string[] }).conflictingPaths).toEqual(['a.txt']);
+    // 冲突不写：current 仍为 rev2
+    const reread = await app.getProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-2' });
+    expect(reread).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 2 } } });
+  });
+
   test('#all、DM、私有频道成员移除均拒绝且不暴露 Workspace 文件', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({ repositories, clock: { now: () => 100 }, ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-2', 'channel-3']) } });

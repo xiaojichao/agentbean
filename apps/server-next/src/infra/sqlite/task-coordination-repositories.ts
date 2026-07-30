@@ -346,11 +346,11 @@ export function createSqliteTaskCoordinationRepositories(
     executionGrants: {
       async create(record) {
         db.prepare(`INSERT INTO task_execution_grants
-          (id, team_id, management_run_id, task_id, task_revision, task_attempt, manifest_revision,
+          (id, team_id, management_run_id, task_id, task_revision, task_attempt, manifest_revision, workspace_revision_id,
            claim_lease_id, agent_id, state, granted_at, revoked_at, revocation_reason, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.managementRunId, record.taskId, record.taskRevision,
-            record.taskAttempt, record.manifestRevision, record.claimLeaseId, record.agentId, record.state,
+            record.taskAttempt, record.manifestRevision, record.workspaceRevisionId ?? null, record.claimLeaseId, record.agentId, record.state,
             record.grantedAt, record.revokedAt ?? null, record.revocationReason ?? null,
             record.grantedAt, record.grantedAt);
         return record;
@@ -516,6 +516,7 @@ function mapGrant(value: unknown): TaskExecutionGrantRecord | null {
     taskRevision: number(value, 'task_revision'),
     taskAttempt: number(value, 'task_attempt'),
     manifestRevision: number(value, 'manifest_revision'),
+    ...(nullableText(value, 'workspace_revision_id') ? { workspaceRevisionId: nullableText(value, 'workspace_revision_id') as string } : {}),
     claimLeaseId: text(value, 'claim_lease_id'),
     agentId: text(value, 'agent_id'),
     state: text(value, 'state') as TaskExecutionGrantRecord['state'],

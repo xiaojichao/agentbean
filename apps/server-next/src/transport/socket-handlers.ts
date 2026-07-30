@@ -502,6 +502,10 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  bind(socket, WEB_EVENTS.project.publishWorkspace, app, 'publishProjectChannelWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.project.importWorkspace, async (payload, ack) => {
     try {
       const result = await app.importProjectChannelWorkspace(payload as ImportProjectChannelWorkspaceInput);

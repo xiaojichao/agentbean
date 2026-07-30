@@ -25,6 +25,7 @@ import type {
   WorkspaceRunRecord,
   ProjectChannelWorkspaceRecord,
   ProjectChannelWorkspaceRevisionRecord,
+  PublishWorkspaceRevisionOutcome,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import type {
@@ -242,6 +243,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0068_workspace_import_provenance.sql');
   // #926 Task lifecycle：具名 transition command receipt / idempotency tombstone。
   applyMigration(db, 'team/0069_task_lifecycle_receipts.sql');
+  applyMigration(db, 'team/0070_task_execution_grant_workspace_revision.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2176,6 +2178,46 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           if (error instanceof Error && error.message.includes('UNIQUE constraint failed: project_channel_workspaces.channel_id')) return null;
           throw error;
         }
+      },
+      async publishRevision(input) {
+        // 单事务 CAS：基线 revisionId 匹配才写；revision 号在事务内据 current 计算（消除号竞态）。
+        // SQLite 写事务串行化，故两个并发 publish：先入者更新 current，后入者读到新 current ≠ 基线 → conflict。
+        let outcome: PublishWorkspaceRevisionOutcome | undefined;
+        const tx = teamDb.transaction(() => {
+          const ws = teamDb.prepare(`SELECT id, current_revision_id FROM project_channel_workspaces WHERE team_id = ? AND channel_id = ?`)
+            .get(input.teamId, input.channelId) as Record<string, unknown> | undefined;
+          if (!ws) throw new Error('Project Channel Workspace not found');
+          const currentRevisionId = String(ws.current_revision_id);
+          if (currentRevisionId !== input.baselineRevisionId) {
+            // 基线落后 → 冲突，re-read 当前 workspace 供反馈（不写）。
+            const cur = teamDb.prepare(`SELECT r.revision, r.files_json, r.provenance_json, r.created_by AS revision_created_by, r.created_at AS revision_created_at
+              FROM project_channel_workspaces w JOIN project_channel_workspace_revisions r ON r.id = w.current_revision_id
+              WHERE w.team_id = ? AND w.channel_id = ?`).get(input.teamId, input.channelId) as Record<string, unknown>;
+            outcome = {
+              kind: 'conflict',
+              current: {
+                id: String(ws.id), teamId: input.teamId, channelId: input.channelId, currentRevisionId,
+                currentRevision: { id: currentRevisionId, teamId: input.teamId, channelId: input.channelId, revision: Number(cur.revision), files: JSON.parse(String(cur.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(cur.revision_created_by), createdAt: Number(cur.revision_created_at), ...(cur.provenance_json ? { provenance: JSON.parse(String(cur.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) },
+              },
+            };
+            return;
+          }
+          const curRev = teamDb.prepare(`SELECT revision FROM project_channel_workspace_revisions WHERE id = ?`).get(currentRevisionId) as Record<string, unknown>;
+          const nextRevision = Number(curRev.revision) + 1;
+          const newId = input.newRevision.id;
+          teamDb.prepare(`INSERT INTO project_channel_workspace_revisions (id, team_id, channel_id, revision, files_json, provenance_json, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(newId, input.teamId, input.channelId, nextRevision, JSON.stringify(input.newRevision.files), input.newRevision.provenance ? JSON.stringify(input.newRevision.provenance) : null, input.newRevision.createdBy, input.newRevision.createdAt);
+          teamDb.prepare(`UPDATE project_channel_workspaces SET current_revision_id = ? WHERE team_id = ? AND channel_id = ?`).run(newId, input.teamId, input.channelId);
+          outcome = {
+            kind: 'published',
+            workspace: {
+              id: String(ws.id), teamId: input.teamId, channelId: input.channelId, currentRevisionId: newId,
+              currentRevision: { id: newId, teamId: input.teamId, channelId: input.channelId, revision: nextRevision, files: input.newRevision.files, createdBy: input.newRevision.createdBy, createdAt: input.newRevision.createdAt, ...(input.newRevision.provenance ? { provenance: input.newRevision.provenance } : {}) },
+            },
+          };
+        });
+        tx();
+        return outcome as PublishWorkspaceRevisionOutcome;
       },
       async getForTeam(input) {
         const row = teamDb.prepare(`SELECT w.*, r.revision, r.files_json, r.provenance_json, r.created_by AS revision_created_by, r.created_at AS revision_created_at

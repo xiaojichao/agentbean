@@ -76,6 +76,8 @@ export interface TaskExecutionGrantRecord {
   readonly taskAttempt: number;
   /** #946：签发时冻结的 Agent Exposure Manifest revision；manifest 变化时据此精确撤销。 */
   readonly manifestRevision: number;
+  /** #966：签发时冻结的 Project Channel Workspace revisionId；Agent 据此读取固定输入版本。undefined=频道无 workspace。 */
+  readonly workspaceRevisionId?: ID;
   readonly claimLeaseId: ID;
   readonly agentId: ID;
   readonly state: ExecutionGrantState;
