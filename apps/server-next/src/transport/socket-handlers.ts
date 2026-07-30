@@ -19,7 +19,7 @@ import {
   type TaskClaimRenewV1,
   type TaskClaimRespondV1,
 } from '../../../../packages/contracts/src/index.js';
-import type { ServerNextUseCases } from '../application/usecases.js';
+import type { ServerNextUseCases, ImportProjectChannelWorkspaceInput } from '../application/usecases.js';
 
 export interface AuthenticatedUserIdentity {
   hasToken: boolean;
@@ -501,6 +501,15 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.project.createWorkspace, app, 'createProjectChannelWorkspace', undefined, {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
+  });
+  // #964 Device-initiated workspace import: token-based auth, no web session required.
+  socket.on(WEB_EVENTS.project.importWorkspace, async (payload, ack) => {
+    try {
+      const result = await app.importProjectChannelWorkspace(payload as ImportProjectChannelWorkspaceInput);
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.project.importWorkspace));
+    }
   });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {

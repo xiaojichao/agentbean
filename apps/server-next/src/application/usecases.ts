@@ -20,7 +20,7 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord } from './repositories.js';
@@ -363,6 +363,8 @@ export interface ServerNextUseCases {
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   createProjectChannelWorkspace(input: CreateProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
+  /** #964 Device-initiated import with provenance tracking. */
+  importProjectChannelWorkspace(input: ImportProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getProjectChannelWorkspace(input: GetProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
@@ -947,6 +949,14 @@ export interface GetProjectChannelWorkspaceInput {
   teamId: string;
   channelId: string;
   revisionId?: string;
+}
+
+/** #964 Device-initiated workspace import. Auth via device token in payload. */
+export interface ImportProjectChannelWorkspaceInput {
+  token: string;
+  teamId: string;
+  channelId: string;
+  files: Array<Pick<ProjectChannelWorkspaceFileDto, 'path' | 'artifactId'>>;
 }
 
 export interface SearchMessagesInput {
@@ -4807,6 +4817,52 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const revision = await repositories.projectChannelWorkspaces.getRevision({ teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, revisionId: workspaceInput.revisionId });
       if (!revision) return makeFailure('NOT_FOUND', 'Workspace revision not found');
       return makeSuccess({ workspace: { ...workspace, currentRevisionId: revision.id, currentRevision: revision } });
+    },
+
+    async importProjectChannelWorkspace(importInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, importInput);
+      if (!actor.ok) return actor;
+      const credentials = verifyDeviceToken(importInput.token, sessionSecret);
+      const sourceDeviceId = credentials?.deviceId ?? 'unknown';
+      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+        userId: actor.userId,
+        teamId: importInput.teamId,
+        channelId: importInput.channelId,
+      });
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      const validated = validateWorkspaceImportFiles(importInput.files);
+      if (!validated.ok) {
+        return makeFailure('VALIDATION_ERROR',
+          validated.error === 'EMPTY_FILES' ? 'Workspace import must contain files'
+          : validated.error === 'INVALID_PATH' ? 'Workspace paths must be unique and relative'
+          : 'Duplicate workspace path');
+      }
+      const files: ProjectChannelWorkspaceFileDto[] = [];
+      for (const { path, artifactId } of validated.value.files) {
+        const artifact = await repositories.artifacts.getForTeam({ teamId: importInput.teamId, artifactId });
+        if (!artifact || artifact.channelId !== importInput.channelId) {
+          return makeFailure('NOT_FOUND', 'Workspace artifact not found');
+        }
+        files.push({
+          path, artifactId: artifact.id,
+          filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes,
+          ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
+        });
+      }
+      const now = clock.now();
+      const revision: ProjectChannelWorkspaceRevisionRecord = {
+        id: ids.nextId(), teamId: importInput.teamId, channelId: importInput.channelId,
+        revision: 1, files, createdBy: actor.userId, createdAt: now,
+        provenance: { sourceDeviceId, importedAt: now },
+      };
+      const workspace: ProjectChannelWorkspaceRecord = {
+        id: ids.nextId(), teamId: importInput.teamId, channelId: importInput.channelId,
+        currentRevisionId: revision.id, currentRevision: revision,
+      };
+      const created = await repositories.projectChannelWorkspaces.createInitial({ workspace, revision });
+      if (!created) return makeFailure('CONFLICT', 'Project Channel Workspace already exists');
+      return makeSuccess({ workspace: created });
     },
 
     async listChannelDocuments(documentInput) {
