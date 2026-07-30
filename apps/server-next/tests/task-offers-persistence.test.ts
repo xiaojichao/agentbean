@@ -90,6 +90,35 @@ describe.each([
     } finally { fixture.close(); }
   });
 
+  test('response attestation round-trips（#947 PR2 ADR-0064 §3 AC3）', async () => {
+    const fixture = createFixture();
+    try {
+      // accepted response 带 attestation（form A 持久化）
+      await fixture.repositories.taskCoordination.offers.create(
+        makeOffer({ id: 'offer-attested', status: 'accepted',
+          response: { offerId: 'offer-attested', agentId: 'agent-a', kind: 'accepted',
+            detail: null, respondedAt: 2_000,
+            attestation: { attestedCapabilities: ['code-review'], attestedSkills: ['typescript'] } } }),
+      );
+      const got = await fixture.repositories.taskCoordination.offers.getById('offer-attested');
+      expect(got?.response?.attestation).toEqual({
+        attestedCapabilities: ['code-review'], attestedSkills: ['typescript'],
+      });
+      // 无 attestation 的 accepted response → attestation 为 undefined（非 null 列默认）
+      await fixture.repositories.taskCoordination.offers.create(
+        makeOffer({ id: 'offer-plain-accepted', status: 'accepted',
+          response: { offerId: 'offer-plain-accepted', agentId: 'agent-a', kind: 'accepted',
+            detail: null, respondedAt: 2_000 } }),
+      );
+      const plainGot = await fixture.repositories.taskCoordination.offers.getById('offer-plain-accepted');
+      expect(plainGot?.response?.attestation).toBeUndefined();
+      // null response（open 态）→ attestation 为 undefined
+      await fixture.repositories.taskCoordination.offers.create(makeOffer({ id: 'offer-open' }));
+      const openGot = await fixture.repositories.taskCoordination.offers.getById('offer-open');
+      expect(openGot?.response).toBeNull();
+    } finally { fixture.close(); }
+  });
+
   test('listByTask returns only that task offers sorted by createdAt (AC#7)', async () => {
     const fixture = createFixture();
     try {

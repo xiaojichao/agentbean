@@ -399,12 +399,30 @@ export interface TaskOfferDto {
  * - rejected：detail = 拒绝原因（可选）。
  * - accepted：detail 留空（Claim 由服务端同事务创建，不经此字段）。
  */
+/**
+ * ADR-0064 §3 per-Task requirement attestation（#947 PR2 / AC3）：Agent 随 acceptance 提交，声明其具备本
+ * Task 的 required Capability/Skill（用于 Requirement-confirmation Offer——manifest 不可得、required 状态
+ * unknown 时）。绑定 task revision：attestation 随某 Offer 的 acceptance 提交，该 Offer 的 taskRevision 即
+ * fence（claim 事务校验 task.revision === offer.taskRevision）；不需在 attestation 内重复 revision。
+ * 不含 crypto 签名（仓库无此基建）；仅作 Agent 对本 Task 的 requirement 覆盖声明，经 domain
+ * `validateRequirementAttestation` 校验 attested ⊇ required 后才解除 fail-closed、建立 claim。
+ */
+export interface TaskRequirementAttestationV1 {
+  readonly attestedCapabilities: readonly string[];
+  readonly attestedSkills: readonly string[];
+}
+
 export interface TaskOfferResponseRecordDto {
   readonly offerId: ID;
   readonly agentId: ID;
   readonly kind: TaskOfferResponseKind;
   readonly detail: string | null;
   readonly respondedAt: UnixMs;
+  /**
+   * #947 PR2：仅当「Requirement-confirmation Offer 经 attestation 接受」时非空——记录 Agent 提交的
+   * per-Task requirement attestation（审计「该 claim 凭 attestation 授予」）。其余响应（含普通 accepted）为 null。
+   */
+  readonly attestation?: TaskRequirementAttestationV1 | null;
 }
 
 /**
