@@ -290,6 +290,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.userMemory.revise,
       WEB_EVENTS.userMemory.deactivate,
       WEB_EVENTS.userMemory.delete,
+      WEB_EVENTS.memoryAttribution.get,
       WEB_EVENTS.memory.projectionCreateDraft,
       WEB_EVENTS.memory.projectionUpdateDraft,
       WEB_EVENTS.memory.projectionPublish,

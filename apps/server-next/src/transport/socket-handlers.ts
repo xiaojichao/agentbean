@@ -810,6 +810,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.userMemory.revise, app, 'reviseUserMemory', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.userMemory.deactivate, app, 'deactivateUserMemory', undefined, memoryBindOptions);
   bind(socket, WEB_EVENTS.userMemory.delete, app, 'deleteUserMemory', undefined, memoryBindOptions);
+  // #965 AC#4：向有权用户展示 PI 协调使用的 Active Memory 来源归因（读取时复验频道读权限）。
+  bind(socket, WEB_EVENTS.memoryAttribution.get, app, 'getMemoryAttribution', undefined, memoryBindOptions);
   // #718 Agent Memory Projection：owner 发布/撤回，Team opt-in，PI/成员只读消费当前 Team 已启用投影。
   bind(socket, WEB_EVENTS.memory.projectionCreateDraft, app, 'createAgentMemoryProjectionDraft', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);
   bind(socket, WEB_EVENTS.memory.projectionUpdateDraft, app, 'updateAgentMemoryProjectionDraft', (payload, result) => options.afterMemoryMutation?.(payload, result), memoryBindOptions);

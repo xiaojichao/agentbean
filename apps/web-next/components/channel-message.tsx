@@ -11,6 +11,7 @@ import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
 } from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
+import { MemoryAttributionSources } from '@/components/MemoryAttributionSources';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
   human: '你',
@@ -64,6 +65,7 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     // #699 US 55：follow-up 候选 Task 列表供用户选择确认。
     const coordination = meta?.coordination as Record<string, unknown> | undefined;
     const followupCandidates = coordination?.followupCandidateTaskIds as readonly string[] | undefined;
+    // #965 AC#4：展示本次 PI 协调使用的 Active Memory 来源说明（仅来源标签，无正文）。
     return (
       <div className={`mx-auto my-1 max-w-prose rounded border px-2 py-1 text-center text-xs ${tone}`}>
         {msg.body}
@@ -79,6 +81,9 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
               </a>
             ))}
           </div>
+        )}
+        {typeof coordination?.jobId === 'string' && (
+          <MemoryAttributionSources teamId={msg.teamId} jobId={coordination?.jobId as string} />
         )}
       </div>
     );

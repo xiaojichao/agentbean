@@ -87,6 +87,13 @@ export const WEB_EVENTS = {
     deactivate: 'user-memory:deactivate',
     delete: 'user-memory:delete',
   },
+  /**
+   * #965 AC#4：读取某次 PI 协调实际使用的 Active Memory 来源归因。
+   * 只返回 id/来源码/理由码（无正文）；服务端读取时复验频道读权限，未授权 fail-closed 返回 null。
+   */
+  memoryAttribution: {
+    get: 'memory-attribution:get',
+  },
   /** #722 Reusable Experience Pack；#723 三态 attachment 生命周期。 */
   experiencePack: {
     createDraft: 'experience-pack:create-draft',
