@@ -6,19 +6,21 @@
  * grant 随 task revision 变化、claim 释放或过期而失效；root Task 永不签发（ADR-0063）。
  *
  * 本模块供 server claim-broker 在 claim 成功同事务签发，并在失效触发点（reviseTask /
- * invalidateClaim / expireClaims）撤销。membership/manifest 变化失效属后续切片。
+ * invalidateClaim / expireClaims / 频道踢人 / manifest 变化）撤销（#945 + #946）。
  */
 
 export type ExecutionGrantState = 'active' | 'revoked';
 
 /**
- * grant 失效归因。ADR-0064：membership/manifest/revision 变化使旧 grant 失效；
- * 本次覆盖 task-revision 变化与 claim 生命周期结束；membership/manifest 失效留 follow-up。
+ * grant 失效归因。ADR-0064 验收#4：task-revision 变化、claim 生命周期结束、
+ * 频道 membership 变化（authority-revoked）、Agent Exposure manifest revision 变化（manifest-superseded）。
  */
 export type ExecutionGrantRevocationReason =
   | 'task-revised'
   | 'claim-released'
-  | 'claim-expired';
+  | 'claim-expired'
+  | 'authority-revoked'
+  | 'manifest-superseded';
 
 export interface TaskExecutionGrantRecord {
   readonly teamId: string;
@@ -26,6 +28,8 @@ export interface TaskExecutionGrantRecord {
   readonly taskId: string;
   readonly taskRevision: number;
   readonly taskAttempt: number;
+  /** #946：签发时冻结的 Agent Exposure Manifest revision；manifest 变化时据此精确撤销。 */
+  readonly manifestRevision: number;
   readonly claimLeaseId: string;
   readonly agentId: string;
   readonly state: ExecutionGrantState;
@@ -43,6 +47,8 @@ export interface EvaluateExecutionGrantIssuanceInput {
   readonly taskAttempt: number;
   readonly claimLeaseId: string;
   readonly agentId: string;
+  /** #946：claim 时冻结的 manifest revision，写入 grant 供后续精确撤销。 */
+  readonly manifestRevision: number;
   /** ADR-0063：root Task 不持有 Agent execution claim，永不签发 grant。 */
   readonly nodeKind: 'root' | 'subtask';
   readonly grantedAt: number;
@@ -70,6 +76,7 @@ export function evaluateExecutionGrantIssuance(
       taskId: input.taskId,
       taskRevision: input.taskRevision,
       taskAttempt: input.taskAttempt,
+      manifestRevision: input.manifestRevision,
       claimLeaseId: input.claimLeaseId,
       agentId: input.agentId,
       state: 'active',

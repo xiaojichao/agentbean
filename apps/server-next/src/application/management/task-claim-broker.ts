@@ -195,6 +195,8 @@ const PROJECT_STAGE_FENCE_PREFIX = 'agentbean:project-stage-fence:';
 interface StoredOffer extends TaskClaimOfferV1 {
   readonly ancestorAgentIds: readonly string[];
   readonly projectStageAuto: boolean;
+  /** #946：发布时冻结的 manifest revision（grant 签发写入；legacy 无 manifest → 0）。 */
+  readonly manifestRevision: number;
 }
 
 export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskClaimBroker {
@@ -375,8 +377,9 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         // C-2b-ii：为 manifest-having 候选持久化完整 TaskOffer（新 respond 路径的 substrate，
         // wire offerId = 持久化 record.id）。legacy（无 active manifest）→ publishOffer 抛
         // MANIFEST_NOT_ACTIVE，跳过持久化仅内存 StoredOffer（旧 acquire 兼容路径）。
+        let manifestRevision = 0;
         try {
-          await this.publishOffer({
+          const published = await this.publishOffer({
             taskId,
             agentId: candidate.agentId,
             offerTtlMs,
@@ -384,8 +387,10 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             id: offerId,
             projectStageAuto: options?.projectStageAuto,
           });
+          manifestRevision = published.manifestRevision;
         } catch (error) {
           if (!(error instanceof Error && error.message === 'TASK_CLAIM_MANIFEST_NOT_ACTIVE')) throw error;
+          // legacy（无 active manifest）：grant 无 manifest 绑定，manifestRevision 保持 0。
         }
         prepared.push({
           schemaVersion: 1,
@@ -397,6 +402,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           agentId: candidate.agentId,
           requiredCapabilities: [...coordination.requiredCapabilities],
           offerExpiresAt: now + offerTtlMs,
+          manifestRevision,
           ancestorAgentIds: resolution.ancestorAgentIds,
           projectStageAuto: options?.projectStageAuto === true,
         });
@@ -405,6 +411,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       return prepared.map(({
         ancestorAgentIds: _ancestorAgentIds,
         projectStageAuto: _projectStageAuto,
+        manifestRevision: _manifestRevision,
         ...offer
       }) => offer);
     },
@@ -524,6 +531,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               taskAttempt: coordination.attempt,
               claimLeaseId: lease.id,
               agentId: offer.agentId,
+              manifestRevision: offer.manifestRevision,
               nodeKind: coordination.nodeKind,
               grantedAt: now,
             });
@@ -893,6 +901,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               taskAttempt: coordination.attempt,
               claimLeaseId: lease.id,
               agentId: offer.agentId,
+              manifestRevision: offer.manifestRevision,
               nodeKind: coordination.nodeKind,
               grantedAt: now,
             });

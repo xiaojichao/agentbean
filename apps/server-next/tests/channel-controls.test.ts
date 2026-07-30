@@ -416,6 +416,47 @@ describe('server-next second-slice channel controls', () => {
     expect(ops?.name).toBeTruthy();
     expect(ops?.name).not.toBe('');
   });
+
+  test('#946: 移出 channel 同事务撤销该 agent 名下的 execution grant（authority-revoked）', async () => {
+    const { app, repositories } = createApp(['user-1', 'team-1', 'channel-all', 'channel-ops']);
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.agents.upsert({
+      id: 'agent-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Codex',
+      adapterKind: 'codex', category: 'executor-hosted', source: 'scanned', status: 'online', lastSeenAt: 100,
+    });
+    await app.createChannel({ userId: 'user-1', teamId: 'team-1', name: 'ops', visibility: 'private' });
+    await app.addChannelAgentMember({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-ops', agentId: 'agent-1',
+    });
+    // 模拟 agent-1 已 claim 持有的 active grant；另造 agent-2 的 grant 验证不受牵连。
+    const grants = repositories.taskCoordination.executionGrants;
+    await grants.create({
+      id: 'grant-1', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-a',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 1, claimLeaseId: 'lease-1',
+      agentId: 'agent-1', state: 'active', grantedAt: 100,
+    });
+    await grants.create({
+      id: 'grant-2', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-b',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 1, claimLeaseId: 'lease-2',
+      agentId: 'agent-2', state: 'active', grantedAt: 100,
+    });
+
+    await expect(app.removeChannelAgentMember({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-ops', agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: true, channel: { agentMemberIds: [] } });
+
+    // 被踢 agent 的 grant 立即撤销；他 agent 不受影响。
+    await expect(grants.getById('grant-1'))
+      .resolves.toMatchObject({ state: 'revoked', revocationReason: 'authority-revoked' });
+    await expect(grants.getById('grant-2')).resolves.toMatchObject({ state: 'active' });
+
+    // 幂等：再次移除（已非成员）不报错，grant 维持 revoked 不重复写。
+    await expect(app.removeChannelAgentMember({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-ops', agentId: 'agent-1',
+    })).resolves.toMatchObject({ ok: true });
+    await expect(grants.getById('grant-1'))
+      .resolves.toMatchObject({ state: 'revoked', revocationReason: 'authority-revoked' });
+  });
 });
 
 function createApp(ids: string[]) {

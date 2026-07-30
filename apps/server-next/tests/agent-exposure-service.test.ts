@@ -66,6 +66,33 @@ async function publishManifest(
 }
 
 describe('Team Agent Exposure (#710)', () => {
+  test('#946: 新 manifest 发布替代旧 revision 后撤销绑定旧 revision 的 execution grant（manifest-superseded）', async () => {
+    const { repositories, app } = await createHarness();
+    // 首个 manifest（revision 1）激活。
+    await publishManifest(app, [{ name: 'code-review', description: 'review' }]);
+    expect((await repositories.agentExposure.manifests.getActiveByTeamAgent('team-1', 'agent-1'))?.revision).toBe(1);
+    // 手动签发绑定 revision 1 的 active grant。
+    const grants = repositories.taskCoordination.executionGrants;
+    await grants.create({
+      id: 'grant-r1', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-a',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 1, claimLeaseId: 'lease-1',
+      agentId: 'agent-1', state: 'active', grantedAt: 100,
+    });
+
+    // 发布新 manifest（revision 2）→ supersede revision 1 → 回调撤销绑定 revision 1 的 grant。
+    await publishManifest(app, [{ name: 'code-review', description: 'review v2' }]);
+    await expect(grants.getById('grant-r1'))
+      .resolves.toMatchObject({ state: 'revoked', revocationReason: 'manifest-superseded' });
+
+    // supersede 后用新 revision 签发的 grant 保持 active（回调只撤旧 revision）。
+    await grants.create({
+      id: 'grant-r2', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-a',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 2, claimLeaseId: 'lease-2',
+      agentId: 'agent-1', state: 'active', grantedAt: 100,
+    });
+    await expect(grants.getById('grant-r2')).resolves.toMatchObject({ state: 'active' });
+  });
+
   test('owner 创建 draft 并发布；active 投影暴露公开 capability 且不含 sourcePath（AC#1/AC#3/AC#6）', async () => {
     const { app } = await createHarness();
     const draft = await app.createAgentExposureDraft({

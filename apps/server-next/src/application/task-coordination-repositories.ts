@@ -71,6 +71,8 @@ export interface TaskExecutionGrantRecord {
   readonly taskId: ID;
   readonly taskRevision: number;
   readonly taskAttempt: number;
+  /** #946：签发时冻结的 Agent Exposure Manifest revision；manifest 变化时据此精确撤销。 */
+  readonly manifestRevision: number;
   readonly claimLeaseId: ID;
   readonly agentId: ID;
   readonly state: ExecutionGrantState;
@@ -232,6 +234,17 @@ export interface TaskCoordinationRepositories {
     }): Promise<TaskExecutionGrantRecord | null>;
     listActiveByTask(taskId: ID): Promise<TaskExecutionGrantRecord[]>;
     listActiveByClaimLease(claimLeaseId: ID): Promise<TaskExecutionGrantRecord[]>;
+    /** #946：频道踢人——找该 agent 在本 team 名下所有 active grant（跨 task）。 */
+    listActiveByAgent(input: {
+      teamId: ID;
+      agentId: ID;
+    }): Promise<TaskExecutionGrantRecord[]>;
+    /** #946：manifest 变化——找绑定旧 manifestRevision 的 active grant（同 agent）。 */
+    listActiveByManifestRevision(input: {
+      teamId: ID;
+      agentId: ID;
+      manifestRevision: number;
+    }): Promise<TaskExecutionGrantRecord[]>;
     revoke(input: {
       id: ID;
       reason: ExecutionGrantRevocationReason;
