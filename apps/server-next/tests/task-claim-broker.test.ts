@@ -1153,6 +1153,107 @@ describe('#948-F allocation_blocked（ADR-0064：无合格候选 → 结构化�
   });
 });
 
+describe('#948-B ADR-0064：Offer 原子发布 + acquire 持久化兜底', () => {
+  test('prepareOffers 优先读持久化 offer（open + 未过期）→ 构建 StoredOffer + emit', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // 模拟 kernel 直接创建持久化 offer（绕开 broker publishOffer 的 manifest gate）。
+    await harness.repositories.taskCoordination.offers.create({
+      id: 'persisted-offer-1', teamId: 'team-1', taskId: 'task-a', agentId: 'agent-1',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 0,
+      objective: {
+        objective: 'test objective', inputs: [], deliverables: ['criteria'],
+        constraints: [], riskLevel: 'low',
+        requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [],
+      },
+      offerTtlMs: 20, offerExpiresAt: 30, hardSpecified: false,
+      requirementConfirmation: false, status: 'open', response: null,
+      createdAt: 10, updatedAt: 10,
+    });
+    // clock=10, offerExpiresAt=30 → 未过期。
+    const offers = await harness.broker.prepareOffers('task-a');
+    expect(offers).toHaveLength(1);
+    expect(offers[0]).toMatchObject({ offerId: 'persisted-offer-1', agentId: 'agent-1' });
+  });
+
+  test('prepareOffers 跳过已过期持久化 offer → fallback legacy 创建', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // 过期 offer（expiresAt=5 < clock=10）。
+    await harness.repositories.taskCoordination.offers.create({
+      id: 'expired-offer', teamId: 'team-1', taskId: 'task-a', agentId: 'agent-1',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 0,
+      objective: {
+        objective: 'test objective', inputs: [], deliverables: ['criteria'],
+        constraints: [], riskLevel: 'low',
+        requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [],
+      },
+      offerTtlMs: 20, offerExpiresAt: 5, hardSpecified: false,
+      requirementConfirmation: false, status: 'open', response: null,
+      createdAt: 10, updatedAt: 10,
+    });
+    const offers = await harness.broker.prepareOffers('task-a');
+    // 过期 offer 被跳过 → fallback 到 legacy 创建路径（memory-only，因无 active manifest）。
+    // legacy 路径仍 create 一个内存 StoredOffer（manifestRevision=0 fallback）。
+    expect(offers).toHaveLength(1);
+    expect(offers[0].offerId).not.toBe('expired-offer');
+  });
+
+  test('acquire Map miss → 持久化兜底成功', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    // 直接创建持久化 offer（不在 memory Map 中）。
+    await harness.repositories.taskCoordination.offers.create({
+      id: 'direct-offer', teamId: 'team-1', taskId: 'task-a', agentId: 'agent-1',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 0,
+      objective: {
+        objective: 'test objective', inputs: [], deliverables: ['criteria'],
+        constraints: [], riskLevel: 'low',
+        requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [],
+      },
+      offerTtlMs: 100, offerExpiresAt: 110, hardSpecified: false,
+      requirementConfirmation: false, status: 'open', response: null,
+      createdAt: 10, updatedAt: 10,
+    });
+    // acquire 直接调——Map miss → 持久化 fallback → 重算 ancestorAgentIds + projectStageAuto。
+    const result = await harness.broker.acquire({
+      schemaVersion: 1, offerId: 'direct-offer', agentId: 'agent-1',
+    });
+    expect(result.ok).toBe(true);
+    const granted = result as Extract<TaskClaimAcquireAckV1, { ok: true }>;
+    expect(granted.lease).toMatchObject({ agentId: 'agent-1', taskId: 'task-a' });
+  });
+
+  test('acquire Map miss + 持久化 offer 已过期 → INVALID', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    // 过期 offer。
+    await harness.repositories.taskCoordination.offers.create({
+      id: 'expired-direct', teamId: 'team-1', taskId: 'task-a', agentId: 'agent-1',
+      taskRevision: 1, taskAttempt: 1, manifestRevision: 0,
+      objective: {
+        objective: 'test objective', inputs: [], deliverables: ['criteria'],
+        constraints: [], riskLevel: 'low',
+        requiredCapabilities: ['code-review'], requiredSkills: [], preferredSkills: [],
+      },
+      offerTtlMs: 20, offerExpiresAt: 5, hardSpecified: false,
+      requirementConfirmation: false, status: 'open', response: null,
+      createdAt: 10, updatedAt: 10,
+    });
+    const result = await harness.broker.acquire({
+      schemaVersion: 1, offerId: 'expired-direct', agentId: 'agent-1',
+    });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ errorCode: 'UNAVAILABLE', diagnosticCode: 'TASK_CLAIM_OFFER_EXPIRED' });
+  });
+});
+
 async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number } = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { value: 10 };

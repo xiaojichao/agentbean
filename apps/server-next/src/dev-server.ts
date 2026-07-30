@@ -2088,6 +2088,31 @@ function createDefaultManagementRuntime(
         allocationService: (taskId) => resolveTaskAllocation({
           taskId, broker: taskClaimBroker, repositories,
         }),
+        // #948-B ADR-0064：publish 前预解算 offer candidate 列表（事务外 IO），
+        // 传给 kernel 在 publishForClaim 事务内原子创建 offer。
+        publishOfferResolutionService: async (taskId) => {
+          const task = await repositories.tasks.getById(taskId);
+          if (!task) return null;
+          const resolution = await taskClaimBroker.resolveCandidates(taskId);
+          const eligible = resolution.candidates.filter((c) => c.eligible && c.deviceId);
+          if (eligible.length === 0) return null;
+          const now = clock.now();
+          const candidates = await Promise.all(eligible.map(async (c) => {
+            const manifest = await repositories.agentExposure.manifests
+              .getActiveByTeamAgent(task.teamId, c.agentId);
+            const manifestRevision = manifest
+              && (manifest.validUntil === null || manifest.validUntil > now)
+              ? manifest.revision : 0;
+            return {
+              agentId: c.agentId,
+              manifestRevision,
+              hardSpecified: false,
+              requirementConfirmation: false,
+              projectStageAuto: false,
+            };
+          }));
+          return { candidates, offerTtlMs: 15_000 };
+        },
         onTaskPublished: async (taskId) => {
           if (!taskClaimEmitter) throw new Error('TASK_CLAIM_EMITTER_UNAVAILABLE');
           await taskClaimEmitter(taskId);
