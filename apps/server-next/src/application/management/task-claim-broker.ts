@@ -8,6 +8,8 @@ import type {
   TaskClaimOfferV1,
   TaskClaimReleaseAckV1,
   TaskClaimReleaseV1,
+  TaskClaimRelinquishAckV1,
+  TaskClaimRelinquishV1,
   TaskClaimRenewAckV1,
   TaskClaimRenewV1,
   TaskOfferResponseKind,
@@ -16,6 +18,7 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import {
   decideHardSpecifiedOfferKind,
+  evaluateClaimRelinquishment,
   evaluateExecutionGrantIssuance,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
@@ -167,6 +170,11 @@ export interface TaskClaimBroker {
   acquire(input: TaskClaimAcquireV1): Promise<TaskClaimAcquireAckV1>;
   renew(input: TaskClaimRenewV1): Promise<TaskClaimRenewAckV1>;
   release(input: TaskClaimReleaseV1): Promise<TaskClaimReleaseAckV1>;
+  /**
+   * ADR-0064/0065 #948-E：Agent 携带 authority 显式 relinquish Claim（带 cause）。
+   * 开工前（task 未 in_progress）只结束 allocation round、保留 attempt；开工后终止 attempt。
+   */
+  relinquish(input: TaskClaimRelinquishV1): Promise<TaskClaimRelinquishAckV1>;
   expireClaims(): Promise<readonly TaskClaimExpiredV1[]>;
   disconnectDevice(deviceId: string): void;
   reconnectDevice(deviceId: string): void;
@@ -756,6 +764,66 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         return updated
           ? { schemaVersion: 1, ok: true, releasedAt: now }
           : failure('CONFLICT', 'TASK_CLAIM_RELEASE_CONFLICT', true);
+      });
+    },
+    async relinquish(payload) {
+      return input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+        const lease = await repositories.coordination.claimLeases.getById(payload.claimLeaseId);
+        const now = input.clock.now();
+        const decision = evaluateClaimRelinquishment({
+          lease: lease ? toDomainLease(lease) : undefined,
+          proof: proof(payload), now, cause: payload.cause,
+          ...(payload.detail ? { detail: payload.detail } : {}),
+        });
+        if (decision.kind === 'rejected') {
+          return failure('STALE_AUTHORITY', `TASK_CLAIM_${code(decision.reason)}`, false);
+        }
+        if (decision.kind === 'no_active_claim') {
+          return { schemaVersion: 1, ok: true, releasedAt: now, executionStarted: false,
+            attempt: payload.taskAttempt };
+        }
+        if (decision.kind === 'already_relinquished') {
+          return { schemaVersion: 1, ok: true, releasedAt: decision.lease.releasedAt ?? now,
+            executionStarted: false, attempt: payload.taskAttempt };
+        }
+        // decision.kind === 'relinquished'：proof-gated 释放（委托 evaluateTaskClaimRelease）。
+        const task = await repositories.tasks.getById(lease!.taskId);
+        const coordination = await repositories.coordination.coordinations.getByTaskId(lease!.taskId);
+        const updated = await repositories.coordination.claimLeases.update({
+          id: payload.claimLeaseId, expectedStatus: 'active', status: 'released',
+          heartbeatAt: lease!.heartbeatAt, expiresAt: lease!.expiresAt, releasedAt: now,
+        });
+        if (!updated) return failure('CONFLICT', 'TASK_CLAIM_RELINQUISH_CONFLICT', true);
+        // 释放绑定 execution context grant（claim-released，同 release/#925/#946 模式）。
+        for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(payload.claimLeaseId)) {
+          await repositories.coordination.executionGrants.revoke({
+            id: grant.id, reason: 'claim-released', revokedAt: now, now,
+          });
+        }
+        // attempt 语义（ADR-0064/0065）：开工后（task 曾 in_progress）relinquish 终止并消耗 attempt；
+        // 开工前只结束 allocation round、保留 attempt。execution-start 信号 = task.status==='in_progress'
+        // （execution grant 在 acquire 即签发，故 grant 存在≠已开工）。
+        let attempt = coordination?.attempt ?? payload.taskAttempt;
+        const executionStarted = task?.status === 'in_progress';
+        if (executionStarted && coordination) {
+          const waitingForUser = coordination.attempt >= coordination.maxAttempts;
+          if (!waitingForUser) {
+            const revised = await repositories.coordination.coordinations.update({
+              expectedTaskRevision: lease!.taskRevision,
+              record: { ...coordination, attempt: coordination.attempt + 1, updatedAt: now },
+            });
+            if (revised) attempt = revised.attempt;
+          }
+          await repositories.tasks.update({ taskId: lease!.taskId,
+            changes: { status: 'todo', updatedAt: now } });
+          await appendTaskClaimEvent(repositories.management, {
+            managementRunId: coordination.managementRunId, type: 'task-state-changed',
+            actorKind: 'agent', actorId: lease!.agentId, idempotencyKey: `relinquish:${lease!.id}`,
+            payload: { taskId: lease!.taskId, taskRevision: lease!.taskRevision,
+              from: 'in_progress', to: 'todo' },
+          }, now, input.ids);
+        }
+        return { schemaVersion: 1, ok: true, releasedAt: now, executionStarted, attempt };
       });
     },
     expireClaims,

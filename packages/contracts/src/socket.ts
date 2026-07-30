@@ -344,6 +344,7 @@ export const AGENT_EVENTS = {
     release: 'task-claim:release',
     expired: 'task-claim:expired',
     respond: 'task-claim:respond',
+    relinquish: 'task-claim:relinquish',
   },
   promotion: {
     escalate: 'promotion:agent-escalate',
@@ -434,6 +435,25 @@ export type TaskClaimAcquireAckV1 = {
 export type TaskClaimRenewV1 = TaskClaimAuthorityV1;
 export type TaskClaimReleaseV1 = TaskClaimAuthorityV1 & { readonly reasonCode: string };
 
+/**
+ * ADR-0064/0065 #948-E：Agent 显式 relinquish Claim 的成因（AC#5）。区别于 release（无归因
+ * 的底层释放），relinquish 携带 cause 供 PI 决定重规划/交接/失败。
+ */
+export type ClaimRelinquishmentCause =
+  | 'agent_voluntary'
+  | 'task_unfeasible'
+  | 'agent_unavailable'
+  | 'context_changed';
+
+/**
+ * ADR-0064/0065 #948-E：Agent 携带当前 authority 显式 relinquish Claim。开工前（task 未
+ * in_progress）只结束 allocation round、保留 attempt；开工后终止 attempt（attempt+1 可重试）。
+ */
+export type TaskClaimRelinquishV1 = TaskClaimAuthorityV1 & {
+  readonly cause: ClaimRelinquishmentCause;
+  readonly detail?: string;
+};
+
 export type TaskClaimRenewAckV1 = {
   readonly schemaVersion: 1;
   readonly ok: true;
@@ -444,6 +464,18 @@ export type TaskClaimReleaseAckV1 = {
   readonly schemaVersion: 1;
   readonly ok: true;
   readonly releasedAt: number;
+} | TaskClaimFailureAckV1;
+
+/**
+ * ADR-0064/0065 #948-E：executionStarted 表示该 claim 是否已进入执行（task 曾 in_progress），
+ * 驱动 attempt 消耗——开工后 relinquish 终止 attempt（attempt+1，可重试时），开工前保留。
+ */
+export type TaskClaimRelinquishAckV1 = {
+  readonly schemaVersion: 1;
+  readonly ok: true;
+  readonly releasedAt: number;
+  readonly executionStarted: boolean;
+  readonly attempt: number;
 } | TaskClaimFailureAckV1;
 
 export interface TaskClaimFailureAckV1 {
@@ -468,9 +500,11 @@ export interface TaskClaimPayloadMapV1 {
   readonly renew: TaskClaimRenewV1;
   readonly release: TaskClaimReleaseV1;
   readonly respond: TaskClaimRespondV1;
+  readonly relinquish: TaskClaimRelinquishV1;
   readonly 'acquire-ack': TaskClaimAcquireAckV1;
   readonly 'renew-ack': TaskClaimRenewAckV1;
   readonly 'release-ack': TaskClaimReleaseAckV1;
+  readonly 'relinquish-ack': TaskClaimRelinquishAckV1;
   readonly expired: TaskClaimExpiredV1;
 }
 

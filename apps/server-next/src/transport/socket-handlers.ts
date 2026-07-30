@@ -15,6 +15,7 @@ import {
   type Phase3MemoryToolRequestV3,
   type TaskClaimAcquireV1,
   type TaskClaimReleaseV1,
+  type TaskClaimRelinquishV1,
   type TaskClaimRenewV1,
   type TaskClaimRespondV1,
 } from '../../../../packages/contracts/src/index.js';
@@ -174,6 +175,7 @@ export interface TaskClaimSocketHandlers {
   acquire(payload: TaskClaimAcquireV1): Promise<unknown>;
   renew(payload: TaskClaimRenewV1): Promise<unknown>;
   release(payload: TaskClaimReleaseV1): Promise<unknown>;
+  relinquish(payload: TaskClaimRelinquishV1): Promise<unknown>;
   respond(payload: TaskClaimRespondV1): Promise<unknown>;
 }
 
@@ -943,6 +945,7 @@ export function registerAgentSocketHandlers(
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.acquire, 'acquire', options.taskClaim.acquire);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.renew, 'renew', options.taskClaim.renew);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.release, 'release', options.taskClaim.release);
+    bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.relinquish, 'relinquish', options.taskClaim.relinquish);
     bindTaskClaimPayload(socket, AGENT_EVENTS.taskClaim.respond, 'respond', options.taskClaim.respond);
   }
 }
@@ -980,11 +983,11 @@ function bindManagementWorkerRegister(
   });
 }
 
-function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release' | 'respond'>(
+function bindTaskClaimPayload<K extends 'acquire' | 'renew' | 'release' | 'relinquish' | 'respond'>(
   socket: SocketLike,
   event: string,
   kind: K,
-  handler: (payload: K extends 'acquire' ? TaskClaimAcquireV1 : K extends 'renew' ? TaskClaimRenewV1 : K extends 'release' ? TaskClaimReleaseV1 : TaskClaimRespondV1) => Promise<unknown>,
+  handler: (payload: K extends 'acquire' ? TaskClaimAcquireV1 : K extends 'renew' ? TaskClaimRenewV1 : K extends 'release' ? TaskClaimReleaseV1 : K extends 'relinquish' ? TaskClaimRelinquishV1 : TaskClaimRespondV1) => Promise<unknown>,
 ): void {
   socket.on(event, async (payload, ack) => {
     const parsed = safeParseTaskClaimPayload(kind, payload);
