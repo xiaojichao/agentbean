@@ -1,4 +1,4 @@
-import type { EvidenceRefDto, InputBindingDeclarationDto, OutputSlotDeclarationDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus } from '../../../../../packages/contracts/src/index.js';
+import type { EvidenceRefDto, InputBindingDeclarationDto, OutputSlotDeclarationDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus, TaskRequirementAttestationV1 } from '../../../../../packages/contracts/src/index.js';
 import type {
   EvidenceSnapshotRecord,
   OutputSnapshotRecord,
@@ -307,8 +307,9 @@ export function createSqliteTaskCoordinationRepositories(
         db.prepare(`INSERT INTO task_offers
           (id, team_id, task_id, agent_id, task_revision, task_attempt, manifest_revision,
            objective_json, offer_ttl_ms, offer_expires_at, hard_specified, requirement_confirmation,
-           status, response_kind, response_detail, responded_at, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           status, response_kind, response_detail, responded_at, response_attestation_json,
+           created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.taskId, record.agentId, record.taskRevision,
             record.taskAttempt, record.manifestRevision, json(record.objective), record.offerTtlMs,
             record.offerExpiresAt, record.hardSpecified ? 1 : 0, record.requirementConfirmation ? 1 : 0,
@@ -335,7 +336,7 @@ export function createSqliteTaskCoordinationRepositories(
       },
       async updateStatus(input) {
         const result = db.prepare(`UPDATE task_offers SET
-          status = ?, response_kind = ?, response_detail = ?, responded_at = ?, updated_at = ?
+          status = ?, response_kind = ?, response_detail = ?, responded_at = ?, response_attestation_json = ?, updated_at = ?
           WHERE id = ? AND status = ?`)
           .run(input.status, ...responseColumns(input.response), input.now, input.id, input.expectedStatus);
         if (changes(result) === 0) return null;
@@ -490,12 +491,17 @@ function mapOffer(value: unknown): TaskOfferRecord | null {
     hardSpecified: number(value, 'hard_specified') === 1,
     requirementConfirmation: number(value, 'requirement_confirmation') === 1,
     status: text(value, 'status') as TaskOfferStatus,
-    response: responseKind ? {
-      offerId: text(value, 'id'), agentId: text(value, 'agent_id'),
-      kind: responseKind as TaskOfferResponseRecordDto['kind'],
-      detail: nullableText(value, 'response_detail') ?? null,
-      respondedAt: number(value, 'responded_at'),
-    } : null,
+    response: (() => {
+      if (!responseKind) return null;
+      const attestationJson = nullableText(value, 'response_attestation_json');
+      return {
+        offerId: text(value, 'id'), agentId: text(value, 'agent_id'),
+        kind: responseKind as TaskOfferResponseRecordDto['kind'],
+        detail: nullableText(value, 'response_detail') ?? null,
+        respondedAt: number(value, 'responded_at'),
+        ...(attestationJson ? { attestation: parse<TaskRequirementAttestationV1>(attestationJson) } : {}),
+      };
+    })(),
     createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'),
   };
 }
@@ -519,9 +525,14 @@ function mapGrant(value: unknown): TaskExecutionGrantRecord | null {
   };
 }
 function mapGrantRequired(value: unknown): TaskExecutionGrantRecord { return required(mapGrant(value)); }
-/** response 三列的绑定值（kind/detail/respondedAt）；null response → 三 null。create 与 updateStatus 共用。 */
-function responseColumns(response: TaskOfferRecord['response']): readonly [string | null, string | null, number | null] {
-  return [response?.kind ?? null, response?.detail ?? null, response?.respondedAt ?? null];
+/** response 四列的绑定值（kind/detail/respondedAt/attestationJson）；null response → 四 null。create 与 updateStatus 共用。 */
+function responseColumns(response: TaskOfferRecord['response']): readonly [string | null, string | null, number | null, string | null] {
+  return [
+    response?.kind ?? null,
+    response?.detail ?? null,
+    response?.respondedAt ?? null,
+    response?.attestation ? json(response.attestation) : null,
+  ];
 }
 function getRequiredCoordination(db: SqliteDatabase, taskId: string): TaskCoordinationRecord {
   const coordination = mapCoordination(db.prepare('SELECT * FROM task_coordinations WHERE task_id = ?').get(taskId));

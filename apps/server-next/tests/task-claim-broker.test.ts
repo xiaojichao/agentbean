@@ -977,6 +977,74 @@ describe('#947 PR1：@Agent 硬指定 Offer 路由 + Requirement-confirmation Of
   });
 });
 
+describe('#947 PR2：Requirement-confirmation Offer attestation 解除 fail-closed（ADR-0064 §3 AC3）', () => {
+  // 确认 Offer fixture：manifestRevision=0（生产 confirm 无 active manifest），hardSpecified=true。
+  const confirmationOver = { requirementConfirmation: true, hardSpecified: true, manifestRevision: 0 } as const;
+
+  test('确认 Offer + 有效 attestation（覆盖 required）→ claim_granted（解除 fail-closed）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', []); // 无 manifest（unknown）
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const confirmation = await publishOffer(harness, 'agent-1', confirmationOver);
+
+    const result = await harness.broker.respondToOffer({
+      offerId: confirmation.id, agentId: 'agent-1', kind: 'accepted',
+      attestation: { attestedCapabilities: ['code-review'], attestedSkills: [] },
+    });
+    expect(result).toMatchObject({ kind: 'claim_granted' });
+    // 持久化的 response 应携带 attestation（form A 审计）
+    const persisted = await harness.repositories.taskCoordination.offers.getById(confirmation.id);
+    expect(persisted?.response?.attestation).toEqual({ attestedCapabilities: ['code-review'], attestedSkills: [] });
+  });
+
+  test('确认 Offer + 缺 attestation → fail-closed 维持（REQUIREMENT_ATTESTATION_REQUIRED）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', []);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const confirmation = await publishOffer(harness, 'agent-1', confirmationOver);
+
+    const result = await harness.broker.respondToOffer({
+      offerId: confirmation.id, agentId: 'agent-1', kind: 'accepted',
+    });
+    expect(result).toMatchObject({
+      kind: 'not_accepted', diagnosticCode: 'TASK_CLAIM_REQUIREMENT_ATTESTATION_REQUIRED',
+    });
+    expect(await harness.repositories.taskCoordination.claimLeases.listActive()).toEqual([]);
+  });
+
+  test('确认 Offer + attestation 不覆盖 required → ATTESTATION_INCOMPLETE', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', []);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const confirmation = await publishOffer(harness, 'agent-1', confirmationOver);
+
+    const result = await harness.broker.respondToOffer({
+      offerId: confirmation.id, agentId: 'agent-1', kind: 'accepted',
+      attestation: { attestedCapabilities: ['other-cap'], attestedSkills: [] },
+    });
+    expect(result).toMatchObject({
+      kind: 'not_accepted', diagnosticCode: 'TASK_CLAIM_ATTESTATION_INCOMPLETE',
+    });
+  });
+
+  test('确认 Offer + 有效 attestation 但硬门槛失败（设备离线）→ agent_not_qualified', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-2', 'online', []); // device-2 offline
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const confirmation = await publishOffer(harness, 'agent-1', confirmationOver);
+
+    const result = await harness.broker.respondToOffer({
+      offerId: confirmation.id, agentId: 'agent-1', kind: 'accepted',
+      attestation: { attestedCapabilities: ['code-review'], attestedSkills: [] },
+    });
+    expect(result).toMatchObject({ kind: 'not_accepted', reason: 'agent_not_qualified' });
+  });
+});
+
 async function publishOffer(
   harness: Awaited<ReturnType<typeof createHarness>>,
   agentId: string,

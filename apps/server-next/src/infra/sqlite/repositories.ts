@@ -231,6 +231,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   // #948-G ADR-0064：output slot/input binding 声明（task_coordinations 两 JSON 列）+ 不可变 output snapshot 表。
   // 改号 0064→0065：#947（PR#961）先合占 0064_task_offer_requirement_confirmation。
   applyMigration(db, 'team/0065_output_slots_and_snapshots.sql');
+  // #947 PR2（AC3）：Task Offer accepted response 的 per-Task requirement attestation（ADR-0064 §3）。
+  applyMigration(db, 'team/0066_task_offer_response_attestation.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

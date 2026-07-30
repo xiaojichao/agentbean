@@ -13,6 +13,7 @@ import type {
   TaskOfferResponseKind,
   TaskOfferResponseRecordDto,
   TaskOfferStatus,
+  TaskRequirementAttestationV1,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   decideHardSpecifiedOfferKind,
@@ -23,6 +24,7 @@ import {
   evaluateTaskClaimAcquire,
   evaluateTaskClaimRelease,
   evaluateTaskClaimRenew,
+  validateRequirementAttestation,
   type OfferInvalidationReason,
   type OfferValidity,
   type TaskClaimLeaseRecord as DomainTaskClaimLeaseRecord,
@@ -79,6 +81,13 @@ export interface TaskOfferRespondInput {
   readonly agentId: string;
   readonly kind: TaskOfferResponseKind;
   readonly detail?: string | null;
+  /**
+   * #947 PR2（ADR-0064 §3）：per-Task requirement attestation——仅 Requirement-confirmation Offer 的 accepted
+   * 需要（其余响应为 undefined/null）。Agent 声明其具备本 Task 的 required capability/skill（用于解除 PR1 的
+   * fail-closed：manifest 不可得→attestation 覆盖 required→建立 claim）。经 domain validateRequirementAttestation
+   * 校验 attested ⊇ required 后才放行。
+   */
+  readonly attestation?: TaskRequirementAttestationV1;
 }
 
 /**
@@ -893,14 +902,36 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
       }
 
       // accepted
-      // #947 PR1（ADR-0064 §3）：Requirement-confirmation Offer 不当作 eligible——accepted 在 attestation
-      // 路径（PR2）落地前 fail-closed，不产 Claim。Agent 可改走 decline（rejected/needs_info）或先更新 Manifest
-      //（→ 旧确认 Offer fence 失效，PI 发新正常 Offer）。此处不消费 validity，确认 Offer 的 accepted 一律拒绝。
+      // #947 PR2（ADR-0064 §3）：Requirement-confirmation Offer 经 per-Task requirement attestation 解除
+      // fail-closed。Agent 随 acceptance 提交 attestation（attested ⊇ required cap+skill），并在本事务通过
+      // attestation 校验 + 容量硬门槛复验后 → 建立 claim。无 attestation / 不覆盖 / 硬门槛失败 → 维持拒绝。
       if (offer.requirementConfirmation) {
-        return {
-          kind: 'not_accepted', reason: 'offer_invalid',
-          diagnosticCode: 'TASK_CLAIM_REQUIREMENT_ATTESTATION_REQUIRED',
-        };
+        if (!payload.attestation) {
+          return {
+            kind: 'not_accepted', reason: 'offer_invalid',
+            diagnosticCode: 'TASK_CLAIM_REQUIREMENT_ATTESTATION_REQUIRED',
+          };
+        }
+        const attestationResult = validateRequirementAttestation({
+          attestation: payload.attestation,
+          requiredCapabilities: offer.objective.requiredCapabilities,
+          requiredSkills: offer.objective.requiredSkills,
+        });
+        if (!attestationResult.ok) {
+          return {
+            kind: 'not_accepted', reason: 'offer_invalid',
+            diagnosticCode: 'TASK_CLAIM_ATTESTATION_INCOMPLETE',
+          };
+        }
+        // 不可覆盖硬门槛快速预检（claim 事务内会用锁后最新数据复查；此处避免进入锁后才发现失败）
+        const gateCheck = await resolveCandidates(offer.taskId);
+        const gateCandidate = gateCheck.candidates.find((item) => item.agentId === offer.agentId);
+        if (!gateCandidate || gateCandidate.diagnosticCodes.some((code) => code !== 'CAPABILITY_MISSING')) {
+          return {
+            kind: 'not_accepted', reason: 'agent_not_qualified' as const,
+            diagnosticCode: gateCandidate?.diagnosticCodes[0] ?? 'TASK_CLAIM_CANDIDATE_UNAVAILABLE',
+          };
+        }
       }
       if (!validity.acceptable) {
         return { kind: 'not_accepted', reason: 'offer_invalid', diagnosticCode: offerValidityCode(validity.reason) };
@@ -925,14 +956,22 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         const resolution = await resolveCandidates(offer.taskId);
         const candidate = resolution.candidates.find((item) => item.agentId === offer.agentId);
         if (!candidate?.eligible) {
-          return { kind: 'not_accepted', reason: 'agent_not_qualified' as const,
-            diagnosticCode: candidate?.diagnosticCodes[0] ?? 'TASK_CLAIM_CANDIDATE_UNAVAILABLE' };
+          if (!offer.requirementConfirmation) {
+            return { kind: 'not_accepted', reason: 'agent_not_qualified' as const,
+              diagnosticCode: candidate?.diagnosticCodes[0] ?? 'TASK_CLAIM_CANDIDATE_UNAVAILABLE' };
+          }
+          // confirmation offer：CAPABILITY_MISSING 已由 attestation 覆盖；只拒硬门槛失败或候选不存在
+          if (!candidate || candidate.diagnosticCodes.some((code) => code !== 'CAPABILITY_MISSING')) {
+            return { kind: 'not_accepted', reason: 'agent_not_qualified' as const,
+              diagnosticCode: candidate?.diagnosticCodes[0] ?? 'TASK_CLAIM_CANDIDATE_UNAVAILABLE' };
+          }
         }
         const leaseToken = leaseTokens.nextToken();
         const leaseTokenHash = hash(leaseToken);
         const leaseFingerprint = leaseTokenHash.slice(0, 16);
         const acceptedResponse: TaskOfferResponseRecordDto = {
           offerId: offer.id, agentId: offer.agentId, kind: 'accepted', detail: null, respondedAt: now,
+          ...(payload.attestation ? { attestation: payload.attestation } : {}),
         };
         try {
           const result = await input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
@@ -1213,7 +1252,11 @@ async function computeOfferValidity(
   const task = await repositories.tasks.getById(offer.taskId);
   const activeManifest = await repositories.agentExposure.manifests.getActiveByTeamAgent(offer.teamId, offer.agentId);
   const manifestRevision = activeManifest && (activeManifest.validUntil === null || activeManifest.validUntil > now)
-    ? activeManifest.revision : Number.NaN;
+    ? activeManifest.revision
+    // #947 PR2：确认 Offer（manifestRevision=0 sentinel）无 active manifest 时不应判 superseded——
+    //   没有 manifest 可比，Agent 未更新 Manifest（仍 unknown）→ 确认 Offer 仍有效。
+    //   Agent 后续发布 manifest revision≥1 → 0≠rev → 正确触发 superseded（ADR path-a）。
+    : (offer.manifestRevision === 0 ? 0 : Number.NaN);
   return evaluateOfferValidity({
     status: offer.status,
     offerExpiresAt: offer.offerExpiresAt,

@@ -11,6 +11,7 @@ import {
   rankQualifiedCandidates,
   resolveHardSpecifiedTarget,
   validateProposedSkillIds,
+  validateRequirementAttestation,
 } from '../src/agent-eligibility.js';
 
 describe('evaluateCapabilityMatch', () => {
@@ -494,5 +495,69 @@ describe('rankQualifiedCandidates (AC#3 only sorts among qualified)', () => {
       ['typescript'],
     );
     expect(ranked.map((c) => c.agentId)).toEqual(['b', 'a']);
+  });
+});
+
+describe('validateRequirementAttestation (ADR-0064 §3 / #947 PR2 AC3)', () => {
+  const attestation = (capabilities: readonly string[], skills: readonly string[] = []) => ({
+    attestedCapabilities: capabilities,
+    attestedSkills: skills,
+  });
+
+  test('attested 覆盖全部 required cap+skill → ok', () => {
+    expect(
+      validateRequirementAttestation({
+        attestation: attestation(['code-review'], ['typescript']),
+        requiredCapabilities: ['code-review'],
+        requiredSkills: ['typescript'],
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test('attested 缺一个 capability → ok:false，missing 含该项', () => {
+    const r = validateRequirementAttestation({
+      attestation: attestation(['lint']),
+      requiredCapabilities: ['code-review', 'lint'],
+      requiredSkills: [],
+    });
+    expect(r).toEqual({ ok: false, missing: ['code-review'] });
+  });
+
+  test('attested 缺一个 skill → ok:false，missing 含该项', () => {
+    const r = validateRequirementAttestation({
+      attestation: attestation(['code-review'], ['typescript']),
+      requiredCapabilities: ['code-review'],
+      requiredSkills: ['typescript', 'rust'],
+    });
+    expect(r).toEqual({ ok: false, missing: ['rust'] });
+  });
+
+  test('空 attestation + 有 required → ok:false，missing = 全部 required', () => {
+    const r = validateRequirementAttestation({
+      attestation: attestation([], []),
+      requiredCapabilities: ['code-review'],
+      requiredSkills: ['typescript'],
+    });
+    expect(r).toEqual({ ok: false, missing: ['code-review', 'typescript'] });
+  });
+
+  test('无 required → ok（无需 attestation 覆盖）', () => {
+    expect(
+      validateRequirementAttestation({
+        attestation: attestation([], []),
+        requiredCapabilities: [],
+        requiredSkills: [],
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test('大小写不敏感匹配', () => {
+    expect(
+      validateRequirementAttestation({
+        attestation: attestation(['Code-Review'], ['TypeScript']),
+        requiredCapabilities: ['code-review'],
+        requiredSkills: ['typescript'],
+      }),
+    ).toEqual({ ok: true });
   });
 });

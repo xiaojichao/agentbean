@@ -13,6 +13,7 @@ import {
   type EligibilityReasonCodeValue,
   ELIGIBILITY_REASON_CODE,
   eligibilityUnknownCauseReasonCode,
+  type TaskRequirementAttestationV1,
 } from '@agentbean/contracts';
 import { RELIABILITY_NEUTRAL_SCORE } from './reliability-policy.js';
 
@@ -374,4 +375,39 @@ export function rankQualifiedCandidates<T extends QualifiedCandidate>(
         a.index - b.index,
     )
     .map((entry) => entry.candidate);
+}
+
+// ── ADR-0064 §3 / #947 PR2 AC3：per-Task requirement attestation 覆盖校验 ──
+
+export interface ValidateRequirementAttestationInput {
+  readonly attestation: TaskRequirementAttestationV1;
+  readonly requiredCapabilities: readonly string[];
+  readonly requiredSkills: readonly string[];
+}
+
+export type RequirementAttestationResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly missing: readonly string[] };
+
+/**
+ * ADR-0064 §3：Requirement-confirmation Offer 的 accepted 携带的 per-Task attestation 是否覆盖全部 required
+ * Capability/Skill。复用 {@link evaluateCapabilityMatch} + {@link evaluateSkillCoverage} 的 missing 计算
+ * （大小写不敏感、去重保序）。覆盖全部 → ok；否则返回未覆盖项（调用方据此拒绝建立 claim）。
+ *
+ * 绑定 task revision：attestation 随某 Offer 的 acceptance 提交，该 Offer 的 taskRevision 即 fence
+ * （claim 事务校验 task.revision === offer.taskRevision），故本函数不复查 revision。
+ */
+export function validateRequirementAttestation(
+  input: ValidateRequirementAttestationInput,
+): RequirementAttestationResult {
+  const missingCapabilities = evaluateCapabilityMatch({
+    exposedCapabilities: input.attestation.attestedCapabilities,
+    requiredCapabilities: input.requiredCapabilities,
+  }).missing;
+  const missingSkills = evaluateSkillCoverage({
+    exposedSkills: input.attestation.attestedSkills,
+    requiredSkills: input.requiredSkills,
+  }).missing;
+  const missing = [...missingCapabilities, ...missingSkills];
+  return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
