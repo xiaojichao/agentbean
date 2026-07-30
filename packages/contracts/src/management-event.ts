@@ -79,6 +79,18 @@ export interface ManagementEventPayloadMapV1 {
     readonly taskRevision: number;
     readonly requiredCapabilities: readonly string[];
   };
+  /**
+   * ADR-0064 #948-F：当前频道无合格候选时 Task 进入结构化 allocation_blocked。suggestion
+   * 为脱敏建议（仅有权人类可见）：绝不携带 agent 身份，只告诉人类「频道外有 N 个 agent 可胜任」
+   * 或「频道内外都无人可胜任」。cause 对应 domain UnallocatableCause。
+   */
+  readonly 'allocation-blocked': {
+    readonly taskId: ID;
+    readonly taskRevision: number;
+    readonly cause: 'no_candidate' | 'no_qualified_candidate' | 'all_unknown';
+    readonly suggestionKind: 'escalate_no_capability' | 'escalate_external_capability';
+    readonly externalAgentCount?: number;
+  };
   readonly 'task-assigned': {
     readonly taskId: ID;
     readonly taskRevision: number;

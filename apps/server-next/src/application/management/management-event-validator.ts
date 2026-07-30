@@ -29,6 +29,7 @@ export const TASK_COORDINATION_MANAGEMENT_EVENT_TYPES = [
   'task-revised',
   'task-state-changed',
   'task-published-for-claim',
+  'allocation-blocked',
   'task-assigned',
   'task-claimed',
   'claim-invalidated',
@@ -74,6 +75,7 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'task-revised': { required: ['taskId', 'previousRevision', 'taskRevision', 'criterionIds', 'reasonCode'] },
   'task-state-changed': { required: ['taskId', 'taskRevision', 'from', 'to'] },
   'task-published-for-claim': { required: ['taskId', 'taskRevision', 'requiredCapabilities'] },
+  'allocation-blocked': { required: ['taskId', 'taskRevision', 'cause', 'suggestionKind'], optional: ['externalAgentCount'] },
   'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
   'task-claimed': { required: ['taskId', 'taskRevision', 'agentId', 'claimLeaseId', 'attempt'] },
   'claim-invalidated': { required: ['taskId', 'previousTaskRevision', 'claimLeaseId', 'invalidatedInvocationIds', 'reasonCode'] },
@@ -205,6 +207,15 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
     case 'task-published-for-claim':
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
       stringArray(payload.requiredCapabilities, 'payload.requiredCapabilities'); return;
+    case 'allocation-blocked': {
+      string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
+      const cause = string(payload.cause, 'payload.cause');
+      const suggestionKind = string(payload.suggestionKind, 'payload.suggestionKind');
+      if (!['no_candidate', 'no_qualified_candidate', 'all_unknown'].includes(cause)) fail('payload.cause');
+      if (!['escalate_no_capability', 'escalate_external_capability'].includes(suggestionKind)) fail('payload.suggestionKind');
+      if (payload.externalAgentCount !== undefined) positiveInteger(payload.externalAgentCount, 'payload.externalAgentCount');
+      return;
+    }
     case 'task-assigned':
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
       string(payload.agentId, 'payload.agentId'); return;

@@ -1115,6 +1115,44 @@ async function publishOffer(
   });
 }
 
+describe('#948-F allocation_blocked（ADR-0064：无合格候选 → 结构化脱敏建议）', () => {
+  test('频道外有 agent 可胜任 → allocation-blocked 携带脱敏 external-capability 建议（不泄露身份）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    // agent-1 具备 task-a 所需 'code-review'，但未加入 channel-1（频道外）→ 无合格候选。
+    const offers = await harness.broker.prepareOffers('task-a');
+    expect(offers).toEqual([]);
+    const blocked = (await harness.repositories.management.events.list('run-1'))
+      .find((record) => record.event.type === 'allocation-blocked');
+    expect(blocked).toBeDefined();
+    expect(blocked!.event.payload).toMatchObject({ taskId: 'task-a', cause: 'no_qualified_candidate',
+      suggestionKind: 'escalate_external_capability', externalAgentCount: 1 });
+    // 脱敏不变量：payload 绝不含 agent 身份。
+    expect(JSON.stringify(blocked!.event.payload)).not.toMatch(/agent-1|agentId/i);
+  });
+
+  test('频道内外都无所需能力 → escalate_no_capability', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['other-capability']);
+    // agent-1 缺 'code-review'（频道外且无能力）→ 频道内外都无人可胜任。
+    await harness.broker.prepareOffers('task-a');
+    const blocked = (await harness.repositories.management.events.list('run-1'))
+      .find((record) => record.event.type === 'allocation-blocked');
+    expect(blocked!.event.payload).toMatchObject({ suggestionKind: 'escalate_no_capability' });
+    expect(blocked!.event.payload).not.toHaveProperty('externalAgentCount');
+  });
+
+  test('重复 prepareOffers 不重复记录 allocation-blocked（幂等）', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.broker.prepareOffers('task-a');
+    await harness.broker.prepareOffers('task-a');
+    const blocked = (await harness.repositories.management.events.list('run-1'))
+      .filter((record) => record.event.type === 'allocation-blocked');
+    expect(blocked).toHaveLength(1);
+  });
+});
+
 async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number } = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { value: 10 };
