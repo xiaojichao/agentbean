@@ -234,7 +234,7 @@ export interface Phase2ManagementWorkerToolOutputMapV1 {
       readonly taskId: ID;
       readonly taskRevision: number;
       readonly taskAttempt: number;
-      readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+      readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
       readonly claimLeaseId?: ID;
       readonly claimedAgentId?: ID;
     }[];
@@ -605,7 +605,7 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
       assertExactKeys(snapshot, ['taskId', 'taskRevision', 'taskAttempt', 'status', 'claimLeaseId', 'claimedAgentId'],
         ['taskId', 'taskRevision', 'taskAttempt', 'status']);
       if (!nonEmpty(snapshot.taskId)
-        || !['todo', 'in_progress', 'in_review', 'done', 'closed'].includes(String(snapshot.status))
+        || !['todo', 'in_progress', 'in_review', 'done', 'cancelled', 'closed'].includes(String(snapshot.status))
         || (snapshot.claimLeaseId !== undefined && !nonEmpty(snapshot.claimLeaseId))
         || (snapshot.claimedAgentId !== undefined && !nonEmpty(snapshot.claimedAgentId))
         || ((snapshot.claimLeaseId === undefined) !== (snapshot.claimedAgentId === undefined))) {

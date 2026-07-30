@@ -126,7 +126,7 @@ export interface ManagementVisibleCheckpointV2 extends ManagementVisibleCheckpoi
     readonly taskId: string;
     readonly taskRevision: number;
     readonly taskAttempt: number;
-    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
     readonly claimLeaseId?: string;
   }[];
   readonly activeClaimLeaseIds: readonly string[];

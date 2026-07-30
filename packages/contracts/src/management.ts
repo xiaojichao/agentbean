@@ -148,7 +148,7 @@ export interface ManagementCheckpointAuthoritativeV1 {
     readonly taskId: ID;
     readonly taskRevision: number;
     readonly taskAttempt: number;
-    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    readonly status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
     readonly claimLeaseId?: ID;
   }[];
   readonly activeClaimLeaseIds?: readonly ID[];

@@ -1,4 +1,4 @@
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
 
 export const TASK_STATUS_COLUMNS: {
   id: TaskStatus;
@@ -25,7 +25,7 @@ export const TASK_STATUS_MENU_DOT_CLASS = 'h-2 w-2 shrink-0 rounded-full';
 export const TASK_STATUS_MENU_LABEL_CLASS = 'min-w-0 flex-1 truncate';
 
 export function isTaskStatus(value: unknown): value is TaskStatus {
-  return value === 'todo' || value === 'in_progress' || value === 'in_review' || value === 'done' || value === 'closed';
+  return value === 'todo' || value === 'in_progress' || value === 'in_review' || value === 'done' || value === 'cancelled' || value === 'closed';
 }
 
 export function taskStatusText(status: TaskStatus): string {

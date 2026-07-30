@@ -9,6 +9,7 @@ import type {
 } from './repositories.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import type { PromotionGateRepositories } from './promotion-gate-repositories.js';
+import type { TaskLifecycleRepositories } from './task-lifecycle-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -25,6 +26,12 @@ export interface TaskCoordinationTransactionRepositories {
    * root Task + source relation + run + event + audit + scheduling + outbox + receipt/tombstone（#894 §10）。
    */
   readonly promotion: PromotionGateRepositories;
+  /**
+   * #926 Task lifecycle：具名 transition command receipt / tombstone。
+   * 挂在本 UoW 上，使每个 lifecycle command 能在单 teamDb 事务里原子提交
+   * status change + event + receipt + tombstone。
+   */
+  readonly lifecycle: TaskLifecycleRepositories;
 }
 
 export interface TaskCoordinationUnitOfWork {

@@ -502,7 +502,6 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
-  // #964 Device-initiated workspace import: token-based auth, no web session required.
   socket.on(WEB_EVENTS.project.importWorkspace, async (payload, ack) => {
     try {
       const result = await app.importProjectChannelWorkspace(payload as ImportProjectChannelWorkspaceInput);

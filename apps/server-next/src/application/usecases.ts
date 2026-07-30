@@ -11672,7 +11672,7 @@ async function isAssignableToTask(
 }
 
 function isTaskStatus(status: string): status is TaskStatus {
-  return status === 'todo' || status === 'in_progress' || status === 'in_review' || status === 'done' || status === 'closed';
+  return status === 'todo' || status === 'in_progress' || status === 'in_review' || status === 'done' || status === 'cancelled' || status === 'closed';
 }
 
 function taskStatusLabel(status: TaskStatus): string {
@@ -11685,6 +11685,8 @@ function taskStatusLabel(status: TaskStatus): string {
       return '待审核';
     case 'done':
       return '已完成';
+    case 'cancelled':
+      return '已取消';
     case 'closed':
       return '已关闭';
   }

@@ -32,6 +32,7 @@ export function projectStageTaskProjection(input: {
       aggregateStatus = 'in_review';
       break;
     case 'done':
+    case 'cancelled':
     case 'closed':
       aggregateStatus = 'complete';
       break;
