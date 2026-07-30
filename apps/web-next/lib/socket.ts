@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -885,6 +885,10 @@ export interface ProjectMutationResult {
 
 export interface ProjectEvents {
   overview(channelId: string): Promise<{ ok: boolean; overview?: ChannelProjectOverviewDto | null; error?: string; message?: string }>;
+  /** #966 读取 Project Channel Workspace 当前或指定 revision 的文件清单 + provenance。 */
+  workspace(channelId: string, revisionId?: string): Promise<{ ok: boolean; workspace?: ProjectChannelWorkspaceDto | null; error?: string; message?: string }>;
+  /** #966 原子发布：以基线 revision 为依据整体创建下一 workspace revision。 */
+  publishWorkspace(payload: { channelId: string; baselineRevisionId: string; files: Array<{ path: string; artifactId: string }> }): Promise<{ ok: boolean; workspace?: ProjectChannelWorkspaceDto | null; error?: string; message?: string; details?: Record<string, unknown> }>;
   createInitialStage(payload: Omit<CreateInitialProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
   createStage(payload: Omit<CreateProjectStageInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
   createStageEdge(payload: Omit<CreateProjectStageEdgeInput, 'userId' | 'teamId'>): Promise<ProjectMutationResult>;
@@ -955,6 +959,12 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
   return {
     overview(channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.project.overview, { channelId });
+    },
+    workspace(channelId, revisionId?) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.workspace, { channelId, ...(revisionId ? { revisionId } : {}) });
+    },
+    publishWorkspace(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.publishWorkspace, payload);
     },
     createInitialStage(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.createInitialStage, payload);
