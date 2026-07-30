@@ -6,7 +6,7 @@ import type {
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   createAckReadCandidateCommandHandler,
@@ -23,7 +23,7 @@ import {
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord } from './repositories.js';
 import {
   PROJECT_REFERENCE_SET_CONTRACT_VERSION,
   type ProjectReferenceFailureDetailsDto,
@@ -362,6 +362,8 @@ export interface ServerNextUseCases {
   listChannelMessages(input: ListChannelMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
   listChannelFiles(input: ListChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
   searchChannelFiles(input: SearchChannelFilesInput): Promise<Ack<ChannelFilesResultDto>>;
+  createProjectChannelWorkspace(input: CreateProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
+  getProjectChannelWorkspace(input: GetProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
@@ -931,6 +933,20 @@ export interface ListChannelFilesInput {
 
 export interface SearchChannelFilesInput extends ListChannelFilesInput {
   query: string;
+}
+
+export interface CreateProjectChannelWorkspaceInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  files: Array<Pick<ProjectChannelWorkspaceFileDto, 'path' | 'artifactId'>>;
+}
+
+export interface GetProjectChannelWorkspaceInput {
+  userId: string;
+  teamId: string;
+  channelId: string;
+  revisionId?: string;
 }
 
 export interface SearchMessagesInput {
@@ -4756,6 +4772,39 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async searchChannelFiles(fileInput) {
       return listPublicChannelFiles(repositories, fileInput, resolveArtifactPreview, { channelFileRollout, channelFileMetrics });
+    },
+
+    async createProjectChannelWorkspace(workspaceInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, workspaceInput);
+      if (!access.ok) return access;
+      if (workspaceInput.files.length === 0) return makeFailure('VALIDATION_ERROR', 'Workspace revision must contain files');
+      const paths = new Set<string>();
+      const files: ProjectChannelWorkspaceFileDto[] = [];
+      for (const file of workspaceInput.files) {
+        const path = normalizeWorkspacePath(file.path);
+        if (!path || paths.has(path)) return makeFailure('VALIDATION_ERROR', 'Workspace paths must be unique and relative');
+        const artifact = await repositories.artifacts.getForTeam({ teamId: workspaceInput.teamId, artifactId: file.artifactId });
+        if (!artifact || artifact.channelId !== workspaceInput.channelId) return makeFailure('NOT_FOUND', 'Workspace artifact not found');
+        paths.add(path);
+        files.push({ path, artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes, ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}) });
+      }
+      const now = clock.now();
+      const revision: ProjectChannelWorkspaceRevisionRecord = { id: ids.nextId(), teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, revision: 1, files, createdBy: workspaceInput.userId, createdAt: now };
+      const workspace: ProjectChannelWorkspaceRecord = { id: ids.nextId(), teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, currentRevisionId: revision.id, currentRevision: revision };
+      const created = await repositories.projectChannelWorkspaces.createInitial({ workspace, revision });
+      if (!created) return makeFailure('CONFLICT', 'Project Channel Workspace already exists');
+      return makeSuccess({ workspace: created });
+    },
+
+    async getProjectChannelWorkspace(workspaceInput) {
+      const access = await ensureUserCanViewProjectWorkspace(repositories, workspaceInput);
+      if (!access.ok) return access;
+      const workspace = await repositories.projectChannelWorkspaces.getForTeam(workspaceInput);
+      if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      if (!workspaceInput.revisionId || workspaceInput.revisionId === workspace.currentRevisionId) return makeSuccess({ workspace });
+      const revision = await repositories.projectChannelWorkspaces.getRevision({ teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, revisionId: workspaceInput.revisionId });
+      if (!revision) return makeFailure('NOT_FOUND', 'Workspace revision not found');
+      return makeSuccess({ workspace: { ...workspace, currentRevisionId: revision.id, currentRevision: revision } });
     },
 
     async listChannelDocuments(documentInput) {
@@ -12965,6 +13014,24 @@ async function ensureUserCanViewChannel(
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) {
     return makeFailure('FORBIDDEN', 'User cannot view channel');
   }
+  return makeSuccess({ channel });
+}
+
+function normalizeWorkspacePath(value: string): string | null {
+  const path = value.trim().replaceAll('\\', '/');
+  if (!path || path.startsWith('/') || path.split('/').some((part) => part === '' || part === '.' || part === '..')) return null;
+  return path;
+}
+
+async function ensureUserCanViewProjectWorkspace(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; channelId: string },
+): Promise<Ack<{ channel: ChannelRecord }>> {
+  if (!(await repositories.teams.isMember(input.teamId, input.userId))) return makeFailure('FORBIDDEN', 'User is not a team member');
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
+  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+  if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
   return makeSuccess({ channel });
 }
 

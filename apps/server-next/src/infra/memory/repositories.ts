@@ -20,6 +20,8 @@ import type {
   TeamRecord,
   UserRecord,
   WorkspaceRunRecord,
+  ProjectChannelWorkspaceRecord,
+  ProjectChannelWorkspaceRevisionRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
@@ -123,6 +125,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const channelDocumentRevisions = new Map<string, ChannelDocumentRevisionRecord>();
   const channelDocumentOperations = new Map<string, ChannelDocumentOperationRecord>();
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
+  const projectChannelWorkspaces = new Map<string, ProjectChannelWorkspaceRecord>();
+  const projectChannelWorkspaceRevisions = new Map<string, ProjectChannelWorkspaceRevisionRecord>();
   const tasks = new Map<string, TaskRecord>();
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
@@ -1608,6 +1612,25 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async listByDispatch(dispatchId) {
         return Array.from(workspaceRuns.values()).filter((run) => run.dispatchId === dispatchId);
+      },
+    },
+    projectChannelWorkspaces: {
+      async createInitial(input) {
+        const key = `${input.workspace.teamId}:${input.workspace.channelId}`;
+        if (projectChannelWorkspaces.has(key)) return null;
+        const revision = structuredClone(input.revision);
+        const workspace = structuredClone({ ...input.workspace, currentRevision: revision });
+        projectChannelWorkspaceRevisions.set(revision.id, revision);
+        projectChannelWorkspaces.set(key, workspace);
+        return structuredClone(workspace);
+      },
+      async getForTeam(input) {
+        const workspace = projectChannelWorkspaces.get(`${input.teamId}:${input.channelId}`);
+        return workspace ? structuredClone(workspace) : null;
+      },
+      async getRevision(input) {
+        const revision = projectChannelWorkspaceRevisions.get(input.revisionId);
+        return revision && revision.teamId === input.teamId && revision.channelId === input.channelId ? structuredClone(revision) : null;
       },
     },
     tasks: {

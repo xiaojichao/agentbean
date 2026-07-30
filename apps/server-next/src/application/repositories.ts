@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, ProjectChannelWorkspaceRevisionDto, ProjectChannelWorkspaceDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import type { ManagementRepositories } from './management-repositories.js';
 import type { ManagementUnitOfWork } from './management-unit-of-work.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
@@ -95,6 +95,8 @@ export interface ChannelDocumentRevisionCommit {
   replayed: boolean;
 }
 export type WorkspaceRunRecord = WorkspaceRunDto;
+export type ProjectChannelWorkspaceRecord = ProjectChannelWorkspaceDto;
+export type ProjectChannelWorkspaceRevisionRecord = ProjectChannelWorkspaceRevisionDto;
 export type TaskRecord = TaskDto & {
   revision: number;
   /** #709：本 revision 行已被哪个 revision 取代（null = 当前行）。append-only 历史保留。 */
@@ -413,6 +415,15 @@ export interface WorkspaceRunRepository {
   listByDispatch(dispatchId: ID): Promise<WorkspaceRunRecord[]>;
 }
 
+export interface ProjectChannelWorkspaceRepository {
+  createInitial(input: {
+    workspace: ProjectChannelWorkspaceRecord;
+    revision: ProjectChannelWorkspaceRevisionRecord;
+  }): Promise<ProjectChannelWorkspaceRecord | null>;
+  getForTeam(input: { teamId: ID; channelId: ID }): Promise<ProjectChannelWorkspaceRecord | null>;
+  getRevision(input: { teamId: ID; channelId: ID; revisionId: ID }): Promise<ProjectChannelWorkspaceRevisionRecord | null>;
+}
+
 export interface TaskRepository {
   create(input: NewTaskRecord): Promise<TaskRecord>;
   getById(taskId: ID): Promise<TaskRecord | null>;
@@ -465,6 +476,7 @@ export interface ServerNextRepositories {
   artifacts: ArtifactRepository;
   channelDocuments: ChannelDocumentRepository;
   workspaceRuns: WorkspaceRunRepository;
+  projectChannelWorkspaces: ProjectChannelWorkspaceRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;
