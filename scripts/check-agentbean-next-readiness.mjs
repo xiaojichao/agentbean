@@ -816,7 +816,9 @@ export function collectAgentBeanNextReadinessChecks({
         daemonInstallSmokeScript.includes(
           'dist/apps/daemon-next/src/management-worker-protocol.js',
         ) &&
-        daemonInstallSmokeScript.includes('PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 22') &&
+        daemonInstallSmokeScript.includes('PHASE_2_MANAGEMENT_TOOL_NAMES?.length !== 24') &&
+        daemonInstallSmokeScript.includes("includes('tasks.cancel')") &&
+        daemonInstallSmokeScript.includes("includes('tasks.close')") &&
         daemonInstallSmokeScript.includes("includes('agents.list_available')") &&
         daemonInstallSmokeScript.includes("includes('handoffs.request')") &&
         daemonInstallSmokeScript.includes("includes('handoffs.await_result')") &&
