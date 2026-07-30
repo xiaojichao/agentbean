@@ -252,6 +252,8 @@ export const WEB_EVENTS = {
     update: 'task:update',
     delete: 'task:delete',
     reorder: 'task:reorder',
+    cancel: 'task:cancel',
+    close: 'task:close',
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },
