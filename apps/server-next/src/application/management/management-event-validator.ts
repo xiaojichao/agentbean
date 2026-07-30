@@ -300,7 +300,7 @@ function optionalPositiveInteger(value: unknown, path: string): void { if (value
 function stringArray(value: unknown, path: string): void { if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.length === 0)) fail(path); }
 function taskStatus(value: unknown, path: string): string {
   const status = string(value, path);
-  if (!['todo', 'in_progress', 'in_review', 'done', 'closed'].includes(status)) fail(path);
+  if (!['todo', 'in_progress', 'in_review', 'done', 'cancelled', 'closed'].includes(status)) fail(path);
   return status;
 }
 function handoffKind(value: unknown, path: string): string {

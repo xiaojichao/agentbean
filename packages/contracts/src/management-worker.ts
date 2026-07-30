@@ -597,7 +597,7 @@ const checkpointSchema = exactObject({
       taskId: required(id),
       taskRevision: required(integer(1)),
       taskAttempt: required(integer(1)),
-      status: required(oneOf(['todo', 'in_progress', 'in_review', 'done', 'closed'])),
+      status: required(oneOf(['todo', 'in_progress', 'in_review', 'done', 'cancelled', 'closed'])),
       claimLeaseId: optional(id),
     }))),
     activeClaimLeaseIds: optional(arrayOf(id)),
@@ -668,7 +668,7 @@ const toolInputSchemas: Record<Phase1ManagementWorkerToolName, Validator> = {
 const taskSchema = nullable(exactObject({
   id: required(id),
   title: required(text()),
-  status: required(oneOf(['todo', 'in_progress', 'in_review', 'done', 'closed'])),
+  status: required(oneOf(['todo', 'in_progress', 'in_review', 'done', 'cancelled', 'closed'])),
   revision: required(integer(0)),
 }));
 
