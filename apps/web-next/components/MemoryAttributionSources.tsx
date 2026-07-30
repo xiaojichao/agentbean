@@ -36,10 +36,15 @@ function summarizeEntries(entries: readonly ActiveMemoryAttributionEntryDto[]): 
   return labels.length > 0 ? labels.join('、') : null;
 }
 
-export function MemoryAttributionSources({ teamId, jobId }: { teamId: string; jobId: string }) {
+export function MemoryAttributionSources({ teamId, jobId }: { teamId?: string; jobId?: string }) {
   const [label, setLabel] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
+    // teamId/jobId 在 ChatMessage 上是可选的；缺任一则不查询、不渲染（也不泄露存在性）。
+    if (!teamId || !jobId) {
+      setLabel(null);
+      return;
+    }
     let cancelled = false;
     setLabel(undefined);
     fetchMemoryAttribution({ teamId, jobId })

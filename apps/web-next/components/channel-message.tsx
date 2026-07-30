@@ -66,7 +66,6 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     const coordination = meta?.coordination as Record<string, unknown> | undefined;
     const followupCandidates = coordination?.followupCandidateTaskIds as readonly string[] | undefined;
     // #965 AC#4：展示本次 PI 协调使用的 Active Memory 来源说明（仅来源标签，无正文）。
-    const coordinationJobId = typeof coordination?.jobId === 'string' ? coordination.jobId : undefined;
     return (
       <div className={`mx-auto my-1 max-w-prose rounded border px-2 py-1 text-center text-xs ${tone}`}>
         {msg.body}
@@ -83,7 +82,9 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
             ))}
           </div>
         )}
-        {coordinationJobId && <MemoryAttributionSources teamId={msg.teamId} jobId={coordinationJobId} />}
+        {typeof coordination?.jobId === 'string' && (
+          <MemoryAttributionSources teamId={msg.teamId} jobId={coordination?.jobId as string} />
+        )}
       </div>
     );
   }
