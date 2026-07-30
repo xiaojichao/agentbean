@@ -314,6 +314,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.task.update,
       WEB_EVENTS.task.delete,
       WEB_EVENTS.task.reorder,
+      WEB_EVENTS.task.cancel,
+      WEB_EVENTS.task.close,
     ]);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.listTeams);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.deleteTeam);

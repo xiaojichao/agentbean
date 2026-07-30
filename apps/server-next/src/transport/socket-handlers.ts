@@ -870,6 +870,8 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.task.update, app, 'updateTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.delete, app, 'deleteTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.reorder, app, 'reorderTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.cancel, app, 'cancelTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  bind(socket, WEB_EVENTS.task.close, app, 'closeTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
 }
 
 export function registerAgentSocketHandlers(

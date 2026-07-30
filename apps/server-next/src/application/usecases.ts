@@ -61,6 +61,7 @@ import { createCollaborationService } from './management/collaboration-service.j
 import { appendManagementEventInTransaction, createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
+import { createTaskLifecycleKernel } from './management/task-lifecycle-kernel.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
 import { createCollaborativeMemoryService, type MemoryView } from './collaborative-memory-service.js';
@@ -439,6 +440,8 @@ export interface ServerNextUseCases {
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto; message?: MessageDto }>>;
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  cancelTask(input: CancelTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  closeTask(input: CloseTaskInput): Promise<Ack<{ task: TaskDto }>>;
   reorderTask(input: ReorderTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   uploadArtifactForDevice(input: DeviceUploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
@@ -1014,6 +1017,20 @@ export interface DeleteTaskInput {
   taskId: string;
 }
 
+export interface CancelTaskInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  reason: string;
+}
+
+export interface CloseTaskInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  reason: string;
+}
+
 export interface ReorderTaskInput {
   userId: string;
   teamId: string;
@@ -1349,6 +1366,7 @@ export interface CreateServerNextUseCasesInput {
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
+  taskLifecycleKernel?: ReturnType<typeof createTaskLifecycleKernel>;
   serverCapsuleRuntimeContextResolver?: ServerCapsuleRuntimeContextResolver;
   /**
    * Default is durable-job (ADR 0061 Coordinated message intake).
@@ -1529,6 +1547,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
   });
   const taskCoordinationKernel = input.taskCoordinationKernel ?? createTaskCoordinationKernel({
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock,
+    ids,
+  });
+  const taskLifecycleKernel = input.taskLifecycleKernel ?? createTaskLifecycleKernel({
     unitOfWork: repositories.taskCoordinationUnitOfWork,
     clock,
     ids,
@@ -7215,6 +7238,60 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         actorId: taskInput.userId,
       });
       return makeSuccess({ task: deleted });
+    },
+
+    async cancelTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      // authority 推导：requester（创建者）/ human（team member）/ admin
+      const role = await repositories.teams.getMemberRole(taskInput.teamId, taskInput.userId);
+      const authorityKind = task.creatorId === taskInput.userId ? 'requester'
+        : (role === 'owner' || role === 'admin') ? 'admin' : 'human';
+      try {
+        const result = await taskLifecycleKernel.cancelTask(
+          { schemaVersion: 1, commandName: 'cancel-task', commandSchemaVersion: 1,
+            idempotencyKey: `cancel:${taskInput.taskId}:${taskInput.userId}:${clock.now()}` },
+          { taskId: task.id, expectedTaskRevision: task.revision, reason: taskInput.reason },
+          { managementRunId: '', workerId: taskInput.userId, leaseToken: '', fencingToken: 0 },
+          authorityKind, taskInput.teamId,
+        );
+        const updated = await repositories.tasks.getById(task.id);
+        return makeSuccess({ task: updated ?? task });
+      } catch (error) {
+        return makeFailure('CONFLICT', (error as Error).message);
+      }
+    },
+
+    async closeTask(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const role = await repositories.teams.getMemberRole(taskInput.teamId, taskInput.userId);
+      if (role !== 'owner' && role !== 'admin') {
+        return makeFailure('FORBIDDEN', 'Only team admins can close tasks');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      try {
+        await taskLifecycleKernel.closeTask(
+          { schemaVersion: 1, commandName: 'close-task', commandSchemaVersion: 1,
+            idempotencyKey: `close:${taskInput.taskId}:${taskInput.userId}:${clock.now()}` },
+          { taskId: task.id, expectedTaskRevision: task.revision, reason: taskInput.reason },
+          { managementRunId: '', workerId: taskInput.userId, leaseToken: '', fencingToken: 0 },
+          'admin', taskInput.teamId,
+        );
+        const updated = await repositories.tasks.getById(task.id);
+        return makeSuccess({ task: updated ?? task });
+      } catch (error) {
+        return makeFailure('CONFLICT', (error as Error).message);
+      }
     },
 
     async reorderTask(taskInput) {
