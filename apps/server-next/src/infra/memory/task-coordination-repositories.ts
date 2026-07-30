@@ -304,6 +304,15 @@ export function createInMemoryTaskCoordinationRepositories(
         return [...state.executionGrants.values()].filter((grant) =>
           grant.claimLeaseId === claimLeaseId && grant.state === 'active');
       },
+      async listActiveByAgent({ teamId, agentId }) {
+        return [...state.executionGrants.values()].filter((grant) =>
+          grant.teamId === teamId && grant.agentId === agentId && grant.state === 'active');
+      },
+      async listActiveByManifestRevision({ teamId, agentId, manifestRevision }) {
+        return [...state.executionGrants.values()].filter((grant) =>
+          grant.teamId === teamId && grant.agentId === agentId
+          && grant.manifestRevision === manifestRevision && grant.state === 'active');
+      },
       async revoke({ id, reason, revokedAt, now }) {
         const current = state.executionGrants.get(id);
         if (!current || current.state !== 'active') return null;

@@ -224,6 +224,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   // #924 Server-owned PI orchestration run / claim / scheduling / command / recovery facts。
   applyMigration(db, 'team/0061_pi_orchestration_runtime.sql');
   applyMigration(db, 'team/0062_task_execution_grants.sql');
+  // #946：grant 绑定 manifest_revision + 扩撤销归因（authority-revoked / manifest-superseded）。
+  applyMigration(db, 'team/0063_task_execution_grants_manifest_revision.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

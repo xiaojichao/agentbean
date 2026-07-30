@@ -1594,6 +1594,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
     clock,
     ids,
+    // #946：manifest 替代后撤销绑定旧 revision 的 execution grant（跨域 best-effort，lease 留存）。
+    onManifestSuperseded: async ({ teamId, agentId, manifestRevision, now }) => {
+      const grants = await repositories.taskCoordination.executionGrants.listActiveByManifestRevision({
+        teamId, agentId, manifestRevision,
+      });
+      for (const grant of grants) {
+        await repositories.taskCoordination.executionGrants.revoke({
+          id: grant.id, reason: 'manifest-superseded', revokedAt: now, now,
+        });
+      }
+    },
   });
   // #718 Team-scoped Agent Memory 投影：owner 发布/撤回，Team Owner/Admin opt-in，
   // PI/成员只读消费当前 Team 已启用投影。canManageAgent 复用设备拥有者链路授权（fail-closed）。
@@ -3937,17 +3948,32 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!channel.ok) {
         return channel;
       }
-      const updated = await repositories.channels.update({
-        channelId: channel.channel.id,
-        changes: {
-          agentMemberIds: channel.channel.agentMemberIds.filter((agentId) => agentId !== memberInput.agentId),
-          updatedAt: clock.now(),
-        },
+      const teamId = channel.channel.teamId;
+      const agentId = memberInput.agentId;
+      const now = clock.now();
+      // #946：channel 更新与 coordination 撤销同一 teamDb 事务——踢人即失效执行权（无越权窗口）。
+      return repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        const txChannel = await transaction.channels.getById(channel.channel.id);
+        if (!txChannel || txChannel.teamId !== teamId) {
+          return makeFailure('NOT_FOUND', 'Channel not found');
+        }
+        if (!txChannel.agentMemberIds.includes(agentId)) {
+          // 幂等：已非成员则不再持有权限，直接返回当前 channel。
+          return makeSuccess({ channel: txChannel });
+        }
+        const updated = await transaction.channels.update({
+          channelId: txChannel.id,
+          changes: {
+            agentMemberIds: txChannel.agentMemberIds.filter((id) => id !== agentId),
+            updatedAt: now,
+          },
+        });
+        if (!updated) {
+          return makeFailure('NOT_FOUND', 'Channel not found');
+        }
+        await revokeAgentChannelMembershipAuthority(transaction.coordination, teamId, agentId, now);
+        return makeSuccess({ channel: updated });
       });
-      if (!updated) {
-        return makeFailure('NOT_FOUND', 'Channel not found');
-      }
-      return makeSuccess({ channel: updated });
     },
 
     async listChannelMembers(memberInput) {
@@ -12865,6 +12891,40 @@ async function taskIsBoundToProjectStage(
     channelId: task.channelId,
   });
   return stages.some((stage) => stage.taskId === task.id);
+}
+
+/**
+ * #946：Agent 被移出 channel 后，撤销其在 Task 协调域的执行权（同事务调用）。
+ * - 释放该 agent 在本 team 的 active claim lease：listActive 仅返回 active lease，
+ *   update 的 CAS（expectedStatus='active'）保证仅释放 active、已终态（released/expired/
+ *   invalid）幂等跳过且绝不重写 releasedAt——与 domain evaluateAuthorityRevocation 的
+ *   inspectTaskClaim 守护等价（application lease 缺 domain 的 renewedAt，故就地用 CAS）。
+ * - 撤销其名下所有 active execution grant（authority-revoked）。
+ */
+async function revokeAgentChannelMembershipAuthority(
+  coordination: TaskCoordinationRepositories,
+  teamId: string,
+  agentId: string,
+  now: number,
+): Promise<void> {
+  const leases = (await coordination.claimLeases.listActive())
+    .filter((lease) => lease.teamId === teamId && lease.agentId === agentId);
+  for (const lease of leases) {
+    await coordination.claimLeases.update({
+      id: lease.id,
+      expectedStatus: 'active',
+      status: 'released',
+      heartbeatAt: lease.heartbeatAt,
+      expiresAt: lease.expiresAt,
+      releasedAt: now,
+    });
+  }
+  const grants = await coordination.executionGrants.listActiveByAgent({ teamId, agentId });
+  for (const grant of grants) {
+    await coordination.executionGrants.revoke({
+      id: grant.id, reason: 'authority-revoked', revokedAt: now, now,
+    });
+  }
 }
 
 async function channelForCreatorManagement(

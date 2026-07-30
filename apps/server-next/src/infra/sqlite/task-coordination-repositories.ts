@@ -314,12 +314,13 @@ export function createSqliteTaskCoordinationRepositories(
     executionGrants: {
       async create(record) {
         db.prepare(`INSERT INTO task_execution_grants
-          (id, team_id, management_run_id, task_id, task_revision, task_attempt, claim_lease_id,
-           agent_id, state, granted_at, revoked_at, revocation_reason, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          (id, team_id, management_run_id, task_id, task_revision, task_attempt, manifest_revision,
+           claim_lease_id, agent_id, state, granted_at, revoked_at, revocation_reason, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.managementRunId, record.taskId, record.taskRevision,
-            record.taskAttempt, record.claimLeaseId, record.agentId, record.state, record.grantedAt,
-            record.revokedAt ?? null, record.revocationReason ?? null, record.grantedAt, record.grantedAt);
+            record.taskAttempt, record.manifestRevision, record.claimLeaseId, record.agentId, record.state,
+            record.grantedAt, record.revokedAt ?? null, record.revocationReason ?? null,
+            record.grantedAt, record.grantedAt);
         return record;
       },
       async getById(id) {
@@ -336,6 +337,16 @@ export function createSqliteTaskCoordinationRepositories(
       async listActiveByClaimLease(claimLeaseId) {
         return db.prepare(`SELECT * FROM task_execution_grants
           WHERE claim_lease_id = ? AND state = 'active'`).all(claimLeaseId).map(mapGrantRequired);
+      },
+      async listActiveByAgent({ teamId, agentId }) {
+        return db.prepare(`SELECT * FROM task_execution_grants
+          WHERE team_id = ? AND agent_id = ? AND state = 'active'`)
+          .all(teamId, agentId).map(mapGrantRequired);
+      },
+      async listActiveByManifestRevision({ teamId, agentId, manifestRevision }) {
+        return db.prepare(`SELECT * FROM task_execution_grants
+          WHERE team_id = ? AND agent_id = ? AND manifest_revision = ? AND state = 'active'`)
+          .all(teamId, agentId, manifestRevision).map(mapGrantRequired);
       },
       async revoke({ id, reason, revokedAt, now }) {
         const result = db.prepare(`UPDATE task_execution_grants SET
@@ -460,6 +471,7 @@ function mapGrant(value: unknown): TaskExecutionGrantRecord | null {
     taskId: text(value, 'task_id'),
     taskRevision: number(value, 'task_revision'),
     taskAttempt: number(value, 'task_attempt'),
+    manifestRevision: number(value, 'manifest_revision'),
     claimLeaseId: text(value, 'claim_lease_id'),
     agentId: text(value, 'agent_id'),
     state: text(value, 'state') as TaskExecutionGrantRecord['state'],

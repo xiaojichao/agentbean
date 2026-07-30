@@ -18,6 +18,7 @@ import {
 } from '../src/infra/sqlite/repositories';
 import { createSqliteArtifactPreviewRepository } from '../src/infra/sqlite/artifact-preview-repository';
 import { createSqlitePromotionGateRepositories } from '../src/infra/sqlite/promotion-gate-repositories';
+import { createSqliteTaskCoordinationRepositories } from '../src/infra/sqlite/task-coordination-repositories';
 
 type BetterSqlite3Constructor = new (filename: string) => SqliteDatabase & { close(): void };
 
@@ -69,6 +70,70 @@ describe('server-next SQLite repositories', () => {
           'simple_request_escalation_handoffs',
         ]),
       );
+    } finally {
+      close();
+    }
+  });
+
+  test('#946: task_execution_grants 加 manifest_revision 列且 CHECK 接受新撤销归因', async () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      const columns = (teamDb.prepare('PRAGMA table_info(task_execution_grants)').all() as Array<{ name: string }>)
+        .map((row) => row.name);
+      expect(columns).toContain('manifest_revision');
+
+      // 新撤销归因通过 CHECK（0063 重建表扩展了 IN 列表）。
+      teamDb.prepare(`INSERT INTO task_execution_grants
+        (id, team_id, management_run_id, task_id, task_revision, task_attempt, manifest_revision,
+         claim_lease_id, agent_id, state, granted_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run('g', 'team-1', 'run-1', 'task-a', 1, 1, 5, 'lease-1', 'agent-1', 'active', 10, 10, 10);
+      expect(() => teamDb.prepare(
+        'UPDATE task_execution_grants SET revocation_reason = ?, state = ?, updated_at = ? WHERE id = ?')
+        .run('authority-revoked', 'revoked', 20, 'g')).not.toThrow();
+      expect(() => teamDb.prepare(
+        'UPDATE task_execution_grants SET revocation_reason = ? WHERE id = ?')
+        .run('manifest-superseded', 'g')).not.toThrow();
+    } finally {
+      close();
+    }
+  });
+
+  test('#946: sqlite executionGrants 按 agent / manifestRevision 查询并撤销（manifest-superseded）', async () => {
+    const { teamDb, close } = openMigratedDatabases();
+    try {
+      const grants = createSqliteTaskCoordinationRepositories(teamDb).executionGrants;
+      await grants.create({
+        id: 'g-a1', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-a',
+        taskRevision: 1, taskAttempt: 1, manifestRevision: 5, claimLeaseId: 'lease-1',
+        agentId: 'agent-1', state: 'active', grantedAt: 10,
+      });
+      await grants.create({
+        id: 'g-a1-new', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-b',
+        taskRevision: 1, taskAttempt: 1, manifestRevision: 6, claimLeaseId: 'lease-2',
+        agentId: 'agent-1', state: 'active', grantedAt: 10,
+      });
+      // create→map 回读 manifestRevision。
+      expect(await grants.getById('g-a1')).toMatchObject({ manifestRevision: 5 });
+      // listActiveByAgent：该 agent 所有 active（跨 task/revision）。
+      expect((await grants.listActiveByAgent({ teamId: 'team-1', agentId: 'agent-1' })).map((g) => g.id).sort())
+        .toEqual(['g-a1', 'g-a1-new']);
+      // listActiveByManifestRevision：仅绑定 revision 5 的。
+      expect((await grants.listActiveByManifestRevision({
+        teamId: 'team-1', agentId: 'agent-1', manifestRevision: 5,
+      })).map((g) => g.id)).toEqual(['g-a1']);
+      // revoke manifest-superseded + 幂等返回 null。
+      expect(await grants.revoke({ id: 'g-a1', reason: 'manifest-superseded', revokedAt: 20, now: 20 }))
+        .toMatchObject({ state: 'revoked', revocationReason: 'manifest-superseded' });
+      expect(await grants.revoke({ id: 'g-a1', reason: 'manifest-superseded', revokedAt: 30, now: 30 })).toBeNull();
+      // 他 agent 的 grant 不受影响。
+      await grants.create({
+        id: 'g-a2', teamId: 'team-1', managementRunId: 'run-1', taskId: 'task-c',
+        taskRevision: 1, taskAttempt: 1, manifestRevision: 5, claimLeaseId: 'lease-3',
+        agentId: 'agent-2', state: 'active', grantedAt: 10,
+      });
+      expect(await grants.listActiveByAgent({ teamId: 'team-1', agentId: 'agent-2' }))
+        .toMatchObject([{ id: 'g-a2' }]);
     } finally {
       close();
     }

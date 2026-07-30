@@ -61,6 +61,17 @@ export interface AgentExposureServiceDependencies {
   readonly canManageAgent: (input: { userId: ID; agentId: ID }) => Promise<boolean>;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
+  /**
+   * #946：active manifest 被新 revision 替代后回调，撤销绑定旧 revision 的 execution grant
+   * （manifest-superseded）。跨域（exposure→task-coordination）best-effort，在 publish 事务外
+   * 执行；lease 留存（agent 可用新 manifest 重新 claim 取得新 grant）。
+   */
+  readonly onManifestSuperseded?: (input: {
+    readonly teamId: ID;
+    readonly agentId: ID;
+    readonly manifestRevision: number;
+    readonly now: number;
+  }) => Promise<void>;
 }
 
 function toManifestDto(
@@ -259,10 +270,22 @@ export function createAgentExposureService(deps: AgentExposureServiceDependencie
         now,
       });
       const activated = await tx.manifests.activate({ id: draft.id, actorId: input.userId, now });
-      return { activated, supersededId: superseded?.id ?? null };
+      return { activated, superseded };
     });
     if (!result.activated) return makeFailure('NOT_FOUND', 'Manifest not found');
-    return makeSuccess({ manifest: toManifestDto(result.activated), supersededManifestId: result.supersededId });
+    // #946：旧 active manifest 被替代后，撤销绑定其 revision 的 execution grant（manifest-superseded）。
+    if (result.superseded && deps.onManifestSuperseded) {
+      await deps.onManifestSuperseded({
+        teamId: input.teamId,
+        agentId: draft.agentId,
+        manifestRevision: result.superseded.revision,
+        now,
+      });
+    }
+    return makeSuccess({
+      manifest: toManifestDto(result.activated),
+      supersededManifestId: result.superseded?.id ?? null,
+    });
   }
 
   async function revoke(

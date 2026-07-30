@@ -57,6 +57,18 @@ describe('Task Claim Broker', () => {
     expect(after).toMatchObject({ state: 'revoked', revocationReason: 'claim-released' });
   });
 
+  test('#946: claim 签发的 grant 绑定签发时 offer 冻结的 manifestRevision', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    await claimFirst(harness);
+    const grant = await harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 });
+    // seedAgent 建的 active manifest revision=1；publishOffer 冻结 manifestRevision=1 → grant 绑定 1。
+    expect(grant).toMatchObject({ manifestRevision: 1, agentId: 'agent-1', state: 'active' });
+  });
+
   test('#925 P1-b: 持久化 offer 在 lease 时间过期未扫时被 accept → 内联过期旧 lease 同事务撤销其 grant', async () => {
     // offerTtlMs(500) > leaseTtlMs(50)：持久化 offer 的生命跨越 lease 过期。
     // prepareOffers 在 t=10 发 O1/O2；agent-1 acquire(O1) 仅 consumeTaskOffers（清内存 map），
