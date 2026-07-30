@@ -6,7 +6,7 @@ import type {
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   createAckReadCandidateCommandHandler,
@@ -145,7 +145,7 @@ import {
   resolveProjectStageClaimFence,
   resolveProjectStageStableInputs,
 } from './project-stage-advance-service.js';
-import { canReadMemoryCapsule, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
+import { canReadMemoryCapsule, canReadMemoryScope, createServerMemoryCandidatePermissions, createServerMemoryWritePermissions } from './server-memory-permissions.js';
 import type { MemoryGrantRecord } from './memory-repositories.js';
 import type { ServerCapsuleRuntimeContextResolver } from './server-capsule-runtime-context-service.js';
 import { createPiProviderService, getEmergencyStopActive } from './pi-provider-service.js';
@@ -290,6 +290,19 @@ export interface ServerNextUseCases {
   updateAgentConfig(input: UpdateAgentConfigInput): Promise<Ack<{ agent: AgentDto }>>;
   deleteAgent(input: DeleteAgentInput): Promise<Ack<{ agent: AgentDto }>>;
   listChannels(input: { teamId: string; userId: string }): Promise<Ack<{ channels: ChannelDto[] }>>;
+  /**
+   * #965 AC#4：读取某次 PI 协调（coordination decision）实际使用的 Active Memory 来源归因。
+   * 仅返回 id/来源码/理由码（无正文）。授权在读取时复验：调用方必须是 decision 所在频道的可读
+   * 成员；否则 fail-closed 返回 null（不泄露归因的存在，也不泄露其他 scope 的正文）。
+   */
+  getMemoryAttribution(input: {
+    teamId: ID;
+    userId: ID;
+    /** PI 系统消息 meta.coordination.jobId 携带；优先用它定位 decision。 */
+    jobId?: ID;
+    /** 无 jobId 时回退用触发协调的人类消息 id 定位。 */
+    messageId?: ID;
+  }): Promise<Ack<{ attribution: ActiveMemoryAttributionDto | null }>>;
   createChannel(input: CreateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   updateChannel(input: UpdateChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   addChannelHumanMember(input: ChannelHumanMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
@@ -3790,6 +3803,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
       return makeSuccess({ channels: await repositories.channels.listForUser(listInput.teamId, listInput.userId) });
+    },
+    async getMemoryAttribution(input) {
+      // #965 AC#4：定位 decision 并在读取时复验频道读权限，fail-closed 返回 null。
+      if (!input.jobId && !input.messageId) {
+        return makeFailure('INVALID_REQUEST', 'jobId or messageId is required');
+      }
+      const decision = input.jobId
+        ? await repositories.channelCoordination.decisions.getByJobId(input.jobId)
+        : await repositories.channelCoordination.decisions.getByMessageId(input.messageId!);
+      // 无 decision、或 teamId 不符（跨 Team 探测）→ 不泄露存在性，返回 null。
+      if (!decision || decision.teamId !== input.teamId) {
+        return makeSuccess({ attribution: null });
+      }
+      // 读取时复验：调用方必须是 decision 所在频道的可读成员（与 Active Memory 注入同一权限闸）。
+      const channelReadable = await canReadMemoryScope(repositories, {
+        teamId: decision.teamId,
+        requesterUserId: input.userId,
+        scopeType: 'channel',
+        scopeRef: decision.channelId,
+      });
+      if (!channelReadable) {
+        return makeSuccess({ attribution: null });
+      }
+      return makeSuccess({ attribution: decision.memoryAttribution });
     },
 
     async createChannel(channelInput) {
