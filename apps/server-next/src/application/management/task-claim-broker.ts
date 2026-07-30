@@ -16,6 +16,7 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import {
   decideHardSpecifiedOfferKind,
+  desensitizeAllocationSuggestion,
   evaluateExecutionGrantIssuance,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
@@ -36,6 +37,7 @@ import type { AgentRecord, ServerNextRepositories, TaskRecord } from '../reposit
 import type { TaskClaimLeaseRecord, TaskCoordinationRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
+  ManagementConflictError,
 } from './management-kernel.js';
 import {
   hashManagementEventPayload,
@@ -469,6 +471,36 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         if (options?.allowedAgentIds && !options.allowedAgentIds.includes(item.agentId)) return false;
         return true;
       });
+      // #948-F ADR-0064：当前频道无合格候选 → 结构化 allocation_blocked（脱敏建议，仅有权人类可见，
+      // 绝不泄露频道外 agent 身份）。事件幂等（同 task+revision+payload → return existing）。
+      if (!resolution.candidates.some((item) => item.eligible)) {
+        const cause = resolution.candidates.length === 0 ? 'no_candidate' : 'no_qualified_candidate';
+        const suggestion = desensitizeAllocationSuggestion({
+          cause,
+          candidates: resolution.candidates.map((item) => ({
+            hasRequiredCapabilities: !item.diagnosticCodes.includes('CAPABILITY_MISSING'),
+            channelForbidden: item.diagnosticCodes.includes('TASK_CHANNEL_FORBIDDEN'),
+          })),
+        });
+        await input.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+          try {
+            await appendTaskClaimEvent(repositories.management, {
+              managementRunId: coordination.managementRunId, type: 'allocation-blocked',
+              actorKind: 'system', actorId: 'system',
+              idempotencyKey: `allocation-blocked:${taskId}:${resolution.taskRevision}`,
+              payload: { taskId, taskRevision: resolution.taskRevision, cause,
+                suggestionKind: suggestion.kind,
+                ...(suggestion.kind === 'escalate_external_capability'
+                  ? { externalAgentCount: suggestion.externalAgentCount } : {}) },
+            }, input.clock.now(), input.ids);
+          } catch (error) {
+            // 候选集变化致建议不同 → 同 key 不同 payload 冲突：已记录过 allocation-blocked，幂等跳过。
+            if (!(error instanceof ManagementConflictError
+              && error.code === 'MANAGEMENT_EVENT_IDEMPOTENCY_CONFLICT')) throw error;
+          }
+        });
+        return [];
+      }
       for (const candidate of eligibleCandidates) {
         const offerId = input.ids.nextId();
         // C-2b-ii：为 manifest-having 候选持久化完整 TaskOffer（新 respond 路径的 substrate，
