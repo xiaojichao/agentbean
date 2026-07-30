@@ -28,6 +28,7 @@ import { createInvocationGateway } from './application/management/invocation-gat
 import { createManagementToolExecutor, createPhase1ManagementToolHandlers, createPhase2CollaborationToolHandlers, createPhase2InvocationToolHandlers, createPhase2ManagementToolHandlers, createPhase3ManagementToolHandlers } from './application/management/management-tool-executor.js';
 import { createSubtaskAcceptanceService } from './application/management/subtask-acceptance-service.js';
 import { createTaskCoordinationKernel } from './application/management/task-coordination-kernel.js';
+import { createTaskLifecycleKernel } from './application/management/task-lifecycle-kernel.js';
 import { resolveTaskAllocation } from './application/management/task-allocation-service.js';
 import { createManagementRouter } from './application/management/management-router.js';
 import { createCollaborativeMemorySearchService } from './application/collaborative-memory-search-service.js';
@@ -1950,6 +1951,11 @@ function createDefaultManagementRuntime(
     clock,
     ids,
   });
+  const taskLifecycleKernel = createTaskLifecycleKernel({
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock,
+    ids,
+  });
   const subtaskAcceptanceService = createSubtaskAcceptanceService({
     unitOfWork: repositories.taskCoordinationUnitOfWork,
     clock,
@@ -2082,6 +2088,7 @@ function createDefaultManagementRuntime(
     }),
     phase2Handlers: {
       ...createPhase2ManagementToolHandlers({ kernel: taskCoordinationKernel,
+        repositories, taskLifecycleKernel,
         acceptanceService: subtaskAcceptanceService,
         // #807 AC#2：publish_for_claim 用真实 allocation 决策取代 kernel 的强转 open 兜底，
         // 使 PI 显式指派的子 Task 不再在发布瞬间被改成 open 并清空 assigneeId。

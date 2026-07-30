@@ -96,6 +96,8 @@ const WRITE_TOOL_NAMES = new Set<ManagementToolName>([
   'tasks.retry',
   'tasks.accept_subtask',
   'tasks.report_blocked',
+  'tasks.cancel',
+  'tasks.close',
   'handoffs.request',
   'memory.create_capsule',
   'memory.propose_candidate',

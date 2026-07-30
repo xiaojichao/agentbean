@@ -25,9 +25,11 @@ describe('Phase 2 management worker contracts', () => {
   });
 
   test('freezes Phase 1 plus Task and serial handoff tools without Memory tools', () => {
-    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toHaveLength(22);
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toHaveLength(24);
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.create_subtasks');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.report_blocked');
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.cancel');
+    expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.close');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('agents.list_available');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('handoffs.request');
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('handoffs.await_result');

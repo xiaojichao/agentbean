@@ -334,7 +334,7 @@ describe('management tool executor', () => {
       } })).resolves.toMatchObject({ ok: false, errorCode: 'CONFLICT', diagnosticCode: 'TASK_REVISION_FUTURE' });
   });
 
-  test('wires all eight Phase 2 Task tools to coordination kernel commands', async () => {
+  test('wires all ten Phase 2 Task tools to coordination kernel commands', async () => {
     const kernel = {
       createSubtasks: vi.fn(async () => ({ taskIds: ['task-1'], taskGraphRevision: 2 })),
       addDependency: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 2, taskGraphRevision: 3 })),
@@ -347,11 +347,18 @@ describe('management tool executor', () => {
       acceptSubtask: vi.fn(async () => ({ taskId: 'task-1', taskRevision: 3, status: 'done' })),
       reportBlocked: vi.fn(async () => ({ taskId: 'task-1', status: 'todo', reportedAt: 100 })),
     };
+    const lifecycleKernel = {
+      cancelTask: vi.fn(async () => ({ result: { taskId: 'task-1', taskRevision: 1, status: 'cancelled', cancelledSubtaskIds: [] }, receipt: { receiptId: 'r1', commandHash: 'h' }, disposition: 'applied' })),
+      closeTask: vi.fn(async () => ({ result: { taskId: 'task-1', taskRevision: 1, status: 'closed', closedSubtaskIds: [] }, receipt: { receiptId: 'r1', commandHash: 'h' }, disposition: 'applied' })),
+    };
+    const teamRepo = { getById: vi.fn(async () => ({ id: 'task-1', teamId: 'team-1', title: 'Test', status: 'todo', creatorId: 'user-1', revision: 1, tags: [], sortOrder: 0, createdAt: 0, updatedAt: 0, channelId: 'channel-1' })) };
     const handlers = createPhase2ManagementToolHandlers({ kernel: kernel as never,
+      repositories: { tasks: teamRepo, management: { runs: { getById: vi.fn(async () => ({ teamId: 'team-1' })) } } } as never,
+      taskLifecycleKernel: lifecycleKernel as never,
       acceptanceService: { decide: kernel.acceptSubtask } as never });
     expect(Object.keys(handlers).sort()).toEqual([
-      'tasks.accept_subtask', 'tasks.add_dependency', 'tasks.assign', 'tasks.create_subtasks',
-      'tasks.publish_for_claim', 'tasks.report_blocked', 'tasks.retry', 'tasks.wait',
+      'tasks.accept_subtask', 'tasks.add_dependency', 'tasks.assign', 'tasks.cancel', 'tasks.close',
+      'tasks.create_subtasks', 'tasks.publish_for_claim', 'tasks.report_blocked', 'tasks.retry', 'tasks.wait',
     ]);
     const base = { schemaVersion: 2 as const, managementPhase: 2 as const, commandId: 'command',
       managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'call', leaseToken: 'token',

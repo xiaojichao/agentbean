@@ -40,6 +40,8 @@ const toolPolicy: Record<ManagementToolName, {
   'tasks.retry': { effect: 'write', phase: 2 },
   'tasks.accept_subtask': { effect: 'write', phase: 2 },
   'tasks.report_blocked': { effect: 'write', phase: 2 },
+  'tasks.cancel': { effect: 'write', phase: 2 },
+  'tasks.close': { effect: 'write', phase: 2 },
   'agents.list_available': { effect: 'read', phase: 2 },
   'handoffs.request': { effect: 'write', phase: 2 },
   'handoffs.await_result': { effect: 'read', phase: 2 },
@@ -194,6 +196,9 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
   if (name === 'tasks.wait') return Type.Object({ taskIds: Type.Array(id()) }, { additionalProperties: false });
   if (name === 'tasks.retry' || name === 'tasks.report_blocked') {
     return Type.Object({ taskId: id(), expectedTaskRevision: revision(), reasonCode: id() }, { additionalProperties: false });
+  }
+  if (name === 'tasks.cancel' || name === 'tasks.close') {
+    return Type.Object({ taskId: id(), expectedTaskRevision: revision(), reason: id() }, { additionalProperties: false });
   }
   const evidenceRef = Type.Object({
     kind: Type.Union([Type.Literal('message'), Type.Literal('artifact'), Type.Literal('workspace-run'), Type.Literal('invocation'), Type.Literal('task')]),

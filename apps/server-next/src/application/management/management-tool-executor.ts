@@ -28,6 +28,7 @@ import type { ManagementMemoryUnitOfWork } from '../management-memory-unit-of-wo
 import { createInvocationGateway } from './invocation-gateway.js';
 import type { createManagementKernel } from './management-kernel.js';
 import type { createTaskCoordinationKernel, OfferCandidateForPublish } from './task-coordination-kernel.js';
+import type { createTaskLifecycleKernel } from './task-lifecycle-kernel.js';
 import type { createSubtaskAcceptanceService } from './subtask-acceptance-service.js';
 import { createSubtaskDeliveryService, deliveryOutput } from './subtask-delivery-service.js';
 import { createCollaborationService } from './collaboration-service.js';
@@ -254,6 +255,8 @@ export function createPhase2CollaborationToolHandlers(input: {
 export function createPhase2ManagementToolHandlers(input: {
   readonly kernel: TaskCoordinationKernel;
   readonly acceptanceService: SubtaskAcceptanceService;
+  readonly repositories: ServerNextRepositories;
+  readonly taskLifecycleKernel?: ReturnType<typeof createTaskLifecycleKernel>;
   readonly onTaskPublished?: (taskId: string) => Promise<void> | void;
   readonly onTaskAccepted?: (taskId: string) => Promise<void> | void;
   /** #805 eligibility 服务（可选,未提供时 allocatability stub,向后兼容 #798）。 */
@@ -271,7 +274,7 @@ export function createPhase2ManagementToolHandlers(input: {
     offerTtlMs: number;
   } | null>;
 }): Phase2ToolHandlers {
-  const { kernel, eligibilityService, allocationService, publishOfferResolutionService } = input;
+  const { kernel, eligibilityService, allocationService, publishOfferResolutionService, repositories, taskLifecycleKernel } = input;
   return {
     'tasks.create_subtasks': async (request) => {
       const drafts = request.input.subtasks.map((draft) => ({
@@ -355,6 +358,28 @@ export function createPhase2ManagementToolHandlers(input: {
         ...request.input,
       });
       return { taskId: blocked.taskId, status: blocked.status, reportedAt: blocked.reportedAt };
+    },
+    'tasks.cancel': async (request) => {
+      if (!taskLifecycleKernel) throw new Error('lifecycle kernel not configured');
+      const task = await repositories.tasks.getById(request.input.taskId);
+      if (!task) throw new Error('task not found');
+      const result = await taskLifecycleKernel.cancelTask(
+        { schemaVersion: 1, commandName: 'cancel-task', commandSchemaVersion: 1, idempotencyKey: request.idempotencyKey },
+        { taskId: request.input.taskId, expectedTaskRevision: request.input.expectedTaskRevision, reason: request.input.reason },
+        authority(request), 'pi_driver', task.teamId,
+      );
+      return { taskId: result.result.taskId, taskRevision: result.result.taskRevision, status: result.result.status, cancelledSubtaskIds: result.result.cancelledSubtaskIds };
+    },
+    'tasks.close': async (request) => {
+      if (!taskLifecycleKernel) throw new Error('lifecycle kernel not configured');
+      const task = await repositories.tasks.getById(request.input.taskId);
+      if (!task) throw new Error('task not found');
+      const result = await taskLifecycleKernel.closeTask(
+        { schemaVersion: 1, commandName: 'close-task', commandSchemaVersion: 1, idempotencyKey: request.idempotencyKey },
+        { taskId: request.input.taskId, expectedTaskRevision: request.input.expectedTaskRevision, reason: request.input.reason },
+        authority(request), 'pi_driver', task.teamId,
+      );
+      return { taskId: result.result.taskId, taskRevision: result.result.taskRevision, status: result.result.status, closedSubtaskIds: result.result.closedSubtaskIds };
     },
   };
 }
