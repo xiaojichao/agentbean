@@ -4191,6 +4191,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       ))).flatMap((attempt) => attempt ? [attempt.invocationId] : []))];
       // 先完成事实源级联，再触发 Memory 失效；跨 source kind 复查必须能看到 Channel 已不存在。
       await repositories.channelDocuments.deleteByChannel(channel.id);
+      await repositories.projectChannelWorkspaces.deleteByChannel(channel.id);
       const deletedArtifactIds = await repositories.artifacts.deleteByChannel(channel.id);
       await repositories.messages.deleteByChannel(channel.id);
       const deleted = await repositories.channels.delete({ channelId: channel.id });
@@ -13020,7 +13021,8 @@ async function ensureUserCanViewChannel(
 
 function normalizeWorkspacePath(value: string): string | null {
   const path = value.trim().replaceAll('\\', '/');
-  if (!path || path.startsWith('/') || path.split('/').some((part) => part === '' || part === '.' || part === '..')) return null;
+  if (!path || path.startsWith('/') || /^[a-zA-Z]:\//.test(path) || /[\u0000-\u001f\u007f]/.test(path)
+    || path.split('/').some((part) => part === '' || part === '.' || part === '..')) return null;
   return path;
 }
 

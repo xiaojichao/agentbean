@@ -1632,6 +1632,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const revision = projectChannelWorkspaceRevisions.get(input.revisionId);
         return revision && revision.teamId === input.teamId && revision.channelId === input.channelId ? structuredClone(revision) : null;
       },
+      async deleteByChannel(channelId) {
+        for (const [id, revision] of projectChannelWorkspaceRevisions) {
+          if (revision.channelId === channelId) projectChannelWorkspaceRevisions.delete(id);
+        }
+        for (const [key, workspace] of projectChannelWorkspaces) {
+          if (workspace.channelId === channelId) projectChannelWorkspaces.delete(key);
+        }
+      },
     },
     tasks: {
       async create(input) {

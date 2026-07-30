@@ -422,6 +422,7 @@ export interface ProjectChannelWorkspaceRepository {
   }): Promise<ProjectChannelWorkspaceRecord | null>;
   getForTeam(input: { teamId: ID; channelId: ID }): Promise<ProjectChannelWorkspaceRecord | null>;
   getRevision(input: { teamId: ID; channelId: ID; revisionId: ID }): Promise<ProjectChannelWorkspaceRevisionRecord | null>;
+  deleteByChannel(channelId: ID): Promise<void>;
 }
 
 export interface TaskRepository {

@@ -21,6 +21,9 @@ describe('Project Channel Workspace', () => {
     });
     expect(created).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 1, files: [{ path: 'README.md', artifactId: 'artifact-1' }] } } });
     if (!created.ok) throw new Error(created.error);
+    await expect(app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-2', files: [{ path: 'C:/outside/secret.txt', artifactId: 'artifact-1' }],
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
     created.workspace.currentRevision.files[0]!.path = 'tampered';
     await repositories.channels.update({ channelId: 'channel-2', changes: { archivedAt: 200 } });
     await expect(app.createProjectChannelWorkspace({
@@ -46,6 +49,9 @@ describe('Project Channel Workspace', () => {
     await expect(app.createProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: privateChannel.channel.id, files: [{ path: 'secret.txt', artifactId: 'private-artifact' }] })).resolves.toMatchObject({ ok: true });
     await repositories.channels.update({ channelId: privateChannel.channel.id, changes: { humanMemberIds: [] } });
     await expect(app.getProjectChannelWorkspace({ userId: 'user-1', teamId: 'team-1', channelId: privateChannel.channel.id })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    await repositories.channels.update({ channelId: privateChannel.channel.id, changes: { humanMemberIds: ['user-1'] } });
+    await expect(app.deleteChannel({ userId: 'user-1', teamId: 'team-1', channelId: privateChannel.channel.id })).resolves.toMatchObject({ ok: true });
+    await expect(repositories.projectChannelWorkspaces.getForTeam({ teamId: 'team-1', channelId: privateChannel.channel.id })).resolves.toBeNull();
   });
 });
 
