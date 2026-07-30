@@ -457,9 +457,3 @@ function createIds(values: string[]) {
   let index = 0;
   return () => values[index++] ?? `generated-${index}`;
 }
-});
-
-function createIds(values: string[]) {
-  let index = 0;
-  return () => values[index++] ?? `generated-${index}`;
-}
