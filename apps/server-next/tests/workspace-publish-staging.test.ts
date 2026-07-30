@@ -272,6 +272,67 @@ describe('Workspace publish staging (#967)', () => {
     void repositories;
   });
 
+  test('publish 成功但 staging 未标 committed 时，重试 commit 半态收敛', async () => {
+    const { app, cid, baselineRevisionId, repositories } = await seedWorkspace();
+    const body = Buffer.from('half-state-payload');
+    await app.beginWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-half',
+      baselineRevisionId,
+      files: [{
+        path: 'half.txt',
+        expectedSizeBytes: body.length,
+        expectedSha256: sha256(body),
+        filename: 'half.txt',
+        mimeType: 'text/plain',
+      }],
+    });
+    await app.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-half', path: 'half.txt', offset: 0, content: body,
+    });
+    // 完整 commit 一次
+    const first = await app.commitWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-half',
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error(first.error);
+    const revId = first.workspace!.currentRevisionId;
+
+    // 模拟崩溃窗口：强行把 staging 打回 open、清掉 committedRevisionId
+    const staging = await repositories.workspacePublishStagings.getByPublishId({
+      teamId: 'team-1', publishId: 'pub-half',
+    });
+    expect(staging).toBeTruthy();
+    await repositories.workspacePublishStagings.update({
+      ...staging!,
+      status: 'open',
+      committedRevisionId: undefined,
+      committedWorkspaceId: undefined,
+      files: staging!.files.map((f) => ({ ...f, complete: true, content: body })),
+      updatedAt: staging!.updatedAt + 1,
+    });
+
+    // 重试 commit：应收敛到同一 revision，不新建
+    const recovered = await app.commitWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-half',
+    });
+    expect(recovered.ok).toBe(true);
+    if (!recovered.ok) throw new Error(recovered.error);
+    expect(recovered.staging.status).toBe('committed');
+    expect(recovered.staging.committedRevisionId).toBe(revId);
+    expect(recovered.workspace?.currentRevisionId).toBe(revId);
+    expect(recovered.workspace?.currentRevision.revision).toBe(2);
+
+    const got = await app.getWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-half',
+    });
+    expect(got).toMatchObject({
+      ok: true,
+      staging: { status: 'committed', committedRevisionId: revId },
+    });
+  });
+
   test('空文件 size=0 可 complete 并提交', async () => {
     const { app, cid, baselineRevisionId } = await seedWorkspace();
     const emptySha = sha256(Buffer.alloc(0));

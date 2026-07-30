@@ -5268,13 +5268,44 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(beginInput.provenance ? { provenance: beginInput.provenance } : {}),
       });
       if (!created) {
-        // 竞态：另一请求刚创建。再读一次做幂等收敛。
+        // 竞态：另一请求刚创建。再读一次，并做与 existing 相同的 plan 兼容性检查。
         const raced = await repositories.workspacePublishStagings.getByPublishId({
           teamId: beginInput.teamId,
           publishId,
         });
-        if (raced) return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
-        return makeFailure('CONFLICT', 'Failed to create workspace publish staging');
+        if (!raced) return makeFailure('CONFLICT', 'Failed to create workspace publish staging');
+        if (raced.channelId !== beginInput.channelId) {
+          return makeFailure('CONFLICT', 'Publish identity already used for another channel');
+        }
+        if (raced.status === 'committed') {
+          return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
+        }
+        const compatible = isCompatibleWorkspaceStagingBegin({
+          existing: {
+            teamId: raced.teamId,
+            channelId: raced.channelId,
+            baselineRevisionId: raced.baselineRevisionId,
+            files: raced.files.map((f) => ({
+              path: f.path,
+              expectedSizeBytes: f.expectedSizeBytes,
+              expectedSha256: f.expectedSha256,
+            })),
+          },
+          requested: {
+            teamId: beginInput.teamId,
+            channelId: beginInput.channelId,
+            baselineRevisionId: beginInput.baselineRevisionId,
+            files: planFiles.map((f) => ({
+              path: f.path,
+              expectedSizeBytes: f.expectedSizeBytes,
+              expectedSha256: f.expectedSha256,
+            })),
+          },
+        });
+        if (!compatible) {
+          return makeFailure('CONFLICT', 'Publish identity already used with a different staging plan');
+        }
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
       }
       return makeSuccess({ staging: toWorkspacePublishStagingDto(created) });
     },
@@ -5495,6 +5526,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
 
+      // 半态恢复：publishRevision 已成功但 staging 未标 committed（崩溃窗口）时，
+      // 当前 head 的 path/size/sha 与本 plan 一致 → 补标 committed 并返回，不重复创建 revision。
+      const recovered = await recoverCommittedWorkspaceStagingIfPublished({
+        repositories,
+        staging,
+        workspace,
+        now: clock.now(),
+      });
+      if (recovered) return recovered;
+
       // 预判基线/空清单：在创建任何公开 artifact 之前失败，避免冲突后残留频道可见半成品。
       // 提交清单用占位 artifactId（仅用于路径集合冲突计算；真实 id 在通过后分配）。
       const provisionalEntries = staging.files.map((file) => ({
@@ -5519,7 +5560,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         );
       }
       if (preDecision.kind === 'conflict') {
-        // 基线落后 / 同路径竞争：明确冲突，不自动合并、不写 revision、不创建 artifact。
+        // 再试一次半态恢复（并发 peer 可能刚完成 publish+标 committed，或仅完成 publish）。
+        const workspaceNow = await repositories.projectChannelWorkspaces.getForTeam({
+          teamId: commitInput.teamId,
+          channelId: commitInput.channelId,
+        });
+        if (workspaceNow) {
+          const recoveredOnConflict = await recoverCommittedWorkspaceStagingIfPublished({
+            repositories,
+            staging,
+            workspace: workspaceNow,
+            now: clock.now(),
+          });
+          if (recoveredOnConflict) return recoveredOnConflict;
+        }
+        // 真冲突：基线落后 / 同路径竞争，不自动合并、不写 revision、不创建 artifact。
         return makeFailure('CONFLICT', 'Workspace baseline changed', {
           currentRevisionId: preDecision.currentRevisionId,
           currentRevision: preDecision.currentRevision,
@@ -5594,7 +5649,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         },
       });
       if (outcome.kind === 'conflict') {
-        // 同 publishId 并发 commit：另一请求可能已成功并标 committed → 幂等收敛，不报假冲突。
+        // 同 publishId 并发 commit / 半态：另一请求可能已成功（或仅完成 publish）→ 幂等收敛。
         const raced = await repositories.workspacePublishStagings.getByPublishId({
           teamId: commitInput.teamId,
           publishId,
@@ -5620,6 +5675,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
           return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
         }
+        const recoveredAfterCas = await recoverCommittedWorkspaceStagingIfPublished({
+          repositories,
+          staging: raced ?? staging,
+          workspace: outcome.current,
+          now: clock.now(),
+        });
+        if (recoveredAfterCas) return recoveredAfterCas;
         // 真冲突：基线被其他 publish 更新。不标 committed；artifact 无 message/run，频道索引不可见。
         const conflictDecision = evaluateWorkspacePublish({
           current: {
@@ -10905,6 +10967,59 @@ function resolveWorkspaceStagingLimits(limits?: { maxFileBytes?: number; maxPubl
     maxFileBytes: limits?.maxFileBytes ?? DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES,
     maxPublishBytes: limits?.maxPublishBytes ?? DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES,
   };
+}
+
+/** path + size + sha 清单是否与 revision 一致（用于 commit 半态恢复，不依赖 artifactId）。 */
+function stagingManifestMatchesRevision(
+  staging: WorkspacePublishStagingRecord,
+  revision: { files: ReadonlyArray<{ path: string; sizeBytes: number; sha256?: string }> },
+): boolean {
+  if (staging.files.length !== revision.files.length) return false;
+  const byPath = new Map(revision.files.map((file) => [file.path, file]));
+  for (const file of staging.files) {
+    const hit = byPath.get(file.path);
+    if (!hit) return false;
+    if (hit.sizeBytes !== file.expectedSizeBytes) return false;
+    if ((hit.sha256 ?? '').toLowerCase() !== file.expectedSha256.toLowerCase()) return false;
+  }
+  return true;
+}
+
+/**
+ * #967 半态恢复：revision 已前进且内容与 staging plan 一致，但 staging 仍为 open。
+ * 补标 committed 并返回最终结果，避免 publishId 永久不可查询。
+ */
+async function recoverCommittedWorkspaceStagingIfPublished(input: {
+  repositories: ServerNextRepositories;
+  staging: WorkspacePublishStagingRecord;
+  workspace: ProjectChannelWorkspaceRecord;
+  now: number;
+}): Promise<Ack<{ staging: WorkspacePublishStagingDto; workspace?: ProjectChannelWorkspaceDto }> | null> {
+  const { repositories, staging, workspace, now } = input;
+  if (staging.status === 'committed') return null;
+  // 基线仍等于当前 → 尚未发布（或无变化），不能当作已发布恢复。
+  if (staging.baselineRevisionId === workspace.currentRevision.id) return null;
+  if (!stagingManifestMatchesRevision(staging, workspace.currentRevision)) return null;
+  const committed = await repositories.workspacePublishStagings.update({
+    ...staging,
+    status: 'committed',
+    committedRevisionId: workspace.currentRevision.id,
+    committedWorkspaceId: workspace.id,
+    files: staging.files.map((file) => ({
+      path: file.path,
+      filename: file.filename,
+      mimeType: file.mimeType,
+      expectedSizeBytes: file.expectedSizeBytes,
+      expectedSha256: file.expectedSha256,
+      receivedBytes: file.receivedBytes,
+      complete: true,
+    })),
+    updatedAt: now,
+  });
+  return makeSuccess({
+    staging: toWorkspacePublishStagingDto(committed),
+    workspace,
+  });
 }
 
 function coerceStagingContent(content: Buffer | Uint8Array | string): Buffer {
