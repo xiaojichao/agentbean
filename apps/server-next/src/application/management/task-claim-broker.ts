@@ -491,6 +491,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 heartbeatAt: latest.heartbeatAt, expiresAt: latest.expiresAt,
               });
               if (!expired) throw new TaskClaimConflict('TASK_CLAIM_EXPIRE_CONFLICT');
+              // #925 P1-b：旧 lease 时间过期但 expireClaims 未扫时被内联过期——同事务撤销其绑定
+              // active grant，避免与同 (taskId, taskAttempt) 新 grant 撞唯一索引（sqlite）或双 active grant（memory）。
+              for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(latest.id)) {
+                await repositories.coordination.executionGrants.revoke({
+                  id: grant.id, reason: 'claim-expired', revokedAt: now, now,
+                });
+              }
             }
             const leaseId = input.ids.nextId();
             const lease: TaskClaimLeaseRecord = {
@@ -861,6 +868,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 heartbeatAt: latest.heartbeatAt, expiresAt: latest.expiresAt,
               });
               if (!expired) throw new TaskClaimConflict('TASK_CLAIM_EXPIRE_CONFLICT');
+              // #925 P1-b：旧 lease 时间过期但 expireClaims 未扫时被内联过期——同事务撤销其绑定
+              // active grant，避免与同 (taskId, taskAttempt) 新 grant 撞唯一索引（sqlite）或双 active grant（memory）。
+              for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(latest.id)) {
+                await repositories.coordination.executionGrants.revoke({
+                  id: grant.id, reason: 'claim-expired', revokedAt: now, now,
+                });
+              }
             }
             const leaseId = input.ids.nextId();
             const lease: TaskClaimLeaseRecord = {
