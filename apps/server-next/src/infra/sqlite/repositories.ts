@@ -2232,6 +2232,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         if (!row) return null;
         return { id: String(row.id), teamId: String(row.team_id), channelId: String(row.channel_id), revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.created_by), createdAt: Number(row.created_at), ...(row.provenance_json ? { provenance: JSON.parse(String(row.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) };
       },
+      async listRevisions(input) {
+        const rows = teamDb.prepare(`SELECT * FROM project_channel_workspace_revisions WHERE team_id = ? AND channel_id = ? ORDER BY revision DESC`).all(input.teamId, input.channelId) as Record<string, unknown>[];
+        return rows.map((row) => ({ id: String(row.id), teamId: String(row.team_id), channelId: String(row.channel_id), revision: Number(row.revision), files: JSON.parse(String(row.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(row.created_by), createdAt: Number(row.created_at), ...(row.provenance_json ? { provenance: JSON.parse(String(row.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) }));
+      },
       async deleteByChannel(channelId) {
         const remove = teamDb.transaction(() => {
           teamDb.prepare('DELETE FROM project_channel_workspace_revisions WHERE channel_id = ?').run(channelId);
