@@ -71,8 +71,8 @@ export interface ManagementEventPayloadMapV1 {
   readonly 'task-state-changed': {
     readonly taskId: ID;
     readonly taskRevision: number;
-    readonly from: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
-    readonly to: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+    readonly from: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
+    readonly to: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
   };
   readonly 'task-published-for-claim': {
     readonly taskId: ID;

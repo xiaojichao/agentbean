@@ -49,6 +49,7 @@ import { createSqliteAgentExposurePersistence } from './agent-exposure-repositor
 import { createSqliteAgentMemoryProjectionPersistence } from './agent-memory-projection-repositories.js';
 import { createSqliteMessageTracerRepositories } from './message-tracer-repositories.js';
 import { createSqlitePromotionGateRepositories } from './promotion-gate-repositories.js';
+import { createSqliteTaskLifecycleRepositories } from './task-lifecycle-repositories.js';
 import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
@@ -239,6 +240,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0067_project_channel_workspaces.sql');
   // #964 Workspace import provenance：记录导入来源设备，不暴露设备绝对路径。
   applyMigration(db, 'team/0068_workspace_import_provenance.sql');
+  // #926 Task lifecycle：具名 transition command receipt / idempotency tombstone。
+  applyMigration(db, 'team/0069_task_lifecycle_receipts.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -483,6 +486,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const projectDocumentInputSetResults = createSqliteProjectDocumentInputSetResultRepository(teamDb);
   const messageTracer = createSqliteMessageTracerRepositories(teamDb);
   const promotion = createSqlitePromotionGateRepositories(teamDb);
+  const lifecycle = createSqliteTaskLifecycleRepositories(teamDb);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -539,6 +543,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           management: managementRepositories,
           channels: repositories.channels,
           promotion,
+          lifecycle,
         })),
     ),
     memory,

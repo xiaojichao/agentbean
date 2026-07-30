@@ -668,7 +668,7 @@ export function createTaskCoordinationKernel(
           taskId: string;
           taskRevision: number;
           taskAttempt: number;
-          status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+          status: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
           claimLeaseId?: string;
           claimedAgentId?: string;
         }> = [];
@@ -680,7 +680,7 @@ export function createTaskCoordinationKernel(
             taskRevision: task.revision,
             taskAttempt: coordination.attempt,
           });
-          if (task.status === 'in_review' || task.status === 'done' || task.status === 'closed') {
+          if (task.status === 'in_review' || task.status === 'done' || task.status === 'cancelled' || task.status === 'closed') {
             readyTaskIds.push(task.id);
           } else {
             waitingTaskIds.push(task.id);

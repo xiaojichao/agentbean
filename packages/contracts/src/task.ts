@@ -1,6 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 
-export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'closed';
+export type TaskStatus = 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
 
 export interface TaskDto {
   id: ID;

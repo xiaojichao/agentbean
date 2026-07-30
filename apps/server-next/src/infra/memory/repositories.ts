@@ -65,6 +65,7 @@ import {
   createPromotionGateMemoryState,
   restorePromotionGateMemoryState,
 } from './promotion-gate-repositories.js';
+import { createMemoryTaskLifecycleRepositories } from './task-lifecycle-repositories.js';
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
@@ -159,6 +160,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   // #922 Promotion gate 内存投影。
   const promotionState = createPromotionGateMemoryState();
   const promotion = createInMemoryPromotionGateRepositories(promotionState);
+  const lifecycle = createMemoryTaskLifecycleRepositories();
 
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -388,6 +390,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             management: managementRepositories,
             channels: repositories.channels,
             promotion,
+            lifecycle,
           });
         } catch (error) {
           tasks.clear();
