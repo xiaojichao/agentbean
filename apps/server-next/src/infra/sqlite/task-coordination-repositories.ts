@@ -1,6 +1,7 @@
-import type { EvidenceRefDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus } from '../../../../../packages/contracts/src/index.js';
+import type { EvidenceRefDto, InputBindingDeclarationDto, OutputSlotDeclarationDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus } from '../../../../../packages/contracts/src/index.js';
 import type {
   EvidenceSnapshotRecord,
+  OutputSnapshotRecord,
   SubtaskAcceptanceRecord,
   SubtaskDeliveryRecord,
   TaskAcceptanceCriterionRecord,
@@ -22,13 +23,15 @@ export function createSqliteTaskCoordinationRepositories(
         db.prepare(`INSERT INTO task_coordinations
           (task_id, team_id, management_run_id, root_task_id, parent_task_id, node_kind,
            review_policy, claim_policy, required_capabilities_json, required_skills_json,
-           preferred_skills_json, atomicity_hint, task_revision, attempt,
-           max_attempts, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           preferred_skills_json, output_slots_json, input_bindings_json, atomicity_hint,
+           task_revision, attempt, max_attempts, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.taskId, record.teamId, record.managementRunId, record.rootTaskId ?? null,
             record.parentTaskId ?? null, record.nodeKind, record.reviewPolicy, record.claimPolicy,
             json(record.requiredCapabilities), record.requiredSkills ? json(record.requiredSkills) : null,
             record.preferredSkills ? json(record.preferredSkills) : null,
+            record.outputSlots ? json(record.outputSlots) : null,
+            record.inputBindings ? json(record.inputBindings) : null,
             record.atomicityHint ?? null, record.taskRevision, record.attempt, record.maxAttempts,
             record.createdAt, record.updatedAt);
         return record;
@@ -46,13 +49,15 @@ export function createSqliteTaskCoordinationRepositories(
         const result = db.prepare(`UPDATE task_coordinations SET
           management_run_id = ?, root_task_id = ?, parent_task_id = ?, node_kind = ?,
           review_policy = ?, claim_policy = ?, required_capabilities_json = ?, required_skills_json = ?,
-          preferred_skills_json = ?, atomicity_hint = ?, task_revision = ?,
-          attempt = ?, max_attempts = ?, updated_at = ?
+          preferred_skills_json = ?, output_slots_json = ?, input_bindings_json = ?, atomicity_hint = ?,
+          task_revision = ?, attempt = ?, max_attempts = ?, updated_at = ?
           WHERE task_id = ? AND task_revision = ?`)
           .run(record.managementRunId, record.rootTaskId ?? null, record.parentTaskId ?? null,
             record.nodeKind, record.reviewPolicy, record.claimPolicy, json(record.requiredCapabilities),
             record.requiredSkills ? json(record.requiredSkills) : null,
-            record.preferredSkills ? json(record.preferredSkills) : null, record.atomicityHint ?? null,
+            record.preferredSkills ? json(record.preferredSkills) : null,
+            record.outputSlots ? json(record.outputSlots) : null,
+            record.inputBindings ? json(record.inputBindings) : null, record.atomicityHint ?? null,
             record.taskRevision, record.attempt, record.maxAttempts, record.updatedAt, record.taskId,
             input.expectedTaskRevision);
         return changes(result) === 1 ? record : null;
@@ -179,6 +184,31 @@ export function createSqliteTaskCoordinationRepositories(
       async listByTask(taskId) {
         return db.prepare(`SELECT * FROM evidence_snapshots
           WHERE task_id = ? ORDER BY captured_at, id`).all(taskId).map(mapSnapshotRequired);
+      },
+    },
+    outputSnapshots: {
+      async create(record) {
+        const coordination = getRequiredCoordination(db, record.taskId);
+        if (coordination.teamId !== record.teamId) {
+          throw new Error('output snapshot does not match Task Team authority');
+        }
+        db.prepare(`INSERT INTO task_output_snapshots
+          (id, team_id, task_id, task_revision, task_attempt, slot_name, resolved_delivery_id,
+           resolved_evidence_refs_json, resolved_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.teamId, record.taskId, record.taskRevision, record.taskAttempt,
+            record.slotName, record.resolvedDeliveryId, json(record.resolvedEvidenceRefs),
+            record.resolvedAt);
+        return record;
+      },
+      async getByTaskSlot(input) {
+        return mapOutputSnapshot(db.prepare(`SELECT * FROM task_output_snapshots
+          WHERE task_id = ? AND task_revision = ? AND task_attempt = ? AND slot_name = ?`)
+          .get(input.taskId, input.taskRevision, input.taskAttempt, input.slotName));
+      },
+      async listByTask(taskId) {
+        return db.prepare(`SELECT * FROM task_output_snapshots
+          WHERE task_id = ? ORDER BY slot_name, id`).all(taskId).map(mapOutputSnapshotRequired);
       },
     },
     deliveries: {
@@ -415,6 +445,10 @@ function mapCoordination(value: unknown): TaskCoordinationRecord | null {
       ? parse<string[]>(text(value, 'required_skills_json')) : [],
     preferredSkills: nullableText(value, 'preferred_skills_json')
       ? parse<string[]>(text(value, 'preferred_skills_json')) : [],
+    outputSlots: nullableText(value, 'output_slots_json')
+      ? parse<OutputSlotDeclarationDto[]>(text(value, 'output_slots_json')) : [],
+    inputBindings: nullableText(value, 'input_bindings_json')
+      ? parse<InputBindingDeclarationDto[]>(text(value, 'input_bindings_json')) : [],
     atomicityHint: nullableText(value, 'atomicity_hint') as TaskCoordinationRecord['atomicityHint'],
     taskRevision: number(value, 'task_revision'), attempt: number(value, 'attempt'),
     maxAttempts: number(value, 'max_attempts'),
@@ -438,6 +472,8 @@ function mapDependency(value: unknown): TaskDependencyRecord { return { taskId: 
 function mapClaim(value: unknown): TaskClaimLeaseRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), taskId: text(value, 'task_id'), taskRevision: number(value, 'task_revision'), taskAttempt: number(value, 'task_attempt'), agentId: text(value, 'agent_id'), leaseTokenHash: text(value, 'lease_token_hash'), leaseFingerprint: text(value, 'lease_fingerprint'), fencingToken: number(value, 'fencing_token'), status: text(value, 'status') as TaskClaimLeaseRecord['status'], acquiredAt: number(value, 'acquired_at'), heartbeatAt: number(value, 'heartbeat_at'), expiresAt: number(value, 'expires_at'), releasedAt: nullableNumber(value, 'released_at') } : null; }
 function mapSnapshot(value: unknown): EvidenceSnapshotRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), taskId: text(value, 'task_id'), taskRevision: number(value, 'task_revision'), taskAttempt: number(value, 'task_attempt'), invocationId: text(value, 'invocation_id'), kind: text(value, 'kind') as EvidenceSnapshotRecord['kind'], sourceId: text(value, 'source_id'), snapshotHash: text(value, 'snapshot_hash'), snapshotRevision: nullableNumber(value, 'snapshot_revision'), snapshot: parse(text(value, 'snapshot_json')), capturedAt: number(value, 'captured_at') } : null; }
 function mapSnapshotRequired(value: unknown): EvidenceSnapshotRecord { return required(mapSnapshot(value)); }
+function mapOutputSnapshot(value: unknown): OutputSnapshotRecord | null { return value ? { id: text(value, 'id'), teamId: text(value, 'team_id'), taskId: text(value, 'task_id'), taskRevision: number(value, 'task_revision'), taskAttempt: number(value, 'task_attempt'), slotName: text(value, 'slot_name'), resolvedDeliveryId: text(value, 'resolved_delivery_id'), resolvedEvidenceRefs: parse<EvidenceRefDto[]>(text(value, 'resolved_evidence_refs_json')), resolvedAt: number(value, 'resolved_at') } : null; }
+function mapOutputSnapshotRequired(value: unknown): OutputSnapshotRecord { return required(mapOutputSnapshot(value)); }
 function mapDelivery(value: unknown): SubtaskDeliveryRecord | null { return value ? parse(text(value, 'delivery_json')) : null; }
 function mapDeliveryRequired(value: unknown): SubtaskDeliveryRecord { return required(mapDelivery(value)); }
 function mapAcceptance(value: unknown): SubtaskAcceptanceRecord | null { return value ? parse(text(value, 'acceptance_json')) : null; }

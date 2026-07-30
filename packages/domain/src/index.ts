@@ -51,3 +51,4 @@ export * from './project-document-bundle-policy.js';
 export * from './project-reference-policy.js';
 export * from './project-document-bundle-backfill-policy.js';
 export * from './allocation-blocked-policy.js';
+export * from './output-slot-resolution-policy.js';

@@ -57,6 +57,56 @@ describe('Task Claim Broker', () => {
     expect(after).toMatchObject({ state: 'revoked', revocationReason: 'claim-released' });
   });
 
+  test('#948-E ADR-0064/0065: relinquish after execution start terminates the attempt and requeues', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const claim = await claimFirst(harness);
+    // acquire 已把 task-a 置 in_progress（execution start）；grant active，attempt=1。
+    await expect(harness.repositories.tasks.getById('task-a')).resolves.toMatchObject({ status: 'in_progress' });
+
+    harness.clock.value = 60;
+    const ack = await harness.broker.relinquish({ ...claim.lease, cause: 'agent_unavailable' });
+    expect(ack).toMatchObject({ ok: true, executionStarted: true, attempt: 2 });
+    // lease released + grant revoked（claim-released）。
+    await expect(harness.repositories.taskCoordination.claimLeases.getById(claim.lease.claimLeaseId))
+      .resolves.toMatchObject({ status: 'released', releasedAt: 60 });
+    expect(await harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 })).toBeNull();
+    // 开工后 relinquish 终止并消耗 attempt（1→2），task 回 todo（可重新派发新 attempt）。
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ attempt: 2 });
+    await expect(harness.repositories.tasks.getById('task-a')).resolves.toMatchObject({ status: 'todo' });
+  });
+
+  test('#948-E: relinquish is idempotent (already-relinquished keeps attempt)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const claim = await claimFirst(harness);
+    await harness.broker.relinquish({ ...claim.lease, cause: 'agent_voluntary' });
+    // 二次 relinquish：lease 已 released → already_relinquished，幂等，不再消耗 attempt。
+    const again = await harness.broker.relinquish({ ...claim.lease, cause: 'agent_voluntary' });
+    expect(again).toMatchObject({ ok: true });
+    await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-a'))
+      .resolves.toMatchObject({ attempt: 2 });
+  });
+
+  test('#948-E: relinquish with stale authority is rejected (proof-gated, claim untouched)', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const claim = await claimFirst(harness);
+    // 错误 leaseToken → presentedLeaseTokenHash 不匹配 → rejected（fail-closed，AC#6）。
+    await expect(harness.broker.relinquish({ ...claim.lease, leaseToken: 'wrong-token', cause: 'agent_voluntary' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'STALE_AUTHORITY' });
+    await expect(harness.repositories.taskCoordination.claimLeases.getById(claim.lease.claimLeaseId))
+      .resolves.toMatchObject({ status: 'active' });
+  });
+
   test('#946: claim 签发的 grant 绑定签发时 offer 冻结的 manifestRevision', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);

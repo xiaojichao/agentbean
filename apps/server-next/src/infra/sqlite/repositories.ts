@@ -228,6 +228,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0063_task_execution_grants_manifest_revision.sql');
   // #947 PR1：Task Offer Requirement-confirmation 标记（ADR-0064 §3）。
   applyMigration(db, 'team/0064_task_offer_requirement_confirmation.sql');
+  // #948-G ADR-0064：output slot/input binding 声明（task_coordinations 两 JSON 列）+ 不可变 output snapshot 表。
+  // 改号 0064→0065：#947（PR#961）先合占 0064_task_offer_requirement_confirmation。
+  applyMigration(db, 'team/0065_output_slots_and_snapshots.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

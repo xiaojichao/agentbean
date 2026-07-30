@@ -6,6 +6,7 @@ describe('task claim socket contracts', () => {
     expect(AGENT_EVENTS.taskClaim).toEqual({
       offer: 'task-claim:offer', acquire: 'task-claim:acquire', renew: 'task-claim:renew',
       release: 'task-claim:release', expired: 'task-claim:expired', respond: 'task-claim:respond',
+      relinquish: 'task-claim:relinquish',
     });
     // #712 切片 C-2a：respond 携带显式四类响应（AC#2），非法 kind 被拒。
     expect(parseTaskClaimPayload('respond', {
