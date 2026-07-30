@@ -35,6 +35,7 @@ export * from './active-memory-renderer.js';
 export * from './agent-eligibility.js';
 export * from './task-offer-policy.js';
 export * from './claim-relinquishment-policy.js';
+export * from './task-execution-grant-policy.js';
 export * from './task-coverage-policy.js';
 export * from './task-decomposition-policy.js';
 export * from './task-followup-binding.js';

@@ -24,6 +24,7 @@ export interface TaskClaimAcquireInput {
   readonly taskId: string;
   readonly taskRevision: number;
   readonly taskAttempt: number;
+  readonly nodeKind: 'root' | 'subtask';
   readonly agentId: string;
   readonly leaseTokenHash: string;
   readonly leaseFingerprint: string;
@@ -38,7 +39,8 @@ export type TaskClaimAcquireRejection =
   | 'invalid-claim-state'
   | 'invalid-duration'
   | 'clock-regressed'
-  | 'fencing-overflow';
+  | 'fencing-overflow'
+  | 'root-not-claimable';
 
 export type TaskClaimAcquireDecision =
   | {
@@ -184,6 +186,11 @@ function grantedLease(input: TaskClaimAcquireInput, fencingToken: number): TaskC
 export function evaluateTaskClaimAcquire(
   input: TaskClaimAcquireInput,
 ): TaskClaimAcquireDecision {
+  // ADR-0063：根 Task 不设普通 Agent execution claim——这是身份级硬约束，
+  // 与输入值无关，优先于 duration/identity 校验，使 root 归因为 root-not-claimable。
+  if (input.nodeKind === 'root') {
+    return { kind: 'rejected', reason: 'root-not-claimable' };
+  }
   if (!isValidDuration(input.now, input.ttlMs)) {
     return { kind: 'rejected', reason: 'invalid-duration' };
   }

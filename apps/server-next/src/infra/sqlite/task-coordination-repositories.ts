@@ -8,6 +8,7 @@ import type {
   TaskCoordinationRecord,
   TaskCoordinationRepositories,
   TaskDependencyRecord,
+  TaskExecutionGrantRecord,
   TaskOfferRecord,
 } from '../../application/task-coordination-repositories.js';
 import type { SqliteDatabase } from './repositories.js';
@@ -310,6 +311,40 @@ export function createSqliteTaskCoordinationRepositories(
         return mapOffer(db.prepare('SELECT * FROM task_offers WHERE id = ?').get(input.id));
       },
     },
+    executionGrants: {
+      async create(record) {
+        db.prepare(`INSERT INTO task_execution_grants
+          (id, team_id, management_run_id, task_id, task_revision, task_attempt, claim_lease_id,
+           agent_id, state, granted_at, revoked_at, revocation_reason, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(record.id, record.teamId, record.managementRunId, record.taskId, record.taskRevision,
+            record.taskAttempt, record.claimLeaseId, record.agentId, record.state, record.grantedAt,
+            record.revokedAt ?? null, record.revocationReason ?? null, record.grantedAt, record.grantedAt);
+        return record;
+      },
+      async getById(id) {
+        return mapGrant(db.prepare('SELECT * FROM task_execution_grants WHERE id = ?').get(id));
+      },
+      async getActiveByTaskAttempt({ taskId, taskAttempt }) {
+        return mapGrant(db.prepare(`SELECT * FROM task_execution_grants
+          WHERE task_id = ? AND task_attempt = ? AND state = 'active'`).get(taskId, taskAttempt));
+      },
+      async listActiveByTask(taskId) {
+        return db.prepare(`SELECT * FROM task_execution_grants
+          WHERE task_id = ? AND state = 'active'`).all(taskId).map(mapGrantRequired);
+      },
+      async listActiveByClaimLease(claimLeaseId) {
+        return db.prepare(`SELECT * FROM task_execution_grants
+          WHERE claim_lease_id = ? AND state = 'active'`).all(claimLeaseId).map(mapGrantRequired);
+      },
+      async revoke({ id, reason, revokedAt, now }) {
+        const result = db.prepare(`UPDATE task_execution_grants SET
+          state = 'revoked', revoked_at = ?, revocation_reason = ?, updated_at = ?
+          WHERE id = ? AND state = 'active'`).run(revokedAt, reason, now, id);
+        if (changes(result) === 0) return null;
+        return mapGrant(db.prepare('SELECT * FROM task_execution_grants WHERE id = ?').get(id));
+      },
+    },
   };
 }
 
@@ -416,6 +451,24 @@ function mapOffer(value: unknown): TaskOfferRecord | null {
   };
 }
 function mapOfferRequired(value: unknown): TaskOfferRecord { return required(mapOffer(value)); }
+function mapGrant(value: unknown): TaskExecutionGrantRecord | null {
+  if (!value) return null;
+  return {
+    id: text(value, 'id'),
+    teamId: text(value, 'team_id'),
+    managementRunId: text(value, 'management_run_id'),
+    taskId: text(value, 'task_id'),
+    taskRevision: number(value, 'task_revision'),
+    taskAttempt: number(value, 'task_attempt'),
+    claimLeaseId: text(value, 'claim_lease_id'),
+    agentId: text(value, 'agent_id'),
+    state: text(value, 'state') as TaskExecutionGrantRecord['state'],
+    grantedAt: number(value, 'granted_at'),
+    revokedAt: nullableNumber(value, 'revoked_at'),
+    revocationReason: nullableText(value, 'revocation_reason') as TaskExecutionGrantRecord['revocationReason'],
+  };
+}
+function mapGrantRequired(value: unknown): TaskExecutionGrantRecord { return required(mapGrant(value)); }
 /** response 三列的绑定值（kind/detail/respondedAt）；null response → 三 null。create 与 updateStatus 共用。 */
 function responseColumns(response: TaskOfferRecord['response']): readonly [string | null, string | null, number | null] {
   return [response?.kind ?? null, response?.detail ?? null, response?.respondedAt ?? null];

@@ -223,6 +223,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0060_promotion_modes.sql');
   // #924 Server-owned PI orchestration run / claim / scheduling / command / recovery facts。
   applyMigration(db, 'team/0061_pi_orchestration_runtime.sql');
+  applyMigration(db, 'team/0062_task_execution_grants.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

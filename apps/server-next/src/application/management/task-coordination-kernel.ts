@@ -95,6 +95,12 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
+  /**
+   * #925 ADR-0064：随子 Task 一同原子发布的 control dependency 边（taskId 依赖 dependencyTaskId）。
+   * 与子 Task 同事务建边 + 整图校验；任一步失败整体回滚，不残留半个节点/边（验收#1）。
+   * 未提供时向后兼容（仅建子 Task，边由 addDependency 单独追加）。
+   */
+  readonly edges?: readonly { readonly taskId: string; readonly dependencyTaskId: string }[];
 }
 
 export interface ReviseTaskInput extends TaskCoordinationCommandInput {
@@ -287,6 +293,17 @@ export function createTaskCoordinationKernel(
           await repositories.coordination.coordinations.create(coordination);
           await createCriteria(repositories, task.id, task.revision, draft.acceptanceCriteria);
           tasks.push(task);
+        }
+        // #925：control dependency 边与子 Task 同事务建立，整图校验失败则连同子 Task 回滚。
+        const taskRevisionById = new Map(tasks.map((task) => [task.id, task.revision]));
+        for (const edge of input.edges ?? []) {
+          await requireCoordinationForRun(repositories, edge.taskId, run.id);
+          await requireCoordinationForRun(repositories, edge.dependencyTaskId, run.id);
+          const edgeRevision = taskRevisionById.get(edge.taskId);
+          if (edgeRevision === undefined) conflict('TASK_SUBTASKS_EDGE_UNKNOWN_TASK');
+          await repositories.coordination.dependencies.create({
+            taskId: edge.taskId, dependencyTaskId: edge.dependencyTaskId, taskRevision: edgeRevision,
+          });
         }
         await validateRunDag(repositories, run);
         let taskGraphRevision = 0;
@@ -1158,6 +1175,14 @@ async function invalidateCapturedClaim(repositories: TransactionRepositories,
     heartbeatAt: claim.heartbeatAt, expiresAt: claim.expiresAt, releasedAt: now,
   });
   if (!invalidated) conflict('TASK_CLAIM_INVALIDATION_CONFLICT');
+  // #925 ADR-0064：claim 失效 → 绑定的 execution context grant 同事务撤销（task-revised 归因）。
+  // repo.revoke 的 CAS（state active→revoked）保证幂等，无需再过 domain 决策函数。
+  const invalidatedGrants = await repositories.coordination.executionGrants.listActiveByClaimLease(claim.id);
+  for (const grant of invalidatedGrants) {
+    await repositories.coordination.executionGrants.revoke({
+      id: grant.id, reason: 'task-revised', revokedAt: now, now,
+    });
+  }
   const invalidatedInvocationIds = (await repositories.management.invocations.listByRun(managementRunId))
     .filter((invocation) => invocation.intent.taskContext?.claimLeaseId === claim.id)
     .map((invocation) => invocation.id).sort();

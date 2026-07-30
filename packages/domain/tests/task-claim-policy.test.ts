@@ -20,6 +20,7 @@ function acquireInput(
     taskId: 'task-1',
     taskRevision: 2,
     taskAttempt: 1,
+    nodeKind: 'subtask',
     agentId: 'agent-1',
     leaseTokenHash: 'token-hash-1',
     leaseFingerprint: 'fingerprint-1',
@@ -53,6 +54,18 @@ function proof(
 }
 
 describe('Phase 2 Task claim policy', () => {
+  test('#925 ADR-0063: root Task node is never claimable by an Agent execution claim', () => {
+    const decision = evaluateTaskClaimAcquire(acquireInput(undefined, { nodeKind: 'root' }));
+    expect(decision).toEqual({ kind: 'rejected', reason: 'root-not-claimable' });
+  });
+
+  test('root rejection takes precedence over invalid duration (identity-level hard gate)', () => {
+    const decision = evaluateTaskClaimAcquire(
+      acquireInput(undefined, { nodeKind: 'root', ttlMs: 0 }),
+    );
+    expect(decision).toEqual({ kind: 'rejected', reason: 'root-not-claimable' });
+  });
+
   test('first eligible claimant wins and duplicate acquire is idempotent', () => {
     const first = evaluateTaskClaimAcquire(acquireInput());
     expect(first).toEqual({

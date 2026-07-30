@@ -10,6 +10,10 @@ import type {
   TaskOfferStatus,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
+import type {
+  ExecutionGrantRevocationReason,
+  ExecutionGrantState,
+} from '../../../../packages/domain/src/index.js';
 
 export interface TaskCoordinationRecord extends Omit<
   TaskCoordinationDto,
@@ -58,6 +62,21 @@ export interface TaskClaimLeaseRecord {
   readonly heartbeatAt: UnixMs;
   readonly expiresAt: UnixMs;
   readonly releasedAt?: UnixMs;
+}
+
+export interface TaskExecutionGrantRecord {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly managementRunId: ID;
+  readonly taskId: ID;
+  readonly taskRevision: number;
+  readonly taskAttempt: number;
+  readonly claimLeaseId: ID;
+  readonly agentId: ID;
+  readonly state: ExecutionGrantState;
+  readonly grantedAt: UnixMs;
+  readonly revokedAt?: UnixMs;
+  readonly revocationReason?: ExecutionGrantRevocationReason;
 }
 
 export interface EvidenceSnapshotRecord {
@@ -203,5 +222,21 @@ export interface TaskCoordinationRepositories {
       response: TaskOfferResponseRecordDto | null;
       now: UnixMs;
     }): Promise<TaskOfferRecord | null>;
+  };
+  executionGrants: {
+    create(record: TaskExecutionGrantRecord): Promise<TaskExecutionGrantRecord>;
+    getById(id: ID): Promise<TaskExecutionGrantRecord | null>;
+    getActiveByTaskAttempt(input: {
+      taskId: ID;
+      taskAttempt: number;
+    }): Promise<TaskExecutionGrantRecord | null>;
+    listActiveByTask(taskId: ID): Promise<TaskExecutionGrantRecord[]>;
+    listActiveByClaimLease(claimLeaseId: ID): Promise<TaskExecutionGrantRecord[]>;
+    revoke(input: {
+      id: ID;
+      reason: ExecutionGrantRevocationReason;
+      revokedAt: UnixMs;
+      now: UnixMs;
+    }): Promise<TaskExecutionGrantRecord | null>;
   };
 }

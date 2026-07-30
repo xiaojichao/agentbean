@@ -15,6 +15,7 @@ import type {
   TaskOfferStatus,
 } from '../../../../../packages/contracts/src/index.js';
 import {
+  evaluateExecutionGrantIssuance,
   evaluateOfferAcceptance,
   evaluateOfferDecline,
   evaluateOfferValidity,
@@ -117,6 +118,7 @@ export type TaskOfferRespondResult =
         readonly taskId: string;
         readonly taskRevision: number;
         readonly taskAttempt: number;
+        readonly grantId: string;
         readonly title: string;
         readonly objective: string;
         readonly acceptanceCriteria: readonly unknown[];
@@ -456,6 +458,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               taskId: task.id,
               taskRevision: task.revision,
               taskAttempt: coordination.attempt,
+              nodeKind: coordination.nodeKind,
               agentId: offer.agentId,
               leaseTokenHash,
               leaseFingerprint,
@@ -488,6 +491,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 heartbeatAt: latest.heartbeatAt, expiresAt: latest.expiresAt,
               });
               if (!expired) throw new TaskClaimConflict('TASK_CLAIM_EXPIRE_CONFLICT');
+              // #925 P1-b：旧 lease 时间过期但 expireClaims 未扫时被内联过期——同事务撤销其绑定
+              // active grant，避免与同 (taskId, taskAttempt) 新 grant 撞唯一索引（sqlite）或双 active grant（memory）。
+              for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(latest.id)) {
+                await repositories.coordination.executionGrants.revoke({
+                  id: grant.id, reason: 'claim-expired', revokedAt: now, now,
+                });
+              }
             }
             const leaseId = input.ids.nextId();
             const lease: TaskClaimLeaseRecord = {
@@ -506,6 +516,25 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               expiresAt: decision.lease.expiresAt,
             };
             await repositories.coordination.claimLeases.create(lease);
+            const grantDecision = evaluateExecutionGrantIssuance({
+              teamId: task.teamId,
+              managementRunId: coordination.managementRunId,
+              taskId: task.id,
+              taskRevision: task.revision,
+              taskAttempt: coordination.attempt,
+              claimLeaseId: lease.id,
+              agentId: offer.agentId,
+              nodeKind: coordination.nodeKind,
+              grantedAt: now,
+            });
+            // root 已被 evaluateTaskClaimAcquire 拒绝；defense in depth：签发决策再次拒绝则回滚。
+            if (grantDecision.kind !== 'issued') {
+              throw new TaskClaimConflict('TASK_CLAIM_GRANT_REFUSED');
+            }
+            const grantId = input.ids.nextId();
+            await repositories.coordination.executionGrants.create({
+              id: grantId, ...grantDecision.grant,
+            });
             await appendTaskClaimEvent(repositories.management, {
               managementRunId: coordination.managementRunId,
               type: 'task-claimed',
@@ -538,7 +567,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
             const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
               .map((dependency) => dependency.dependencyTaskId);
-            return { lease, task, coordination, criteria, dependencyTaskIds };
+            return { lease, task, coordination, criteria, dependencyTaskIds, grantId };
           });
           consumeTaskOffers(offers, offer.taskId);
           const response = {
@@ -551,6 +580,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               taskId: result.task.id,
               taskRevision: result.task.revision,
               taskAttempt: result.coordination.attempt,
+              grantId: result.grantId,
               title: result.task.title,
               objective: result.task.description ?? result.task.title,
               acceptanceCriteria: result.criteria,
@@ -610,6 +640,14 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           id: payload.claimLeaseId, expectedStatus: 'active', status: 'released',
           heartbeatAt: lease!.heartbeatAt, expiresAt: lease!.expiresAt, releasedAt: now,
         });
+        if (updated) {
+          // #925：lease 释放 → 绑定 execution context grant 同事务撤销（claim-released）。
+          for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(payload.claimLeaseId)) {
+            await repositories.coordination.executionGrants.revoke({
+              id: grant.id, reason: 'claim-released', revokedAt: now, now,
+            });
+          }
+        }
         return updated
           ? { schemaVersion: 1, ok: true, releasedAt: now }
           : failure('CONFLICT', 'TASK_CLAIM_RELEASE_CONFLICT', true);
@@ -794,6 +832,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               acquire: {
                 current: latest ? toDomainLease(latest) : undefined,
                 taskId: task.id, taskRevision: task.revision, taskAttempt: coordination.attempt,
+                nodeKind: coordination.nodeKind,
                 agentId: offer.agentId, leaseTokenHash, leaseFingerprint,
                 ancestorAgentIds: resolution.ancestorAgentIds, now, ttlMs: leaseTtlMs,
               },
@@ -829,6 +868,13 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 heartbeatAt: latest.heartbeatAt, expiresAt: latest.expiresAt,
               });
               if (!expired) throw new TaskClaimConflict('TASK_CLAIM_EXPIRE_CONFLICT');
+              // #925 P1-b：旧 lease 时间过期但 expireClaims 未扫时被内联过期——同事务撤销其绑定
+              // active grant，避免与同 (taskId, taskAttempt) 新 grant 撞唯一索引（sqlite）或双 active grant（memory）。
+              for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(latest.id)) {
+                await repositories.coordination.executionGrants.revoke({
+                  id: grant.id, reason: 'claim-expired', revokedAt: now, now,
+                });
+              }
             }
             const leaseId = input.ids.nextId();
             const lease: TaskClaimLeaseRecord = {
@@ -839,6 +885,24 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
               heartbeatAt: decision.lease.renewedAt, expiresAt: decision.lease.expiresAt,
             };
             await repositories.coordination.claimLeases.create(lease);
+            const grantDecision = evaluateExecutionGrantIssuance({
+              teamId: task.teamId,
+              managementRunId: coordination.managementRunId,
+              taskId: task.id,
+              taskRevision: task.revision,
+              taskAttempt: coordination.attempt,
+              claimLeaseId: lease.id,
+              agentId: offer.agentId,
+              nodeKind: coordination.nodeKind,
+              grantedAt: now,
+            });
+            if (grantDecision.kind !== 'issued') {
+              throw new TaskClaimConflict('TASK_CLAIM_GRANT_REFUSED');
+            }
+            const grantId = input.ids.nextId();
+            await repositories.coordination.executionGrants.create({
+              id: grantId, ...grantDecision.grant,
+            });
             await appendTaskClaimEvent(repositories.management, {
               managementRunId: coordination.managementRunId, type: 'task-claimed',
               actorKind: 'agent', actorId: offer.agentId,
@@ -868,7 +932,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 retiredRevision: _retiredRevision, position: _position, ...criterion }) => criterion);
             const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
               .map((dependency) => dependency.dependencyTaskId);
-            return { lease, task, coordination, criteria, dependencyTaskIds };
+            return { lease, task, coordination, criteria, dependencyTaskIds, grantId };
           });
           if ('overtaken' in result) return { kind: 'overtaken' };
           const response = {
@@ -877,7 +941,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             execution: {
               schemaVersion: 1, managementRunId: result.coordination.managementRunId,
               taskId: result.task.id, taskRevision: result.task.revision,
-              taskAttempt: result.coordination.attempt, title: result.task.title,
+              taskAttempt: result.coordination.attempt, grantId: result.grantId, title: result.task.title,
               objective: result.task.description ?? result.task.title,
               acceptanceCriteria: result.criteria, dependencyTaskIds: result.dependencyTaskIds,
               ...(result.task.channelId ? { channelId: result.task.channelId } : {}),
@@ -925,6 +989,12 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
           heartbeatAt: lease.heartbeatAt, expiresAt: lease.expiresAt,
         });
         if (!updated) continue;
+        // #925：lease 过期 → 绑定 execution context grant 同事务撤销（claim-expired）。
+        for (const grant of await repositories.coordination.executionGrants.listActiveByClaimLease(lease.id)) {
+          await repositories.coordination.executionGrants.revoke({
+            id: grant.id, reason: 'claim-expired', revokedAt: now, now,
+          });
+        }
         expired.push({ schemaVersion: 1, claimLeaseId: lease.id,
           taskId: lease.taskId, agentId: lease.agentId, expiredAt: now });
         const task = await repositories.tasks.getById(lease.taskId);

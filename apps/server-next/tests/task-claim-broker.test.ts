@@ -11,6 +11,100 @@ import type { ServerNextRepositories } from '../src/application/repositories.js'
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
 
 describe('Task Claim Broker', () => {
+  test('#925 ADR-0063: root Task node rejects Agent execution claim on both acquire and accept paths', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({
+      channelId: 'channel-1',
+      changes: { agentMemberIds: ['eligible'], updatedAt: harness.clock.value },
+    });
+    // prepareOffers/publishOffer 不按 nodeKind 门禁；claim 决策（acquire/accept）才是 root 硬防线。
+    const [acquireOffer] = await harness.broker.prepareOffers('root-task');
+    expect(acquireOffer).toBeDefined();
+    await expect(harness.broker.acquire({
+      schemaVersion: 1, offerId: acquireOffer!.offerId, agentId: 'eligible',
+    })).resolves.toMatchObject({ ok: false, diagnosticCode: 'TASK_CLAIM_ROOT_NOT_CLAIMABLE' });
+
+    const [acceptOffer] = await harness.broker.prepareOffers('root-task');
+    await expect(harness.broker.respondToOffer({
+      offerId: acceptOffer!.offerId, agentId: 'eligible', kind: 'accepted',
+    })).resolves.toMatchObject({ kind: 'not_accepted' });
+
+    // 防线落在 claim 决策：root Task 不产生任何 active claim lease。
+    await expect(harness.repositories.taskCoordination.claimLeases.listActive())
+      .resolves.toEqual([]);
+  });
+
+  test('#925 ADR-0064: successful claim issues an execution context grant; release revokes it', async () => {
+    const harness = await createHarness();
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1'], updatedAt: 10 } });
+    const claim = await claimFirst(harness);
+    expect(typeof claim.execution.grantId).toBe('string');
+
+    const grant = await harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 });
+    expect(grant).toMatchObject({
+      state: 'active', agentId: 'agent-1',
+      claimLeaseId: claim.lease.claimLeaseId, taskRevision: claim.lease.taskRevision,
+    });
+
+    harness.clock.value = 60;
+    await expect(harness.broker.release({ ...claim.lease, reasonCode: 'YIELD' }))
+      .resolves.toMatchObject({ ok: true });
+    const after = await harness.repositories.taskCoordination.executionGrants.getById(grant!.id);
+    expect(after).toMatchObject({ state: 'revoked', revocationReason: 'claim-released' });
+  });
+
+  test('#925 P1-b: 持久化 offer 在 lease 时间过期未扫时被 accept → 内联过期旧 lease 同事务撤销其 grant', async () => {
+    // offerTtlMs(500) > leaseTtlMs(50)：持久化 offer 的生命跨越 lease 过期。
+    // prepareOffers 在 t=10 发 O1/O2；agent-1 acquire(O1) 仅 consumeTaskOffers（清内存 map），
+    // 不失效持久化 O2、也不触发 sweep。clock 推过 L1 过期(60)后 agent-2 accept 持久化 O2 →
+    // getLatest=L1(active,已时间过期)→claim_granted→respondToOffer 内联过期分支触发。
+    // 无修复：旧 grant 不撤销 → 内存双 active grant（sqlite 则撞唯一索引回滚整笔 accept）。
+    const harness = await createHarness({ offerTtlMs: 500, leaseTtlMs: 50 });
+    await seedAgent(harness.repositories, 'agent-1', 'device-1', 'online', ['code-review']);
+    await seedAgent(harness.repositories, 'agent-2', 'device-1', 'online', ['code-review']);
+    await harness.repositories.channels.update({ channelId: 'channel-1',
+      changes: { agentMemberIds: ['agent-1', 'agent-2'], updatedAt: 10 } });
+
+    // t=10：无 active lease → 给两 agent 各持久化一个 offer（均 valid 到 510）。
+    const prepared = await harness.broker.prepareOffers('task-a');
+    const o1 = prepared.find((candidate) => candidate.agentId === 'agent-1')!;
+    const o2 = prepared.find((candidate) => candidate.agentId === 'agent-2')!;
+
+    // agent-1 acquire(O1) → L1（expiresAt = 10+50 = 60）+ G1。
+    const first = await harness.broker.acquire({ schemaVersion: 1,
+      offerId: o1.offerId, agentId: 'agent-1' });
+    expect(first.ok).toBe(true);
+    const firstAck = first as Extract<TaskClaimAcquireAckV1, { ok: true }>;
+    const g1Id = firstAck.execution.grantId;
+    expect(typeof g1Id).toBe('string');
+    await expect(harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 }))
+      .resolves.toMatchObject({ state: 'active', agentId: 'agent-1', id: g1Id });
+
+    // 关键：clock 推过 L1 过期(60)，但不调 prepareOffers/expireClaims → L1 仍持久化 active、G1 仍 active。
+    harness.clock.value = 70;
+
+    // agent-2 accept 持久化 O2（valid 到 510）→ 命中 respondToOffer 内联过期分支。
+    const accepted = await harness.broker.respondToOffer({
+      offerId: o2.offerId, agentId: 'agent-2', kind: 'accepted',
+    });
+    expect(accepted).toMatchObject({ kind: 'claim_granted' });
+
+    // 旧 grant G1 必须已撤销（claim-expired），不得与新 G2 共存。
+    await expect(harness.repositories.taskCoordination.executionGrants.getById(g1Id!))
+      .resolves.toMatchObject({ state: 'revoked', revocationReason: 'claim-expired' });
+    await expect(harness.repositories.taskCoordination.executionGrants
+      .getActiveByTaskAttempt({ taskId: 'task-a', taskAttempt: 1 }))
+      .resolves.toMatchObject({ state: 'active', agentId: 'agent-2' });
+    // (task-a) 全表仅一个 active grant——锁死内存分叉的双 active grant 回归。
+    await expect(harness.repositories.taskCoordination.executionGrants.listActiveByTask('task-a'))
+      .resolves.toHaveLength(1);
+  });
+
   test('#829 文档 InputSet 候选必须同时声明 Agent 与 Device 合同版本', async () => {
     const harness = await createHarness();
     await seedAgent(harness.repositories, 'eligible', 'device-1', 'online', ['code-review']);
@@ -785,7 +879,7 @@ async function publishOffer(
   });
 }
 
-async function createHarness() {
+async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number } = {}) {
   const repositories = createInMemoryRepositories();
   const clock = { value: 10 };
   let id = 0;
@@ -835,7 +929,8 @@ async function createHarness() {
   let tokenId = 0;
   const broker = createTaskClaimBroker({ repositories, clock: { now: () => clock.value },
     ids: { nextId: () => `broker-${++brokerId}` },
-    leaseTokens: { nextToken: () => `raw-token-${++tokenId}` }, offerTtlMs: 20, leaseTtlMs: 100,
+    leaseTokens: { nextToken: () => `raw-token-${++tokenId}` },
+    offerTtlMs: options.offerTtlMs ?? 20, leaseTtlMs: options.leaseTtlMs ?? 100,
     piHealthy: async () => true });
   return { repositories, clock, broker, coordination, authority };
 }
