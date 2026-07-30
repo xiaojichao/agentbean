@@ -26,6 +26,8 @@ import type {
   ProjectChannelWorkspaceRecord,
   ProjectChannelWorkspaceRevisionRecord,
   PublishWorkspaceRevisionOutcome,
+  WorkspacePublishStagingFileRecord,
+  WorkspacePublishStagingRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import type {
@@ -244,6 +246,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   // #926 Task lifecycle：具名 transition command receipt / idempotency tombstone。
   applyMigration(db, 'team/0069_task_lifecycle_receipts.sql');
   applyMigration(db, 'team/0070_task_execution_grant_workspace_revision.sql');
+  // #967 Workspace 大文件暂存：稳定 publish identity、续传与超时清理。
+  applyMigration(db, 'team/0071_workspace_publish_staging.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2242,6 +2246,92 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           teamDb.prepare('DELETE FROM project_channel_workspaces WHERE channel_id = ?').run(channelId);
         });
         remove();
+      },
+    },
+    workspacePublishStagings: {
+      async create(input) {
+        try {
+          const tx = teamDb.transaction(() => {
+            teamDb.prepare(`INSERT INTO workspace_publish_stagings (
+              team_id, publish_id, channel_id, baseline_revision_id, status, created_by, created_at, updated_at,
+              committed_revision_id, committed_workspace_id, provenance_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+              input.teamId, input.publishId, input.channelId, input.baselineRevisionId, input.status,
+              input.createdBy, input.createdAt, input.updatedAt,
+              input.committedRevisionId ?? null, input.committedWorkspaceId ?? null,
+              input.provenance ? JSON.stringify(input.provenance) : null,
+            );
+            const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
+              team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            for (const file of input.files) {
+              insertFile.run(
+                input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
+                file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
+              );
+            }
+          });
+          tx();
+          return structuredCloneStaging(input);
+        } catch (error) {
+          if (error instanceof Error && (
+            error.message.includes('UNIQUE constraint failed: workspace_publish_stagings.team_id, workspace_publish_stagings.publish_id')
+            || error.message.includes('UNIQUE constraint failed: workspace_publish_stagings.publish_id')
+          )) {
+            return null;
+          }
+          throw error;
+        }
+      },
+      async getByPublishId(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM workspace_publish_stagings WHERE team_id = ? AND publish_id = ?`,
+        ).get(input.teamId, input.publishId) as Record<string, unknown> | undefined;
+        if (!row) return null;
+        return mapWorkspacePublishStaging(teamDb, row);
+      },
+      async update(input) {
+        const tx = teamDb.transaction(() => {
+          teamDb.prepare(`UPDATE workspace_publish_stagings SET
+            baseline_revision_id = ?, status = ?, updated_at = ?,
+            committed_revision_id = ?, committed_workspace_id = ?, provenance_json = ?
+            WHERE team_id = ? AND publish_id = ?`).run(
+            input.baselineRevisionId, input.status, input.updatedAt,
+            input.committedRevisionId ?? null, input.committedWorkspaceId ?? null,
+            input.provenance ? JSON.stringify(input.provenance) : null,
+            input.teamId, input.publishId,
+          );
+          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
+            .run(input.teamId, input.publishId);
+          const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
+            team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          for (const file of input.files) {
+            insertFile.run(
+              input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
+              file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
+            );
+          }
+        });
+        tx();
+        return structuredCloneStaging(input);
+      },
+      async listExpiredOpen(input) {
+        const rows = teamDb.prepare(
+          `SELECT * FROM workspace_publish_stagings
+           WHERE status != 'committed' AND created_at <= ?
+           ORDER BY created_at ASC LIMIT ?`,
+        ).all(input.olderThan, input.limit) as Record<string, unknown>[];
+        return rows.map((row) => mapWorkspacePublishStaging(teamDb, row));
+      },
+      async delete(input) {
+        const tx = teamDb.transaction(() => {
+          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
+            .run(input.teamId, input.publishId);
+          teamDb.prepare('DELETE FROM workspace_publish_stagings WHERE team_id = ? AND publish_id = ?')
+            .run(input.teamId, input.publishId);
+        });
+        tx();
       },
     },
     channelDocuments: {
@@ -4267,6 +4357,62 @@ function mapDispatch(row: unknown): DispatchRecord | null {
     acceptedAt: sqliteNullableNumber(row, 'accepted_at'),
     completedAt: sqliteNullableNumber(row, 'completed_at'),
     error: sqliteNullableText(row, 'error_message'),
+  };
+}
+
+function structuredCloneStaging(input: WorkspacePublishStagingRecord): WorkspacePublishStagingRecord {
+  return {
+    ...input,
+    files: input.files.map((file) => ({
+      ...file,
+      ...(file.content ? { content: Buffer.from(file.content) } : {}),
+    })),
+    ...(input.provenance ? { provenance: { ...input.provenance } } : {}),
+  };
+}
+
+function mapWorkspacePublishStaging(
+  teamDb: { prepare: (sql: string) => { all: (...params: unknown[]) => unknown[] } },
+  row: Record<string, unknown>,
+): WorkspacePublishStagingRecord {
+  const publishId = String(row.publish_id);
+  const teamId = String(row.team_id);
+  const fileRows = teamDb.prepare(
+    `SELECT * FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ? ORDER BY path ASC`,
+  ).all(teamId, publishId) as Record<string, unknown>[];
+  const files: WorkspacePublishStagingFileRecord[] = fileRows.map((fileRow) => {
+    const content = fileRow.content;
+    return {
+      path: String(fileRow.path),
+      filename: String(fileRow.filename),
+      mimeType: String(fileRow.mime_type),
+      expectedSizeBytes: Number(fileRow.expected_size_bytes),
+      expectedSha256: String(fileRow.expected_sha256),
+      receivedBytes: Number(fileRow.received_bytes),
+      complete: Number(fileRow.complete) === 1,
+      ...(Buffer.isBuffer(content) ? { content: Buffer.from(content) }
+        : content instanceof Uint8Array ? { content: Buffer.from(content) }
+        : typeof content === 'string' ? { content: Buffer.from(content) }
+        : {}),
+    };
+  });
+  const provenanceRaw = row.provenance_json ? String(row.provenance_json) : '';
+  const provenance = provenanceRaw
+    ? JSON.parse(provenanceRaw) as WorkspacePublishStagingRecord['provenance']
+    : undefined;
+  return {
+    publishId,
+    teamId: String(row.team_id),
+    channelId: String(row.channel_id),
+    baselineRevisionId: String(row.baseline_revision_id),
+    status: String(row.status) as WorkspacePublishStagingRecord['status'],
+    files,
+    createdBy: String(row.created_by),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    ...(row.committed_revision_id ? { committedRevisionId: String(row.committed_revision_id) } : {}),
+    ...(row.committed_workspace_id ? { committedWorkspaceId: String(row.committed_workspace_id) } : {}),
+    ...(provenance ? { provenance } : {}),
   };
 }
 

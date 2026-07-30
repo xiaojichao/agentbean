@@ -445,6 +445,55 @@ export type PublishWorkspaceRevisionOutcome =
   | { readonly kind: 'published'; readonly workspace: ProjectChannelWorkspaceRecord }
   | { readonly kind: 'conflict'; readonly current: ProjectChannelWorkspaceRecord };
 
+/** #967 暂存会话内单文件（含私有 content，DTO 层必须剥离）。 */
+export interface WorkspacePublishStagingFileRecord {
+  path: string;
+  filename: string;
+  mimeType: string;
+  expectedSizeBytes: number;
+  expectedSha256: string;
+  receivedBytes: number;
+  complete: boolean;
+  /** Server-private partial/full bytes；不进频道索引 / revision。 */
+  content?: Buffer;
+}
+
+/** #967 稳定 publish identity 的暂存会话。 */
+export interface WorkspacePublishStagingRecord {
+  publishId: ID;
+  teamId: ID;
+  channelId: ID;
+  baselineRevisionId: ID;
+  status: 'open' | 'committed' | 'failed';
+  files: WorkspacePublishStagingFileRecord[];
+  createdBy: ID;
+  createdAt: UnixMs;
+  updatedAt: UnixMs;
+  committedRevisionId?: ID;
+  committedWorkspaceId?: ID;
+  provenance?: {
+    agentId: ID;
+    taskId: ID;
+    taskAttempt: number;
+  };
+}
+
+/**
+ * #967 Workspace publish staging 仓储。
+ * 暂存与 artifacts 表隔离：commit 前不创建 artifact，故频道文件/下载路径天然不可见。
+ */
+export interface WorkspacePublishStagingRepository {
+  create(input: WorkspacePublishStagingRecord): Promise<WorkspacePublishStagingRecord | null>;
+  getByPublishId(input: { teamId: ID; publishId: ID }): Promise<WorkspacePublishStagingRecord | null>;
+  update(input: WorkspacePublishStagingRecord): Promise<WorkspacePublishStagingRecord>;
+  /**
+   * 列出可清理的 open/failed 会话（createdAt <= olderThan）。
+   * committed 结果不在此列（永久可查询）。
+   */
+  listExpiredOpen(input: { olderThan: UnixMs; limit: number }): Promise<WorkspacePublishStagingRecord[]>;
+  delete(input: { teamId: ID; publishId: ID }): Promise<void>;
+}
+
 export interface TaskRepository {
   create(input: NewTaskRecord): Promise<TaskRecord>;
   getById(taskId: ID): Promise<TaskRecord | null>;
@@ -498,6 +547,8 @@ export interface ServerNextRepositories {
   channelDocuments: ChannelDocumentRepository;
   workspaceRuns: WorkspaceRunRepository;
   projectChannelWorkspaces: ProjectChannelWorkspaceRepository;
+  /** #967 Workspace 大文件暂存（publish identity 续传 / 幂等提交）。 */
+  workspacePublishStagings: WorkspacePublishStagingRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;

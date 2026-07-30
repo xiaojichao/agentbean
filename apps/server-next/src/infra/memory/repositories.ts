@@ -23,6 +23,7 @@ import type {
   ProjectChannelWorkspaceRecord,
   ProjectChannelWorkspaceRevisionRecord,
   PublishWorkspaceRevisionOutcome,
+  WorkspacePublishStagingRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
@@ -129,6 +130,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const workspaceRuns = new Map<string, WorkspaceRunRecord>();
   const projectChannelWorkspaces = new Map<string, ProjectChannelWorkspaceRecord>();
   const projectChannelWorkspaceRevisions = new Map<string, ProjectChannelWorkspaceRevisionRecord>();
+  const workspacePublishStagings = new Map<string, WorkspacePublishStagingRecord>();
   const tasks = new Map<string, TaskRecord>();
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
@@ -1671,6 +1673,35 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
       },
     },
+    workspacePublishStagings: {
+      async create(input) {
+        const key = `${input.teamId}:${input.publishId}`;
+        if (workspacePublishStagings.has(key)) return null;
+        const record = cloneWorkspacePublishStaging(input);
+        workspacePublishStagings.set(key, record);
+        return cloneWorkspacePublishStaging(record);
+      },
+      async getByPublishId(input) {
+        const record = workspacePublishStagings.get(`${input.teamId}:${input.publishId}`);
+        return record ? cloneWorkspacePublishStaging(record) : null;
+      },
+      async update(input) {
+        const key = `${input.teamId}:${input.publishId}`;
+        const record = cloneWorkspacePublishStaging(input);
+        workspacePublishStagings.set(key, record);
+        return cloneWorkspacePublishStaging(record);
+      },
+      async listExpiredOpen(input) {
+        return Array.from(workspacePublishStagings.values())
+          .filter((row) => row.status !== 'committed' && row.createdAt <= input.olderThan)
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .slice(0, input.limit)
+          .map(cloneWorkspacePublishStaging);
+      },
+      async delete(input) {
+        workspacePublishStagings.delete(`${input.teamId}:${input.publishId}`);
+      },
+    },
     tasks: {
       async create(input) {
         const task: TaskRecord = {
@@ -2409,6 +2440,17 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     experiencePack: createMemoryExperiencePackRepositories(),
   };
   return repositories;
+}
+
+function cloneWorkspacePublishStaging(input: WorkspacePublishStagingRecord): WorkspacePublishStagingRecord {
+  return {
+    ...input,
+    files: input.files.map((file) => ({
+      ...file,
+      ...(file.content ? { content: Buffer.from(file.content) } : {}),
+    })),
+    ...(input.provenance ? { provenance: { ...input.provenance } } : {}),
+  };
 }
 
 function uniqueStrings(values: string[]): string[] {
