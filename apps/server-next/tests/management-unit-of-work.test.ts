@@ -298,7 +298,10 @@ describe('management SQLite constraints', () => {
 
   test('rolls back schema when recording the 0010 migration ledger fails', () => {
     const db = new Database(':memory:');
-    const phase2Tables = ['agent_handoffs', 'agent_collaboration_proposals', 'subtask_acceptance_evidence_refs', 'subtask_acceptance_criterion_results', 'subtask_acceptances', 'subtask_delivery_evidence_refs', 'subtask_deliveries', 'evidence_snapshots', 'task_claim_leases', 'task_dependencies', 'task_acceptance_criteria', 'task_coordinations'];
+    // Drop child tables before their FK parents (task_coordinations, subtask_deliveries);
+    // task_output_snapshots references both, so it must be dropped first or the parent
+    // drop fails with foreign_keys=ON (rebuilt child trigger names an already-dropped table).
+    const phase2Tables = ['task_output_snapshots', 'agent_handoffs', 'agent_collaboration_proposals', 'subtask_acceptance_evidence_refs', 'subtask_acceptance_criterion_results', 'subtask_acceptances', 'subtask_delivery_evidence_refs', 'subtask_deliveries', 'evidence_snapshots', 'task_claim_leases', 'task_dependencies', 'task_acceptance_criteria', 'task_coordinations'];
     const tables = ['management_shadow_decisions', 'invocation_dispatch_attempts', 'agent_invocations', 'management_checkpoints', 'management_events', 'manager_leases', 'management_runs', 'managed_request_reservations', 'team_management_policies'];
     try {
       applyTeamMigrations(db);

@@ -1,22 +1,27 @@
 import type {
   AcceptanceCriterionDto,
+  InputBindingDeclarationDto,
   ManagementEventV1,
   ManagementEventPayloadMapV1,
+  OutputSlotDeclarationDto,
   SubtaskAcceptanceV1,
   TaskStatus,
 } from '../../../../../packages/contracts/src/index.js';
 import {
   authorizeTaskRevision,
+  evaluateInputBindingResolvability,
   evaluateSkillCoverageUnion,
   evaluateSubtaskAcceptance,
   evaluateTaskDag,
   evaluateTaskDecomposability,
   evaluateTaskRevisionChange,
+  resolveOutputSlots,
   type ExecutableSubtaskCoverageResult,
 } from '../../../../../packages/domain/src/index.js';
 import type { TaskRecord } from '../repositories.js';
 import type { ManagementEventRecord } from '../management-repositories.js';
 import type {
+  OutputSnapshotRecord,
   TaskAcceptanceCriterionRecord,
   TaskClaimLeaseRecord,
   TaskCoordinationRecord,
@@ -92,6 +97,10 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
      * 供 broker publishOffer 写入 offer objective（#725 F3）。
      */
     readonly preferredSkills?: readonly string[];
+    /** #948-G ADR-0064：该子 Task 声明的具名 output slots（验收时解析为不可变 snapshot）。缺省视为 []。 */
+    readonly outputSlots?: readonly OutputSlotDeclarationDto[];
+    /** #948-G ADR-0064：该子 Task 声明的 input bindings（显式引用上游 output slot，数据依赖）。缺省视为 []。 */
+    readonly inputBindings?: readonly InputBindingDeclarationDto[];
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
@@ -288,6 +297,8 @@ export function createTaskCoordinationKernel(
             claimPolicy: draft.claimPolicy, requiredCapabilities: [...draft.requiredCapabilities],
             requiredSkills: draft.requiredSkills ? [...draft.requiredSkills] : [],
             preferredSkills: draft.preferredSkills ? [...draft.preferredSkills] : [],
+            outputSlots: draft.outputSlots ? [...draft.outputSlots] : [],
+            inputBindings: draft.inputBindings ? [...draft.inputBindings] : [],
             atomicityHint: input.atomicityHint ?? 'decomposable',
             taskRevision: task.revision, attempt: 1, maxAttempts: draft.maxAttempts,
             createdAt: now, updatedAt: now,
@@ -443,6 +454,7 @@ export function createTaskCoordinationKernel(
         assertExpectedRevision(task.revision, input.expectedTaskRevision);
         if (task.status !== 'todo') conflict('TASK_NOT_PUBLISHABLE');
         await requireDependenciesDone(repositories, task.id);
+        await requireInputBindingsResolved(repositories, task.id);
         const currentCriteria = activeCriteria(
           await repositories.coordination.criteria.list(task.id), task.revision);
         const dependencyTaskIds = (await repositories.coordination.dependencies.list(task.id))
@@ -517,6 +529,7 @@ export function createTaskCoordinationKernel(
           conflict('TASK_ALREADY_ASSIGNED');
         }
         await requireDependenciesDone(repositories, task.id);
+        await requireInputBindingsResolved(repositories, task.id);
         const revised = await reviseInTransaction(repositories, run, task, coordination, {
           objective: objectiveOf(task), acceptanceCriteria: activeCriteria(
             await repositories.coordination.criteria.list(task.id), task.revision),
@@ -744,6 +757,26 @@ export function createTaskCoordinationKernel(
           const updated = await repositories.tasks.update({ taskId: task.id,
             changes: { status, updatedAt: now } });
           if (!updated) conflict('TASK_NOT_FOUND');
+        }
+        // #948-G ADR-0064：合法验收后把声明的 output slot 解析为不可变 snapshot（绑定当前 revision/attempt）。
+        // 未验收（rejected/needs_human）不解析——下游 input binding 门禁据此阻断（未验收不解除依赖）。
+        const declaredOutputSlots = coordination.outputSlots ?? [];
+        if (status === 'done' && declaredOutputSlots.length > 0) {
+          const slotDecision = resolveOutputSlots({
+            declaredSlots: declaredOutputSlots,
+            deliveryEvidenceRefs: delivery.evidenceRefs,
+          });
+          if (slotDecision.kind === 'rejected') {
+            conflict('TASK_OUTPUT_SLOT_RESOLUTION_CONFLICT', { slotName: slotDecision.slotName });
+          }
+          for (const slot of slotDecision.slots) {
+            await repositories.coordination.outputSnapshots.create({
+              id: ids.nextId(), teamId: run.teamId, taskId: task.id,
+              taskRevision: task.revision, taskAttempt: coordination.attempt,
+              slotName: slot.name, resolvedDeliveryId: delivery.id,
+              resolvedEvidenceRefs: [...slot.evidenceRefs], resolvedAt: now,
+            });
+          }
         }
         await appendTaskEvent(repositories, {
           managementRunId: run.id, type: 'task-acceptance-decided', actorKind: 'manager',
@@ -1230,6 +1263,7 @@ async function inspectRootDeliveryReadiness(
   const contributingInvocationIds: string[] = [];
   for (const coordination of subtasks) {
     await requireDependenciesDone(repositories, coordination.taskId);
+    await requireInputBindingsResolved(repositories, coordination.taskId);
   }
   for (const leaf of leaves) {
     const task = await requireTask(repositories, leaf.taskId);
@@ -1325,6 +1359,53 @@ async function requireDependenciesDone(repositories: TransactionRepositories, ta
     const task = await requireTask(repositories, dependency.dependencyTaskId);
     if (task.status !== 'done') conflict('TASK_DEPENDENCIES_NOT_READY');
   }
+}
+
+/**
+ * #948-G ADR-0064：数据门禁——与 requireDependenciesDone（控制门禁）分离且合取。
+ * 控制门禁只查「上游 status===done」；本门禁查「上游当前 revision/attempt 的 output snapshot 是否存在」。
+ * 因 transitionTaskState 可绕过验收直推 done，一个 done 的 task 可能没有 output snapshot——
+ * 故必须独立检查，否则「未验收 artifact 解除下游依赖」违反 ADR-0064。
+ *
+ * 纯函数 evaluateInputBindingResolvability 需同步 resolver，故先预取所有上游 snapshot 到 Map，
+ * 再用闭包提供同步视图（domain 不做 IO）。snapshot 缺失（含上游被 revise 到未验收的新 revision）
+ * → unresolved → conflict。
+ */
+async function requireInputBindingsResolved(repositories: TransactionRepositories, taskId: string) {
+  const coordination = await repositories.coordination.coordinations.getByTaskId(taskId);
+  if (!coordination) return;
+  const declaredBindings = coordination.inputBindings ?? [];
+  if (declaredBindings.length === 0) return;
+  const resolved = new Map<string, OutputSnapshotRecord | null>();
+  for (const binding of declaredBindings) {
+    const upstream = await repositories.coordination.coordinations.getByTaskId(binding.upstreamTaskId);
+    if (!upstream) {
+      resolved.set(inputBindingKey(binding), null);
+      continue;
+    }
+    const snapshot = await repositories.coordination.outputSnapshots.getByTaskSlot({
+      taskId: binding.upstreamTaskId, taskRevision: upstream.taskRevision,
+      taskAttempt: upstream.attempt, slotName: binding.slotName,
+    });
+    resolved.set(inputBindingKey(binding), snapshot);
+  }
+  const decision = evaluateInputBindingResolvability({
+    declaredBindings,
+    resolver: (binding) => {
+      const snapshot = resolved.get(inputBindingKey(binding));
+      return snapshot ? snapshot.resolvedEvidenceRefs : null;
+    },
+  });
+  if (decision.kind === 'rejected') {
+    conflict('TASK_INPUT_BINDING_DUPLICATE_NAME', { bindingName: decision.bindingName });
+  }
+  if (decision.kind === 'unresolved') {
+    conflict('TASK_INPUT_BINDING_NOT_RESOLVED', { bindings: decision.bindings });
+  }
+}
+
+function inputBindingKey(binding: InputBindingDeclarationDto): string {
+  return `${binding.upstreamTaskId}:${binding.slotName}`;
 }
 
 async function requireTask(repositories: TransactionRepositories, taskId: string) {

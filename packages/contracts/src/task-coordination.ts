@@ -21,6 +21,27 @@ export interface EvidenceRefDto {
   readonly capturedAt: UnixMs;
 }
 
+/**
+ * ADR-0064 #948-G：声明的具名 output slot。上游 Task delivery 被合法验收后，
+ * 每个声明 slot 解析为指向不可变 evidence_snapshots 的 EvidenceRef 集合。
+ * evidenceKind 可选：undefined 表示解析为该 delivery 的全部 evidence（兜底语义）。
+ */
+export interface OutputSlotDeclarationDto {
+  readonly name: string;
+  readonly evidenceKind?: EvidenceKind;
+}
+
+/**
+ * ADR-0064 #948-G：下游 Task 显式引用上游具名 output slot 的 binding（数据依赖，
+ * 与 dependencyTaskIds 控制依赖分离）。gate 在 publish_for_claim/assign 时校验
+ * 可解析性——上游当前 accepted revision/attempt 的 output snapshot 必须存在。
+ */
+export interface InputBindingDeclarationDto {
+  readonly name: string;
+  readonly upstreamTaskId: ID;
+  readonly slotName: string;
+}
+
 export interface TaskCoordinationDto {
   readonly schemaVersion: 1;
   readonly rootTaskId?: ID;
@@ -41,6 +62,10 @@ export interface TaskCoordinationDto {
    * 必须引用当前 Team Manifest 真实 skill id（AC#5 fail-closed）。
    */
   readonly preferredSkills?: readonly string[];
+  /** #948-G：声明的 output slots；缺省视为 []（向后兼容）。 */
+  readonly outputSlots?: readonly OutputSlotDeclarationDto[];
+  /** #948-G：声明的 input bindings；缺省视为 []（向后兼容）。 */
+  readonly inputBindings?: readonly InputBindingDeclarationDto[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly dependencyTaskIds: readonly ID[];
   readonly attempt: number;
@@ -114,6 +139,16 @@ export interface TaskDagNodeViewDto {
   readonly resultRefs: readonly TaskDagResultRefDto[];
   /** #712 切片 C-3：该 task 上 PI 发布的 Offer 及 Agent 响应（AC#7 展示）。为空 = 未发 Offer。 */
   readonly offers?: readonly TaskOfferProjectionDto[];
+  /**
+   * #948-G：该 task 已验收 delivery 解析出的具名 output snapshot（不可变，绑定 revision+attempt）。
+   * 下游经 input binding 引用上游节点的此项。缺省/未声明 outputSlots 时省略。
+   */
+  readonly resolvedOutputSnapshots?: readonly {
+    readonly slotName: string;
+    readonly taskRevision: number;
+    readonly taskAttempt: number;
+    readonly evidenceRefs: readonly EvidenceRefDto[];
+  }[];
 }
 
 export interface TaskDagViewDto {

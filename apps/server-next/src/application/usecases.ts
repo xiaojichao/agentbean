@@ -6788,6 +6788,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 && reference.id === snapshot.sourceId
                 && reference.snapshotHash === snapshot.snapshotHash))
           : [];
+        // #948-G：该 task 验收时解析的不可变 output snapshot（下游 input binding 引用其 evidenceRefs）。
+        const outputSnapshots = await repositories.taskCoordination.outputSnapshots.listByTask(task.id);
         const { revision: _revision, ...taskDto } = task;
         return {
           task: taskDto,
@@ -6842,6 +6844,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             response: offer.response,
             createdAt: offer.createdAt,
           })),
+          // #948-G：已解析的具名 output snapshot（不可变，绑定 revision+attempt）。非空才含。
+          ...(outputSnapshots.length > 0 ? { resolvedOutputSnapshots: outputSnapshots.map((snapshot) => ({
+            slotName: snapshot.slotName,
+            taskRevision: snapshot.taskRevision,
+            taskAttempt: snapshot.taskAttempt,
+            evidenceRefs: snapshot.resolvedEvidenceRefs,
+          })) } : {}),
         };
       }));
       // #709 root task 的不可变 revision 历史（旧→新），供 Task 视图展示变更原因（AC7）。

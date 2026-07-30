@@ -1,6 +1,7 @@
 import type { EvidenceRefDto } from '../../../../../packages/contracts/src/index.js';
 import type {
   EvidenceSnapshotRecord,
+  OutputSnapshotRecord,
   SubtaskAcceptanceRecord,
   SubtaskDeliveryRecord,
   TaskAcceptanceCriterionRecord,
@@ -18,6 +19,7 @@ export interface TaskCoordinationMemoryState {
   dependencies: Map<string, TaskDependencyRecord>;
   claimLeases: Map<string, TaskClaimLeaseRecord>;
   evidenceSnapshots: Map<string, EvidenceSnapshotRecord>;
+  outputSnapshots: Map<string, OutputSnapshotRecord>;
   deliveries: Map<string, SubtaskDeliveryRecord>;
   acceptances: Map<string, SubtaskAcceptanceRecord>;
   offers: Map<string, TaskOfferRecord>;
@@ -27,8 +29,8 @@ export interface TaskCoordinationMemoryState {
 export function createTaskCoordinationMemoryState(): TaskCoordinationMemoryState {
   return {
     coordinations: new Map(), criteria: new Map(), dependencies: new Map(),
-    claimLeases: new Map(), evidenceSnapshots: new Map(), deliveries: new Map(),
-    acceptances: new Map(), offers: new Map(),
+    claimLeases: new Map(), evidenceSnapshots: new Map(), outputSnapshots: new Map(),
+    deliveries: new Map(), acceptances: new Map(), offers: new Map(),
     executionGrants: new Map(),
   };
 }
@@ -39,9 +41,9 @@ export function cloneTaskCoordinationMemoryState(
   return {
     coordinations: new Map(state.coordinations), criteria: new Map(state.criteria),
     dependencies: new Map(state.dependencies), claimLeases: new Map(state.claimLeases),
-    evidenceSnapshots: new Map(state.evidenceSnapshots), deliveries: new Map(state.deliveries),
-    acceptances: new Map(state.acceptances), offers: new Map(state.offers),
-    executionGrants: new Map(state.executionGrants),
+    evidenceSnapshots: new Map(state.evidenceSnapshots), outputSnapshots: new Map(state.outputSnapshots),
+    deliveries: new Map(state.deliveries), acceptances: new Map(state.acceptances),
+    offers: new Map(state.offers), executionGrants: new Map(state.executionGrants),
   };
 }
 
@@ -186,6 +188,32 @@ export function createInMemoryTaskCoordinationRepositories(
       async listByTask(taskId) {
         return [...state.evidenceSnapshots.values()].filter((item) => item.taskId === taskId)
           .sort((left, right) => left.capturedAt - right.capturedAt || left.id.localeCompare(right.id));
+      },
+    },
+    outputSnapshots: {
+      async create(record) {
+        if (state.outputSnapshots.has(record.id)) throw new Error('output snapshot already exists');
+        if ([...state.outputSnapshots.values()].some((item) =>
+          item.taskId === record.taskId && item.taskRevision === record.taskRevision &&
+          item.taskAttempt === record.taskAttempt && item.slotName === record.slotName)) {
+          throw new Error('output snapshot slot already resolved for task revision and attempt');
+        }
+        const coordination = state.coordinations.get(record.taskId);
+        if (!coordination || coordination.teamId !== record.teamId) {
+          throw new Error('output snapshot does not match Task Team authority');
+        }
+        state.outputSnapshots.set(record.id, record);
+        return record;
+      },
+      async getByTaskSlot(input) {
+        return [...state.outputSnapshots.values()].find((item) =>
+          item.taskId === input.taskId && item.taskRevision === input.taskRevision &&
+          item.taskAttempt === input.taskAttempt && item.slotName === input.slotName) ?? null;
+      },
+      async listByTask(taskId) {
+        return [...state.outputSnapshots.values()].filter((item) => item.taskId === taskId)
+          .sort((left, right) => left.slotName.localeCompare(right.slotName)
+            || left.id.localeCompare(right.id));
       },
     },
     deliveries: {

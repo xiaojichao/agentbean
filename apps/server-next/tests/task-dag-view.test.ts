@@ -75,6 +75,29 @@ describe('Phase 2 Task DAG view', () => {
       }),
     ]);
   });
+
+  test('#948-G projects resolved output snapshots (immutable, slot/revision/attempt-bound) per node', async () => {
+    const repositories = createInMemoryRepositories();
+    await seed(repositories);
+    // 模拟验收时解析的不可变 output snapshot（acceptSubtask 在 outputSlots 声明时产出，下游 input binding 引用之）。
+    await repositories.taskCoordination.outputSnapshots.create({
+      id: 'output-1', teamId: 'team-1', taskId: 'task-child', taskRevision: 1, taskAttempt: 2,
+      slotName: 'research-result', resolvedDeliveryId: 'delivery-1',
+      resolvedEvidenceRefs: [{ kind: 'message', id: 'message-result', snapshotHash: 'snapshot-hash', capturedAt: 4 }],
+      resolvedAt: 5,
+    });
+    let id = 0;
+    const app = createServerNextUseCases({
+      repositories, clock: { now: () => 100 }, ids: { nextId: () => `generated-${++id}` },
+    });
+    const result = await app.getTaskDag({ userId: 'user-1', teamId: 'team-1', rootTaskId: 'task-root' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected dag');
+    expect(result.dag.nodes.find((node) => node.task.id === 'task-child')).toMatchObject({
+      resolvedOutputSnapshots: [{ slotName: 'research-result', taskRevision: 1, taskAttempt: 2,
+        evidenceRefs: [{ kind: 'message', id: 'message-result', snapshotHash: 'snapshot-hash', capturedAt: 4 }] }],
+    });
+  });
 });
 
 async function seed(repositories: ReturnType<typeof createInMemoryRepositories>) {
