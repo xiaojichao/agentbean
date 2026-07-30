@@ -9,6 +9,7 @@ const STATUS_LABELS: Record<TaskDagNodeViewDto['task']['status'], string> = {
   in_progress: '进行中',
   in_review: '待审核',
   done: '已完成',
+  cancelled: '已取消',
   closed: '已关闭',
 };
 
