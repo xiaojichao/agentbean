@@ -382,6 +382,13 @@ export interface ServerNextUseCases {
   /** #966 Atomic publish: 基线匹配则整体创建下一 revision；基线落后返回 CONFLICT（当前版本+冲突路径）。 */
   publishProjectChannelWorkspace(input: PublishProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getProjectChannelWorkspace(input: GetProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
+  /**
+   * #968 Device-initiated materialization (apply a published revision back to a local dir).
+   * Authorizes via device token + channel membership and returns the immutable revision
+   * manifest (paths + artifact refs). The server never learns the local target path.
+   * Source-Device independent: any device whose owner can view the channel may materialize.
+   */
+  materializeProjectChannelWorkspace(input: MaterializeProjectChannelWorkspaceInput): Promise<Ack<{ workspace: ProjectChannelWorkspaceDto }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
   createInitialProjectStage(input: CreateInitialProjectStageInput & { userId: string }): Promise<Ack<{
     overview: ChannelProjectOverviewDto;
@@ -990,6 +997,18 @@ export interface PublishProjectChannelWorkspaceInput {
   files: Array<Pick<ProjectChannelWorkspaceFileDto, 'path' | 'artifactId'>>;
   /** #966 交付 Agent 身份，写入 publish provenance（AC#4）。省略=非 Agent 发布（无 provenance）。 */
   provenance?: { agentId: string; taskId: string; taskAttempt: number };
+}
+
+/**
+ * #968 Device-initiated workspace materialization (apply published revision to local).
+ * Auth via device token; the local target directory is chosen client-side and never sent.
+ */
+export interface MaterializeProjectChannelWorkspaceInput {
+  token: string;
+  teamId: string;
+  channelId: string;
+  /** Specific revision to materialize; defaults to the workspace's current revision. */
+  revisionId?: string;
 }
 
 export interface SearchMessagesInput {
@@ -4890,10 +4909,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!access.ok) return access;
       const workspace = await repositories.projectChannelWorkspaces.getForTeam(workspaceInput);
       if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
-      if (!workspaceInput.revisionId || workspaceInput.revisionId === workspace.currentRevisionId) return makeSuccess({ workspace });
-      const revision = await repositories.projectChannelWorkspaces.getRevision({ teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, revisionId: workspaceInput.revisionId });
-      if (!revision) return makeFailure('NOT_FOUND', 'Workspace revision not found');
-      return makeSuccess({ workspace: { ...workspace, currentRevisionId: revision.id, currentRevision: revision } });
+      return resolveProjectChannelWorkspaceRevision(repositories, workspace, workspaceInput.revisionId);
     },
 
     async importProjectChannelWorkspace(importInput) {
@@ -5001,6 +5017,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         currentRevision: outcome.current.currentRevision.revision,
         conflictingPaths,
       });
+    },
+
+    async materializeProjectChannelWorkspace(materializeInput) {
+      // AC#1: device-token gate — only a local device acting for its owner can request a
+      // manifest to apply. Remote Agents hold no device token; background jobs don't call this.
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, materializeInput);
+      if (!actor.ok) return actor;
+      // Authorization is membership-based and source-Device independent (#960: provenance does
+      // not decide read/apply authorization). Any device whose owner can view the channel may
+      // materialize a revision imported by a different device (AC#4).
+      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+        userId: actor.userId,
+        teamId: materializeInput.teamId,
+        channelId: materializeInput.channelId,
+      });
+      if (!access.ok) return access;
+      const workspace = await repositories.projectChannelWorkspaces.getForTeam({
+        teamId: materializeInput.teamId,
+        channelId: materializeInput.channelId,
+      });
+      if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      // The manifest returned is the immutable file list (paths + artifact refs + size/sha).
+      // The server never receives the local target directory (no absolute-path leakage).
+      return resolveProjectChannelWorkspaceRevision(repositories, workspace, materializeInput.revisionId);
     },
 
     async listChannelDocuments(documentInput) {
@@ -13286,6 +13326,25 @@ async function ensureUserCanViewProjectWorkspace(
   if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
   return makeSuccess({ channel });
+}
+
+/**
+ * Resolve a workspace to a specific revision, or its current revision when `revisionId`
+ * is omitted / matches current. Shared by read (#962) and materialize (#968) use cases.
+ */
+async function resolveProjectChannelWorkspaceRevision(
+  repositories: ServerNextRepositories,
+  workspace: ProjectChannelWorkspaceRecord,
+  revisionId?: string,
+): Promise<Ack<{ workspace: ProjectChannelWorkspaceRecord }>> {
+  if (!revisionId || revisionId === workspace.currentRevisionId) return makeSuccess({ workspace });
+  const revision = await repositories.projectChannelWorkspaces.getRevision({
+    teamId: workspace.teamId,
+    channelId: workspace.channelId,
+    revisionId,
+  });
+  if (!revision) return makeFailure('NOT_FOUND', 'Workspace revision not found');
+  return makeSuccess({ workspace: { ...workspace, currentRevisionId: revision.id, currentRevision: revision } });
 }
 
 async function validateProjectDocumentInputSetResultProposal(input: {
