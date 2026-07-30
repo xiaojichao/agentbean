@@ -181,6 +181,11 @@ function phase2TaskSchemaFor(name: Phase2TaskToolName) {
         acceptanceCriteria: Type.Array(criterion),
         maxAttempts: Type.Integer({ minimum: 1 }),
       }, { additionalProperties: false }), { minItems: 1, maxItems: 8 }),
+      // #954 批次内 control edges（clientKey 键）；与子 Task 同事务原子发布，由 server 解析为 taskId 边。
+      edges: Type.Optional(Type.Array(Type.Object({
+        dependentClientKey: id(),
+        dependencyClientKey: id(),
+      }, { additionalProperties: false }))),
     }, { additionalProperties: false });
   }
   if (name === 'tasks.add_dependency') return Type.Object({ taskId: id(), dependencyTaskId: id(), expectedTaskRevision: revision() }, { additionalProperties: false });

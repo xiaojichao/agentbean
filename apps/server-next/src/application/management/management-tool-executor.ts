@@ -270,6 +270,11 @@ export function createPhase2ManagementToolHandlers(input: {
         ...draft,
         taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, draft.clientKey),
       }));
+      // #954 批次内 control edges（clientKey 键）解析为内核 taskId 键，与子 Task 同事务原子发布。
+      const edges = request.input.edges?.map((edge) => ({
+        taskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, edge.dependentClientKey),
+        dependencyTaskId: deterministicTaskId(request.managementRunId, request.input.parentTaskId, edge.dependencyClientKey),
+      }));
       const allocatability = eligibilityService
         ? await eligibilityService(request.input.parentTaskId, drafts).catch(() => undefined)
         : undefined;
@@ -279,6 +284,7 @@ export function createPhase2ManagementToolHandlers(input: {
         atomicityHint: request.input.atomicityHint,
         allocatability,
         subtasks: drafts,
+        ...(edges && edges.length ? { edges } : {}),
       });
       return { taskIds: created.taskIds, taskGraphRevision: created.taskGraphRevision };
     },

@@ -117,7 +117,16 @@ export interface Phase2ManagementWorkerToolInputMapV1 {
     readonly handoffId: ID;
     readonly timeoutAt?: UnixMs;
   };
-  readonly 'tasks.create_subtasks': { readonly parentTaskId: ID; readonly subtasks: readonly Phase2SubtaskDraftV1[]; readonly atomicityHint?: 'atomic' | 'decomposable' };
+  readonly 'tasks.create_subtasks': {
+    readonly parentTaskId: ID;
+    readonly subtasks: readonly Phase2SubtaskDraftV1[];
+    readonly atomicityHint?: 'atomic' | 'decomposable';
+    /**
+     * #954 与子 Task 同事务原子发布的批次内控制依赖边（clientKey 键，对 Agent 自然）。
+     * 两端 clientKey 必须都在 subtasks 批次内；依赖 run 内旧 task 走 tasks.add_dependency。
+     */
+    readonly edges?: readonly { readonly dependentClientKey: string; readonly dependencyClientKey: string }[];
+  };
   readonly 'tasks.add_dependency': { readonly taskId: ID; readonly dependencyTaskId: ID; readonly expectedTaskRevision: number };
   readonly 'tasks.publish_for_claim': { readonly taskId: ID; readonly expectedTaskRevision: number };
   readonly 'tasks.assign': { readonly taskId: ID; readonly agentId: ID; readonly expectedTaskRevision: number };
@@ -442,7 +451,7 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
     return;
   }
   if (toolName === 'tasks.create_subtasks') {
-    assertExactKeys(value, ['parentTaskId', 'subtasks', 'atomicityHint'], ['parentTaskId', 'subtasks']);
+    assertExactKeys(value, ['parentTaskId', 'subtasks', 'atomicityHint', 'edges'], ['parentTaskId', 'subtasks']);
     if (value.atomicityHint !== undefined && value.atomicityHint !== 'atomic' && value.atomicityHint !== 'decomposable') {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
@@ -465,6 +474,20 @@ function assertTaskToolInput(toolName: string, value: unknown): void {
       if (!Array.isArray(draft.acceptanceCriteria)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
       draft.acceptanceCriteria.forEach(assertCriterion);
       assertInteger(draft.maxAttempts, 1);
+    }
+    if (value.edges !== undefined) {
+      if (!Array.isArray(value.edges)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+      const batchClientKeys = new Set(value.subtasks.map((draft) => draft.clientKey));
+      for (const edge of value.edges) {
+        assertExactKeys(edge, ['dependentClientKey', 'dependencyClientKey'], ['dependentClientKey', 'dependencyClientKey']);
+        if (!nonEmpty(edge.dependentClientKey) || !nonEmpty(edge.dependencyClientKey)) {
+          throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+        }
+        // 批次内约束：两端 clientKey 必须都在本次 subtasks 内（依赖旧 task 走 tasks.add_dependency）。
+        if (!batchClientKeys.has(edge.dependentClientKey) || !batchClientKeys.has(edge.dependencyClientKey)) {
+          throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+        }
+      }
     }
     return;
   }

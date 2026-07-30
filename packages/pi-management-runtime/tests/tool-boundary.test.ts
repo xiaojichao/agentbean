@@ -520,6 +520,7 @@ describe('management tool boundary', () => {
     const schema = tool?.parameters as unknown as {
       properties: {
         atomicityHint?: unknown;
+        edges?: { type?: string };
         subtasks: { items: { properties: Record<string, unknown>; additionalProperties: boolean } };
       };
     };
@@ -527,6 +528,8 @@ describe('management tool boundary', () => {
     expect(draft.additionalProperties).toBe(false);
     expect(Object.keys(draft.properties)).toEqual(expect.arrayContaining(['requiredSkills', 'preferredSkills']));
     expect(schema.properties.atomicityHint).toBeDefined();
+    // #954 批次内 control edges 已在 schema 声明（additionalProperties:false 下模型才能产出）。
+    expect(schema.properties.edges?.type).toBe('array');
   });
 
   it('passes create_subtasks Skill inputs through to the executor unchanged', async () => {
@@ -575,6 +578,49 @@ describe('management tool boundary', () => {
         atomicityHint: 'decomposable',
         subtasks: [{ requiredSkills: ['rust'], preferredSkills: ['typescript'] }],
       },
+    });
+    await session.dispose();
+  });
+
+  it('passes create_subtasks batch-internal edges through to the executor (#954)', async () => {
+    const calls: Array<{ name: string; input: unknown }> = [];
+    const session = await createManagementRuntimeFactory({
+      model: {
+        id: 'phase-2-edges',
+        async respond(_request, state) {
+          if (state.callCount === 1) {
+            return modelResponse([{
+              type: 'toolCall',
+              id: 'call-phase-2-edges',
+              name: 'tasks.create_subtasks',
+              arguments: {
+                parentTaskId: 'task-root',
+                subtasks: [
+                  { clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [],
+                    acceptanceCriteria: [], maxAttempts: 1 },
+                  { clientKey: 'b', title: 'B', claimPolicy: 'open', requiredCapabilities: [],
+                    acceptanceCriteria: [], maxAttempts: 1 },
+                ],
+                edges: [{ dependentClientKey: 'b', dependencyClientKey: 'a' }],
+              },
+            }], 'tool_use');
+          }
+          return modelResponse([{ type: 'text', text: 'done' }]);
+        },
+      },
+      toolExecutor: async (call) => {
+        calls.push({ name: call.name, input: call.input });
+        return { text: 'created' };
+      },
+    }).createSession(phase2SessionInput('edges-input'));
+
+    await session.prompt({ text: 'decompose' });
+    await session.waitForIdle();
+    // edges 不被 additionalProperties:false 的 schema 拒绝，原样到达 executor（#954 schema 接线）。
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      name: 'tasks.create_subtasks',
+      input: { edges: [{ dependentClientKey: 'b', dependencyClientKey: 'a' }] },
     });
     await session.dispose();
   });

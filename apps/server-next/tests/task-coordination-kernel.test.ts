@@ -62,6 +62,32 @@ describe.each([
     }
   });
 
+  test('#954 createSubtasks 幂等哈希纳入 edges：同 idempotencyKey 不同 edges 不被误判为 replay', async () => {
+    const fixture = createFixture();
+    try {
+      const harness = await createHarness(fixture.repositories);
+      await harness.kernel.createRootCoordination(rootInput(harness.authority));
+      const base = { ...subtasksInput(harness.authority), idempotencyKey: 'edges-idem' };
+      // 首次：task-b 依赖 task-a。
+      const created = await harness.kernel.createSubtasks({
+        ...base, edges: [{ taskId: 'task-b', dependencyTaskId: 'task-a' }],
+      });
+      expect(created.disposition).toBe('created');
+      // 相同 idempotencyKey + 相同 subtasks + 相同 edges → 命中 replay（existing）。
+      const replay = await harness.kernel.createSubtasks({
+        ...base, edges: [{ taskId: 'task-b', dependencyTaskId: 'task-a' }],
+      });
+      expect(replay).toEqual({ ...created, disposition: 'existing' });
+      // 相同 idempotencyKey + 相同 subtasks + 不同 edges → commandHash 不同 → 不命中 replay →
+      // idempotencyKey 复用冲突。修复前 edges 不入哈希会误判为同一命令、静默丢弃新 edges。
+      await expect(harness.kernel.createSubtasks({
+        ...base, edges: [{ taskId: 'task-a', dependencyTaskId: 'task-b' }],
+      })).rejects.toMatchObject<Partial<ManagementConflictError>>({ code: 'TASK_COMMAND_IDEMPOTENCY_CONFLICT' });
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('creates root coordination and a bounded subtask batch with idempotent typed events', async () => {
     const fixture = createFixture();
     try {
