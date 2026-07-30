@@ -335,6 +335,19 @@ export default function TasksPage() {
     const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
     setTasks((prev) => prev.map((item) => item.id === task.id ? optimistic : item));
     setStatusMenuFor(null);
+    // cancelled / closed 是终态，走 lifecycle command（角色门禁 + root cascade + receipt 幂等）
+    if (status === 'cancelled' || status === 'closed') {
+      const reason = status === 'cancelled' ? '用户取消' : '管理员关闭';
+      const res = status === 'cancelled'
+        ? await taskEvents().cancel(task.id, reason)
+        : await taskEvents().close(task.id, reason);
+      if (res.ok && res.task) {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
+      } else if (!res.ok) {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
+      }
+      return;
+    }
     const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
     if (res.ok && res.task) {
       setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));

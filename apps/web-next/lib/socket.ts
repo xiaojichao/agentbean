@@ -853,6 +853,8 @@ export interface TaskEvents {
   update(payload: { id: string; title?: string; description?: string; status?: string; assigneeId?: string | null; channelId?: string | null; tags?: string[]; sortOrder?: number }): Promise<{ ok: boolean; task?: any; error?: string }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
+  cancel(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
+  close(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
   onSnapshot(handler: (tasks: any[]) => void): () => void;
 }
 
@@ -864,6 +866,8 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
     update({ id, ...rest }) { return emitWithTimeout(socket, WEB_EVENTS.task.update, { taskId: id, ...rest }); },
     delete(id) { return emitWithTimeout(socket, WEB_EVENTS.task.delete, { taskId: id }); },
     reorder(id, sortOrder) { return emitWithTimeout(socket, WEB_EVENTS.task.reorder, { taskId: id, sortOrder }); },
+    cancel(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.cancel, { taskId: id, reason }); },
+    close(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.close, { taskId: id, reason }); },
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.task.snapshot, handler);
       return () => { socket.off(WEB_EVENTS.task.snapshot, handler); };
