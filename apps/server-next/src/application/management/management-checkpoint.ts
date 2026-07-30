@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   ManagementCheckpointContextHintsV1,
   ManagementCheckpointV1,
@@ -199,6 +200,7 @@ export async function collectManagementCheckpointFacts(
     : [];
   return {
     managementRunId: run.id,
+    runRevision: run.orchestrationRevision ?? 0,
     lastEventSequence: events.at(-1)?.event.sequence ?? 0,
     taskGraphRevision: taskSnapshots.length > 0
       ? Math.max(...taskSnapshots.map((task) => task.taskRevision))
@@ -224,9 +226,15 @@ export function restoreOrRebuildManagementCheckpoint(input: {
     || !sameSet(input.checkpoint.authoritative.memoryCapsuleIds, input.facts.validMemoryCapsuleIds)
     || JSON.stringify(input.checkpoint.authoritative.taskSnapshots ?? []) !== JSON.stringify(input.facts.taskSnapshots ?? [])
     || !sameSet(input.checkpoint.authoritative.activeClaimLeaseIds ?? [], input.facts.activeClaimLeaseIds ?? []);
-  if (decision.kind === 'usable' && !exactMismatch) return { kind: 'usable', checkpoint: input.checkpoint };
+  const contentHash = input.checkpoint.authoritative.contentHash;
+  const hashMismatch = contentHash !== undefined
+    && contentHash !== hashManagementCheckpointAuthoritative(input.checkpoint.authoritative);
+  if (decision.kind === 'usable' && !exactMismatch && !hashMismatch) {
+    return { kind: 'usable', checkpoint: input.checkpoint };
+  }
   const reasons: string[] = decision.kind === 'rebuild_required' ? [...decision.reasons] : [];
   if (exactMismatch) reasons.push('authoritative-set-mismatch');
+  if (hashMismatch) reasons.push('checkpoint-hash-mismatch');
   return {
     kind: 'rebuilt',
     reasons,
@@ -247,7 +255,9 @@ export function restoreOrRebuildManagementCheckpoint(input: {
 }
 
 export function toManagementCheckpointAuthoritative(facts: ManagementCheckpointFacts): ManagementCheckpointV1['authoritative'] {
-  return {
+  const authoritative = {
+    runRevision: facts.runRevision,
+    eventSchemaVersion: 1 as const,
     lastEventSequence: facts.lastEventSequence,
     taskGraphRevision: facts.taskGraphRevision,
     openTaskIds: [...facts.openTaskIds],
@@ -257,7 +267,31 @@ export function toManagementCheckpointAuthoritative(facts: ManagementCheckpointF
     ...(facts.taskSnapshots ? { taskSnapshots: structuredClone(facts.taskSnapshots) } : {}),
     ...(facts.activeClaimLeaseIds ? { activeClaimLeaseIds: [...facts.activeClaimLeaseIds] } : {}),
   };
+  return {
+    ...authoritative,
+    contentHash: hashManagementCheckpointAuthoritative(authoritative),
+  };
+}
+export function hashManagementCheckpointAuthoritative(
+  authoritative: ManagementCheckpointV1['authoritative'],
+): string {
+  const { contentHash: _contentHash, ...content } = authoritative;
+  return createHash('sha256').update(canonicalJson(content)).digest('hex');
 }
 function maxTaskRevision(payloads: readonly unknown[]): number { let max = 0; for (const value of payloads) { if (value && typeof value === 'object') { const revision = (value as Record<string, unknown>).taskRevision; if (Number.isSafeInteger(revision)) max = Math.max(max, revision as number); } } return max; }
 function sameSet(left: readonly string[], right: readonly string[]): boolean { return left.length === right.length && new Set(left).size === left.length && left.every((item) => right.includes(item)); }
 async function requireRun(repositories: ManagementRepositories, id: string): Promise<ManagementRunRecord> { const run = await repositories.runs.getById(id); if (!run) throw new Error('MANAGEMENT_RUN_NOT_FOUND'); return run; }
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('CHECKPOINT_HASH_UNSUPPORTED_VALUE');
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+  }
+  throw new Error('CHECKPOINT_HASH_UNSUPPORTED_VALUE');
+}

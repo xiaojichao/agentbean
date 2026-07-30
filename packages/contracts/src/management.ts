@@ -19,6 +19,9 @@ export type ManagementRunStatus =
   | 'failed'
   | 'cancelled';
 
+export type PiOrchestrationRecoveryState = 'healthy' | 'recovery_pending';
+export type PiSchedulingState = 'queued' | 'runnable' | 'waiting' | 'recovery_pending';
+
 export type ManagerPlacement = 'managed' | 'device' | 'auto';
 
 export interface ManagerPlacementPolicyDto {
@@ -73,6 +76,9 @@ export interface ManagementRunDto {
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly activeWorkerId?: ID;
   readonly checkpointRevision: number;
+  /** #924：旧 schemaVersion=1 Run 可被前滚恢复时使用；历史记录缺省为 0。 */
+  readonly orchestrationRevision?: number;
+  readonly recoveryState?: PiOrchestrationRecoveryState;
   readonly budget: ManagementBudgetDto;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
@@ -108,6 +114,10 @@ interface ManagementRunV2BaseDto {
   readonly placementPolicy: ManagerPlacementPolicyDto;
   readonly activeWorkerId?: ID;
   readonly checkpointRevision: number;
+  /** #924：Server-owned PI orchestration command 的单调 revision；旧 Run 缺省为 0。 */
+  readonly orchestrationRevision?: number;
+  /** #924：无法由权威事实安全解释时 fail-closed，禁止 driver 继续写入。 */
+  readonly recoveryState?: PiOrchestrationRecoveryState;
   readonly budget: ManagementBudgetDto;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;
@@ -121,6 +131,12 @@ export type ManagementRunV2Dto = ManagementRunV2BaseDto & (
 );
 
 export interface ManagementCheckpointAuthoritativeV1 {
+  /** #924：checkpoint 绑定的 PI orchestration run revision。旧 checkpoint 可缺省。 */
+  readonly runRevision?: number;
+  /** #924：用于解释 event stream 的 schema version。旧 checkpoint 可缺省。 */
+  readonly eventSchemaVersion?: 1;
+  /** #924：authoritative payload 的 canonical SHA-256。旧 checkpoint 可缺省。 */
+  readonly contentHash?: string;
   readonly lastEventSequence: number;
   readonly taskGraphRevision: number;
   readonly openTaskIds: readonly ID[];

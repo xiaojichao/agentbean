@@ -8,6 +8,7 @@ import type {
   ManagementEventV1,
   ManagementRunDto,
   ManagementRunV2Dto,
+  PiSchedulingState,
   TeamManagementPolicyV2Dto,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
@@ -66,6 +67,70 @@ export interface ManagementShadowDecisionRecord {
   readonly createdAt: UnixMs;
 }
 
+export interface PiOrchestrationClaimRecord {
+  readonly managementRunId: ID;
+  readonly rootTaskId: ID;
+  readonly state: 'active' | 'closed';
+  readonly revision: number;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+  readonly closedAt?: UnixMs;
+}
+
+export interface PiSchedulingRecord {
+  readonly managementRunId: ID;
+  readonly state: PiSchedulingState;
+  readonly eligibleAt: UnixMs;
+  readonly enqueuedAt: UnixMs;
+  readonly priority: number;
+  readonly revision: number;
+  readonly waitingReason?: string;
+  readonly updatedAt: UnixMs;
+}
+
+export interface PiOrchestrationDeadlineRecord {
+  readonly managementRunId: ID;
+  readonly kind: string;
+  readonly dueAt: UnixMs;
+  readonly state: 'active' | 'satisfied' | 'cancelled';
+  readonly revision: number;
+  readonly createdAt: UnixMs;
+  readonly updatedAt: UnixMs;
+}
+
+export interface PiOrchestrationCommandReceiptRecord {
+  readonly id: ID;
+  readonly managementRunId: ID;
+  readonly idempotencyKey: string;
+  readonly commandHash: string;
+  readonly outcome: 'applied' | 'no_op';
+  readonly runRevision: number;
+  readonly schedulingRevision: number;
+  readonly eventSequence: number;
+  readonly createdAt: UnixMs;
+}
+
+export interface PiOrchestrationAttemptAuditRecord {
+  readonly id: ID;
+  readonly managementRunId: ID;
+  readonly commandName: string;
+  readonly idempotencyKey: string;
+  readonly workerId?: ID;
+  readonly fencingToken?: number;
+  readonly decision: 'applied' | 'rejected';
+  readonly reasonCode?: string;
+  readonly createdAt: UnixMs;
+}
+
+export interface PiOrchestrationOutboxRecord {
+  readonly id: ID;
+  readonly managementRunId: ID;
+  readonly receiptId?: ID;
+  readonly eventSequence: number;
+  readonly state: 'pending' | 'delivered';
+  readonly createdAt: UnixMs;
+}
+
 export interface ManagementRepositories {
   policies: {
     get(teamId: ID): Promise<ManagementPolicyRecord | null>;
@@ -84,6 +149,38 @@ export interface ManagementRepositories {
   leases: {
     get(managementRunId: ID): Promise<ManagerLeaseRecord | null>;
     put(record: ManagerLeaseRecord): Promise<ManagerLeaseRecord>;
+  };
+  orchestrationClaims: {
+    create(record: PiOrchestrationClaimRecord): Promise<PiOrchestrationClaimRecord>;
+    getByRunId(managementRunId: ID): Promise<PiOrchestrationClaimRecord | null>;
+    getByRootTaskId(rootTaskId: ID): Promise<PiOrchestrationClaimRecord | null>;
+    update(record: PiOrchestrationClaimRecord): Promise<PiOrchestrationClaimRecord>;
+  };
+  scheduling: {
+    create(record: PiSchedulingRecord): Promise<PiSchedulingRecord>;
+    get(managementRunId: ID): Promise<PiSchedulingRecord | null>;
+    update(record: PiSchedulingRecord): Promise<PiSchedulingRecord>;
+    listRunnable(now: UnixMs): Promise<PiSchedulingRecord[]>;
+  };
+  deadlines: {
+    put(record: PiOrchestrationDeadlineRecord): Promise<PiOrchestrationDeadlineRecord>;
+    list(managementRunId: ID): Promise<PiOrchestrationDeadlineRecord[]>;
+  };
+  commandReceipts: {
+    create(record: PiOrchestrationCommandReceiptRecord): Promise<PiOrchestrationCommandReceiptRecord>;
+    getByIdempotencyKey(input: {
+      managementRunId: ID;
+      idempotencyKey: string;
+    }): Promise<PiOrchestrationCommandReceiptRecord | null>;
+    list(managementRunId: ID): Promise<PiOrchestrationCommandReceiptRecord[]>;
+  };
+  attemptAudits: {
+    append(record: PiOrchestrationAttemptAuditRecord): Promise<PiOrchestrationAttemptAuditRecord>;
+    list(managementRunId: ID): Promise<PiOrchestrationAttemptAuditRecord[]>;
+  };
+  outbox: {
+    create(record: PiOrchestrationOutboxRecord): Promise<PiOrchestrationOutboxRecord>;
+    list(managementRunId: ID): Promise<PiOrchestrationOutboxRecord[]>;
   };
   events: {
     append(record: ManagementEventRecord): Promise<ManagementEventRecord>;

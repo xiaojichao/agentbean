@@ -221,6 +221,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   // #922 Promotion gate：source relation / scheduling / outbox / receipt / tombstone。
   applyMigration(db, 'team/0059_promotion_gate.sql');
   applyMigration(db, 'team/0060_promotion_modes.sql');
+  // #924 Server-owned PI orchestration run / claim / scheduling / command / recovery facts。
+  applyMigration(db, 'team/0061_pi_orchestration_runtime.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

@@ -584,6 +584,9 @@ const checkpointSchema = exactObject({
   managementRunId: required(id),
   revision: required(integer(0)),
   authoritative: required(exactObject({
+    runRevision: optional(integer(0)),
+    eventSchemaVersion: optional(literal(1)),
+    contentHash: optional(hash),
     lastEventSequence: required(integer(0)),
     taskGraphRevision: required(integer(0)),
     openTaskIds: required(arrayOf(id)),
