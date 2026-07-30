@@ -221,6 +221,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.createDocumentBundle,
       WEB_EVENTS.project.resolveReferences,
       WEB_EVENTS.project.resolveReferenceOrdinal,
+      WEB_EVENTS.project.workspace,
+      WEB_EVENTS.project.createWorkspace,
       WEB_EVENTS.channel.join,
       WEB_EVENTS.agent.create,
       WEB_EVENTS.agent.setVisibility,
@@ -1116,6 +1118,20 @@ describe('server-next socket handlers', () => {
       expectedRevision: 0,
       idempotencyKey: 'key-1',
     });
+  });
+
+  test('Project Channel Workspace 读取和创建使用 Socket authenticated identity', async () => {
+    const socket = new FakeSocket();
+    const getProjectChannelWorkspace = vi.fn(async (payload) => makeSuccess({ payload }));
+    const createProjectChannelWorkspace = vi.fn(async (payload) => makeSuccess({ payload }));
+    const app = { getProjectChannelWorkspace, createProjectChannelWorkspace } as unknown as ServerNextUseCases;
+    registerWebSocketHandlers(socket, app, {
+      authenticatedUser: async () => ({ hasToken: true, userId: 'user-session', currentTeamId: 'team-session', currentDeviceId: null }),
+    });
+    await socket.trigger(WEB_EVENTS.project.workspace, { userId: 'spoofed', teamId: 'spoofed-team', channelId: 'channel-1' });
+    await socket.trigger(WEB_EVENTS.project.createWorkspace, { userId: 'spoofed', teamId: 'spoofed-team', channelId: 'channel-1', files: [{ path: 'README.md', artifactId: 'artifact-1' }] });
+    expect(getProjectChannelWorkspace).toHaveBeenCalledWith({ userId: 'user-session', teamId: 'spoofed-team', currentDeviceId: null, channelId: 'channel-1' });
+    expect(createProjectChannelWorkspace).toHaveBeenCalledWith({ userId: 'user-session', teamId: 'spoofed-team', currentDeviceId: null, channelId: 'channel-1', files: [{ path: 'README.md', artifactId: 'artifact-1' }] });
   });
 
   test('#823/#824 产物写入使用 Socket authenticated identity 并忽略伪造 userId', async () => {

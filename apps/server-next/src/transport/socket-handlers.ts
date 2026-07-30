@@ -494,6 +494,14 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  bind(socket, WEB_EVENTS.project.workspace, app, 'getProjectChannelWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.createWorkspace, app, 'createProjectChannelWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.channel.join, async (payload, ack) => {
     try {
       const input = asChannelJoinInput(await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser }));
