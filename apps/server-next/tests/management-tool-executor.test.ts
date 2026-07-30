@@ -373,6 +373,51 @@ describe('management tool executor', () => {
     expect(kernel.reportBlocked).toHaveBeenCalledTimes(1);
   });
 
+  test('#954 tasks.create_subtasks 解析 clientKey edges 为 taskId 并随子 Task 同事务传入内核', async () => {
+    const createSubtasks = vi.fn(async () => ({ taskIds: ['t-a', 't-b'], taskGraphRevision: 3 }));
+    const kernel = { createSubtasks,
+      addDependency: vi.fn(), publishForClaim: vi.fn(), assignTask: vi.fn(),
+      waitForTasks: vi.fn(), retryTask: vi.fn(), acceptSubtask: vi.fn(), reportBlocked: vi.fn() };
+    const handlers = createPhase2ManagementToolHandlers({ kernel: kernel as never,
+      acceptanceService: { decide: kernel.acceptSubtask } as never });
+    const base = { schemaVersion: 2 as const, managementPhase: 2 as const, commandId: 'command',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'call', leaseToken: 'token',
+      fencingToken: 1, idempotencyKey: 'key' };
+    const result = await handlers['tasks.create_subtasks']!({ ...base, toolName: 'tasks.create_subtasks',
+      input: {
+        parentTaskId: 'root-task',
+        subtasks: [
+          { clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [], acceptanceCriteria: [], maxAttempts: 1 },
+          { clientKey: 'b', title: 'B', claimPolicy: 'open', requiredCapabilities: [], acceptanceCriteria: [], maxAttempts: 1 },
+        ],
+        edges: [{ dependentClientKey: 'b', dependencyClientKey: 'a' }],
+      } });
+    expect(result).toMatchObject({ taskIds: ['t-a', 't-b'], taskGraphRevision: 3 });
+    // clientKey 边被解析为 drafts 的 taskId（b 依赖 a），与子 Task 同事务传入内核。
+    const call = createSubtasks.mock.calls[0]![0] as {
+      subtasks: readonly { clientKey: string; taskId: string }[];
+      edges?: readonly { taskId: string; dependencyTaskId: string }[];
+    };
+    const taskOf = new Map(call.subtasks.map((draft) => [draft.clientKey, draft.taskId]));
+    expect(call.edges).toEqual([{ taskId: taskOf.get('b'), dependencyTaskId: taskOf.get('a') }]);
+  });
+
+  test('#954 tasks.create_subtasks 无 edges 时不传该键（向后兼容）', async () => {
+    const createSubtasks = vi.fn(async () => ({ taskIds: ['t-a'], taskGraphRevision: 2 }));
+    const kernel = { createSubtasks,
+      addDependency: vi.fn(), publishForClaim: vi.fn(), assignTask: vi.fn(),
+      waitForTasks: vi.fn(), retryTask: vi.fn(), acceptSubtask: vi.fn(), reportBlocked: vi.fn() };
+    const handlers = createPhase2ManagementToolHandlers({ kernel: kernel as never,
+      acceptanceService: { decide: kernel.acceptSubtask } as never });
+    const base = { schemaVersion: 2 as const, managementPhase: 2 as const, commandId: 'command',
+      managementRunId: 'run-1', workerId: 'worker-1', toolCallId: 'call', leaseToken: 'token',
+      fencingToken: 1, idempotencyKey: 'key' };
+    await handlers['tasks.create_subtasks']!({ ...base, toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'root-task',
+        subtasks: [{ clientKey: 'a', title: 'A', claimPolicy: 'open', requiredCapabilities: [], acceptanceCriteria: [], maxAttempts: 1 }] } });
+    expect(createSubtasks.mock.calls[0]![0]).not.toHaveProperty('edges');
+  });
+
   test('finalizes a succeeded Phase 2 Invocation into a canonical delivery result', async () => {
     const harness = await createSubtaskEvidenceHarness();
     const handlers = createPhase2InvocationToolHandlers({ repositories: harness.repositories,

@@ -377,6 +377,39 @@ describe('Phase 2 management worker contracts', () => {
     })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
   });
 
+  test('accepts batch-internal edges on create_subtasks and rejects off-batch / malformed edges (#954)', () => {
+    const envelope = {
+      schemaVersion: 2,
+      managementPhase: 2,
+      commandId: 'command-1',
+      managementRunId: 'run-1',
+      workerId: 'worker-1',
+      toolCallId: 'tool-call-1',
+      leaseToken: 'lease-token',
+      fencingToken: 1,
+      idempotencyKey: 'idempotency-1',
+    };
+    const draft = (clientKey: string) => ({
+      clientKey, title: `Task ${clientKey}`, claimPolicy: 'open' as const, requiredCapabilities: [],
+      acceptanceCriteria: [{ id: `c-${clientKey}`, description: 'done', evidenceRequired: true, allowedEvidenceKinds: ['task'] as const }],
+      maxAttempts: 2,
+    });
+    const subtasks = [draft('a'), draft('b')];
+    // 批次内 control edge（b 依赖 a）被接受
+    expect(parsePhase2TaskToolRequestV2({ ...envelope, toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks, edges: [{ dependentClientKey: 'b', dependencyClientKey: 'a' }] },
+    })).toMatchObject({ toolName: 'tasks.create_subtasks' });
+    // 依赖批次外 clientKey → 拒绝（依赖旧 task 走 tasks.add_dependency）
+    expect(() => parsePhase2TaskToolRequestV2({ ...envelope, toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks, edges: [{ dependentClientKey: 'b', dependencyClientKey: 'zzz' }] },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    // edge 缺键 → assertExactKeys 拒绝
+    expect(() => parsePhase2TaskToolRequestV2({ ...envelope, toolName: 'tasks.create_subtasks',
+      input: { parentTaskId: 'task-root', subtasks,
+        edges: [{ dependentClientKey: 'b' }] as unknown as { dependentClientKey: string; dependencyClientKey: string }[] },
+    })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+  });
+
   test('parses exact Phase 3 Memory tool inputs and rejects contract drift', () => {
     const sourceRef = {
       schemaVersion: 1 as const,

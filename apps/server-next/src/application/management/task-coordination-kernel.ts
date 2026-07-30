@@ -225,7 +225,9 @@ export function createTaskCoordinationKernel(
         const now = clock.now();
         const run = await authorizeCommand(repositories, input.authority, now);
         const commandHash = hashManagementCommandInput({ command: 'create-subtasks',
-          parentTaskId: input.parentTaskId, subtasks: input.subtasks });
+          parentTaskId: input.parentTaskId, subtasks: input.subtasks,
+          // #954 edges 入幂等哈希：不同 edges 不被 findReplay 误判；空/缺省不注入以保持向后兼容。
+          ...(input.edges?.length ? { edges: input.edges } : {}) });
         const replay = await findReplay(repositories, run.id, input.idempotencyKey, commandHash);
         if (replay) {
           const taskIds = replay.events.map((record) => record.event)
