@@ -77,14 +77,22 @@ export function evaluateWorkspaceStagingUpload(input: {
   readonly chunkLength: number;
 }): EvaluateWorkspaceStagingUploadDecision {
   if (input.complete) return { kind: 'already-complete' };
-  if (!Number.isFinite(input.chunkLength) || input.chunkLength <= 0) {
-    return { kind: 'rejected', reason: 'empty-chunk' };
-  }
   if (!Number.isFinite(input.offset) || input.offset < 0 || input.offset !== input.receivedBytes) {
     return { kind: 'rejected', reason: 'invalid-offset' };
   }
   if (!Number.isFinite(input.expectedSizeBytes) || input.expectedSizeBytes < 0) {
     return { kind: 'rejected', reason: 'size-mismatch' };
+  }
+  // 空文件：允许 offset=0 + 空 chunk 一次完成（否则 empty-chunk 会永久卡死 size=0）。
+  if (input.expectedSizeBytes === 0) {
+    if (!Number.isFinite(input.chunkLength) || input.chunkLength < 0) {
+      return { kind: 'rejected', reason: 'empty-chunk' };
+    }
+    if (input.chunkLength > 0) return { kind: 'rejected', reason: 'overflow' };
+    return { kind: 'accept', nextReceivedBytes: 0, complete: true };
+  }
+  if (!Number.isFinite(input.chunkLength) || input.chunkLength <= 0) {
+    return { kind: 'rejected', reason: 'empty-chunk' };
   }
   const next = input.receivedBytes + input.chunkLength;
   if (next > input.expectedSizeBytes) {

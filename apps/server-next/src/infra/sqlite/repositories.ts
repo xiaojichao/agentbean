@@ -2253,20 +2253,20 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         try {
           const tx = teamDb.transaction(() => {
             teamDb.prepare(`INSERT INTO workspace_publish_stagings (
-              publish_id, team_id, channel_id, baseline_revision_id, status, created_by, created_at, updated_at,
+              team_id, publish_id, channel_id, baseline_revision_id, status, created_by, created_at, updated_at,
               committed_revision_id, committed_workspace_id, provenance_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-              input.publishId, input.teamId, input.channelId, input.baselineRevisionId, input.status,
+              input.teamId, input.publishId, input.channelId, input.baselineRevisionId, input.status,
               input.createdBy, input.createdAt, input.updatedAt,
               input.committedRevisionId ?? null, input.committedWorkspaceId ?? null,
               input.provenance ? JSON.stringify(input.provenance) : null,
             );
             const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
-              publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+              team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const file of input.files) {
               insertFile.run(
-                input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
+                input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
                 file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
               );
             }
@@ -2274,7 +2274,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           tx();
           return structuredCloneStaging(input);
         } catch (error) {
-          if (error instanceof Error && error.message.includes('UNIQUE constraint failed: workspace_publish_stagings.publish_id')) {
+          if (error instanceof Error && (
+            error.message.includes('UNIQUE constraint failed: workspace_publish_stagings.team_id, workspace_publish_stagings.publish_id')
+            || error.message.includes('UNIQUE constraint failed: workspace_publish_stagings.publish_id')
+          )) {
             return null;
           }
           throw error;
@@ -2298,13 +2301,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             input.provenance ? JSON.stringify(input.provenance) : null,
             input.teamId, input.publishId,
           );
-          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE publish_id = ?').run(input.publishId);
+          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
+            .run(input.teamId, input.publishId);
           const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
-            publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
           for (const file of input.files) {
             insertFile.run(
-              input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
+              input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
               file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
             );
           }
@@ -2322,7 +2326,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
       async delete(input) {
         const tx = teamDb.transaction(() => {
-          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE publish_id = ?').run(input.publishId);
+          teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
+            .run(input.teamId, input.publishId);
           teamDb.prepare('DELETE FROM workspace_publish_stagings WHERE team_id = ? AND publish_id = ?')
             .run(input.teamId, input.publishId);
         });
@@ -4371,9 +4376,10 @@ function mapWorkspacePublishStaging(
   row: Record<string, unknown>,
 ): WorkspacePublishStagingRecord {
   const publishId = String(row.publish_id);
+  const teamId = String(row.team_id);
   const fileRows = teamDb.prepare(
-    `SELECT * FROM workspace_publish_staging_files WHERE publish_id = ? ORDER BY path ASC`,
-  ).all(publishId) as Record<string, unknown>[];
+    `SELECT * FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ? ORDER BY path ASC`,
+  ).all(teamId, publishId) as Record<string, unknown>[];
   const files: WorkspacePublishStagingFileRecord[] = fileRows.map((fileRow) => {
     const content = fileRow.content;
     return {

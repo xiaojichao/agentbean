@@ -110,6 +110,16 @@ describe('workspace-staging-policy (#967 暂存 / 续传 / 上限 / 清理)', ()
         chunkLength: 0,
       })).toEqual({ kind: 'rejected', reason: 'empty-chunk' });
     });
+
+    test('空文件 size=0 允许空 chunk 一次 complete', () => {
+      expect(evaluateWorkspaceStagingUpload({
+        expectedSizeBytes: 0,
+        receivedBytes: 0,
+        complete: false,
+        offset: 0,
+        chunkLength: 0,
+      })).toEqual({ kind: 'accept', nextReceivedBytes: 0, complete: true });
+    });
   });
 
   describe('evaluateWorkspaceStagingCommitReadiness', () => {

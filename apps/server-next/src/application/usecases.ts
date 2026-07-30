@@ -5594,7 +5594,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         },
       });
       if (outcome.kind === 'conflict') {
-        // CAS 竞态：基线在预判后被并发更新。不标 committed；artifact 无 message/run，频道索引不可见。
+        // 同 publishId 并发 commit：另一请求可能已成功并标 committed → 幂等收敛，不报假冲突。
+        const raced = await repositories.workspacePublishStagings.getByPublishId({
+          teamId: commitInput.teamId,
+          publishId,
+        });
+        if (raced?.status === 'committed' && raced.committedRevisionId) {
+          const workspaceAfter = await repositories.projectChannelWorkspaces.getForTeam({
+            teamId: commitInput.teamId,
+            channelId: commitInput.channelId,
+          });
+          if (workspaceAfter && workspaceAfter.currentRevisionId === raced.committedRevisionId) {
+            return makeSuccess({ staging: toWorkspacePublishStagingDto(raced), workspace: workspaceAfter });
+          }
+          const revision = await repositories.projectChannelWorkspaces.getRevision({
+            teamId: commitInput.teamId,
+            channelId: commitInput.channelId,
+            revisionId: raced.committedRevisionId,
+          });
+          if (workspaceAfter && revision) {
+            return makeSuccess({
+              staging: toWorkspacePublishStagingDto(raced),
+              workspace: { ...workspaceAfter, currentRevisionId: revision.id, currentRevision: revision },
+            });
+          }
+          return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
+        }
+        // 真冲突：基线被其他 publish 更新。不标 committed；artifact 无 message/run，频道索引不可见。
         const conflictDecision = evaluateWorkspacePublish({
           current: {
             revisionId: outcome.current.currentRevision.id,

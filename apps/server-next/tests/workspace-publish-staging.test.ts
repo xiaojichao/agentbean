@@ -272,6 +272,35 @@ describe('Workspace publish staging (#967)', () => {
     void repositories;
   });
 
+  test('空文件 size=0 可 complete 并提交', async () => {
+    const { app, cid, baselineRevisionId } = await seedWorkspace();
+    const emptySha = sha256(Buffer.alloc(0));
+    await app.beginWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-empty',
+      baselineRevisionId,
+      files: [{
+        path: 'empty.bin',
+        expectedSizeBytes: 0,
+        expectedSha256: emptySha,
+        filename: 'empty.bin',
+      }],
+    });
+    const put = await app.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-empty', path: 'empty.bin', offset: 0, content: Buffer.alloc(0),
+    });
+    expect(put).toMatchObject({ ok: true, staging: { files: [{ complete: true, receivedBytes: 0 }] } });
+    const committed = await app.commitWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-empty',
+    });
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error(committed.error);
+    expect(committed.workspace?.currentRevision.files).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'empty.bin', sizeBytes: 0 })]),
+    );
+  });
+
   test('过期未提交暂存安全清理；committed 结果仍可查询', async () => {
     const { app, cid, baselineRevisionId, setNow } = await seedWorkspace();
     const body = Buffer.from('temp');
