@@ -21,6 +21,33 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-30] - 2026-07-30
+### Added
+- Workspace 原子发布、冲突反馈、revision 绑定与 provenance
+- Web UI 接线 cancel/close（拖到终态列触发 lifecycle command）
+- 暴露 PI 协调的 Active Memory 来源归因 (AC#4)
+- 接线 lifecycle kernel 到 usecases + socket 入口
+- 实现 10 个 task-lifecycle kernel handler + 集成测试
+- Task 具名生命周期 — Contracts + Domain + Server 基础设施
+- Invocation authorization、Action approval 与 Effect identity
+- 实现 #948 子项 B：Offer 原子发布（ADR-0064, Option A）
+- server: @Agent 硬指定 Offer 路由 + Requirement-confirmation Offer 发布门禁（#947 PR1/2）
+- 实现 #925 核心闭环：execution context grant、claim 角色门禁、DAG 原子发布
+- 收敛 Server-owned PI 编排运行时（#924）
+### Changed
+- 实现 attempt 失败分类、SLA、条件改派与人工 remediation（#928）
+- 实现 #963 Device-bound Agent 生命周期隔离：domain policy + 行为测试
+- 实现 #964 首次导入与跨设备项目浏览
+- 实现 #962 Project Channel Workspace 核心模型与授权读取
+- 实现 #948 子项 F：allocation_blocked 结构化脱敏建议（ADR-0064）
+- server: attestation 解除 Requirement-confirmation Offer fail-closed（#947 PR2/2，Closes #947）
+- 实现 #948 子项 E：Agent relinquish Claim 接线 + ADR-0064/0065 attempt 语义
+- 实现 #948 子项 G：output slot/input binding 不可变 snapshot 与数据门禁（squash + migration 0065）
+- server: execution context grant 随 membership/manifest 变化失效
+- create_subtasks 生产接线 edges + 幂等哈希
+- 实现 #923 Promotion 提案与原子升级交接
+- 记录 2026-07-29 每日更新日志
+
 ## [Daily 2026-07-29] - 2026-07-29
 ### Changed
 - server: Message tracer slice D — cutover 路由层（#921）
