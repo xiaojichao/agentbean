@@ -38,6 +38,14 @@ export const WEB_EVENTS = {
     get: 'pi-policy:get',
     update: 'pi-policy:update',
   },
+  /** #923 Promotion proposal 与 Team rollout/policy 控制；完整 projection 属后续切片。 */
+  promotion: {
+    semanticEvaluate: 'promotion:semantic-evaluate',
+    proposalAction: 'promotion:proposal-action',
+    semanticRolloutUpdate: 'promotion:semantic-rollout-update',
+    teamPolicyUpdate: 'promotion:team-policy-update',
+    teamPolicyApply: 'promotion:team-policy-apply',
+  },
   /** 系统作用域 PI Provider Supply；仅系统管理员可访问。 */
   piProvider: {
     listPresets: 'pi-provider:list-presets',
@@ -336,6 +344,9 @@ export const AGENT_EVENTS = {
     release: 'task-claim:release',
     expired: 'task-claim:expired',
     respond: 'task-claim:respond',
+  },
+  promotion: {
+    escalate: 'promotion:agent-escalate',
   },
   memory: {
     governanceSummaryRequested: 'memory:governance-summary-requested',

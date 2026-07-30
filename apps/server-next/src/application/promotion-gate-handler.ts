@@ -9,6 +9,7 @@ import type {
   PromotionCommandReceiptV1,
   PromotionGateCommandOutputUnionV1,
   PromotionObjectiveSnapshotV1,
+  PromotionTriggerKind,
 } from '../../../../packages/contracts/src/index.js';
 import { canonicalizePromotionGateCommand } from '../../../../packages/contracts/src/index.js';
 import type {
@@ -16,7 +17,10 @@ import type {
   PromotionIdempotencyTombstoneRecord,
   PromotionSourceRelationRecord,
 } from './promotion-gate-repositories.js';
-import type { TaskCoordinationUnitOfWork } from './task-coordination-unit-of-work.js';
+import type {
+  TaskCoordinationTransactionRepositories,
+  TaskCoordinationUnitOfWork,
+} from './task-coordination-unit-of-work.js';
 import { appendManagementEventInTransaction } from './management/management-kernel.js';
 import {
   canonicalizePromotionObjectiveSnapshot,
@@ -75,6 +79,28 @@ export interface PromotionGateHandlerDependencies {
   readonly unitOfWork: TaskCoordinationUnitOfWork;
   readonly clock: PromotionGateClock;
   readonly ids: PromotionGateIdGenerator;
+  /** #923：只有完成 proposal/policy/escalation 专项授权的 Server handler 才能信任非 human trigger。 */
+  readonly trustedTriggerKinds?: readonly Exclude<PromotionTriggerKind, 'human-structured'>[];
+  /**
+   * #923 direct escalation 原子 handoff hook。只在新 root Task 的 applied 分支、receipt 提交前执行；
+   * 抛错会回滚整个 TaskCoordination UoW。
+   */
+  readonly onAppliedInTransaction?: (input: {
+    readonly repositories: TaskCoordinationTransactionRepositories;
+    readonly rootTaskId: ID;
+    readonly managementRunId: ID;
+    readonly sourceRelationId: ID;
+    readonly rootMessageId: ID;
+    readonly now: UnixMs;
+  }) => Promise<void>;
+  readonly onConvergedInTransaction?: (input: {
+    readonly repositories: TaskCoordinationTransactionRepositories;
+    readonly rootTaskId: ID;
+    readonly managementRunId: ID;
+    readonly sourceRelationId: ID;
+    readonly rootMessageId: ID;
+    readonly now: UnixMs;
+  }) => Promise<void>;
 }
 
 export interface PromotionGateHandler {
@@ -320,7 +346,13 @@ export function createPromotionGateHandler(
         // -------------------------------------------------------------------
         // 2. Authorization（#894 §1/§8 / #900 §18）：trigger + 频道访问权
         // -------------------------------------------------------------------
-        const triggerAuthorization = evaluatePromotionAuthorization({ triggerKind: input.triggerKind });
+        const triggerAuthorization = evaluatePromotionAuthorization({
+          triggerKind: input.triggerKind,
+          ...(input.triggerKind !== 'human-structured'
+            && dependencies.trustedTriggerKinds?.includes(input.triggerKind)
+            ? { trustedStructuredTrigger: true }
+            : {}),
+        });
         if ('denied' in triggerAuthorization) {
           return {
             schemaVersion: 1,
@@ -426,6 +458,18 @@ export function createPromotionGateHandler(
             'existing',
           );
           const receiptId = ids.nextId();
+          const convergedRootMessageId = input.rootMessageId
+            ?? (input.freshnessBasis.sourceLineage.kind === 'message'
+              ? input.freshnessBasis.sourceLineage.id
+              : existingRelation.taskId);
+          await dependencies.onConvergedInTransaction?.({
+            repositories: repos,
+            rootTaskId: existingRelation.taskId,
+            managementRunId: existingRelation.managementRunId,
+            sourceRelationId: existingRelation.id,
+            rootMessageId: convergedRootMessageId,
+            now,
+          });
           const receipt: PromotionCommandReceiptRecord = {
             receiptId,
             teamId,
@@ -660,8 +704,17 @@ export function createPromotionGateHandler(
           scopeId: taskId,
           action: 'access',
           decision: 'allowed',
-          diagnosticCode: 'PROMOTION_HUMAN_TRIGGER',
+          diagnosticCode: `PROMOTION_${input.triggerKind.toUpperCase().replace(/-/g, '_')}`,
           createdAt: now,
+        });
+
+        await dependencies.onAppliedInTransaction?.({
+          repositories: repos,
+          rootTaskId: taskId,
+          managementRunId,
+          sourceRelationId,
+          rootMessageId,
+          now,
         });
 
         // Receipt + tombstone（幂等锚）

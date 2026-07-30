@@ -90,6 +90,8 @@ export function evaluatePromotionConvergence(input: PromotionConvergenceInput): 
 
 export interface PromotionAuthorizationInput {
   readonly triggerKind: PromotionTriggerKind;
+  /** 非 human trigger 只能由 Server 的 proposal/policy/escalation handler 完成授权后置 true。 */
+  readonly trustedStructuredTrigger?: boolean;
   /** 请求的动作；orchestration-only（create-task/start-orchestration）允许，高风险 action 拒绝。 */
   readonly requestedActions?: readonly string[];
 }
@@ -104,7 +106,7 @@ export type PromotionAuthorizationDecision =
  */
 export function evaluatePromotionAuthorization(input: PromotionAuthorizationInput): PromotionAuthorizationDecision {
   // 二次防御：envelope exact-key 校验已拒绝非登记 trigger；本函数对任何非 human-structured 一律拒绝。
-  if (input.triggerKind !== 'human-structured') {
+  if (input.triggerKind !== 'human-structured' && input.trustedStructuredTrigger !== true) {
     return { denied: true, reason: 'not-human-trigger' };
   }
   const actions = input.requestedActions ?? [];
@@ -136,6 +138,9 @@ export type PromotionFreshnessDecision =
  */
 export function evaluatePromotionFreshness(input: PromotionFreshnessInput): PromotionFreshnessDecision {
   if (input.sourceChanged) return { hold: true, reason: 'source-changed' };
+  if (input.requestedSourceRevision !== undefined && input.currentSourceRevision === undefined) {
+    return { hold: true, reason: 'source-revision-unavailable' };
+  }
   if (input.requestedSourceRevision !== undefined
     && input.currentSourceRevision !== undefined
     && input.requestedSourceRevision < input.currentSourceRevision) {
