@@ -17,6 +17,7 @@ export * from './task.js';
 export * from './management.js';
 export * from './task-coordination.js';
 export * from './invocation.js';
+export * from './invocation-authorization.js';
 export * from './collaboration.js';
 export * from './management-event.js';
 export * from './management-memory.js';
