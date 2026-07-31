@@ -532,14 +532,14 @@ jobs:
           fi
 
           if npm view "@agentbean/daemon-next@$DAEMON_NEXT_VERSION" version >/dev/null 2>&1; then
-            echo "::notice::@agentbean/daemon-next@$DAEMON_NEXT_VERSION is already published; skipping npm publish."
+            echo "::warning::@agentbean/daemon-next@$DAEMON_NEXT_VERSION 已存在于 npm，本次不会发布新的 daemon 版本；设备执行 agentbean update 仍停留在该版本。若本次提交包含 daemon 代码改动，请先提升 apps/daemon-next/package.json 版本号再发版。"
             echo "should_publish_daemon_next=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish_daemon_next=true" >> "$GITHUB_OUTPUT"
           fi
 
           if npm view "@agentbean/daemon@$CANONICAL_DAEMON_VERSION" version >/dev/null 2>&1; then
-            echo "::notice::@agentbean/daemon@$CANONICAL_DAEMON_VERSION is already published; skipping npm publish."
+            echo "::warning::@agentbean/daemon@$CANONICAL_DAEMON_VERSION 已存在于 npm，本次不会发布新的设备安装包，npm latest 不会变化。若本次提交包含 daemon 代码改动，请先提升版本号再发版。"
             echo "should_publish_canonical_daemon=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish_canonical_daemon=true" >> "$GITHUB_OUTPUT"
@@ -576,13 +576,13 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Promote canonical daemon latest before production deploy
-        if: env.NPM_TOKEN != ''
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
         run: npm dist-tag add "@agentbean/daemon@${{ steps.agentbean-next-packages.outputs.canonical_daemon_version }}" latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify canonical daemon latest before production deploy
-        if: env.NPM_TOKEN != ''
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'
         run: |
           EXPECTED="${{ steps.agentbean-next-packages.outputs.canonical_daemon_version }}"
           LATEST=""
@@ -601,6 +601,31 @@ jobs:
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summarize npm publish outcome
+        if: env.NPM_TOKEN != ''
+        run: |
+          DAEMON_NEXT_PUBLISHED="${{ steps.agentbean-next-packages.outputs.should_publish_daemon_next }}"
+          CANONICAL_PUBLISHED="${{ steps.agentbean-next-packages.outputs.should_publish_canonical_daemon }}"
+          DAEMON_VERSION="${{ steps.agentbean-next-packages.outputs.canonical_daemon_version }}"
+          {
+            echo "## 本次 npm 发布结果"
+            echo ""
+            if [ "$DAEMON_NEXT_PUBLISHED" = "true" ]; then
+              echo "- @agentbean/daemon-next：已发布 ${DAEMON_VERSION}"
+            else
+              echo "- @agentbean/daemon-next：未发布新版本（${DAEMON_VERSION} 已存在于 npm）"
+            fi
+            if [ "$CANONICAL_PUBLISHED" = "true" ]; then
+              echo "- @agentbean/daemon（设备安装包）：已发布 ${DAEMON_VERSION}，并已提升为 npm latest"
+            else
+              echo "- @agentbean/daemon（设备安装包）：未发布新版本，npm latest 保持 ${DAEMON_VERSION}"
+            fi
+            if [ "$DAEMON_NEXT_PUBLISHED" != "true" ] && [ "$CANONICAL_PUBLISHED" != "true" ]; then
+              echo ""
+              echo "> 本次没有新的 daemon 版本发布，设备执行 agentbean update 仍停留在 ${DAEMON_VERSION}。若本次提交包含 daemon 代码改动，请先提升 apps/daemon-next/package.json 版本号，再通过发版提交发布。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   promote-agentbean-daemon-latest:
     name: Promote canonical daemon npm latest

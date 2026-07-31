@@ -448,6 +448,11 @@ export function collectAgentBeanNextReadinessChecks({
       'CI publish must promote and verify canonical @agentbean/daemon latest before the dependent production deploy can expose matching Web commands',
     ),
     check(
+      'ci-promotes-daemon-latest-only-when-published',
+      publishJob.includes("steps.agentbean-next-packages.outputs.should_publish_canonical_daemon == 'true'"),
+      'CI publish must promote canonical daemon latest only when a new canonical daemon version was actually published in this run',
+    ),
+    check(
       'ci-runs-next-production-smoke-after-main-push',
       workflow.includes("github.event_name == 'push' && github.ref == 'refs/heads/main'") &&
         workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
