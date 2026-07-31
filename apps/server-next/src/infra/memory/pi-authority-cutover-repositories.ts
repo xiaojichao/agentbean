@@ -105,17 +105,25 @@ function projectionKey(
 
 export function createInMemoryPiAuthorityCutoverRepositories(
   state: PiAuthorityCutoverMemoryState = createPiAuthorityCutoverMemoryState(),
+  options?: {
+    /**
+     * 与 sendMessage / Coordinator fence 共用同一 migration 权威存储。
+     * 生产与 E2E 应注入 `ServerNextRepositories.teamPiAuthorityMigrations`。
+     */
+    readonly migrations?: PiAuthorityCutoverRepositories['migrations'];
+  },
 ): PiAuthorityCutoverRepositories {
-  return {
-    migrations: {
-      async get(teamId) {
-        return state.migrations.get(teamId) ?? null;
-      },
-      async upsert(record) {
-        state.migrations.set(record.teamId, record);
-        return record;
-      },
+  const migrations = options?.migrations ?? {
+    async get(teamId: string) {
+      return state.migrations.get(teamId) ?? null;
     },
+    async upsert(record: TeamPiAuthorityMigrationRecord) {
+      state.migrations.set(record.teamId, record);
+      return record;
+    },
+  };
+  return {
+    migrations,
     readinessSnapshots: {
       async create(record) {
         state.readinessSnapshots.set(record.snapshotId, record);

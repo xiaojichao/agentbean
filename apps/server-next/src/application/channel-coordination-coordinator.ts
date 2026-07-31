@@ -693,13 +693,15 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
 
     const now = nowOverride ?? deps.clock.now();
 
-    // #930：cutover 后未开始的 legacy job 必须取消，不得继续拆解/派发。
-    if (job.status === 'pending' || job.status === 'retry_wait') {
-      const fenced = await lookupLegacyCoordinationWriteFenced(
-        deps.teamPiAuthorityMigrations,
-        job.teamId,
-      );
-      if (fenced) {
+    // #930：cutover 后 legacy writer fenced。
+    // - pending/retry_wait：取消（未开始不得继续）
+    // - running：不得再走完整协调（拆解/派发/建 Task）；留给 Legacy drain bridge 收尾
+    const fenced = await lookupLegacyCoordinationWriteFenced(
+      deps.teamPiAuthorityMigrations,
+      job.teamId,
+    );
+    if (fenced) {
+      if (job.status === 'pending' || job.status === 'retry_wait') {
         await deps.jobs.updateState({
           jobId: job.id,
           status: 'cancelled',
@@ -708,6 +710,9 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
           updatedAt: now,
         });
         return { kind: 'terminal', status: 'cancelled' };
+      }
+      if (job.status === 'running') {
+        return { kind: 'not_runnable', status: 'running' };
       }
     }
 

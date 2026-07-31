@@ -739,13 +739,12 @@ export async function handleSubmitLegacyDrainResult(
     }
 
     if (decision.kind === 'expire' || decision.kind === 'recovery_pending') {
-      const nextState = decision.kind === 'expire' ? 'expired' as const : 'recovery_pending' as const;
+      // 过期与无法安全解释均进入 recovery_pending（ADR-0068），等待合法人工恢复。
       const updated: LegacyDrainLineageRecord = {
         ...drain,
-        state: nextState === 'expired' ? 'recovery_pending' : 'recovery_pending',
+        state: 'recovery_pending',
         updatedAt: now,
       };
-      // 过期与无法安全解释均进入 recovery_pending（ADR-0068）
       await repos.drainLineages.update(updated);
       await appendAuditAndOutbox(repos, {
         teamId: deps.teamId,
