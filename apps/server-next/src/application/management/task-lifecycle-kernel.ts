@@ -264,13 +264,16 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       };
     });
 
-    // #1014 post-commit 自动投影（不回滚权威事实）
+    // post-commit 自动投影（不回滚权威事实）
     if (outcome.freshlyApplied && onApplied) {
       const r = outcome.result as Record<string, unknown>;
       const taskId = String(r.taskId ?? (input as { taskId?: string }).taskId ?? '');
       const taskRevision = Number(r.taskRevision ?? (input as { expectedTaskRevision?: number }).expectedTaskRevision ?? 0);
       const status = typeof r.status === 'string' ? r.status : undefined;
       const deliveryMessageId = typeof r.deliveryMessageId === 'string' ? r.deliveryMessageId : undefined;
+      const onAppliedReason = typeof (input as { reason?: string }).reason === 'string'
+        ? (input as { reason?: string }).reason
+        : undefined;
       try {
         await onApplied({
           commandName,
@@ -279,7 +282,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           taskRevision,
           status,
           deliveryMessageId,
-          reason: outcome.reason ?? reason,
+          reason: onAppliedReason,
           channelId: outcome.taskSnapshot?.channelId ?? null,
           creatorId: outcome.taskSnapshot?.creatorId ?? null,
           assigneeId: outcome.taskSnapshot?.assigneeId ?? null,
@@ -291,13 +294,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       }
     }
 
-    return {
-      result: outcome.result,
-      receipt: outcome.receipt,
-      disposition: outcome.disposition === 'replayed' ? 'applied' as const : outcome.disposition,
-      ...('reason' in outcome && outcome.reason !== undefined ? { reason: outcome.reason } : {}),
-      ...('tombstoneOutcome' in outcome && outcome.tombstoneOutcome !== undefined ? { tombstoneOutcome: outcome.tombstoneOutcome } : {}),
-    };
+    return outcome;
   }
 
   /** 取 task 的 coordination 记录（不带 run 校验，lifecycle handler 自己管理 run 关联）。 */
