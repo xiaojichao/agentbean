@@ -22,6 +22,7 @@ import type {
 } from '../../../../packages/contracts/src/system-activity.js';
 import { createSystemActivityDispatcher } from './system-activity-dispatcher.js';
 import { createMemorySystemActivityUnitOfWork } from './system-activity-unit-of-work.js';
+import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
 import {
   cloneSystemActivityMemoryState,
   createInMemorySystemActivityRepositories,
@@ -1970,6 +1971,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     memoryContextResolver: activeMemoryContextResolver,
     clock,
     ids,
+    teamPiAuthorityMigrations: repositories.teamPiAuthorityMigrations,
   });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
@@ -4732,7 +4734,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
           if (!frozen.ok) return { kind: 'rejected' as const, failure: frozen };
           const messageId = messageInput.messageId ?? ids.nextId();
-          const jobId = ids.nextId();
           const message = await transaction.messages.append({
             id: messageId,
             teamId: messageInput.teamId,
@@ -4765,20 +4766,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           for (const artifact of attachmentResult.artifacts) {
             attachedArtifacts.push(await transaction.artifacts.create({ ...artifact, messageId }));
           }
-          await transaction.jobs.create({
-            id: jobId,
-            teamId: messageInput.teamId,
-            channelId: messageInput.channelId,
-            messageId,
-            idempotencyKey: clientIdempotencyKey ?? `message:${messageInput.teamId}:${messageId}`,
-            status: 'pending',
-            attempt: 0,
-            nextRetryAt: null,
-            activeModel,
-            createdAt: now,
-            updatedAt: now,
-          });
-          return { kind: 'saved' as const, message, artifacts: attachedArtifacts, referenceSet };
+          // #930：cutover 后 Message 仍提交，但不得新建 legacy coordination job（无 dual-write）。
+          const legacyFenced = await lookupLegacyCoordinationWriteFenced(
+            repositories.teamPiAuthorityMigrations,
+            messageInput.teamId,
+          );
+          if (!legacyFenced) {
+            await transaction.jobs.create({
+              id: ids.nextId(),
+              teamId: messageInput.teamId,
+              channelId: messageInput.channelId,
+              messageId,
+              idempotencyKey: clientIdempotencyKey ?? `message:${messageInput.teamId}:${messageId}`,
+              status: 'pending',
+              attempt: 0,
+              nextRetryAt: null,
+              activeModel,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+          return {
+            kind: 'saved' as const,
+            message,
+            artifacts: attachedArtifacts,
+            referenceSet,
+            legacyCoordinationFenced: legacyFenced,
+          };
         });
       }).catch((error: unknown) => {
         if (error instanceof ProjectReferenceCommitConflictError) {

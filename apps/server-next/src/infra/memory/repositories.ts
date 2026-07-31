@@ -183,6 +183,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       snap as ReturnType<typeof createSystemActivityMemoryState>,
     ),
   });
+  // #930 Team PI authority migration（legacy write fence）。
+  const teamPiAuthorityMigrations = new Map<string, import('../../application/pi-authority-cutover-repositories.js').TeamPiAuthorityMigrationRecord>();
 
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -2465,6 +2467,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     experiencePack: createMemoryExperiencePackRepositories(),
     systemActivity,
     systemActivityUnitOfWork,
+    teamPiAuthorityMigrations: {
+      async get(teamId) {
+        return teamPiAuthorityMigrations.get(teamId) ?? null;
+      },
+      async upsert(record) {
+        teamPiAuthorityMigrations.set(record.teamId, record);
+        return record;
+      },
+    },
   };
   return repositories;
 }
