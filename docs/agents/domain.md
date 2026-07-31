@@ -41,3 +41,7 @@ issue 标题、重构建议、假设和测试名称应使用对应 `CONTEXT.md` 
 ## ADR 冲突
 
 输出若与现有 ADR 冲突，必须明确指出冲突及重新讨论的理由，不得静默覆盖既有决策。
+
+## 相关操作索引
+
+- Project Channel Workspace 发布暂存（begin/put/get/commit、HTTP、socket）：[`workspace-publish-staging.md`](./workspace-publish-staging.md)

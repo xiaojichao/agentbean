@@ -2485,7 +2485,9 @@ function cloneWorkspacePublishStaging(input: WorkspacePublishStagingRecord): Wor
     ...input,
     files: input.files.map((file) => ({
       ...file,
-      ...(file.content ? { content: Buffer.from(file.content) } : {}),
+      ...(file.storagePath ? { storagePath: file.storagePath } : {}),
+      // 有 storagePath 时不克隆 BLOB（#1005 磁盘路径）
+      ...(!file.storagePath && file.content ? { content: Buffer.from(file.content) } : {}),
     })),
     ...(input.provenance ? { provenance: { ...input.provenance } } : {}),
   };

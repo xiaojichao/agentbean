@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, test } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, test } from 'vitest';
 import { createInMemoryRepositories, createServerNextUseCases } from '../src/index';
+import {
+  createFileWorkspaceStagingContentStore,
+  workspaceStagingRelativePath,
+} from '../src/application/workspace-staging-content-store.js';
 
 function sha256(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
@@ -485,5 +492,205 @@ describe('Workspace publish staging (#967)', () => {
       ok: true,
       staging: { status: 'committed', committedRevisionId: expect.any(String) },
     });
+  });
+});
+
+describe('Workspace staging disk content store (#1005)', () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  async function seedWithDiskStore() {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-staging-'));
+    tempDirs.push(dataDir);
+    const stagingContentStore = createFileWorkspaceStagingContentStore(dataDir);
+    const repositories = createInMemoryRepositories();
+    let now = 100;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds([
+          'user-1', 'team-1', 'all-1', 'channel-1',
+          'workspace-1', 'revision-1',
+          'art-1', 'rev-2', 'art-2', 'rev-3', 'art-3', 'rev-4',
+        ]),
+      },
+      stagingContentStore,
+    });
+    await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app.createChannel({
+      userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public',
+    });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    await repositories.artifacts.create({
+      id: 'seed-art', teamId: 'team-1', channelId: cid, uploaderId: 'user-1',
+      filename: 'base.txt', mimeType: 'text/plain', sizeBytes: 4, pathKind: 'workspace', createdAt: 1,
+    });
+    const created = await app.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      files: [{ path: 'base.txt', artifactId: 'seed-art' }],
+    });
+    if (!created.ok) throw new Error(created.error);
+    return {
+      dataDir,
+      stagingContentStore,
+      repositories,
+      app,
+      cid,
+      baselineRevisionId: created.workspace.currentRevisionId,
+      setNow: (value: number) => { now = value; },
+    };
+  }
+
+  test('多分片 put 写磁盘且不把 content 塞进 staging 记录', async () => {
+    const { app, cid, baselineRevisionId, repositories, dataDir } = await seedWithDiskStore();
+    const part1 = Buffer.from('hello ');
+    const part2 = Buffer.from('disk!!');
+    const full = Buffer.concat([part1, part2]);
+    await app.beginWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-disk-1',
+      baselineRevisionId,
+      files: [{
+        path: 'out/big.bin',
+        expectedSizeBytes: full.length,
+        expectedSha256: sha256(full),
+      }],
+    });
+    const half = await app.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-disk-1', path: 'out/big.bin', offset: 0, content: part1,
+    });
+    expect(half).toMatchObject({ ok: true, staging: { files: [{ complete: false, receivedBytes: part1.length }] } });
+
+    const rel = workspaceStagingRelativePath('team-1', 'pub-disk-1', 'out/big.bin');
+    const abs = join(dataDir, rel);
+    expect(existsSync(abs)).toBe(true);
+
+    const storedHalf = await repositories.workspacePublishStagings.getByPublishId({
+      teamId: 'team-1', publishId: 'pub-disk-1',
+    });
+    expect(storedHalf?.files[0]?.storagePath).toBe(rel);
+    expect(storedHalf?.files[0]?.content).toBeUndefined();
+
+    const rest = await app.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-disk-1', path: 'out/big.bin', offset: part1.length, content: part2,
+    });
+    expect(rest).toMatchObject({ ok: true, staging: { files: [{ complete: true, receivedBytes: full.length }] } });
+
+    const committed = await app.commitWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-disk-1',
+    });
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) throw new Error(committed.error);
+    expect(committed.workspace?.currentRevision.files).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'out/big.bin', sizeBytes: full.length })]),
+    );
+    // commit 后清理 staging 目录
+    expect(existsSync(join(dataDir, 'workspace-staging', 'team-1', 'pub-disk-1'))).toBe(false);
+  });
+
+  test('同 dataDir 新 store 实例可续传（模拟进程重启后同一磁盘）', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-staging-resume-'));
+    tempDirs.push(dataDir);
+    const repositories = createInMemoryRepositories();
+    let now = 100;
+    const ids = {
+      nextId: createIds([
+        'user-1', 'team-1', 'all-1', 'channel-1',
+        'workspace-1', 'revision-1',
+        'art-1', 'rev-2',
+      ]),
+    };
+    const app1 = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids,
+      stagingContentStore: createFileWorkspaceStagingContentStore(dataDir),
+    });
+    await app1.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
+    const channel = await app1.createChannel({
+      userId: 'user-1', teamId: 'team-1', name: 'project', visibility: 'public',
+    });
+    if (!channel.ok) throw new Error(channel.error);
+    const cid = channel.channel.id;
+    await repositories.artifacts.create({
+      id: 'seed-art', teamId: 'team-1', channelId: cid, uploaderId: 'user-1',
+      filename: 'base.txt', mimeType: 'text/plain', sizeBytes: 4, pathKind: 'workspace', createdAt: 1,
+    });
+    const created = await app1.createProjectChannelWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      files: [{ path: 'base.txt', artifactId: 'seed-art' }],
+    });
+    if (!created.ok) throw new Error(created.error);
+    const part1 = Buffer.from('resume-');
+    const part2 = Buffer.from('works!');
+    const full = Buffer.concat([part1, part2]);
+    await app1.beginWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-resume-disk',
+      baselineRevisionId: created.workspace.currentRevisionId,
+      files: [{
+        path: 'r.bin',
+        expectedSizeBytes: full.length,
+        expectedSha256: sha256(full),
+      }],
+    });
+    await app1.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-resume-disk', path: 'r.bin', offset: 0, content: part1,
+    });
+
+    // 模拟进程重启：新 store（同 dataDir）+ 新 usecase（metadata 仍在 repositories）
+    const app2 = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids,
+      stagingContentStore: createFileWorkspaceStagingContentStore(dataDir),
+    });
+    const rest = await app2.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-resume-disk', path: 'r.bin', offset: part1.length, content: part2,
+    });
+    expect(rest).toMatchObject({ ok: true, staging: { files: [{ complete: true }] } });
+    const committed = await app2.commitWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-resume-disk',
+    });
+    expect(committed.ok).toBe(true);
+  });
+
+  test('cleanup 过期 open staging 时删除磁盘目录', async () => {
+    const { app, cid, baselineRevisionId, dataDir, setNow } = await seedWithDiskStore();
+    const body = Buffer.from('temp-disk');
+    await app.beginWorkspacePublishStaging({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-disk-expire',
+      baselineRevisionId,
+      files: [{
+        path: 'tmp.bin',
+        expectedSizeBytes: body.length,
+        expectedSha256: sha256(body),
+      }],
+    });
+    await app.putWorkspacePublishStagingFile({
+      userId: 'user-1', teamId: 'team-1', channelId: cid,
+      publishId: 'pub-disk-expire', path: 'tmp.bin', offset: 0, content: body.subarray(0, 4),
+    });
+    const stagingDir = join(dataDir, 'workspace-staging', 'team-1', 'pub-disk-expire');
+    expect(existsSync(stagingDir)).toBe(true);
+
+    setNow(100 + 24 * 60 * 60 * 1000 + 1);
+    const cleaned = await app.cleanupExpiredWorkspacePublishStaging({
+      retentionMs: 24 * 60 * 60 * 1000,
+      now: 100 + 24 * 60 * 60 * 1000 + 1,
+    });
+    expect(cleaned).toMatchObject({ ok: true, cleaned: 1 });
+    expect(existsSync(stagingDir)).toBe(false);
   });
 });

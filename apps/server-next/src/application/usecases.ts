@@ -38,6 +38,7 @@ import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRu
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
+import type { WorkspaceStagingContentStore } from './workspace-staging-content-store.js';
 import {
   PROJECT_REFERENCE_SET_CONTRACT_VERSION,
   type ProjectReferenceFailureDetailsDto,
@@ -1584,6 +1585,11 @@ export interface CreateServerNextUseCasesInput {
   deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
   artifactContentStore?: ArtifactContentStore;
+  /**
+   * #1005：staging 字节磁盘存储。有则 put 写 dataDir、不写 SQLite BLOB；
+   * 缺省（memory 测试）继续用 file.content Buffer。
+   */
+  stagingContentStore?: WorkspaceStagingContentStore;
   resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>;
   onArtifactCommitted?: (artifact: ArtifactRecord) => Promise<void>;
   /** #829 项目审核/最终化事实变化后，best-effort 触发 Server 权威阶段推进重算。 */
@@ -1644,6 +1650,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     }
   }
   const artifactContentStore = input.artifactContentStore;
+  const stagingContentStore = input.stagingContentStore;
   const resolveArtifactPreview = input.resolveArtifactPreview;
   const onArtifactCommitted = input.onArtifactCommitted;
   // #706 Channel Coordinator 消费 durable Job。默认 durable-job（ADR 0061）；
@@ -5599,7 +5606,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           { reason: uploadDecision.reason },
         );
       }
-      const nextContent = Buffer.concat([file.content ? Buffer.from(file.content) : Buffer.alloc(0), chunk]);
       // 上限双检：单文件 + 会话总接收量（含本 chunk）。
       const limits = resolveWorkspaceStagingLimits(putInput.limits);
       const totalAfter = staging.files.reduce((sum, entry, index) => {
@@ -5620,6 +5626,72 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           { reason: sizeDecision.reason },
         );
       }
+
+      // #1005：有磁盘 store 时写 dataDir，metadata 只记 storagePath（不塞 BLOB）。
+      if (stagingContentStore) {
+        let stored: { storagePath: string; sizeBytes: number };
+        try {
+          stored = await stagingContentStore.appendChunk({
+            teamId: putInput.teamId,
+            publishId,
+            path,
+            offset: putInput.offset,
+            chunk,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.startsWith('STAGING_OFFSET_MISMATCH')) {
+            return makeFailure('VALIDATION_ERROR', 'Staging upload offset mismatch', {
+              reason: 'invalid-offset',
+            });
+          }
+          throw error;
+        }
+        let complete = uploadDecision.complete;
+        if (complete) {
+          const onDisk = await stagingContentStore.readContent({
+            teamId: putInput.teamId,
+            publishId,
+            path,
+            storagePath: stored.storagePath,
+          });
+          const digest = createHash('sha256').update(onDisk ?? Buffer.alloc(0)).digest('hex');
+          if (digest !== file.expectedSha256.toLowerCase()) {
+            // 回滚磁盘到本 put 前长度，与 memory 路径「不提交失败 chunk」一致。
+            await stagingContentStore.truncateTo({
+              teamId: putInput.teamId,
+              publishId,
+              path,
+              sizeBytes: file.receivedBytes,
+            });
+            return makeFailure('VALIDATION_ERROR', 'Staging file sha256 mismatch', {
+              reason: 'hash-mismatch',
+              path,
+            });
+          }
+        }
+        const nextFiles = staging.files.map((entry, index) => {
+          if (index !== fileIndex) return entry;
+          return {
+            path: entry.path,
+            filename: entry.filename,
+            mimeType: entry.mimeType,
+            expectedSizeBytes: entry.expectedSizeBytes,
+            expectedSha256: entry.expectedSha256,
+            receivedBytes: uploadDecision.nextReceivedBytes,
+            complete,
+            storagePath: stored.storagePath,
+          };
+        });
+        const updated = await repositories.workspacePublishStagings.update({
+          ...staging,
+          files: nextFiles,
+          updatedAt: clock.now(),
+        });
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(updated) });
+      }
+
+      const nextContent = Buffer.concat([file.content ? Buffer.from(file.content) : Buffer.alloc(0), chunk]);
       let complete = uploadDecision.complete;
       if (complete) {
         const digest = createHash('sha256').update(nextContent).digest('hex');
@@ -5669,6 +5741,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           retentionMs: DEFAULT_WORKSPACE_STAGING_RETENTION_MS,
         });
         if (expiry.kind === 'expired-cleanable') {
+          await stagingContentStore?.deletePublish({
+            teamId: staging.teamId,
+            publishId: staging.publishId,
+          });
           await repositories.workspacePublishStagings.delete({
             teamId: staging.teamId,
             publishId: staging.publishId,
@@ -5717,9 +5793,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (staging.status !== 'open') {
         return makeFailure('CONFLICT', 'Workspace publish staging is not open');
       }
+      // 先解析字节（磁盘或 memory Buffer），再做 readiness / 物化。
+      const fileContents = new Map<string, Buffer>();
+      for (const file of staging.files) {
+        fileContents.set(
+          file.path,
+          await resolveWorkspaceStagingFileContent(stagingContentStore, staging, file),
+        );
+      }
       const readiness = evaluateWorkspaceStagingCommitReadiness(
         staging.files.map((file) => {
-          const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+          const content = fileContents.get(file.path) ?? Buffer.alloc(0);
           const digest = content.length === file.expectedSizeBytes && file.complete
             ? createHash('sha256').update(content).digest('hex')
             : '';
@@ -5778,7 +5862,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         workspace,
         now: clock.now(),
       });
-      if (recovered) return recovered;
+      if (recovered) {
+        await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+        return recovered;
+      }
 
       // 预判基线/空清单：在创建任何公开 artifact 之前失败，避免冲突后残留频道可见半成品。
       // 提交清单用占位 artifactId（仅用于路径集合冲突计算；真实 id 在通过后分配）。
@@ -5816,7 +5903,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             workspace: workspaceNow,
             now: clock.now(),
           });
-          if (recoveredOnConflict) return recoveredOnConflict;
+          if (recoveredOnConflict) {
+            await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+            return recoveredOnConflict;
+          }
         }
         // 真冲突：基线落后 / 同路径竞争，不自动合并、不写 revision、不创建 artifact。
         return makeFailure('CONFLICT', 'Workspace baseline changed', {
@@ -5831,7 +5921,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const publishedFiles: ProjectChannelWorkspaceFileDto[] = [];
       const createdArtifactIds: string[] = [];
       for (const file of staging.files) {
-        const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+        const content = fileContents.get(file.path) ?? Buffer.alloc(0);
         const artifactId = ids.nextId();
         let storagePath: string | undefined;
         let sha256 = file.expectedSha256;
@@ -5967,7 +6057,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         status: 'committed',
         committedRevisionId: outcome.workspace.currentRevisionId,
         committedWorkspaceId: outcome.workspace.id,
-        // 提交后剥离私有 content，避免暂存区长期持有大文件。
+        // 提交后剥离私有 content / storagePath，避免暂存区长期持有大文件。
         files: staging.files.map((f) => ({
           path: f.path,
           filename: f.filename,
@@ -5978,6 +6068,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           complete: true,
         })),
         updatedAt: now,
+      });
+      // 已物化到 artifact store；删除 staging 磁盘目录。
+      await stagingContentStore?.deletePublish({
+        teamId: staging.teamId,
+        publishId: staging.publishId,
       });
       return makeSuccess({
         staging: toWorkspacePublishStagingDto(committed),
@@ -6002,6 +6097,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           retentionMs,
         });
         if (decision.kind !== 'expired-cleanable') continue;
+        await stagingContentStore?.deletePublish({
+          teamId: row.teamId,
+          publishId: row.publishId,
+        });
         await repositories.workspacePublishStagings.delete({
           teamId: row.teamId,
           publishId: row.publishId,
@@ -11409,6 +11508,24 @@ function coerceStagingContent(content: Buffer | Uint8Array | string): Buffer {
   if (Buffer.isBuffer(content)) return content;
   if (content instanceof Uint8Array) return Buffer.from(content);
   return Buffer.from(content, 'base64');
+}
+
+/** #1005：优先从磁盘 staging store 读；否则回退 memory Buffer / 旧 BLOB 行。 */
+async function resolveWorkspaceStagingFileContent(
+  store: WorkspaceStagingContentStore | undefined,
+  staging: WorkspacePublishStagingRecord,
+  file: WorkspacePublishStagingFileRecord,
+): Promise<Buffer> {
+  if (store && (file.storagePath || file.receivedBytes > 0)) {
+    const fromDisk = await store.readContent({
+      teamId: staging.teamId,
+      publishId: staging.publishId,
+      path: file.path,
+      ...(file.storagePath ? { storagePath: file.storagePath } : {}),
+    });
+    if (fromDisk) return fromDisk;
+  }
+  return file.content ? Buffer.from(file.content) : Buffer.alloc(0);
 }
 
 /** #967 DTO 剥离私有 content，确保上传中字节不经 API 泄漏到频道侧。 */
