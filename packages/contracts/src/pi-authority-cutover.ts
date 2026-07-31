@@ -297,12 +297,15 @@ export interface PiAuthorityCutoverCommandInputMapV1 {
     readonly readinessToken: string;
     readonly expectedMigrationRevision: number;
     readonly expectedTargetEpoch: number;
-    /** cutover 时已 running 的 legacy job → drain；pending 的 → cancel。 */
-    readonly runningLegacyJobs: readonly {
+    /**
+     * 可选客户端提示。#931：Server 必须自动扫描 Team 内全部 pending/retry_wait/running
+     * legacy job 并处置，不依赖调用方传全量 job id。
+     */
+    readonly runningLegacyJobs?: readonly {
       readonly jobId: ID;
       readonly lineageKey: string;
     }[];
-    readonly pendingLegacyJobIds: readonly ID[];
+    readonly pendingLegacyJobIds?: readonly ID[];
     readonly drainDeadlineMs: number;
   };
   readonly 'submit-legacy-drain-result': {
@@ -600,7 +603,7 @@ export function parsePiAuthorityCutoverCommandInputV1<
         value,
         [
           'readinessToken', 'expectedMigrationRevision', 'expectedTargetEpoch',
-          'runningLegacyJobs', 'pendingLegacyJobIds', 'drainDeadlineMs',
+          'drainDeadlineMs',
         ],
         [
           'readinessToken', 'expectedMigrationRevision', 'expectedTargetEpoch',
@@ -610,16 +613,21 @@ export function parsePiAuthorityCutoverCommandInputV1<
       if (!nonEmpty(value.readinessToken)) throw new Error(PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID);
       assertInteger(value.expectedMigrationRevision, 0);
       assertInteger(value.expectedTargetEpoch, 1);
-      if (!Array.isArray(value.runningLegacyJobs) || !Array.isArray(value.pendingLegacyJobIds)) {
+      const runningRaw = value.runningLegacyJobs;
+      if (runningRaw !== undefined && !Array.isArray(runningRaw)) {
         throw new Error(PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID);
       }
-      const runningLegacyJobs = value.runningLegacyJobs.map((job) => {
+      const pendingRaw = value.pendingLegacyJobIds;
+      if (pendingRaw !== undefined && !Array.isArray(pendingRaw)) {
+        throw new Error(PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID);
+      }
+      const runningLegacyJobs = (runningRaw ?? []).map((job) => {
         assertExactKeys(job, ['jobId', 'lineageKey'], ['jobId', 'lineageKey']);
         assertId(job.jobId);
         if (!nonEmpty(job.lineageKey)) throw new Error(PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID);
         return { jobId: job.jobId as ID, lineageKey: job.lineageKey as string };
       });
-      const pendingLegacyJobIds = value.pendingLegacyJobIds.map((id) => {
+      const pendingLegacyJobIds = (pendingRaw ?? []).map((id) => {
         assertId(id);
         return id as ID;
       });

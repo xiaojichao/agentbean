@@ -15,6 +15,11 @@ export interface ChannelCoordinationJobRepository {
   getByMessageId(messageId: string): Promise<ChannelCoordinationJobRecord | null>;
   getByIdempotencyKey(idempotencyKey: string): Promise<ChannelCoordinationJobRecord | null>;
   listByChannel(channelId: string, limit: number): Promise<ChannelCoordinationJobRecord[]>;
+  /**
+   * #931 cutover：列出 Team 内仍 open 的 legacy jobs（pending/retry_wait/running）。
+   * 不按 nextRetryAt / lease 过滤——cutover 必须处置全部存量。
+   */
+  listOpenByTeam(teamId: string): Promise<ChannelCoordinationJobRecord[]>;
   /** 取可消费的 Job：pending、到期 retry_wait 或超过 processing lease 的 running，按 createdAt 升序。 */
   listRunnable(input: { now: number; runningBefore: number; limit: number }): Promise<ChannelCoordinationJobRecord[]>;
   /** 原子抢占一个可消费 Job；并发 worker 只有一个能成功。成功时 attempt 自增并进入 running。 */

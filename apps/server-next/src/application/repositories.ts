@@ -577,6 +577,8 @@ export interface ServerNextRepositories {
    * 无行 = 仍处 legacy，不 fence。
    */
   teamPiAuthorityMigrations: import('./pi-authority-cutover-repositories.js').TeamPiAuthorityMigrationRepository;
+  /** #931 PI authority cutover 事务边界。未注入时 usecase 回退到 per-team memory。 */
+  piAuthorityCutoverUnitOfWork?: import('./pi-authority-cutover-unit-of-work.js').PiAuthorityCutoverUnitOfWork;
 }
 
 export interface ReactionRecord {
