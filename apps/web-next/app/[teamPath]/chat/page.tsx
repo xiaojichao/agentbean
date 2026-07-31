@@ -22,6 +22,7 @@ import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
+import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
@@ -5892,6 +5893,8 @@ function ActivityView({
     return true;
   });
 
+  const teamId = useAgentBeanStore((s) => s.currentTeamId);
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="flex h-16 items-center justify-between border-b border-neutral-200 px-6">
@@ -5901,6 +5904,9 @@ function ActivityView({
         </div>
         <button onClick={() => setDoneIds((prev) => markMessagesDone(prev, allMessages))} className="rounded-md border border-neutral-200 px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50">全部标记已读</button>
       </div>
+      {teamId && currentUser?.id ? (
+        <ChatAttentionInboxSection teamId={teamId} userId={currentUser.id} />
+      ) : null}
       <div className="flex gap-2 border-b border-neutral-200 px-6 py-2">
         {(['all', 'unread', 'mentions'] as const).map((item) => (
           <button key={item} onClick={() => setFilter(item)} className={`rounded-full px-3 py-1 text-xs font-medium ${filter === item ? 'bg-neutral-900 text-white' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'}`}>

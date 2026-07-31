@@ -82,6 +82,8 @@ export interface SystemActivityFeedCursorRecord {
 
 export interface SystemActivityCommandReceiptRecord {
   readonly receiptId: ID;
+  /** SQLite 持久化需要；memory 路径可缺省。 */
+  readonly teamId?: ID;
   readonly commandName: SystemActivityCommandName;
   readonly commandSchemaVersion: number;
   readonly idempotencyKey: string;
@@ -95,6 +97,9 @@ export interface SystemActivityCommandReceiptRecord {
 }
 
 export interface SystemActivityIdempotencyTombstoneRecord {
+  readonly id?: ID;
+  readonly teamId?: ID;
+  readonly commandName?: string;
   readonly idempotencyKey: string;
   readonly commandHash: string;
   readonly receiptId: ID;

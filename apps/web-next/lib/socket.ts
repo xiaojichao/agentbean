@@ -875,6 +875,22 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
   };
 }
 
+/** #998 System activity query/command 客户端入口。 */
+export function systemActivityEvents(socket: Socket = getWebSocket()) {
+  return {
+    query(input: { queryName: string; payload: unknown; userId: string; teamId: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.systemActivity.query, input);
+    },
+    command(input: { envelope: unknown; payload: unknown; userId: string; teamId: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.systemActivity.command, input);
+    },
+    onNotice(handler: (payload: unknown) => void) {
+      socket.on(WEB_EVENTS.systemActivity.notice, handler);
+      return () => { socket.off(WEB_EVENTS.systemActivity.notice, handler); };
+    },
+  };
+}
+
 export interface ProjectMutationResult {
   ok: boolean;
   overview?: ChannelProjectOverviewDto;

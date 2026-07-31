@@ -30,6 +30,7 @@ import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket,
 import { WEB_EVENTS, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
+import { TaskSystemActivitySection } from '@/components/TaskSystemActivitySection';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
 import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { acceptTaskDagSnapshot } from '@/lib/task-dag';
@@ -607,6 +608,8 @@ export default function TasksPage() {
           taskDag={taskDag}
           taskDagLoading={taskDagLoading}
           teamPath={np}
+          teamId={currentTeamId ?? ''}
+          userId={currentUser?.id ?? ''}
           onInput={setThreadInput}
           onSend={sendThreadMessage}
           onUpload={uploadFiles}
@@ -1011,6 +1014,8 @@ function TaskThreadPanel({
   taskDag,
   taskDagLoading,
   teamPath,
+  teamId,
+  userId,
   onInput,
   onSend,
   onUpload,
@@ -1037,6 +1042,8 @@ function TaskThreadPanel({
   taskDag: TaskDagViewDto | null;
   taskDagLoading: boolean;
   teamPath: string;
+  teamId: string;
+  userId: string;
   onInput: (value: string) => void;
   onSend: () => void;
   onUpload: (files: FileList | File[]) => void;
@@ -1085,6 +1092,14 @@ function TaskThreadPanel({
           : taskDag
             ? <TaskDagPanel dag={taskDag} teamPath={teamPath} />
             : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
+        {teamId && userId ? (
+          <TaskSystemActivitySection
+            taskId={task.id}
+            channelId={task.channelId}
+            teamId={teamId}
+            userId={userId}
+          />
+        ) : null}
         <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
           <div>回复的开头</div>
           <div>{replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}</div>

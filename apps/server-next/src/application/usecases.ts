@@ -1708,26 +1708,38 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     return { ok: true, response };
   }
 
-  /** #929 per-team memory-backed System activity service（投影/attention/change-feed）。 */
+  /**
+   * #999 System activity：优先使用 repositories 注入的 SQLite/memory 持久仓储；
+   * 未注入时回退 per-team 进程内 memory（兼容旧测试构造）。
+   */
   const systemActivityByTeam = new Map<string, ReturnType<typeof createSystemActivityDispatcher>>();
   function systemActivityDispatcherFor(teamId: string) {
     let dispatcher = systemActivityByTeam.get(teamId);
     if (dispatcher) return dispatcher;
-    const state = createSystemActivityMemoryState();
-    const repos = createInMemorySystemActivityRepositories(state);
-    dispatcher = createSystemActivityDispatcher({
-      teamId,
-      unitOfWork: createMemorySystemActivityUnitOfWork({
-        repos,
-        snapshot: () => cloneSystemActivityMemoryState(state),
-        restore: (snap) => restoreSystemActivityMemoryState(
-          state,
-          snap as ReturnType<typeof createSystemActivityMemoryState>,
-        ),
-      }),
-      ids,
-      clock,
-    });
+    if (repositories.systemActivity && repositories.systemActivityUnitOfWork) {
+      dispatcher = createSystemActivityDispatcher({
+        teamId,
+        unitOfWork: repositories.systemActivityUnitOfWork,
+        ids,
+        clock,
+      });
+    } else {
+      const state = createSystemActivityMemoryState();
+      const repos = createInMemorySystemActivityRepositories(state);
+      dispatcher = createSystemActivityDispatcher({
+        teamId,
+        unitOfWork: createMemorySystemActivityUnitOfWork({
+          repos,
+          snapshot: () => cloneSystemActivityMemoryState(state),
+          restore: (snap) => restoreSystemActivityMemoryState(
+            state,
+            snap as ReturnType<typeof createSystemActivityMemoryState>,
+          ),
+        }),
+        ids,
+        clock,
+      });
+    }
     systemActivityByTeam.set(teamId, dispatcher);
     return dispatcher;
   }

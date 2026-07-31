@@ -68,6 +68,15 @@ import {
   restorePromotionGateMemoryState,
 } from './promotion-gate-repositories.js';
 import { createMemoryTaskLifecycleRepositories } from './task-lifecycle-repositories.js';
+import {
+  createInMemorySystemActivityRepositories,
+  createSystemActivityMemoryState,
+} from './system-activity-repositories.js';
+import { createMemorySystemActivityUnitOfWork } from '../../application/system-activity-unit-of-work.js';
+import {
+  cloneSystemActivityMemoryState,
+  restoreSystemActivityMemoryState,
+} from './system-activity-repositories.js';
 import type {
   ChannelProjectMutationRecord,
   ChannelProjectProfileRecord,
@@ -164,6 +173,16 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const promotionState = createPromotionGateMemoryState();
   const promotion = createInMemoryPromotionGateRepositories(promotionState);
   const lifecycle = createMemoryTaskLifecycleRepositories();
+  const systemActivityState = createSystemActivityMemoryState();
+  const systemActivity = createInMemorySystemActivityRepositories(systemActivityState);
+  const systemActivityUnitOfWork = createMemorySystemActivityUnitOfWork({
+    repos: systemActivity,
+    snapshot: () => cloneSystemActivityMemoryState(systemActivityState),
+    restore: (snap) => restoreSystemActivityMemoryState(
+      systemActivityState,
+      snap as ReturnType<typeof createSystemActivityMemoryState>,
+    ),
+  });
 
   const channelCoordination: ChannelCoordinationRepositories = {
     jobs: {
@@ -2444,6 +2463,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
     },
     experiencePack: createMemoryExperiencePackRepositories(),
+    systemActivity,
+    systemActivityUnitOfWork,
   };
   return repositories;
 }

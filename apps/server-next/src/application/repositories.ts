@@ -561,6 +561,12 @@ export interface ServerNextRepositories {
   projectDocumentInputSetResults: ProjectDocumentInputSetResultRepository;
   projectReferenceSets: ProjectReferenceSetRepository;
   projectDocumentBundleBackfill: ProjectDocumentBundleBackfillRepository;
+  /**
+   * #999 System activity 投影 / attention / change feed。
+   * 可选：旧 memory 测试构造可不带；生产 sqlite 与新 memory 工厂会注入。
+   */
+  systemActivity?: import('./system-activity-repositories.js').SystemActivityRepositories;
+  systemActivityUnitOfWork?: import('./system-activity-unit-of-work.js').SystemActivityUnitOfWork;
 }
 
 export interface ReactionRecord {
