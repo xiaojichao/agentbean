@@ -17,7 +17,6 @@ import {
 } from '@/lib/browser-settings';
 import { releases } from '@/lib/releases.generated';
 import { formatReleaseVersion, type Release, type ChangeType } from '@/lib/changelog';
-import { PiPolicyPanel } from './PiPolicyPanel';
 import { PiTeamCoveragePanel } from '@/components/PiTeamCoveragePanel';
 import { SystemUserMemoryPanel } from '@/components/SystemUserMemoryPanel';
 import {
@@ -460,7 +459,6 @@ function ServerPanel() {
   }, [settingsTeamId]);
 
   const agentList = visibleAgents;
-  const canManagePolicy = settingsTeam?.currentUserRole === 'owner' || settingsTeam?.currentUserRole === 'admin';
 
   const loadLinks = useCallback(async () => {
     if (!settingsTeamId) return;
@@ -565,9 +563,6 @@ function ServerPanel() {
         </div>
       </section>
 
-      {settingsTeamId && (
-        <PiPolicyPanel key={settingsTeamId} teamId={settingsTeamId} canManage={canManagePolicy} />
-      )}
       {settingsTeamId && <PiTeamCoveragePanel teamId={settingsTeamId} />}
 
       {/* ADMINS */}
