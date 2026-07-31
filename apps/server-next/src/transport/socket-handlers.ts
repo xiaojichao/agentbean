@@ -794,6 +794,8 @@ export function registerWebSocketHandlers(
   // #929 System activity command/query（audience-scoped projection / attention / change feed）。
   bind(socket, WEB_EVENTS.systemActivity.command, app, 'dispatchSystemActivityCommand', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.systemActivity.query, app, 'dispatchSystemActivityQuery', undefined, { authenticatedUser: options.authenticatedUser });
+  // #1014 Task remediation 具名 command（retry-attempt 等）。
+  bind(socket, WEB_EVENTS.taskRemediation.command, app, 'dispatchTaskRemediationCommand', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.search, app, 'searchMessages', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.context, app, 'getMessageContext', undefined, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.message.react, app, 'reactMessage', undefined, { authenticatedUser: options.authenticatedUser });

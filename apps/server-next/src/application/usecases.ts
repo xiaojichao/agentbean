@@ -22,6 +22,22 @@ import type {
 } from '../../../../packages/contracts/src/system-activity.js';
 import { createSystemActivityDispatcher } from './system-activity-dispatcher.js';
 import { createMemorySystemActivityUnitOfWork } from './system-activity-unit-of-work.js';
+import { autoProjectSystemActivityFact } from './system-activity-auto-project.js';
+import {
+  createInMemoryTaskFailureRemediationRepositories,
+  createTaskFailureRemediationMemoryState,
+  cloneTaskFailureRemediationMemoryState,
+  restoreTaskFailureRemediationMemoryState,
+} from '../infra/memory/task-failure-remediation-repositories.js';
+import { createMemoryTaskFailureRemediationUnitOfWork } from './task-failure-remediation-unit-of-work.js';
+import {
+  handleRetryAttempt,
+  type TaskFailureRemediationHandlerDeps,
+} from './task-failure-remediation-handler.js';
+import type { TaskRemediationCommandResponseV1 } from '../../../../packages/contracts/src/task-failure-remediation.js';
+import {
+  parseTaskRemediationCommandEnvelopeV1,
+} from '../../../../packages/contracts/src/task-failure-remediation.js';
 import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
 import {
   cloneSystemActivityMemoryState,
@@ -34,7 +50,7 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
@@ -361,6 +377,16 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: SystemActivityQueryResponseV1 } | { ok: false; error: string }>;
+  /**
+   * #1014 Task remediation 具名 command（至少 retry-attempt）。
+   * envelope.commandName 路由；authority 由 session 注入。
+   */
+  dispatchTaskRemediationCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: TaskRemediationCommandResponseV1 } | { ok: false; error: string }>;
   /** #923 模型评估入口：只产 clarification/proposal/audit，永远不 direct promote。 */
   evaluateSemanticPromotion(input: {
     userId: string;
@@ -1819,6 +1845,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return { ok: false, error: 'SYSTEM_ACTIVITY_PAYLOAD_INVALID' };
     }
   }
+
+  async function dispatchTaskRemediationCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: TaskRemediationCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    let commandName: ReturnType<typeof parseTaskRemediationCommandEnvelopeV1>['commandName'];
+    try {
+      commandName = parseTaskRemediationCommandEnvelopeV1(input.envelope).commandName;
+    } catch {
+      return { ok: false, error: 'TASK_REMEDIATION_PAYLOAD_INVALID' };
+    }
+    try {
+      let response: TaskRemediationCommandResponseV1;
+      if (commandName === 'retry-attempt') {
+        response = await handleRetryAttempt(remediationHandlerDeps, input.envelope, input.payload);
+      } else {
+        return { ok: false, error: 'REMEDIATION_COMMAND_NOT_WIRED' };
+      }
+      // #1014：remediation 成功后自动投影
+      if (response.outcome === 'applied' && response.result) {
+        const result = response.result as {
+          commandName?: string;
+          taskId?: string;
+          actionRequiredId?: string;
+          remediation?: { taskRevision?: number };
+        };
+        const taskId = result.taskId ?? '';
+        if (taskId) {
+          const task = await repositories.tasks.getById(taskId);
+          const members = await repositories.teams.listAllMembers(input.teamId);
+          const memberIds = members.map((m) => m.userId);
+          let channelHuman: string[] | null = null;
+          if (task?.channelId) {
+            const channel = await repositories.channels.getById(task.channelId);
+            channelHuman = channel?.humanMemberIds ?? null;
+          }
+          const audience = deriveActivityAudience({
+            teamMemberIds: memberIds,
+            channelHumanMemberIds: channelHuman,
+            creatorId: task?.creatorId,
+            assigneeId: task?.assigneeId,
+            forActionRequired: true,
+          });
+          const fact = mapRemediationCommandToActivityFact({
+            commandName,
+            teamId: input.teamId,
+            taskId,
+            taskRevision: result.remediation?.taskRevision ?? task?.revision ?? 1,
+            channelId: task?.channelId ?? undefined,
+            visibleRecipientIds: audience.visibleRecipientIds,
+            responsibleRecipientIds: audience.responsibleRecipientIds,
+            eventId: `remediation:${commandName}:${taskId}:${input.userId}:${clock.now()}`,
+            sequence: task?.revision ?? 1,
+            occurredAt: clock.now(),
+            actionRequiredId: result.actionRequiredId,
+          });
+          if (fact) {
+            await autoProjectSystemActivityFact({
+              dispatcher: systemActivityDispatcherFor(input.teamId),
+              fact,
+              idempotencyKey: `auto-project:remediation:${commandName}:${taskId}:${response.receipt?.receiptId ?? clock.now()}`,
+            });
+          }
+        }
+      }
+      return { ok: true, response };
+    } catch {
+      return { ok: false, error: 'TASK_REMEDIATION_FAILED' };
+    }
+  }
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
     // Directly constructed use cases preserve the pre-rollout behavior. Production
@@ -1865,7 +1966,64 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     unitOfWork: repositories.taskCoordinationUnitOfWork,
     clock,
     ids,
+    // #1014：lifecycle 权威成功后自动投影 System activity（post-commit）
+    async onApplied(event) {
+      const members = await repositories.teams.listAllMembers(event.teamId);
+      const memberIds = members.map((m) => m.userId);
+      let channelHuman: string[] | null = null;
+      if (event.channelId) {
+        const channel = await repositories.channels.getById(event.channelId);
+        channelHuman = channel?.humanMemberIds ?? null;
+      }
+      const forReview = event.commandName === 'submit-root-delivery'
+        || event.commandName === 'transition-subtask-in-review';
+      const audience = deriveActivityAudience({
+        teamMemberIds: memberIds,
+        channelHumanMemberIds: channelHuman,
+        creatorId: event.creatorId,
+        assigneeId: event.assigneeId,
+        forReview,
+      });
+      const fact = mapLifecycleCommandToActivityFact({
+        commandName: event.commandName,
+        teamId: event.teamId,
+        taskId: event.taskId,
+        taskRevision: event.taskRevision,
+        channelId: event.channelId ?? undefined,
+        visibleRecipientIds: audience.visibleRecipientIds,
+        responsibleRecipientIds: audience.responsibleRecipientIds,
+        eventId: event.eventId,
+        sequence: Math.max(event.taskRevision, 1),
+        occurredAt: event.occurredAt,
+        deliveryMessageId: event.deliveryMessageId,
+        reason: event.reason,
+        status: event.status,
+      });
+      if (!fact) return;
+      await autoProjectSystemActivityFact({
+        dispatcher: systemActivityDispatcherFor(event.teamId),
+        fact,
+        idempotencyKey: `auto-project:${event.eventId}`,
+      });
+    },
   });
+
+  /** #1014 remediation：进程内 memory 仓储 + retry 等具名 command 入口。 */
+  const remediationState = createTaskFailureRemediationMemoryState();
+  const remediationRepos = createInMemoryTaskFailureRemediationRepositories(remediationState);
+  const remediationUnitOfWork = createMemoryTaskFailureRemediationUnitOfWork({
+    repos: remediationRepos,
+    snapshot: () => cloneTaskFailureRemediationMemoryState(remediationState),
+    restore: (snap) => restoreTaskFailureRemediationMemoryState(
+      remediationState,
+      snap as ReturnType<typeof createTaskFailureRemediationMemoryState>,
+    ),
+  });
+  const remediationHandlerDeps: TaskFailureRemediationHandlerDeps = {
+    unitOfWork: remediationUnitOfWork,
+    ids,
+    clock,
+  };
   const managementRouter = input.managementRouter ?? createManagementRouter({
     repositories,
     kernel: managementKernel,
@@ -4663,6 +4821,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     dispatchMessageTracerCommand,
     dispatchSystemActivityCommand,
     dispatchSystemActivityQuery,
+    dispatchTaskRemediationCommand,
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
