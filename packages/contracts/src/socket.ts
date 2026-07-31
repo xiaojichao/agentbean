@@ -292,6 +292,10 @@ export const WEB_EVENTS = {
    * #931 Team PI authority cutover / legacy 兼容退役。
    * 仅 Team Owner/Admin 可执行写 command；Server 推导 authority，禁止客户端自报。
    */
+  /** #1014 Task failure remediation 具名 command（envelope.commandName 路由）。 */
+  taskRemediation: {
+    command: 'task-remediation:command',
+  },
   piAuthorityCutover: {
     command: 'pi-authority-cutover:command',
     query: 'pi-authority-cutover:query',
