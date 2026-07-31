@@ -344,6 +344,7 @@ describe('Phase 0 existing execution fact boundary', () => {
     await expect(app.receiveDispatchResult({
       dispatchId: 'dispatch-1', agentId: 'agent-1', body: 'delivery ready for review',
     })).resolves.toMatchObject({ ok: true, task: { id: 'task-1', status: 'in_review' } });
+    // 非 management root coordination 的 legacy asTask 路径仍可用 updateTask 完成
     await expect(app.updateTask({
       userId: 'user-1', teamId: 'team-1', taskId: 'task-1', status: 'done',
     })).resolves.toMatchObject({

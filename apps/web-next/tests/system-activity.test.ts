@@ -8,6 +8,7 @@ import {
   buildMarkAttentionSeenPayload,
   isNamedActivityAction,
   isProjectionNotReady,
+  mapReviewCommandToTaskSocketEvent,
   shouldRenderAsSystemActivity,
   sortAttentionInbox,
   sortTaskTimeline,
@@ -15,6 +16,7 @@ import {
   type SystemActivityItemView,
   type SystemAttentionItemView,
 } from '../lib/system-activity';
+import { dispatchNamedReviewAction } from '../lib/system-activity-socket';
 import { SystemActivityPanels } from '../components/SystemActivityPanels';
 
 const timelineItem = (overrides: Partial<SystemActivityItemView> = {}): SystemActivityItemView => ({
@@ -71,6 +73,39 @@ describe('system-activity helpers', () => {
     expect(payload.confirmationToken).toBe('tok');
     expect(payload.expectedEscalationRevision).toBe(2);
     expect(payload.expectedTaskRevision).toBe(5);
+  });
+
+  test('#995 review command 映射到 task socket 并绑定 reason', () => {
+    expect(mapReviewCommandToTaskSocketEvent('accept-root-delivery')).toBe('acceptRootDelivery');
+    expect(mapReviewCommandToTaskSocketEvent('reject-root-delivery')).toBe('rejectRootDelivery');
+    expect(mapReviewCommandToTaskSocketEvent('retry-attempt')).toBeNull();
+    const rejectPayload = buildBoundActionPayload({
+      command: 'reject-root-delivery',
+      taskId: 'task-1',
+      attention: attentionItem({ allowedCommands: ['accept-root-delivery', 'reject-root-delivery'] }),
+      reason: '证据不足',
+    });
+    expect(rejectPayload.reason).toBe('证据不足');
+    expect(rejectPayload.expectedTaskRevision).toBe(5);
+  });
+
+  test('#995 dispatchNamedReviewAction 发 lifecycle task 事件', async () => {
+    const emitWithAck = vi.fn(async () => ({ ok: true, task: { id: 'task-1', status: 'done' } }));
+    const result = await dispatchNamedReviewAction(
+      { emitWithAck },
+      {
+        command: 'accept-root-delivery',
+        attention: attentionItem({
+          allowedCommands: ['accept-root-delivery'],
+          taskRevision: 3,
+        }),
+      },
+    );
+    expect(result).toMatchObject({ ok: true });
+    expect(emitWithAck).toHaveBeenCalledWith(
+      'task:accept-root-delivery',
+      expect.objectContaining({ taskId: 'task-1', expectedTaskRevision: 3 }),
+    );
   });
 
   test('PI / coordination 不得作为 system activity 渲染', () => {

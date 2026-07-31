@@ -348,9 +348,33 @@ export default function TasksPage() {
       }
       return;
     }
+    // #995：in_review 的 accept/reject 必须走具名 root-delivery command，禁止 task:update 旁路
+    if (task.status === 'in_review' && status === 'done') {
+      const res = await taskEvents().acceptRootDelivery({ taskId: task.id });
+      if (res.ok && res.task) {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
+      } else {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
+      }
+      return;
+    }
+    if (task.status === 'in_review' && status === 'in_progress') {
+      const res = await taskEvents().rejectRootDelivery({
+        taskId: task.id,
+        reason: '用户退回修改',
+      });
+      if (res.ok && res.task) {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
+      } else {
+        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
+      }
+      return;
+    }
     const res = await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
     if (res.ok && res.task) {
       setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
+    } else if (!res.ok) {
+      setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
     }
   };
 
