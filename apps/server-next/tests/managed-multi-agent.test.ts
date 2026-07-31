@@ -90,16 +90,20 @@ describe('Phase 2 managed multi-agent recovery and root delivery', () => {
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ status: 'in_review' });
 
-    await expect(harness.app.updateTask({ userId: 'user-1', teamId: 'team-1',
-      taskId: 'task-root', status: 'in_progress' }))
-      .resolves.toMatchObject({ ok: true, task: { status: 'in_progress', revision: 2 } });
+    // #995：退回必须走 reject-root-delivery，禁止 updateTask 旁路
+    await expect(harness.app.rejectRootDelivery({
+      userId: 'user-1', teamId: 'team-1', taskId: 'task-root',
+      reason: 'needs rework', expectedTaskRevision: 1,
+    })).resolves.toMatchObject({ ok: true, task: { status: 'in_progress', revision: 2 } });
     await expect(harness.repositories.taskCoordination.coordinations.getByTaskId('task-root'))
       .resolves.toMatchObject({ taskRevision: 2, attempt: 1 });
     await expect(harness.repositories.management.runs.getById(harness.runId))
       .resolves.toMatchObject({ status: 'running' });
-    await expect(harness.taskKernel.reopenRootTaskFromHuman({ managementRunId: harness.runId,
-      taskId: 'task-root', userId: 'user-1', expectedTaskRevision: 1 }))
-      .resolves.toMatchObject({ disposition: 'existing', task: { revision: 2 } });
+    // 同 revision 重放：lifecycle receipt 幂等（不再走 updateTask reopen 旁路）
+    await expect(harness.app.rejectRootDelivery({
+      userId: 'user-1', teamId: 'team-1', taskId: 'task-root',
+      reason: 'needs rework', expectedTaskRevision: 1,
+    })).resolves.toMatchObject({ ok: true, task: { revision: 2 } });
     await expect(harness.repositories.taskCoordination.acceptances.getCanonicalByDelivery('delivery-a'))
       .resolves.toMatchObject({ decision: 'accepted', expectedTaskRevision: 1 });
     expect((await harness.repositories.management.events.list(harness.runId))
