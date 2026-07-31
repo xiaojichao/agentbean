@@ -1,2 +1,47 @@
-import type { TaskLifecycleCommandReceiptRecord, TaskLifecycleCommandReceiptRepository, TaskLifecycleIdempotencyTombstoneRecord, TaskLifecycleRepositories } from '../../application/task-lifecycle-repositories.js';
-export function createMemoryTaskLifecycleRepositories():TaskLifecycleRepositories{const r=new Map<string,TaskLifecycleCommandReceiptRecord>(),t=new Map<string,TaskLifecycleIdempotencyTombstoneRecord>();const repo:TaskLifecycleCommandReceiptRepository={async createReceipt(i){if(r.has(i.idempotencyKey))throw Object.assign(new Error('UNIQUE'),{code:'SQLITE_CONSTRAINT_UNIQUE'});r.set(i.idempotencyKey,i);return i;},async getReceiptByIdempotencyKey(k){return r.get(k)??null;},async getReceiptById(id){for(const v of r.values())if(v.receiptId===id)return v;return null;},async createTombstone(i){if(t.has(i.idempotencyKey))throw Object.assign(new Error('UNIQUE'),{code:'SQLITE_CONSTRAINT_UNIQUE'});t.set(i.idempotencyKey,i);return i;},async getTombstoneByIdempotencyKey(k){return t.get(k)??null;},};return{receipts:repo};}
+import type {
+  TaskLifecycleCommandReceiptRecord,
+  TaskLifecycleCommandReceiptRepository,
+  TaskLifecycleIdempotencyTombstoneRecord,
+  TaskLifecycleRepositories,
+} from '../../application/task-lifecycle-repositories.js';
+
+export function createMemoryTaskLifecycleRepositories(): TaskLifecycleRepositories {
+  const receipts = new Map<string, TaskLifecycleCommandReceiptRecord>();
+  const byReceiptId = new Map<string, TaskLifecycleCommandReceiptRecord>();
+  const tombstones = new Map<string, TaskLifecycleIdempotencyTombstoneRecord>();
+
+  const repo: TaskLifecycleCommandReceiptRepository = {
+    async createReceipt(input) {
+      if (receipts.has(input.idempotencyKey)) {
+        throw Object.assign(new Error('UNIQUE'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+      }
+      receipts.set(input.idempotencyKey, input);
+      byReceiptId.set(input.receiptId, input);
+      return input;
+    },
+    async getReceiptByIdempotencyKey(key) {
+      return receipts.get(key) ?? null;
+    },
+    async getReceiptById(id) {
+      return byReceiptId.get(id) ?? null;
+    },
+    async deleteReceiptByIdempotencyKey(key) {
+      const existing = receipts.get(key);
+      if (!existing) return false;
+      receipts.delete(key);
+      byReceiptId.delete(existing.receiptId);
+      return true;
+    },
+    async createTombstone(input) {
+      if (tombstones.has(input.idempotencyKey)) {
+        throw Object.assign(new Error('UNIQUE'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+      }
+      tombstones.set(input.idempotencyKey, input);
+      return input;
+    },
+    async getTombstoneByIdempotencyKey(key) {
+      return tombstones.get(key) ?? null;
+    },
+  };
+  return { receipts: repo };
+}

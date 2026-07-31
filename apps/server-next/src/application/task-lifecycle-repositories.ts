@@ -2,5 +2,16 @@ import type { ID, UnixMs } from '../../../../packages/contracts/src/index.js';
 import type { TaskLifecycleCommandName, TaskLifecycleReceiptOutcome, TaskLifecycleEventRefV1, TaskLifecycleRevisionRefV1 } from '../../../../packages/contracts/src/index.js';
 export interface TaskLifecycleCommandReceiptRecord { readonly receiptId: ID; readonly teamId: ID; readonly commandName: TaskLifecycleCommandName; readonly commandSchemaVersion: number; readonly idempotencyKey: string; readonly commandHash: string; readonly outcome: TaskLifecycleReceiptOutcome; readonly committedRevisions: readonly TaskLifecycleRevisionRefV1[]; readonly eventRefs: readonly TaskLifecycleEventRefV1[]; readonly resultAvailable: boolean; readonly resultJson: string|null; readonly commitTime: UnixMs; readonly createdAt: UnixMs; }
 export interface TaskLifecycleIdempotencyTombstoneRecord { readonly id: ID; readonly teamId: ID; readonly commandName: TaskLifecycleCommandName; readonly idempotencyKey: string; readonly commandHash: string; readonly receiptId: ID; readonly outcome: TaskLifecycleReceiptOutcome; readonly resultAvailable: boolean; readonly createdAt: UnixMs; }
-export interface TaskLifecycleCommandReceiptRepository { createReceipt(input: TaskLifecycleCommandReceiptRecord): Promise<TaskLifecycleCommandReceiptRecord>; getReceiptByIdempotencyKey(idempotencyKey: string): Promise<TaskLifecycleCommandReceiptRecord|null>; getReceiptById(receiptId: ID): Promise<TaskLifecycleCommandReceiptRecord|null>; createTombstone(input: TaskLifecycleIdempotencyTombstoneRecord): Promise<TaskLifecycleIdempotencyTombstoneRecord>; getTombstoneByIdempotencyKey(idempotencyKey: string): Promise<TaskLifecycleIdempotencyTombstoneRecord|null>; }
+export interface TaskLifecycleCommandReceiptRepository {
+  createReceipt(input: TaskLifecycleCommandReceiptRecord): Promise<TaskLifecycleCommandReceiptRecord>;
+  getReceiptByIdempotencyKey(idempotencyKey: string): Promise<TaskLifecycleCommandReceiptRecord | null>;
+  getReceiptById(receiptId: ID): Promise<TaskLifecycleCommandReceiptRecord | null>;
+  /**
+   * #996 治理压缩：删除 receipt 结果体，保留 tombstone 作为幂等锚。
+   * 返回 true 表示删除了存在的 receipt。
+   */
+  deleteReceiptByIdempotencyKey(idempotencyKey: string): Promise<boolean>;
+  createTombstone(input: TaskLifecycleIdempotencyTombstoneRecord): Promise<TaskLifecycleIdempotencyTombstoneRecord>;
+  getTombstoneByIdempotencyKey(idempotencyKey: string): Promise<TaskLifecycleIdempotencyTombstoneRecord | null>;
+}
 export interface TaskLifecycleRepositories { readonly receipts: TaskLifecycleCommandReceiptRepository; }
