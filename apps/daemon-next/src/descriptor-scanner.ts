@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { load as parseYaml } from 'js-yaml';
@@ -25,14 +26,22 @@ import { load as parseYaml } from 'js-yaml';
 
 const MAX_DESCRIPTION = 2000;
 const MAX_CAPABILITIES = 100;
+/** rawContent 截断上限：典型 AGENTS.md 1-5KB，8KB 覆盖绝大多数（LLM 总结输入）。 */
+const MAX_RAW_CONTENT = 8000;
 
 export interface AgentDescriptor {
   /** 从 AGENTS.md/CLAUDE.md 提取的 Agent 名称。 */
   name: string | null;
   /** 简介（正文首段，frontmatter 兼容），截断到 MAX_DESCRIPTION。 */
   description: string | null;
-  /** 从正文能力小节提取的能力清单。小写折叠去重。 */
+  /** 从正文能力小节提取的能力清单（确定性快路径）。小写折叠去重。 */
   capabilities: string[];
+  /** LLM 总结结果：daemon 侧恒为空，由 server 异步总结后写回（契约占位）。 */
+  capabilitiesSummarized: string[];
+  /** AGENTS.md/CLAUDE.md 全文（截断到 MAX_RAW_CONTENT），供 server 异步 LLM 总结。 */
+  rawContent: string | null;
+  /** sha256(rawContent)，LLM 总结缓存 key（内容未变不重跑）。 */
+  contentHash: string | null;
   /** 实际读到的文件路径（AGENTS.md 优先，否则 CLAUDE.md）。 */
   sourcePath: string | null;
 }
@@ -146,12 +155,18 @@ export function scanAgentDescriptor(cwd: string): AgentDescriptor | null {
     }
 
     const front = readFrontmatterMeta(raw);
+    const rawContent = truncate(raw, MAX_RAW_CONTENT);
     return {
       // name/description：frontmatter 优先（产品预填默认值），正文兜底。
       name: front?.name ?? extractTitle(raw) ?? null,
       description: front?.description ?? extractFirstParagraph(raw) ?? null,
       // capabilities：只从正文能力小节提取，不读 frontmatter（生态文件无此标准字段）。
       capabilities: extractCapabilitiesFromBody(raw),
+      // LLM 总结由 server 异步完成，daemon 恒为空数组。
+      capabilitiesSummarized: [],
+      // 全文供 server 异步 LLM 总结（内容 hash 做缓存 key，未变不重跑）。
+      rawContent,
+      contentHash: createHash('sha256').update(rawContent, 'utf8').digest('hex'),
       sourcePath: path,
     };
   }

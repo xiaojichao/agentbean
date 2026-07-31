@@ -328,6 +328,12 @@ export interface AgentRepository {
   markMissingScannedOffline(input: { teamId: ID; deviceId: ID; seenIdentityKeys: string[]; timestamp: UnixMs }): Promise<ID[]>;
   updateStatus(input: { agentId: ID; status: AgentRecord['status']; lastSeenAt: UnixMs; lastError?: string }): Promise<void>;
   updateSkills(input: { agentId: ID; skills: SkillDto[]; timestamp: UnixMs }): Promise<AgentRecord | null>;
+  /** LLM 总结的 capabilities 写回（capability-summarizer 慢路径结果）。 */
+  updateSummarizedCapabilities(input: {
+    agentId: ID;
+    capabilitiesSummarized: string[];
+    timestamp: UnixMs;
+  }): Promise<AgentRecord | null>;
   listVisibleInTeam(teamId: ID): Promise<AgentRecord[]>;
   listByDevice(deviceId: ID): Promise<AgentRecord[]>;
   listAll(): Promise<AgentRecord[]>;

@@ -55,8 +55,10 @@ export interface AgentDto {
   /** description 的来源：agent_md=扫描自 AGENTS.md/CLAUDE.md，manual=用户手工填写。 */
   descriptionSource?: 'agent_md' | 'manual';
   skills?: SkillDto[];
-  /** 扫描自 AGENTS.md/CLAUDE.md 的公开能力候选（事实层，无 sourcePath 泄露）。 */
+  /** 机械提取自 AGENTS.md/CLAUDE.md 能力小节的候选（已验证，无 sourcePath 泄露）。 */
   scannedCapabilities?: string[];
+  /** LLM 总结 AGENTS.md/CLAUDE.md 全文得到的候选（AI 总结，待用户确认）。 */
+  scannedCapabilitiesSummarized?: string[];
   lastSeenAt?: UnixMs;
   lastError?: string;
   /** Agent adapter 公开支持的 ProjectDocumentInputSet 合同版本。 */
@@ -67,7 +69,14 @@ export interface AgentDto {
 export interface AgentDescriptorDto {
   name: string | null;
   description: string | null;
+  /** 机械提取（确定性快路径）：能力小节列表项。 */
   capabilities: string[];
+  /** LLM 总结（慢路径）：server 侧异步生成后写回。 */
+  capabilitiesSummarized: string[];
+  /** AGENTS.md/CLAUDE.md 全文（最多 8KB），供 server 异步 LLM 总结。 */
+  rawContent: string | null;
+  /** sha256(rawContent)，去重 + LLM 总结缓存 key。 */
+  contentHash: string | null;
   sourcePath: string | null;
 }
 

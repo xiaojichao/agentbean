@@ -1607,18 +1607,24 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
 
 /**
  * AgentOS 托管型 Agent 的能力暴露发布块（#710 系列）。
- * 候选来自 daemon 扫描 AGENTS.md/CLAUDE.md（agent.scannedCapabilities）与 SKILL.md（agent.skills）。
+ * 候选来自：
+ * - agent.scannedCapabilities（机械提取，已验证）
+ * - agent.scannedCapabilitiesSummarized（LLM 总结，AI 总结待确认）
+ * - agent.skills（SKILL.md 扫描）
  * owner 勾选 → createDraft + publish 一次发布为 Exposure；已发布则提示可在 Agent 详情页管理。
  */
 function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: string }) {
   const scannedCapabilities: string[] = Array.isArray(agent.scannedCapabilities) ? agent.scannedCapabilities : [];
+  const summarizedCapabilities: string[] = Array.isArray(agent.scannedCapabilitiesSummarized) ? agent.scannedCapabilitiesSummarized : [];
   const skills: { name: string; description?: string }[] = Array.isArray(agent.skills) ? agent.skills : [];
   const [selectedCaps, setSelectedCaps] = useState<Set<string>>(new Set(scannedCapabilities));
+  const [selectedSummarized, setSelectedSummarized] = useState<Set<string>>(new Set(summarizedCapabilities));
   const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set(skills.map((s) => s.name)));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
-  if (scannedCapabilities.length === 0 && skills.length === 0) {
+  const hasAny = scannedCapabilities.length > 0 || summarizedCapabilities.length > 0 || skills.length > 0;
+  if (!hasAny) {
     return (
       <div>
         <label className="mb-1 block text-xs font-medium text-neutral-600">能力暴露</label>
@@ -1642,7 +1648,10 @@ function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: str
     const created = await agentExposureEvents().createDraft({
       teamId,
       agentId: agent.id,
-      capabilities: scannedCapabilities.filter((c) => selectedCaps.has(c)).map((c) => ({ name: c, description: c })),
+      capabilities: [
+        ...scannedCapabilities.filter((c) => selectedCaps.has(c)),
+        ...summarizedCapabilities.filter((c) => selectedSummarized.has(c)),
+      ].map((c) => ({ name: c, description: c })),
       skills: skills.filter((s) => selectedSkills.has(s.name)).map((s) => ({ name: s.name, description: s.description ?? s.name })),
     });
     if (!created.ok || !created.manifest) {
@@ -1659,6 +1668,21 @@ function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: str
     }
   };
 
+  const capabilityLabel = (name: string, tag: 'extracted' | 'summarized') => (
+    <label key={`${tag}-${name}`} className="flex items-center gap-1 text-[11px] text-neutral-700">
+      <input
+        type="checkbox"
+        checked={tag === 'extracted' ? selectedCaps.has(name) : selectedSummarized.has(name)}
+        onChange={() => toggle(tag === 'extracted' ? selectedCaps : selectedSummarized, name, tag === 'extracted' ? setSelectedCaps : setSelectedSummarized)}
+        className="h-3 w-3"
+      />
+      {name}
+      {tag === 'extracted'
+        ? <span className="rounded bg-emerald-50 px-1 py-px text-[9px] font-medium text-emerald-600">已验证</span>
+        : <span className="rounded bg-blue-50 px-1 py-px text-[9px] font-medium text-blue-600">AI 总结</span>}
+    </label>
+  );
+
   return (
     <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
       <label className="mb-1 block text-xs font-medium text-neutral-600">能力暴露</label>
@@ -1667,19 +1691,17 @@ function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: str
       </p>
       {scannedCapabilities.length > 0 && (
         <div className="mb-2">
-          <div className="text-[11px] text-neutral-500">Capabilities（AGENTS.md）</div>
+          <div className="text-[11px] text-neutral-500">Capabilities（已验证 · AGENTS.md 能力小节）</div>
           <div className="flex flex-wrap gap-2">
-            {scannedCapabilities.map((capability) => (
-              <label key={capability} className="flex items-center gap-1 text-[11px] text-neutral-700">
-                <input
-                  type="checkbox"
-                  checked={selectedCaps.has(capability)}
-                  onChange={() => toggle(selectedCaps, capability, setSelectedCaps)}
-                  className="h-3 w-3"
-                />
-                {capability}
-              </label>
-            ))}
+            {scannedCapabilities.map((capability) => capabilityLabel(capability, 'extracted'))}
+          </div>
+        </div>
+      )}
+      {summarizedCapabilities.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[11px] text-neutral-500">Capabilities（AI 总结 · 全文归纳，请人工确认）</div>
+          <div className="flex flex-wrap gap-2">
+            {summarizedCapabilities.map((capability) => capabilityLabel(capability, 'summarized'))}
           </div>
         </div>
       )}
@@ -1712,7 +1734,7 @@ function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: str
         </button>
         {message && <span className={`text-[11px] ${message.ok ? 'text-emerald-600' : 'text-red-600'}`}>{message.text}</span>}
       </div>
-      <p className="mt-1 text-[10px] text-neutral-400">已发布后可到 Agent 详情页管理或撤回。</p>
+      <p className="mt-1 text-[10px] text-neutral-400">「AI 总结」候选由模型归纳生成，发布前请人工确认准确性。已发布后可到 Agent 详情页管理或撤回。</p>
     </div>
   );
 }

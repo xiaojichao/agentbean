@@ -23,6 +23,11 @@ describe('scanAgentDescriptor', () => {
     // capabilities 从 ## Capabilities 小节提取，小写折叠去重
     expect(result!.capabilities).toEqual(['code review', 'web-search', '代码审查']);
     expect(result!.sourcePath).toContain('AGENTS.md');
+    // rawContent 含全文、contentHash 是 sha256、summarized 恒空（server 异步填充）
+    expect(result!.rawContent).toContain('## Capabilities');
+    expect(result!.rawContent).toContain('web-search');
+    expect(result!.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(result!.capabilitiesSummarized).toEqual([]);
   });
 
   test('中文能力小节（## 能力）同样提取', () => {

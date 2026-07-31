@@ -803,7 +803,15 @@ export interface DeviceEvents {
   listDirectory(deviceId: string, path: string): Promise<{ ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string; truncated?: boolean }>;
   scanDescriptor(deviceId: string, cwd: string, adapterKind: string): Promise<{
     ok: boolean;
-    descriptor?: { name: string | null; description: string | null; capabilities: string[]; sourcePath: string | null } | null;
+    descriptor?: {
+      name: string | null;
+      description: string | null;
+      capabilities: string[];
+      capabilitiesSummarized: string[];
+      rawContent: string | null;
+      contentHash: string | null;
+      sourcePath: string | null;
+    } | null;
     skills?: { name: string; description: string; scope: string; sourcePath: string; adapterKind: string }[];
     error?: string;
   }>;

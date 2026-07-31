@@ -9,6 +9,7 @@ import {
   safeParseTaskClaimPayload,
   type DispatchRequestDto,
   type ManagementWorkerPayloadKind,
+  type AgentDescriptorDto,
   type ManagementWorkerPayloadMapV1,
   type ManagementWorkerRegisterV2,
   type Phase2TaskToolRequestV2,
@@ -117,7 +118,7 @@ export interface ListDirectoryForwardResult {
 export interface ScanDescriptorForwardResult {
   ok: boolean;
   requestId?: string;
-  descriptor?: { name: string | null; description: string | null; capabilities: string[]; sourcePath: string | null } | null;
+  descriptor?: AgentDescriptorDto | null;
   skills?: { name: string; description: string; scope: string; sourcePath: string; adapterKind: string }[];
   error?: string;
 }

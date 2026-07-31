@@ -126,6 +126,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0019_active_pi_model.sql');
   applyMigration(db, 'global/0020_system_user_memory.sql');
   applyMigration(db, 'global/0021_agent_descriptor.sql');
+  applyMigration(db, 'global/0022_agent_summarized_capabilities.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -1703,6 +1704,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         globalDb
           .prepare('UPDATE agents SET skills_json = ?, updated_at = ? WHERE id = ?')
           .run(input.skills ? JSON.stringify(input.skills) : null, input.timestamp, input.agentId);
+        const row = globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId);
+        return mapAgent(globalDb, row);
+      },
+      async updateSummarizedCapabilities(input) {
+        globalDb
+          .prepare('UPDATE agents SET scanned_capabilities_summarized_json = ?, updated_at = ? WHERE id = ?')
+          .run(
+            input.capabilitiesSummarized.length > 0
+              ? JSON.stringify(input.capabilitiesSummarized)
+              : null,
+            input.timestamp,
+            input.agentId,
+          );
         const row = globalDb.prepare('SELECT * FROM agents WHERE id = ?').get(input.agentId);
         return mapAgent(globalDb, row);
       },
@@ -4321,6 +4335,9 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     descriptionSource: sqliteNullableText(row, 'description_source') as AgentRecord['descriptionSource'],
     scannedCapabilities:
       (parseJsonArraySafe(sqliteNullableText(row, 'scanned_capabilities_json')) as string[] | null)
+        ?? undefined,
+    scannedCapabilitiesSummarized:
+      (parseJsonArraySafe(sqliteNullableText(row, 'scanned_capabilities_summarized_json')) as string[] | null)
         ?? undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
