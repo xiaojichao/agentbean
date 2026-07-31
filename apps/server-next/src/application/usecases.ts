@@ -430,13 +430,19 @@ export interface ServerNextUseCases {
   beginWorkspacePublishStaging(input: BeginWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
   /** #967 字节续传：同 publishId 可断点续传；已完成文件幂等成功。 */
   putWorkspacePublishStagingFile(input: PutWorkspacePublishStagingFileInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /** #967 hardening：device token 入口的 put（daemon 续传）。 */
+  putWorkspacePublishStagingFileForDevice(input: DevicePutWorkspacePublishStagingFileInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
   /** #967 查询暂存进度或已提交最终结果（幂等）。 */
   getWorkspacePublishStaging(input: GetWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /** #967 hardening：device token 查询 staging。 */
+  getWorkspacePublishStagingForDevice(input: DeviceGetWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
   /**
    * #967 原子提交暂存 → 新 revision。
    * 重复 commit 同一 publishId 不重复创建 revision；超限/未完成/冲突均无部分结果。
    */
   commitWorkspacePublishStaging(input: CommitWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto; workspace?: ProjectChannelWorkspaceDto }>>;
+  /** #967 hardening：device token 提交 staging。 */
+  commitWorkspacePublishStagingForDevice(input: DeviceCommitWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto; workspace?: ProjectChannelWorkspaceDto }>>;
   /** #967 清理过期未提交暂存（committed 结果保留可查询）。 */
   cleanupExpiredWorkspacePublishStaging(input?: CleanupWorkspacePublishStagingInput): Promise<Ack<{ cleaned: number }>>;
   getChannelProjectOverview(input: GetChannelProjectOverviewInput & { userId: string }): Promise<Ack<{ overview: ChannelProjectOverviewDto | null }>>;
@@ -1107,6 +1113,17 @@ export interface PutWorkspacePublishStagingFileInput {
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
 }
 
+export interface DevicePutWorkspacePublishStagingFileInput {
+  token: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  path: string;
+  offset: number;
+  content: Buffer | Uint8Array | string;
+  limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
 export interface GetWorkspacePublishStagingInput {
   userId: string;
   teamId: string;
@@ -1114,8 +1131,23 @@ export interface GetWorkspacePublishStagingInput {
   publishId: string;
 }
 
+export interface DeviceGetWorkspacePublishStagingInput {
+  token: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+}
+
 export interface CommitWorkspacePublishStagingInput {
   userId: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
+export interface DeviceCommitWorkspacePublishStagingInput {
+  token: string;
   teamId: string;
   channelId: string;
   publishId: string;
@@ -5263,6 +5295,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const access = await ensureUserCanViewProjectWorkspace(repositories, beginInput);
       if (!access.ok) return access;
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
+      // hardening：begin 时顺带清理少量过期 open staging（best-effort，不阻塞主路径）。
+      void this.cleanupExpiredWorkspacePublishStaging({ limit: 20 }).catch(() => undefined);
       const publishId = normalizeWorkspacePublishId(beginInput.publishId);
       if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
       if (!beginInput.baselineRevisionId?.trim()) {
@@ -5404,6 +5438,44 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
       }
       return makeSuccess({ staging: toWorkspacePublishStagingDto(created) });
+    },
+
+    async putWorkspacePublishStagingFileForDevice(devicePutInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, devicePutInput);
+      if (!actor.ok) return actor;
+      return this.putWorkspacePublishStagingFile({
+        userId: actor.userId,
+        teamId: devicePutInput.teamId,
+        channelId: devicePutInput.channelId,
+        publishId: devicePutInput.publishId,
+        path: devicePutInput.path,
+        offset: devicePutInput.offset,
+        content: devicePutInput.content,
+        ...(devicePutInput.limits ? { limits: devicePutInput.limits } : {}),
+      });
+    },
+
+    async getWorkspacePublishStagingForDevice(deviceGetInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceGetInput);
+      if (!actor.ok) return actor;
+      return this.getWorkspacePublishStaging({
+        userId: actor.userId,
+        teamId: deviceGetInput.teamId,
+        channelId: deviceGetInput.channelId,
+        publishId: deviceGetInput.publishId,
+      });
+    },
+
+    async commitWorkspacePublishStagingForDevice(deviceCommitInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceCommitInput);
+      if (!actor.ok) return actor;
+      return this.commitWorkspacePublishStaging({
+        userId: actor.userId,
+        teamId: deviceCommitInput.teamId,
+        channelId: deviceCommitInput.channelId,
+        publishId: deviceCommitInput.publishId,
+        ...(deviceCommitInput.limits ? { limits: deviceCommitInput.limits } : {}),
+      });
     },
 
     async putWorkspacePublishStagingFile(putInput) {
@@ -5679,7 +5751,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       // 通过预判后再物化 artifacts（commit 前它们不在 revision；无 message/run 时频道索引也不收录）。
+      // 先用 intermediate 角色物化：CAS 冲突时删除；成功 publish 后保留（revision 引用为准）。
       const publishedFiles: ProjectChannelWorkspaceFileDto[] = [];
+      const createdArtifactIds: string[] = [];
       for (const file of staging.files) {
         const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
         const artifactId = ids.nextId();
@@ -5704,12 +5778,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           mimeType: file.mimeType,
           sizeBytes: file.expectedSizeBytes,
           pathKind: 'workspace',
-          role: 'deliverable',
+          role: 'intermediate',
           relativePath: file.path,
           sha256,
           createdAt: clock.now(),
           ...(storagePath ? { storagePath } : {}),
         });
+        createdArtifactIds.push(artifact.id);
         publishedFiles.push({
           path: file.path,
           artifactId: artifact.id,
@@ -5751,6 +5826,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           publishId,
         });
         if (raced?.status === 'committed' && raced.committedRevisionId) {
+          // peer 已成功：本请求创建的 artifact 是重复物化，清理掉。
+          await deleteOrphanWorkspaceStagingArtifacts(repositories, artifactContentStore, {
+            teamId: commitInput.teamId,
+            artifactIds: createdArtifactIds,
+          });
           const workspaceAfter = await repositories.projectChannelWorkspaces.getForTeam({
             teamId: commitInput.teamId,
             channelId: commitInput.channelId,
@@ -5777,8 +5857,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           workspace: outcome.current,
           now: clock.now(),
         });
-        if (recoveredAfterCas) return recoveredAfterCas;
-        // 真冲突：基线被其他 publish 更新。不标 committed；artifact 无 message/run，频道索引不可见。
+        if (recoveredAfterCas) {
+          // 半态恢复成功：revision 已由先前请求持有，本请求孤儿 artifact 删除。
+          await deleteOrphanWorkspaceStagingArtifacts(repositories, artifactContentStore, {
+            teamId: commitInput.teamId,
+            artifactIds: createdArtifactIds,
+          });
+          return recoveredAfterCas;
+        }
+        // 真冲突：删除刚物化的孤儿 artifact（含 content store），避免 archive/下载残片。
+        await deleteOrphanWorkspaceStagingArtifacts(repositories, artifactContentStore, {
+          teamId: commitInput.teamId,
+          artifactIds: createdArtifactIds,
+        });
         const conflictDecision = evaluateWorkspacePublish({
           current: {
             revisionId: outcome.current.currentRevision.id,
@@ -11079,6 +11170,26 @@ function stagingManifestMatchesRevision(
     if ((hit.sha256 ?? '').toLowerCase() !== file.expectedSha256.toLowerCase()) return false;
   }
   return true;
+}
+
+/** #967 hardening：清理 commit 冲突/重复物化产生的孤儿 artifact + content store。 */
+async function deleteOrphanWorkspaceStagingArtifacts(
+  repositories: ServerNextRepositories,
+  artifactContentStore: ArtifactContentStore | undefined,
+  input: { teamId: string; artifactIds: readonly string[] },
+): Promise<void> {
+  for (const artifactId of input.artifactIds) {
+    try {
+      await repositories.artifacts.deleteForTeam({ teamId: input.teamId, artifactId });
+    } catch {
+      // best-effort：不因清理失败掩盖主错误
+    }
+    try {
+      await artifactContentStore?.deleteContent?.({ teamId: input.teamId, artifactId });
+    } catch {
+      // best-effort
+    }
+  }
 }
 
 /**

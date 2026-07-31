@@ -1452,6 +1452,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         return deletedIds.sort();
       },
+      async deleteForTeam(input) {
+        const artifact = artifacts.get(input.artifactId);
+        if (!artifact || artifact.teamId !== input.teamId) return false;
+        artifacts.delete(input.artifactId);
+        return true;
+      },
     },
     channelDocuments: {
       async create(input) {

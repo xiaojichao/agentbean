@@ -25,9 +25,11 @@ async function seedWorkspace() {
     ids: {
       nextId: createIds([
         'user-1', 'team-1', 'all-1', 'channel-1',
-        'workspace-1', 'revision-1', 'seed-art',
-        'art-new-1', 'art-new-2', 'revision-2',
-        'art-retry', 'revision-3',
+        'workspace-1', 'revision-1',
+        // staging commits consume artifact + revision ids；并发 race 额外多占
+        'art-1', 'rev-2', 'art-2', 'rev-3', 'art-3', 'rev-4',
+        'art-4', 'rev-5', 'art-5', 'rev-6', 'art-6', 'rev-7',
+        'art-7', 'rev-8', 'art-8', 'rev-9',
       ]),
     },
   });
@@ -331,6 +333,58 @@ describe('Workspace publish staging (#967)', () => {
       ok: true,
       staging: { status: 'committed', committedRevisionId: revId },
     });
+  });
+
+  test('并发 commit 同基线：败者 CAS 冲突后清理孤儿 artifact', async () => {
+    const { app, cid, baselineRevisionId, repositories } = await seedWorkspace();
+    const a = Buffer.from('alpha-payload');
+    const b = Buffer.from('bravo-payload');
+    for (const [publishId, body, path] of [
+      ['pub-race-a', a, 'a.bin'],
+      ['pub-race-b', b, 'b.bin'],
+    ] as const) {
+      await app.beginWorkspacePublishStaging({
+        userId: 'user-1', teamId: 'team-1', channelId: cid,
+        publishId,
+        baselineRevisionId,
+        files: [{
+          path,
+          expectedSizeBytes: body.length,
+          expectedSha256: sha256(body),
+          filename: path,
+        }],
+      });
+      await app.putWorkspacePublishStagingFile({
+        userId: 'user-1', teamId: 'team-1', channelId: cid,
+        publishId, path, offset: 0, content: body,
+      });
+    }
+    const before = await repositories.artifacts.listByChannel({ teamId: 'team-1', channelId: cid });
+    const [r1, r2] = await Promise.all([
+      app.commitWorkspacePublishStaging({
+        userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-race-a',
+      }),
+      app.commitWorkspacePublishStaging({
+        userId: 'user-1', teamId: 'team-1', channelId: cid, publishId: 'pub-race-b',
+      }),
+    ]);
+    const outcomes = [r1, r2];
+    const wins = outcomes.filter((o) => o.ok);
+    const losses = outcomes.filter((o) => !o.ok);
+    expect(wins).toHaveLength(1);
+    expect(losses).toHaveLength(1);
+    expect(losses[0]).toMatchObject({ ok: false, error: 'CONFLICT' });
+
+    const after = await repositories.artifacts.listByChannel({ teamId: 'team-1', channelId: cid });
+    // seed artifact + 胜者 1 个文件；败者物化的 intermediate 必须被删掉
+    expect(after.length).toBe(before.length + 1);
+    if (!wins[0]!.ok) throw new Error('expected win');
+    const winPaths = new Set(wins[0]!.workspace!.currentRevision.files.map((f) => f.path));
+    // 仅胜者路径的 artifact 保留（相对 path 的 revision 引用）
+    const revisionArtifactIds = new Set(wins[0]!.workspace!.currentRevision.files.map((f) => f.artifactId));
+    const extras = after.filter((art) => art.id !== 'seed-art' && !revisionArtifactIds.has(art.id));
+    expect(extras).toEqual([]);
+    expect(winPaths.size).toBe(1);
   });
 
   test('空文件 size=0 可 complete 并提交', async () => {
