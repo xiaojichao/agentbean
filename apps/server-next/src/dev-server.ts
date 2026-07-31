@@ -329,6 +329,10 @@ export async function startServerNextDevServer(
       if (await handleArtifactHttp({ app, config, request, response, url, previewService: appWithCleanup.artifactPreviewService })) {
         return;
       }
+      // #967 hardening：Workspace publish staging 分块续传 HTTP 入口。
+      if (await handleWorkspacePublishStagingHttp({ app, config, request, response, url })) {
+        return;
+      }
       if (await handleAgentEnvHttp({ app, config, request, response, url })) {
         return;
       }
@@ -393,6 +397,19 @@ export async function startServerNextDevServer(
       void appWithCleanup.artifactPreviewService?.runOnce().catch(() => undefined);
     }, 250)
     : undefined;
+  // #967 hardening：周期清理过期未提交 Workspace publish staging。
+  let workspaceStagingCleanupRunning = false;
+  const workspaceStagingCleanupInterval = setInterval(() => {
+    if (workspaceStagingCleanupRunning) return;
+    if (typeof app.cleanupExpiredWorkspacePublishStaging !== 'function') return;
+    workspaceStagingCleanupRunning = true;
+    void app.cleanupExpiredWorkspacePublishStaging({ limit: 50 })
+      .catch(() => undefined)
+      .finally(() => {
+        workspaceStagingCleanupRunning = false;
+      });
+  }, 5 * 60_000);
+  workspaceStagingCleanupInterval.unref();
   const channelFileBackfillInterval = appWithCleanup.channelFileBackfill
     ? setInterval(() => {
       try {
@@ -448,6 +465,9 @@ export async function startServerNextDevServer(
       }
       if (projectDocumentBundleBackfillInterval) {
         clearInterval(projectDocumentBundleBackfillInterval);
+      }
+      if (workspaceStagingCleanupInterval) {
+        clearInterval(workspaceStagingCleanupInterval);
       }
       await coordinationScheduler?.stop();
       stopVersionRefresh();
@@ -783,6 +803,140 @@ async function handleWorkspaceRunLogHttp(input: ArtifactHttpInput): Promise<bool
     ...log,
   });
   return true;
+}
+
+/**
+ * #967 hardening：Workspace publish staging 分块 put。
+ * POST /api/teams/:teamId/workspace-publish-staging/put
+ * - multipart: channelId, publishId, path, offset + file
+ * - 或 application/octet-stream + query/fields: channelId, publishId, path, offset
+ */
+async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/workspace-publish-staging\/put$/);
+  if (!match) return false;
+  const teamId = decodeURIComponent(match[1] ?? '');
+  try {
+    if (input.request.method !== 'POST') {
+      writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+      return true;
+    }
+    const contentType = input.request.headers['content-type'];
+    let channelId: string;
+    let publishId: string;
+    let path: string;
+    let offset: number;
+    let content: Buffer;
+    if (typeof contentType === 'string' && contentType.toLowerCase().startsWith('multipart/form-data')) {
+      const multipart = await readMultipartUpload(
+        input.request,
+        contentType,
+        input.config.dataDir,
+        input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES,
+      );
+      try {
+        channelId = readRequiredString(multipart.fields, 'channelId');
+        publishId = readRequiredString(multipart.fields, 'publishId');
+        path = readRequiredString(multipart.fields, 'path');
+        offset = Number(multipart.fields.offset ?? '0');
+        if (!Number.isFinite(offset) || offset < 0) {
+          throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
+        }
+        content = readFileSync(multipart.file.tempPath);
+      } finally {
+        safeUnlink(multipart.file.tempPath);
+      }
+      const token = readToken(input.url, input.request, multipart.fields);
+      const result = await putWorkspaceStagingForToken(input, token, {
+        teamId,
+        channelId,
+        publishId,
+        path,
+        offset,
+        content,
+      });
+      if (!result.ok) {
+        writeAckFailure(input.response, result);
+        return true;
+      }
+      writeJson(input.response, 200, { ok: true, staging: result.staging });
+      return true;
+    }
+    // raw body + query/header fields
+    const maxBytes = input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
+    content = await readRequestBody(input.request, maxBytes);
+    channelId = input.url.searchParams.get('channelId')?.trim()
+      || (typeof input.request.headers['x-channel-id'] === 'string' ? input.request.headers['x-channel-id'].trim() : '');
+    publishId = input.url.searchParams.get('publishId')?.trim()
+      || (typeof input.request.headers['x-publish-id'] === 'string' ? input.request.headers['x-publish-id'].trim() : '');
+    path = input.url.searchParams.get('path')?.trim()
+      || (typeof input.request.headers['x-workspace-path'] === 'string' ? input.request.headers['x-workspace-path'].trim() : '');
+    offset = Number(input.url.searchParams.get('offset') ?? input.request.headers['x-upload-offset'] ?? '0');
+    if (!channelId || !publishId || !path) {
+      throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId, publishId and path are required' });
+    }
+    if (!Number.isFinite(offset) || offset < 0) {
+      throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
+    }
+    const token = readToken(input.url, input.request, {});
+    const result = await putWorkspaceStagingForToken(input, token, {
+      teamId,
+      channelId,
+      publishId,
+      path,
+      offset,
+      content,
+    });
+    if (!result.ok) {
+      writeAckFailure(input.response, result);
+      return true;
+    }
+    writeJson(input.response, 200, { ok: true, staging: result.staging });
+    return true;
+  } catch (error) {
+    if (error instanceof ArtifactHttpError) {
+      writeJson(input.response, error.status, error.payload);
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    writeJson(input.response, 500, { ok: false, error: 'INTERNAL_ERROR', message });
+    return true;
+  }
+}
+
+async function putWorkspaceStagingForToken(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  put: {
+    teamId: string;
+    channelId: string;
+    publishId: string;
+    path: string;
+    offset: number;
+    content: Buffer;
+  },
+): Promise<{ ok: true; staging: unknown } | { ok: false; error?: string; message?: string }> {
+  if (isDeviceToken(token)) {
+    return input.app.putWorkspacePublishStagingFileForDevice({
+      token,
+      teamId: put.teamId,
+      channelId: put.channelId,
+      publishId: put.publishId,
+      path: put.path,
+      offset: put.offset,
+      content: put.content,
+    });
+  }
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) return session;
+  return input.app.putWorkspacePublishStagingFile({
+    userId: session.user.id,
+    teamId: put.teamId,
+    channelId: put.channelId,
+    publishId: put.publishId,
+    path: put.path,
+    offset: put.offset,
+    content: put.content,
+  });
 }
 
 async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {

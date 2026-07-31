@@ -380,6 +380,8 @@ export interface ArtifactRepository {
   listByChannel(input: { teamId: ID; channelId: ID }): Promise<ArtifactRecord[]>;
   listByWorkspaceRunForChannel(input: { teamId: ID; channelId: ID; runId: ID }): Promise<ArtifactRecord[]>;
   deleteByChannel(channelId: ID): Promise<ID[]>;
+  /** #967 hardening：删除 commit 冲突路径上刚物化的孤儿 artifact（team 作用域）。 */
+  deleteForTeam(input: { teamId: ID; artifactId: ID }): Promise<boolean>;
 }
 
 export interface ChannelDocumentRepository {

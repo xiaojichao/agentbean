@@ -2168,6 +2168,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         teamDb.prepare('DELETE FROM artifacts WHERE channel_id = ?').run(channelId);
         return deletedIds;
       },
+      async deleteForTeam(input) {
+        const result = teamDb.prepare('DELETE FROM artifacts WHERE team_id = ? AND id = ?')
+          .run(input.teamId, input.artifactId) as { changes?: number };
+        return Number(result.changes ?? 0) > 0;
+      },
     },
     projectChannelWorkspaces: {
       async createInitial(input) {
