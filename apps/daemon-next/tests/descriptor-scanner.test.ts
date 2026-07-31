@@ -13,41 +13,58 @@ function writeAgentsMd(dir: string, content: string) {
 }
 
 describe('scanAgentDescriptor', () => {
-  test('frontmatter 完整解析 name/description/capabilities', () => {
+  test('正文标题取 name、首段取 description、能力小节列表取 capabilities', () => {
     const dir = makeDir();
-    writeAgentsMd(dir, `---\nname: my-agent\ndescription: 负责代码审查\ncapabilities:\n  - code-review\n  - Web-Search\n---\n# my-agent\n正文说明\n`);
-    const result = scanAgentDescriptor(dir);
-    expect(result).not.toBeNull();
-    expect(result!.name).toBe('my-agent');
-    expect(result!.description).toBe('负责代码审查');
-    // capabilities 小写折叠去重
-    expect(result!.capabilities).toEqual(['code-review', 'web-search']);
-    expect(result!.sourcePath).toContain('AGENTS.md');
-  });
-
-  test('无 frontmatter 时从正文提取标题和首段', () => {
-    const dir = makeDir();
-    writeAgentsMd(dir, `# My Coding Agent\n\n这是我负责日常编码的 Agent。\n\n## 其他段落\n后续内容\n`);
+    writeAgentsMd(dir, `# My Coding Agent\n\n这是我负责日常编码的 Agent。\n\n## Capabilities\n\n- Code Review\n- web-search\n- 代码审查\n`);
     const result = scanAgentDescriptor(dir);
     expect(result).not.toBeNull();
     expect(result!.name).toBe('My Coding Agent');
     expect(result!.description).toContain('这是我负责日常编码的 Agent');
+    // capabilities 从 ## Capabilities 小节提取，小写折叠去重
+    expect(result!.capabilities).toEqual(['code review', 'web-search', '代码审查']);
+    expect(result!.sourcePath).toContain('AGENTS.md');
+  });
+
+  test('中文能力小节（## 能力）同样提取', () => {
+    const dir = makeDir();
+    writeAgentsMd(dir, `# Agent\n\n简介。\n\n## 能力\n\n- 代码审查\n- 单元测试\n`);
+    const result = scanAgentDescriptor(dir);
+    expect(result!.capabilities).toEqual(['代码审查', '单元测试']);
+  });
+
+  test('frontmatter 中的 capabilities 字段不读取（生态文件无此标准，避免变相要求改文件）', () => {
+    const dir = makeDir();
+    writeAgentsMd(dir, `---\nname: from-frontmatter\ndescription: 来自 frontmatter\ncapabilities:\n  - invented-field\n---\n# Body Title\n正文首段。\n\n## Capabilities\n\n- real-capability\n`);
+    const result = scanAgentDescriptor(dir);
+    // name/description：正文优先，frontmatter 仅兼容备选
+    expect(result!.name).toBe('Body Title');
+    expect(result!.description).toContain('正文首段');
+    // capabilities 只来自正文小节，frontmatter 的 invented-field 被忽略
+    expect(result!.capabilities).toEqual(['real-capability']);
+  });
+
+  test('无能力小节时 capabilities 为空数组', () => {
+    const dir = makeDir();
+    writeAgentsMd(dir, `# Agent\n\n只有描述，没有能力小节。\n`);
+    const result = scanAgentDescriptor(dir);
+    expect(result!.name).toBe('Agent');
+    expect(result!.description).toContain('只有描述');
     expect(result!.capabilities).toEqual([]);
   });
 
   test('CLAUDE.md 作为兜底（无 AGENTS.md 时）', () => {
     const dir = makeDir();
-    writeFileSync(join(dir, 'CLAUDE.md'), `---\nname: claude-agent\ndescription: Claude 专用\n---\n正文\n`);
+    writeFileSync(join(dir, 'CLAUDE.md'), `# Claude Agent\n\nClaude 专用描述。\n`);
     const result = scanAgentDescriptor(dir);
     expect(result).not.toBeNull();
-    expect(result!.name).toBe('claude-agent');
+    expect(result!.name).toBe('Claude Agent');
     expect(result!.sourcePath).toContain('CLAUDE.md');
   });
 
   test('AGENTS.md 优先于 CLAUDE.md', () => {
     const dir = makeDir();
-    writeAgentsMd(dir, `---\nname: agents-wins\ndescription: 来自 AGENTS.md\n---\n`);
-    writeFileSync(join(dir, 'CLAUDE.md'), `---\nname: claude-wins\ndescription: 来自 CLAUDE.md\n---\n`);
+    writeAgentsMd(dir, `# agents-wins\n\n来自 AGENTS.md。\n`);
+    writeFileSync(join(dir, 'CLAUDE.md'), `# claude-wins\n\n来自 CLAUDE.md。\n`);
     const result = scanAgentDescriptor(dir);
     expect(result!.name).toBe('agents-wins');
     expect(result!.sourcePath).toContain('AGENTS.md');
@@ -59,19 +76,27 @@ describe('scanAgentDescriptor', () => {
     expect(scanAgentDescriptor(join(dir, 'not-exists'))).toBeNull();
   });
 
-  test('frontmatter 缺 name 时回退正文标题', () => {
+  test('frontmatter name/description 作为正文缺失时的兼容备选', () => {
     const dir = makeDir();
-    writeAgentsMd(dir, `---\ndescription: 只有描述\n---\n# Title From Body\n正文\n`);
+    writeAgentsMd(dir, `---\nname: fm-name\ndescription: fm-desc\n---\n## Capabilities\n\n- cap-a\n`);
     const result = scanAgentDescriptor(dir);
-    expect(result!.name).toBe('Title From Body');
-    expect(result!.description).toBe('只有描述');
+    expect(result!.name).toBe('fm-name');
+    expect(result!.description).toBe('fm-desc');
+    expect(result!.capabilities).toEqual(['cap-a']);
   });
 
   test('description 截断到 MAX_DESCRIPTION', () => {
     const dir = makeDir();
-    writeAgentsMd(dir, `---\nname: long-desc\ndescription: ${'x'.repeat(3000)}\n---\n`);
+    writeAgentsMd(dir, `# long-desc\n\n${'x'.repeat(3000)}\n`);
     const result = scanAgentDescriptor(dir);
     expect(result!.description!.length).toBeLessThanOrEqual(2000);
+  });
+
+  test('能力小节内说明文字与代码块不进入 capabilities', () => {
+    const dir = makeDir();
+    writeAgentsMd(dir, `# Agent\n\n简介。\n\n## Capabilities\n\n以下是能力列表：\n\n- code-review\n\n\`\`\`js\nconst x = 1;\n\`\`\`\n`);
+    const result = scanAgentDescriptor(dir);
+    expect(result!.capabilities).toEqual(['code-review']);
   });
 });
 

@@ -9,10 +9,17 @@ import { load as parseYaml } from 'js-yaml';
  * name / description / capabilities。这些信息是 Agent 能力的「事实层」，
  * 作为 Agent Exposure 发布时的候选来源（#710 系列）。
  *
- * 格式策略：
- * - frontmatter 优先：`---` 包裹的 YAML，字段 name/description/capabilities(string[])。
- * - 正文兜底（生态大量 AGENTS.md 是纯正文，如仓库根）：一级标题（# xxx）取 name，
- *   首个非空段落取 description。无 capabilities 时返回空数组。
+ * 关键约束：AGENTS.md/CLAUDE.md 是 claude-code/codex 等运行时的生态指令文件，
+ * 我们【不修改、也不要求用户往里面写任何自定义字段】。capabilities 必须从
+ * 文件内容中提取（extract），而非依赖用户声明。
+ *
+ * 提取策略：
+ * - name：正文首个一级标题（# xxx）。frontmatter name 仅作兼容备选
+ *   （部分生成工具会写，非标准）。
+ * - description：正文首个非空段落。frontmatter description 仅作兼容备选。
+ * - capabilities：从正文能力小节提取——识别 `## Capabilities` / `## 能力` /
+ *   `## Skills` 等标题，取其下 markdown 列表项（`- xxx`）。无匹配小节 → 空数组。
+ *   frontmatter 中的 capabilities 字段【不读取】（非生态标准，避免变相要求改文件）。
  * - 任何解析失败返回 null（与 skill-scanner 的 fail-closed 一致）。
  */
 
@@ -22,9 +29,9 @@ const MAX_CAPABILITIES = 100;
 export interface AgentDescriptor {
   /** 从 AGENTS.md/CLAUDE.md 提取的 Agent 名称。 */
   name: string | null;
-  /** 简介（frontmatter description 或首个段落），截断到 MAX_DESCRIPTION。 */
+  /** 简介（正文首段，frontmatter 兼容），截断到 MAX_DESCRIPTION。 */
   description: string | null;
-  /** 声明的能力清单（frontmatter capabilities 或空）。小写折叠去重。 */
+  /** 从正文能力小节提取的能力清单。小写折叠去重。 */
   capabilities: string[];
   /** 实际读到的文件路径（AGENTS.md 优先，否则 CLAUDE.md）。 */
   sourcePath: string | null;
@@ -42,13 +49,16 @@ function extractTitle(raw: string): string | null {
   return title.length > 0 ? title : null;
 }
 
-/** 从正文提取首个非空段落作为 description（跳过标题与代码块，最多 3 段探测）。 */
+/** 从正文提取首个非空段落作为 description（跳过 frontmatter/标题/代码块）。 */
 function extractFirstParagraph(raw: string): string | null {
-  const lines = raw.split(/\r?\n/);
+  // 先剥离 frontmatter 块（--- 开头到 --- 结尾），避免把 YAML 当成正文段落。
+  const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
+  const lines = body.split(/\r?\n/);
   let paragraph: string[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('```')) {
+    // 跳过空行、标题（#）、列表项（-/*）、代码围栏。
+    if (!trimmed || /^#/.test(trimmed) || /^[-*]\s/.test(trimmed) || trimmed.startsWith('```')) {
       if (paragraph.length > 0) break;
       continue;
     }
@@ -56,6 +66,67 @@ function extractFirstParagraph(raw: string): string | null {
   }
   const text = paragraph.join(' ').trim();
   return text.length > 0 ? truncate(text, MAX_DESCRIPTION) : null;
+}
+
+/** 能力小节标题（大小写不敏感匹配）。用户可以用任意一个组织能力清单。 */
+const CAPABILITY_SECTION_TITLES = [
+  'capabilities',
+  '能力',
+  '技能',
+  'skills',
+  '我能做什么',
+  'what i can do',
+  '职责',
+  'responsibilities',
+];
+
+/** 从正文能力小节提取列表项作为 capabilities（小写折叠去重，最多 MAX_CAPABILITIES）。 */
+function extractCapabilitiesFromBody(raw: string): string[] {
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+  let inSection: string | null = null;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const heading = trimmed.match(/^#{2,4}\s+(.+)$/);
+    if (heading) {
+      const title = heading[1]!.trim().toLowerCase();
+      inSection = CAPABILITY_SECTION_TITLES.some((known) => title.includes(known.toLowerCase()))
+        ? title
+        : null;
+      continue;
+    }
+    if (!inSection) continue;
+    const item = trimmed.match(/^[-*]\s+(.+)$/);
+    if (!item) {
+      // 小节内非列表内容（说明文字等）跳过；遇到新标题由 heading 分支重置。
+      continue;
+    }
+    const lower = item[1]!.trim().toLowerCase();
+    if (lower && !out.includes(lower)) {
+      out.push(lower);
+      if (out.length >= MAX_CAPABILITIES) break;
+    }
+  }
+  return out;
+}
+
+/** frontmatter 兼容读取：仅 name/description（生成工具可能写入，非标准字段不做强依赖）。 */
+function readFrontmatterMeta(raw: string): { name?: string; description?: string } | null {
+  const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!fmMatch) return null;
+  try {
+    const parsed = parseYaml(fmMatch[1]!);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const front = parsed as { name?: unknown; description?: unknown };
+    return {
+      name: typeof front.name === 'string' && front.name.trim() ? front.name.trim() : undefined,
+      description: typeof front.description === 'string'
+        ? truncate(front.description.trim(), MAX_DESCRIPTION)
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -74,43 +145,13 @@ export function scanAgentDescriptor(cwd: string): AgentDescriptor | null {
       continue;
     }
 
-    const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    if (fmMatch) {
-      let front: { name?: unknown; description?: unknown; capabilities?: unknown } | null = null;
-      try {
-        const parsed = parseYaml(fmMatch[1]!);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          front = parsed as { name?: unknown; description?: unknown; capabilities?: unknown };
-        }
-      } catch {
-        front = null;
-      }
-      if (front) {
-        const name = typeof front.name === 'string' ? front.name.trim() : null;
-        const description = typeof front.description === 'string'
-          ? truncate(front.description.trim(), MAX_DESCRIPTION)
-          : null;
-        const rawCaps = Array.isArray(front.capabilities) ? front.capabilities : [];
-        const capabilities: string[] = [];
-        for (const cap of rawCaps) {
-          if (typeof cap !== 'string') continue;
-          const lower = cap.trim().toLowerCase();
-          if (lower && !capabilities.includes(lower)) capabilities.push(lower);
-        }
-        return {
-          name: name && name.length > 0 ? name : extractTitle(raw),
-          description,
-          capabilities,
-          sourcePath: path,
-        };
-      }
-    }
-
-    // 无 frontmatter（或 frontmatter 非法）：正文兜底。
+    const front = readFrontmatterMeta(raw);
     return {
-      name: extractTitle(raw),
-      description: extractFirstParagraph(raw),
-      capabilities: [],
+      // name/description：正文优先，frontmatter 仅兼容备选。
+      name: extractTitle(raw) ?? front?.name ?? null,
+      description: extractFirstParagraph(raw) ?? front?.description ?? null,
+      // capabilities：只从正文能力小节提取，不读 frontmatter（生态文件无此标准字段）。
+      capabilities: extractCapabilitiesFromBody(raw),
       sourcePath: path,
     };
   }
