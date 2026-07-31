@@ -3718,7 +3718,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             daemonProtocolVersion: deviceInput.daemonVersion
               ? Number(deviceInput.daemonVersion.split('.')[0]) || 0
               : 0,
-            advertisedCapabilities: (deviceInput.capabilities as string[]) ?? [],
+            advertisedCapabilities: [], // PI orchestration capabilities come from management-worker registration, not device hello
             teamMigrationState: piMigration.state,
             legacyWriterFenced: piMigration.legacyWriterFenced,
           })
