@@ -20,14 +20,31 @@ import type {
   SystemActivityQueryName,
   SystemActivityQueryResponseV1,
 } from '../../../../packages/contracts/src/system-activity.js';
+import { createSystemActivityDispatcher } from './system-activity-dispatcher.js';
+import { createMemorySystemActivityUnitOfWork } from './system-activity-unit-of-work.js';
+import { autoProjectSystemActivityFact } from './system-activity-auto-project.js';
+import {
+  createInMemoryTaskFailureRemediationRepositories,
+  createTaskFailureRemediationMemoryState,
+  cloneTaskFailureRemediationMemoryState,
+  restoreTaskFailureRemediationMemoryState,
+} from '../infra/memory/task-failure-remediation-repositories.js';
+import { createMemoryTaskFailureRemediationUnitOfWork } from './task-failure-remediation-unit-of-work.js';
+import {
+  handleRetryAttempt,
+  type TaskFailureRemediationHandlerDeps,
+} from './task-failure-remediation-handler.js';
+import type { TaskRemediationCommandResponseV1 } from '../../../../packages/contracts/src/task-failure-remediation.js';
+import {
+  parseTaskRemediationCommandEnvelopeV1,
+} from '../../../../packages/contracts/src/task-failure-remediation.js';
+import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
 import type {
   DaemonPiCapabilityNegotiationV1,
   PiAuthorityCutoverCommandResponseV1,
   PiAuthorityCutoverQueryName,
   PiAuthorityCutoverQueryResponseV1,
 } from '../../../../packages/contracts/src/pi-authority-cutover.js';
-import { createSystemActivityDispatcher } from './system-activity-dispatcher.js';
-import { createMemorySystemActivityUnitOfWork } from './system-activity-unit-of-work.js';
 import { createPiAuthorityCutoverDispatcher } from './pi-authority-cutover-dispatcher.js';
 import { createMemoryPiAuthorityCutoverUnitOfWork } from './pi-authority-cutover-unit-of-work.js';
 import {
@@ -35,17 +52,10 @@ import {
   type LegacyCoordinationJobInventory,
   type PiAuthorityCutoverHandlerDeps,
 } from './pi-authority-cutover-handler.js';
-import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
 import {
   evaluateCommandPathAvailability,
   negotiateDaemonPiCapabilities,
 } from '../../../../packages/domain/src/pi-authority-cutover-policy.js';
-import {
-  cloneSystemActivityMemoryState,
-  createInMemorySystemActivityRepositories,
-  createSystemActivityMemoryState,
-  restoreSystemActivityMemoryState,
-} from '../infra/memory/system-activity-repositories.js';
 import {
   clonePiAuthorityCutoverMemoryState,
   createInMemoryPiAuthorityCutoverRepositories,
@@ -53,14 +63,21 @@ import {
   restorePiAuthorityCutoverMemoryState,
 } from '../infra/memory/pi-authority-cutover-repositories.js';
 import {
+  cloneSystemActivityMemoryState,
+  createInMemorySystemActivityRepositories,
+  createSystemActivityMemoryState,
+  restoreSystemActivityMemoryState,
+} from '../infra/memory/system-activity-repositories.js';
+import {
   initialChannelDocumentIds,
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
-import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS } from '../../../../packages/domain/src/index.js';
+import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
+import type { WorkspaceStagingContentStore } from './workspace-staging-content-store.js';
 import {
   PROJECT_REFERENCE_SET_CONTRACT_VERSION,
   type ProjectReferenceFailureDetailsDto,
@@ -319,7 +336,6 @@ export interface ServerNextUseCases {
     device: DeviceDto;
     credentials?: DeviceInviteCredentialsDto;
     affectedTeamIds: string[];
-    /** #931：Server 按 Team cutover 状态协商的 daemon PI 能力（禁止客户端自报）。 */
     piAuthorityCapabilities?: DaemonPiCapabilityNegotiationV1;
   }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
@@ -390,23 +406,23 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: SystemActivityQueryResponseV1 } | { ok: false; error: string }>;
-  /**
-   * #931 PI authority cutover command 派发。
-   * authority（userId/teamId/role）由 socket session 注入；禁止客户端自报 operator role。
-   */
+  /** #931 PI authority cutover command/query 派发。 */
   dispatchPiAuthorityCutoverCommand(input: {
+    envelope: unknown; payload: unknown; userId: string; teamId: string;
+  }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }>;
+  dispatchPiAuthorityCutoverQuery(input: {
+    queryName: PiAuthorityCutoverQueryName; payload: unknown; userId: string; teamId: string;
+  }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }>;
+  /**
+   * #1014 Task remediation 具名 command（至少 retry-attempt）。
+   * envelope.commandName 路由；authority 由 session 注入。
+   */
+  dispatchTaskRemediationCommand(input: {
     envelope: unknown;
     payload: unknown;
     userId: string;
     teamId: string;
-  }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }>;
-  /** #931 PI authority cutover query（migration state / retirement metrics / legacy projection）。 */
-  dispatchPiAuthorityCutoverQuery(input: {
-    queryName: PiAuthorityCutoverQueryName;
-    payload: unknown;
-    userId: string;
-    teamId: string;
-  }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }>;
+  }): Promise<{ ok: true; response: TaskRemediationCommandResponseV1 } | { ok: false; error: string }>;
   /** #923 模型评估入口：只产 clarification/proposal/audit，永远不 direct promote。 */
   evaluateSemanticPromotion(input: {
     userId: string;
@@ -1630,6 +1646,11 @@ export interface CreateServerNextUseCasesInput {
   deviceInviteCodes?: ServerNextDeviceInviteCodes;
   sessionSecret?: string;
   artifactContentStore?: ArtifactContentStore;
+  /**
+   * #1005：staging 字节磁盘存储。有则 put 写 dataDir、不写 SQLite BLOB；
+   * 缺省（memory 测试）继续用 file.content Buffer。
+   */
+  stagingContentStore?: WorkspaceStagingContentStore;
   resolveArtifactPreview?: (artifact: ArtifactRecord) => Promise<ArtifactPreviewDto | undefined>;
   onArtifactCommitted?: (artifact: ArtifactRecord) => Promise<void>;
   /** #829 项目审核/最终化事实变化后，best-effort 触发 Server 权威阶段推进重算。 */
@@ -1690,6 +1711,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     }
   }
   const artifactContentStore = input.artifactContentStore;
+  const stagingContentStore = input.stagingContentStore;
   const resolveArtifactPreview = input.resolveArtifactPreview;
   const onArtifactCommitted = input.onArtifactCommitted;
   // #706 Channel Coordinator 消费 durable Job。默认 durable-job（ADR 0061）；
@@ -1866,31 +1888,82 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     }
   }
 
-  /**
-   * #931 A2：sendMessage 提交后绑定 authority epoch（best-effort）。
-   */
-  async function bindMessageEpochBestEffort(
-    teamId: string, messageId: string, clientMessageId: string | null,
-  ): Promise<void> {
+  async function dispatchTaskRemediationCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: TaskRemediationCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    let commandName: ReturnType<typeof parseTaskRemediationCommandEnvelopeV1>['commandName'];
     try {
-      await piAuthorityCutoverUnitOfWork.runInTransaction(async (repos) => {
-        const migration = await repos.migrations.get(teamId);
-        if (!migration) return;
-        await repos.epochBindings.create({
-          messageId, teamId,
-          sourceLineageKey: `message:${teamId}:${messageId}`,
-          authorityEpoch: migration.authorityEpoch,
-          migrationRevision: migration.migrationRevision,
-          boundAt: clock.now(),
-          clientMessageId,
-        });
-      });
-    } catch { /* best-effort */ }
+      commandName = parseTaskRemediationCommandEnvelopeV1(input.envelope).commandName;
+    } catch {
+      return { ok: false, error: 'TASK_REMEDIATION_PAYLOAD_INVALID' };
+    }
+    try {
+      let response: TaskRemediationCommandResponseV1;
+      if (commandName === 'retry-attempt') {
+        response = await handleRetryAttempt(remediationHandlerDeps, input.envelope, input.payload);
+      } else {
+        return { ok: false, error: 'REMEDIATION_COMMAND_NOT_WIRED' };
+      }
+      // #1014：remediation 成功后自动投影
+      if (response.outcome === 'applied' && response.result) {
+        const result = response.result as {
+          commandName?: string;
+          taskId?: string;
+          actionRequiredId?: string;
+          remediation?: { taskRevision?: number };
+        };
+        const taskId = result.taskId ?? '';
+        if (taskId) {
+          const task = await repositories.tasks.getById(taskId);
+          const members = await repositories.teams.listAllMembers(input.teamId);
+          const memberIds = members.map((m) => m.userId);
+          let channelHuman: string[] | null = null;
+          if (task?.channelId) {
+            const channel = await repositories.channels.getById(task.channelId);
+            channelHuman = channel?.humanMemberIds ?? null;
+          }
+          const audience = deriveActivityAudience({
+            teamMemberIds: memberIds,
+            channelHumanMemberIds: channelHuman,
+            creatorId: task?.creatorId,
+            assigneeId: task?.assigneeId,
+            forActionRequired: true,
+          });
+          const fact = mapRemediationCommandToActivityFact({
+            commandName,
+            teamId: input.teamId,
+            taskId,
+            taskRevision: result.remediation?.taskRevision ?? task?.revision ?? 1,
+            channelId: task?.channelId ?? undefined,
+            visibleRecipientIds: audience.visibleRecipientIds,
+            responsibleRecipientIds: audience.responsibleRecipientIds,
+            eventId: `remediation:${commandName}:${taskId}:${input.userId}:${clock.now()}`,
+            sequence: task?.revision ?? 1,
+            occurredAt: clock.now(),
+            actionRequiredId: result.actionRequiredId,
+          });
+          if (fact) {
+            await autoProjectSystemActivityFact({
+              dispatcher: systemActivityDispatcherFor(input.teamId),
+              fact,
+              idempotencyKey: `auto-project:remediation:${commandName}:${taskId}:${response.receipt?.receiptId ?? clock.now()}`,
+            });
+          }
+        }
+      }
+      return { ok: true, response };
+    } catch {
+      return { ok: false, error: 'TASK_REMEDIATION_FAILED' };
+    }
   }
-
   /**
-   * #931 PI authority cutover：与 fence / sendMessage 共享 teamPiAuthorityMigrations。
-   * 其余 cutover 表（token/drain/receipt）进程内 memory（与 #930 一致；SQLite 全表接线可后续切片）。
+   * #931 PI authority cutover infrastructure.
    */
   const piAuthorityCutoverState = createPiAuthorityCutoverMemoryState();
   const piAuthorityCutoverRepos = createInMemoryPiAuthorityCutoverRepositories(
@@ -1900,10 +1973,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const piAuthorityCutoverUnitOfWork = createMemoryPiAuthorityCutoverUnitOfWork({
     repos: piAuthorityCutoverRepos,
     snapshot: () => clonePiAuthorityCutoverMemoryState(piAuthorityCutoverState),
-    restore: (snap) => restorePiAuthorityCutoverMemoryState(
-      piAuthorityCutoverState,
-      snap as ReturnType<typeof createPiAuthorityCutoverMemoryState>,
-    ),
+    restore: (snap) => restorePiAuthorityCutoverMemoryState(piAuthorityCutoverState, snap as ReturnType<typeof createPiAuthorityCutoverMemoryState>),
   });
   const legacyJobInventory: LegacyCoordinationJobInventory = {
     async listOpen(teamId) {
@@ -1914,10 +1984,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (job.status === 'pending' || job.status === 'retry_wait') {
           pendingOrRetry.push(job.id);
         } else if (job.status === 'running') {
-          running.push({
-            jobId: job.id,
-            lineageKey: `legacy-job:${job.id}:message:${job.messageId}`,
-          });
+          running.push({ jobId: job.id, lineageKey: `legacy-job:${job.id}:message:${job.messageId}` });
         }
       }
       return { pendingOrRetry, running };
@@ -1928,105 +1995,65 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const job = await repositories.channelCoordination.jobs.getById(jobId);
         if (!job) continue;
         if (job.status !== 'pending' && job.status !== 'retry_wait') continue;
-        const updated = await repositories.channelCoordination.jobs.updateState({
-          jobId,
-          status: 'cancelled',
-          attempt: job.attempt,
-          nextRetryAt: null,
-          updatedAt: now,
-        });
+        const updated = await repositories.channelCoordination.jobs.updateState({ jobId, status: 'cancelled', attempt: job.attempt, nextRetryAt: null, updatedAt: now });
         if (updated) cancelled.push(jobId);
       }
       return cancelled;
     },
   };
 
-  function piAuthorityCutoverDispatcherFor(input: {
-    teamId: string;
-    operatorId: string;
-    operatorRole: 'owner' | 'admin' | 'member';
-  }) {
-    const deps: PiAuthorityCutoverHandlerDeps = {
-      teamId: input.teamId,
-      operatorId: input.operatorId,
-      operatorRole: input.operatorRole,
-      unitOfWork: piAuthorityCutoverUnitOfWork,
-      ids,
-      clock,
-      legacyJobInventory,
-    };
-    return createPiAuthorityCutoverDispatcher(deps);
+  function makeCutoverHandlerDeps(teamId: string, operatorId: string, operatorRole: 'owner'|'admin'|'member'): PiAuthorityCutoverHandlerDeps {
+    return { unitOfWork: piAuthorityCutoverUnitOfWork, ids, clock, teamId, operatorId, operatorRole, legacyJobInventory };
   }
 
-  async function dispatchPiAuthorityCutoverCommand(input: {
-    envelope: unknown;
-    payload: unknown;
-    userId: string;
-    teamId: string;
-  }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }> {
-    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
-    if (!role) return { ok: false, error: 'FORBIDDEN' };
+  /** #931 A2：bind authority epoch after sendMessage（best-effort）。 */
+  async function bindMessageEpochBestEffort(teamId: string, messageId: string, clientMessageId: string | null): Promise<void> {
     try {
-      const response = await piAuthorityCutoverDispatcherFor({
-        teamId: input.teamId,
-        operatorId: input.userId,
-        operatorRole: role,
-      }).dispatchCommand({
-        envelope: input.envelope,
-        payload: input.payload,
+      await piAuthorityCutoverUnitOfWork.runInTransaction(async (repos) => {
+        const migration = await repos.migrations.get(teamId);
+        if (!migration) return;
+        await repos.epochBindings.create({ messageId, teamId, sourceLineageKey: `message:${teamId}:${messageId}`, authorityEpoch: migration.authorityEpoch, migrationRevision: migration.migrationRevision, boundAt: clock.now(), clientMessageId });
       });
-      return { ok: true, response };
-    } catch {
-      return { ok: false, error: 'PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID' };
-    }
+    } catch { /* best-effort */ }
   }
 
-  async function dispatchPiAuthorityCutoverQuery(input: {
-    queryName: PiAuthorityCutoverQueryName;
-    payload: unknown;
-    userId: string;
-    teamId: string;
-  }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }> {
-    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
-      return { ok: false, error: 'FORBIDDEN' };
-    }
-    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
-    try {
-      const response = await piAuthorityCutoverDispatcherFor({
-        teamId: input.teamId,
-        operatorId: input.userId,
-        operatorRole: role ?? 'member',
-      }).dispatchQuery({
-        queryName: input.queryName,
-        payload: input.payload,
-      });
-      return { ok: true, response };
-    } catch {
-      return { ok: false, error: 'PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID' };
-    }
-  }
-
-  /** #931 A6：Team-level emergency-stop 暂停新 promotion/PI command。 */
+  /** #931 A6：Team emergency-stop guard for promotion/PI commands。 */
   async function assertTeamPiCommandsAllowed(teamId: string): Promise<Ack<never> | null> {
     const migration = await repositories.teamPiAuthorityMigrations.get(teamId);
     if (!migration) return null;
-    const decision = evaluateCommandPathAvailability({
-      migration: {
-        state: migration.state,
-        legacyWriterFenced: migration.legacyWriterFenced,
-        emergencyStop: migration.emergencyStop,
-      },
-      path: 'promotion',
-    });
+    const decision = evaluateCommandPathAvailability({ migration: { state: migration.state, legacyWriterFenced: migration.legacyWriterFenced, emergencyStop: migration.emergencyStop }, path: 'promotion' });
     if (!decision.allowed) {
-      return makeFailure(
-        'CONFLICT',
-        decision.reason === 'pi_emergency_stop'
-          ? 'Team PI emergency-stop is active; promotion/PI commands are paused'
-          : decision.reason,
-      );
+      return makeFailure('CONFLICT', decision.reason === 'pi_emergency_stop' ? 'Team PI emergency-stop is active' : decision.reason);
     }
     return null;
+  }
+
+  /** #931 A1：cutover command dispatcher。 */
+  async function dispatchPiAuthorityCutoverCommand(input: { envelope: unknown; payload: unknown; userId: string; teamId: string }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) return { ok: false, error: 'FORBIDDEN' };
+    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+    if (!role || (role !== 'owner' && role !== 'admin')) return { ok: false, error: 'FORBIDDEN' };
+    try {
+      const dispatcher = createPiAuthorityCutoverDispatcher(makeCutoverHandlerDeps(input.teamId, input.userId, role));
+      const response = await dispatcher.dispatchCommand({ envelope: input.envelope, payload: input.payload });
+      return { ok: true, response };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'PI_AUTHORITY_CUTOVER_FAILED' };
+    }
+  }
+
+  /** #931 A1：cutover query dispatcher。 */
+  async function dispatchPiAuthorityCutoverQuery(input: { queryName: PiAuthorityCutoverQueryName; payload: unknown; userId: string; teamId: string }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) return { ok: false, error: 'FORBIDDEN' };
+    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+    if (!role || (role !== 'owner' && role !== 'admin')) return { ok: false, error: 'FORBIDDEN' };
+    try {
+      const dispatcher = createPiAuthorityCutoverDispatcher(makeCutoverHandlerDeps(input.teamId, input.userId, role));
+      const response = await dispatcher.dispatchQuery({ queryName: input.queryName, payload: input.payload });
+      return { ok: true, response };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'PI_AUTHORITY_CUTOVER_FAILED' };
+    }
   }
 
   const channelFileRollout = input.channelFileRollout ?? {
@@ -2075,7 +2102,64 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     unitOfWork: repositories.taskCoordinationUnitOfWork,
     clock,
     ids,
+    // #1014：lifecycle 权威成功后自动投影 System activity（post-commit）
+    async onApplied(event) {
+      const members = await repositories.teams.listAllMembers(event.teamId);
+      const memberIds = members.map((m) => m.userId);
+      let channelHuman: string[] | null = null;
+      if (event.channelId) {
+        const channel = await repositories.channels.getById(event.channelId);
+        channelHuman = channel?.humanMemberIds ?? null;
+      }
+      const forReview = event.commandName === 'submit-root-delivery'
+        || event.commandName === 'transition-subtask-in-review';
+      const audience = deriveActivityAudience({
+        teamMemberIds: memberIds,
+        channelHumanMemberIds: channelHuman,
+        creatorId: event.creatorId,
+        assigneeId: event.assigneeId,
+        forReview,
+      });
+      const fact = mapLifecycleCommandToActivityFact({
+        commandName: event.commandName,
+        teamId: event.teamId,
+        taskId: event.taskId,
+        taskRevision: event.taskRevision,
+        channelId: event.channelId ?? undefined,
+        visibleRecipientIds: audience.visibleRecipientIds,
+        responsibleRecipientIds: audience.responsibleRecipientIds,
+        eventId: event.eventId,
+        sequence: Math.max(event.taskRevision, 1),
+        occurredAt: event.occurredAt,
+        deliveryMessageId: event.deliveryMessageId,
+        reason: event.reason,
+        status: event.status,
+      });
+      if (!fact) return;
+      await autoProjectSystemActivityFact({
+        dispatcher: systemActivityDispatcherFor(event.teamId),
+        fact,
+        idempotencyKey: `auto-project:${event.eventId}`,
+      });
+    },
   });
+
+  /** #1014 remediation：进程内 memory 仓储 + retry 等具名 command 入口。 */
+  const remediationState = createTaskFailureRemediationMemoryState();
+  const remediationRepos = createInMemoryTaskFailureRemediationRepositories(remediationState);
+  const remediationUnitOfWork = createMemoryTaskFailureRemediationUnitOfWork({
+    repos: remediationRepos,
+    snapshot: () => cloneTaskFailureRemediationMemoryState(remediationState),
+    restore: (snap) => restoreTaskFailureRemediationMemoryState(
+      remediationState,
+      snap as ReturnType<typeof createTaskFailureRemediationMemoryState>,
+    ),
+  });
+  const remediationHandlerDeps: TaskFailureRemediationHandlerDeps = {
+    unitOfWork: remediationUnitOfWork,
+    ids,
+    clock,
+  };
   const managementRouter = input.managementRouter ?? createManagementRouter({
     repositories,
     kernel: managementKernel,
@@ -2578,11 +2662,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return channelCoordinator.processJob(jobId);
     },
     async evaluateSemanticPromotion(promotionInput) {
+      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
+      if (stopped) return stopped;
       if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
         return makeFailure('FORBIDDEN', 'Requester is not a team member');
       }
-      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
-      if (stopped) return stopped;
       let command: ReturnType<typeof parseSemanticPromotionEvaluateCommandV1>;
       try {
         command = parseSemanticPromotionEvaluateCommandV1(promotionInput.command);
@@ -2604,11 +2688,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     },
     async actOnPromotionProposal(promotionInput) {
+      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
+      if (stopped) return stopped;
       if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
-      if (stopped) return stopped;
       let action: ReturnType<typeof parsePromotionProposalActionV1>;
       try {
         action = parsePromotionProposalActionV1(promotionInput.action);
@@ -3711,19 +3795,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         affectedTeamIds.push(...agent.visibleTeamIds);
       }
 
-      // #931 A5：Server 按 Team cutover 状态协商 daemon PI 能力
       const piMigration = await repositories.teamPiAuthorityMigrations.get(device.teamId);
       const piAuthorityCapabilities = piMigration
-        ? negotiateDaemonPiCapabilities({
-            daemonProtocolVersion: deviceInput.daemonVersion
-              ? Number(deviceInput.daemonVersion.split('.')[0]) || 0
-              : 0,
-            advertisedCapabilities: [], // PI orchestration capabilities come from management-worker registration, not device hello
-            teamMigrationState: piMigration.state,
-            legacyWriterFenced: piMigration.legacyWriterFenced,
-          })
+        ? negotiateDaemonPiCapabilities({ daemonProtocolVersion: Number(deviceInput.daemonVersion?.split('.')[0]) || 0, advertisedCapabilities: [], teamMigrationState: piMigration.state, legacyWriterFenced: piMigration.legacyWriterFenced })
         : undefined;
-
       return makeSuccess({
         device: await toDeviceDtoWithOwnerName(repositories, device),
         affectedTeamIds: uniqueIds(affectedTeamIds),
@@ -4895,6 +4970,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     dispatchMessageTracerCommand,
     dispatchSystemActivityCommand,
     dispatchSystemActivityQuery,
+    dispatchTaskRemediationCommand,
     dispatchPiAuthorityCutoverCommand,
     dispatchPiAuthorityCutoverQuery,
 
@@ -5054,12 +5130,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               createdAt: now,
               updatedAt: now,
             });
-          } else {
-            // #931 A4：fenced 后若有写入尝试意图（asTask 等），记退役审计；不静默转译。
-            if (messageInput.asTask === true) {
-              // #931 A4：fenced 后 asTask 尝试记退役审计
-              try { await piAuthorityCutoverUnitOfWork.runInTransaction(async (repos) => { await repos.legacyWriteAudits.create({ id: ids.nextId(), teamId: messageInput.teamId, writeKind: 'create_coordination_job_as_task', correlationId: ids.nextId(), createdAt: clock.now() }); }); } catch { /* best-effort */ }
-            }
           }
           return {
             kind: 'saved' as const,
@@ -5286,9 +5356,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...messageWithMeta,
           ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
         };
-      if (message.id) {
-        void bindMessageEpochBestEffort(message.teamId, message.id, messageInput.clientMessageId ?? null);
-      }
+      if (message.id) { void bindMessageEpochBestEffort(message.teamId, message.id, messageInput.clientMessageId ?? null); }
       return makeSuccess({
         message,
         dispatches,
@@ -5842,7 +5910,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           { reason: uploadDecision.reason },
         );
       }
-      const nextContent = Buffer.concat([file.content ? Buffer.from(file.content) : Buffer.alloc(0), chunk]);
       // 上限双检：单文件 + 会话总接收量（含本 chunk）。
       const limits = resolveWorkspaceStagingLimits(putInput.limits);
       const totalAfter = staging.files.reduce((sum, entry, index) => {
@@ -5863,6 +5930,72 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           { reason: sizeDecision.reason },
         );
       }
+
+      // #1005：有磁盘 store 时写 dataDir，metadata 只记 storagePath（不塞 BLOB）。
+      if (stagingContentStore) {
+        let stored: { storagePath: string; sizeBytes: number };
+        try {
+          stored = await stagingContentStore.appendChunk({
+            teamId: putInput.teamId,
+            publishId,
+            path,
+            offset: putInput.offset,
+            chunk,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.startsWith('STAGING_OFFSET_MISMATCH')) {
+            return makeFailure('VALIDATION_ERROR', 'Staging upload offset mismatch', {
+              reason: 'invalid-offset',
+            });
+          }
+          throw error;
+        }
+        let complete = uploadDecision.complete;
+        if (complete) {
+          const onDisk = await stagingContentStore.readContent({
+            teamId: putInput.teamId,
+            publishId,
+            path,
+            storagePath: stored.storagePath,
+          });
+          const digest = createHash('sha256').update(onDisk ?? Buffer.alloc(0)).digest('hex');
+          if (digest !== file.expectedSha256.toLowerCase()) {
+            // 回滚磁盘到本 put 前长度，与 memory 路径「不提交失败 chunk」一致。
+            await stagingContentStore.truncateTo({
+              teamId: putInput.teamId,
+              publishId,
+              path,
+              sizeBytes: file.receivedBytes,
+            });
+            return makeFailure('VALIDATION_ERROR', 'Staging file sha256 mismatch', {
+              reason: 'hash-mismatch',
+              path,
+            });
+          }
+        }
+        const nextFiles = staging.files.map((entry, index) => {
+          if (index !== fileIndex) return entry;
+          return {
+            path: entry.path,
+            filename: entry.filename,
+            mimeType: entry.mimeType,
+            expectedSizeBytes: entry.expectedSizeBytes,
+            expectedSha256: entry.expectedSha256,
+            receivedBytes: uploadDecision.nextReceivedBytes,
+            complete,
+            storagePath: stored.storagePath,
+          };
+        });
+        const updated = await repositories.workspacePublishStagings.update({
+          ...staging,
+          files: nextFiles,
+          updatedAt: clock.now(),
+        });
+        return makeSuccess({ staging: toWorkspacePublishStagingDto(updated) });
+      }
+
+      const nextContent = Buffer.concat([file.content ? Buffer.from(file.content) : Buffer.alloc(0), chunk]);
       let complete = uploadDecision.complete;
       if (complete) {
         const digest = createHash('sha256').update(nextContent).digest('hex');
@@ -5912,6 +6045,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           retentionMs: DEFAULT_WORKSPACE_STAGING_RETENTION_MS,
         });
         if (expiry.kind === 'expired-cleanable') {
+          await stagingContentStore?.deletePublish({
+            teamId: staging.teamId,
+            publishId: staging.publishId,
+          });
           await repositories.workspacePublishStagings.delete({
             teamId: staging.teamId,
             publishId: staging.publishId,
@@ -5960,9 +6097,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (staging.status !== 'open') {
         return makeFailure('CONFLICT', 'Workspace publish staging is not open');
       }
+      // 先解析字节（磁盘或 memory Buffer），再做 readiness / 物化。
+      const fileContents = new Map<string, Buffer>();
+      for (const file of staging.files) {
+        fileContents.set(
+          file.path,
+          await resolveWorkspaceStagingFileContent(stagingContentStore, staging, file),
+        );
+      }
       const readiness = evaluateWorkspaceStagingCommitReadiness(
         staging.files.map((file) => {
-          const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+          const content = fileContents.get(file.path) ?? Buffer.alloc(0);
           const digest = content.length === file.expectedSizeBytes && file.complete
             ? createHash('sha256').update(content).digest('hex')
             : '';
@@ -6021,7 +6166,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         workspace,
         now: clock.now(),
       });
-      if (recovered) return recovered;
+      if (recovered) {
+        await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+        return recovered;
+      }
 
       // 预判基线/空清单：在创建任何公开 artifact 之前失败，避免冲突后残留频道可见半成品。
       // 提交清单用占位 artifactId（仅用于路径集合冲突计算；真实 id 在通过后分配）。
@@ -6059,7 +6207,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             workspace: workspaceNow,
             now: clock.now(),
           });
-          if (recoveredOnConflict) return recoveredOnConflict;
+          if (recoveredOnConflict) {
+            await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+            return recoveredOnConflict;
+          }
         }
         // 真冲突：基线落后 / 同路径竞争，不自动合并、不写 revision、不创建 artifact。
         return makeFailure('CONFLICT', 'Workspace baseline changed', {
@@ -6074,7 +6225,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const publishedFiles: ProjectChannelWorkspaceFileDto[] = [];
       const createdArtifactIds: string[] = [];
       for (const file of staging.files) {
-        const content = file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+        const content = fileContents.get(file.path) ?? Buffer.alloc(0);
         const artifactId = ids.nextId();
         let storagePath: string | undefined;
         let sha256 = file.expectedSha256;
@@ -6210,7 +6361,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         status: 'committed',
         committedRevisionId: outcome.workspace.currentRevisionId,
         committedWorkspaceId: outcome.workspace.id,
-        // 提交后剥离私有 content，避免暂存区长期持有大文件。
+        // 提交后剥离私有 content / storagePath，避免暂存区长期持有大文件。
         files: staging.files.map((f) => ({
           path: f.path,
           filename: f.filename,
@@ -6221,6 +6372,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           complete: true,
         })),
         updatedAt: now,
+      });
+      // 已物化到 artifact store；删除 staging 磁盘目录。
+      await stagingContentStore?.deletePublish({
+        teamId: staging.teamId,
+        publishId: staging.publishId,
       });
       return makeSuccess({
         staging: toWorkspacePublishStagingDto(committed),
@@ -6245,6 +6401,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           retentionMs,
         });
         if (decision.kind !== 'expired-cleanable') continue;
+        await stagingContentStore?.deletePublish({
+          teamId: row.teamId,
+          publishId: row.publishId,
+        });
         await repositories.workspacePublishStagings.delete({
           teamId: row.teamId,
           publishId: row.publishId,
@@ -11654,6 +11814,24 @@ function coerceStagingContent(content: Buffer | Uint8Array | string): Buffer {
   return Buffer.from(content, 'base64');
 }
 
+/** #1005：优先从磁盘 staging store 读；否则回退 memory Buffer / 旧 BLOB 行。 */
+async function resolveWorkspaceStagingFileContent(
+  store: WorkspaceStagingContentStore | undefined,
+  staging: WorkspacePublishStagingRecord,
+  file: WorkspacePublishStagingFileRecord,
+): Promise<Buffer> {
+  if (store && (file.storagePath || file.receivedBytes > 0)) {
+    const fromDisk = await store.readContent({
+      teamId: staging.teamId,
+      publishId: staging.publishId,
+      path: file.path,
+      ...(file.storagePath ? { storagePath: file.storagePath } : {}),
+    });
+    if (fromDisk) return fromDisk;
+  }
+  return file.content ? Buffer.from(file.content) : Buffer.alloc(0);
+}
+
 /** #967 DTO 剥离私有 content，确保上传中字节不经 API 泄漏到频道侧。 */
 function toWorkspacePublishStagingDto(record: WorkspacePublishStagingRecord): WorkspacePublishStagingDto {
   return {
@@ -12037,11 +12215,32 @@ async function buildDispatchRequest(
       if (artifact?.channelId === dispatch.channelId) attachments.push(artifact);
     }
   } else {
-    const attachmentMessageIds = promptMessages.length > 0
+    // Current coalesced prompt messages always carry their own attachments.
+    const promptAttachmentMessageIds = promptMessages.length > 0
       ? promptMessages.map((message) => message.id)
       : [dispatch.messageId];
-    for (const messageId of attachmentMessageIds) {
+    for (const messageId of promptAttachmentMessageIds) {
       attachments.push(...await repositories.artifacts.listByMessage(messageId));
+    }
+    // Thread history only includes message bodies. Without re-attaching prior
+    // human uploads, a follow-up like "分析这张图片" has no image bytes/path and
+    // the agent correctly claims no picture was provided.
+    const promptMessageIdSet = new Set(promptAttachmentMessageIds);
+    for (const message of dispatchHistory) {
+      if (
+        message.senderKind !== 'human'
+        || isDeletedMessage(message)
+        || promptMessageIdSet.has(message.id)
+      ) {
+        continue;
+      }
+      for (const artifact of await repositories.artifacts.listByMessage(message.id)) {
+        if (isWorkspaceRunLogArtifact(artifact)) continue;
+        // Only user upload attachments — not agent run outputs re-injected as inputs.
+        const role = artifact.role ?? 'attachment';
+        if (role !== 'attachment') continue;
+        attachments.push(artifact);
+      }
     }
   }
   // 冻结引用对应的精确内容也进入既有 attachment 下载链路；daemon 同时获得

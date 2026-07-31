@@ -57,9 +57,7 @@ checks.push(run('npx tsc --project packages/domain/tsconfig.json --noEmit', 'dom
     // Filter to only check for #931-related errors
     const relevantErrors = output.split('\n').filter(line =>
       line.includes('error TS') &&
-      !line.includes('stagingContentStore') &&
-      !line.includes('dispatchTaskRemediationCommand') &&
-      !line.includes('listOpenByTeam')
+      !line.includes('UNRELATED_PLACEHOLDER')
     );
     if (relevantErrors.length === 0) {
       console.log('✓ PASS (pre-existing errors only)');

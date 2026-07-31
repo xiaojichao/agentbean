@@ -603,11 +603,11 @@ export function parsePiAuthorityCutoverCommandInputV1<
         value,
         [
           'readinessToken', 'expectedMigrationRevision', 'expectedTargetEpoch',
-          'drainDeadlineMs',
+          'runningLegacyJobs', 'pendingLegacyJobIds', 'drainDeadlineMs',
         ],
         [
           'readinessToken', 'expectedMigrationRevision', 'expectedTargetEpoch',
-          'runningLegacyJobs', 'pendingLegacyJobIds', 'drainDeadlineMs',
+          'drainDeadlineMs',
         ],
       );
       if (!nonEmpty(value.readinessToken)) throw new Error(PI_AUTHORITY_CUTOVER_PAYLOAD_INVALID);
