@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams, usePathname } from 'next/navigation';
-import { Bot, Database, Globe, Monitor, Sparkles, Terminal, Users } from 'lucide-react';
+import { Activity, Bot, Database, Globe, Monitor, Sparkles, Terminal, Users } from 'lucide-react';
 import { ConnectionBanner } from '@/components/connection-banner';
 import { ADMIN_CONSOLE_NAV, type AdminConsoleNavKey } from '@/components/admin-console-panel';
 import { useAgentBeanStore } from '@/lib/store';
@@ -15,6 +15,7 @@ const NAV_ICONS: Record<AdminConsoleNavKey, React.ReactNode> = {
   pi: <Sparkles size={14} />,
   memory: <Database size={14} />,
   runs: <Terminal size={14} />,
+  'pi-auto': <Activity size={14} />,
 };
 
 function sectionFromPath(pathname: string): AdminConsoleNavKey | null {
@@ -27,6 +28,7 @@ function sectionFromPath(pathname: string): AdminConsoleNavKey | null {
     || key === 'devices'
     || key === 'agents'
     || key === 'pi'
+    || key === 'pi-auto'
     || key === 'memory'
     || key === 'runs'
   ) {

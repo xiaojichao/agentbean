@@ -16,6 +16,7 @@ describe('System Admin Console shell', () => {
       'pi',
       'memory',
       'runs',
+      'pi-auto',
     ]);
     expect(ADMIN_CONSOLE_NAV.map((item) => item.label)).toEqual([
       '团队管理',
@@ -25,6 +26,7 @@ describe('System Admin Console shell', () => {
       'PI Agent 管理',
       'Memory 管理',
       '执行记录诊断',
+      'PI 自动协调',
     ]);
   });
 
@@ -78,6 +80,12 @@ describe('System Admin Console shell', () => {
     expect(memoryPage).toContain('admin-memory-page');
     expect(runsPage).toContain('RunsPanel');
     expect(runsPage).toContain('admin-runs-page');
+
+    const piAutoPage = readFileSync(
+      new URL('../app/[teamPath]/dashboard/pi-auto/page.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(piAutoPage).toContain('admin-pi-auto-page');
 
     expect(panel).toContain("section === 'teams'");
     expect(panel).toContain("section === 'users'");

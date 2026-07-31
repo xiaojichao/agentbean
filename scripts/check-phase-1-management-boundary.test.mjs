@@ -99,7 +99,7 @@ function scaffoldManagementRouting(root, options = {}) {
     'management-worker:outbox-replay', 'management-worker:shadow-evaluate', 'management-worker:shadow-result',
     'pi-policy:get', 'pi-policy:update',
   ].join('\n'));
-  write(root, 'apps/web-next/app/[teamPath]/settings/PiPolicyPanel.tsx', 'settings-pi-policy settings-pi-auto-coordination\n');
+  write(root, 'apps/web-next/app/[teamPath]/dashboard/pi-auto/page.tsx', 'admin-pi-auto-page\n');
 }
 
 function scaffoldDeviceWorkerHost(root) {

@@ -167,7 +167,9 @@ export default function AgentDetailPage() {
   const canDeleteAgent = agent.source === 'custom';
 
   return (
-    <div className="space-y-4 p-6" data-smoke="agent-detail" data-agent-id={agent.id} data-agent-name={agent.name}>
+    <div className="flex flex-1 flex-col overflow-hidden" data-smoke="agent-detail" data-agent-id={agent.id} data-agent-name={agent.name}>
+      <div className="flex-1 overflow-y-auto">
+        <div className="space-y-4 p-6">
       <Link href={`/${np}/agents`} className="inline-flex items-center text-sm text-neutral-500 hover:text-neutral-900">
         <ArrowLeft className="mr-1 h-4 w-4" />返回 Agent 列表
       </Link>
@@ -355,6 +357,8 @@ export default function AgentDetailPage() {
           复制该命令到本机终端，即可启动这个 Agent 的本地客户端。
         </div>
       </section>
+        </div>
+      </div>
 
       {configOpen && (
         <AgentConfigDialog
