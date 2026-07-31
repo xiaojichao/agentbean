@@ -288,6 +288,11 @@ export const WEB_EVENTS = {
     query: 'system-activity:query',
     notice: 'system-activity:notice',
   },
+  /** #1014 Task failure remediation 具名 command（envelope.commandName 路由）。 */
+  taskRemediation: {
+    command: 'task-remediation:command',
+  },
+
 
   memory: {
     snapshot: 'memory:snapshot',

@@ -15,7 +15,8 @@ import {
   markAttentionSeen,
   prepareNamedAction,
 } from '@/lib/system-activity-client';
-import { systemActivityEvents, taskEvents } from '@/lib/socket';
+import { systemActivityEvents, taskEvents, taskRemediationEvents } from '@/lib/socket';
+import { mapReviewCommandToTaskSocketEvent } from '@/lib/system-activity';
 
 /**
  * #998 Task 详情侧：拉取并展示 audience-scoped 活动时间线 + 本任务相关 attention。
@@ -82,22 +83,72 @@ export function TaskSystemActivitySection(props: {
     if (res.ok) void refresh();
   };
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const onNamedAction = async (command: NamedActivityActionCommand, item: SystemAttentionItemView) => {
+    setActionError(null);
     const prepared = prepareNamedAction({
       command,
       taskId: item.taskId,
       attention: item,
     });
-    // review 走 task lifecycle cancel/close；remediation 需服务端专用路径——
-    // 当前最小接线：cancel/close 直接 taskEvents，其余仅刷新并在控制台提示。
-    if (command === 'cancel-task') {
-      await taskEvents().cancel(item.taskId, 'system-activity-ui');
-    } else if (command === 'close-task') {
-      await taskEvents().close(item.taskId, 'system-activity-ui');
-    } else {
-      if (typeof console !== 'undefined') {
-        console.info('[system-activity] named action ready (dispatch via lifecycle/remediation):', prepared);
+    const mapped = mapReviewCommandToTaskSocketEvent(command);
+    try {
+      if (mapped === 'acceptRootDelivery') {
+        const res = await taskEvents().acceptRootDelivery({
+          taskId: item.taskId,
+          expectedTaskRevision: Number(prepared.payload.expectedTaskRevision ?? item.taskRevision ?? 0),
+          ...(typeof prepared.payload.deliveryMessageId === 'string'
+            ? { deliveryMessageId: prepared.payload.deliveryMessageId }
+            : {}),
+        });
+        if (!res.ok) setActionError(res.error ?? 'accept 失败');
+      } else if (mapped === 'rejectRootDelivery') {
+        const res = await taskEvents().rejectRootDelivery({
+          taskId: item.taskId,
+          reason: String(prepared.payload.reason ?? '审查退回'),
+          expectedTaskRevision: Number(prepared.payload.expectedTaskRevision ?? item.taskRevision ?? 0),
+        });
+        if (!res.ok) setActionError(res.error ?? 'reject 失败');
+      } else if (mapped === 'cancel') {
+        const res = await taskEvents().cancel(item.taskId, String(prepared.payload.reason ?? '用户取消'));
+        if (!res.ok) setActionError(res.error ?? 'cancel 失败');
+      } else if (mapped === 'close') {
+        const res = await taskEvents().close(item.taskId, String(prepared.payload.reason ?? '管理员关闭'));
+        if (!res.ok) setActionError(res.error ?? 'close 失败');
+      } else if (command === 'retry-attempt') {
+        // #1014 remediation 具名 command
+        if (!item.confirmationToken) {
+          setActionError('缺少 confirmationToken，无法 retry');
+        } else {
+          const res = await taskRemediationEvents().command({
+            envelope: {
+              schemaVersion: 1,
+              commandName: 'retry-attempt',
+              commandSchemaVersion: 1,
+              idempotencyKey: `retry:${item.attentionIdentity}:${item.revision}:${Date.now()}`,
+            },
+            payload: {
+              taskId: item.taskId,
+              expectedTaskRevision: item.taskRevision ?? 0,
+              actionRequiredId: item.attentionIdentity,
+              confirmationToken: item.confirmationToken,
+              expectedEscalationRevision: item.escalationRevision ?? item.revision,
+            },
+            userId: props.userId,
+            teamId: props.teamId,
+          }) as { ok?: boolean; error?: string; response?: { outcome?: string; rejectReason?: string } };
+          if (!res?.ok) {
+            setActionError(res?.error ?? 'retry 失败');
+          } else if (res.response?.outcome === 'rejected') {
+            setActionError(res.response.rejectReason ?? 'retry 被拒绝');
+          }
+        }
+      } else {
+        setActionError(`未接线的具名 command: ${command}`);
       }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '操作失败');
     }
     void refresh();
   };
@@ -112,6 +163,11 @@ export function TaskSystemActivitySection(props: {
 
   return (
     <div data-testid="task-system-activity-section" className="border-t border-neutral-100 pt-3">
+      {actionError ? (
+        <div className="mb-2 rounded border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] text-rose-700" data-testid="task-system-activity-action-error">
+          {actionError}
+        </div>
+      ) : null}
       <SystemActivityPanels
         taskTimeline={timeline}
         threadCard={card}
@@ -174,8 +230,42 @@ export function ChatAttentionInboxSection(props: {
           if (res.ok) void refresh();
         }}
         onNamedAction={async (command, item) => {
-          if (command === 'cancel-task') await taskEvents().cancel(item.taskId, 'system-activity-ui');
-          else if (command === 'close-task') await taskEvents().close(item.taskId, 'system-activity-ui');
+          const prepared = prepareNamedAction({ command, taskId: item.taskId, attention: item });
+          const mapped = mapReviewCommandToTaskSocketEvent(command);
+          if (mapped === 'acceptRootDelivery') {
+            await taskEvents().acceptRootDelivery({
+              taskId: item.taskId,
+              expectedTaskRevision: Number(prepared.payload.expectedTaskRevision ?? item.taskRevision ?? 0),
+            });
+          } else if (mapped === 'rejectRootDelivery') {
+            await taskEvents().rejectRootDelivery({
+              taskId: item.taskId,
+              reason: String(prepared.payload.reason ?? '审查退回'),
+              expectedTaskRevision: Number(prepared.payload.expectedTaskRevision ?? item.taskRevision ?? 0),
+            });
+          } else if (mapped === 'cancel') {
+            await taskEvents().cancel(item.taskId, String(prepared.payload.reason ?? '用户取消'));
+          } else if (mapped === 'close') {
+            await taskEvents().close(item.taskId, String(prepared.payload.reason ?? '管理员关闭'));
+          } else if (command === 'retry-attempt' && item.confirmationToken) {
+            await taskRemediationEvents().command({
+              envelope: {
+                schemaVersion: 1,
+                commandName: 'retry-attempt',
+                commandSchemaVersion: 1,
+                idempotencyKey: `retry:${item.attentionIdentity}:${item.revision}:${Date.now()}`,
+              },
+              payload: {
+                taskId: item.taskId,
+                expectedTaskRevision: item.taskRevision ?? 0,
+                actionRequiredId: item.attentionIdentity,
+                confirmationToken: item.confirmationToken,
+                expectedEscalationRevision: item.escalationRevision ?? item.revision,
+              },
+              userId: props.userId,
+              teamId: props.teamId,
+            });
+          }
           void refresh();
         }}
       />
