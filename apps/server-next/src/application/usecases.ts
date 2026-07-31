@@ -5751,7 +5751,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       // 通过预判后再物化 artifacts（commit 前它们不在 revision；无 message/run 时频道索引也不收录）。
-      // 先用 intermediate 角色物化：CAS 冲突时删除；成功 publish 后保留（revision 引用为准）。
+      // role=deliverable：成功后可进归档导出；CAS 冲突路径会 deleteForTeam 清掉孤儿。
       const publishedFiles: ProjectChannelWorkspaceFileDto[] = [];
       const createdArtifactIds: string[] = [];
       for (const file of staging.files) {
@@ -5778,7 +5778,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           mimeType: file.mimeType,
           sizeBytes: file.expectedSizeBytes,
           pathKind: 'workspace',
-          role: 'intermediate',
+          role: 'deliverable',
           relativePath: file.path,
           sha256,
           createdAt: clock.now(),
