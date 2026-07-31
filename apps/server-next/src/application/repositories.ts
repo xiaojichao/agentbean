@@ -567,6 +567,11 @@ export interface ServerNextRepositories {
    */
   systemActivity?: import('./system-activity-repositories.js').SystemActivityRepositories;
   systemActivityUnitOfWork?: import('./system-activity-unit-of-work.js').SystemActivityUnitOfWork;
+  /**
+   * #930 Team PI authority migration 权威快照（cutover fence）。
+   * 无行 = 仍处 legacy，不 fence。
+   */
+  teamPiAuthorityMigrations: import('./pi-authority-cutover-repositories.js').TeamPiAuthorityMigrationRepository;
 }
 
 export interface ReactionRecord {

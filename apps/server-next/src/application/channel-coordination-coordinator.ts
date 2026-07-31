@@ -61,6 +61,8 @@ import type {
   TeamRepository,
 } from './repositories.js';
 import type { ActiveMemoryContextResolver } from './active-memory-context-resolver.js';
+import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
+import type { TeamPiAuthorityMigrationLookup } from './legacy-coordination-fence.js';
 
 /** PI Provider 解析目标的最小依赖（仅 resolveInvocationTarget，避免引入完整服务类型）。 */
 export interface CoordinatorModelResolver {
@@ -107,6 +109,11 @@ export interface ChannelCoordinatorDependencies {
   readonly maxAttempts?: number;
   readonly baseDelayMs?: number;
   readonly processingTimeoutMs?: number;
+  /**
+   * #930 cutover fence：Team 已 new_authority 后，pending/retry_wait job 不得再被领取执行。
+   * 已 running 的 drain 单元由 cutover 登记，本路径仍允许完成当前 claim。
+   */
+  readonly teamPiAuthorityMigrations?: TeamPiAuthorityMigrationLookup;
 }
 
 export type CoordinationJobOutcome =
@@ -685,6 +692,30 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
     }
 
     const now = nowOverride ?? deps.clock.now();
+
+    // #930：cutover 后 legacy writer fenced。
+    // - pending/retry_wait：取消（未开始不得继续）
+    // - running：不得再走完整协调（拆解/派发/建 Task）；留给 Legacy drain bridge 收尾
+    const fenced = await lookupLegacyCoordinationWriteFenced(
+      deps.teamPiAuthorityMigrations,
+      job.teamId,
+    );
+    if (fenced) {
+      if (job.status === 'pending' || job.status === 'retry_wait') {
+        await deps.jobs.updateState({
+          jobId: job.id,
+          status: 'cancelled',
+          attempt: job.attempt,
+          nextRetryAt: null,
+          updatedAt: now,
+        });
+        return { kind: 'terminal', status: 'cancelled' };
+      }
+      if (job.status === 'running') {
+        return { kind: 'not_runnable', status: 'running' };
+      }
+    }
+
     const humanMessage = await deps.messages.getById(job.messageId);
     if (!humanMessage) {
       await deps.jobs.updateState({

@@ -254,6 +254,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0071_workspace_publish_staging.sql');
   // #929 audience-scoped System activity / attention / change feed。
   applyMigration(db, 'team/0072_system_activity.sql');
+  // #930 Team PI authority cutover 与 legacy 兼容退役。
+  applyMigration(db, 'team/0073_pi_authority_cutover.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -3951,6 +3953,62 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
     systemActivity,
     systemActivityUnitOfWork,
+    teamPiAuthorityMigrations: {
+      async get(teamId) {
+        const row = teamDb.prepare(
+          `SELECT * FROM team_pi_authority_migrations WHERE team_id = ?`,
+        ).get(teamId);
+        if (!row) return null;
+        return {
+          teamId: sqliteText(row, 'team_id'),
+          authorityEpoch: sqliteNumber(row, 'authority_epoch'),
+          migrationRevision: sqliteNumber(row, 'migration_revision'),
+          state: sqliteText(row, 'state') as import('../../application/pi-authority-cutover-repositories.js').TeamPiAuthorityMigrationRecord['state'],
+          legacyWriterFenced: sqliteNumber(row, 'legacy_writer_fenced') === 1,
+          emergencyStop: sqliteNumber(row, 'emergency_stop') === 1,
+          cutoverVersion: sqliteNullableNumber(row, 'cutover_version') ?? null,
+          cutoverAt: sqliteNullableNumber(row, 'cutover_at') ?? null,
+          cutoverBy: sqliteNullableText(row, 'cutover_by') ?? null,
+          drainDeadlineAt: sqliteNullableNumber(row, 'drain_deadline_at') ?? null,
+          createdAt: sqliteNumber(row, 'created_at'),
+          updatedAt: sqliteNumber(row, 'updated_at'),
+        };
+      },
+      async upsert(record) {
+        teamDb.prepare(
+          `INSERT INTO team_pi_authority_migrations (
+            team_id, authority_epoch, migration_revision, state,
+            legacy_writer_fenced, emergency_stop, cutover_version, cutover_at, cutover_by,
+            drain_deadline_at, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(team_id) DO UPDATE SET
+            authority_epoch = excluded.authority_epoch,
+            migration_revision = excluded.migration_revision,
+            state = excluded.state,
+            legacy_writer_fenced = excluded.legacy_writer_fenced,
+            emergency_stop = excluded.emergency_stop,
+            cutover_version = excluded.cutover_version,
+            cutover_at = excluded.cutover_at,
+            cutover_by = excluded.cutover_by,
+            drain_deadline_at = excluded.drain_deadline_at,
+            updated_at = excluded.updated_at`,
+        ).run(
+          record.teamId,
+          record.authorityEpoch,
+          record.migrationRevision,
+          record.state,
+          record.legacyWriterFenced ? 1 : 0,
+          record.emergencyStop ? 1 : 0,
+          record.cutoverVersion,
+          record.cutoverAt,
+          record.cutoverBy,
+          record.drainDeadlineAt,
+          record.createdAt,
+          record.updatedAt,
+        );
+        return record;
+      },
+    },
     revocations: {
       async find({ teamId, machineId, profileId }) {
         const row = globalDb
