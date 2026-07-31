@@ -1050,6 +1050,12 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             agent.name = existing.name;
           }
           agent.nameSource = existing.nameSource;
+          // 用户手工填写 description 受保护：description_source='manual' 时不被扫描描述覆盖
+          // （对齐 sqlite agents.upsert ON CONFLICT 的 CASE WHEN description_source='manual' 分支）。
+          if (existing.descriptionSource === 'manual') {
+            agent.description = existing.description;
+          }
+          agent.descriptionSource = existing.descriptionSource;
           // createdAt is immutable after first insert (matches SQLite ON CONFLICT leaving created_at).
           agent.createdAt = existing.createdAt ?? agent.createdAt ?? agent.lastSeenAt ?? 0;
         } else {
@@ -1109,6 +1115,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           nameSource: changes.name !== undefined && changes.name !== agent.name
             ? 'custom'
             : (agent.nameSource ?? 'scanned'),
+          // 用户手工编辑 description → 标记 manual（此后扫描不覆盖，对齐 sqlite）。
+          descriptionSource: changes.description !== undefined
+            ? 'manual'
+            : (agent.descriptionSource ?? undefined),
           lastSeenAt: changes.lastSeenAt ?? agent.lastSeenAt,
         };
         agents.set(agent.id, updated);

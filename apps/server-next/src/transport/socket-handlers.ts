@@ -113,6 +113,15 @@ export interface ListDirectoryForwardResult {
   error?: string;
 }
 
+// server 转发 device:scan-descriptor 到 daemon 后回传的结果形状（daemon descriptor-scanner 返回对齐）。
+export interface ScanDescriptorForwardResult {
+  ok: boolean;
+  requestId?: string;
+  descriptor?: { name: string | null; description: string | null; capabilities: string[]; sourcePath: string | null } | null;
+  skills?: { name: string; description: string; scope: string; sourcePath: string; adapterKind: string }[];
+  error?: string;
+}
+
 export interface WebSocketHandlerOptions {
   authenticatedUser?: AuthenticatedUserProvider;
   dispatch?(request: DispatchRequestDto & { id: string }): void;
@@ -125,6 +134,7 @@ export interface WebSocketHandlerOptions {
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   deviceListDirectory?(request: { deviceId: string; path: string }): Promise<ListDirectoryForwardResult>;
+  deviceScanDescriptor?(request: { deviceId: string; cwd: string; adapterKind: string }): Promise<ScanDescriptorForwardResult>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterMessagePin?(payload: unknown, result: unknown): Promise<void> | void;
   afterDeviceInviteComplete?(payload: unknown, result: unknown): Promise<void> | void;
@@ -401,6 +411,41 @@ export function registerWebSocketHandlers(
       ack?.(result);
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.device.listDirectory));
+    }
+  });
+  socket.on(WEB_EVENTS.device.scanDescriptor, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
+      const deviceId = (input as { deviceId?: string } | null)?.deviceId;
+      if (!deviceId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'deviceId is required'));
+        return;
+      }
+      const userId = (input as { userId?: string } | null)?.userId;
+      if (!userId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      const cwd = (input as { cwd?: string } | null)?.cwd ?? '';
+      const adapterKind = (input as { adapterKind?: string } | null)?.adapterKind ?? '';
+      if (!cwd) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'cwd is required'));
+        return;
+      }
+      // 与 fs:list 同门控：目录读取仅限设备拥有者/系统管理员。
+      const deviceAccess = await app.assertCanManageDevice({ userId, deviceId });
+      if (!isSuccessResult(deviceAccess)) {
+        ack?.(deviceAccess);
+        return;
+      }
+      if (!options.deviceScanDescriptor) {
+        ack?.(makeFailure('INTERNAL_ERROR', 'deviceScanDescriptor not configured'));
+        return;
+      }
+      const result = await options.deviceScanDescriptor({ deviceId, cwd, adapterKind });
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.device.scanDescriptor));
     }
   });
   const afterChannelMutation = (payload: unknown, result: unknown) =>

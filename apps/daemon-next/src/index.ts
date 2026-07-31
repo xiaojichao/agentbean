@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -23,6 +23,7 @@ import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
+import { scanAgentDescriptor } from './descriptor-scanner.js';
 import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
 import {
   buildDispatchWorkspacePublishId,
@@ -242,6 +243,8 @@ export interface DaemonAgentReport {
   discoverySource?: 'runtime' | 'gateway' | 'filesystem';
   gatewayInstanceKey?: string;
   projectDocumentInputSetVersions?: number[];
+  /** 扫描自 cwd/AGENTS.md（或 CLAUDE.md）的 descriptor（AgentOS 托管型 Agent 有值）。 */
+  descriptor?: AgentDescriptorDto | null;
 }
 
 export interface DaemonScanSnapshot {
@@ -508,6 +511,27 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           scheduleRecoverPersistedWorkspaceRuns(request.customAgents.map((agent) => agent.cwd));
         }
         await input.onScanChanged?.(snapshot);
+      });
+
+      socket.on(AGENT_EVENTS.device.scanDescriptorRequested, async (payload, ack?: (result: unknown) => void) => {
+        // 指定目录的 AGENTS.md/CLAUDE.md + skills 扫描（web 表单 cwd 选定后触发）。
+        // 用 ack 直接回传结果，不走上报链（无需 server 广播）。
+        const request = readScanDescriptorRequest(payload);
+        try {
+          const descriptor = scanAgentDescriptor(request.cwd);
+          const skills = scanCustomAgentSkills(
+            { id: 'descriptor-scan', adapterKind: request.adapterKind, cwd: request.cwd },
+            home,
+          );
+          ack?.({
+            ok: true,
+            requestId: request.requestId,
+            descriptor,
+            skills,
+          });
+        } catch (error) {
+          ack?.({ ok: false, requestId: request.requestId, error: error instanceof Error ? error.message : 'descriptor scan failed' });
+        }
       });
 
       socket.on(AGENT_EVENTS.device.selectDirectoryRequested, async (_payload: unknown, ack?: (result: unknown) => void) => {
@@ -1286,6 +1310,17 @@ function readScanRequest(payload: unknown): { requestId: string; deviceId: strin
         ca != null && typeof ca === 'object' && typeof (ca as any).id === 'string')
     : undefined;
   return { requestId: request.requestId, deviceId: request.deviceId, ...(customAgents ? { customAgents } : {}) };
+}
+
+function readScanDescriptorRequest(payload: unknown): { requestId: string; cwd: string; adapterKind: any } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('device:scan-descriptor-requested payload missing request');
+  }
+  const request = payload as { requestId?: unknown; cwd?: unknown; adapterKind?: unknown };
+  if (typeof request.requestId !== 'string' || typeof request.cwd !== 'string' || typeof request.adapterKind !== 'string') {
+    throw new Error('device:scan-descriptor-requested payload missing request id, cwd or adapterKind');
+  }
+  return { requestId: request.requestId, cwd: request.cwd, adapterKind: request.adapterKind };
 }
 
 function readAckDeviceId(ack: unknown): string {

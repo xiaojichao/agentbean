@@ -52,11 +52,23 @@ export interface AgentDto {
   gatewayInstanceKey?: string;
   envKeys?: string[];
   description?: string | null;
+  /** description 的来源：agent_md=扫描自 AGENTS.md/CLAUDE.md，manual=用户手工填写。 */
+  descriptionSource?: 'agent_md' | 'manual';
   skills?: SkillDto[];
+  /** 扫描自 AGENTS.md/CLAUDE.md 的公开能力候选（事实层，无 sourcePath 泄露）。 */
+  scannedCapabilities?: string[];
   lastSeenAt?: UnixMs;
   lastError?: string;
   /** Agent adapter 公开支持的 ProjectDocumentInputSet 合同版本。 */
   projectDocumentInputSetVersions?: number[];
+}
+
+/** daemon 扫描 AGENTS.md/CLAUDE.md 得到的 Agent 自描述（descriptor 事实层）。 */
+export interface AgentDescriptorDto {
+  name: string | null;
+  description: string | null;
+  capabilities: string[];
+  sourcePath: string | null;
 }
 
 export interface DiscoveredAgentDto {

@@ -3,6 +3,7 @@ import { accessSync, constants, existsSync, readdirSync, readFileSync, statSync 
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { DaemonScanProvider, DaemonScanSnapshot } from './index.js';
+import { scanAgentDescriptor } from './descriptor-scanner.js';
 
 interface RuntimeSpec {
   bin: string;
@@ -149,16 +150,19 @@ async function scanHermesGateway(
     return null;
   }
 
+  const cwd = dirname(command);
   return {
     adapterKind: 'hermes',
     name: 'Hermes-Agent',
     category: 'agentos-hosted',
     command,
     args: [],
-    cwd: dirname(command),
+    cwd,
     discoverySource: 'gateway',
     gatewayInstanceKey: `hermes:${command}`,
     projectDocumentInputSetVersions: [1],
+    // AgentOS 托管型 Agent：扫描 cwd 的 AGENTS.md/CLAUDE.md 作为能力事实层。
+    descriptor: scanAgentDescriptor(cwd),
   };
 }
 
@@ -182,16 +186,19 @@ async function scanOpenClawGateway(
   }
 
   const resolvedAgentId = agentId ?? 'main';
+  const cwd = dirname(command);
   return {
     adapterKind: 'openclaw',
     name: 'OpenClaw-Agent',
     category: 'agentos-hosted',
     command,
     args: ['agent', '--agent', resolvedAgentId],
-    cwd: dirname(command),
+    cwd,
     discoverySource: 'gateway',
     gatewayInstanceKey: `openclaw:${command}:${resolvedAgentId}`,
     projectDocumentInputSetVersions: [1],
+    // AgentOS 托管型 Agent：扫描 cwd 的 AGENTS.md/CLAUDE.md 作为能力事实层。
+    descriptor: scanAgentDescriptor(cwd),
   };
 }
 
@@ -273,14 +280,17 @@ function readLocalAgentDefinition(path: string, fallbackName: string): DaemonSca
   if (!command) {
     return null;
   }
+  const cwd = typeof parsed.cwd === 'string' ? parsed.cwd : undefined;
   return {
     name: sanitizeAgentName(typeof parsed.name === 'string' ? parsed.name : fallbackName),
     adapterKind: readAdapterKind(parsed.adapterKind),
     category: readAgentCategory(parsed.category),
     command,
     args: Array.isArray(parsed.args) ? parsed.args.map(String) : [],
-    cwd: typeof parsed.cwd === 'string' ? parsed.cwd : undefined,
+    cwd,
     discoverySource: 'filesystem',
+    // 本地定义的自定义 Agent：同样扫描 cwd 的 AGENTS.md/CLAUDE.md 作为能力事实层。
+    descriptor: cwd ? scanAgentDescriptor(cwd) : null,
   };
 }
 

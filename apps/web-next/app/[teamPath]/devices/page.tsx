@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Monitor, Circle, Plus, Pencil, Copy, Globe, Terminal, RefreshCw, X, FolderOpen, Paperclip, Image as ImageIcon, Trash2, ExternalLink } from 'lucide-react';
-import { authEvents, deviceEvents, agentEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
+import { authEvents, deviceEvents, agentEvents, agentExposureEvents, getResolvedServerUrl, fetchAgentWorkspace, authedApiUrl } from '@/lib/socket';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { daemonUpgradeGuidance, daemonVersionDisplay, versionAtLeast } from '@/lib/daemon-version';
 import { canAddCustomAgentToDevice, canManageDeviceForUser, directoryBrowseMode, requiresDeleteNameConfirm } from '@/lib/device-permissions';
@@ -1587,6 +1587,9 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
               <p className="mt-1 text-[11px] text-neutral-400">仅设备拥有者可修改运行时环境变量。</p>
             </div>
           )}
+          {isAgentOS && (
+            <AgentExposurePublishBlock agent={agent} teamId={agent.primaryTeamId} />
+          )}
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex justify-end gap-2">
@@ -1602,6 +1605,118 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   );
 }
 
+/**
+ * AgentOS 托管型 Agent 的能力暴露发布块（#710 系列）。
+ * 候选来自 daemon 扫描 AGENTS.md/CLAUDE.md（agent.scannedCapabilities）与 SKILL.md（agent.skills）。
+ * owner 勾选 → createDraft + publish 一次发布为 Exposure；已发布则提示可在 Agent 详情页管理。
+ */
+function AgentExposurePublishBlock({ agent, teamId }: { agent: any; teamId?: string }) {
+  const scannedCapabilities: string[] = Array.isArray(agent.scannedCapabilities) ? agent.scannedCapabilities : [];
+  const skills: { name: string; description?: string }[] = Array.isArray(agent.skills) ? agent.skills : [];
+  const [selectedCaps, setSelectedCaps] = useState<Set<string>>(new Set(scannedCapabilities));
+  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set(skills.map((s) => s.name)));
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  if (scannedCapabilities.length === 0 && skills.length === 0) {
+    return (
+      <div>
+        <label className="mb-1 block text-xs font-medium text-neutral-600">能力暴露</label>
+        <p className="text-[11px] text-neutral-400">
+          设备尚未扫描到该 Agent 的 AGENTS.md/CLAUDE.md 或 Skills。在 Agent 工作目录放置 AGENTS.md 后刷新设备即可自动发现。
+        </p>
+      </div>
+    );
+  }
+
+  const toggle = (set: Set<string>, value: string, update: (next: Set<string>) => void) => {
+    const next = new Set(set);
+    if (next.has(value)) next.delete(value); else next.add(value);
+    update(next);
+  };
+
+  const publish = async () => {
+    if (!teamId) { setMessage({ ok: false, text: '缺少 Team 上下文' }); return; }
+    setBusy(true);
+    setMessage(null);
+    const created = await agentExposureEvents().createDraft({
+      teamId,
+      agentId: agent.id,
+      capabilities: scannedCapabilities.filter((c) => selectedCaps.has(c)).map((c) => ({ name: c, description: c })),
+      skills: skills.filter((s) => selectedSkills.has(s.name)).map((s) => ({ name: s.name, description: s.description ?? s.name })),
+    });
+    if (!created.ok || !created.manifest) {
+      setBusy(false);
+      setMessage({ ok: false, text: created.error ?? created.message ?? '创建草稿失败' });
+      return;
+    }
+    const result = await agentExposureEvents().publish({ teamId, manifestId: created.manifest.id });
+    setBusy(false);
+    if (result.ok && result.manifest) {
+      setMessage({ ok: true, text: `已发布能力暴露（revision ${result.manifest.revision}）` });
+    } else {
+      setMessage({ ok: false, text: result.error ?? result.message ?? '发布失败' });
+    }
+  };
+
+  return (
+    <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+      <label className="mb-1 block text-xs font-medium text-neutral-600">能力暴露</label>
+      <p className="mb-2 text-[11px] text-neutral-400">
+        以下能力扫描自 AGENTS.md/CLAUDE.md 与 Skills。勾选后发布，团队成员与 PI 即可看到这些公开能力。
+      </p>
+      {scannedCapabilities.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[11px] text-neutral-500">Capabilities（AGENTS.md）</div>
+          <div className="flex flex-wrap gap-2">
+            {scannedCapabilities.map((capability) => (
+              <label key={capability} className="flex items-center gap-1 text-[11px] text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={selectedCaps.has(capability)}
+                  onChange={() => toggle(selectedCaps, capability, setSelectedCaps)}
+                  className="h-3 w-3"
+                />
+                {capability}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      {skills.length > 0 && (
+        <div className="mb-2">
+          <div className="text-[11px] text-neutral-500">Skills（SKILL.md）</div>
+          <div className="flex flex-wrap gap-2">
+            {skills.map((skill) => (
+              <label key={skill.name} className="flex items-center gap-1 text-[11px] text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={selectedSkills.has(skill.name)}
+                  onChange={() => toggle(selectedSkills, skill.name, setSelectedSkills)}
+                  className="h-3 w-3"
+                />
+                {skill.name}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={publish}
+          disabled={busy}
+          className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+        >
+          {busy ? '发布中…' : '发布能力暴露'}
+        </button>
+        {message && <span className={`text-[11px] ${message.ok ? 'text-emerald-600' : 'text-red-600'}`}>{message.text}</span>}
+      </div>
+      <p className="mt-1 text-[10px] text-neutral-400">已发布后可到 Agent 详情页管理或撤回。</p>
+    </div>
+  );
+}
+
 function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runtimes, isLocal = true, onClose, onCreated }: { deviceId: string; teamId?: string | null; daemonVersion?: string | null; fsBrowse?: boolean | null; runtimes: any[]; isLocal?: boolean; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('');
   const runtimeOptions = useMemo(() => buildRuntimeOptions(runtimes), [runtimes]);
@@ -1611,8 +1726,51 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // 目录 descriptor 扫描（cwd 选定后自动触发；description 预填 + 能力候选勾选）。
+  const [scanningDir, setScanningDir] = useState(false);
+  const [scannedDescription, setScannedDescription] = useState<string | null>(null);
+  const [scannedCaps, setScannedCaps] = useState<string[]>([]);
+  const [scannedSkills, setScannedSkills] = useState<{ name: string; description?: string }[]>([]);
+  const [selectedCaps, setSelectedCaps] = useState<Set<string>>(new Set());
+  const [selectedSkills, setSelectedSkills] = useState<Set<string>>(new Set());
+  const descriptionEditedRef = useRef(false);
+  const scanSeqRef = useRef(0);
 
   const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
+
+  // cwd 变化（含目录浏览选定）→ 防抖扫描该目录的 AGENTS.md/CLAUDE.md + skills。
+  useEffect(() => {
+    const dir = cwd.trim();
+    if (!dir) return;
+    if (!selectedRuntime?.adapterKind) return;
+    setScanningDir(true);
+    const seq = ++scanSeqRef.current;
+    const timer = setTimeout(() => {
+      void deviceEvents().scanDescriptor(deviceId, dir, selectedRuntime.adapterKind).then((res) => {
+        if (seq !== scanSeqRef.current) return;
+        setScanningDir(false);
+        if (res.ok) {
+          if (res.descriptor) {
+            setScannedDescription(res.descriptor.description ?? null);
+            const caps = Array.isArray(res.descriptor.capabilities) ? res.descriptor.capabilities : [];
+            setScannedCaps(caps);
+            setSelectedCaps(new Set(caps));
+            // description 仅在用户尚未手工编辑时预填（AGENTS.md 内容优先）。
+            if (!descriptionEditedRef.current && res.descriptor.description) {
+              setDescription(res.descriptor.description);
+            }
+          }
+          const skills = Array.isArray(res.skills) ? res.skills.map((s) => ({ name: s.name, description: s.description })) : [];
+          setScannedSkills(skills);
+          setSelectedSkills(new Set(skills.map((s) => s.name)));
+        }
+      }).catch(() => {
+        if (seq === scanSeqRef.current) setScanningDir(false);
+      });
+    }, 500);
+    return () => { clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd, deviceId, selectedRuntime?.adapterKind]);
 
   const handleSubmit = async () => {
     const trimmedName = name.trim();
@@ -1663,11 +1821,30 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
     };
     const res = await agentEvents().create(payload);
     setLoading(false);
-    if (res.ok) {
-      onCreated();
-    } else {
+    if (!res.ok) {
       setError(formatCreateAgentError(res.error));
+      return;
     }
+    const createdAgent = res.agent as { id?: string } | undefined;
+    // 创建成功后，把用户勾选的能力候选自动发布为 Exposure（best-effort，失败不阻断创建）。
+    if (createdAgent?.id && teamId && (selectedCaps.size > 0 || selectedSkills.size > 0)) {
+      try {
+        const caps = scannedCaps.filter((c) => selectedCaps.has(c)).map((c) => ({ name: c, description: c }));
+        const skillNames = scannedSkills.filter((s) => selectedSkills.has(s.name)).map((s) => ({ name: s.name, description: s.description ?? s.name }));
+        const draft = await agentExposureEvents().createDraft({
+          teamId,
+          agentId: createdAgent.id,
+          capabilities: caps,
+          skills: skillNames,
+        });
+        if (draft.ok && draft.manifest) {
+          await agentExposureEvents().publish({ teamId, manifestId: draft.manifest.id });
+        }
+      } catch {
+        // 暴露发布失败不阻塞创建流程。
+      }
+    }
+    onCreated();
   };
 
   return (
@@ -1685,7 +1862,7 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">功能介绍</label>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none" placeholder="描述这个 Agent 的用途和能力（可选）" />
+            <textarea value={description} onChange={(e) => { descriptionEditedRef.current = true; setDescription(e.target.value); }} rows={3} className="w-full rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400 resize-none" placeholder="描述这个 Agent 的用途和能力（可选）" />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-neutral-600">Code Agent 运行时 <span className="text-red-500">*</span></label>
@@ -1704,8 +1881,72 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
               <input value={cwd} onChange={(e) => setCwd(e.target.value)} className="flex-1 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="/path/to/project" />
               <DirectoryBrowseControl deviceId={deviceId} fsBrowse={fsBrowse} daemonVersion={daemonVersion} onSelect={setCwd} onError={setError} isLocal={isLocal} />
             </div>
-            <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录</p>
+            <p className="mt-1 text-[11px] text-neutral-400">Agent 启动时的工作目录；选定后自动扫描其中的 AGENTS.md/CLAUDE.md 预填能力。</p>
           </div>
+          {cwd.trim() && (scanningDir || scannedCaps.length > 0 || scannedSkills.length > 0 || scannedDescription !== null) && (
+            <div className="rounded-md border border-neutral-100 bg-neutral-50 px-3 py-2">
+              <div className="mb-1 text-xs font-medium text-neutral-600">能力自动发现</div>
+              {scanningDir ? (
+                <p className="text-[11px] text-neutral-400">正在扫描 {cwd.trim()} …</p>
+              ) : scannedCaps.length === 0 && scannedSkills.length === 0 && scannedDescription === null ? (
+                <p className="text-[11px] text-neutral-400">未找到 AGENTS.md/CLAUDE.md 或 Skills。可稍后在 Agent 详情页手动发布能力。</p>
+              ) : (
+                <>
+                  {scannedDescription && (
+                    <div className="mb-2">
+                      <div className="text-[11px] text-neutral-500">功能介绍（已从 AGENTS.md 预填，可修改）</div>
+                      <p className="text-[11px] text-neutral-700 line-clamp-2">{scannedDescription}</p>
+                    </div>
+                  )}
+                  {scannedCaps.length > 0 && (
+                    <div className="mb-2">
+                      <div className="text-[11px] text-neutral-500">Capabilities（AGENTS.md）</div>
+                      <div className="flex flex-wrap gap-2">
+                        {scannedCaps.map((capability) => (
+                          <label key={capability} className="flex items-center gap-1 text-[11px] text-neutral-700">
+                            <input
+                              type="checkbox"
+                              checked={selectedCaps.has(capability)}
+                              onChange={() => {
+                                const next = new Set(selectedCaps);
+                                if (next.has(capability)) next.delete(capability); else next.add(capability);
+                                setSelectedCaps(next);
+                              }}
+                              className="h-3 w-3"
+                            />
+                            {capability}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {scannedSkills.length > 0 && (
+                    <div>
+                      <div className="text-[11px] text-neutral-500">Skills（SKILL.md）</div>
+                      <div className="flex flex-wrap gap-2">
+                        {scannedSkills.map((skill) => (
+                          <label key={skill.name} className="flex items-center gap-1 text-[11px] text-neutral-700">
+                            <input
+                              type="checkbox"
+                              checked={selectedSkills.has(skill.name)}
+                              onChange={() => {
+                                const next = new Set(selectedSkills);
+                                if (next.has(skill.name)) next.delete(skill.name); else next.add(skill.name);
+                                setSelectedSkills(next);
+                              }}
+                              className="h-3 w-3"
+                            />
+                            {skill.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <p className="mt-1 text-[10px] text-neutral-400">勾选项将在创建 Agent 后自动发布为公开能力暴露。</p>
+                </>
+              )}
+            </div>
+          )}
           <EnvironmentVariableEditor rows={envRows} onChange={setEnvRows} />
         </div>
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}

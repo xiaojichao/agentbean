@@ -801,6 +801,12 @@ export interface DeviceEvents {
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   listDirectory(deviceId: string, path: string): Promise<{ ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string; truncated?: boolean }>;
+  scanDescriptor(deviceId: string, cwd: string, adapterKind: string): Promise<{
+    ok: boolean;
+    descriptor?: { name: string | null; description: string | null; capabilities: string[]; sourcePath: string | null } | null;
+    skills?: { name: string; description: string; scope: string; sourcePath: string; adapterKind: string }[];
+    error?: string;
+  }>;
   delete(id: string): Promise<{ ok: boolean; error?: string }>;
   rename(id: string, name: string): Promise<{ ok: boolean; device?: DeviceInfo; error?: string }>;
   onSnapshot(handler: (devices: DeviceInfo[]) => void): () => void;
@@ -827,6 +833,9 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     },
     listDirectory(deviceId, path) {
       return emitWithTimeout(socket, WEB_EVENTS.device.listDirectory, { deviceId, path }, 15000);
+    },
+    scanDescriptor(deviceId, cwd, adapterKind) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.scanDescriptor, { deviceId, cwd, adapterKind }, 20000);
     },
     delete(id) {
       return emitWithTimeout(socket, WEB_EVENTS.device.delete, { id, deviceId: id });

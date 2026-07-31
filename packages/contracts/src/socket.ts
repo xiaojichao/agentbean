@@ -14,6 +14,7 @@ import type {
 } from './management-worker.js';
 import type { AcceptanceCriterionDto } from './task-coordination.js';
 import type { TaskOfferResponseKind } from './agent-exposure.js';
+import type { AgentDescriptorDto } from './agent.js';
 
 export const WEB_EVENTS = {
   auth: {
@@ -142,6 +143,8 @@ export const WEB_EVENTS = {
     delete: 'device:delete',
     selectDirectory: 'device:select-directory',
     listDirectory: 'device:list-directory',
+    // web→server：请求 daemon 扫描指定目录的 AGENTS.md/CLAUDE.md descriptor（表单 cwd 选定后）。
+    scanDescriptor: 'device:scan-descriptor',
   },
   deviceInvite: {
     create: 'device-invite:create',
@@ -350,12 +353,16 @@ export const AGENT_EVENTS = {
     scanRequested: 'device:scan-requested',
     selectDirectoryRequested: 'device:select-directory-requested',
     listDirectoryRequested: 'device:list-directory-requested',
+    // 服务端→daemon：扫描指定目录的 AGENTS.md/CLAUDE.md descriptor（web 表单 cwd 选定后触发）。
+    scanDescriptorRequested: 'device:scan-descriptor-requested',
     // 服务端→daemon 单向通知：该设备已被删除，daemon 应回收重连并退出进程。
     removed: 'device:removed',
   },
   agent: {
     registerBatch: 'agent:register-batch',
     reportCustomSkills: 'agent:report-custom-skills',
+    // daemon→服务端：上报指定目录扫描到的 descriptor（AGENTS.md/CLAUDE.md + skills）。
+    reportDescriptor: 'agent:report-descriptor',
   },
   dispatch: {
     request: 'dispatch:request',
@@ -415,6 +422,30 @@ export interface ScanRequest {
   requestId: string;
   deviceId: string;
   customAgents?: ScanRequestCustomAgent[];
+}
+
+/** server→daemon：请求扫描指定目录的 descriptor（AGENTS.md/CLAUDE.md + skills）。 */
+export interface ScanDescriptorRequest {
+  requestId: string;
+  cwd: string;
+  adapterKind: string;
+}
+
+/** daemon→server：descriptor 扫描结果上报。 */
+export interface ReportDescriptorPayload {
+  requestId: string;
+  teamId: string;
+  deviceId: string;
+  agentId?: string;
+  cwd: string;
+  descriptor: AgentDescriptorDto;
+  skills: {
+    name: string;
+    description: string;
+    scope: string;
+    sourcePath: string;
+    adapterKind: string;
+  }[];
 }
 
 export interface TaskClaimOfferV1 {
