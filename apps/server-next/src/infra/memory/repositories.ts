@@ -215,6 +215,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
       },
+      async listOpenByTeam(teamId) {
+        return Array.from(channelCoordinationJobs.values())
+          .filter((job) =>
+            job.teamId === teamId
+            && (job.status === 'pending' || job.status === 'retry_wait' || job.status === 'running'))
+          .sort((left, right) => left.createdAt - right.createdAt);
+      },
       async updateState(input) {
         const job = channelCoordinationJobs.get(input.jobId);
         if (!job) return null;
@@ -2485,9 +2492,7 @@ function cloneWorkspacePublishStaging(input: WorkspacePublishStagingRecord): Wor
     ...input,
     files: input.files.map((file) => ({
       ...file,
-      ...(file.storagePath ? { storagePath: file.storagePath } : {}),
-      // 有 storagePath 时不克隆 BLOB（#1005 磁盘路径）
-      ...(!file.storagePath && file.content ? { content: Buffer.from(file.content) } : {}),
+      ...(file.content ? { content: Buffer.from(file.content) } : {}),
     })),
     ...(input.provenance ? { provenance: { ...input.provenance } } : {}),
   };

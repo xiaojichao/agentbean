@@ -288,11 +288,14 @@ export const WEB_EVENTS = {
     query: 'system-activity:query',
     notice: 'system-activity:notice',
   },
-  /** #1014 Task failure remediation 具名 command（envelope.commandName 路由）。 */
-  taskRemediation: {
-    command: 'task-remediation:command',
+  /**
+   * #931 Team PI authority cutover / legacy 兼容退役。
+   * 仅 Team Owner/Admin 可执行写 command；Server 推导 authority，禁止客户端自报。
+   */
+  piAuthorityCutover: {
+    command: 'pi-authority-cutover:command',
+    query: 'pi-authority-cutover:query',
   },
-
 
   memory: {
     snapshot: 'memory:snapshot',
