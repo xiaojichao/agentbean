@@ -21,6 +21,41 @@
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
 
+## [Daily 2026-07-31] - 2026-07-31
+### Added
+- Agent capability 混合提取——确定性快路径 + LLM 总结慢路径
+- Agent Exposure 能力自动扫描（AGENTS.md/CLAUDE.md + Skills）
+- PI authority cutover 端到端接线 + crash recovery + production verification
+- 实现 #1014：lifecycle/remediation 自动投影 System activity 并补齐 accept/retry
+- Workspace staging 大文件改磁盘存储并补 API 索引
+- 将 legacy coordination fence 接到 sendMessage 与 Coordinator
+- 实现 Team PI authority cutover 与 legacy 兼容退役
+- 补齐 Project Channel Workspace 双 Device 端到端契约
+- PI worker lifecycle tool 注册（tasks.cancel / tasks.close）
+- web-next Workspace revision 文件浏览面板（#966 AC#4）
+- Project Channel Workspace 归档导出、历史 revision 与归档门控回归
+### Changed
+- 将 PI 自动协调从团队设置迁移到系统管理员仪表盘
+- 收口 Task lifecycle 治理：reason 审计、tombstone 读取与 cascade 统一 (#996)
+- 接线根交付人审 accept/reject 完整入口（#995）
+- 实现 #998/#999：System activity SQLite 持久化与 Task/Chat 接线
+- 记录 2026-07-30 每日更新日志
+- 实现 audience-scoped System activity、attention 与 change feed（#929）
+### Fixed
+- capabilities 从正文提取 + 功能介绍预填 frontmatter description + 抽取能力
+- 线程追问时把历史 human 附件带入 dispatch
+- 无 serverUrl 时跳过 staging 客户端（e2e stub 兼容）
+- 接线 daemon Workspace staging 可恢复发布
+- cutover 与 fence 共享 migration，running job 停止完整协调
+- 成功 commit 的 staging artifact 保持 deliverable
+- 加固 staging HTTP put、孤儿 artifact 清理与周期过期清理
+- commit 半态恢复与 begin 竞态 plan 兼容检查
+- 修复审查发现的暂存边界问题
+- Workspace 大文件暂存、断网续传与可恢复发布
+- 修复 project-channel-workspace 测试语法错误（main 红灯）
+### Security
+- 已发布 Workspace revision 的安全本地应用
+
 ## [Daily 2026-07-30] - 2026-07-30
 ### Added
 - Workspace 原子发布、冲突反馈、revision 绑定与 provenance
