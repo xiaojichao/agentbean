@@ -11794,11 +11794,32 @@ async function buildDispatchRequest(
       if (artifact?.channelId === dispatch.channelId) attachments.push(artifact);
     }
   } else {
-    const attachmentMessageIds = promptMessages.length > 0
+    // Current coalesced prompt messages always carry their own attachments.
+    const promptAttachmentMessageIds = promptMessages.length > 0
       ? promptMessages.map((message) => message.id)
       : [dispatch.messageId];
-    for (const messageId of attachmentMessageIds) {
+    for (const messageId of promptAttachmentMessageIds) {
       attachments.push(...await repositories.artifacts.listByMessage(messageId));
+    }
+    // Thread history only includes message bodies. Without re-attaching prior
+    // human uploads, a follow-up like "分析这张图片" has no image bytes/path and
+    // the agent correctly claims no picture was provided.
+    const promptMessageIdSet = new Set(promptAttachmentMessageIds);
+    for (const message of dispatchHistory) {
+      if (
+        message.senderKind !== 'human'
+        || isDeletedMessage(message)
+        || promptMessageIdSet.has(message.id)
+      ) {
+        continue;
+      }
+      for (const artifact of await repositories.artifacts.listByMessage(message.id)) {
+        if (isWorkspaceRunLogArtifact(artifact)) continue;
+        // Only user upload attachments — not agent run outputs re-injected as inputs.
+        const role = artifact.role ?? 'attachment';
+        if (role !== 'attachment') continue;
+        attachments.push(artifact);
+      }
     }
   }
   // 冻结引用对应的精确内容也进入既有 attachment 下载链路；daemon 同时获得
