@@ -72,8 +72,8 @@ const payloadKeys: Record<WritableEventType, { required: readonly string[]; opti
   'run-failed': { required: ['errorCode', 'recoverable'] },
   'run-cancelled': { required: ['reasonCode', 'cancelledBy'] },
   'task-created': { required: ['taskId', 'taskRevision'], optional: ['parentTaskId'] },
-  'task-revised': { required: ['taskId', 'previousRevision', 'taskRevision', 'criterionIds', 'reasonCode'] },
-  'task-state-changed': { required: ['taskId', 'taskRevision', 'from', 'to'] },
+  'task-revised': { required: ['taskId', 'previousRevision', 'taskRevision', 'criterionIds', 'reasonCode'], optional: ['reason'] },
+  'task-state-changed': { required: ['taskId', 'taskRevision', 'from', 'to'], optional: ['reason'] },
   'task-published-for-claim': { required: ['taskId', 'taskRevision', 'requiredCapabilities'] },
   'allocation-blocked': { required: ['taskId', 'taskRevision', 'cause', 'suggestionKind'], optional: ['externalAgentCount'] },
   'task-assigned': { required: ['taskId', 'taskRevision', 'agentId'] },
@@ -196,12 +196,14 @@ function validatePayload(type: WritableEventType, payload: Record<string, unknow
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.previousRevision, 'payload.previousRevision');
       positiveInteger(payload.taskRevision, 'payload.taskRevision');
       if (payload.taskRevision !== (payload.previousRevision as number) + 1) fail('payload.taskRevision');
-      stringArray(payload.criterionIds, 'payload.criterionIds'); string(payload.reasonCode, 'payload.reasonCode'); return;
+      stringArray(payload.criterionIds, 'payload.criterionIds'); string(payload.reasonCode, 'payload.reasonCode');
+      optionalString(payload.reason, 'payload.reason'); return;
     case 'task-state-changed': {
       string(payload.taskId, 'payload.taskId'); positiveInteger(payload.taskRevision, 'payload.taskRevision');
       const from = taskStatus(payload.from, 'payload.from');
       const to = taskStatus(payload.to, 'payload.to');
       if (from === to) fail('payload.to');
+      optionalString(payload.reason, 'payload.reason');
       return;
     }
     case 'task-published-for-claim':

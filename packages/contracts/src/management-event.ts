@@ -67,12 +67,16 @@ export interface ManagementEventPayloadMapV1 {
     readonly taskRevision: number;
     readonly criterionIds: readonly ID[];
     readonly reasonCode: string;
+    /** #996：可选人类可读 reason（与 reasonCode 并存）。 */
+    readonly reason?: string;
   };
   readonly 'task-state-changed': {
     readonly taskId: ID;
     readonly taskRevision: number;
     readonly from: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
     readonly to: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
+    /** #996：cancel/close/reject 等人审/终止原因，供审计查询；不进 Message 正文。 */
+    readonly reason?: string;
   };
   readonly 'task-published-for-claim': {
     readonly taskId: ID;

@@ -11,9 +11,11 @@ import {
   evaluateClosurePreconditions,
   evaluateRejectRevision,
   evaluateRevisionFencing,
+  evaluateRootCascadeCloseout,
   evaluateSubtaskAcceptance,
   resolveOutputSlots,
   validateTaskLifecycleTransition,
+  type SubtaskCascadeState,
 } from '../../../../../packages/domain/src/index.js';
 import type { TaskRecord } from '../repositories.js';
 import type {
@@ -26,7 +28,10 @@ import {
   ManagementConflictError,
   type LeaseAuthorityInput,
 } from './management-kernel.js';
-import { hashManagementCommandInput, parseTaskCoordinationManagementEvent } from './management-event-validator.js';
+import {
+  hashManagementCommandInput,
+  parseTaskCoordinationManagementEvent,
+} from './management-event-validator.js';
 import {
   activeCriteria,
   appendTaskEvent,
@@ -38,6 +43,45 @@ import {
 
 type Tx = TaskCoordinationTransactionRepositories;
 type AK = 'pi_driver' | 'human' | 'agent' | 'admin' | 'requester';
+
+/** #996 receipt resultJson 包装：兼容旧版（直接存 result）。 */
+const RECEIPT_RESULT_VERSION = 1 as const;
+
+function packReceiptResultJson(result: unknown, reason?: string): string {
+  return JSON.stringify({
+    v: RECEIPT_RESULT_VERSION,
+    result,
+    ...(reason !== undefined ? { reason } : {}),
+  });
+}
+
+/** 从 receipt.resultJson 解析业务结果与可选 reason（#996 审计查询）。 */
+export function unpackLifecycleReceiptResultJson<T>(
+  resultJson: string | null,
+): { result: T; reason?: string } {
+  if (!resultJson) return { result: {} as T };
+  const parsed: unknown = JSON.parse(resultJson);
+  if (
+    parsed
+    && typeof parsed === 'object'
+    && !Array.isArray(parsed)
+    && (parsed as { v?: unknown }).v === RECEIPT_RESULT_VERSION
+    && 'result' in (parsed as object)
+  ) {
+    const wrap = parsed as { result: T; reason?: unknown };
+    return {
+      result: wrap.result,
+      ...(typeof wrap.reason === 'string' ? { reason: wrap.reason } : {}),
+    };
+  }
+  return { result: parsed as T };
+}
+
+function inputReason(input: unknown): string | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const reason = (input as { reason?: unknown }).reason;
+  return typeof reason === 'string' && reason.length > 0 ? reason : undefined;
+}
 
 function conflict(code: string): never {
   // normalize 为大写 SNAKE_CASE，使 domain policy 的小写 kebab reason 与显式 code 一致
@@ -69,7 +113,8 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
 
   /**
    * 通用 command 执行骨架：authority 检查 → canonical hash → UoW 事务 →
-   * receipt 幂等查重 → 业务逻辑 → receipt/tombstone 持久化。
+   * receipt/tombstone 幂等查重 → 业务逻辑 → receipt/tombstone 持久化。
+   * #996：tombstone 可读；reason 写入 receipt 包装，便于审计查询。
    */
   async function handle<K extends TaskLifecycleCommandName>(
     commandName: K,
@@ -87,6 +132,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       command: `task-lifecycle:${commandName}`,
       input: canonicalizeTaskLifecycleCommand(commandName, envelope.commandSchemaVersion, input),
     });
+    const reason = inputReason(input);
 
     return unitOfWork.run(async (repos) => {
       const now = clock.now();
@@ -94,16 +140,47 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         await authorizeManagementWrite(repos.management, authority, now);
       }
 
-      // receipt 幂等查重
+      // receipt 幂等查重（优先完整结果）
       const existing = await repos.lifecycle.receipts.getReceiptByIdempotencyKey(
         envelope.idempotencyKey,
       );
       if (existing) {
         if (existing.commandHash !== ch) conflict('COMMAND_IDEMPOTENCY_CONFLICT');
+        const unpacked = unpackLifecycleReceiptResultJson<TaskLifecycleCommandOutputMapV1[K]>(
+          existing.resultJson,
+        );
         return {
-          result: JSON.parse(existing.resultJson ?? '{}') as TaskLifecycleCommandOutputMapV1[K],
+          result: unpacked.result,
           receipt: existing,
-          disposition: 'applied' as const,
+          disposition: 'replayed' as const,
+          ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
+        };
+      }
+
+      // #996：receipt 被治理压缩后仍可读 tombstone，禁止 silent re-apply
+      const tombstone = await repos.lifecycle.receipts.getTombstoneByIdempotencyKey(
+        envelope.idempotencyKey,
+      );
+      if (tombstone) {
+        if (tombstone.commandHash !== ch) conflict('COMMAND_IDEMPOTENCY_CONFLICT');
+        const viaReceipt = await repos.lifecycle.receipts.getReceiptById(tombstone.receiptId);
+        if (viaReceipt?.resultAvailable && viaReceipt.resultJson) {
+          const unpacked = unpackLifecycleReceiptResultJson<TaskLifecycleCommandOutputMapV1[K]>(
+            viaReceipt.resultJson,
+          );
+          return {
+            result: unpacked.result,
+            receipt: viaReceipt,
+            disposition: 'replayed' as const,
+            ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
+          };
+        }
+        // tombstone 仍在、结果已压缩：返回空结果壳，outcome 来自 tombstone，绝不重跑业务
+        return {
+          result: {} as TaskLifecycleCommandOutputMapV1[K],
+          receipt: null as never,
+          disposition: 'replayed' as const,
+          tombstoneOutcome: tombstone.outcome,
         };
       }
 
@@ -115,7 +192,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
 
       const result = await fn(repos, now, { ch, actorKind, actorId });
       const rid = ids.nextId();
-      const rj = JSON.stringify(result);
+      const rj = packReceiptResultJson(result, reason);
 
       await repos.lifecycle.receipts.createReceipt({
         receiptId: rid,
@@ -145,7 +222,12 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         createdAt: now,
       });
 
-      return { result, receipt: null as never, disposition: 'applied' as const };
+      return {
+        result,
+        receipt: null as never,
+        disposition: 'applied' as const,
+        ...(reason !== undefined ? { reason } : {}),
+      };
     });
   }
 
@@ -157,7 +239,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
   }
 
   // -------------------------------------------------------------------
-  // Root cascade helper（cancel/close 复用）
+  // Root cascade helper（#996：统一走 evaluateRootCascadeCloseout）
   // -------------------------------------------------------------------
   async function cascadeTermination(
     repos: Tx,
@@ -165,33 +247,59 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
     targetStatus: 'cancelled' | 'closed',
     now: number,
   ): Promise<string[]> {
-    const affected: string[] = [];
     const coord = await repos.coordination.coordinations.getByTaskId(taskId);
-    if (coord?.nodeKind !== 'root') return affected;
+    if (coord?.nodeKind !== 'root') return [];
 
+    const root = await requireTask(repos, taskId);
     const allCoord = await repos.coordination.coordinations.listByManagementRun(coord.managementRunId);
+    const subs: SubtaskCascadeState[] = [];
+
     for (const sc of allCoord) {
       if (sc.taskId === taskId || sc.nodeKind !== 'subtask') continue;
       const sub = await repos.tasks.getById(sc.taskId);
-      if (!sub || sub.status === 'done' || sub.status === 'cancelled' || sub.status === 'closed') continue;
-
-      await repos.tasks.update({ taskId: sub.id, changes: { status: targetStatus, updatedAt: now } });
-      affected.push(sub.id);
-
+      if (!sub) continue;
       const claim = await repos.coordination.claimLeases.getCurrent({
         taskId: sub.id, taskRevision: sub.revision, taskAttempt: sc.attempt,
       });
+      const grants = await repos.coordination.executionGrants.listActiveByTask(sub.id);
+      const activeClaim = claim?.status === 'active' ? claim : null;
+      const activeGrant = grants[0];
+      subs.push({
+        taskId: sub.id,
+        status: sub.status,
+        hasActiveClaim: Boolean(activeClaim),
+        hasActiveGrant: grants.length > 0,
+        ...(activeClaim ? { claimLeaseId: activeClaim.id } : {}),
+        ...(activeGrant ? { grantId: activeGrant.id } : {}),
+      });
+    }
+
+    // 权威决策：哪些子任务应 cascade、哪些 claim/grant 应吊销
+    const decision = evaluateRootCascadeCloseout(root.status, targetStatus, subs);
+    if (decision.kind === 'rejected') return [];
+
+    for (const subTaskId of decision.affectedSubtaskIds) {
+      await repos.tasks.update({
+        taskId: subTaskId,
+        changes: { status: targetStatus, updatedAt: now },
+      });
+      // domain 的 grantId 只建模单 grant；对受影响子任务吊销全部 active grants，避免遗漏
+      for (const g of await repos.coordination.executionGrants.listActiveByTask(subTaskId)) {
+        await repos.coordination.executionGrants.revoke({
+          id: g.id, reason: 'authority-revoked', revokedAt: now, now,
+        });
+      }
+    }
+    for (const leaseId of decision.claimLeaseIdsToRevoke) {
+      const claim = await repos.coordination.claimLeases.getById(leaseId);
       if (claim?.status === 'active') {
         await repos.coordination.claimLeases.update({
           id: claim.id, expectedStatus: 'active', status: 'released',
           heartbeatAt: claim.heartbeatAt, expiresAt: claim.expiresAt, releasedAt: now,
         });
       }
-      for (const g of await repos.coordination.executionGrants.listActiveByTask(sub.id)) {
-        await repos.coordination.executionGrants.revoke({ id: g.id, reason: 'authority-revoked', revokedAt: now, now });
-      }
     }
-    return affected;
+    return [...decision.affectedSubtaskIds];
   }
 
   // ===================================================================
@@ -324,13 +432,19 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       await appendTaskEvent(repos, {
         managementRunId: coord.managementRunId, type: 'task-revised', actorKind,
         actorId, idempotencyKey: envelope.idempotencyKey,
-        payload: { taskId: task.id, previousRevision: task.revision, taskRevision: nextRevision,
-          criterionIds: criteria.map((c) => c.id), reasonCode: 'HUMAN_REJECTED_ROOT_DELIVERY' },
+        payload: {
+          taskId: task.id, previousRevision: task.revision, taskRevision: nextRevision,
+          criterionIds: criteria.map((c) => c.id), reasonCode: 'HUMAN_REJECTED_ROOT_DELIVERY',
+          reason: input.reason,
+        },
       }, now, ids, ch);
       await appendTaskEvent(repos, {
         managementRunId: coord.managementRunId, type: 'task-state-changed', actorKind,
         actorId, idempotencyKey: `${envelope.idempotencyKey}:state`,
-        payload: { taskId: task.id, taskRevision: nextRevision, from: 'in_review', to: 'in_progress' },
+        payload: {
+          taskId: task.id, taskRevision: nextRevision, from: 'in_review', to: 'in_progress',
+          reason: input.reason,
+        },
       }, now, ids, ch);
       await repos.management.runs.update({ ...run, status: 'running', updatedAt: now });
       return { taskId: task.id, taskRevision: nextRevision, status: 'in_progress' as const };
@@ -477,7 +591,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       await appendTaskEvent(repos, {
         managementRunId: coord.managementRunId, type: 'task-state-changed', actorKind,
         actorId, idempotencyKey: envelope.idempotencyKey,
-        payload: { taskId: task.id, taskRevision: task.revision, from: 'in_review', to: 'todo' },
+        payload: {
+          taskId: task.id, taskRevision: task.revision, from: 'in_review', to: 'todo',
+          reason: input.reason,
+        },
       }, now, ids, ch);
       await invalidateCapturedClaim(repos, coord.managementRunId, actorId,
         `${envelope.idempotencyKey}:claim-invalidated`, ch, claim, input.reason, now, ids,
@@ -498,6 +615,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       const vt = validateTaskLifecycleTransition(task.status, 'cancelled');
       if (vt.kind === 'rejected') conflict(vt.reason ?? 'INVALID_TRANSITION');
 
+      const fromStatus = task.status;
       const cancelledSubtaskIds = await cascadeTermination(repos, task.id, 'cancelled', now);
       const updated = await repos.tasks.update({ taskId: task.id, changes: { status: 'cancelled', updatedAt: now } });
       if (!updated) conflict('TASK_NOT_FOUND');
@@ -506,7 +624,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         await appendTaskEvent(repos, {
           managementRunId: coord.managementRunId, type: 'task-state-changed', actorKind,
           actorId, idempotencyKey: envelope.idempotencyKey,
-          payload: { taskId: task.id, taskRevision: task.revision, from: task.status, to: 'cancelled' },
+          payload: {
+            taskId: task.id, taskRevision: task.revision, from: fromStatus, to: 'cancelled',
+            reason: input.reason,
+          },
         }, now, ids, ch);
       }
       return { taskId: task.id, taskRevision: task.revision, status: 'cancelled' as const, cancelledSubtaskIds };
@@ -525,6 +646,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       const vt = validateTaskLifecycleTransition(task.status, 'closed');
       if (vt.kind === 'rejected') conflict(vt.reason ?? 'INVALID_TRANSITION');
 
+      const fromStatus = task.status;
       const closedSubtaskIds = await cascadeTermination(repos, task.id, 'closed', now);
       const updated = await repos.tasks.update({ taskId: task.id, changes: { status: 'closed', updatedAt: now } });
       if (!updated) conflict('TASK_NOT_FOUND');
@@ -533,7 +655,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         await appendTaskEvent(repos, {
           managementRunId: coord.managementRunId, type: 'task-state-changed', actorKind,
           actorId, idempotencyKey: envelope.idempotencyKey,
-          payload: { taskId: task.id, taskRevision: task.revision, from: task.status, to: 'closed' },
+          payload: {
+            taskId: task.id, taskRevision: task.revision, from: fromStatus, to: 'closed',
+            reason: input.reason,
+          },
         }, now, ids, ch);
       }
       return { taskId: task.id, taskRevision: task.revision, status: 'closed' as const, closedSubtaskIds };
