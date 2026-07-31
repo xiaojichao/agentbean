@@ -4176,10 +4176,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           gatewayInstanceKey: discovered.gatewayInstanceKey ?? existing?.gatewayInstanceKey,
           projectDocumentInputSetVersions: discovered.projectDocumentInputSetVersions,
           // descriptor 扫描到的 description：仅当无既有手工 description 时使用（agent_md 不覆盖 manual）。
+          // 组合 = frontmatter description + 抽取的 capabilities（与添加自定义 Agent 预填语义一致）。
           description: existing?.description
-            ?? discovered.descriptor?.description
+            ?? buildScannedAgentDescription(discovered.descriptor)
             ?? null,
-          descriptionSource: existing?.description ? (existing.descriptionSource ?? 'manual') : discovered.descriptor?.description ? 'agent_md' : undefined,
+          descriptionSource: existing?.description
+            ? (existing.descriptionSource ?? 'manual')
+            : discovered.descriptor?.description || (discovered.descriptor?.capabilities?.length ?? 0) > 0
+              ? 'agent_md'
+              : undefined,
           scannedCapabilities: discovered.descriptor?.capabilities,
           lastSeenAt: now,
         });
@@ -16481,6 +16486,22 @@ function toPublicAgent(agent: AgentRecord): AgentDto {
     ...publicAgent
   } = agent;
   return publicAgent;
+}
+
+/**
+ * 组合扫描 descriptor 的「功能介绍」：frontmatter description（优先）+ 抽取的 capabilities。
+ * 与 web 端添加自定义 Agent 的预填语义一致（AddCustomAgentDialog）。
+ * 无 description 且无 capabilities → null（不写空描述）。
+ */
+function buildScannedAgentDescription(
+  descriptor: AgentDescriptorDto | null | undefined,
+): string | null {
+  if (!descriptor) return null;
+  const parts: string[] = [];
+  if (descriptor.description) parts.push(descriptor.description);
+  const caps = Array.isArray(descriptor.capabilities) ? descriptor.capabilities : [];
+  if (caps.length > 0) parts.push(`具备能力：${caps.join('、')}`);
+  return parts.length > 0 ? parts.join('\n') : null;
 }
 
 async function toAgentMemberDtos(
