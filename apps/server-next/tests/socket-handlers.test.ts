@@ -252,6 +252,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.message.messageTracer.command,
       WEB_EVENTS.systemActivity.command,
       WEB_EVENTS.systemActivity.query,
+      WEB_EVENTS.piAuthorityCutover.command,
+      WEB_EVENTS.piAuthorityCutover.query,
       WEB_EVENTS.taskRemediation.command,
       WEB_EVENTS.message.search,
       WEB_EVENTS.message.context,
