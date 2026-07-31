@@ -39,8 +39,10 @@ export interface AgentSnapshot {
   deviceName?: string | null;
   source?: 'self-register' | 'scanned' | 'custom';
   skills?: SkillDto[];
-  /** 扫描自 AGENTS.md/CLAUDE.md 的公开能力候选（事实层，无 sourcePath 泄露）。 */
+  /** 机械提取自 AGENTS.md/CLAUDE.md 能力小节的候选（已验证）。 */
   scannedCapabilities?: string[];
+  /** LLM 总结 AGENTS.md/CLAUDE.md 全文得到的候选（AI 总结，待用户确认）。 */
+  scannedCapabilitiesSummarized?: string[];
 }
 
 export interface DiscoveredAgent {

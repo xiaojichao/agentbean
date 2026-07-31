@@ -1183,6 +1183,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         agents.set(input.agentId, updated);
         return updated;
       },
+      async updateSummarizedCapabilities(input) {
+        const agent = agents.get(input.agentId);
+        if (!agent) {
+          return null;
+        }
+        const updated = {
+          ...agent,
+          scannedCapabilitiesSummarized: input.capabilitiesSummarized,
+        };
+        agents.set(input.agentId, updated);
+        return updated;
+      },
       async listVisibleInTeam(teamId) {
         return Array.from(agents.values()).filter(
           (agent) =>

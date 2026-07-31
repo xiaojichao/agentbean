@@ -18,6 +18,7 @@ import {
   parsePhase2TaskToolRequestV2,
   parsePhase3MemoryToolRequestV3,
   safeParseManagementWorkerPayload,
+  type AgentDescriptorDto,
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
   type TaskClaimExpiredV1,
@@ -468,7 +469,7 @@ export function attachServerNextNamespaces(
           return result as {
             ok: boolean;
             requestId?: string;
-            descriptor?: { name: string | null; description: string | null; capabilities: string[]; sourcePath: string | null } | null;
+            descriptor?: AgentDescriptorDto | null;
             skills?: { name: string; description: string; scope: string; sourcePath: string; adapterKind: string }[];
             error?: string;
           };

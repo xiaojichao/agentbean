@@ -216,6 +216,7 @@ import {
   parseTeamPromotionPolicyV1,
 } from '../../../../packages/contracts/src/index.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
+import { createCapabilitySummarizer } from './capability-summarizer.js';
 import {
   compareChannelFileSnapshots,
   createChannelFileMetrics,
@@ -2304,6 +2305,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
     teamPiAuthorityMigrations: repositories.teamPiAuthorityMigrations,
   });
+  // Agent capability LLM 总结（混合提取慢路径）：机械提取为空/内容变化时，
+  // 用 Active PI Model 对 AGENTS.md 全文总结一次，结果标「AI 总结」候选。
+  const capabilitySummarizer = createCapabilitySummarizer({
+    resolveActiveTarget: async () => {
+      const active = await repositories.piProviderUnitOfWork.run(
+        (piRepositories) => piRepositories.activeModel.get(),
+      );
+      if (!active) {
+        return { kind: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_SET' };
+      }
+      return piProvider.resolveInvocationTarget({
+        cardId: active.cardId,
+        revisionId: active.revisionId,
+      });
+    },
+    updateSummarized: async ({ agentId, capabilitiesSummarized, timestamp }) =>
+      repositories.agents.updateSummarizedCapabilities({
+        agentId,
+        capabilitiesSummarized,
+        timestamp,
+      }),
+    clock,
+  });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
   const invalidateSourcesAfterDeletion = async (input: {
@@ -4199,6 +4223,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           agentId: agent.id,
         });
         agents.push(toPublicAgent(agent));
+        // 混合提取慢路径：机械提取为空 且 有全文 → 异步触发 LLM 总结
+        // （fire-and-forget，不阻塞注册；模型不可用/失败静默跳过）。
+        if (
+          (discovered.descriptor?.capabilities?.length ?? 0) === 0
+          && discovered.descriptor?.rawContent
+          && discovered.descriptor.contentHash
+        ) {
+          void capabilitySummarizer.summarize({
+            agentId: agent.id,
+            rawContent: discovered.descriptor.rawContent,
+            contentHash: discovered.descriptor.contentHash,
+          }).catch((error) => {
+            console.warn(`capability summarizer failed: ${agent.id} ${error instanceof Error ? error.message : String(error)}`);
+          });
+        }
       }
 
       const missingOfflineIds = await repositories.agents.markMissingScannedOffline({
