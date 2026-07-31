@@ -54,6 +54,10 @@ import { createSqliteMessageTracerRepositories } from './message-tracer-reposito
 import { createSqlitePromotionGateRepositories } from './promotion-gate-repositories.js';
 import { createSqliteTaskLifecycleRepositories } from './task-lifecycle-repositories.js';
 import {
+  createSqliteSystemActivityRepositories,
+  createSqliteSystemActivityUnitOfWork,
+} from './system-activity-repositories.js';
+import {
   createChannelCoordinationUnitOfWork,
   type ChannelCoordinationRepositories,
 } from '../../application/channel-coordination-unit-of-work.js';
@@ -495,6 +499,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
   const messageTracer = createSqliteMessageTracerRepositories(teamDb);
   const promotion = createSqlitePromotionGateRepositories(teamDb);
   const lifecycle = createSqliteTaskLifecycleRepositories(teamDb);
+  const systemActivity = createSqliteSystemActivityRepositories(teamDb);
+  const systemActivityUnitOfWork = createSqliteSystemActivityUnitOfWork(teamDb, systemActivity);
 
   let repositories!: ServerNextRepositories;
   const managementMemoryUnitOfWork = createManagementMemoryUnitOfWork(async (operation) => {
@@ -3938,6 +3944,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
       },
     },
     experiencePack: createSqliteExperiencePackRepositories(teamDb),
+    systemActivity,
+    systemActivityUnitOfWork,
     revocations: {
       async find({ teamId, machineId, profileId }) {
         const row = globalDb

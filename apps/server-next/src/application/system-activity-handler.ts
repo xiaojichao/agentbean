@@ -252,10 +252,12 @@ async function commitReceipt(
     streamId: ID;
     revision: number;
     sequence: number;
+    teamId: ID;
   },
 ): Promise<SystemActivityCommandReceiptRecord> {
   const receipt: SystemActivityCommandReceiptRecord = {
     receiptId: input.ids.nextId(),
+    teamId: input.teamId,
     commandName: input.commandName,
     commandSchemaVersion: SYSTEM_ACTIVITY_COMMAND_SCHEMA_VERSION,
     idempotencyKey: input.idempotencyKey,
@@ -269,6 +271,9 @@ async function commitReceipt(
   };
   await repos.receipts.create(receipt);
   await repos.receipts.createTombstone({
+    id: input.ids.nextId(),
+    teamId: input.teamId,
+    commandName: input.commandName,
     idempotencyKey: input.idempotencyKey,
     commandHash: input.commandHash,
     receiptId: receipt.receiptId,
@@ -440,6 +445,7 @@ export async function handleProjectSourceFact(
       projectionWatermark: Math.max(input.projectionWatermark, input.fact.sequence),
     };
     const receipt = await commitReceipt(repos, {
+      teamId: deps.teamId,
       commandName: 'project-source-fact',
       idempotencyKey: envelope.idempotencyKey,
       commandHash,
@@ -500,6 +506,7 @@ export async function handleMarkAttentionSeen(
       stillOpen: true,
     };
     const receipt = await commitReceipt(repos, {
+      teamId: deps.teamId,
       commandName: 'mark-attention-seen',
       idempotencyKey: envelope.idempotencyKey,
       commandHash,
@@ -560,6 +567,7 @@ export async function handleAckChangeFeedCursor(
       advancedTaskResponsibility: false,
     };
     const receipt = await commitReceipt(repos, {
+      teamId: deps.teamId,
       commandName: 'ack-change-feed-cursor',
       idempotencyKey: envelope.idempotencyKey,
       commandHash,
@@ -626,6 +634,7 @@ export async function handleRetrimAudience(
       retainedProjectionCount: retained,
     };
     const receipt = await commitReceipt(repos, {
+      teamId: deps.teamId,
       commandName: 'retrim-audience',
       idempotencyKey: envelope.idempotencyKey,
       commandHash,
