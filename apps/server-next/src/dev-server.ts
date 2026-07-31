@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore, type BeginWorkspacePublishStagingInput, type CreateServerNextUseCasesInput } from './application/usecases.js';
+import { createFileWorkspaceStagingContentStore } from './application/workspace-staging-content-store.js';
 import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
 import { createChannelFileMetrics, parseChannelFileRolloutConfig, type ChannelFileRolloutConfig } from './application/channel-file-rollout.js';
 import type { ArtifactRecord, ServerNextRepositories } from './application/repositories.js';
@@ -1982,6 +1983,8 @@ function createDefaultApp(
   onMessageTracerDelivered?: (delivery: { teamId: string; channelId: string; messageId: string }) => Promise<void> | void,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
+  // #1005：生产/dev host 始终用 dataDir 磁盘 staging，避免大文件塞 team SQLite BLOB。
+  const stagingContentStore = createFileWorkspaceStagingContentStore(config.dataDir);
   const channelFileRollout = config.channelFileRollout ?? parseChannelFileRolloutConfig();
   const channelFileMetrics = config.channelFileMetrics ?? createChannelFileMetrics();
   const projectDocumentRollout = config.projectDocumentRollout ?? parseProjectDocumentRolloutConfig();
@@ -2022,6 +2025,7 @@ function createDefaultApp(
       ids,
       sessionSecret: config.sessionSecret,
       artifactContentStore,
+      stagingContentStore,
       channelFileRollout,
       channelFileMetrics,
       projectCollaborationRollout,
@@ -2117,6 +2121,7 @@ function createDefaultApp(
     ids,
     sessionSecret: config.sessionSecret,
     artifactContentStore,
+    stagingContentStore,
     channelFileRollout,
     channelFileMetrics,
     projectCollaborationRollout,

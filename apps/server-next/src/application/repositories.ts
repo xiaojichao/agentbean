@@ -456,7 +456,12 @@ export interface WorkspacePublishStagingFileRecord {
   expectedSha256: string;
   receivedBytes: number;
   complete: boolean;
-  /** Server-private partial/full bytes；不进频道索引 / revision。 */
+  /**
+   * #1005：相对 dataDir 的磁盘路径（优先）。
+   * 有 storagePath 时 content 可为空，避免大文件进 SQLite BLOB。
+   */
+  storagePath?: string;
+  /** 小文件/memory 实现：私有 partial/full bytes；不进频道索引 / revision。 */
   content?: Buffer;
 }
 

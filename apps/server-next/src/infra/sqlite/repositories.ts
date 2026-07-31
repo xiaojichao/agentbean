@@ -256,6 +256,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0072_system_activity.sql');
   // #930 Team PI authority cutover 与 legacy 兼容退役。
   applyMigration(db, 'team/0073_pi_authority_cutover.sql');
+  // #1005：staging 内容磁盘路径（BLOB 可选，大文件不入 team DB）。
+  applyMigration(db, 'team/0074_workspace_staging_storage_path.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2277,12 +2279,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               input.provenance ? JSON.stringify(input.provenance) : null,
             );
             const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
-              team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+              team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content, storage_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
             for (const file of input.files) {
               insertFile.run(
                 input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
-                file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
+                file.receivedBytes, file.complete ? 1 : 0,
+                // #1005：有磁盘路径时不写 BLOB
+                file.storagePath ? null : (file.content ?? null),
+                file.storagePath ?? null,
               );
             }
           });
@@ -2319,12 +2324,14 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
             .run(input.teamId, input.publishId);
           const insertFile = teamDb.prepare(`INSERT INTO workspace_publish_staging_files (
-            team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            team_id, publish_id, path, filename, mime_type, expected_size_bytes, expected_sha256, received_bytes, complete, content, storage_path
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
           for (const file of input.files) {
             insertFile.run(
               input.teamId, input.publishId, file.path, file.filename, file.mimeType, file.expectedSizeBytes, file.expectedSha256,
-              file.receivedBytes, file.complete ? 1 : 0, file.content ?? null,
+              file.receivedBytes, file.complete ? 1 : 0,
+              file.storagePath ? null : (file.content ?? null),
+              file.storagePath ?? null,
             );
           }
         });
@@ -4438,6 +4445,7 @@ function structuredCloneStaging(input: WorkspacePublishStagingRecord): Workspace
     ...input,
     files: input.files.map((file) => ({
       ...file,
+      ...(file.storagePath ? { storagePath: file.storagePath } : {}),
       ...(file.content ? { content: Buffer.from(file.content) } : {}),
     })),
     ...(input.provenance ? { provenance: { ...input.provenance } } : {}),
@@ -4455,6 +4463,7 @@ function mapWorkspacePublishStaging(
   ).all(teamId, publishId) as Record<string, unknown>[];
   const files: WorkspacePublishStagingFileRecord[] = fileRows.map((fileRow) => {
     const content = fileRow.content;
+    const storagePath = fileRow.storage_path ? String(fileRow.storage_path) : undefined;
     return {
       path: String(fileRow.path),
       filename: String(fileRow.filename),
@@ -4463,9 +4472,11 @@ function mapWorkspacePublishStaging(
       expectedSha256: String(fileRow.expected_sha256),
       receivedBytes: Number(fileRow.received_bytes),
       complete: Number(fileRow.complete) === 1,
-      ...(Buffer.isBuffer(content) ? { content: Buffer.from(content) }
-        : content instanceof Uint8Array ? { content: Buffer.from(content) }
-        : typeof content === 'string' ? { content: Buffer.from(content) }
+      ...(storagePath ? { storagePath } : {}),
+      // 有磁盘路径时不回填 BLOB（新路径）；旧行仍可从 content 列读
+      ...(!storagePath && Buffer.isBuffer(content) ? { content: Buffer.from(content) }
+        : !storagePath && content instanceof Uint8Array ? { content: Buffer.from(content) }
+        : !storagePath && typeof content === 'string' ? { content: Buffer.from(content) }
         : {}),
     };
   });
