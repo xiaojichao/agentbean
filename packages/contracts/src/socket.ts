@@ -292,7 +292,11 @@ export const WEB_EVENTS = {
   taskRemediation: {
     command: 'task-remediation:command',
   },
-
+  /** #931 PI authority cutover 具名 command/query。 */
+  piAuthorityCutover: {
+    command: 'pi-authority-cutover:command',
+    query: 'pi-authority-cutover:query',
+  },
 
   memory: {
     snapshot: 'memory:snapshot',
