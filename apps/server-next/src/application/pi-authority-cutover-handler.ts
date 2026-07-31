@@ -56,6 +56,24 @@ import type { PiAuthorityCutoverUnitOfWork } from './pi-authority-cutover-unit-o
  * （epoch 推进 + legacy fencing + audit/outbox）。
  */
 
+/**
+ * #931 A3：cutover 时 Server 自动扫描 Team 内存量 legacy job。
+ * pending/retry_wait → 取消；running → 登记 drain lineage。
+ */
+export interface LegacyCoordinationJobInventory {
+  /** 列出 Team 当前 open legacy jobs（pending/retry_wait/running）。 */
+  listOpen(teamId: ID): Promise<{
+    readonly pendingOrRetry: readonly ID[];
+    readonly running: readonly { readonly jobId: ID; readonly lineageKey: string }[];
+  }>;
+  /** 将 pending/retry_wait job 标记 cancelled（与 Coordinator fence 双保险）。 */
+  cancelJobs(input: {
+    readonly teamId: ID;
+    readonly jobIds: readonly ID[];
+    readonly now: UnixMs;
+  }): Promise<readonly ID[]>;
+}
+
 export interface PiAuthorityCutoverHandlerDeps {
   readonly unitOfWork: PiAuthorityCutoverUnitOfWork;
   readonly ids: { nextId(): ID };
@@ -64,6 +82,11 @@ export interface PiAuthorityCutoverHandlerDeps {
   /** Server 推导的操作者（不在 envelope）。 */
   readonly operatorId: ID;
   readonly operatorRole: TeamAdminRole;
+  /**
+   * #931：可选；生产 usecases 注入 channel coordination jobs。
+   * 缺省时仅处置调用方传入的 job 列表（#930 测试兼容）。
+   */
+  readonly legacyJobInventory?: LegacyCoordinationJobInventory;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +483,7 @@ export async function handleExecutePiAuthorityCutover(
       const result: PiAuthorityCutoverCommandOutputUnionV1 = {
         commandName: 'execute-pi-authority-cutover',
         migration: migrationToV1(migration),
-        cancelledJobIds: input.pendingLegacyJobIds,
+        cancelledJobIds: input.pendingLegacyJobIds ?? [],
         drainLineages: openDrains.map(drainToV1),
         cutoverVersion: migration.cutoverVersion ?? migration.authorityEpoch,
       };
@@ -515,9 +538,31 @@ export async function handleExecutePiAuthorityCutover(
         });
     }
 
-    // 取消未开始 job；登记 drain
-    const cancelledJobIds = [...input.pendingLegacyJobIds];
-    for (const jobId of input.pendingLegacyJobIds) {
+    // #931 A3：Server 自动扫描 Team 存量 legacy job，并与调用方提示合并（Server 扫描权威）。
+    const scanned = deps.legacyJobInventory
+      ? await deps.legacyJobInventory.listOpen(deps.teamId)
+      : { pendingOrRetry: [] as const, running: [] as const };
+    const pendingSet = new Set<ID>([
+      ...(input.pendingLegacyJobIds ?? []),
+      ...scanned.pendingOrRetry,
+    ]);
+    const runningById = new Map<ID, { jobId: ID; lineageKey: string }>();
+    for (const job of [...(input.runningLegacyJobs ?? []), ...scanned.running]) {
+      if (!runningById.has(job.jobId)) runningById.set(job.jobId, job);
+    }
+    // running 优先：同一 job 不应既 cancel 又 drain
+    for (const jobId of runningById.keys()) pendingSet.delete(jobId);
+
+    const pendingToCancel = [...pendingSet];
+    let cancelledJobIds = pendingToCancel;
+    if (deps.legacyJobInventory && pendingToCancel.length > 0) {
+      cancelledJobIds = [...await deps.legacyJobInventory.cancelJobs({
+        teamId: deps.teamId,
+        jobIds: pendingToCancel,
+        now,
+      })];
+    }
+    for (const jobId of cancelledJobIds) {
       const disp = disposeLegacyJobAtCutover({
         status: 'pending',
         now,
@@ -538,7 +583,7 @@ export async function handleExecutePiAuthorityCutover(
     const drainDeadlineAt = now + input.drainDeadlineMs;
     const drainLineages: LegacyDrainLineageRecord[] = [];
     let fencingSeq = 1;
-    for (const job of input.runningLegacyJobs) {
+    for (const job of runningById.values()) {
       const disp = disposeLegacyJobAtCutover({
         status: 'running',
         now,

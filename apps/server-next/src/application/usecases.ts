@@ -39,6 +39,29 @@ import {
   parseTaskRemediationCommandEnvelopeV1,
 } from '../../../../packages/contracts/src/task-failure-remediation.js';
 import { lookupLegacyCoordinationWriteFenced } from './legacy-coordination-fence.js';
+import type {
+  DaemonPiCapabilityNegotiationV1,
+  PiAuthorityCutoverCommandResponseV1,
+  PiAuthorityCutoverQueryName,
+  PiAuthorityCutoverQueryResponseV1,
+} from '../../../../packages/contracts/src/pi-authority-cutover.js';
+import { createPiAuthorityCutoverDispatcher } from './pi-authority-cutover-dispatcher.js';
+import { createMemoryPiAuthorityCutoverUnitOfWork } from './pi-authority-cutover-unit-of-work.js';
+import {
+  handleBindMessageAuthorityEpoch,
+  type LegacyCoordinationJobInventory,
+  type PiAuthorityCutoverHandlerDeps,
+} from './pi-authority-cutover-handler.js';
+import {
+  evaluateCommandPathAvailability,
+  negotiateDaemonPiCapabilities,
+} from '../../../../packages/domain/src/pi-authority-cutover-policy.js';
+import {
+  clonePiAuthorityCutoverMemoryState,
+  createInMemoryPiAuthorityCutoverRepositories,
+  createPiAuthorityCutoverMemoryState,
+  restorePiAuthorityCutoverMemoryState,
+} from '../infra/memory/pi-authority-cutover-repositories.js';
 import {
   cloneSystemActivityMemoryState,
   createInMemorySystemActivityRepositories,
@@ -309,7 +332,12 @@ export interface ServerNextUseCases {
   renameDevice(input: { userId: string; deviceId: string; name: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto }>>;
   deleteDevice(input: { userId: string; deviceId: string; currentDeviceId?: string | null }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[]; channelTeamIds: string[]; deletedDeviceIds: string[] }>>;
   requestDeviceScan(input: RequestDeviceScanInput): Promise<Ack<RequestDeviceScanResult>>;
-  deviceHello(input: DeviceHelloInput): Promise<Ack<{ device: DeviceDto; credentials?: DeviceInviteCredentialsDto; affectedTeamIds: string[] }>>;
+  deviceHello(input: DeviceHelloInput): Promise<Ack<{
+    device: DeviceDto;
+    credentials?: DeviceInviteCredentialsDto;
+    affectedTeamIds: string[];
+    piAuthorityCapabilities?: DaemonPiCapabilityNegotiationV1;
+  }>>;
   markDeviceOffline(input: { deviceId: string; timestamp: UnixMs }): Promise<Ack<{ device: DeviceDto; affectedTeamIds: string[] }>>;
   reconcileDisconnectedDevices(input: { timestamp: UnixMs }): Promise<Ack<{ devices: DeviceDto[]; affectedTeamIds: string[] }>>;
   reportDeviceRuntimes(input: ReportDeviceRuntimesInput): Promise<Ack<{ runtimes: RuntimeDto[] }>>;
@@ -378,6 +406,13 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: SystemActivityQueryResponseV1 } | { ok: false; error: string }>;
+  /** #931 PI authority cutover command/query 派发。 */
+  dispatchPiAuthorityCutoverCommand(input: {
+    envelope: unknown; payload: unknown; userId: string; teamId: string;
+  }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }>;
+  dispatchPiAuthorityCutoverQuery(input: {
+    queryName: PiAuthorityCutoverQueryName; payload: unknown; userId: string; teamId: string;
+  }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }>;
   /**
    * #1014 Task remediation 具名 command（至少 retry-attempt）。
    * envelope.commandName 路由；authority 由 session 注入。
@@ -1927,6 +1962,100 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return { ok: false, error: 'TASK_REMEDIATION_FAILED' };
     }
   }
+  /**
+   * #931 PI authority cutover infrastructure.
+   */
+  const piAuthorityCutoverState = createPiAuthorityCutoverMemoryState();
+  const piAuthorityCutoverRepos = createInMemoryPiAuthorityCutoverRepositories(
+    piAuthorityCutoverState,
+    { migrations: repositories.teamPiAuthorityMigrations },
+  );
+  const piAuthorityCutoverUnitOfWork = createMemoryPiAuthorityCutoverUnitOfWork({
+    repos: piAuthorityCutoverRepos,
+    snapshot: () => clonePiAuthorityCutoverMemoryState(piAuthorityCutoverState),
+    restore: (snap) => restorePiAuthorityCutoverMemoryState(piAuthorityCutoverState, snap as ReturnType<typeof createPiAuthorityCutoverMemoryState>),
+  });
+  const legacyJobInventory: LegacyCoordinationJobInventory = {
+    async listOpen(teamId) {
+      const open = await repositories.channelCoordination.jobs.listOpenByTeam(teamId);
+      const pendingOrRetry: string[] = [];
+      const running: { jobId: string; lineageKey: string }[] = [];
+      for (const job of open) {
+        if (job.status === 'pending' || job.status === 'retry_wait') {
+          pendingOrRetry.push(job.id);
+        } else if (job.status === 'running') {
+          running.push({ jobId: job.id, lineageKey: `legacy-job:${job.id}:message:${job.messageId}` });
+        }
+      }
+      return { pendingOrRetry, running };
+    },
+    async cancelJobs({ jobIds, now }) {
+      const cancelled: string[] = [];
+      for (const jobId of jobIds) {
+        const job = await repositories.channelCoordination.jobs.getById(jobId);
+        if (!job) continue;
+        if (job.status !== 'pending' && job.status !== 'retry_wait') continue;
+        const updated = await repositories.channelCoordination.jobs.updateState({ jobId, status: 'cancelled', attempt: job.attempt, nextRetryAt: null, updatedAt: now });
+        if (updated) cancelled.push(jobId);
+      }
+      return cancelled;
+    },
+  };
+
+  function makeCutoverHandlerDeps(teamId: string, operatorId: string, operatorRole: 'owner'|'admin'|'member'): PiAuthorityCutoverHandlerDeps {
+    return { unitOfWork: piAuthorityCutoverUnitOfWork, ids, clock, teamId, operatorId, operatorRole, legacyJobInventory };
+  }
+
+  /** #931 A2：bind authority epoch after sendMessage（best-effort）。 */
+  async function bindMessageEpochBestEffort(teamId: string, messageId: string, clientMessageId: string | null): Promise<void> {
+    try {
+      await piAuthorityCutoverUnitOfWork.runInTransaction(async (repos) => {
+        const migration = await repos.migrations.get(teamId);
+        if (!migration) return;
+        await repos.epochBindings.create({ messageId, teamId, sourceLineageKey: `message:${teamId}:${messageId}`, authorityEpoch: migration.authorityEpoch, migrationRevision: migration.migrationRevision, boundAt: clock.now(), clientMessageId });
+      });
+    } catch { /* best-effort */ }
+  }
+
+  /** #931 A6：Team emergency-stop guard for promotion/PI commands。 */
+  async function assertTeamPiCommandsAllowed(teamId: string): Promise<Ack<never> | null> {
+    const migration = await repositories.teamPiAuthorityMigrations.get(teamId);
+    if (!migration) return null;
+    const decision = evaluateCommandPathAvailability({ migration: { state: migration.state, legacyWriterFenced: migration.legacyWriterFenced, emergencyStop: migration.emergencyStop }, path: 'promotion' });
+    if (!decision.allowed) {
+      return makeFailure('CONFLICT', decision.reason === 'pi_emergency_stop' ? 'Team PI emergency-stop is active' : decision.reason);
+    }
+    return null;
+  }
+
+  /** #931 A1：cutover command dispatcher。 */
+  async function dispatchPiAuthorityCutoverCommand(input: { envelope: unknown; payload: unknown; userId: string; teamId: string }): Promise<{ ok: true; response: PiAuthorityCutoverCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) return { ok: false, error: 'FORBIDDEN' };
+    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+    if (!role || (role !== 'owner' && role !== 'admin')) return { ok: false, error: 'FORBIDDEN' };
+    try {
+      const dispatcher = createPiAuthorityCutoverDispatcher(makeCutoverHandlerDeps(input.teamId, input.userId, role));
+      const response = await dispatcher.dispatchCommand({ envelope: input.envelope, payload: input.payload });
+      return { ok: true, response };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'PI_AUTHORITY_CUTOVER_FAILED' };
+    }
+  }
+
+  /** #931 A1：cutover query dispatcher。 */
+  async function dispatchPiAuthorityCutoverQuery(input: { queryName: PiAuthorityCutoverQueryName; payload: unknown; userId: string; teamId: string }): Promise<{ ok: true; response: PiAuthorityCutoverQueryResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) return { ok: false, error: 'FORBIDDEN' };
+    const role = await repositories.teams.getMemberRole(input.teamId, input.userId);
+    if (!role || (role !== 'owner' && role !== 'admin')) return { ok: false, error: 'FORBIDDEN' };
+    try {
+      const dispatcher = createPiAuthorityCutoverDispatcher(makeCutoverHandlerDeps(input.teamId, input.userId, role));
+      const response = await dispatcher.dispatchQuery({ queryName: input.queryName, payload: input.payload });
+      return { ok: true, response };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'PI_AUTHORITY_CUTOVER_FAILED' };
+    }
+  }
+
   const channelFileRollout = input.channelFileRollout ?? {
     ...DEFAULT_CHANNEL_FILE_ROLLOUT,
     // Directly constructed use cases preserve the pre-rollout behavior. Production
@@ -2226,6 +2355,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     if (response.outcome === 'applied' && response.result?.commandName === 'send-message') {
       const message = await repositories.messages.getById(response.result.messageId);
       if (!message) return makeFailure('INTERNAL_ERROR', 'Message not found after send');
+      void bindMessageEpochBestEffort(message.teamId, message.id, messageInput.clientMessageId ?? null);
       return makeSuccess({ message, dispatches: [] });
     }
     // replay → response 仅含 wire receipt（V1 投影白名单不含 resultJson，ADR-0067）；
@@ -2238,7 +2368,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const data = JSON.parse(receiptRecord.resultJson) as { messageId?: string };
           if (data.messageId) {
             const message = await repositories.messages.getById(data.messageId);
-            if (message) return makeSuccess({ message, dispatches: [] });
+            if (message) {
+              void bindMessageEpochBestEffort(message.teamId, message.id, messageInput.clientMessageId ?? null);
+              return makeSuccess({ message, dispatches: [] });
+            }
           }
         } catch { /* fall through */ }
       }
@@ -2529,6 +2662,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return channelCoordinator.processJob(jobId);
     },
     async evaluateSemanticPromotion(promotionInput) {
+      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
+      if (stopped) return stopped;
       if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
         return makeFailure('FORBIDDEN', 'Requester is not a team member');
       }
@@ -2553,6 +2688,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     },
     async actOnPromotionProposal(promotionInput) {
+      const stopped = await assertTeamPiCommandsAllowed(promotionInput.teamId);
+      if (stopped) return stopped;
       if (!(await repositories.teams.isMember(promotionInput.teamId, promotionInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
@@ -3658,9 +3795,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         affectedTeamIds.push(...agent.visibleTeamIds);
       }
 
+      const piMigration = await repositories.teamPiAuthorityMigrations.get(device.teamId);
+      const piAuthorityCapabilities = piMigration
+        ? negotiateDaemonPiCapabilities({ daemonProtocolVersion: Number(deviceInput.daemonVersion?.split('.')[0]) || 0, advertisedCapabilities: [], teamMigrationState: piMigration.state, legacyWriterFenced: piMigration.legacyWriterFenced })
+        : undefined;
       return makeSuccess({
         device: await toDeviceDtoWithOwnerName(repositories, device),
         affectedTeamIds: uniqueIds(affectedTeamIds),
+        ...(piAuthorityCapabilities ? { piAuthorityCapabilities } : {}),
         credentials: {
           token: issueDeviceToken({
             teamId: device.teamId,
@@ -4829,6 +4971,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     dispatchSystemActivityCommand,
     dispatchSystemActivityQuery,
     dispatchTaskRemediationCommand,
+    dispatchPiAuthorityCutoverCommand,
+    dispatchPiAuthorityCutoverQuery,
 
     async sendMessage(messageInput) {
       if (messageIngestionMode === 'legacy') return sendLegacyMessage(messageInput);
@@ -5212,6 +5356,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...messageWithMeta,
           ...(outcome.referenceSet ? { referenceSet: outcome.referenceSet } : {}),
         };
+      if (message.id) { void bindMessageEpochBestEffort(message.teamId, message.id, messageInput.clientMessageId ?? null); }
       return makeSuccess({
         message,
         dispatches,

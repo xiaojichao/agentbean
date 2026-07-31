@@ -383,6 +383,16 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           return job;
         });
       },
+      // #931 cutover：列出 Team 内仍 open 的 legacy jobs
+      async listOpenByTeam(teamId) {
+        return (teamDb.prepare(
+          "SELECT * FROM channel_coordination_jobs WHERE team_id = ? AND status IN ('pending','retry_wait','running') ORDER BY created_at"
+        ).all(teamId) as unknown[]).map((row) => {
+          const job = mapChannelCoordinationJob(row);
+          if (!job) throw new Error('SQLite coordination job row could not be mapped');
+          return job;
+        });
+      },
       async updateState(input) {
         const result = teamDb.prepare(`UPDATE channel_coordination_jobs
           SET status = ?, attempt = ?, next_retry_at = ?, updated_at = ? WHERE id = ?`)
