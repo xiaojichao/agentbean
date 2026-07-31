@@ -3488,6 +3488,188 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('same-batch image then text still coalesces attachments on one dispatch', async () => {
+    let now = 600;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'dm-1',
+        'artifact-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      filename: 'chart.png',
+      mimeType: 'image/png',
+      sizeBytes: 10,
+      storagePath: 'artifacts/team-1/artifact-1/chart.png',
+      relativePath: 'chart.png',
+      sha256: 'hash-chart',
+    });
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: '附件',
+      artifactIds: ['artifact-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1' }],
+    });
+    now = 605;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: '请分析该图片',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-2' },
+      dispatches: [],
+      coalescedDispatchId: 'dispatch-1',
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        prompt: '附件\n\n请分析该图片',
+        attachments: [{ id: 'artifact-1', name: 'chart.png', mimeType: 'image/png' }],
+      },
+    });
+  });
+
+  test('thread follow-up after image upload includes prior message image in dispatch attachments', async () => {
+    // Repro: user uploads image in DM/thread, then later asks agent to analyze it.
+    // Symptom: agent replies as if no image exists ("请上传或描述您想要分析的图片").
+    let now = 500;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'dm-1',
+        'artifact-1',
+        'message-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+        'dispatch-2',
+        'request-2',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await expect(app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' })).resolves.toMatchObject({
+      ok: true,
+      dm: { channel: { id: 'dm-1' } },
+    });
+    await app.uploadArtifact({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      filename: 'screenshot.png',
+      mimeType: 'image/png',
+      sizeBytes: 42,
+      storagePath: 'artifacts/team-1/artifact-1/screenshot.png',
+      relativePath: 'screenshot.png',
+      sha256: 'hash-image-1',
+    });
+
+    // 1) First message: image only (composer body defaults to "附件")
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: '附件',
+      artifactIds: ['artifact-1'],
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-1', artifacts: [{ id: 'artifact-1', filename: 'screenshot.png' }] },
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+    });
+    await expect(app.getDispatchRequest({ dispatchId: 'dispatch-1' })).resolves.toMatchObject({
+      ok: true,
+      request: {
+        attachments: [{ id: 'artifact-1', name: 'screenshot.png', mimeType: 'image/png' }],
+      },
+    });
+
+    now = 501;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '已收到消息。',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-2', threadId: 'message-1' },
+    });
+
+    // 2) Later follow-up in the same thread: ask to analyze the image (no new artifacts)
+    now = 520;
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      threadId: 'message-1',
+      body: '请分析该图片的内容',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: { id: 'message-3', threadId: 'message-1' },
+      dispatches: [{ id: 'dispatch-2', messageId: 'message-3' }],
+    });
+
+    const followUp = await app.getDispatchRequest({ dispatchId: 'dispatch-2' });
+    expect(followUp).toMatchObject({ ok: true });
+    if (!followUp.ok) throw new Error('follow-up dispatch request failed');
+    // history includes the prior image message body
+    expect(followUp.request.history).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: 'message-1', body: '附件' }),
+    ]));
+    // BUG symptom: agent cannot see the image unless prior-thread artifacts are on the request
+    expect(followUp.request.attachments).toEqual([
+      expect.objectContaining({
+        id: 'artifact-1',
+        name: 'screenshot.png',
+        mimeType: 'image/png',
+      }),
+    ]);
+  });
+
   test('sendMessage passes uploaded artifacts through to the dispatch request', async () => {
     const app = createInMemoryServerNext({
       now: () => 330,
