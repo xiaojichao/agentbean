@@ -33,10 +33,14 @@ export interface AgentSnapshot {
   cwd?: string | null;
   env?: Record<string, string> | null;
   description?: string | null;
+  /** description 的来源：agent_md=扫描自 AGENTS.md/CLAUDE.md，manual=用户手工填写。 */
+  descriptionSource?: 'agent_md' | 'manual';
   deviceId?: string;
   deviceName?: string | null;
   source?: 'self-register' | 'scanned' | 'custom';
   skills?: SkillDto[];
+  /** 扫描自 AGENTS.md/CLAUDE.md 的公开能力候选（事实层，无 sourcePath 泄露）。 */
+  scannedCapabilities?: string[];
 }
 
 export interface DiscoveredAgent {

@@ -188,6 +188,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.device.delete,
       WEB_EVENTS.device.selectDirectory,
       WEB_EVENTS.device.listDirectory,
+      WEB_EVENTS.device.scanDescriptor,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
       WEB_EVENTS.channel.addMember,

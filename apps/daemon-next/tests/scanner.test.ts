@@ -118,6 +118,7 @@ describe('daemon-next builtin scanner', () => {
         discoverySource: 'gateway',
         gatewayInstanceKey: 'hermes:/opt/homebrew/bin/hermes',
         projectDocumentInputSetVersions: [1],
+        descriptor: null,
       },
       {
         adapterKind: 'openclaw',
@@ -129,6 +130,7 @@ describe('daemon-next builtin scanner', () => {
         discoverySource: 'gateway',
         gatewayInstanceKey: 'openclaw:/opt/homebrew/bin/openclaw:main',
         projectDocumentInputSetVersions: [1],
+        descriptor: null,
       },
       {
         adapterKind: 'codex',
@@ -138,6 +140,7 @@ describe('daemon-next builtin scanner', () => {
         args: ['exec'],
         cwd: '/Users/shaw/project',
         discoverySource: 'filesystem',
+        descriptor: null,
       },
     ]);
   });

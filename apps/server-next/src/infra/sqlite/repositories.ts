@@ -125,6 +125,7 @@ export function applyGlobalMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'global/0019_agent_input_set_capabilities.sql');
   applyMigration(db, 'global/0019_active_pi_model.sql');
   applyMigration(db, 'global/0020_system_user_memory.sql');
+  applyMigration(db, 'global/0021_agent_descriptor.sql');
 }
 
 export function applyTeamMigrations(db: SqliteDatabase): void {
@@ -1481,8 +1482,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             `INSERT INTO agents (
               id, primary_team_id, name, normalized_name, role, description, adapter_kind, category, source,
               status, owner_id, device_id, command, args_json, cwd, gateway_instance_key, env_json, last_seen_at, last_error, created_at, updated_at,
-              deleted_at, skills_json, name_source, project_document_input_set_versions_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              deleted_at, skills_json, name_source, project_document_input_set_versions_json,
+              description_source, scanned_capabilities_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               primary_team_id = excluded.primary_team_id,
               name = CASE WHEN name_source = 'custom' THEN agents.name ELSE excluded.name END,
@@ -1495,6 +1497,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
               command = excluded.command,
               args_json = excluded.args_json,
               cwd = excluded.cwd,
+              description = CASE WHEN agents.description_source = 'manual' THEN agents.description ELSE excluded.description END,
+              description_source = CASE WHEN agents.description_source = 'manual' THEN 'manual' ELSE excluded.description_source END,
+              scanned_capabilities_json = excluded.scanned_capabilities_json,
               skills_json = excluded.skills_json,
               project_document_input_set_versions_json = excluded.project_document_input_set_versions_json,
               gateway_instance_key = excluded.gateway_instance_key,
@@ -1528,6 +1533,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             agent.nameSource ?? 'scanned',
             agent.projectDocumentInputSetVersions
               ? JSON.stringify(agent.projectDocumentInputSetVersions)
+              : null,
+            agent.descriptionSource ?? null,
+            agent.scannedCapabilities
+              ? JSON.stringify(agent.scannedCapabilities)
               : null,
           );
         for (const teamId of agent.visibleTeamIds) {
@@ -1603,6 +1612,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
                normalized_name = ?,
                name_source = ?,
                description = ?,
+               description_source = ?,
                adapter_kind = ?,
                device_id = ?,
                command = ?,
@@ -1619,6 +1629,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             normalizeName(nextName),
             hasOwn(changes, 'name') && nextName !== existing.name ? 'custom' : (existing.nameSource ?? 'scanned'),
             hasOwn(changes, 'description') ? changes.description ?? null : existing.description ?? null,
+            // 用户经配置对话框手工编辑 description → 标记 manual（此后扫描不再覆盖）。
+            hasOwn(changes, 'description') ? 'manual' : (existing.descriptionSource ?? null),
             hasOwn(changes, 'adapterKind') ? changes.adapterKind ?? existing.adapterKind : existing.adapterKind,
             hasOwn(changes, 'deviceId') ? changes.deviceId ?? null : existing.deviceId ?? null,
             hasOwn(changes, 'command') ? changes.command ?? null : existing.command ?? null,
@@ -4306,6 +4318,10 @@ function mapAgent(db: SqliteDatabase, row: unknown): AgentRecord | null {
     gatewayInstanceKey: sqliteNullableText(row, 'gateway_instance_key'),
     envKeys: rawEnv ? Object.keys(rawEnv).sort() : undefined,
     description: sqliteNullableText(row, 'description'),
+    descriptionSource: sqliteNullableText(row, 'description_source') as AgentRecord['descriptionSource'],
+    scannedCapabilities:
+      (parseJsonArraySafe(sqliteNullableText(row, 'scanned_capabilities_json')) as string[] | null)
+        ?? undefined,
     lastSeenAt: sqliteNumber(row, 'last_seen_at'),
     lastError: sqliteNullableText(row, 'last_error'),
     projectDocumentInputSetVersions:
