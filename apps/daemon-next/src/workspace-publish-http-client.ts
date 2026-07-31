@@ -16,7 +16,18 @@ export function createHttpWorkspaceStagingClient(
   input: CreateHttpWorkspaceStagingClientInput,
 ): StagingRemoteClient {
   const fetchFn = input.fetch ?? fetch;
-  const base = input.serverUrl.replace(/\/$/, '');
+  const base = String(input.serverUrl ?? '').replace(/\/$/, '');
+  if (!base) {
+    const missing = async (): Promise<{ ok: false; error: string }> => (
+      { ok: false, error: 'SERVER_URL_MISSING' }
+    );
+    return {
+      begin: missing,
+      putChunk: missing,
+      get: missing,
+      commit: missing,
+    };
+  }
   const auth = { Authorization: `Bearer ${input.token}` };
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
@@ -166,7 +177,8 @@ export async function fetchProjectChannelWorkspaceCurrent(input: {
   fetch?: typeof fetch;
 }): Promise<{ ok: true; currentRevisionId: string } | { ok: false; error: string }> {
   const fetchFn = input.fetch ?? fetch;
-  const base = input.serverUrl.replace(/\/$/, '');
+  const base = String(input.serverUrl ?? '').replace(/\/$/, '');
+  if (!base) return { ok: false, error: 'SERVER_URL_MISSING' };
   const url = new URL(`${base}/api/teams/${encodeURIComponent(input.teamId)}/project-channel-workspace`);
   url.searchParams.set('channelId', input.channelId);
   const response = await fetchFn(url.toString(), {

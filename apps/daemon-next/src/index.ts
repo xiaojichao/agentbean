@@ -369,7 +369,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let dispatchOutbox: DispatchOutbox | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
   const resumePendingWorkspacePublishes = async () => {
-    if (!device.token) return;
+    // e2e/stub 场景可能无 serverUrl；无 token 也无法 resume。
+    if (!device.token || !serverUrl) return;
     const client = createHttpWorkspaceStagingClient({
       serverUrl,
       token: device.token,
@@ -731,9 +732,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 .filter((artifact) => artifact.sourceRoot.kind === 'adapter_generated')
                 .map((artifact) => `${artifact.relativePath}:${artifact.sizeBytes}`));
               // #1003：频道存在 Project Channel Workspace 时走 staging 原子发布；否则回退 legacy upload。
+              // 无 serverUrl 时（部分 e2e stub）不走 staging。
               let usedStaging = false;
               let baselineRevisionId = request.workspaceRevisionId;
-              if (!baselineRevisionId) {
+              if (serverUrl && !baselineRevisionId) {
                 const current = await fetchProjectChannelWorkspaceCurrent({
                   serverUrl,
                   token: device.token,
@@ -743,7 +745,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 });
                 if (current.ok) baselineRevisionId = current.currentRevisionId;
               }
-              if (baselineRevisionId) {
+              if (serverUrl && baselineRevisionId) {
                 const client = createHttpWorkspaceStagingClient({
                   serverUrl,
                   token: device.token,
