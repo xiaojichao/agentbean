@@ -293,8 +293,9 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
     expect(targetedNode?.task.status).toBe('done');
     expect(targetedNode?.coordination.dependencyTaskIds).toContain(managerState.openTaskId);
 
-    await expect(webSocket.emitWithAck(WEB_EVENTS.task.update, {
-      userId, teamId, taskId: sent.task!.id, status: 'done',
+    // #995：managed root 完成走 accept-root-delivery
+    await expect(webSocket.emitWithAck(WEB_EVENTS.task.acceptRootDelivery, {
+      userId, teamId, taskId: sent.task!.id,
     })).resolves.toMatchObject({ ok: true, task: { id: sent.task!.id, status: 'done' } });
 
     const firstExecution = executions[0]!;

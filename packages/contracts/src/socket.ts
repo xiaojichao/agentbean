@@ -272,6 +272,9 @@ export const WEB_EVENTS = {
     reorder: 'task:reorder',
     cancel: 'task:cancel',
     close: 'task:close',
+    /** #995 根交付人审：具名 lifecycle command，禁止用 task:update 旁路进 done。 */
+    acceptRootDelivery: 'task:accept-root-delivery',
+    rejectRootDelivery: 'task:reject-root-delivery',
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },

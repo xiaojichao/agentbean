@@ -212,6 +212,9 @@ export function buildBoundActionPayload(input: {
   command: NamedActivityActionCommand;
   taskId: string;
   attention: SystemAttentionItemView;
+  /** reject-root-delivery 必填；其余 command 可选。 */
+  reason?: string;
+  deliveryMessageId?: string;
 }): Record<string, unknown> {
   const base: Record<string, unknown> = {
     taskId: input.taskId,
@@ -222,13 +225,39 @@ export function buildBoundActionPayload(input: {
     base.confirmationToken = input.attention.confirmationToken;
     base.expectedEscalationRevision = input.attention.escalationRevision ?? input.attention.revision;
   }
-  if (input.command === 'accept-root-delivery' || input.command === 'reject-root-delivery') {
+  if (input.command === 'accept-root-delivery') {
     base.expectedTaskRevision = input.attention.taskRevision ?? 0;
+    if (input.deliveryMessageId) base.deliveryMessageId = input.deliveryMessageId;
     if (input.attention.deliveryRevision !== undefined) {
       base.deliveryRevision = input.attention.deliveryRevision;
     }
   }
+  if (input.command === 'reject-root-delivery') {
+    base.expectedTaskRevision = input.attention.taskRevision ?? 0;
+    base.reason = input.reason?.trim() || '审查退回';
+  }
+  if (input.command === 'cancel-task' || input.command === 'close-task') {
+    base.reason = input.reason?.trim() || (input.command === 'cancel-task' ? '用户取消' : '管理员关闭');
+  }
   return base;
+}
+
+/** #995：将 system-activity 具名 review action 映射到 task socket 事件。 */
+export function mapReviewCommandToTaskSocketEvent(
+  command: NamedActivityActionCommand,
+): 'acceptRootDelivery' | 'rejectRootDelivery' | 'cancel' | 'close' | null {
+  switch (command) {
+    case 'accept-root-delivery':
+      return 'acceptRootDelivery';
+    case 'reject-root-delivery':
+      return 'rejectRootDelivery';
+    case 'cancel-task':
+      return 'cancel';
+    case 'close-task':
+      return 'close';
+    default:
+      return null;
+  }
 }
 
 export function isProjectionNotReady(outcome: string | undefined): boolean {

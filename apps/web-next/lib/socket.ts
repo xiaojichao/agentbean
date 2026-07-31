@@ -855,6 +855,18 @@ export interface TaskEvents {
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
   cancel(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
   close(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
+  /** #995 根交付人审 accept。 */
+  acceptRootDelivery(payload: {
+    taskId: string;
+    deliveryMessageId?: string;
+    expectedTaskRevision?: number;
+  }): Promise<{ ok: boolean; task?: any; error?: string }>;
+  /** #995 根交付人审 reject。 */
+  rejectRootDelivery(payload: {
+    taskId: string;
+    reason: string;
+    expectedTaskRevision?: number;
+  }): Promise<{ ok: boolean; task?: any; error?: string }>;
   onSnapshot(handler: (tasks: any[]) => void): () => void;
 }
 
@@ -868,6 +880,12 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
     reorder(id, sortOrder) { return emitWithTimeout(socket, WEB_EVENTS.task.reorder, { taskId: id, sortOrder }); },
     cancel(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.cancel, { taskId: id, reason }); },
     close(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.close, { taskId: id, reason }); },
+    acceptRootDelivery(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.task.acceptRootDelivery, payload);
+    },
+    rejectRootDelivery(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.task.rejectRootDelivery, payload);
+    },
     onSnapshot(handler) {
       socket.on(WEB_EVENTS.task.snapshot, handler);
       return () => { socket.off(WEB_EVENTS.task.snapshot, handler); };

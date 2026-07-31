@@ -520,6 +520,10 @@ export interface ServerNextUseCases {
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
   cancelTask(input: CancelTaskInput): Promise<Ack<{ task: TaskDto }>>;
   closeTask(input: CloseTaskInput): Promise<Ack<{ task: TaskDto }>>;
+  /** #995 根交付人审 accept（human authority → lifecycle accept-root-delivery）。 */
+  acceptRootDelivery(input: AcceptRootDeliveryInput): Promise<Ack<{ task: TaskDto }>>;
+  /** #995 根交付人审 reject（human authority → lifecycle reject-root-delivery）。 */
+  rejectRootDelivery(input: RejectRootDeliveryInput): Promise<Ack<{ task: TaskDto }>>;
   reorderTask(input: ReorderTaskInput): Promise<Ack<{ task: TaskDto }>>;
   uploadArtifact(input: UploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
   uploadArtifactForDevice(input: DeviceUploadArtifactInput): Promise<Ack<{ artifact: ArtifactDto }>>;
@@ -1227,6 +1231,24 @@ export interface CloseTaskInput {
   teamId: string;
   taskId: string;
   reason: string;
+}
+
+export interface AcceptRootDeliveryInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  /** 省略时服务端从 root-delivery-submitted 事件解析。 */
+  deliveryMessageId?: string;
+  /** 省略时使用当前 task.revision（仍会在 kernel 做 fencing）。 */
+  expectedTaskRevision?: number;
+}
+
+export interface RejectRootDeliveryInput {
+  userId: string;
+  teamId: string;
+  taskId: string;
+  reason: string;
+  expectedTaskRevision?: number;
 }
 
 export interface ReorderTaskInput {
@@ -8191,33 +8213,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (title !== undefined && !title) {
         return makeFailure('VALIDATION_ERROR', 'Task title is required');
       }
-      let managedCompletion: { managementRunId: string; deliveryMessageId: string } | null = null;
-      if (taskInput.status === 'in_progress' && task.status === 'in_review') {
+      // #995：绑定 management run 的 root Task 禁止用 task:update 完成/退回。
+      if (taskInput.status !== undefined && taskInput.status !== task.status) {
         const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
-        const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
-        if (managementRun && coordination?.nodeKind === 'root'
-          && coordination.managementRunId === managementRun.id) {
-          await taskCoordinationKernel.reopenRootTaskFromHuman({
-            managementRunId: managementRun.id,
-            taskId: task.id,
-            userId: taskInput.userId,
-            expectedTaskRevision: task.revision,
-          });
+        if (managementRun && taskInput.status === 'done') {
+          return makeFailure(
+            'CONFLICT',
+            'Managed root completion must use accept-root-delivery (task:accept-root-delivery)',
+          );
         }
-      }
-      if (taskInput.status === 'done' && task.status !== 'done') {
-        const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
-        if (managementRun) {
-          if (managementRun.status !== 'in_review' && managementRun.status !== 'completed') {
-            return makeFailure('CONFLICT', 'Managed Task is not ready for human completion');
-          }
-          const events = await repositories.management.events.list(managementRun.id);
-          const deliveryEvent = [...events].reverse()
-            .find(({ event }) => event.type === 'root-delivery-submitted');
-          if (!deliveryEvent || deliveryEvent.event.type !== 'root-delivery-submitted') {
-            return makeFailure('CONFLICT', 'Managed Task has no review delivery');
-          }
-          managedCompletion = { managementRunId: managementRun.id, deliveryMessageId: deliveryEvent.event.payload.messageId };
+        if (managementRun && task.status === 'in_review' && taskInput.status === 'in_progress') {
+          return makeFailure(
+            'CONFLICT',
+            'Managed root rework must use reject-root-delivery (task:reject-root-delivery)',
+          );
         }
       }
       const updated = await repositories.tasks.update({
@@ -8254,14 +8263,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             },
           })
         : null;
-      if (managedCompletion) {
-        await managementKernel.completeRunFromHumanTask({
-          managementRunId: managedCompletion.managementRunId,
-          taskId: updated.id,
-          userId: taskInput.userId,
-          deliveryMessageId: managedCompletion.deliveryMessageId,
-        });
-      }
       return makeSuccess({
         task: updated,
         ...(statusMessage ? { message: statusMessage } : {}),
@@ -8346,6 +8347,127 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           { managementRunId: '', workerId: taskInput.userId, leaseToken: '', fencingToken: 0 },
           'admin', taskInput.teamId,
         );
+        const updated = await repositories.tasks.getById(task.id);
+        return makeSuccess({ task: updated ?? task });
+      } catch (error) {
+        return makeFailure('CONFLICT', (error as Error).message);
+      }
+    },
+
+    async acceptRootDelivery(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
+      if (!managementRun) {
+        return makeFailure('CONFLICT', 'Only managed root tasks support root-delivery accept');
+      }
+      if (managementRun.status !== 'in_review' && managementRun.status !== 'completed') {
+        return makeFailure('CONFLICT', 'Managed Task is not ready for human completion');
+      }
+      let deliveryMessageId = taskInput.deliveryMessageId?.trim() || '';
+      if (!deliveryMessageId) {
+        const events = await repositories.management.events.list(managementRun.id);
+        const deliveryEvent = [...events].reverse()
+          .find(({ event }) => event.type === 'root-delivery-submitted');
+        if (!deliveryEvent || deliveryEvent.event.type !== 'root-delivery-submitted') {
+          return makeFailure('CONFLICT', 'Managed Task has no review delivery');
+        }
+        deliveryMessageId = deliveryEvent.event.payload.messageId;
+      }
+      const expectedTaskRevision = taskInput.expectedTaskRevision ?? task.revision;
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      try {
+        if (coordination?.nodeKind === 'root' && coordination.managementRunId === managementRun.id) {
+          // 优先 lifecycle registry（#926/#995 权威路径）
+          await taskLifecycleKernel.acceptRootDelivery(
+            {
+              schemaVersion: 1,
+              commandName: 'accept-root-delivery',
+              commandSchemaVersion: 1,
+              idempotencyKey: `accept-root:${task.id}:${taskInput.userId}:${expectedTaskRevision}:${deliveryMessageId}`,
+            },
+            {
+              taskId: task.id,
+              expectedTaskRevision,
+              deliveryMessageId,
+            },
+            { managementRunId: '', workerId: taskInput.userId, leaseToken: '', fencingToken: 0 },
+            'human',
+            taskInput.teamId,
+          );
+        } else {
+          // 无 coordination 的 Phase-1 managed root：统一入口仍禁用 updateTask 旁路
+          if (task.status !== 'done') {
+            const updatedTask = await repositories.tasks.update({
+              taskId: task.id,
+              changes: { status: 'done', updatedAt: clock.now() },
+            });
+            if (!updatedTask) return makeFailure('NOT_FOUND', 'Task not found');
+          }
+          await managementKernel.completeRunFromHumanTask({
+            managementRunId: managementRun.id,
+            taskId: task.id,
+            userId: taskInput.userId,
+            deliveryMessageId,
+          });
+        }
+        const updated = await repositories.tasks.getById(task.id);
+        return makeSuccess({ task: updated ?? task });
+      } catch (error) {
+        return makeFailure('CONFLICT', (error as Error).message);
+      }
+    },
+
+    async rejectRootDelivery(taskInput) {
+      if (!(await repositories.teams.isMember(taskInput.teamId, taskInput.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const reason = typeof taskInput.reason === 'string' ? taskInput.reason.trim() : '';
+      if (!reason) {
+        return makeFailure('VALIDATION_ERROR', 'Reject reason is required');
+      }
+      const task = await repositories.tasks.getById(taskInput.taskId);
+      if (!task || task.teamId !== taskInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
+      if (!managementRun) {
+        return makeFailure('CONFLICT', 'Only managed root tasks support root-delivery reject');
+      }
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+      const expectedTaskRevision = taskInput.expectedTaskRevision ?? task.revision;
+      try {
+        if (coordination?.nodeKind === 'root' && coordination.managementRunId === managementRun.id) {
+          await taskLifecycleKernel.rejectRootDelivery(
+            {
+              schemaVersion: 1,
+              commandName: 'reject-root-delivery',
+              commandSchemaVersion: 1,
+              idempotencyKey: `reject-root:${task.id}:${taskInput.userId}:${expectedTaskRevision}:${reason}`,
+            },
+            {
+              taskId: task.id,
+              expectedTaskRevision,
+              reason,
+            },
+            { managementRunId: '', workerId: taskInput.userId, leaseToken: '', fencingToken: 0 },
+            'human',
+            taskInput.teamId,
+          );
+        } else {
+          // Phase-1 无 coordination：退回仍走 coordination kernel reopen（统一 reject 入口）
+          await taskCoordinationKernel.reopenRootTaskFromHuman({
+            managementRunId: managementRun.id,
+            taskId: task.id,
+            userId: taskInput.userId,
+            expectedTaskRevision,
+          });
+        }
         const updated = await repositories.tasks.getById(task.id);
         return makeSuccess({ task: updated ?? task });
       } catch (error) {

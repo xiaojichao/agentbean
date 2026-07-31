@@ -85,8 +85,12 @@ describe('Phase 1 managed single-Agent vertical slice', () => {
       output: { deliveryMessageId: deliveryId, status: 'in_review' },
     });
 
+    // #995：禁止 updateTask 旁路；accept-root-delivery 是唯一 human completion 入口
     await expect(harness.app.updateTask({
       userId: 'user-1', teamId: 'team-1', taskId: 'task-1', status: 'done',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.app.acceptRootDelivery({
+      userId: 'user-1', teamId: 'team-1', taskId: 'task-1', deliveryMessageId: deliveryId,
     })).resolves.toMatchObject({ ok: true, task: { status: 'done' } });
     await expect(harness.repositories.management.runs.getById(harness.runId)).resolves.toMatchObject({ status: 'completed' });
     const deliveries = (await harness.repositories.messages.listByThread({
