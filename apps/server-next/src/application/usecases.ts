@@ -428,6 +428,8 @@ export interface ServerNextUseCases {
    * 上传中内容不进 revision / 频道索引；同 identity + 兼容 plan 幂等返回现有会话。
    */
   beginWorkspacePublishStaging(input: BeginWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
+  /** #1003：device token 开启/续用 staging（daemon 生产路径）。 */
+  beginWorkspacePublishStagingForDevice(input: DeviceBeginWorkspacePublishStagingInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
   /** #967 字节续传：同 publishId 可断点续传；已完成文件幂等成功。 */
   putWorkspacePublishStagingFile(input: PutWorkspacePublishStagingFileInput): Promise<Ack<{ staging: WorkspacePublishStagingDto }>>;
   /** #967 hardening：device token 入口的 put（daemon 续传）。 */
@@ -1111,6 +1113,17 @@ export interface PutWorkspacePublishStagingFileInput {
   /** 原始字节（测试与 usecase 直调）；HTTP 层可先读入再传入。 */
   content: Buffer | Uint8Array | string;
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+}
+
+export interface DeviceBeginWorkspacePublishStagingInput {
+  token: string;
+  teamId: string;
+  channelId: string;
+  publishId: string;
+  baselineRevisionId: string;
+  files: BeginWorkspacePublishStagingInput['files'];
+  provenance?: BeginWorkspacePublishStagingInput['provenance'];
+  limits?: BeginWorkspacePublishStagingInput['limits'];
 }
 
 export interface DevicePutWorkspacePublishStagingFileInput {
@@ -5450,6 +5463,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
       }
       return makeSuccess({ staging: toWorkspacePublishStagingDto(created) });
+    },
+
+    async beginWorkspacePublishStagingForDevice(deviceBeginInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceBeginInput);
+      if (!actor.ok) return actor;
+      return this.beginWorkspacePublishStaging({
+        userId: actor.userId,
+        teamId: deviceBeginInput.teamId,
+        channelId: deviceBeginInput.channelId,
+        publishId: deviceBeginInput.publishId,
+        baselineRevisionId: deviceBeginInput.baselineRevisionId,
+        files: deviceBeginInput.files,
+        ...(deviceBeginInput.provenance ? { provenance: deviceBeginInput.provenance } : {}),
+        ...(deviceBeginInput.limits ? { limits: deviceBeginInput.limits } : {}),
+      });
     },
 
     async putWorkspacePublishStagingFileForDevice(devicePutInput) {

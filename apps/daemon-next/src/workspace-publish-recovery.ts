@@ -141,7 +141,17 @@ export interface StagingRemoteClient {
     teamId: string;
     channelId: string;
   }): Promise<
-    | { ok: true; staging: { status: string; committedRevisionId?: string }; workspace?: { currentRevisionId: string } }
+    | {
+        ok: true;
+        staging: { status: string; committedRevisionId?: string };
+        workspace?: {
+          currentRevisionId: string;
+          currentRevision?: {
+            id: string;
+            files: Array<{ path: string; artifactId: string }>;
+          };
+        };
+      }
     | { ok: false; error: string; details?: { conflictingPaths?: string[] } }
   >;
 }
