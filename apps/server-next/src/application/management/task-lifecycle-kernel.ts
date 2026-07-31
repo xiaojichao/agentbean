@@ -170,10 +170,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           result: unpacked.result,
           receipt: existing,
           disposition: 'replayed' as const,
+          ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
           freshlyApplied: false as const,
           now,
           taskSnapshot: null as TaskRecord | null,
-          ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
         };
       }
 
@@ -192,10 +192,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
             result: unpacked.result,
             receipt: viaReceipt,
             disposition: 'replayed' as const,
+            ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
             freshlyApplied: false as const,
             now,
             taskSnapshot: null as TaskRecord | null,
-            ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
           };
         }
         // tombstone 仍在、结果已压缩：返回空结果壳，outcome 来自 tombstone，绝不重跑业务
@@ -203,10 +203,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           result: {} as TaskLifecycleCommandOutputMapV1[K],
           receipt: null as never,
           disposition: 'replayed' as const,
+          tombstoneOutcome: tombstone.outcome,
           freshlyApplied: false as const,
           now,
           taskSnapshot: null as TaskRecord | null,
-          tombstoneOutcome: tombstone.outcome,
         };
       }
 
@@ -257,10 +257,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         result,
         receipt: null as never,
         disposition: 'applied' as const,
+        ...(reason !== undefined ? { reason } : {}),
         freshlyApplied: true as const,
         now,
         taskSnapshot,
-        ...(reason !== undefined ? { reason } : {}),
       };
     });
 
@@ -271,7 +271,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       const taskRevision = Number(r.taskRevision ?? (input as { expectedTaskRevision?: number }).expectedTaskRevision ?? 0);
       const status = typeof r.status === 'string' ? r.status : undefined;
       const deliveryMessageId = typeof r.deliveryMessageId === 'string' ? r.deliveryMessageId : undefined;
-      const onAppliedReason = typeof (input as { reason?: string }).reason === 'string'
+      const reason = typeof (input as { reason?: string }).reason === 'string'
         ? (input as { reason?: string }).reason
         : undefined;
       try {
@@ -282,7 +282,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           taskRevision,
           status,
           deliveryMessageId,
-          reason: onAppliedReason,
+          reason,
           channelId: outcome.taskSnapshot?.channelId ?? null,
           creatorId: outcome.taskSnapshot?.creatorId ?? null,
           assigneeId: outcome.taskSnapshot?.assigneeId ?? null,
