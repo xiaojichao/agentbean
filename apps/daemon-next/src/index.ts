@@ -24,6 +24,18 @@ import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
 import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
+import {
+  buildDispatchWorkspacePublishId,
+  deliverWorkspaceOutputsViaStaging,
+} from './workspace-publish-delivery.js';
+import {
+  createHttpWorkspaceStagingClient,
+  fetchProjectChannelWorkspaceCurrent,
+} from './workspace-publish-http-client.js';
+import {
+  createFilesystemWorkspacePublishRecoveryStore,
+  resumeLocalWorkspacePublish,
+} from './workspace-publish-recovery.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -47,6 +59,26 @@ export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
 export { createHttpEnvResolver } from './env-fetcher.js';
+export {
+  buildDispatchWorkspacePublishId,
+  deliverWorkspaceOutputsViaStaging,
+} from './workspace-publish-delivery.js';
+export type { DeliverWorkspaceOutputsResult } from './workspace-publish-delivery.js';
+export {
+  createHttpWorkspaceStagingClient,
+  createHttpWorkspaceStagingPutClient,
+  fetchProjectChannelWorkspaceCurrent,
+} from './workspace-publish-http-client.js';
+export {
+  createFilesystemWorkspacePublishRecoveryStore,
+  resumeLocalWorkspacePublish,
+  buildLocalWorkspacePublishFile,
+} from './workspace-publish-recovery.js';
+export type {
+  LocalWorkspacePublishRecord,
+  StagingRemoteClient,
+  WorkspacePublishRecoveryStore,
+} from './workspace-publish-recovery.js';
 export { createDeviceServiceCore } from './device-service-core.js';
 export type { DeviceServiceComponent, DeviceServiceCore } from './device-service-core.js';
 export { createDeviceServiceHost, bindDeviceServiceSignals } from './device-service-host.js';
@@ -236,6 +268,11 @@ export interface DispatchRequestPayload {
   memoryContext?: readonly DispatchMemoryContextItemDto[];
   projectReferenceSets?: readonly ProjectReferenceSetDto[];
   projectDocumentInputSet?: ProjectDocumentInputSetV1;
+  /**
+   * #1003 / #966：执行时冻结的 Project Channel Workspace revisionId。
+   * claim 路径可来自 execution snapshot；未提供时交付阶段会尝试读取频道当前 revision 作为 baseline。
+   */
+  workspaceRevisionId?: string;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -320,6 +357,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
   const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
+  // #1003：可恢复 Workspace publish 本地 pending 根（profile/home 下，与 attachment 隔离）。
+  const workspacePublishStore = createFilesystemWorkspacePublishRecoveryStore(
+    join(home, '.agentbean'),
+  );
   let currentDeviceId = '';
   let rescan: RescanController | undefined;
   let acceptingDispatches = false;
@@ -327,6 +368,39 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   let activeDispatchCount = 0;
   let dispatchOutbox: DispatchOutbox | undefined;
   let latestSnapshot: DaemonScanSnapshot = { runtimes, agents };
+  const resumePendingWorkspacePublishes = async () => {
+    // e2e/stub 场景可能无 serverUrl；无 token 也无法 resume。
+    if (!device.token || !serverUrl) return;
+    const client = createHttpWorkspaceStagingClient({
+      serverUrl,
+      token: device.token,
+      fetch: fetchFn,
+    });
+    for (const pending of workspacePublishStore.listPending()) {
+      try {
+        const result = await resumeLocalWorkspacePublish({
+          store: workspacePublishStore,
+          client,
+          publishId: pending.publishId,
+          now: Date.now(),
+        });
+        if (result.kind === 'failed') {
+          console.warn(
+            `daemon workspace-publish resume ${pending.publishId} failed (non-blocking): ${result.error}`,
+          );
+        } else if (result.kind === 'conflict') {
+          console.warn(
+            `daemon workspace-publish resume ${pending.publishId} conflict (non-blocking)`
+            + (result.conflictingPaths?.length ? `: ${result.conflictingPaths.join(',')}` : ''),
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `daemon workspace-publish resume ${pending.publishId} threw (non-blocking): ${readErrorMessage(error)}`,
+        );
+      }
+    }
+  };
   const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
   const localMemoryObservationTails = new Map<string, Promise<void>>();
   const outcomeObserver = input.outcomeObserver ?? observeDispatchOutcome;
@@ -404,6 +478,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         ...latestSnapshot.agents.map((agent) => agent.cwd),
         attachmentWorkspaceRoot,
       ]);
+      // #1003：启动时恢复未完成的 Workspace publish（不以本地 pending 证明已发布）。
+      void resumePendingWorkspacePublishes();
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -413,6 +489,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           console.warn(`daemon reconnect announce failed (non-blocking): ${error instanceof Error ? error.message : String(error)}`);
         }
         scheduleRecoverPersistedWorkspaceRuns(latestSnapshot.agents.map((agent) => agent.cwd));
+        void resumePendingWorkspacePublishes();
         await outbox.flush();
       });
 
@@ -654,24 +731,88 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               const optionalAdapterArtifacts = new Set(collected
                 .filter((artifact) => artifact.sourceRoot.kind === 'adapter_generated')
                 .map((artifact) => `${artifact.relativePath}:${artifact.sizeBytes}`));
-              const uploaded = await uploadArtifacts(
-                {
+              // #1003：频道存在 Project Channel Workspace 时走 staging 原子发布；否则回退 legacy upload。
+              // 无 serverUrl 时（部分 e2e stub）不走 staging。
+              let usedStaging = false;
+              let baselineRevisionId = request.workspaceRevisionId;
+              if (serverUrl && !baselineRevisionId) {
+                const current = await fetchProjectChannelWorkspaceCurrent({
                   serverUrl,
                   token: device.token,
                   teamId: device.teamId,
                   channelId: request.channelId,
                   fetch: fetchFn,
-                  maxBytes: input.artifactMaxBytes,
-                  maxTotalBytes: input.artifactRunMaxBytes,
-                  onSkipped: (artifact) => {
-                    if (!optionalAdapterArtifacts.has(`${artifact.relativePath}:${artifact.sizeBytes}`)) {
-                      skippedProductArtifacts.push(artifact);
-                    }
+                });
+                if (current.ok) baselineRevisionId = current.currentRevisionId;
+              }
+              if (serverUrl && baselineRevisionId) {
+                const client = createHttpWorkspaceStagingClient({
+                  serverUrl,
+                  token: device.token,
+                  fetch: fetchFn,
+                });
+                const publishId = buildDispatchWorkspacePublishId({
+                  dispatchId: request.id,
+                  channelId: request.channelId,
+                  baselineRevisionId,
+                });
+                const delivered = await deliverWorkspaceOutputsViaStaging({
+                  store: workspacePublishStore,
+                  client,
+                  teamId: device.teamId,
+                  channelId: request.channelId,
+                  baselineRevisionId,
+                  collected,
+                  publishId,
+                  now: Date.now(),
+                  provenance: {
+                    agentId: request.agentId,
+                    taskId: request.managementInvocationId ?? request.id,
+                    taskAttempt: 1,
                   },
-                },
-                collected,
-              );
-              productArtifactIds = uploaded.map((u) => u.id);
+                });
+                if (delivered.kind === 'committed') {
+                  usedStaging = true;
+                  productArtifactIds = delivered.artifactIds;
+                } else if (delivered.kind === 'conflict') {
+                  const diagnostic = `[workspace-publish:CONFLICT] publishId=${delivered.publishId}`
+                    + (delivered.conflictingPaths?.length
+                      ? ` paths=${delivered.conflictingPaths.join(',')}`
+                      : '');
+                  result.body = appendDiagnostic(result.body, diagnostic);
+                  if (result.workspaceRun) {
+                    result.workspaceRun.logExcerpt = appendDiagnostic(
+                      result.workspaceRun.logExcerpt,
+                      diagnostic,
+                    );
+                  }
+                  // 冲突不伪造 revision；仍回退 upload 保证 dispatch 可见产物（非 workspace 半成品）。
+                } else if (delivered.kind === 'failed') {
+                  console.warn(
+                    `daemon workspace-publish ${delivered.publishId} failed, fallback upload: ${delivered.error}`,
+                  );
+                }
+              }
+              if (!usedStaging) {
+                const uploaded = await uploadArtifacts(
+                  {
+                    serverUrl,
+                    token: device.token,
+                    teamId: device.teamId,
+                    channelId: request.channelId,
+                    fetch: fetchFn,
+                    maxBytes: input.artifactMaxBytes,
+                    maxTotalBytes: input.artifactRunMaxBytes,
+                    onSkipped: (artifact) => {
+                      if (!optionalAdapterArtifacts.has(`${artifact.relativePath}:${artifact.sizeBytes}`)) {
+                        skippedProductArtifacts.push(artifact);
+                      }
+                    },
+                  },
+                  collected,
+                );
+                productArtifactIds = uploaded.map((u) => u.id);
+              }
             } else if (collected.length > 0) {
               skippedProductArtifacts.push(...collected
                 .filter((artifact) => artifact.sourceRoot.kind !== 'adapter_generated')

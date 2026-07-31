@@ -7,7 +7,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
-import { createServerNextUseCases, type ArtifactContentStore, type CreateServerNextUseCasesInput } from './application/usecases.js';
+import { createServerNextUseCases, type ArtifactContentStore, type BeginWorkspacePublishStagingInput, type CreateServerNextUseCasesInput } from './application/usecases.js';
 import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
 import { createChannelFileMetrics, parseChannelFileRolloutConfig, type ChannelFileRolloutConfig } from './application/channel-file-rollout.js';
 import type { ArtifactRecord, ServerNextRepositories } from './application/repositories.js';
@@ -806,53 +806,66 @@ async function handleWorkspaceRunLogHttp(input: ArtifactHttpInput): Promise<bool
 }
 
 /**
- * #967 hardening：Workspace publish staging 分块 put。
- * POST /api/teams/:teamId/workspace-publish-staging/put
- * - multipart: channelId, publishId, path, offset + file
- * - 或 application/octet-stream + query/fields: channelId, publishId, path, offset
+ * #967 / #1003 Workspace publish staging HTTP 面。
+ * - POST .../begin  JSON
+ * - POST .../put    multipart 或 raw body
+ * - GET  ...?channelId&publishId
+ * - POST .../commit JSON
+ * - GET  .../workspace?channelId  → 当前 revision（device 冻结 baseline）
  */
 async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Promise<boolean> {
-  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/workspace-publish-staging\/put$/);
-  if (!match) return false;
-  const teamId = decodeURIComponent(match[1] ?? '');
+  const baseMatch = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/workspace-publish-staging(?:\/(begin|put|commit))?$/);
+  const workspaceMatch = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/project-channel-workspace$/);
+  if (!baseMatch && !workspaceMatch) return false;
+  const teamId = decodeURIComponent((baseMatch?.[1] ?? workspaceMatch?.[1]) ?? '');
   try {
-    if (input.request.method !== 'POST') {
-      writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    if (workspaceMatch) {
+      if (input.request.method !== 'GET') {
+        writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+        return true;
+      }
+      const channelId = input.url.searchParams.get('channelId')?.trim() ?? '';
+      const revisionId = input.url.searchParams.get('revisionId')?.trim() || undefined;
+      if (!channelId) {
+        throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId is required' });
+      }
+      const token = readToken(input.url, input.request, {});
+      const result = await getWorkspaceForToken(input, token, { teamId, channelId, revisionId });
+      if (!result.ok) {
+        writeAckFailure(input.response, result);
+        return true;
+      }
+      writeJson(input.response, 200, { ok: true, workspace: result.workspace });
       return true;
     }
-    const contentType = input.request.headers['content-type'];
-    let channelId: string;
-    let publishId: string;
-    let path: string;
-    let offset: number;
-    let content: Buffer;
-    if (typeof contentType === 'string' && contentType.toLowerCase().startsWith('multipart/form-data')) {
-      const multipart = await readMultipartUpload(
-        input.request,
-        contentType,
-        input.config.dataDir,
-        input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES,
-      );
-      try {
-        channelId = readRequiredString(multipart.fields, 'channelId');
-        publishId = readRequiredString(multipart.fields, 'publishId');
-        path = readRequiredString(multipart.fields, 'path');
-        offset = Number(multipart.fields.offset ?? '0');
-        if (!Number.isFinite(offset) || offset < 0) {
-          throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
-        }
-        content = readFileSync(multipart.file.tempPath);
-      } finally {
-        safeUnlink(multipart.file.tempPath);
+
+    const action = baseMatch?.[2]; // undefined = GET list/status
+    const token = readToken(input.url, input.request, {});
+
+    if (input.request.method === 'GET' && !action) {
+      const channelId = input.url.searchParams.get('channelId')?.trim() ?? '';
+      const publishId = input.url.searchParams.get('publishId')?.trim() ?? '';
+      if (!channelId || !publishId) {
+        throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId and publishId are required' });
       }
-      const token = readToken(input.url, input.request, multipart.fields);
-      const result = await putWorkspaceStagingForToken(input, token, {
+      const result = await getWorkspaceStagingForToken(input, token, { teamId, channelId, publishId });
+      if (!result.ok) {
+        writeAckFailure(input.response, result);
+        return true;
+      }
+      writeJson(input.response, 200, { ok: true, staging: result.staging });
+      return true;
+    }
+
+    if (input.request.method === 'POST' && action === 'begin') {
+      const body = await readJsonBody(input.request) as Record<string, unknown>;
+      const result = await beginWorkspaceStagingForToken(input, readToken(input.url, input.request, body) ?? token, {
         teamId,
-        channelId,
-        publishId,
-        path,
-        offset,
-        content,
+        channelId: readRequiredString(body, 'channelId'),
+        publishId: readRequiredString(body, 'publishId'),
+        baselineRevisionId: readRequiredString(body, 'baselineRevisionId'),
+        files: Array.isArray(body.files) ? body.files as BeginWorkspacePublishStagingInput['files'] : [],
+        provenance: body.provenance as BeginWorkspacePublishStagingInput['provenance'] | undefined,
       });
       if (!result.ok) {
         writeAckFailure(input.response, result);
@@ -861,36 +874,83 @@ async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Prom
       writeJson(input.response, 200, { ok: true, staging: result.staging });
       return true;
     }
-    // raw body + query/header fields
-    const maxBytes = input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
-    content = await readRequestBody(input.request, maxBytes);
-    channelId = input.url.searchParams.get('channelId')?.trim()
-      || (typeof input.request.headers['x-channel-id'] === 'string' ? input.request.headers['x-channel-id'].trim() : '');
-    publishId = input.url.searchParams.get('publishId')?.trim()
-      || (typeof input.request.headers['x-publish-id'] === 'string' ? input.request.headers['x-publish-id'].trim() : '');
-    path = input.url.searchParams.get('path')?.trim()
-      || (typeof input.request.headers['x-workspace-path'] === 'string' ? input.request.headers['x-workspace-path'].trim() : '');
-    offset = Number(input.url.searchParams.get('offset') ?? input.request.headers['x-upload-offset'] ?? '0');
-    if (!channelId || !publishId || !path) {
-      throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId, publishId and path are required' });
-    }
-    if (!Number.isFinite(offset) || offset < 0) {
-      throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
-    }
-    const token = readToken(input.url, input.request, {});
-    const result = await putWorkspaceStagingForToken(input, token, {
-      teamId,
-      channelId,
-      publishId,
-      path,
-      offset,
-      content,
-    });
-    if (!result.ok) {
-      writeAckFailure(input.response, result);
+
+    if (input.request.method === 'POST' && action === 'commit') {
+      const body = await readJsonBody(input.request) as Record<string, unknown>;
+      const result = await commitWorkspaceStagingForToken(input, readToken(input.url, input.request, body) ?? token, {
+        teamId,
+        channelId: readRequiredString(body, 'channelId'),
+        publishId: readRequiredString(body, 'publishId'),
+      });
+      if (!result.ok) {
+        writeAckFailure(input.response, result);
+        return true;
+      }
+      writeJson(input.response, 200, {
+        ok: true,
+        staging: result.staging,
+        ...(result.workspace ? { workspace: result.workspace } : {}),
+      });
       return true;
     }
-    writeJson(input.response, 200, { ok: true, staging: result.staging });
+
+    if (input.request.method === 'POST' && action === 'put') {
+      const contentType = input.request.headers['content-type'];
+      let channelId: string;
+      let publishId: string;
+      let path: string;
+      let offset: number;
+      let content: Buffer;
+      let putToken = token;
+      if (typeof contentType === 'string' && contentType.toLowerCase().startsWith('multipart/form-data')) {
+        const multipart = await readMultipartUpload(
+          input.request,
+          contentType,
+          input.config.dataDir,
+          input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES,
+        );
+        try {
+          channelId = readRequiredString(multipart.fields, 'channelId');
+          publishId = readRequiredString(multipart.fields, 'publishId');
+          path = readRequiredString(multipart.fields, 'path');
+          offset = Number(multipart.fields.offset ?? '0');
+          if (!Number.isFinite(offset) || offset < 0) {
+            throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
+          }
+          content = readFileSync(multipart.file.tempPath);
+        } finally {
+          safeUnlink(multipart.file.tempPath);
+        }
+        putToken = readToken(input.url, input.request, multipart.fields) ?? token;
+      } else {
+        const maxBytes = input.config.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
+        content = await readRequestBody(input.request, maxBytes);
+        channelId = input.url.searchParams.get('channelId')?.trim()
+          || (typeof input.request.headers['x-channel-id'] === 'string' ? input.request.headers['x-channel-id'].trim() : '');
+        publishId = input.url.searchParams.get('publishId')?.trim()
+          || (typeof input.request.headers['x-publish-id'] === 'string' ? input.request.headers['x-publish-id'].trim() : '');
+        path = input.url.searchParams.get('path')?.trim()
+          || (typeof input.request.headers['x-workspace-path'] === 'string' ? input.request.headers['x-workspace-path'].trim() : '');
+        offset = Number(input.url.searchParams.get('offset') ?? input.request.headers['x-upload-offset'] ?? '0');
+        if (!channelId || !publishId || !path) {
+          throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId, publishId and path are required' });
+        }
+        if (!Number.isFinite(offset) || offset < 0) {
+          throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'Invalid offset' });
+        }
+      }
+      const result = await putWorkspaceStagingForToken(input, putToken, {
+        teamId, channelId, publishId, path, offset, content,
+      });
+      if (!result.ok) {
+        writeAckFailure(input.response, result);
+        return true;
+      }
+      writeJson(input.response, 200, { ok: true, staging: result.staging });
+      return true;
+    }
+
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
     return true;
   } catch (error) {
     if (error instanceof ArtifactHttpError) {
@@ -903,6 +963,8 @@ async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Prom
   }
 }
 
+type StagingAck = { ok: true; staging: unknown; workspace?: unknown } | { ok: false; error?: string; message?: string; details?: unknown };
+
 async function putWorkspaceStagingForToken(
   input: ArtifactHttpInput,
   token: string | undefined,
@@ -914,7 +976,7 @@ async function putWorkspaceStagingForToken(
     offset: number;
     content: Buffer;
   },
-): Promise<{ ok: true; staging: unknown } | { ok: false; error?: string; message?: string }> {
+): Promise<StagingAck> {
   if (isDeviceToken(token)) {
     return input.app.putWorkspacePublishStagingFileForDevice({
       token,
@@ -936,6 +998,111 @@ async function putWorkspaceStagingForToken(
     path: put.path,
     offset: put.offset,
     content: put.content,
+  });
+}
+
+async function beginWorkspaceStagingForToken(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  begin: {
+    teamId: string;
+    channelId: string;
+    publishId: string;
+    baselineRevisionId: string;
+    files: BeginWorkspacePublishStagingInput['files'];
+    provenance?: BeginWorkspacePublishStagingInput['provenance'];
+  },
+): Promise<StagingAck> {
+  if (isDeviceToken(token)) {
+    return input.app.beginWorkspacePublishStagingForDevice({
+      token,
+      teamId: begin.teamId,
+      channelId: begin.channelId,
+      publishId: begin.publishId,
+      baselineRevisionId: begin.baselineRevisionId,
+      files: begin.files,
+      ...(begin.provenance ? { provenance: begin.provenance } : {}),
+    });
+  }
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) return session;
+  return input.app.beginWorkspacePublishStaging({
+    userId: session.user.id,
+    teamId: begin.teamId,
+    channelId: begin.channelId,
+    publishId: begin.publishId,
+    baselineRevisionId: begin.baselineRevisionId,
+    files: begin.files,
+    ...(begin.provenance ? { provenance: begin.provenance } : {}),
+  });
+}
+
+async function getWorkspaceStagingForToken(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  get: { teamId: string; channelId: string; publishId: string },
+): Promise<StagingAck> {
+  if (isDeviceToken(token)) {
+    return input.app.getWorkspacePublishStagingForDevice({
+      token,
+      teamId: get.teamId,
+      channelId: get.channelId,
+      publishId: get.publishId,
+    });
+  }
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) return session;
+  return input.app.getWorkspacePublishStaging({
+    userId: session.user.id,
+    teamId: get.teamId,
+    channelId: get.channelId,
+    publishId: get.publishId,
+  });
+}
+
+async function commitWorkspaceStagingForToken(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  commit: { teamId: string; channelId: string; publishId: string },
+): Promise<StagingAck> {
+  if (isDeviceToken(token)) {
+    return input.app.commitWorkspacePublishStagingForDevice({
+      token,
+      teamId: commit.teamId,
+      channelId: commit.channelId,
+      publishId: commit.publishId,
+    });
+  }
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) return session;
+  return input.app.commitWorkspacePublishStaging({
+    userId: session.user.id,
+    teamId: commit.teamId,
+    channelId: commit.channelId,
+    publishId: commit.publishId,
+  });
+}
+
+async function getWorkspaceForToken(
+  input: ArtifactHttpInput,
+  token: string | undefined,
+  get: { teamId: string; channelId: string; revisionId?: string },
+): Promise<{ ok: true; workspace: unknown } | { ok: false; error?: string; message?: string }> {
+  if (isDeviceToken(token)) {
+    return input.app.materializeProjectChannelWorkspace({
+      token,
+      teamId: get.teamId,
+      channelId: get.channelId,
+      ...(get.revisionId ? { revisionId: get.revisionId } : {}),
+    });
+  }
+  const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
+  if (!session.ok) return session;
+  return input.app.getProjectChannelWorkspace({
+    userId: session.user.id,
+    teamId: get.teamId,
+    channelId: get.channelId,
+    ...(get.revisionId ? { revisionId: get.revisionId } : {}),
   });
 }
 
@@ -1670,7 +1837,7 @@ function isPathInside(root: string, candidate: string): boolean {
   return delta === '' || (!!delta && !delta.startsWith('..') && !isAbsolute(delta));
 }
 
-function writeAckFailure(response: ArtifactHttpInput['response'], ack: { error?: string; message?: string }): void {
+function writeAckFailure(response: ArtifactHttpInput['response'], ack: { error?: string; message?: string; details?: unknown }): void {
   const status = ack.error === 'UNAUTHENTICATED'
     ? 401
     : ack.error === 'FORBIDDEN'
@@ -1680,7 +1847,12 @@ function writeAckFailure(response: ArtifactHttpInput['response'], ack: { error?:
         : ack.error === 'CONFLICT'
           ? 409
           : 400;
-  writeJson(response, status, { ok: false, error: ack.error ?? 'ERROR', message: ack.message });
+  writeJson(response, status, {
+    ok: false,
+    error: ack.error ?? 'ERROR',
+    message: ack.message,
+    ...(ack.details !== undefined ? { details: ack.details } : {}),
+  });
 }
 
 function writeInternalHttpError(response: ArtifactHttpInput['response'], error: unknown): void {
