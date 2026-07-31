@@ -36,9 +36,9 @@ describe('scanAgentDescriptor', () => {
     const dir = makeDir();
     writeAgentsMd(dir, `---\nname: from-frontmatter\ndescription: 来自 frontmatter\ncapabilities:\n  - invented-field\n---\n# Body Title\n正文首段。\n\n## Capabilities\n\n- real-capability\n`);
     const result = scanAgentDescriptor(dir);
-    // name/description：正文优先，frontmatter 仅兼容备选
-    expect(result!.name).toBe('Body Title');
-    expect(result!.description).toContain('正文首段');
+    // name/description：frontmatter 优先（产品预填默认值），正文兜底
+    expect(result!.name).toBe('from-frontmatter');
+    expect(result!.description).toBe('来自 frontmatter');
     // capabilities 只来自正文小节，frontmatter 的 invented-field 被忽略
     expect(result!.capabilities).toEqual(['real-capability']);
   });
@@ -76,13 +76,21 @@ describe('scanAgentDescriptor', () => {
     expect(scanAgentDescriptor(join(dir, 'not-exists'))).toBeNull();
   });
 
-  test('frontmatter name/description 作为正文缺失时的兼容备选', () => {
+  test('frontmatter name/description 优先于正文（纯正文文件才用正文兜底）', () => {
     const dir = makeDir();
-    writeAgentsMd(dir, `---\nname: fm-name\ndescription: fm-desc\n---\n## Capabilities\n\n- cap-a\n`);
+    writeAgentsMd(dir, `---\nname: fm-name\ndescription: fm-desc\n---\n# Body Title\n正文首段。\n\n## Capabilities\n\n- cap-a\n`);
     const result = scanAgentDescriptor(dir);
     expect(result!.name).toBe('fm-name');
     expect(result!.description).toBe('fm-desc');
     expect(result!.capabilities).toEqual(['cap-a']);
+  });
+
+  test('无 frontmatter 时正文标题/首段兜底', () => {
+    const dir = makeDir();
+    writeAgentsMd(dir, `# Body Title\n\n正文首段。\n`);
+    const result = scanAgentDescriptor(dir);
+    expect(result!.name).toBe('Body Title');
+    expect(result!.description).toContain('正文首段');
   });
 
   test('description 截断到 MAX_DESCRIPTION', () => {

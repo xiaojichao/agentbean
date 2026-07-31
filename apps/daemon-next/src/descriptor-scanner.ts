@@ -14,9 +14,9 @@ import { load as parseYaml } from 'js-yaml';
  * 文件内容中提取（extract），而非依赖用户声明。
  *
  * 提取策略：
- * - name：正文首个一级标题（# xxx）。frontmatter name 仅作兼容备选
- *   （部分生成工具会写，非标准）。
- * - description：正文首个非空段落。frontmatter description 仅作兼容备选。
+ * - name：frontmatter name 优先（生成工具常写），正文首个一级标题（# xxx）兜底。
+ * - description：frontmatter description 优先（产品预填以此为默认），正文首个
+ *   非空段落兜底。
  * - capabilities：从正文能力小节提取——识别 `## Capabilities` / `## 能力` /
  *   `## Skills` 等标题，取其下 markdown 列表项（`- xxx`）。无匹配小节 → 空数组。
  *   frontmatter 中的 capabilities 字段【不读取】（非生态标准，避免变相要求改文件）。
@@ -147,9 +147,9 @@ export function scanAgentDescriptor(cwd: string): AgentDescriptor | null {
 
     const front = readFrontmatterMeta(raw);
     return {
-      // name/description：正文优先，frontmatter 仅兼容备选。
-      name: extractTitle(raw) ?? front?.name ?? null,
-      description: extractFirstParagraph(raw) ?? front?.description ?? null,
+      // name/description：frontmatter 优先（产品预填默认值），正文兜底。
+      name: front?.name ?? extractTitle(raw) ?? null,
+      description: front?.description ?? extractFirstParagraph(raw) ?? null,
       // capabilities：只从正文能力小节提取，不读 frontmatter（生态文件无此标准字段）。
       capabilities: extractCapabilitiesFromBody(raw),
       sourcePath: path,

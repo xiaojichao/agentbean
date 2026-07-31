@@ -1755,9 +1755,12 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
             const caps = Array.isArray(res.descriptor.capabilities) ? res.descriptor.capabilities : [];
             setScannedCaps(caps);
             setSelectedCaps(new Set(caps));
-            // description 仅在用户尚未手工编辑时预填（AGENTS.md 内容优先）。
-            if (!descriptionEditedRef.current && res.descriptor.description) {
-              setDescription(res.descriptor.description);
+            // description 仅在用户尚未手工编辑时预填：frontmatter description + 抽取的 capabilities。
+            if (!descriptionEditedRef.current) {
+              const parts: string[] = [];
+              if (res.descriptor.description) parts.push(res.descriptor.description);
+              if (caps.length > 0) parts.push(`具备能力：${caps.join('、')}`);
+              if (parts.length > 0) setDescription(parts.join('\n'));
             }
           }
           const skills = Array.isArray(res.skills) ? res.skills.map((s) => ({ name: s.name, description: s.description })) : [];
