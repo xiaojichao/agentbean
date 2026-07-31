@@ -102,14 +102,31 @@ function assertRevision(actual: number, expected: number): void {
   if (d.kind === 'rejected') conflict(d.reason ?? 'REVISION_FENCING_FAILED');
 }
 
+export interface TaskLifecycleAppliedEvent {
+  readonly commandName: TaskLifecycleCommandName;
+  readonly teamId: string;
+  readonly taskId: string;
+  readonly taskRevision: number;
+  readonly status?: string;
+  readonly deliveryMessageId?: string;
+  readonly reason?: string;
+  readonly channelId?: string | null;
+  readonly creatorId?: string | null;
+  readonly assigneeId?: string | null;
+  readonly occurredAt: number;
+  readonly eventId: string;
+}
+
 export interface TaskLifecycleKernelDependencies {
   readonly unitOfWork: TaskCoordinationUnitOfWork;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
+  /** #1014 post-commit：权威 lifecycle 成功后自动投影 System activity。 */
+  readonly onApplied?: (event: TaskLifecycleAppliedEvent) => Promise<void> | void;
 }
 
 export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies) {
-  const { unitOfWork, clock, ids } = deps;
+  const { unitOfWork, clock, ids, onApplied } = deps;
 
   /**
    * 通用 command 执行骨架：authority 检查 → canonical hash → UoW 事务 →
@@ -134,7 +151,7 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
     });
     const reason = inputReason(input);
 
-    return unitOfWork.run(async (repos) => {
+    const outcome = await unitOfWork.run(async (repos) => {
       const now = clock.now();
       if (authorityKind === 'pi_driver') {
         await authorizeManagementWrite(repos.management, authority, now);
@@ -153,6 +170,9 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           result: unpacked.result,
           receipt: existing,
           disposition: 'replayed' as const,
+          freshlyApplied: false as const,
+          now,
+          taskSnapshot: null as TaskRecord | null,
           ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
         };
       }
@@ -172,6 +192,9 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
             result: unpacked.result,
             receipt: viaReceipt,
             disposition: 'replayed' as const,
+            freshlyApplied: false as const,
+            now,
+            taskSnapshot: null as TaskRecord | null,
             ...(unpacked.reason !== undefined ? { reason: unpacked.reason } : {}),
           };
         }
@@ -180,6 +203,9 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           result: {} as TaskLifecycleCommandOutputMapV1[K],
           receipt: null as never,
           disposition: 'replayed' as const,
+          freshlyApplied: false as const,
+          now,
+          taskSnapshot: null as TaskRecord | null,
           tombstoneOutcome: tombstone.outcome,
         };
       }
@@ -222,13 +248,56 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
         createdAt: now,
       });
 
+      const taskId = (result as { taskId?: string }).taskId
+        ?? (input as { taskId?: string }).taskId
+        ?? '';
+      const taskSnapshot = taskId ? await repos.tasks.getById(taskId) : null;
+
       return {
         result,
         receipt: null as never,
         disposition: 'applied' as const,
+        freshlyApplied: true as const,
+        now,
+        taskSnapshot,
         ...(reason !== undefined ? { reason } : {}),
       };
     });
+
+    // #1014 post-commit 自动投影（不回滚权威事实）
+    if (outcome.freshlyApplied && onApplied) {
+      const r = outcome.result as Record<string, unknown>;
+      const taskId = String(r.taskId ?? (input as { taskId?: string }).taskId ?? '');
+      const taskRevision = Number(r.taskRevision ?? (input as { expectedTaskRevision?: number }).expectedTaskRevision ?? 0);
+      const status = typeof r.status === 'string' ? r.status : undefined;
+      const deliveryMessageId = typeof r.deliveryMessageId === 'string' ? r.deliveryMessageId : undefined;
+      try {
+        await onApplied({
+          commandName,
+          teamId,
+          taskId,
+          taskRevision,
+          status,
+          deliveryMessageId,
+          reason: outcome.reason ?? reason,
+          channelId: outcome.taskSnapshot?.channelId ?? null,
+          creatorId: outcome.taskSnapshot?.creatorId ?? null,
+          assigneeId: outcome.taskSnapshot?.assigneeId ?? null,
+          occurredAt: outcome.now,
+          eventId: `lifecycle:${commandName}:${taskId}:${taskRevision}:${envelope.idempotencyKey}`,
+        });
+      } catch {
+        /* projection failure must not surface as lifecycle failure */
+      }
+    }
+
+    return {
+      result: outcome.result,
+      receipt: outcome.receipt,
+      disposition: outcome.disposition === 'replayed' ? 'applied' as const : outcome.disposition,
+      ...('reason' in outcome && outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+      ...('tombstoneOutcome' in outcome && outcome.tombstoneOutcome !== undefined ? { tombstoneOutcome: outcome.tombstoneOutcome } : {}),
+    };
   }
 
   /** 取 task 的 coordination 记录（不带 run 校验，lifecycle handler 自己管理 run 关联）。 */

@@ -909,6 +909,15 @@ export function systemActivityEvents(socket: Socket = getWebSocket()) {
   };
 }
 
+/** #1014 Task remediation 具名 command 客户端入口。 */
+export function taskRemediationEvents(socket: Socket = getWebSocket()) {
+  return {
+    command(input: { envelope: unknown; payload: unknown; userId: string; teamId: string }) {
+      return emitWithTimeout(socket, WEB_EVENTS.taskRemediation.command, input);
+    },
+  };
+}
+
 export interface ProjectMutationResult {
   ok: boolean;
   overview?: ChannelProjectOverviewDto;
