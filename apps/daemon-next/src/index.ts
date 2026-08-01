@@ -612,12 +612,16 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         if (!acceptingDispatches) return;
         activeDispatchCount += 1;
         const incomingRequest = payload as DispatchRequestPayload;
-        const previousExecution = dispatchExecutionTails.get(incomingRequest.agentId) ?? Promise.resolve();
+        // agentos-hosted（Hermes/OpenClaw）共享同一 adapter 数据目录（~/.hermes、~/.openclaw），
+        // 产物收集只按 mtime > startedAt 过滤；若同一设备上多个这类 Agent 并发执行，后运行者写入的
+        // 文件会落进先运行者的收集窗口，造成跨 run/跨频道产物串线。按 adapter 根串行整个执行窗口。
+        const executionSerialKey = dispatchExecutionSerialKey(incomingRequest);
+        const previousExecution = dispatchExecutionTails.get(executionSerialKey) ?? Promise.resolve();
         let releaseExecution: (() => void) | undefined;
         const executionTail = new Promise<void>((resolve) => {
           releaseExecution = resolve;
         });
-        dispatchExecutionTails.set(incomingRequest.agentId, executionTail);
+        dispatchExecutionTails.set(executionSerialKey, executionTail);
         await previousExecution;
         let request = incomingRequest;
         try {
@@ -968,8 +972,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // cancel suppresses a late result, but only the executor actually returning makes
           // it safe to start another request for the same Agent.
           releaseExecution?.();
-          if (dispatchExecutionTails.get(incomingRequest.agentId) === executionTail) {
-            dispatchExecutionTails.delete(incomingRequest.agentId);
+          if (dispatchExecutionTails.get(executionSerialKey) === executionTail) {
+            dispatchExecutionTails.delete(executionSerialKey);
           }
         }
       });
@@ -1087,6 +1091,19 @@ export function createTaskClaimProtocolClient(input: {
 
 function isCodexAdapterKind(adapterKind: string | undefined): boolean {
   return adapterKind === 'codex' || adapterKind === 'codex-cli';
+}
+
+/**
+ * 同一执行串行键内的 dispatch 逐个执行。普通 Agent 按 agentId 串行；
+ * agentos-hosted 网关共享 adapter 产物根，按 adapter 类型在整台设备上串行，
+ * 避免并发 run 互相收集对方的产物。
+ */
+function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
+  const adapterKind = request.customAgent?.adapterKind;
+  if (adapterKind === 'hermes' || adapterKind === 'openclaw') {
+    return `agentos-adapter:${adapterKind}`;
+  }
+  return `agent:${request.agentId}`;
 }
 
 /**

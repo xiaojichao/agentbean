@@ -16,20 +16,32 @@ export function ArtifactSourceRootsSection({
   rows,
   onChange,
   existingKeys = [],
+  clearRequested = false,
+  onClearRequested,
 }: {
   rows: ArtifactSourceRootRow[];
   onChange: (rows: ArtifactSourceRootRow[]) => void;
   /** Server 已保存的 Key 名（值不可回显；同名 Key 填写会覆盖）。 */
   existingKeys?: string[];
+  /** 用户已选择清除已配置的产物收集目录（保存后写入空声明覆盖旧值）。 */
+  clearRequested?: boolean;
+  onClearRequested?: (clear: boolean) => void;
 }) {
   const reservedExistingKeys = existingKeys.filter(
     (key) => key === ARTIFACT_SOURCE_ROOTS_ENV_KEY || key.startsWith('AGENTBEAN_SOURCE_ROOT_'),
   );
+  const hasExistingDeclaration = reservedExistingKeys.includes(ARTIFACT_SOURCE_ROOTS_ENV_KEY);
   const updateRow = (index: number, patch: Partial<ArtifactSourceRootRow>) => {
+    if (clearRequested) onClearRequested?.(false);
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   };
   const removeRow = (index: number) => {
+    if (clearRequested) onClearRequested?.(false);
     onChange(rows.filter((_, i) => i !== index));
+  };
+  const addRow = () => {
+    onClearRequested?.(false);
+    onChange([...rows, newArtifactSourceRootRow(rows)]);
   };
   return (
     <div data-smoke="artifact-source-roots-section">
@@ -51,7 +63,11 @@ export function ArtifactSourceRootsSection({
         </div>
       )}
       {rows.length === 0 ? (
-        <p className="mb-2 text-[11px] text-neutral-400">未配置。Agent 写在项目目录内的文件无需此设置。</p>
+        <p className="mb-2 text-[11px] text-neutral-400">
+          {clearRequested
+            ? '保存后将清除已配置的产物收集目录，daemon 不再从这些目录收集。'
+            : '未配置。Agent 写在项目目录内的文件无需此设置。'}
+        </p>
       ) : (
         <div className="space-y-2">
           {rows.map((row, index) => (
@@ -103,13 +119,32 @@ export function ArtifactSourceRootsSection({
           ))}
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => onChange([...rows, newArtifactSourceRootRow(rows)])}
-        className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-neutral-600 hover:text-neutral-900"
-      >
-        <Plus size={12} /> 添加目录
-      </button>
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={addRow}
+          className="inline-flex items-center gap-1 text-xs font-medium text-neutral-600 hover:text-neutral-900"
+        >
+          <Plus size={12} /> 添加目录
+        </button>
+        {clearRequested ? (
+          <button
+            type="button"
+            onClick={() => onClearRequested?.(false)}
+            className="text-xs font-medium text-neutral-600 hover:text-neutral-900"
+          >
+            撤销清除
+          </button>
+        ) : hasExistingDeclaration && rows.length === 0 ? (
+          <button
+            type="button"
+            onClick={() => onClearRequested?.(true)}
+            className="text-xs font-medium text-rose-600 hover:text-rose-700"
+          >
+            清除已配置目录
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

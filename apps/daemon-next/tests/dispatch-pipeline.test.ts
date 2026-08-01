@@ -600,6 +600,93 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(uploadFetch).not.toHaveBeenCalledWith(expect.stringContaining('/artifacts/upload'), expect.anything());
   });
 
+  test('同一设备上不同 Hermes Agent 的 dispatch 按 adapter 根串行执行', async () => {
+    const harness = createFakeSocket();
+    const binDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-hermes-serial-')));
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async (request) => {
+        calls.push(request.id);
+        if (request.id === 'disp-hermes-1') {
+          await firstGate;
+        }
+        return { body: 'done' };
+      },
+    });
+    await client.start();
+
+    const first = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-hermes-1', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'hermes-agent-a', requestId: 'disp-hermes-1', prompt: 'do work',
+      customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: binDir },
+    });
+    const second = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-hermes-2', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-2',
+      agentId: 'hermes-agent-b', requestId: 'disp-hermes-2', prompt: 'do more',
+      customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: binDir },
+    });
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['disp-hermes-1']);
+    });
+    // 第一个 run 未结束时，第二个 Hermes run 不得开始（避免共享 ~/.hermes 产物串线）。
+    expect(calls).not.toContain('disp-hermes-2');
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(calls).toEqual(['disp-hermes-1', 'disp-hermes-2']);
+  });
+
+  test('不同 Agent 的非 agentos dispatch 仍按 agentId 独立并行', async () => {
+    const harness = createFakeSocket();
+    const binDirA = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-codex-serial-a-')));
+    const binDirB = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-codex-serial-b-')));
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async (request) => {
+        calls.push(request.id);
+        if (request.id === 'disp-codex-1') {
+          await firstGate;
+        }
+        return { body: 'done' };
+      },
+    });
+    await client.start();
+
+    const first = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-codex-1', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'codex-agent-a', requestId: 'disp-codex-1', prompt: 'do work',
+      customAgent: { adapterKind: 'codex', command: 'codex', cwd: binDirA },
+    });
+    const second = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-codex-2', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-2',
+      agentId: 'codex-agent-b', requestId: 'disp-codex-2', prompt: 'do more',
+      customAgent: { adapterKind: 'codex', command: 'codex', cwd: binDirB },
+    });
+    await vi.waitFor(() => {
+      expect(calls).toContain('disp-codex-2');
+    });
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(calls.sort()).toEqual(['disp-codex-1', 'disp-codex-2']);
+  });
+
   test('dispatch 结果在 socket 断开时入队，重连后补发，且不抛', async () => {
     const harness = createFakeSocket();
     const client = createDaemonProtocolClient({

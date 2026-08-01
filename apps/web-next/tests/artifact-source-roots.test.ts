@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   ARTIFACT_SOURCE_ROOTS_ENV_KEY,
   buildArtifactSourceRootsEnv,
+  buildClearedArtifactSourceRootsEnv,
   mergeEnvWithSourceRoots,
   newArtifactSourceRootRow,
   nextArtifactSourceRootEnvVarName,
@@ -41,6 +42,10 @@ describe('artifact-source-roots', () => {
     expect(buildArtifactSourceRootsEnv([])).toEqual({});
   });
 
+  test('显式清除声明写入空数组，覆盖服务端部分合并保留的旧声明', () => {
+    expect(buildClearedArtifactSourceRootsEnv()).toEqual({ [ARTIFACT_SOURCE_ROOTS_ENV_KEY]: '[]' });
+  });
+
   test('parse 从 env 还原行并解析路径（json 键 + 路径键）', () => {
     const env = buildArtifactSourceRootsEnv([row()]);
     const parsed = parseArtifactSourceRootsFromEnv(env);
@@ -69,6 +74,7 @@ describe('artifact-source-roots', () => {
 
   test('validate 通过合法行', () => {
     expect(validateArtifactSourceRoots([row()]).ok).toBe(true);
+    expect(validateArtifactSourceRoots([]).ok).toBe(true);
   });
 
   test('validate 拒绝非绝对路径、非法环境变量名、重复 id、空标签', () => {

@@ -15,7 +15,7 @@ import { AgentMemoryProjectionPanel } from '@/components/AgentMemoryProjectionPa
 import { ArtifactSourceRootsSection } from '@/components/artifact-source-roots-section';
 import { EnvironmentVariableEditor, type EnvironmentVariableRow } from '@/components/environment-variable-editor';
 import {
-  ARTIFACT_SOURCE_ROOTS_ENV_KEY,
+  buildClearedArtifactSourceRootsEnv,
   mergeEnvWithSourceRoots,
   validateArtifactSourceRoots,
   type ArtifactSourceRootRow,
@@ -41,6 +41,7 @@ export default function AgentDetailPage() {
   const [configCwd, setConfigCwd] = useState('');
   const [configEnvRows, setConfigEnvRows] = useState<EnvironmentVariableRow[]>([]);
   const [configSourceRootRows, setConfigSourceRootRows] = useState<ArtifactSourceRootRow[]>([]);
+  const [clearSourceRoots, setClearSourceRoots] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -85,20 +86,13 @@ export default function AgentDetailPage() {
 
   const openConfig = () => {
     if (!agent) return;
-    const envKeys = Array.isArray((agent as { envKeys?: string[] }).envKeys)
-      ? (agent as { envKeys?: string[] }).envKeys!
-      : [];
     setConfigName(agent.name ?? '');
     setConfigDescription(agent.description ?? '');
     setConfigCommand(agent.command ?? '');
     setConfigCwd(agent.cwd ?? '');
     setConfigEnvRows([]);
-    // 编辑态只回显 Key 名、不回显值；已声明过产物目录时给一行空模板引导重新填写。
-    setConfigSourceRootRows(
-      envKeys.includes(ARTIFACT_SOURCE_ROOTS_ENV_KEY)
-        ? [{ id: 'src-1', label: '', envVarName: 'AGENTBEAN_SOURCE_ROOT_1', path: '', defaultRole: 'run_output' }]
-        : [],
-    );
+    setConfigSourceRootRows([]);
+    setClearSourceRoots(false);
     setConfigError('');
     setConfigOpen(true);
   };
@@ -135,7 +129,11 @@ export default function AgentDetailPage() {
           return;
         }
       }
-      Object.assign(env, mergeEnvWithSourceRoots(configEnvRows, configSourceRootRows));
+      if (clearSourceRoots) {
+        Object.assign(env, buildClearedArtifactSourceRootsEnv());
+      } else {
+        Object.assign(env, mergeEnvWithSourceRoots(configEnvRows, configSourceRootRows));
+      }
     }
     setConfigSaving(true);
     setConfigError('');
@@ -420,6 +418,8 @@ export default function AgentDetailPage() {
           onCwdChange={setConfigCwd}
           envRows={configEnvRows}
           sourceRootRows={configSourceRootRows}
+          clearSourceRoots={clearSourceRoots}
+          onClearSourceRoots={setClearSourceRoots}
           existingEnvKeys={Array.isArray((agent as { envKeys?: string[] }).envKeys)
             ? (agent as { envKeys?: string[] }).envKeys!
             : []}
@@ -451,6 +451,8 @@ function AgentConfigDialog({
   cwd,
   envRows,
   sourceRootRows,
+  clearSourceRoots,
+  onClearSourceRoots,
   existingEnvKeys,
   onEnvRowsChange,
   onSourceRootRowsChange,
@@ -470,6 +472,8 @@ function AgentConfigDialog({
   cwd: string;
   envRows: EnvironmentVariableRow[];
   sourceRootRows: ArtifactSourceRootRow[];
+  clearSourceRoots: boolean;
+  onClearSourceRoots(value: boolean): void;
   existingEnvKeys: string[];
   onEnvRowsChange(value: EnvironmentVariableRow[]): void;
   onSourceRootRowsChange(value: ArtifactSourceRootRow[]): void;
@@ -544,6 +548,8 @@ function AgentConfigDialog({
                 rows={sourceRootRows}
                 onChange={onSourceRootRowsChange}
                 existingKeys={existingEnvKeys}
+                clearRequested={clearSourceRoots}
+                onClearRequested={onClearSourceRoots}
               />
               <EnvironmentVariableEditor
                 rows={envRows}

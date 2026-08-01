@@ -12,7 +12,7 @@ import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
 import {
-  ARTIFACT_SOURCE_ROOTS_ENV_KEY,
+  buildClearedArtifactSourceRootsEnv,
   mergeEnvWithSourceRoots,
   validateArtifactSourceRoots,
   type ArtifactSourceRootRow,
@@ -1416,12 +1416,8 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   const [runtimeIndex, setRuntimeIndex] = useState(String(initialRuntimeIndex));
   const [cwd, setCwd] = useState<string>(agent.cwd ?? '');
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
-  const [sourceRootRows, setSourceRootRows] = useState<ArtifactSourceRootRow[]>(() => {
-    // 编辑态只回显 Key 名、不回显值；若已声明过产物目录，给一行空模板引导重新填写。
-    return Array.isArray(agent.envKeys) && agent.envKeys.includes(ARTIFACT_SOURCE_ROOTS_ENV_KEY)
-      ? [{ id: 'src-1', label: '', envVarName: 'AGENTBEAN_SOURCE_ROOT_1', path: '', defaultRole: 'run_output' }]
-      : [];
-  });
+  const [sourceRootRows, setSourceRootRows] = useState<ArtifactSourceRootRow[]>([]);
+  const [clearSourceRoots, setClearSourceRoots] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
@@ -1452,7 +1448,11 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
           return;
         }
       }
-      Object.assign(env, mergeEnvWithSourceRoots(envRows, sourceRootRows));
+      if (clearSourceRoots) {
+        Object.assign(env, buildClearedArtifactSourceRootsEnv());
+      } else {
+        Object.assign(env, mergeEnvWithSourceRoots(envRows, sourceRootRows));
+      }
     }
     setSaving(true);
     setError('');
@@ -1536,6 +1536,8 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
                 rows={sourceRootRows}
                 onChange={setSourceRootRows}
                 existingKeys={existingEnvKeys}
+                clearRequested={clearSourceRoots}
+                onClearRequested={setClearSourceRoots}
               />
               <EnvironmentVariableEditor
                 rows={envRows}

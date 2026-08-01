@@ -77,6 +77,17 @@ export function buildArtifactSourceRootsEnv(rows: ArtifactSourceRootRow[]): Reco
   return env;
 }
 
+/**
+ * 显式清除产物收集目录的 env 声明。
+ *
+ * 服务端 updateAgentConfig 对 env 采用部分合并：缺省 key 保留、空串跳过，
+ * 因此「删除全部目录」必须显式写入 `AGENTBEAN_ARTIFACT_SOURCE_ROOTS: "[]"`，
+ * 否则旧声明会继续生效，daemon 仍会从用户以为已移除的目录收集产物。
+ */
+export function buildClearedArtifactSourceRootsEnv(): Record<string, string> {
+  return { [ARTIFACT_SOURCE_ROOTS_ENV_KEY]: '[]' };
+}
+
 /** 校验 UI 行，规则与 Server 端 parseAgentArtifactSourceRoots 一致。 */
 export function validateArtifactSourceRoots(
   rows: ArtifactSourceRootRow[],
