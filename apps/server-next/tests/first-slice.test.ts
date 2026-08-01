@@ -2138,6 +2138,106 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('DM task-like agent requests also auto-create a task and nest the agent result in the thread', async () => {
+    let now = 340;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds([
+        'user-1',
+        'team-1',
+        'channel-1',
+        'dm-1',
+        'message-1',
+        'task-1',
+        'dispatch-1',
+        'request-1',
+        'message-2',
+        'message-3',
+      ]),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Hermes-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+    await app.startDirectMessage({ userId: 'user-1', teamId: 'team-1', agentId: 'agent-1' });
+
+    const sendAck = await app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'dm-1',
+      body: '分析一下这张图',
+    });
+
+    expect(sendAck).toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-1',
+        threadId: 'message-1',
+        meta: { taskId: 'task-1', routeReason: 'DIRECT' },
+      },
+      task: {
+        id: 'task-1',
+        title: '分析一下这张图',
+        assigneeId: 'agent-1',
+        status: 'in_progress',
+      },
+      dispatches: [{ id: 'dispatch-1', messageId: 'message-1' }],
+      acknowledgementMessage: {
+        id: 'message-2',
+        senderKind: 'agent',
+        senderId: 'agent-1',
+        threadId: 'message-1',
+        body: '我来处理，会先看请求和附件，再把结果发在线程里。',
+        meta: {
+          kind: 'task-claim-confirmed',
+          taskId: 'task-1',
+          dispatchId: 'dispatch-1',
+          parentMessageId: 'message-1',
+          replyScope: 'thread',
+        },
+      },
+    });
+
+    now = 341;
+    await expect(app.receiveDispatchResult({
+      dispatchId: 'dispatch-1',
+      agentId: 'agent-1',
+      body: '图片分析结果',
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'message-3',
+        threadId: 'message-1',
+        body: '图片分析结果',
+        meta: { parentMessageId: 'message-1', replyScope: 'thread' },
+      },
+      task: { id: 'task-1', status: 'in_review' },
+    });
+
+    await expect(app.getMessageContext({
+      userId: 'user-1',
+      teamId: 'team-1',
+      messageId: 'message-3',
+    })).resolves.toMatchObject({
+      ok: true,
+      threadRootId: 'message-1',
+      messages: [
+        { id: 'message-1', body: '分析一下这张图' },
+        { id: 'message-2', body: '我来处理，会先看请求和附件，再把结果发在线程里。' },
+        { id: 'message-3', body: '图片分析结果' },
+      ],
+    });
+  });
+
   test('one 15-second message batch creates one dispatch for the same routing scope', async () => {
     let now = 1_000;
     const app = createInMemoryServerNext({
@@ -3502,6 +3602,7 @@ describe('server-next first-slice use cases', () => {
         'dispatch-1',
         'request-1',
         'message-2',
+        'task-1',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });

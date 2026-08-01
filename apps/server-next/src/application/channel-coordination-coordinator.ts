@@ -55,6 +55,7 @@ import type {
 } from './channel-coordination-unit-of-work.js';
 import type {
   AgentRepository,
+  ArtifactRecord,
   ChannelRepository,
   MessageRepository,
   TeamPiPolicyRepository,
@@ -162,6 +163,21 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       messages: [{ role: 'user', content: [{ type: 'text', text: humanMessageBody }] }],
       tools: [],
     };
+  }
+
+  /**
+   * 把消息附件以纯文本元数据形式拼进协调者请求，使 Active PI Model 至少知道
+   * “用户带了哪些附件”，避免模型误报“没有看到图片/文件”。协议仅支持 text
+   * content（见 ManagementModelContent），因此不注入文件内容或图片像素。
+   */
+  function renderAttachmentSection(artifacts: readonly ArtifactRecord[]): string {
+    if (artifacts.length === 0) return '';
+    const lines = artifacts.map((artifact) => {
+      const kind = artifact.mimeType?.startsWith('image/') ? 'image' : 'file';
+      const size = artifact.sizeBytes != null ? `${artifact.sizeBytes} bytes` : 'size unknown';
+      return `- ${artifact.filename ?? artifact.id} (${kind}, mime=${artifact.mimeType ?? 'unknown'}, ${size}, role=${artifact.role ?? 'attachment'})`;
+    });
+    return `\n\n[Message attachments]\n${lines.join('\n')}`;
   }
 
   /** 合并二次检索（agent_request projection）的 attribution 到初始 attribution（AC#4）。 */
@@ -727,6 +743,7 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
       });
       return { kind: 'terminal', status: 'failed' };
     }
+    const attachments = await deps.unitOfWork.run((tx) => tx.artifacts.listByMessage(humanMessage.id));
 
     // #720 Active Memory Context（AC#1/2/8）：buildRequest 前解析最小可见 memory，失败降级为空（不阻塞协调）。
     let memoryAttribution: ActiveMemoryAttributionDto | null = null;
@@ -804,7 +821,10 @@ export function createChannelCoordinator(deps: ChannelCoordinatorDependencies) {
         // 不强制 response metadata：usage 缺失 → null（unknown, AC#8）而非报错。
         fetch: fetchFn,
       });
-      response = await adapter.respond(buildRequest(humanMessage.body, memorySection), { callCount: 1 });
+      response = await adapter.respond(
+        buildRequest(`${humanMessage.body}${renderAttachmentSection(attachments)}`, memorySection),
+        { callCount: 1 },
+      );
     } catch (error) {
       return handleUnrecoverable(job, attempt, mapAdapterError(error), toUsage(null, null), null, now);
     }
