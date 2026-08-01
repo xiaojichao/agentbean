@@ -242,7 +242,11 @@ export default function ChatPage() {
   const params = useParams();
   const np = useCurrentTeamPath();
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
-  const { width: threadPanelWidth, onHandlePointerDown: onThreadPanelResizePointerDown } = useThreadPanelWidth(routeTeamPath);
+  const {
+    width: threadPanelWidth,
+    onHandlePointerDown: onThreadPanelResizePointerDown,
+    onHandleKeyDown: onThreadPanelResizeKeyDown,
+  } = useThreadPanelWidth(routeTeamPath);
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -2342,7 +2346,9 @@ export default function ChatPage() {
             aria-valuemax={THREAD_PANEL_MAX_WIDTH}
             aria-valuenow={threadPanelWidth}
             onPointerDown={onThreadPanelResizePointerDown}
-            className="w-2 shrink-0 cursor-col-resize touch-none select-none border-l border-neutral-200 bg-transparent transition-colors hover:bg-amber-200/60 active:bg-amber-200/80"
+            onKeyDown={onThreadPanelResizeKeyDown}
+            tabIndex={0}
+            className="w-2 shrink-0 cursor-col-resize touch-none select-none border-l border-neutral-200 bg-transparent transition-colors hover:bg-amber-200/60 active:bg-amber-200/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
           />
           <ThreadPanel
             width={threadPanelWidth}

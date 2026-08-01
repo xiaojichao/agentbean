@@ -15,11 +15,11 @@ import {
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 function ResizeHarness({ teamPath }: { teamPath: string }) {
-  const { width, onHandlePointerDown } = useThreadPanelWidth(teamPath);
+  const { width, onHandlePointerDown, onHandleKeyDown } = useThreadPanelWidth(teamPath);
   return (
     <div>
       <div data-testid="thread-panel" style={{ width }} />
-      <div data-testid="resize-handle" onPointerDown={onHandlePointerDown} />
+      <div data-testid="resize-handle" onPointerDown={onHandlePointerDown} onKeyDown={onHandleKeyDown} />
     </div>
   );
 }
@@ -65,6 +65,16 @@ describe('讨论串宽度拖拽调整', () => {
     unmount();
     render(<ResizeHarness teamPath="team-a" />);
     expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH + 150);
+  });
+
+  test('键盘方向键也能调整并持久化宽度', () => {
+    render(<ResizeHarness teamPath="team-a" />);
+    fireEvent.keyDown(screen.getByTestId('resize-handle'), { key: 'ArrowLeft' });
+    expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH - 16);
+    fireEvent.keyDown(screen.getByTestId('resize-handle'), { key: 'ArrowRight' });
+    expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH);
+    expect(window.localStorage.getItem(threadPanelWidthStorageKey('team-a')))
+      .toBe(String(THREAD_PANEL_DEFAULT_WIDTH));
   });
 
   test('不同团队路径的宽度互不影响', () => {

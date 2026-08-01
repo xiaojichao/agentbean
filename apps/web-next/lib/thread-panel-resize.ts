@@ -94,5 +94,13 @@ export function useThreadPanelWidth(routeTeamPath: string) {
     window.addEventListener('pointercancel', stop);
   }, [persist]);
 
-  return { width, onHandlePointerDown };
+  const onHandleKeyDown = useCallback((event: React.KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const next = clampThreadPanelWidth(widthRef.current + (event.key === 'ArrowLeft' ? -16 : 16));
+    setWidth(next);
+    saveThreadPanelWidth(routeTeamPathRef.current, next);
+  }, []);
+
+  return { width, onHandlePointerDown, onHandleKeyDown };
 }
