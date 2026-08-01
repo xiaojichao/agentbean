@@ -11,6 +11,14 @@ import { canAddCustomAgentToDevice, canManageDeviceForUser, directoryBrowseMode,
 import { formatRelative } from '@/lib/format-time';
 import { directoryPickerErrorMessage } from '@/lib/directory-picker-error';
 import { formatCreateAgentError } from '@/lib/agent-create-error';
+import {
+  ARTIFACT_SOURCE_ROOTS_ENV_KEY,
+  mergeEnvWithSourceRoots,
+  validateArtifactSourceRoots,
+  type ArtifactSourceRootRow,
+} from '@/lib/artifact-source-roots';
+import { ArtifactSourceRootsSection } from '@/components/artifact-source-roots-section';
+import { EnvironmentVariableEditor } from '@/components/environment-variable-editor';
 import { DirectoryTreeBrowseButton } from './DirectoryTreePicker';
 import type { AgentWorkspaceFile, AgentWorkspaceRun, DeviceServiceOperationCommand } from '@/lib/schema';
 
@@ -1395,61 +1403,6 @@ function buildRuntimeOptions(runtimes: any[]) {
   });
 }
 
-function EnvironmentVariableEditor({
-  rows,
-  onChange,
-  existingKeys = [],
-  hint,
-}: {
-  rows: EnvRow[];
-  onChange: (rows: EnvRow[]) => void;
-  /** Public key names already stored (values never leave the server). */
-  existingKeys?: string[];
-  hint?: string;
-}) {
-  const updateRow = (index: number, patch: Partial<EnvRow>) => {
-    onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  };
-  const removeRow = (index: number) => {
-    onChange(rows.filter((_, i) => i !== index));
-  };
-  return (
-    <div>
-      <label className="mb-1 block text-xs font-medium text-neutral-600">环境变量</label>
-      <p className="mb-2 text-[11px] text-neutral-400">
-        {hint ?? '创建后会注入到 Coding Agent 运行时环境。'}
-      </p>
-      {existingKeys.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {existingKeys.map((key) => (
-            <span
-              key={key}
-              className="inline-flex items-center rounded-md border border-neutral-200 bg-neutral-50 px-2 py-0.5 font-mono text-[11px] text-neutral-600"
-              title="已配置（值不可回显；下方填写同名 Key 可覆盖）"
-            >
-              {key}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="space-y-2">
-        {rows.map((row, index) => (
-          <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-center gap-2">
-            <input value={row.key} onChange={(e) => updateRow(index, { key: e.target.value })} className="min-w-0 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="KEY" />
-            <input value={row.value} onChange={(e) => updateRow(index, { value: e.target.value })} className="min-w-0 rounded-md border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-neutral-400" placeholder="value" />
-            <button type="button" onClick={() => removeRow(index)} className="rounded-md border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50" aria-label="删除环境变量">
-              <X size={14} />
-            </button>
-          </div>
-        ))}
-      </div>
-      <button type="button" onClick={() => onChange([...rows, { key: '', value: '' }])} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-neutral-600 hover:text-neutral-900">
-        <Plus size={12} /> 添加变量
-      </button>
-    </div>
-  );
-}
-
 function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDeviceSettings, onClose, onSaved }: { agent: any; device?: { systemInfo?: { daemonVersion?: string } | null; daemonVersionInfo?: { current: string | null }; capabilities?: { fsBrowse?: boolean }; isLocal?: boolean }; runtimes: any[]; canEditMetadata: boolean; canEditDeviceSettings: boolean; onClose: () => void; onSaved: () => void }) {
   const isCustom = agent.source === 'custom';
   const isAgentOS = agent.category === 'agentos-hosted';
@@ -1463,6 +1416,12 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
   const [runtimeIndex, setRuntimeIndex] = useState(String(initialRuntimeIndex));
   const [cwd, setCwd] = useState<string>(agent.cwd ?? '');
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [sourceRootRows, setSourceRootRows] = useState<ArtifactSourceRootRow[]>(() => {
+    // 编辑态只回显 Key 名、不回显值；若已声明过产物目录，给一行空模板引导重新填写。
+    return Array.isArray(agent.envKeys) && agent.envKeys.includes(ARTIFACT_SOURCE_ROOTS_ENV_KEY)
+      ? [{ id: 'src-1', label: '', envVarName: 'AGENTBEAN_SOURCE_ROOT_1', path: '', defaultRole: 'run_output' }]
+      : [];
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const selectedRuntime = runtimeOptions[Number(runtimeIndex)] ?? runtimeOptions[0] ?? RUNTIME_OPTIONS[0];
@@ -1475,6 +1434,11 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
     if (/\s/.test(trimmedName)) { setError('名称不能包含空格，请使用连字符（-）'); return; }
     const env: Record<string, string> = {};
     if (isCustom && canEditRuntimeFields) {
+      const sourceRootValidation = validateArtifactSourceRoots(sourceRootRows);
+      if (!sourceRootValidation.ok) {
+        setError(sourceRootValidation.error);
+        return;
+      }
       for (const row of envRows) {
         const key = row.key.trim();
         const value = row.value;
@@ -1487,8 +1451,8 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
           setError(`环境变量 ${key} 的值不能为空（已配置的密钥不可回显；留空行请删除）`);
           return;
         }
-        env[key] = value;
       }
+      Object.assign(env, mergeEnvWithSourceRoots(envRows, sourceRootRows));
     }
     setSaving(true);
     setError('');
@@ -1567,12 +1531,19 @@ function AgentConfigDialog({ agent, device, runtimes, canEditMetadata, canEditDe
             </div>
           )}
           {isCustom && canEditRuntimeFields && (
-            <EnvironmentVariableEditor
-              rows={envRows}
-              onChange={setEnvRows}
-              existingKeys={existingEnvKeys}
-              hint="会注入到 Codex 等子进程。密钥值不会回显；填写同名 Key 可覆盖。例如 Codex 报 Missing environment variable: CRS_OAI_KEY 时，在此添加 CRS_OAI_KEY。"
-            />
+            <>
+              <ArtifactSourceRootsSection
+                rows={sourceRootRows}
+                onChange={setSourceRootRows}
+                existingKeys={existingEnvKeys}
+              />
+              <EnvironmentVariableEditor
+                rows={envRows}
+                onChange={setEnvRows}
+                existingKeys={existingEnvKeys}
+                hint="会注入到 Codex 等子进程。密钥值不会回显；填写同名 Key 可覆盖。例如 Codex 报 Missing environment variable: CRS_OAI_KEY 时，在此添加 CRS_OAI_KEY。"
+              />
+            </>
           )}
           {isCustom && !canEditRuntimeFields && existingEnvKeys.length > 0 && (
             <div>
@@ -1746,6 +1717,7 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
   const [cwd, setCwd] = useState('');
   const [description, setDescription] = useState('');
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [sourceRootRows, setSourceRootRows] = useState<ArtifactSourceRootRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   // 目录 descriptor 扫描（cwd 选定后自动触发；description 预填 + 能力候选勾选）。
@@ -1821,6 +1793,11 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
       return;
     }
     const env: Record<string, string> = {};
+    const sourceRootValidation = validateArtifactSourceRoots(sourceRootRows);
+    if (!sourceRootValidation.ok) {
+      setError(sourceRootValidation.error);
+      return;
+    }
     for (const row of envRows) {
       const key = row.key.trim();
       const value = row.value;
@@ -1829,8 +1806,8 @@ function AddCustomAgentDialog({ deviceId, teamId, daemonVersion, fsBrowse, runti
         setError('环境变量 Key 必须以字母或下划线开头，只能包含字母、数字和下划线');
         return;
       }
-      env[key] = value;
     }
+    Object.assign(env, mergeEnvWithSourceRoots(envRows, sourceRootRows));
     setLoading(true);
     setError('');
     const payload = {

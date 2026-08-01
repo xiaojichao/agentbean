@@ -359,6 +359,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
+  // agentos-hosted（Hermes/OpenClaw）原生产物目录：它们不写 AGENTBEAN_OUTPUT_DIR，
+  // 而是落到自己的数据目录，因此作为 adapter 默认 source root 参与 mtime 过滤收集。
+  const hermesHomeDir = join(home, '.hermes');
+  const openclawHomeDir = join(home, '.openclaw');
   const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
   // #1003：可恢复 Workspace publish 本地 pending 根（profile/home 下，与 attachment 隔离）。
   const workspacePublishStore = createFilesystemWorkspacePublishRecoveryStore(
@@ -724,22 +728,25 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
-          const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
-          const generatedImageDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
+          const adapterOutputDirs = resolveAdapterOutputDirs(request.customAgent?.adapterKind, {
+            codexGeneratedImagesDir,
+            hermesHomeDir,
+            openclawHomeDir,
+          });
           const configuredRoots = resolveConfiguredArtifactRoots(
             request.customAgent?.artifactSourceRoots,
             request.customAgent?.env,
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (workspace || generatedImageDirs.length > 0 || configuredRoots.roots.length > 0);
+            && (workspace || adapterOutputDirs.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
               ...(workspace ? {
                 outputDir: workspace.outputDir,
                 ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
               } : {}),
-              extraOutputDirs: generatedImageDirs,
+              extraOutputDirs: adapterOutputDirs,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
               maxBytes: input.artifactMaxBytes,
@@ -1080,6 +1087,30 @@ export function createTaskClaimProtocolClient(input: {
 
 function isCodexAdapterKind(adapterKind: string | undefined): boolean {
   return adapterKind === 'codex' || adapterKind === 'codex-cli';
+}
+
+/**
+ * Adapter 级默认产物根：与 Codex 的 ~/.codex/generated_images 同款语义，
+ * 只收集本次运行窗口内（mtime > startedAt）新增或修改的受支持文件，
+ * 默认归类为普通 Run artifact（adapter_generated source root）。
+ * agentos-hosted 网关（Hermes/OpenClaw）把文件写在自己的数据目录而不写
+ * AGENTBEAN_OUTPUT_DIR，缺省根会导致产物永远进不了 run 目录与频道文件索引。
+ */
+function resolveAdapterOutputDirs(
+  adapterKind: string | undefined,
+  dirs: { codexGeneratedImagesDir: string; hermesHomeDir: string; openclawHomeDir: string },
+): string[] {
+  const output: string[] = [];
+  if (isCodexAdapterKind(adapterKind)) {
+    output.push(dirs.codexGeneratedImagesDir);
+  }
+  if (adapterKind === 'hermes') {
+    output.push(dirs.hermesHomeDir);
+  }
+  if (adapterKind === 'openclaw') {
+    output.push(dirs.openclawHomeDir);
+  }
+  return output;
 }
 
 function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {

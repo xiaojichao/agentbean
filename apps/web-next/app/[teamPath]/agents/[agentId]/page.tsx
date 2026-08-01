@@ -12,6 +12,16 @@ import type { AgentSnapshot, AgentWorkspaceRun } from '@/lib/schema';
 import { AgentWorkspaceSection } from '@/components/agent-workspace-section';
 import { AgentExposurePanel } from '@/components/AgentExposurePanel';
 import { AgentMemoryProjectionPanel } from '@/components/AgentMemoryProjectionPanel';
+import { ArtifactSourceRootsSection } from '@/components/artifact-source-roots-section';
+import { EnvironmentVariableEditor, type EnvironmentVariableRow } from '@/components/environment-variable-editor';
+import {
+  ARTIFACT_SOURCE_ROOTS_ENV_KEY,
+  mergeEnvWithSourceRoots,
+  validateArtifactSourceRoots,
+  type ArtifactSourceRootRow,
+} from '@/lib/artifact-source-roots';
+
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export default function AgentDetailPage() {
   const params = useParams<{ teamPath: string; agentId: string }>();
@@ -29,6 +39,8 @@ export default function AgentDetailPage() {
   const [configDescription, setConfigDescription] = useState('');
   const [configCommand, setConfigCommand] = useState('');
   const [configCwd, setConfigCwd] = useState('');
+  const [configEnvRows, setConfigEnvRows] = useState<EnvironmentVariableRow[]>([]);
+  const [configSourceRootRows, setConfigSourceRootRows] = useState<ArtifactSourceRootRow[]>([]);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -73,10 +85,20 @@ export default function AgentDetailPage() {
 
   const openConfig = () => {
     if (!agent) return;
+    const envKeys = Array.isArray((agent as { envKeys?: string[] }).envKeys)
+      ? (agent as { envKeys?: string[] }).envKeys!
+      : [];
     setConfigName(agent.name ?? '');
     setConfigDescription(agent.description ?? '');
     setConfigCommand(agent.command ?? '');
     setConfigCwd(agent.cwd ?? '');
+    setConfigEnvRows([]);
+    // 编辑态只回显 Key 名、不回显值；已声明过产物目录时给一行空模板引导重新填写。
+    setConfigSourceRootRows(
+      envKeys.includes(ARTIFACT_SOURCE_ROOTS_ENV_KEY)
+        ? [{ id: 'src-1', label: '', envVarName: 'AGENTBEAN_SOURCE_ROOT_1', path: '', defaultRole: 'run_output' }]
+        : [],
+    );
     setConfigError('');
     setConfigOpen(true);
   };
@@ -93,6 +115,28 @@ export default function AgentDetailPage() {
       return;
     }
     const isCustom = agent.source === 'custom';
+    const env: Record<string, string> = {};
+    if (isCustom) {
+      const sourceRootValidation = validateArtifactSourceRoots(configSourceRootRows);
+      if (!sourceRootValidation.ok) {
+        setConfigError(sourceRootValidation.error);
+        return;
+      }
+      for (const row of configEnvRows) {
+        const key = row.key.trim();
+        const value = row.value;
+        if (!key && !value.trim()) continue;
+        if (!key || !ENV_KEY_PATTERN.test(key)) {
+          setConfigError('环境变量 Key 必须以字母或下划线开头，只能包含字母、数字和下划线');
+          return;
+        }
+        if (!value.trim()) {
+          setConfigError(`环境变量 ${key} 的值不能为空（已配置的密钥不可回显；留空行请删除）`);
+          return;
+        }
+      }
+      Object.assign(env, mergeEnvWithSourceRoots(configEnvRows, configSourceRootRows));
+    }
     setConfigSaving(true);
     setConfigError('');
     const res = await agentEvents().updateConfig({
@@ -104,6 +148,7 @@ export default function AgentDetailPage() {
       ...(isCustom ? {
         command: configCommand.trim() || agent.command || 'codex',
         cwd: configCwd.trim() || null,
+        ...(Object.keys(env).length > 0 ? { env } : {}),
       } : {}),
     });
     setConfigSaving(false);
@@ -373,6 +418,13 @@ export default function AgentDetailPage() {
           onDescriptionChange={setConfigDescription}
           onCommandChange={setConfigCommand}
           onCwdChange={setConfigCwd}
+          envRows={configEnvRows}
+          sourceRootRows={configSourceRootRows}
+          existingEnvKeys={Array.isArray((agent as { envKeys?: string[] }).envKeys)
+            ? (agent as { envKeys?: string[] }).envKeys!
+            : []}
+          onEnvRowsChange={setConfigEnvRows}
+          onSourceRootRowsChange={setConfigSourceRootRows}
           onCancel={() => setConfigOpen(false)}
           onSave={handleSaveConfig}
         />
@@ -397,6 +449,11 @@ function AgentConfigDialog({
   description,
   command,
   cwd,
+  envRows,
+  sourceRootRows,
+  existingEnvKeys,
+  onEnvRowsChange,
+  onSourceRootRowsChange,
   saving,
   error,
   onNameChange,
@@ -411,6 +468,11 @@ function AgentConfigDialog({
   description: string;
   command: string;
   cwd: string;
+  envRows: EnvironmentVariableRow[];
+  sourceRootRows: ArtifactSourceRootRow[];
+  existingEnvKeys: string[];
+  onEnvRowsChange(value: EnvironmentVariableRow[]): void;
+  onSourceRootRowsChange(value: ArtifactSourceRootRow[]): void;
   saving: boolean;
   error: string;
   onNameChange(value: string): void;
@@ -478,6 +540,17 @@ function AgentConfigDialog({
                   placeholder="/path/to/project（可选）"
                 />
               </div>
+              <ArtifactSourceRootsSection
+                rows={sourceRootRows}
+                onChange={onSourceRootRowsChange}
+                existingKeys={existingEnvKeys}
+              />
+              <EnvironmentVariableEditor
+                rows={envRows}
+                onChange={onEnvRowsChange}
+                existingKeys={existingEnvKeys}
+                hint="会注入到 Codex 等子进程。密钥值不会回显；填写同名 Key 可覆盖。例如 Codex 报 Missing environment variable: CRS_OAI_KEY 时，在此添加 CRS_OAI_KEY。"
+              />
             </>
           )}
         </div>
