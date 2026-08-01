@@ -1167,3 +1167,8 @@ _Avoid_: second runtime、server shell、remote Device。
 
 旧的固定等待失败策略，不再作为目标合同；run 的恢复调度由 PI scheduling state 表示，具体公平性、配额与 backpressure 等待后续决策。
 _Avoid_: 现行五分钟承诺、进程内 timeout、silent drop、以超时替代可恢复状态。
+
+## User-facing update
+
+面向终端用户的产品变更描述，只按新功能、改进或修复三分类组织，由作者在 PR body 的 `## 用户向更新` 小节以 `- 新功能: xxx` 行前缀形式撰写；它是设置页更新日志（Daily Changelog）的唯一内容来源，与 git commit subject、内部 issue/slice 语言或版本发布公告无关。缺失小节时由 LLM 从该 PR 的 title 与 commits 生成同构条目，但无用户可见影响的 PR 不生成条目。
+_Avoid_: 开发 commit subject、内部 issue/slice 术语、机器猜分类的条目、把所有 commit 都当作更新日志内容。
