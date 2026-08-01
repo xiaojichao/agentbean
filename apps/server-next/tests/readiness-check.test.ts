@@ -54,6 +54,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-syncs-railway-next-env-without-deploy',
       'ci-publishes-on-main-push',
       'ci-promotes-canonical-daemon-latest-before-production-deploy',
+      'ci-promotes-daemon-latest-only-when-published',
       'ci-runs-next-production-smoke-after-main-push',
       'ci-promotes-canonical-daemon-latest-on-demand',
       'ci-verifies-published-legacy-daemon-artifact',
