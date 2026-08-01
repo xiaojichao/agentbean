@@ -12,9 +12,12 @@ describe('chat message layout', () => {
     );
     const dispatchIndex = bubble.indexOf('renderDispatchStatus()');
     const artifactsIndex = bubble.indexOf('msg.artifacts && msg.artifacts.length > 0 && (');
+    const badgesIndex = bubble.indexOf('showInlineTaskBadge || showInlineReplyBadge || reacted || saved || pinned');
     expect(dispatchIndex).toBeGreaterThan(-1);
     expect(artifactsIndex).toBeGreaterThan(-1);
+    expect(badgesIndex).toBeGreaterThan(-1);
     expect(dispatchIndex).toBeGreaterThan(artifactsIndex);
+    expect(dispatchIndex).toBeGreaterThan(badgesIndex);
   });
 
   test('ChannelMessage 的 dispatch 状态同样渲染在附件之后', () => {

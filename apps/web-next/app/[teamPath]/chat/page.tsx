@@ -4712,7 +4712,6 @@ function ChatBubble({
             ))}
           </div>
         )}
-        {!isDeleted && !editing && renderDispatchStatus()}
         {hasThreadSurface && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 border border-sky-100 bg-sky-50/70 px-2 py-1.5">
             {taskId && (
@@ -4771,6 +4770,7 @@ function ChatBubble({
             )}
           </div>
         )}
+        {!isDeleted && !editing && renderDispatchStatus()}
       </div>
     </div>
   );
