@@ -46,7 +46,9 @@ export function saveThreadPanelWidth(routeTeamPath: string, width: number, stora
  * 松开后按团队路径持久化到 localStorage；宽度始终收敛在最小/最大值之间。
  */
 export function useThreadPanelWidth(routeTeamPath: string) {
-  const [width, setWidth] = useState<number>(() => loadThreadPanelWidth(routeTeamPath));
+  // 初始值固定为默认宽度：SSR 与客户端 hydration 保持一致（避免 style/aria
+  // 与服务端 HTML 不一致的警告），持久化值统一在挂载后读取。
+  const [width, setWidth] = useState<number>(THREAD_PANEL_DEFAULT_WIDTH);
   const routeTeamPathRef = useRef(routeTeamPath);
   const widthRef = useRef(width);
   const stopDragRef = useRef<(() => void) | null>(null);
