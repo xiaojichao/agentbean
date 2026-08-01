@@ -109,4 +109,32 @@ describe('parseChangelog', () => {
     expect(formatReleaseVersion('0.2.0-beta.1')).toBe('v0.2.0-beta.1');
     expect(formatReleaseVersion('Daily 2026-07-09')).toBe('Daily 2026-07-09');
   });
+
+  test('解析中文三分 Section（新功能/改进/修复）', () => {
+    const md = `## [Daily 2026-08-01] - 2026-08-01
+### 新功能
+- 支持频道文件预览
+### 改进
+- 消息加载性能提升
+### 修复
+- 修复断线重连偶发失败
+`;
+    const r = parseChangelog(md);
+    expect(r[0].sections.map((s) => s.type)).toEqual(['新功能', '改进', '修复']);
+    expect(r[0].sections[0].items).toEqual(['支持频道文件预览']);
+  });
+
+  test('中文与英文 Section 可共存于同一文件', () => {
+    const md = `## [Daily 2026-07-30] - 2026-07-30
+### Added
+- 旧条目
+## [Daily 2026-08-01] - 2026-08-01
+### 新功能
+- 新条目
+`;
+    const r = parseChangelog(md);
+    expect(r.length).toBe(2);
+    expect(r[0].sections.map((s) => s.type)).toEqual(['新功能']);
+    expect(r[1].sections.map((s) => s.type)).toEqual(['Added']);
+  });
 });

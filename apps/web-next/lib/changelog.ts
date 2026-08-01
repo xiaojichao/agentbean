@@ -2,7 +2,8 @@
 // 以便同时被 vitest 与 Node tsx 脚本（scripts/gen-changelog.ts）import。
 
 export type ChangeType =
-  | 'Added' | 'Changed' | 'Deprecated' | 'Removed' | 'Fixed' | 'Security';
+  | 'Added' | 'Changed' | 'Deprecated' | 'Removed' | 'Fixed' | 'Security'
+  | '新功能' | '改进' | '修复';
 
 export interface ReleaseSection {
   type: ChangeType;
@@ -18,7 +19,7 @@ export interface Release {
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const VERSION_RE = /^##\s*\[([^\]]+)\]\s*-\s*(\d{4}-\d{2}-\d{2})\s*$/;
 const VERSION_HEADER_RE = /^##\s*\[([^\]]+)\]/;
-const SECTION_RE = /^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security)\s*$/;
+const SECTION_RE = /^###\s+(Added|Changed|Deprecated|Removed|Fixed|Security|新功能|改进|修复)\s*$/;
 const ITEM_RE = /^\s*[-*]\s+(.+?)\s*$/;
 const UNRELEASED_RE = /^##\s*\[Unreleased\]/i;
 
