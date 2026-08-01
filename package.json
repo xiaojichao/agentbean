@@ -51,6 +51,7 @@
     "issue:claim-release": "node scripts/claim-github-issue.mjs release",
     "check:pr-review-readiness": "node scripts/check-pr-merge-readiness.mjs --stage review",
     "check:pr-merge-readiness": "node scripts/check-pr-merge-readiness.mjs",
+    "post-alternative-review": "node scripts/post-alternative-review.mjs",
     "check:agentbean-next-railway-preflight": "node scripts/check-agentbean-next-railway-preflight.mjs",
     "audit:agentbean-next-cutover": "node scripts/audit-agentbean-next-cutover.mjs",
     "smoke:agentbean-next-daemon-install": "node scripts/smoke-agentbean-next-daemon-install.mjs",
