@@ -4,6 +4,12 @@ import { fileURLToPath } from 'node:url';
 const CODEX_REVIEWER = 'chatgpt-codex-connector';
 const PASSING_CHECK_CONCLUSIONS = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
+/** 替代 review 评论格式：review-provider + Reviewed commit + 结论（Codex 额度不足时使用）。 */
+const ALTERNATIVE_PROVIDER_RE = /review-provider\s*[:：]\s*([^\s,，]+)/i;
+const ALTERNATIVE_COMMIT_RE = /Reviewed\s*commit\s*[:：]?\s*\*{0,2}\s*`([0-9a-f]{7,40})`/i;
+const ALTERNATIVE_CONCLUSION_RE = /结论\s*[:：]\s*(?:APPROVED|CHANGES_REQUESTED|COMMENTED)/i;
+const CODEX_LIMIT_RE = /usage limits for code reviews/i;
+
 /** Paths that do not require a fresh Codex Review after a prior review (or at all when the whole PR is only these). */
 export const CODEX_EXEMPT_PATH_RE =
   /^(?:docs\/|CONTEXT\.md$|CHANGELOG\.md$|README\.md$|AGENTS\.md$|Agents\.md$|\.github\/.+\.md$)/;
@@ -105,6 +111,38 @@ function reviewedCommitFromComment(comment) {
   return comment.body?.match(/Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`/i)?.[1] ?? null;
 }
 
+/** 解析“替代 Codex Review”评论；格式不完整时返回 null，避免误认。 */
+function alternativeReviewFromComment(comment) {
+  const body = comment.body ?? '';
+  const provider = body.match(ALTERNATIVE_PROVIDER_RE)?.[1];
+  if (!provider) return null;
+  const commit = body.match(ALTERNATIVE_COMMIT_RE)?.[1];
+  if (!commit) return null;
+  if (!ALTERNATIVE_CONCLUSION_RE.test(body)) return null;
+  return { commit, at: comment.createdAt, provider };
+}
+
+function collectReviewCandidates(pr) {
+  const candidates = [
+    ...(pr.reviews?.nodes ?? [])
+      .filter((review) => review.author?.login === CODEX_REVIEWER)
+      .map((review) => ({ commit: review.commit?.oid, at: review.submittedAt, provider: 'codex-cloud' })),
+    ...(pr.comments?.nodes ?? [])
+      .map((comment) => {
+        const botCommit = reviewedCommitFromComment(comment);
+        const alternative = alternativeReviewFromComment(comment);
+        const commit = botCommit ?? alternative?.commit;
+        if (!commit) return null;
+        return { commit, at: comment.createdAt, provider: alternative?.provider ?? 'codex-cloud' };
+      })
+      .filter(Boolean),
+  ];
+  const codexReviewLimit = (pr.comments?.nodes ?? []).some(
+    (comment) => comment.author?.login === CODEX_REVIEWER && CODEX_LIMIT_RE.test(comment.body ?? ''),
+  );
+  return { candidates, codexReviewLimit };
+}
+
 function matchesHead(candidate, headOid) {
   return Boolean(candidate && headOid && (headOid.startsWith(candidate) || candidate.startsWith(headOid)));
 }
@@ -164,14 +202,7 @@ export function evaluatePullRequest(pr, now = new Date(), {
     request.requestedReviewer?.login ?? request.requestedReviewer?.slug ?? 'unknown',
   );
 
-  const codexReviewCandidates = [
-    ...(pr.reviews?.nodes ?? [])
-      .filter((review) => review.author?.login === CODEX_REVIEWER)
-      .map((review) => ({ commit: review.commit?.oid, at: review.submittedAt })),
-    ...(pr.comments?.nodes ?? [])
-      .map((comment) => ({ commit: reviewedCommitFromComment(comment), at: comment.createdAt }))
-      .filter((item) => item.commit),
-  ];
+  const { candidates: codexReviewCandidates, codexReviewLimit } = collectReviewCandidates(pr);
   const currentCodexReview = codexReviewCandidates
     .filter((item) => matchesHead(item.commit, headOid))
     .sort((left, right) => new Date(right.at) - new Date(left.at))[0] ?? null;
@@ -242,7 +273,9 @@ export function evaluatePullRequest(pr, now = new Date(), {
       code: codexReviewCandidates.length > 0 ? 'CODEX_REVIEW_STALE' : 'CODEX_REVIEW_MISSING',
       detail: codexReviewCandidates.length > 0
         ? 'Codex Review 尚未覆盖最新提交（自上次 Review 以来存在非文档改动，或无法证明仅为文档改动）'
-        : '尚未收到 Codex Review（PR 含非文档改动，或无法证明仅为文档改动）',
+        : codexReviewLimit
+          ? 'Codex Review 额度不足且未收到覆盖最新提交的 review；请使用替代通道：评论需含 review-provider、Reviewed commit 与结论（如 npm run post-alternative-review -- <PR号> --provider local-codex --conclusion APPROVED）'
+          : '尚未收到 Codex Review（PR 含非文档改动，或无法证明仅为文档改动）',
     });
   }
 
@@ -272,6 +305,7 @@ export function evaluatePullRequest(pr, now = new Date(), {
       codexCurrent: Boolean(currentCodexReview),
       codexSatisfied,
       codexWaived,
+      codexReviewLimit,
       codexReviewedAt: currentCodexReview?.at ?? lastCodexReview?.at ?? null,
       unresolvedThreads: unresolvedThreads.length,
       pendingReviewers,
@@ -290,6 +324,7 @@ function codexStatusLine(result) {
   if (result.review.codexCurrent) return '已覆盖最新提交';
   if (result.review.codexWaived === 'docs_only_pr') return '已豁免（PR 仅为文档路径）';
   if (result.review.codexWaived === 'docs_only_delta') return '已豁免（相对上次 Review 仅为文档路径）';
+  if (result.review.codexReviewLimit) return 'Codex 额度不足（未收到 bot review，可用替代通道）';
   return '未覆盖最新提交';
 }
 
@@ -385,14 +420,7 @@ function fetchPullRequest({ number, repo }) {
     }
   }
 
-  const codexCandidates = [
-    ...(pr.reviews?.nodes ?? [])
-      .filter((review) => review.author?.login === CODEX_REVIEWER)
-      .map((review) => ({ commit: review.commit?.oid, at: review.submittedAt })),
-    ...(pr.comments?.nodes ?? [])
-      .map((comment) => ({ commit: reviewedCommitFromComment(comment), at: comment.createdAt }))
-      .filter((item) => item.commit),
-  ];
+  const { candidates: codexCandidates } = collectReviewCandidates(pr);
   const lastCodex = latestCodexReview(codexCandidates);
   let filesSinceCodexReview = null;
   let deltaTruncated = false;

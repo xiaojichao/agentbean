@@ -301,3 +301,105 @@ test('never reports an already merged PR as ready', () => {
     'MERGE_STATE_NOT_CLEAN',
   ]);
 });
+
+test('accepts an alternative review comment with provider, commit, and conclusion', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [{
+        createdAt: '2026-07-15T00:10:00Z',
+        author: { login: 'xiaojichao' },
+        body: '## 替代 Codex Review\nreview-provider: local-codex\nReviewed commit: `aaaaaaaaaa`\n结论：APPROVED',
+      }],
+    },
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexCurrent, true);
+  assert.match(formatReadiness(result), /已覆盖最新提交/);
+});
+
+test('rejects an alternative comment missing the review-provider field', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [{
+        createdAt: '2026-07-15T00:10:00Z',
+        author: { login: 'xiaojichao' },
+        body: 'Reviewed commit: `aaaaaaaaaa`\n结论：APPROVED',
+      }],
+    },
+  }));
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_MISSING']);
+});
+
+test('rejects an alternative comment missing the conclusion field', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [{
+        createdAt: '2026-07-15T00:10:00Z',
+        author: { login: 'xiaojichao' },
+        body: 'review-provider: local-codex\nReviewed commit: `aaaaaaaaaa`',
+      }],
+    },
+  }));
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_MISSING']);
+});
+
+test('blocks an alternative review comment that only covers an older commit', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [{
+        createdAt: '2026-07-15T00:10:00Z',
+        author: { login: 'xiaojichao' },
+        body: 'review-provider: local-codex\nReviewed commit: `bbbbbbbbbb`\n结论：APPROVED',
+      }],
+    },
+  }));
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_STALE']);
+});
+
+test('detects Codex review usage limit and guides to the fallback channel', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [{
+        createdAt: '2026-07-15T00:10:00Z',
+        author: { login: 'chatgpt-codex-connector' },
+        body: 'You have reached your Codex usage limits for code reviews. See the usage dashboard.',
+      }],
+    },
+  }));
+  assert.equal(result.ready, false);
+  assert.equal(result.review.codexReviewLimit, true);
+  assert.deepEqual(result.blockers.map((item) => item.code), ['CODEX_REVIEW_MISSING']);
+  assert.match(result.blockers[0].detail, /替代通道/);
+  assert.match(formatReadiness(result), /额度不足/);
+});
+
+test('accepts an alternative review when the Codex bot hit its usage limit', () => {
+  const result = evaluatePullRequest(fixture({
+    reviews: { nodes: [] },
+    comments: {
+      nodes: [
+        {
+          createdAt: '2026-07-15T00:10:00Z',
+          author: { login: 'chatgpt-codex-connector' },
+          body: 'You have reached your Codex usage limits for code reviews.',
+        },
+        {
+          createdAt: '2026-07-15T00:11:00Z',
+          author: { login: 'xiaojichao' },
+          body: 'review-provider: local-codex\nReviewed commit: `aaaaaaaaaa`\n结论：APPROVED',
+        },
+      ],
+    },
+  }));
+  assert.equal(result.ready, true);
+  assert.equal(result.review.codexReviewLimit, true);
+  assert.equal(result.review.codexCurrent, true);
+});

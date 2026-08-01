@@ -40,6 +40,28 @@ npm run check:pr-merge-readiness -- <PR号> --json
 - **delta 或全量文件列表无法完整取得**（分页截断、compare 失败）：失败关闭，仍要求覆盖最新提交。
 - **任何非文档代码 / workflow / 脚本改动**：仍要求 Codex 覆盖最新 head。
 
+### Codex Review 额度不足时的替代通道
+
+当 `chatgpt-codex-connector` 因 Codex 账号 code review 额度用尽（评论回复 "You have reached your Codex usage limits for code reviews"）而未产出 review 时，合并门禁不再无限期卡死，支持仓库维护者使用替代 review 通道：
+
+1. 用其他模型/工具完成一次完整 review（本地 Codex、Claude Code 等均可）；
+2. 在 PR 上发布固定格式评论，也可用
+   `npm run post-alternative-review -- <PR号> --provider local-codex --conclusion APPROVED --note "…"`：
+
+   ```markdown
+   ## 替代 Codex Review
+   review-provider: local-codex
+   Reviewed commit: `23ca4087c`
+   结论：APPROVED
+   ```
+
+3. 门禁校验三个字段：`review-provider` 非空、`Reviewed commit` 等于最新 head、结论明确（`APPROVED` / `CHANGES_REQUESTED` / `COMMENTED`）。校验通过后视为覆盖最新提交的 review，`READY` 后即可合并。
+
+约束与审计：
+- 替代通道仅用于 Codex 额度不足的降级场景；额度恢复后仍以 `chatgpt-codex-connector` 的 review 为准；
+- 替代 review 评论与 PR 作者可能同账号，独立性弱于 Cloud bot，请确保 review 确实由独立模型/工具完成，并在 `--note` 中留痕审查结论；
+- 每次替代 review 都会留下 provider、commit 与结论记录，供后续审计。
+
 流程建议：保持 Draft 直到 CI 绿 → 一次 `gh pr ready` 触发 Review → 把 finding 与文档收尾攒成尽量少的 push → 再跑合并门禁。不要在每个小 commit 后重复 `@codex review`。
 
 Cloud 侧建议（需在 [Codex GitHub settings](https://chatgpt.com/codex/cloud/settings/general) 人工确认）：自动 Review 优先绑定 `ready_for_review`，避免每个 `synchronize` push 都全量重评。
