@@ -3360,7 +3360,12 @@ function ConversationFiles({
           {files.map((file) => {
             return (
               <div data-smoke="channel-file-entry" data-filename={file.artifact.filename} data-path={file.logicalPath ?? ''} key={file.artifact.id} className="border border-neutral-300 bg-white p-3 hover:border-neutral-900">
-                <ChatArtifactPreview artifact={file.artifact} teamId={file.artifact.teamId} onEdit={() => onEditArtifact(file.artifact, file.documentId)} />
+                <ChatArtifactPreview
+                  artifact={file.artifact}
+                  teamId={file.artifact.teamId}
+                  editable={file.senderKind === 'agent'}
+                  onEdit={() => onEditArtifact(file.artifact, file.documentId)}
+                />
                 <div className="mt-2 flex items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-neutral-500">
                     <span>{formatDateTime(file.createdAt)}</span>
@@ -4694,14 +4699,20 @@ function ChatBubble({
             teamId={msg.teamId}
           />
         )}
-        {!isDeleted && !editing && renderDispatchStatus()}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
-              <ChatArtifactPreview key={artifact.id} artifact={artifact} teamId={msg.teamId} onEdit={() => onEditArtifact(artifact)} />
+              <ChatArtifactPreview
+                key={artifact.id}
+                artifact={artifact}
+                teamId={msg.teamId}
+                editable={msg.senderKind === 'agent'}
+                onEdit={() => onEditArtifact(artifact)}
+              />
             ))}
           </div>
         )}
+        {!isDeleted && !editing && renderDispatchStatus()}
         {hasThreadSurface && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 border border-sky-100 bg-sky-50/70 px-2 py-1.5">
             {taskId && (
@@ -5517,7 +5528,17 @@ function sortModeLabel(mode: SidebarSortMode): string {
   return '手动';
 }
 
-function ChatArtifactPreview({ artifact, teamId, onEdit }: { artifact: Artifact; teamId?: string; onEdit?: () => void }) {
+function ChatArtifactPreview({
+  artifact,
+  teamId,
+  onEdit,
+  editable,
+}: {
+  artifact: Artifact;
+  teamId?: string;
+  onEdit?: () => void;
+  editable?: boolean;
+}) {
   const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
   const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
   return <div className="space-y-1">
@@ -5532,7 +5553,7 @@ function ChatArtifactPreview({ artifact, teamId, onEdit }: { artifact: Artifact;
         ? <MarkdownMessage body={content} />
         : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
     />
-    {onEdit && isMarkdownArtifact(artifact) && artifact.sizeBytes <= 10 * 1024 * 1024 && (
+    {onEdit && editable && isMarkdownArtifact(artifact) && artifact.sizeBytes <= 10 * 1024 * 1024 && (
       <button type="button" onClick={onEdit} className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline">
         <Pencil size={12} />
         {artifact.sizeBytes > 2 * 1024 * 1024 ? '截断预览' : '编辑 Markdown'}

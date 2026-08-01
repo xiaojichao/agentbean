@@ -1423,10 +1423,17 @@ async function readMultipartUpload(
   maxArtifactBytes: number,
 ): Promise<MultipartUploadResult> {
   mkdirSync(dataDir, { recursive: true });
-  const Busboy = createRequire(import.meta.url)('busboy') as (options: { headers: IncomingMessage['headers']; limits: { fileSize: number; files: number; fieldSize: number; fields: number; parts: number } }) => NodeJS.WritableStream & { destroy(error?: Error): void; on(event: string, listener: (...args: any[]) => void): unknown };
+  const Busboy = createRequire(import.meta.url)('busboy') as (options: {
+    headers: IncomingMessage['headers'];
+    limits: { fileSize: number; files: number; fieldSize: number; fields: number; parts: number };
+    defParamCharset?: string;
+  }) => NodeJS.WritableStream & { destroy(error?: Error): void; on(event: string, listener: (...args: any[]) => void): unknown };
   const parser = Busboy({
     headers: request.headers,
     limits: { fileSize: maxArtifactBytes, files: 1, fieldSize: 64 * 1024, fields: 16, parts: 18 },
+    // 浏览器把 multipart 的 filename 参数按 UTF-8 字节发送；busboy 默认按 latin1 解码，
+    // 会导致中文等非 ASCII 文件名乱码（如 中文文档.md -> 一串下划线）。
+    defParamCharset: 'utf8',
   });
   const fields: Record<string, string> = {};
   let fileResult: MultipartUploadResult['file'] | undefined;
@@ -1715,7 +1722,8 @@ function readRequiredString(body: Record<string, unknown>, field: string): strin
 }
 
 function sanitizeFilename(filename: string): string {
-  const safe = basename(filename).replace(/[^\w .@-]/g, '_').trim();
+  // 保留 Unicode 字母/数字（含中文），仅替换路径分隔符与不安全字符，避免中文名被改写成下划线。
+  const safe = basename(filename).replace(/[^\p{L}\p{N} ._@-]/gu, '_').trim();
   return safe || 'artifact.bin';
 }
 
