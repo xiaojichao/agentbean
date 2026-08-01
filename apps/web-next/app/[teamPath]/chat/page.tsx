@@ -21,6 +21,7 @@ import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedCh
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
+import { THREAD_PANEL_MAX_WIDTH, THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
@@ -241,6 +242,7 @@ export default function ChatPage() {
   const params = useParams();
   const np = useCurrentTeamPath();
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const { width: threadPanelWidth, onHandlePointerDown: onThreadPanelResizePointerDown } = useThreadPanelWidth(routeTeamPath);
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -2330,57 +2332,71 @@ export default function ChatPage() {
       )}
 
       {!profileTarget && !taskDetailMessage && threadRoot && activeChannel && (
-        <ThreadPanel
-          root={threadRoot}
-          replies={threadReplies}
-          agents={agents}
-          humanProfiles={humanProfiles}
-          title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
-          input={threadInput}
-          attachments={threadAttachments}
-          uploading={uploading}
-          imageInputRef={threadImageInputRef}
-          fileInputRef={threadFileInputRef}
-          savedIds={savedIds}
-          pinnedIds={pinnedIds}
-          reactionEmojis={reactionEmojis}
-          tasks={tasks}
-          taskNumbers={taskNumbers}
-          activeDmAgent={activeDmAgent}
-          channelMembers={channelMembers}
-          mentionMembers={mentionMembers}
-          mentionCandidates={composerMentionMembers}
-          chatTaskMenuTarget={chatTaskMenuTarget}
-          selectedMessageId={selectedMessageId}
-          onInput={setThreadInput}
-          onSend={sendThreadMessage}
-          onUpload={(files) => uploadFiles(files, 'thread')}
-          onRemoveAttachment={(id) => setThreadAttachments((prev) => {
-            const removed = prev.find((item) => item.localId === id);
-            if (removed) revokeComposerPreview(removed);
-            return prev.filter((item) => item.localId !== id);
-          })}
-          onReply={handleThreadReply}
-          onOpenProfile={openProfile}
-          onToggleSave={toggleSave}
-          onTogglePin={togglePin}
-          onToggleReaction={toggleReaction}
-          onReactWithEmoji={reactWithEmoji}
-          onCopyLink={copyMessageLink}
-          onCopyMarkdown={copyMessageMarkdown}
-          onSelectMessage={selectMessage}
-          onEditMessage={editMessage}
-          onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
-          onDeleteMessage={deleteMessage}
-          onOpenTaskDetail={openTaskDetail}
-          onOpenTaskDetailById={openTaskDetailById}
-          onConvertToTask={convertMessageToTask}
-          onUnfollowThread={unfollowThreadLocally}
-          onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
-          onTaskStatus={updateTaskStatus}
-          onViewInChannel={viewThreadRootInChannel}
-          onClose={closeThread}
-        />
+        <>
+          <div
+            data-smoke="thread-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整讨论串宽度"
+            aria-valuemin={THREAD_PANEL_MIN_WIDTH}
+            aria-valuemax={THREAD_PANEL_MAX_WIDTH}
+            aria-valuenow={threadPanelWidth}
+            onPointerDown={onThreadPanelResizePointerDown}
+            className="w-2 shrink-0 cursor-col-resize touch-none select-none border-l border-neutral-200 bg-transparent transition-colors hover:bg-amber-200/60 active:bg-amber-200/80"
+          />
+          <ThreadPanel
+            width={threadPanelWidth}
+            root={threadRoot}
+            replies={threadReplies}
+            agents={agents}
+            humanProfiles={humanProfiles}
+            title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
+            input={threadInput}
+            attachments={threadAttachments}
+            uploading={uploading}
+            imageInputRef={threadImageInputRef}
+            fileInputRef={threadFileInputRef}
+            savedIds={savedIds}
+            pinnedIds={pinnedIds}
+            reactionEmojis={reactionEmojis}
+            tasks={tasks}
+            taskNumbers={taskNumbers}
+            activeDmAgent={activeDmAgent}
+            channelMembers={channelMembers}
+            mentionMembers={mentionMembers}
+            mentionCandidates={composerMentionMembers}
+            chatTaskMenuTarget={chatTaskMenuTarget}
+            selectedMessageId={selectedMessageId}
+            onInput={setThreadInput}
+            onSend={sendThreadMessage}
+            onUpload={(files) => uploadFiles(files, 'thread')}
+            onRemoveAttachment={(id) => setThreadAttachments((prev) => {
+              const removed = prev.find((item) => item.localId === id);
+              if (removed) revokeComposerPreview(removed);
+              return prev.filter((item) => item.localId !== id);
+            })}
+            onReply={handleThreadReply}
+            onOpenProfile={openProfile}
+            onToggleSave={toggleSave}
+            onTogglePin={togglePin}
+            onToggleReaction={toggleReaction}
+            onReactWithEmoji={reactWithEmoji}
+            onCopyLink={copyMessageLink}
+            onCopyMarkdown={copyMessageMarkdown}
+            onSelectMessage={selectMessage}
+            onEditMessage={editMessage}
+            onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
+            onDeleteMessage={deleteMessage}
+            onOpenTaskDetail={openTaskDetail}
+            onOpenTaskDetailById={openTaskDetailById}
+            onConvertToTask={convertMessageToTask}
+            onUnfollowThread={unfollowThreadLocally}
+            onTaskMenu={(messageId) => setChatTaskMenuTarget(messageId ? { surface: 'thread', messageId } : null)}
+            onTaskStatus={updateTaskStatus}
+            onViewInChannel={viewThreadRootInChannel}
+            onClose={closeThread}
+          />
+        </>
       )}
 
       {openChannelDocument && (
@@ -3761,6 +3777,7 @@ function TaskRunMeta({ label, value }: { label: string; value: string }) {
 }
 
 function ThreadPanel({
+  width,
   root,
   replies,
   agents,
@@ -3807,6 +3824,7 @@ function ThreadPanel({
   onViewInChannel,
   onClose,
 }: {
+  width: number;
   root: ChatMessage;
   replies: ChatMessage[];
   agents: Record<string, AgentSnapshot>;
@@ -3978,7 +3996,7 @@ function ThreadPanel({
     );
   };
   return (
-    <aside className="flex w-96 shrink-0 flex-col border-l border-neutral-200 bg-white">
+    <aside className="flex shrink-0 flex-col bg-white" style={{ width }}>
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-neutral-900">{title}</div>
