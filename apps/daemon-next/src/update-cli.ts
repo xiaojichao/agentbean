@@ -1,6 +1,5 @@
 import { execFile } from 'node:child_process';
-import { access } from 'node:fs/promises';
-import { readFile } from 'node:fs/promises';
+import { access, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -9,6 +8,8 @@ import {
   removeMacOSLaunchAgentInstallation,
 } from './macos-launch-agent.js';
 import type { PlatformCommandResult, PlatformServiceStatus } from './device-platform-service.js';
+import { deviceServicePaths } from './device-service-paths.js';
+import { createDeviceServiceStateStore } from './device-service-state.js';
 
 const CANONICAL_PACKAGE = '@agentbean/daemon';
 const CANONICAL_REGISTRY = 'https://registry.npmjs.org/';
@@ -18,6 +19,10 @@ export const SERVICE_INSTALL_DEADLINE_MS = 90_000;
 const SERVICE_QUIESCE_DEADLINE_MS = 30_000;
 const PACKAGE_IMPORT_VERIFY_TIMEOUT_MS = 30_000;
 const ERROR_LOG_SUMMARY_MAX_CHARS = 800;
+/** 更新锁超过该时长视为陈旧，允许接管（防止异常退出残留锁阻塞更新）。 */
+export const UPDATE_LOCK_STALE_MS = 10 * 60_000;
+/** 换包前将当前全局安装整体移出 node_modules 的备份目录名。 */
+export const PACKAGE_SNAPSHOT_DIR_NAME = 'agentbean-daemon-update-backup';
 
 export const UPDATE_CLI_EXIT = {
   success: 0,
@@ -57,6 +62,24 @@ export interface UpdateCliDeps {
     version: string;
   }) => Promise<PackageInstallResult>;
   readonly readServiceErrorSummary?: () => Promise<string>;
+  /** 更新锁文件路径；默认 <AgentBean home>/service/update.lock。 */
+  readonly lockFilePath?: string;
+  readonly acquireUpdateLock?: (lockFilePath: string) => Promise<boolean>;
+  readonly releaseUpdateLock?: (lockFilePath: string) => Promise<void>;
+  /** 换包前把当前全局安装 mv 到备份目录，失败则中止更新。 */
+  readonly snapshotInstalledPackage?: (input: {
+    packageRoot: string;
+    backupRoot: string;
+  }) => Promise<boolean>;
+  /** 回滚：删除半安装的新目录并把备份 mv 回原位（不依赖 npm/网络）。 */
+  readonly restorePackageSnapshot?: (input: {
+    packageRoot: string;
+    backupRoot: string;
+  }) => Promise<boolean>;
+  /** 更新成功并确认服务就绪后清理备份目录。 */
+  readonly discardPackageSnapshot?: (backupRoot: string) => Promise<void>;
+  /** 运行级健康确认：Device Service 必须报告新版本且处于 running/degraded。 */
+  readonly confirmServiceReady?: (expectedVersion: string) => Promise<boolean>;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
 }
@@ -92,6 +115,8 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.rejected;
   }
   const agentBeanExecutable = join(globalPrefix, 'bin', 'agentbean');
+  const packageRoot = join(globalPrefix, 'lib', 'node_modules', CANONICAL_PACKAGE);
+  const backupRoot = join(globalPrefix, 'lib', PACKAGE_SNAPSHOT_DIR_NAME);
   const latestResult = await safeRun(runNpm, [
     'view', `${CANONICAL_PACKAGE}@latest`, 'version', '--json', `--registry=${CANONICAL_REGISTRY}`,
   ]);
@@ -107,6 +132,45 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.success;
   }
 
+  // 并发防护：同一时间只允许一个 agentbean update（防止两个 npm 同时 reify 全局包，
+  // 这是 typebox 等嵌套依赖被删成残树、Device Service ERR_MODULE_NOT_FOUND 的直接成因）。
+  const lockFilePath = deps.lockFilePath
+    ?? join(deviceServicePaths(deps.baseDir).root, 'update.lock');
+  const acquireLock = deps.acquireUpdateLock ?? acquireUpdateLockFile;
+  const releaseLock = deps.releaseUpdateLock ?? releaseUpdateLockFile;
+  const locked = await safeBoolean(() => acquireLock(lockFilePath));
+  if (!locked) {
+    stderr('另一个 AgentBean 更新正在进行（UPDATE_LOCKED）；请稍后重试。');
+    return UPDATE_CLI_EXIT.rejected;
+  }
+  try {
+    return await executeUpdate({
+      deps, stderr, stdout, runNpm, agentBeanExecutable, packageRoot, backupRoot,
+      current, latest, globalPrefix,
+    });
+  } finally {
+    await safeBoolean(async () => {
+      await releaseLock(lockFilePath);
+      return true;
+    });
+  }
+}
+
+interface ExecuteUpdateInput {
+  readonly deps: UpdateCliDeps;
+  readonly stderr: (message: string) => void;
+  readonly stdout: (message: string) => void;
+  readonly runNpm: (argv: readonly string[]) => Promise<PlatformCommandResult>;
+  readonly agentBeanExecutable: string;
+  readonly packageRoot: string;
+  readonly backupRoot: string;
+  readonly current: InstalledAgentBeanPackage;
+  readonly latest: string;
+  readonly globalPrefix: string;
+}
+
+async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
+  const { deps, stderr, stdout, runNpm, agentBeanExecutable, packageRoot, backupRoot, current, latest, globalPrefix } = input;
   const servicePathsInput = {
     ...(deps.home ? { home: deps.home } : {}),
     ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
@@ -133,30 +197,48 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
 
   const runAgentBean = deps.runAgentBean ?? runAgentBeanCommand;
   const verify = deps.verifyInstalledPackage
-    ?? ((input: { globalPrefix: string; version: string }) => verifyInstalledPackage(input));
+    ?? ((verifyInput: { globalPrefix: string; version: string }) => verifyInstalledPackage(verifyInput));
+  const snapshot = deps.snapshotInstalledPackage ?? snapshotInstalledPackage;
+  const restoreSnapshot = deps.restorePackageSnapshot ?? restorePackageSnapshot;
+  const discardSnapshot = deps.discardPackageSnapshot ?? discardPackageSnapshot;
+  const confirmServiceReady = deps.confirmServiceReady
+    ?? ((expectedVersion: string) => confirmDeviceServiceVersion({
+      expectedVersion,
+      ...(deps.baseDir ? { baseDir: deps.baseDir } : {}),
+    }));
+
+  // 换包前把当前全局安装整体移出 node_modules：回滚只做 mv/rm，
+  // 不依赖 npm/网络，也不会在 crash-loop 的 Device Service 上重跑 npm reify。
+  const snapshotted = await safeBoolean(() => snapshot({ packageRoot, backupRoot }));
+  if (!snapshotted) {
+    stderr('无法备份当前 AgentBean 安装（UPDATE_SNAPSHOT_FAILED）；未执行更新。');
+    return UPDATE_CLI_EXIT.rejected;
+  }
+
   const installed = await installExactVersion(runNpm, latest, globalPrefix, verify);
   if (!installed.ok) {
-    // Re-fence before rollback npm: a partial device start may have re-bootstrapped KeepAlive.
+    // 安装验证失败：直接从快照恢复旧版本。
     if (wasServiceInstalled) await safeBoolean(fence);
-    const rolledBack = await installExactVersion(runNpm, current.version, globalPrefix, verify);
-    if (!rolledBack.ok) {
+    const snapshotRestored = await safeBoolean(() => restoreSnapshot({ packageRoot, backupRoot }));
+    if (!snapshotRestored) {
       stderr(
         'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。'
-        + formatDetail(installed.detail),
+        + formatDetail(installed.detail)
+        + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
       );
       return UPDATE_CLI_EXIT.rejected;
     }
     if (!wasServiceInstalled) {
       stderr(
-        `AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）；未使用 sudo。`
+        `AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）。`
         + formatDetail(installed.detail),
       );
       return UPDATE_CLI_EXIT.rejected;
     }
-    const restored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+    const serviceRestored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
       'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
     ]);
-    stderr(restored.exitCode === 0
+    stderr(serviceRestored.exitCode === 0
       ? `AgentBean 更新安装验证失败，已恢复 ${current.version} 并恢复 Device Service（UPDATE_INSTALL_FAILED）。`
         + formatDetail(installed.detail)
       : 'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。'
@@ -165,6 +247,10 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
     return UPDATE_CLI_EXIT.rejected;
   }
   if (!wasServiceInstalled) {
+    await safeBoolean(async () => {
+      await discardSnapshot(backupRoot);
+      return true;
+    });
     stdout(`AgentBean 已更新到 ${latest}；Device Service 尚未安装，无需重启。`);
     return UPDATE_CLI_EXIT.success;
   }
@@ -172,7 +258,14 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
   const prepared = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
     'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
   ]);
-  if (prepared.exitCode === 0) {
+  // 运行级健康确认：service run 报告就绪还不够，还要确认运行中的版本与目标一致。
+  const confirmed = prepared.exitCode === 0
+    && await safeBoolean(() => confirmServiceReady(latest));
+  if (prepared.exitCode === 0 && confirmed) {
+    await safeBoolean(async () => {
+      await discardSnapshot(backupRoot);
+      return true;
+    });
     stdout(`AgentBean 已更新到 ${latest}，Device Service 已安全${serviceStatus.loaded ? '重启' : '启动'}。`);
     return UPDATE_CLI_EXIT.success;
   }
@@ -184,24 +277,28 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
   const errorLog = await (deps.readServiceErrorSummary
     ? deps.readServiceErrorSummary()
     : readServiceErrorSummary(servicePathsInput));
-  const reasonSummary = [startDetail, errorLog].filter(Boolean).join('\n').slice(0, ERROR_LOG_SUMMARY_MAX_CHARS);
+  const reasonSummary = [
+    prepared.exitCode === 0 && !confirmed ? 'Device Service 已安装但版本/健康确认失败。' : '',
+    startDetail,
+    errorLog,
+  ].filter(Boolean).join('\n').slice(0, ERROR_LOG_SUMMARY_MAX_CHARS);
 
-  // Fence again so rollback npm install cannot race KeepAlive crash-loops.
+  // 回滚：再次 fence 是尽力而为；即使失败也直接做快照恢复（mv/rm），
+  // 绝不在 crash-loop 的服务运行期间重跑 npm install（原实现会把树越搅越烂）。
   const fencedForRollback = await safeBoolean(fence);
-  const rolledBack = await installExactVersion(runNpm, current.version, globalPrefix, verify);
-  if (!rolledBack.ok) {
+  const snapshotRestored = await safeBoolean(() => restoreSnapshot({ packageRoot, backupRoot }));
+  if (!snapshotRestored) {
     stderr(
       `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
       + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : '')
-      + formatDetail(rolledBack.detail)
-      + `\n可手动恢复：npm install -g ${CANONICAL_PACKAGE}@${current.version} && agentbean device install`,
+      + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
     );
     return UPDATE_CLI_EXIT.rejected;
   }
-  const restored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
+  const serviceRestored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
     'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
   ]);
-  if (restored.exitCode === 0) {
+  if (serviceRestored.exitCode === 0) {
     stderr(
       `新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`
       + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : ''),
@@ -213,9 +310,111 @@ export async function runUpdateCli(argv: readonly string[], deps: UpdateCliDeps 
       ? `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
       : `新版本 ${latest} 未能就绪，Device Service 无法安全停止且自动恢复失败（UPDATE_RECOVERY_REQUIRED）。`)
     + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : '')
-    + `\n可手动恢复：npm install -g ${CANONICAL_PACKAGE}@${current.version} && agentbean device install`,
+    + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
   );
   return UPDATE_CLI_EXIT.rejected;
+}
+
+/**
+ * 获取更新锁（exclusive create + 陈旧超时接管）。
+ * 返回 true 表示获得锁；false 表示已有并发的 AgentBean 更新在进行。
+ */
+export async function acquireUpdateLockFile(
+  lockFilePath: string,
+  staleMs = UPDATE_LOCK_STALE_MS,
+): Promise<boolean> {
+  if (await tryAcquireUpdateLockFile(lockFilePath)) return true;
+  let stale = false;
+  try {
+    const parsed = JSON.parse(await readFile(lockFilePath, 'utf8')) as { startedAt?: unknown };
+    const startedAt = typeof parsed.startedAt === 'string' ? Date.parse(parsed.startedAt) : Number.NaN;
+    stale = Number.isFinite(startedAt) && Date.now() - startedAt >= staleMs;
+  } catch {
+    return false;
+  }
+  if (!stale) return false;
+  await rm(lockFilePath, { force: true });
+  return tryAcquireUpdateLockFile(lockFilePath);
+}
+
+export async function releaseUpdateLockFile(lockFilePath: string): Promise<void> {
+  await rm(lockFilePath, { force: true });
+}
+
+async function tryAcquireUpdateLockFile(lockFilePath: string): Promise<boolean> {
+  try {
+    await mkdir(dirname(lockFilePath), { recursive: true, mode: 0o700 });
+    const handle = await open(lockFilePath, 'wx', 0o600);
+    try {
+      await handle.writeFile(
+        `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`,
+        'utf8',
+      );
+    } finally {
+      await handle.close();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 把当前全局安装 mv 到备份目录；包目录不存在时视为无需备份。 */
+export async function snapshotInstalledPackage(input: {
+  readonly packageRoot: string;
+  readonly backupRoot: string;
+}): Promise<boolean> {
+  try {
+    await rm(input.backupRoot, { recursive: true, force: true });
+    await access(input.packageRoot);
+    await rename(input.packageRoot, input.backupRoot);
+    return true;
+  } catch (error) {
+    return isNodeError(error, 'ENOENT') ? true : false;
+  }
+}
+
+/** 删除半安装的新目录并把备份 mv 回原位。 */
+export async function restorePackageSnapshot(input: {
+  readonly packageRoot: string;
+  readonly backupRoot: string;
+}): Promise<boolean> {
+  try {
+    await access(input.backupRoot);
+  } catch {
+    return false;
+  }
+  try {
+    await rm(input.packageRoot, { recursive: true, force: true });
+    await rename(input.backupRoot, input.packageRoot);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 更新成功且服务健康确认后清理备份目录。 */
+export async function discardPackageSnapshot(backupRoot: string): Promise<void> {
+  await rm(backupRoot, { recursive: true, force: true });
+}
+
+/** 运行级确认：Device Service 已以目标版本 running/degraded。 */
+export async function confirmDeviceServiceVersion(input: {
+  readonly expectedVersion: string;
+  readonly baseDir?: string;
+}): Promise<boolean> {
+  try {
+    const state = await createDeviceServiceStateStore(deviceServicePaths(input.baseDir).stateFile).read();
+    return Boolean(state
+      && (state.phase === 'running' || state.phase === 'degraded')
+      && state.version === input.expectedVersion);
+  } catch {
+    return false;
+  }
+}
+
+function formatManualRecovery(backupRoot: string, version: string): string {
+  return `恢复备份目录 ${backupRoot}，或 npm install -g ${CANONICAL_PACKAGE}@${version} && agentbean device install`;
 }
 
 export async function readInstalledAgentBeanPackage(
