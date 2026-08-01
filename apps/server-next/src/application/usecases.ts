@@ -2497,7 +2497,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
     const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
       body: messageInput.body,
-      channel,
       route,
       threadId: messageInput.threadId,
     });
@@ -5284,7 +5283,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
         body: messageInput.body,
-        channel,
         route,
         threadId: messageInput.threadId,
       });
@@ -12813,11 +12811,12 @@ function isDispatchEligibleAgent(
 
 function shouldAutoCreateTaskThread(input: {
   body: string;
-  channel: ChannelRecord;
   route: RouteResult;
   threadId?: string;
 }): boolean {
-  if (input.threadId || input.channel.kind === 'direct' || input.route.kind !== 'dispatch') {
+  // DM 与频道一致：命中任务型关键词且已路由到 Agent 时自动建 Task 并沉淀讨论串。
+  // 已在既有讨论串内（threadId 存在）或未路由到 Agent 时不自动建 Task。
+  if (input.threadId || input.route.kind !== 'dispatch') {
     return false;
   }
   const body = input.body.trim();

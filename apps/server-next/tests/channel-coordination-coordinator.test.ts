@@ -75,6 +75,21 @@ function makeFetch(responses: FetchSpec[]) {
   };
 }
 
+/** 受控 fake fetch：记录请求 body 并按指定 spec 返回响应（用于断言模型请求内容）。 */
+function recordingFetch(recorded: { body: string }[], spec: FetchSpec) {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
+    recorded.push({ body: String(init?.body ?? '') });
+    const parsed = typeof spec.body === 'string' ? JSON.parse(spec.body) : (spec.body ?? {});
+    const bodyText = typeof spec.body === 'string' ? spec.body : JSON.stringify(spec.body ?? {});
+    return {
+      ok: (spec.status ?? 200) >= 200 && (spec.status ?? 200) < 300,
+      status: spec.status ?? 200,
+      text: async () => bodyText,
+      json: async () => parsed,
+    } as unknown as Response;
+  };
+}
+
 const availableResolver: CoordinatorModelResolver = {
   async resolveInvocationTarget() {
     return {
@@ -272,6 +287,47 @@ describe('channel coordinator: happy path intents', () => {
     const sysMessages = (await repos.messages.listByChannel('channel-1', 10))
       .filter((m) => m.senderKind === 'system');
     expect(sysMessages).toHaveLength(0);
+  });
+
+  test('model request carries message attachment metadata so PI does not claim attachments are missing', async () => {
+    const requests: { body: string }[] = [];
+    const { repos, coordinator } = setup({
+      fetch: recordingFetch(requests, okResponse(JSON.stringify({
+        intent: 'system_reply',
+        reasonCode: 'attachment_seen',
+        text: '已看到附件',
+      }))),
+    });
+    const { jobId } = await seedHumanMessageJob(repos, { body: '分析一下这张图' });
+    await repos.artifacts.create({
+      id: 'artifact-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      uploaderId: 'user-1',
+      filename: 'chart.png',
+      mimeType: 'image/png',
+      sizeBytes: 1024,
+      storagePath: 'artifacts/team-1/artifact-1/chart.png',
+      relativePath: 'chart.png',
+      sha256: 'hash-chart',
+      pathKind: 'upload',
+      role: 'attachment',
+      createdAt: 901,
+    });
+
+    const outcome = await coordinator.processJob(jobId);
+    expect(outcome.kind).toBe('resolved');
+
+    const requestBody = requests[0]?.body ?? '';
+    expect(requestBody).toContain('分析一下这张图');
+    expect(requestBody).toContain('[Message attachments]');
+    expect(requestBody).toContain('chart.png');
+    expect(requestBody).toContain('image/png');
+    // 附件信息只进入模型请求，绝不进入系统消息正文。
+    const sysMessages = (await repos.messages.listByChannel('channel-1', 10))
+      .filter((m) => m.senderKind === 'system');
+    expect(JSON.stringify(sysMessages)).not.toContain('chart.png');
   });
 });
 
