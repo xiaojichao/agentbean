@@ -795,6 +795,52 @@ describe('server-next dev server entry', () => {
     await expect(preview.text()).resolves.toBe(fileContent);
   });
 
+  test('keeps non-ASCII multipart filenames intact (中文附件名不乱码)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-multipart-cjk-'));
+    const server = await startServerNextDevServer({
+      Server,
+      Database,
+      config: { host: '127.0.0.1', port: 0, storage: 'sqlite', dataDir, sessionSecret: 'test-secret' },
+    });
+    cleanups.push(() => server.close());
+    const ownerSocket = await connectClient(`${server.baseUrl}/web`);
+    cleanups.push(async () => {
+      ownerSocket.disconnect();
+    });
+    const owner = await ownerSocket.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'cjk-shaw',
+      password: 'secret',
+      teamName: 'AgentBean',
+    }) as {
+      ok: true;
+      token: string;
+      currentTeam: { id: string };
+      defaultChannel: { id: string };
+    };
+    const boundary = 'agentbean-cjk-boundary';
+    const chineseFilename = '中文报告.md';
+    // 浏览器把 filename 参数按 UTF-8 字节写入 multipart 头；raw body 保持同样的字节序列。
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="token"\r\n\r\n${owner.token}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="channelId"\r\n\r\n${owner.defaultChannel.id}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${chineseFilename}"\r\nContent-Type: text/markdown\r\n\r\n`),
+      Buffer.from('# 中文内容\n'),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+
+    const upload = await fetch(`${server.baseUrl}/api/teams/${owner.currentTeam.id}/artifacts/upload`, {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+    expect(upload.status).toBe(201);
+    const uploadJson = await upload.json() as {
+      ok: true;
+      artifact: { id: string; filename: string; previewUrl: string };
+    };
+    expect(uploadJson.artifact.filename).toBe(chineseFilename);
+  });
+
   test('cleans multipart temp files when required fields are missing or the file exceeds the cap', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'agentbean-next-artifacts-cleanup-'));
     const app = createInMemoryServerNext();

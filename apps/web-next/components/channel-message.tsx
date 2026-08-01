@@ -172,7 +172,6 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
           teamId={msg.teamId}
         />
       )}
-      {renderDispatch()}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {msg.artifacts.map((a) => (
@@ -180,6 +179,7 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
           ))}
         </div>
       )}
+      {renderDispatch()}
     </div>
   );
 }
