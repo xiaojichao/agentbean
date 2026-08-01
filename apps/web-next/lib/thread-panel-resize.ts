@@ -97,7 +97,8 @@ export function useThreadPanelWidth(routeTeamPath: string) {
   const onHandleKeyDown = useCallback((event: React.KeyboardEvent) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
-    const next = clampThreadPanelWidth(widthRef.current + (event.key === 'ArrowLeft' ? -16 : 16));
+    // 讨论串在分隔线右侧：ArrowLeft 让分隔线左移（讨论串变宽），与拖拽方向一致。
+    const next = clampThreadPanelWidth(widthRef.current + (event.key === 'ArrowLeft' ? 16 : -16));
     setWidth(next);
     saveThreadPanelWidth(routeTeamPathRef.current, next);
   }, []);

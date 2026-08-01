@@ -70,7 +70,7 @@ describe('讨论串宽度拖拽调整', () => {
   test('键盘方向键也能调整并持久化宽度', () => {
     render(<ResizeHarness teamPath="team-a" />);
     fireEvent.keyDown(screen.getByTestId('resize-handle'), { key: 'ArrowLeft' });
-    expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH - 16);
+    expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH + 16);
     fireEvent.keyDown(screen.getByTestId('resize-handle'), { key: 'ArrowRight' });
     expect(panelWidth()).toBe(THREAD_PANEL_DEFAULT_WIDTH);
     expect(window.localStorage.getItem(threadPanelWidthStorageKey('team-a')))
