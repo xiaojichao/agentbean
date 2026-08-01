@@ -21,7 +21,7 @@ import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedCh
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
-import { THREAD_PANEL_MAX_WIDTH, THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
+import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
@@ -242,11 +242,27 @@ export default function ChatPage() {
   const params = useParams();
   const np = useCurrentTeamPath();
   const routeTeamPath = typeof params.teamPath === 'string' ? params.teamPath : np;
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [chatContainerWidth, setChatContainerWidth] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const measure = () => setChatContainerWidth(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const {
     width: threadPanelWidth,
+    maxWidth: threadPanelMaxWidth,
     onHandlePointerDown: onThreadPanelResizePointerDown,
     onHandleKeyDown: onThreadPanelResizeKeyDown,
-  } = useThreadPanelWidth(routeTeamPath);
+  } = useThreadPanelWidth(routeTeamPath, chatContainerWidth);
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const searchParams = useSearchParams();
@@ -1782,7 +1798,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex flex-1 overflow-hidden">
+    <div ref={chatContainerRef} className="flex flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
       <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]">
         {/* Chat label */}
@@ -2343,7 +2359,7 @@ export default function ChatPage() {
             aria-orientation="vertical"
             aria-label="调整讨论串宽度"
             aria-valuemin={THREAD_PANEL_MIN_WIDTH}
-            aria-valuemax={THREAD_PANEL_MAX_WIDTH}
+            aria-valuemax={threadPanelMaxWidth}
             aria-valuenow={threadPanelWidth}
             onPointerDown={onThreadPanelResizePointerDown}
             onKeyDown={onThreadPanelResizeKeyDown}

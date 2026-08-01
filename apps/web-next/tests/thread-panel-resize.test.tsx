@@ -7,6 +7,7 @@ import {
   THREAD_PANEL_DEFAULT_WIDTH,
   THREAD_PANEL_MAX_WIDTH,
   THREAD_PANEL_MIN_WIDTH,
+  availableThreadPanelMaxWidth,
   clampThreadPanelWidth,
   threadPanelWidthStorageKey,
   useThreadPanelWidth,
@@ -14,11 +15,12 @@ import {
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-function ResizeHarness({ teamPath }: { teamPath: string }) {
-  const { width, onHandlePointerDown, onHandleKeyDown } = useThreadPanelWidth(teamPath);
+function ResizeHarness({ teamPath, containerWidth }: { teamPath: string; containerWidth?: number }) {
+  const { width, maxWidth, onHandlePointerDown, onHandleKeyDown } = useThreadPanelWidth(teamPath, containerWidth);
   return (
     <div>
       <div data-testid="thread-panel" style={{ width }} />
+      <div data-testid="thread-panel-max" style={{ width: maxWidth }} />
       <div data-testid="resize-handle" onPointerDown={onHandlePointerDown} onKeyDown={onHandleKeyDown} />
     </div>
   );
@@ -26,6 +28,11 @@ function ResizeHarness({ teamPath }: { teamPath: string }) {
 
 function panelWidth(): number {
   const raw = screen.getByTestId('thread-panel').style.width;
+  return Number(raw.replace('px', ''));
+}
+
+function panelMaxWidth(): number {
+  const raw = screen.getByTestId('thread-panel-max').style.width;
   return Number(raw.replace('px', ''));
 }
 
@@ -55,6 +62,27 @@ describe('讨论串宽度拖拽调整', () => {
     expect(panelWidth()).toBe(THREAD_PANEL_MAX_WIDTH);
     dragBy(-100000);
     expect(panelWidth()).toBe(THREAD_PANEL_MIN_WIDTH);
+  });
+
+  test('动态上限按容器宽度计算，拖动不超出可用宽度', () => {
+    render(<ResizeHarness teamPath="team-a" containerWidth={1440} />);
+    expect(panelMaxWidth()).toBe(availableThreadPanelMaxWidth(1440));
+    dragBy(100000);
+    expect(panelWidth()).toBe(availableThreadPanelMaxWidth(1440));
+    expect(window.localStorage.getItem(threadPanelWidthStorageKey('team-a')))
+      .toBe(String(availableThreadPanelMaxWidth(1440)));
+  });
+
+  test('容器变窄时宽度收敛到新上限并写回持久化', () => {
+    const { unmount } = render(<ResizeHarness teamPath="team-a" containerWidth={1440} />);
+    dragBy(100000);
+    expect(panelWidth()).toBe(availableThreadPanelMaxWidth(1440));
+    unmount();
+    render(<ResizeHarness teamPath="team-a" containerWidth={1000} />);
+    expect(panelMaxWidth()).toBe(availableThreadPanelMaxWidth(1000));
+    expect(panelWidth()).toBe(availableThreadPanelMaxWidth(1000));
+    expect(window.localStorage.getItem(threadPanelWidthStorageKey('team-a')))
+      .toBe(String(availableThreadPanelMaxWidth(1000)));
   });
 
   test('拖动后的宽度会持久化，重新打开仍生效', () => {
@@ -89,5 +117,11 @@ describe('讨论串宽度拖拽调整', () => {
     expect(clampThreadPanelWidth(Number.NaN)).toBe(THREAD_PANEL_DEFAULT_WIDTH);
     expect(clampThreadPanelWidth(10)).toBe(THREAD_PANEL_MIN_WIDTH);
     expect(clampThreadPanelWidth(99999)).toBe(THREAD_PANEL_MAX_WIDTH);
+    expect(clampThreadPanelWidth(99999, 872)).toBe(872);
+  });
+
+  test('availableThreadPanelMaxWidth 为窄容器保留主会话区下限', () => {
+    expect(availableThreadPanelMaxWidth(1440)).toBe(1440 - 240 - 8 - 320);
+    expect(availableThreadPanelMaxWidth(700)).toBe(THREAD_PANEL_MIN_WIDTH);
   });
 });

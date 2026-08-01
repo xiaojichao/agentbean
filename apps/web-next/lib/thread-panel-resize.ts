@@ -6,6 +6,9 @@ const THREAD_PANEL_WIDTH_KEY_PREFIX = 'agentbean:chat:thread-width:';
 export const THREAD_PANEL_DEFAULT_WIDTH = 384;
 export const THREAD_PANEL_MIN_WIDTH = 320;
 export const THREAD_PANEL_MAX_WIDTH = 960;
+export const THREAD_PANEL_HANDLE_WIDTH = 8;
+export const CHAT_SIDEBAR_WIDTH = 240;
+export const THREAD_PANEL_MIN_MAIN_WIDTH = 320;
 
 export interface ThreadPanelWidthStorage {
   getItem(key: string): string | null;
@@ -22,17 +25,30 @@ export function threadPanelWidthStorageKey(routeTeamPath: string): string {
   return `${THREAD_PANEL_WIDTH_KEY_PREFIX}${routeTeamPath}`;
 }
 
-export function clampThreadPanelWidth(width: number): number {
+export function clampThreadPanelWidth(width: number, maxWidth = THREAD_PANEL_MAX_WIDTH): number {
   if (!Number.isFinite(width)) return THREAD_PANEL_DEFAULT_WIDTH;
-  return Math.min(THREAD_PANEL_MAX_WIDTH, Math.max(THREAD_PANEL_MIN_WIDTH, Math.round(width)));
+  return Math.min(maxWidth, Math.max(THREAD_PANEL_MIN_WIDTH, Math.round(width)));
 }
 
-export function loadThreadPanelWidth(routeTeamPath: string, storage?: ThreadPanelWidthStorage): number {
+/**
+ * 聊天页 flex 容器（已排除全局侧栏）给主会话区保留最小宽度后，
+ * 讨论串可用的最大宽度；容器过窄时回落到下限。
+ */
+export function availableThreadPanelMaxWidth(containerWidth: number): number {
+  const bound = containerWidth - CHAT_SIDEBAR_WIDTH - THREAD_PANEL_HANDLE_WIDTH - THREAD_PANEL_MIN_MAIN_WIDTH;
+  return Math.max(THREAD_PANEL_MIN_WIDTH, Math.floor(bound));
+}
+
+export function loadThreadPanelWidth(
+  routeTeamPath: string,
+  maxWidth = THREAD_PANEL_MAX_WIDTH,
+  storage?: ThreadPanelWidthStorage,
+): number {
   const store = resolveStorage(storage);
   if (!store) return THREAD_PANEL_DEFAULT_WIDTH;
   const raw = store.getItem(threadPanelWidthStorageKey(routeTeamPath));
   if (!raw) return THREAD_PANEL_DEFAULT_WIDTH;
-  return clampThreadPanelWidth(Number(raw));
+  return clampThreadPanelWidth(Number(raw), maxWidth);
 }
 
 export function saveThreadPanelWidth(routeTeamPath: string, width: number, storage?: ThreadPanelWidthStorage): void {
@@ -45,24 +61,42 @@ export function saveThreadPanelWidth(routeTeamPath: string, width: number, stora
  * 讨论串（最右面板）的拖拽调宽状态：按下分隔线后跟随 pointermove 更新宽度，
  * 松开后按团队路径持久化到 localStorage；宽度始终收敛在最小/最大值之间。
  */
-export function useThreadPanelWidth(routeTeamPath: string) {
+export function useThreadPanelWidth(routeTeamPath: string, containerWidth?: number) {
   // 初始值固定为默认宽度：SSR 与客户端 hydration 保持一致（避免 style/aria
   // 与服务端 HTML 不一致的警告），持久化值统一在挂载后读取。
   const [width, setWidth] = useState<number>(THREAD_PANEL_DEFAULT_WIDTH);
+  const maxWidth = containerWidth === undefined
+    ? THREAD_PANEL_MAX_WIDTH
+    : availableThreadPanelMaxWidth(containerWidth);
   const routeTeamPathRef = useRef(routeTeamPath);
   const widthRef = useRef(width);
+  const maxWidthRef = useRef(maxWidth);
   const stopDragRef = useRef<(() => void) | null>(null);
 
   routeTeamPathRef.current = routeTeamPath;
   widthRef.current = width;
+  maxWidthRef.current = maxWidth;
 
   const persist = useCallback(() => {
     saveThreadPanelWidth(routeTeamPathRef.current, widthRef.current);
   }, []);
 
   useEffect(() => {
-    setWidth(loadThreadPanelWidth(routeTeamPath));
-  }, [routeTeamPath]);
+    const loaded = loadThreadPanelWidth(routeTeamPath, maxWidthRef.current);
+    setWidth(loaded);
+    // 持久化值超出当前上限时（窗口缩小）把收敛后的值写回，避免下次加载仍取旧值。
+    saveThreadPanelWidth(routeTeamPathRef.current, loaded);
+  }, [routeTeamPath, maxWidth]);
+
+  // 容器变窄导致上限收缩时，收敛当前宽度并持久化，避免持久化的宽宽度
+  // 在刷新或切换到小窗口后持续遮蔽主会话区。
+  useEffect(() => {
+    setWidth((current) => {
+      const next = clampThreadPanelWidth(current, maxWidthRef.current);
+      if (next !== current) saveThreadPanelWidth(routeTeamPathRef.current, next);
+      return next;
+    });
+  }, [maxWidth]);
 
   // 组件在拖动中卸载时也要解绑监听并落盘，避免 window 上残留监听器。
   useEffect(() => () => stopDragRef.current?.(), []);
@@ -77,7 +111,7 @@ export function useThreadPanelWidth(routeTeamPath: string) {
 
     const handleMove = (moveEvent: PointerEvent) => {
       // 分隔线左移（clientX 变小）→ 讨论串变宽；右移 → 变窄。
-      setWidth(clampThreadPanelWidth(startWidth + (startClientX - moveEvent.clientX)));
+      setWidth(clampThreadPanelWidth(startWidth + (startClientX - moveEvent.clientX), maxWidthRef.current));
     };
     const stop = () => {
       stopDragRef.current = null;
@@ -98,10 +132,10 @@ export function useThreadPanelWidth(routeTeamPath: string) {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
     // 讨论串在分隔线右侧：ArrowLeft 让分隔线左移（讨论串变宽），与拖拽方向一致。
-    const next = clampThreadPanelWidth(widthRef.current + (event.key === 'ArrowLeft' ? 16 : -16));
+    const next = clampThreadPanelWidth(widthRef.current + (event.key === 'ArrowLeft' ? 16 : -16), maxWidthRef.current);
     setWidth(next);
     saveThreadPanelWidth(routeTeamPathRef.current, next);
   }, []);
 
-  return { width, onHandlePointerDown, onHandleKeyDown };
+  return { width, maxWidth, onHandlePointerDown, onHandleKeyDown };
 }
