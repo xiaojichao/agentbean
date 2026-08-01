@@ -36,7 +36,8 @@ export function clampThreadPanelWidth(width: number, maxWidth = THREAD_PANEL_MAX
  */
 export function availableThreadPanelMaxWidth(containerWidth: number): number {
   const bound = containerWidth - CHAT_SIDEBAR_WIDTH - THREAD_PANEL_HANDLE_WIDTH - THREAD_PANEL_MIN_MAIN_WIDTH;
-  return Math.max(THREAD_PANEL_MIN_WIDTH, Math.floor(bound));
+  // 动态上限仍需受固定上限约束，保证显示宽度与持久化保存（按固定上限钳制）一致。
+  return Math.min(THREAD_PANEL_MAX_WIDTH, Math.max(THREAD_PANEL_MIN_WIDTH, Math.floor(bound)));
 }
 
 export function loadThreadPanelWidth(

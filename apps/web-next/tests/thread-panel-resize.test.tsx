@@ -123,5 +123,6 @@ describe('讨论串宽度拖拽调整', () => {
   test('availableThreadPanelMaxWidth 为窄容器保留主会话区下限', () => {
     expect(availableThreadPanelMaxWidth(1440)).toBe(1440 - 240 - 8 - 320);
     expect(availableThreadPanelMaxWidth(700)).toBe(THREAD_PANEL_MIN_WIDTH);
+    expect(availableThreadPanelMaxWidth(1712)).toBe(THREAD_PANEL_MAX_WIDTH);
   });
 });
