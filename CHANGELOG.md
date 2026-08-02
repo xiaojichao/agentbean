@@ -3,6 +3,7 @@
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
 ### Fixed
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.27：修复 AgentOS（Hermes/OpenClaw）交付文件写在任意位置（实测主目录、`~/Desktop` 等）时无法进入频道文件索引——daemon 解析 Agent 回复中明确报告的交付文件路径（存在性 + mtime/birthtime 窗口 + 交付物扩展名白名单 + 排除 `.agentbean` 内部路径），不再依赖猜测目录；adapter 默认根保留为兜底
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.26：修复 Hermes/OpenClaw 运行产物收集漏掉写进用户主目录顶层的交付文件（adapter 默认根增加主目录顶层非递归扫描，扩展名白名单 + mtime 窗口 + 跳过隐藏项，不进入任何子目录；数据根顶层与 `output/` 范围保持不变）
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.25：Hermes/OpenClaw（agentos-hosted）运行产物默认从数据根目录顶层与 `output/` 子目录收集（交付物扩展名白名单 + 跳过隐藏项，避免把配对/会话/checkpoint 等内部状态上传），并按 adapter 根串行执行 dispatch 防止并发 run 共享产物目录串线；此前修复已合入 main 但版本未 bump，CI 因 already published 跳过 publish
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.24：修复 `agentbean update` 并发 npm 写坏全局包导致 Device Service `ERR_MODULE_NOT_FOUND` 与 `UPDATE_RECOVERY_REQUIRED`（更新锁 + 快照换包/回滚 + 运行级版本确认）；此前修复已合入 main 但版本未 bump，CI 因 already published 跳过 publish

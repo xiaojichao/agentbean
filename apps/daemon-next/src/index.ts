@@ -18,7 +18,12 @@ import {
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-import { collectArtifacts, type AdapterOutputRoot, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
+import {
+  collectArtifacts,
+  extractReportedOutputPaths,
+  type AdapterOutputRoot,
+  type ArtifactCollectionDiagnostic,
+} from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
@@ -751,6 +756,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
+          // AgentOS oneshot（Hermes/OpenClaw）把交付文件写到任意位置，但在回复里
+          // 明确报告路径；解析回复比继续扩大猜测目录更可靠。
+          const reportedOutputPaths = extractReportedOutputPaths(result.body);
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
           const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {
@@ -764,7 +772,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0 || configuredRoots.roots.length > 0);
+            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0
+              || configuredRoots.roots.length > 0 || reportedOutputPaths.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
               ...(workspace ? {
@@ -774,6 +783,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               extraOutputDirs: codexExtraOutputDirs,
               adapterOutputRoots,
               configuredOutputRoots: configuredRoots.roots,
+              reportedOutputPaths,
               startedAt,
               maxBytes: input.artifactMaxBytes,
               onSkipped: (artifact, sourceRoot) => {

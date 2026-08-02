@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, utimesSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { collectArtifacts, shouldCollectWindowedFile } from '../src/artifact-collector';
+import { collectArtifacts, extractReportedOutputPaths, shouldCollectWindowedFile } from '../src/artifact-collector';
 
 async function touch(path: string, mtimeMs: number): Promise<void> {
   writeFileSync(path, 'x');
@@ -11,6 +11,75 @@ async function touch(path: string, mtimeMs: number): Promise<void> {
 }
 
 describe('artifact-collector', () => {
+  describe('extractReportedOutputPaths', () => {
+    test('提取回复中明确报告的交付文件路径并去重', () => {
+      const body = [
+        '搞定！总结文件已生成，保存在桌面上：',
+        '',
+        '/Users/shaw/Desktop/短视频二次创作总结.md',
+        '',
+        '参考了 /Users/shaw/notes.md 与 https://example.com/a.pdf',
+        '已保存到：/Users/shaw/Documents/report.md。',
+      ].join('\n');
+      expect(extractReportedOutputPaths(body)).toEqual([
+        '/Users/shaw/Desktop/短视频二次创作总结.md',
+        '/Users/shaw/notes.md',
+        '/Users/shaw/Documents/report.md',
+      ]);
+    });
+
+    test('忽略非交付扩展名、相对路径、缺失正文并处理尾部标点', () => {
+      expect(extractReportedOutputPaths('参考 /Users/a/state.json，路径 /Users/a/tmp.log')).toEqual([]);
+      expect(extractReportedOutputPaths('使用 docs/a.md 作为模板')).toEqual([]);
+      expect(extractReportedOutputPaths('文件在：/Users/x/报告.md。')).toEqual(['/Users/x/报告.md']);
+      expect(extractReportedOutputPaths('a\n/Users/x/a.md\nb\n/Users/x/a.md')).toEqual(['/Users/x/a.md']);
+      expect(extractReportedOutputPaths(undefined)).toEqual([]);
+    });
+  });
+
+  test('collectArtifacts 收集回复报告的交付文件（任意目录 + 窗口/内部路径过滤）', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-')));
+    const outputDir = join(cwd, 'outputs');
+    mkdirSync(outputDir, { recursive: true });
+    const desktopDir = join(cwd, 'Desktop');
+    mkdirSync(desktopDir, { recursive: true });
+    const target = join(desktopDir, '短视频二次创作总结.md');
+    await touch(target, 5000);
+    await touch(join(desktopDir, 'old.md'), 500);
+    const internal = join(cwd, '.agentbean', 'runs', 'r', 'internal.md');
+    mkdirSync(join(cwd, '.agentbean', 'runs', 'r'), { recursive: true });
+    await touch(internal, 5000);
+
+    const collected = await collectArtifacts({
+      outputDir,
+      reportedOutputPaths: [target, join(desktopDir, 'old.md'), join(desktopDir, 'missing.md'), internal],
+      startedAt: 1000,
+    });
+
+    expect(collected.map((artifact) => artifact.filename)).toEqual(['短视频二次创作总结.md']);
+    expect(collected[0]!.sourceRoot).toEqual({
+      id: 'agent-reported-outputs', kind: 'adapter_generated', label: 'Agent 报告的输出',
+    });
+    expect(collected[0]!.role).toBe('run_output');
+  });
+
+  test('回复报告与 adapter 根收集同一文件时去重', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-dedupe-')));
+    const outputDir = join(cwd, 'outputs');
+    mkdirSync(outputDir, { recursive: true });
+    const target = join(cwd, '交付.md');
+    await touch(target, 5000);
+
+    const collected = await collectArtifacts({
+      outputDir,
+      adapterOutputRoots: [{ dir: cwd, recursive: false }],
+      reportedOutputPaths: [target],
+      startedAt: 1000,
+    });
+
+    expect(collected.filter((artifact) => artifact.absolutePath === target)).toHaveLength(1);
+  });
+
   test('shouldCollectWindowedFile 只收 run 窗口内新建的共享目录文件', () => {
     const startedAt = Date.now() - 60_000;
     // 窗口内新建：mtime 与 birthtime 都在窗口内 → 收集。

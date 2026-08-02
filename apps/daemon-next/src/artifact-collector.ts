@@ -15,6 +15,12 @@ const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mo
  * 数据目录里的内部状态（pairing/sessions/checkpoints 等）上传到频道。
  */
 const ADAPTER_OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|md|mp4|mov|zip)$/i;
+/**
+ * Agent 回复中明确报告的交付文件绝对路径。AgentOS oneshot（Hermes/OpenClaw）
+ * 会把交付文件写到任意位置并在回复里报告路径；解析这些路径比猜目录更可靠。
+ * 只接受本机绝对路径 + 交付物扩展名白名单，后续再做存在性/mtime 窗口过滤。
+ */
+const REPORTED_OUTPUT_PATH_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|`]+\.(?:md|txt|pdf|png|jpe?g|gif|webp|svg|mp4|mov|zip))/gi;
 const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
@@ -27,6 +33,13 @@ export interface ArtifactSourceRoot {
   kind: ArtifactSourceRootKind;
   label: string;
 }
+
+/** Agent 回复中明确报告的交付文件来源根（adapter_generated，稳定 id）。 */
+const REPORTED_SOURCE_ROOT: ArtifactSourceRoot = {
+  id: 'agent-reported-outputs',
+  kind: 'adapter_generated',
+  label: 'Agent 报告的输出',
+};
 
 export interface CollectedArtifact {
   absolutePath: string;
@@ -78,6 +91,31 @@ export function shouldCollectWindowedFile(input: {
   return input.birthtimeMs > input.startedAt - skew;
 }
 
+/**
+ * 从 Agent 回复正文提取明确报告的交付文件绝对路径，去重保序。
+ * 仅返回本机绝对路径 + 交付物扩展名白名单的候选，过滤 .agentbean 内部路径
+ * 在收集阶段进行（见 collectReportedOutputs）。
+ */
+export function extractReportedOutputPaths(body: string | undefined): string[] {
+  if (!body) return [];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const match of body.matchAll(REPORTED_OUTPUT_PATH_RE)) {
+    const raw = (match[1] ?? '').trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    if (!raw.startsWith('//')
+      && !raw.endsWith('.')
+      && !raw.includes('/.')
+      && !raw.includes('..')
+      && ADAPTER_OUTPUT_FILE_EXT_RE.test(raw)) {
+      if (!seen.has(raw)) {
+        seen.add(raw);
+        paths.push(raw);
+      }
+    }
+  }
+  return paths;
+}
+
 export interface CollectArtifactsInput {
   /** per-run outputs/ directory; all matching files are collected regardless of mtime. */
   outputDir?: string;
@@ -91,6 +129,12 @@ export interface CollectArtifactsInput {
    * 且跳过隐藏文件/目录，避免把 AgentOS 内部状态当作产物上传。
    */
   adapterOutputRoots?: AdapterOutputRoot[];
+  /**
+   * Agent 回复中明确报告的交付文件绝对路径（extractReportedOutputPaths 的输出）。
+   * 收集时校验：文件存在、交付物扩展名白名单、mtime/birthtime 在 run 窗口内、
+   * 不在 .agentbean 内部路径中。
+   */
+  reportedOutputPaths?: string[];
   /** Additional roots with safe public labels; absolute paths never leave the daemon. */
   configuredOutputRoots?: Array<{ id?: string; path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
   /** Stable public label for the agent workspace root. */
@@ -299,7 +343,65 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   if (input.cwd) {
     await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'run_output');
   }
+  const collectedByAbs = new Set([...byRootPath.values()].map((artifact) => artifact.absolutePath));
+  for (const reportedPath of input.reportedOutputPaths ?? []) {
+    if (collectedByAbs.has(reportedPath) || reportedPath.includes('/.agentbean/')) {
+      continue;
+    }
+    let stat;
+    try {
+      stat = statSync(reportedPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile() || !ADAPTER_OUTPUT_FILE_EXT_RE.test(basename(reportedPath))) {
+      continue;
+    }
+    if (!shouldCollectWindowedFile({
+      mtimeMs: stat.mtimeMs,
+      birthtimeMs: stat.birthtimeMs,
+      startedAt: input.startedAt,
+      createdInWindow: true,
+    })) {
+      continue;
+    }
+    if (stat.size > maxBytes) {
+      continue;
+    }
+    const hashed = await computeFileHash(reportedPath, maxBytes);
+    if (!hashed || hashed.sizeBytes !== stat.size) {
+      continue;
+    }
+    const filename = basename(reportedPath);
+    byRootPath.set(`reported:${reportedPath}`, {
+      absolutePath: reportedPath,
+      relativePath: filename,
+      sha256: hashed.sha256,
+      sizeBytes: hashed.sizeBytes,
+      filename,
+      sourceRoot: REPORTED_SOURCE_ROOT,
+      role: 'run_output',
+    });
+    collectedByAbs.add(reportedPath);
+  }
   return [...byRootPath.values()];
+}
+
+async function computeFileHash(abs: string, maxBytes: number): Promise<{ sha256: string; sizeBytes: number } | null> {
+  const hash = createHash('sha256');
+  let sizeBytes = 0;
+  try {
+    for await (const chunk of createReadStream(abs)) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      sizeBytes += buffer.length;
+      hash.update(buffer);
+      if (sizeBytes > maxBytes) return null;
+    }
+  } catch {
+    return null;
+  }
+  if (sizeBytes > maxBytes) return null;
+  return { sha256: hash.digest('hex'), sizeBytes };
 }
 
 function makeSourceRoot(kind: ArtifactSourceRootKind, label: string, localIdentity: string): ArtifactSourceRoot {

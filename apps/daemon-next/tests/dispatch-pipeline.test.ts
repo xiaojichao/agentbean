@@ -523,6 +523,50 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(uploadCalls[0]?.[0]).toContain('/artifacts/upload');
   });
 
+  test('collects Hermes 回复中报告的输出文件（写在任意目录）', async () => {
+    const binDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reported-bin-')));
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reported-home-')));
+    // 报告文件落在 adapter 根（主目录/数据根/output）之外的任意目录。
+    const desktopDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-reported-desktop-')));
+    const reportedPath = join(desktopDir, '短视频二次创作总结.md');
+    await touchFile(reportedPath, 5000);
+    const harness = createFakeSocket();
+    const uploadFetch = vi.fn<typeof fetch>(async (input) => {
+      if (String(input).includes('/artifacts/upload')) {
+        return new Response(JSON.stringify({ ok: true, artifact: { id: 'srv-reported-file' } }), {
+          status: 201, headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: uploadFetch,
+      homeDir,
+      executor: async () => ({
+        body: `搞定！总结文件已生成，保存在桌面上：\n\n${reportedPath}\n\n需要调整可以跟我说~`,
+        workspaceRun: { status: 'succeeded', cwd: binDir, exitCode: 0, startedAt: 1000, completedAt: 2000 },
+      }),
+    });
+    await client.start();
+
+    await harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-reported', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'agent-1', requestId: 'disp-reported', prompt: '总结附件',
+      customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: binDir },
+    });
+
+    const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+    expect(resultEmit).toBeTruthy();
+    expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['srv-reported-file']);
+    const uploadCalls = uploadFetch.mock.calls.filter(([input]) => String(input).includes('/artifacts/upload'));
+    expect(uploadCalls).toHaveLength(1);
+  });
+
   test('uploads OpenClaw native ~/.openclaw outputs during a run', async () => {
     const binDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-openclaw-bin-')));
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-openclaw-home-')));
