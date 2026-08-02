@@ -520,7 +520,7 @@
     }
     .file-row {
       display: grid;
-      grid-template-columns: 42px minmax(0, 1fr) auto auto;
+      grid-template-columns: 18px 42px minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 8px;
       min-height: 40px;
@@ -529,6 +529,11 @@
       font-size: 12px;
     }
     .file-row:last-child { border-bottom: 0; }
+    .file-check {
+      width: 15px;
+      height: 15px;
+      accent-color: var(--amber);
+    }
     .file-id {
       display: inline-grid;
       min-width: 31px;
@@ -1299,10 +1304,10 @@
                 <div class="avatar">D</div>
                 <div class="topic-card-main">
                   <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
-                  <div class="topic-card-title">@某个智能体 基于 PKG-042 最新版本继续创作</div>
-                  <div class="topic-card-body">最新活动：讨论串里已引用 PKG-042 latest server projection，准备选择一个智能体继续执行。</div>
+                  <div class="topic-card-title">@某个智能体 基于 PKG-042 当前版本继续创作</div>
+                  <div class="topic-card-body">最新活动：讨论串里已引用 PKG-042 current projection，准备选择一个智能体继续执行。</div>
                   <div class="topic-card-meta">
-                    <span class="chip violet">PKG-042 latest</span>
+                    <span class="chip violet">PKG-042 current</span>
                     <span class="chip blue">F1 v4</span>
                     <span class="chip">3 条回复</span>
                     <span class="chip amber">待处理</span>
@@ -1354,8 +1359,8 @@
             <div class="task-toolbar">
               <div class="filters">
                 <button class="select-button">创建者 ⌄</button>
-                <button class="select-button">负责人 ⌄</button>
-                <button class="select-button">审核人：我 ⌄</button>
+                <button class="select-button">责任焦点 ⌄</button>
+                <button class="select-button">建议审核人：我 ⌄</button>
                 <span class="chip amber">当前视图：任务状态 + 审核动作</span>
               </div>
               <button class="solid-button">+ 新建任务</button>
@@ -1365,31 +1370,34 @@
                 <div class="column-head"><span>进行中</span><span class="chip blue">3</span></div>
                 <div class="column-body">
                   <article class="task-card">
-                    <div class="task-type">阶段任务 · 待选择负责人</div>
-                    <div class="task-title">下一步创作：等待选择执行智能体</div>
+                    <div class="task-type">阶段任务 · 未触发执行</div>
+                    <div class="task-title">下一步创作：等待在讨论串 @智能体</div>
                     <div class="task-meta-grid">
-                      <span class="label">负责人</span><span class="value">待选择</span>
-                      <span class="label">审核人</span><span class="value">未指定</span>
-                      <span class="label">输入</span><span class="value">等待引用 PKG-042 latest / final</span>
-                      <span class="label">阻塞</span><span class="value">等待审核通过并选择执行者</span>
+                      <span class="label">负责人</span><span class="value">未开始</span>
+                      <span class="label">建议审核人</span><span class="value">未指定</span>
+                      <span class="label">输入</span><span class="value">等待引用 PKG-042 current / final</span>
+                      <span class="label">阻塞</span><span class="value">等待用户在讨论串提交指令</span>
                     </div>
                     <div class="mini-package">
                       <strong>可作为下一步输入</strong>
-                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。可以在讨论串 @智能体，也可以在任务页负责人下拉里直接选。
+                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。任务页只提供“交给智能体处理”入口，点击后跳到讨论串并预填引用。
+                    </div>
+                    <div class="inline-actions" style="margin-top:8px; justify-content:flex-start;">
+                      <button class="pill-button">交给智能体处理</button>
                     </div>
                   </article>
                   <article class="task-card">
-                    <div class="task-type">阶段任务 · 已指定待接收</div>
-                    <div class="task-title">下一步创作：任务页已选择负责人</div>
+                    <div class="task-type">阶段任务 · 讨论串已预填</div>
+                    <div class="task-title">下一步创作：等待发送 @智能体 指令</div>
                     <div class="task-meta-grid">
-                      <span class="label">负责人</span><span class="value">@镜头拆分（待接收）</span>
-                      <span class="label">审核人</span><span class="value">项目成员可审核</span>
-                      <span class="label">输入</span><span class="value">PKG-042 latest</span>
-                      <span class="label">状态</span><span class="value">已指定；等待 Agent accepted</span>
+                      <span class="label">负责人</span><span class="value">未开始</span>
+                      <span class="label">建议审核人</span><span class="value">未指定 · 任一成员可审核</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 current 已插入</span>
+                      <span class="label">状态</span><span class="value">尚未创建 AgentInvocation</span>
                     </div>
                     <div class="mini-package">
-                      <strong>任务页选择负责人</strong>
-                      选择负责人只创建 assignment/proposal；目标 Agent accepted/running 后才算真正执行中。
+                      <strong>任务页不直接选负责人</strong>
+                      只有用户在讨论串发送 @智能体 + 文件引用 + 指令后，Server 才创建 invocation，负责人再由执行事实回填。
                     </div>
                   </article>
                   <article class="task-card">
@@ -1397,13 +1405,13 @@
                     <div class="task-title">下一步创作：讨论串 @智能体后已接收</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@镜头拆分（执行中）</span>
-                      <span class="label">审核人</span><span class="value">未指定</span>
-                      <span class="label">输入</span><span class="value">@PKG-042 latest</span>
+                      <span class="label">建议审核人</span><span class="value">未指定</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 current</span>
                       <span class="label">来源</span><span class="value">讨论串 @智能体 创建</span>
                     </div>
                     <div class="mini-package">
-                      <strong>负责人落定</strong>
-                      Agent accepted/running 后，任务负责人从待接收切换为该智能体；后续输出仍需人审。
+                      <strong>负责人是执行事实投影</strong>
+                      Agent accepted/running 后，任务责任焦点显示为该智能体；进入待审核后焦点会转到审核。
                     </div>
                   </article>
                 </div>
@@ -1417,7 +1425,7 @@
                     <div class="task-title">剧本创作：《温暖的一步》第一版输出</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@剧本创作</span>
-                      <span class="label">审核人</span><span class="value">未指定（你可审核）</span>
+                      <span class="label">建议审核人</span><span class="value">未指定 · 任一成员可审核</span>
                       <span class="label">输出</span><span class="value">PKG-042 · 5 md / 1 image</span>
                       <span class="label">状态</span><span class="value">等待人审；实际审核人待产生</span>
                     </div>
@@ -1428,7 +1436,7 @@
                       F3 分镜提示词.md v2（Agent 初稿）
                     </div>
                     <div class="review-panel">
-                      <div class="review-panel-title">你是当前审核人，可以处理这个版本</div>
+                      <div class="review-panel-title">任一频道成员都可以审核；实际审核人以点击者为准</div>
                       <p>审核动作只处理当前输出版本；接下来由哪个智能体继续执行，在讨论串里通过 @智能体 + @文件包 来决定。</p>
                       <div class="review-action-group">
                         <div class="review-action-label">审核结论</div>
@@ -1442,9 +1450,9 @@
                       <div class="review-action-group">
                         <div class="review-action-label">版本选择</div>
                         <div class="review-actions">
-                          <button class="solid-button amber">设为最终版</button>
+                          <button class="solid-button amber">通过并设为最终版</button>
                         </div>
-                        <p class="review-action-help">写入 Server finalVersionId。通常只对已通过版本开放；否则应先通过审核或使用“通过并设为最终版”。</p>
+                        <p class="review-action-help">待审核版本不能直接设 final；这里使用“通过并设为最终版”，一次写入 ArtifactReview 和 finalVersionId。</p>
                       </div>
                       <div class="review-action-group">
                         <div class="review-action-label">继续协作</div>
@@ -1457,14 +1465,15 @@
                     <div class="timeline">
                       <div><span class="dot blue"></span><span>19:28 Agent 交付 PKG-042，任务从进行中进入待审核。</span></div>
                       <div><span class="dot amber"></span><span>19:41 derrick 在预览浮窗修改 F1，Server 生成 script.ep01 v4。</span></div>
-                      <div><span class="dot"></span><span>下一步：在讨论串 @任意可见智能体，并引用 latest / final 文件包作为输入。</span></div>
+                      <div><span class="dot"></span><span>下一步：在讨论串 @任意可见智能体，并引用 current / final 文件包作为输入。</span></div>
                     </div>
                     <div class="implementation-note">
                       <strong>实现备注</strong>
                       <ul>
                         <li>审核结论写入 ArtifactReview，不等于 final。</li>
-                        <li>审核人可预设也可为空；实际审核人以点击审核按钮的人为准。</li>
-                        <li>设为最终版写入 ProjectArtifactCollection.finalVersionId。</li>
+                        <li>首版任一频道成员都可审核；实际审核人以点击审核按钮的人为准。</li>
+                        <li>待审核版本使用“通过并设为最终版”；已通过版本才显示“设为最终版”。</li>
+                        <li>负责人不在任务页下拉选择，由讨论串 invocation 执行事实投影。</li>
                         <li>回到讨论串继续不改状态，只帮助用户用 @智能体 + @文件/文件包指定下一步。</li>
                       </ul>
                     </div>
@@ -1496,33 +1505,38 @@
           <section class="screen screen-files file-view">
             <div class="file-toolbar">
               <div class="filters" style="flex:1;">
-                <input class="file-search" value="按文件名、产物集合、Agent 或版本搜索">
+                <input class="file-search" value="按文件名、文件组、Agent 或版本搜索">
                 <button class="select-button">全部角色 ⌄</button>
                 <button class="select-button">全部状态 ⌄</button>
               </div>
-              <button class="solid-button amber">整包引用当前版本</button>
+              <button class="pill-button">多选引用</button>
+              <button class="pill-button">引用最终版包</button>
+              <button class="solid-button amber">引用当前包</button>
             </div>
             <div class="files-layout">
               <aside class="collection-sidebar">
                 <div class="collection-card active">
+                  <div class="topic-card-meta"><span class="chip violet">输出包</span><span class="chip amber">最近活跃</span></div>
                   <div class="collection-card-title">PKG-042 剧本输出包</div>
-                  <div class="collection-card-meta">6 个文件 · 剧本阶段 · latest projection<br>F1 v4 / F2 v3 / F3 v2 / IMG v1</div>
+                  <div class="collection-card-meta">6 个文件 · 剧本阶段 · current projection<br>F1 v4 / F2 v3 / F3 v2 / IMG v1</div>
                 </div>
                 <div class="collection-card">
+                  <div class="topic-card-meta"><span class="chip blue">文件集合</span><span class="chip green">有 final</span></div>
                   <div class="collection-card-title">角色设定集合</div>
                   <div class="collection-card-meta">2 个 Markdown · 已通过 · final v3</div>
                 </div>
                 <div class="collection-card">
+                  <div class="topic-card-meta"><span class="chip">等待上游</span></div>
                   <div class="collection-card-title">分镜输出包</div>
                   <div class="collection-card-meta">等待上游最终版 · 暂无产物</div>
                 </div>
                 <div class="identity-note">
-                  文件页按逻辑产物集合组织。聊天里的 F1/F2 只是当前消息编号，长期身份是 collectionId + artifactVersionId。
+                  左侧是文件组卡片：输出包、文件集合和等待上游可以混排，默认按最近活跃排序。聊天里的 F1/F2 只是当前包编号。
                 </div>
                 <div class="implementation-note">
-                  <strong>左侧产物集合</strong>
+                  <strong>左侧文件组</strong>
                   <ul>
-                    <li>产物集合不是文件夹，而是逻辑交付物或一次 Agent 输出包。</li>
+                    <li>左侧不是文件夹树，不需要用户理解底层模型。</li>
                     <li>PKG-042 表示一次 Agent 输出的一组文件；角色设定集合表示同一逻辑产物的多次版本。</li>
                     <li>左侧摘要里的 F1/F2 只帮助用户识别当前讨论串文件，不能作为长期身份。</li>
                   </ul>
@@ -1549,7 +1563,7 @@
                       <td><span class="chip amber">v4 current</span><div class="file-sub">server revision rev_4</div></td>
                       <td><span class="chip">未设置</span></td>
                       <td><span class="chip amber">待审核</span></td>
-                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">设 final</button></div></td>
+                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">引用</button></div></td>
                     </tr>
                     <tr>
                       <td><strong>角色表.md</strong><div class="file-sub">collection: character.sheet</div></td>
@@ -1566,27 +1580,27 @@
                       <td>@剧本创作<div class="file-sub">wr_42 · 初稿</div></td>
                       <td><span class="chip amber">v2 current</span><div class="file-sub">server revision rev_2</div></td>
                       <td><span class="chip">未设置</span></td>
-                      <td><span class="chip amber">待审核</span></td>
-                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">要求修改</button></div></td>
+                      <td><span class="chip amber">要求修改</span></td>
+                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">基于此修改</button></div></td>
                     </tr>
                     <tr>
                       <td><strong>场景参考图.png</strong><div class="file-sub">collection: visual.reference.ep01</div></td>
                       <td><span class="chip">image</span><div class="file-sub">剧本创作</div></td>
                       <td>@剧本创作<div class="file-sub">wr_42 · generated artifact</div></td>
                       <td><span class="chip blue">v1 current</span></td>
-                      <td><span class="chip">不适用</span></td>
+                      <td><span class="chip">未设置</span></td>
                       <td><span class="chip green">可用</span></td>
                       <td><div class="row-actions"><button class="pill-button">查看</button><button class="pill-button">引用</button></div></td>
                     </tr>
                   </tbody>
                 </table>
                 <div class="identity-note">
-                  这里的“最终版”不是标签或文件名，而是 Server 保存的 finalVersionId。若 later Agent B 接手，Server 组装上下文时读取 current / final 指针，不从聊天长文本里复制旧内容。
+                  这里的“最终版”不是标签或文件名，而是 Server 保存的 finalVersionId。@PKG 默认引用 current；引用 final 必须显式选择。
                 </div>
                 <div class="implementation-note">
                   <strong>表格字段说明</strong>
                   <ul>
-                    <li>名称 = 文件名 + 产物集合 ID；类型 / 阶段 = 项目语义，不是文件来源。</li>
+                    <li>名称 = 文件名 + 长期文件 ID；类型 / 阶段 = 项目语义，不是文件来源。</li>
                     <li>来源 = Agent、人类修改、WorkspaceRun 和消息位置。</li>
                     <li>当前版 = currentVersionId，代表最新 Server 修订；最终版 = finalVersionId，代表人工确认指针。</li>
                     <li>审核 = 当前版本是否可被后续引用；动作最终必须写回 Server 事实。</li>
@@ -1595,8 +1609,10 @@
                 <div class="implementation-note">
                   <strong>整包引用规则</strong>
                   <ul>
-                    <li>整包引用当前版本时，读取包内每个产物集合各自的 currentVersionId。</li>
+                    <li>整包引用当前版本时，读取包内每个文件各自的 currentVersionId。</li>
                     <li>用户手动修改和 Agent 修订都以 Server 最新修订为准，不回退到聊天旧正文。</li>
+                    <li>引用最终版包要求包内所有文件都有 finalVersionId，不能静默混用 final + current。</li>
+                    <li>被拒绝或要求修改的 current 不能作为默认正式输入，只能显式用于基于此修改。</li>
                     <li>提交给后端时必须携带 artifactVersionId 或 artifactCollectionId，不能只传 F1/F2 或“第 3 个”。</li>
                   </ul>
                 </div>
@@ -1646,41 +1662,46 @@
                 <div class="package-actions">
                   <button class="pill-button js-open-preview">预览</button>
                   <button class="pill-button js-open-preview">编辑</button>
-                  <button class="solid-button amber">整包引用</button>
+                  <button class="pill-button">引用最终版包</button>
+                  <button class="solid-button amber">引用当前包</button>
                 </div>
               </div>
               <div class="file-list">
                 <div class="file-row">
+                  <input class="file-check" type="checkbox" checked aria-label="选择 F1">
                   <span class="file-id">F1</span>
                   <div class="file-main">
                     <span class="file-name">第1集剧本.md</span>
-                    <span class="file-sub">collection: script.ep01 · latest server v4 · 手动修改于 19:41</span>
+                    <span class="file-sub">collection: script.ep01 · current server v4 · 手动修改于 19:41</span>
                   </div>
                   <span class="chip amber">待审核</span>
-                  <button class="pill-button js-open-preview">预览</button>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
                 </div>
                 <div class="file-row">
+                  <input class="file-check" type="checkbox" checked aria-label="选择 F2">
                   <span class="file-id">F2</span>
                   <div class="file-main">
                     <span class="file-name">角色表.md</span>
-                    <span class="file-sub">collection: character.sheet · latest server v3 · Agent 修订于 19:37</span>
+                    <span class="file-sub">collection: character.sheet · current server v3 · Agent 修订于 19:37</span>
                   </div>
                   <span class="chip green">已通过</span>
-                  <button class="pill-button js-open-preview">预览</button>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
                 </div>
                 <div class="file-row">
+                  <input class="file-check" type="checkbox" aria-label="选择 F3">
                   <span class="file-id">F3</span>
                   <div class="file-main">
                     <span class="file-name">分镜提示词.md</span>
-                    <span class="file-sub">collection: storyboard.prompt · latest server v2 · Agent 初稿</span>
+                    <span class="file-sub">collection: storyboard.prompt · current server v2 · Agent 初稿</span>
                   </div>
-                  <span class="chip amber">待审核</span>
-                  <button class="pill-button js-open-preview">预览</button>
+                  <span class="chip amber">要求修改</span>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">基于此修改</button></div>
                 </div>
               </div>
               <div class="package-foot">
-                <span><strong>整包引用</strong>会引用每个文件的 latest server revision：F1=v4, F2=v3, F3=v2...</span>
+                <span><strong>多选引用</strong>会插入多个稳定文件 chip；<strong>引用当前包</strong>读取每个文件的 current，若 current 已拒绝/要求修改则先提示。</span>
                 <div class="inline-actions">
+                  <button class="pill-button">引用已选 2 个</button>
                   <button class="pill-button">打开审核任务</button>
                 </div>
               </div>
@@ -1692,12 +1713,14 @@
           <div>
             <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
             <div class="message-body">我改了 F1 的结尾，保存后可以在这里 @任意可见智能体，并基于最新 Server 修订继续。</div>
+            <div class="request-banner">轻量事件：derrick 手动修改 F1 第1集剧本.md，Server 生成 v4；final 未自动移动。</div>
             <div class="implementation-note">
               <strong>实现备注</strong>
               <ul>
                 <li>讨论串输入框的 @ 选择器需要同时支持成员、智能体、文件和文件包。</li>
-                <li>@文件包 默认引用 latest projection；@具体文件引用具体 artifactVersionId。</li>
-                <li>手动编辑保存后生成新的 Server revision，并更新 currentVersionId。</li>
+                <li>@文件包 默认引用 current projection；引用 final 必须显式选择。</li>
+                <li>单个引用和多选引用都提交稳定 artifactVersionId 或 artifactCollectionId + versionPolicy。</li>
+                <li>手动编辑保存后生成新的 Server revision，更新 currentVersionId，并在讨论串留下轻量事件。</li>
               </ul>
             </div>
           </div>
@@ -1706,7 +1729,7 @@
       <div class="thread-foot">
         <div class="reference-strip">
           <span>引用中：</span>
-          <span class="chip violet">PKG-042 整包 latest</span>
+          <span class="chip violet">PKG-042 current</span>
           <span class="chip blue">F1 第1集剧本.md v4</span>
           <span class="chip blue">F2 角色表.md v3</span>
         </div>
@@ -1727,22 +1750,22 @@
         <aside class="modal-files">
           <div class="modal-file active">
             <div class="file-name">F1 第1集剧本.md</div>
-            <div class="file-sub">latest v4 · 手动修改 · 待审核</div>
+            <div class="file-sub">current v4 · 手动修改 · 待审核</div>
           </div>
           <div class="modal-file">
             <div class="file-name">F2 角色表.md</div>
-            <div class="file-sub">latest v3 · Agent 修订 · final</div>
+            <div class="file-sub">current v3 · Agent 修订 · final</div>
           </div>
           <div class="modal-file">
             <div class="file-name">F3 分镜提示词.md</div>
-            <div class="file-sub">latest v2 · Agent 初稿 · 待审核</div>
+            <div class="file-sub">current v2 · Agent 初稿 · 待审核</div>
           </div>
           <div class="modal-file">
             <div class="file-name">IMG 场景参考图.png</div>
             <div class="file-sub">v1 · generated artifact</div>
           </div>
           <div class="identity-note" style="margin-top:10px;">
-            保存后直接更新该文档的最新 Server 修订；后续整包引用自动读取这个 latest projection。
+            保存后直接更新该文档的最新 Server 修订；后续引用当前包自动读取这个 current projection。是否同步到本地/Agent 工作区待文件同步架构确认。
           </div>
         </aside>
         <section class="editor-pane">
@@ -1786,19 +1809,19 @@
       <footer class="modal-foot">
         <div class="server-state" id="serverState">
           <span class="chip blue">Server source of truth</span>
-          <span>当前编辑基于 <strong>script.ep01 v4</strong>；保存会生成 v5，并替换 current 指针。</span>
+          <span>当前编辑基于 <strong>script.ep01 v4</strong>；保存会生成 v5，并替换 current 指针，但不会自动移动 final。</span>
         </div>
         <div class="modal-actions">
           <button class="pill-button" id="simulateConflict">模拟冲突</button>
           <button class="pill-button">查看版本历史</button>
-          <button class="solid-button blue" id="saveServer">保存到 Server</button>
+          <button class="solid-button blue" id="saveServer">保存为 Server 新版本</button>
           <button class="solid-button amber">保存并提交审核</button>
         </div>
       </footer>
     </section>
   </div>
 
-  <div class="toast" id="toast">已保存：Server 生成 script.ep01 v5，当前包 PKG-042 的 latest projection 已更新。</div>
+  <div class="toast" id="toast">已保存：Server 生成 script.ep01 v5，当前包 PKG-042 的 current projection 已更新。</div>
 
   <nav class="switcher" aria-label="原型状态切换">
     <button data-screen-target="chat" class="active">聊天：话题内文件包</button>
@@ -1887,8 +1910,8 @@
     });
     source.addEventListener('input', renderMarkdown);
     document.getElementById('saveServer').addEventListener('click', () => {
-      serverState.innerHTML = '<span class="chip green">已保存</span><span>Server 已生成 <strong>script.ep01 v5</strong>；PKG-042 整包 latest projection 现在读取 F1=v5。</span>';
-      showToast('已保存：Server 生成 script.ep01 v5，后续 Agent 将基于 v5 继续。');
+      serverState.innerHTML = '<span class="chip green">已保存</span><span>Server 已生成 <strong>script.ep01 v5</strong>；PKG-042 当前包现在读取 F1=v5，final 不自动移动。</span>';
+      showToast('已保存：Server 生成 script.ep01 v5，并在讨论串记录轻量事件。');
     });
     document.getElementById('simulateConflict').addEventListener('click', () => {
       serverState.innerHTML = '<span class="chip red">冲突</span><span>Server 已有 <strong>script.ep01 v6</strong>；请先查看最新版，确认后再保存为 v7。</span>';
