@@ -1362,20 +1362,48 @@
             </div>
             <div class="task-grid">
               <section class="task-column">
-                <div class="column-head"><span>进行中</span><span class="chip blue">2</span></div>
+                <div class="column-head"><span>进行中</span><span class="chip blue">3</span></div>
                 <div class="column-body">
                   <article class="task-card">
-                    <div class="task-type">阶段任务 · 执行中</div>
+                    <div class="task-type">阶段任务 · 待选择负责人</div>
                     <div class="task-title">下一步创作：等待选择执行智能体</div>
                     <div class="task-meta-grid">
-                      <span class="label">负责人</span><span class="value">未指定</span>
-                      <span class="label">审核人</span><span class="value">derrick</span>
+                      <span class="label">负责人</span><span class="value">待选择</span>
+                      <span class="label">审核人</span><span class="value">未指定</span>
                       <span class="label">输入</span><span class="value">等待引用 PKG-042 latest / final</span>
                       <span class="label">阻塞</span><span class="value">等待审核通过并选择执行者</span>
                     </div>
                     <div class="mini-package">
                       <strong>可作为下一步输入</strong>
-                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。通过讨论串 @某个智能体 时再确定执行者。
+                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。可以在讨论串 @智能体，也可以在任务页负责人下拉里直接选。
+                    </div>
+                  </article>
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 已指定待接收</div>
+                    <div class="task-title">下一步创作：任务页已选择负责人</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">@镜头拆分（待接收）</span>
+                      <span class="label">审核人</span><span class="value">项目成员可审核</span>
+                      <span class="label">输入</span><span class="value">PKG-042 latest</span>
+                      <span class="label">状态</span><span class="value">已指定；等待 Agent accepted</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>任务页选择负责人</strong>
+                      选择负责人只创建 assignment/proposal；目标 Agent accepted/running 后才算真正执行中。
+                    </div>
+                  </article>
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 执行中</div>
+                    <div class="task-title">下一步创作：讨论串 @智能体后已接收</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">@镜头拆分（执行中）</span>
+                      <span class="label">审核人</span><span class="value">未指定</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 latest</span>
+                      <span class="label">来源</span><span class="value">讨论串 @智能体 创建</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>负责人落定</strong>
+                      Agent accepted/running 后，任务负责人从待接收切换为该智能体；后续输出仍需人审。
                     </div>
                   </article>
                 </div>
@@ -1389,9 +1417,9 @@
                     <div class="task-title">剧本创作：《温暖的一步》第一版输出</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@剧本创作</span>
-                      <span class="label">审核人</span><span class="value">derrick（你）</span>
+                      <span class="label">审核人</span><span class="value">未指定（你可审核）</span>
                       <span class="label">输出</span><span class="value">PKG-042 · 5 md / 1 image</span>
-                      <span class="label">状态</span><span class="value">等待人审；Agent 无权通过</span>
+                      <span class="label">状态</span><span class="value">等待人审；实际审核人待产生</span>
                     </div>
                     <div class="mini-package">
                       <strong>待审核输出</strong>
@@ -1435,6 +1463,7 @@
                       <strong>实现备注</strong>
                       <ul>
                         <li>审核结论写入 ArtifactReview，不等于 final。</li>
+                        <li>审核人可预设也可为空；实际审核人以点击审核按钮的人为准。</li>
                         <li>设为最终版写入 ProjectArtifactCollection.finalVersionId。</li>
                         <li>回到讨论串继续不改状态，只帮助用户用 @智能体 + @文件/文件包指定下一步。</li>
                       </ul>
@@ -1451,7 +1480,7 @@
                     <div class="task-title">角色设定整理</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@剧本创作</span>
-                      <span class="label">审核人</span><span class="value">derrick</span>
+                      <span class="label">审核人</span><span class="value">derrick（实际审核人）</span>
                       <span class="label">最终版</span><span class="value">character.sheet v3</span>
                       <span class="label">后续</span><span class="value">可被任意后续智能体引用</span>
                     </div>
