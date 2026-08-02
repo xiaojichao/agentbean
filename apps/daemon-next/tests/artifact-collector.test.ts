@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, utimesSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { collectArtifacts } from '../src/artifact-collector';
+import { collectArtifacts, shouldCollectWindowedFile } from '../src/artifact-collector';
 
 async function touch(path: string, mtimeMs: number): Promise<void> {
   writeFileSync(path, 'x');
@@ -11,6 +11,30 @@ async function touch(path: string, mtimeMs: number): Promise<void> {
 }
 
 describe('artifact-collector', () => {
+  test('shouldCollectWindowedFile 只收 run 窗口内新建的共享目录文件', () => {
+    const startedAt = Date.now() - 60_000;
+    // 窗口内新建：mtime 与 birthtime 都在窗口内 → 收集。
+    expect(shouldCollectWindowedFile({
+      mtimeMs: Date.now(), birthtimeMs: Date.now(), startedAt, createdInWindow: true,
+    })).toBe(true);
+    // 窗口外 mtime → 不收集。
+    expect(shouldCollectWindowedFile({
+      mtimeMs: startedAt - 1000, birthtimeMs: Date.now(), startedAt, createdInWindow: true,
+    })).toBe(false);
+    // 既有文件仅被修改（birthtime 早于窗口，mtime 在窗口内）→ 不收集。
+    expect(shouldCollectWindowedFile({
+      mtimeMs: Date.now(), birthtimeMs: startedAt - 86_400_000, startedAt, createdInWindow: true,
+    })).toBe(false);
+    // 平台无 birthtime（<=0）→ 退化为仅 mtime 判断。
+    expect(shouldCollectWindowedFile({
+      mtimeMs: Date.now(), birthtimeMs: 0, startedAt, createdInWindow: true,
+    })).toBe(true);
+    // 未开启 createdInWindow → 仅 mtime 判断。
+    expect(shouldCollectWindowedFile({
+      mtimeMs: Date.now(), birthtimeMs: startedAt - 86_400_000, startedAt,
+    })).toBe(true);
+  });
+
   test('collects all matching files from outputs dir regardless of mtime', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
@@ -83,30 +107,41 @@ describe('artifact-collector', () => {
   });
 
   test('adapter output roots collect only whitelisted top-level and output/ files', async () => {
+    const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'col-adapter-home-')));
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-adapter-')));
     const outputDir = join(cwd, 'outputs');
     mkdirSync(outputDir, { recursive: true });
-    await touch(join(cwd, '总结.md'), 5000);
-    await touch(join(cwd, 'gateway_state.json'), 5000);
-    await touch(join(cwd, 'config.yaml'), 5000);
-    await touch(join(cwd, '.hidden.md'), 5000);
-    await touch(join(cwd, 'old.md'), 500);
-    mkdirSync(join(cwd, 'pairing'), { recursive: true });
-    await touch(join(cwd, 'pairing', 'weixin.json'), 5000);
-    mkdirSync(join(cwd, 'output', '20260801'), { recursive: true });
-    await touch(join(cwd, 'output', '20260801', 'report.md'), 5000);
+    const hermesHomeDir = join(homeDir, '.hermes');
+    mkdirSync(outputDir, { recursive: true });
+    // 主目录顶层：交付 .md 可收集；.json/.yaml/隐藏项/子目录/超窗文件均排除。
+    await touch(join(homeDir, 'HyperFrames视频制作完全指南-摘要.md'), 5000);
+    await touch(join(homeDir, 'notes.json'), 5000);
+    await touch(join(homeDir, '.hidden.md'), 5000);
+    await touch(join(homeDir, 'old.md'), 500);
+    mkdirSync(join(homeDir, 'Documents'), { recursive: true });
+    await touch(join(homeDir, 'Documents', 'draft.md'), 5000);
+    // AgentOS 数据根：顶层 总结.md 可收集；pairing/config 等状态排除；output/ 递归可收集。
+    mkdirSync(hermesHomeDir, { recursive: true });
+    await touch(join(hermesHomeDir, '总结.md'), 5000);
+    await touch(join(hermesHomeDir, 'gateway_state.json'), 5000);
+    await touch(join(hermesHomeDir, 'config.yaml'), 5000);
+    mkdirSync(join(hermesHomeDir, 'pairing'), { recursive: true });
+    await touch(join(hermesHomeDir, 'pairing', 'weixin.json'), 5000);
+    mkdirSync(join(hermesHomeDir, 'output', '20260801'), { recursive: true });
+    await touch(join(hermesHomeDir, 'output', '20260801', 'report.md'), 5000);
 
     const collected = await collectArtifacts({
       outputDir,
       adapterOutputRoots: [
-        { dir: cwd, recursive: false },
-        { dir: join(cwd, 'output'), recursive: true },
+        { dir: homeDir, recursive: false, createdInWindow: true },
+        { dir: hermesHomeDir, recursive: false },
+        { dir: join(hermesHomeDir, 'output'), recursive: true },
       ],
       startedAt: 1000,
     });
 
     const names = collected.map((c) => c.filename).sort();
-    expect(names).toEqual(['report.md', '总结.md']);
+    expect(names).toEqual(['HyperFrames视频制作完全指南-摘要.md', 'report.md', '总结.md']);
     expect(collected.every((artifact) => artifact.sourceRoot.kind === 'adapter_generated')).toBe(true);
   });
 

@@ -475,14 +475,15 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-hermes-home-')));
     const hermesHomeDir = join(homeDir, '.hermes');
     mkdirSync(hermesHomeDir, { recursive: true });
-    // Hermes 不写 AGENTBEAN_OUTPUT_DIR，而是落盘到自己的数据目录（mtime 在 run 窗口内）。
-    await touchFile(join(hermesHomeDir, '总结.md'), 5000);
-    // 内部状态/配置不得被当作产物上传（顶层非递归 + 扩展名白名单 + 隐藏项跳过）。
+    // Hermes oneshot 把交付文件直接写到用户主目录顶层（mtime 在 run 窗口内）。
+    await touchFile(join(homeDir, 'HyperFrames视频制作完全指南-摘要.md'), 5000);
+    // 内部状态/配置不得被当作产物上传（非递归 + 扩展名白名单 + 隐藏项跳过）。
     mkdirSync(join(hermesHomeDir, 'pairing'), { recursive: true });
     await touchFile(join(hermesHomeDir, 'pairing', 'weixin-state.json'), 5000);
     await touchFile(join(hermesHomeDir, 'gateway_state.json'), 5000);
     mkdirSync(join(hermesHomeDir, '.claude'), { recursive: true });
     await touchFile(join(hermesHomeDir, '.claude', 'settings.local.json'), 5000);
+    await touchFile(join(homeDir, 'notes.json'), 5000);
     const harness = createFakeSocket();
     const uploadFetch = vi.fn<typeof fetch>(async (input) => {
       if (String(input).includes('/artifacts/upload')) {
@@ -516,7 +517,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
     expect(resultEmit).toBeTruthy();
     expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['srv-hermes-file']);
-    // 只有 总结.md 被收集上传，内部 .json 状态文件全部被排除。
+    // 只有主目录顶层的摘要 .md 被收集上传，内部 .json 状态文件全部被排除。
     const uploadCalls = uploadFetch.mock.calls.filter(([input]) => String(input).includes('/artifacts/upload'));
     expect(uploadCalls).toHaveLength(1);
     expect(uploadCalls[0]?.[0]).toContain('/artifacts/upload');
@@ -689,6 +690,51 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     releaseFirst?.();
     await Promise.all([first, second]);
     expect(calls.sort()).toEqual(['disp-codex-1', 'disp-codex-2']);
+  });
+
+  test('Hermes 与 OpenClaw dispatch 共享同一串行键（共享主目录扫描根）', async () => {
+    const harness = createFakeSocket();
+    const binDirA = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-agentos-serial-a-')));
+    const binDirB = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-agentos-serial-b-')));
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async (request) => {
+        calls.push(request.id);
+        if (request.id === 'disp-hermes-a') {
+          await firstGate;
+        }
+        return { body: 'done' };
+      },
+    });
+    await client.start();
+
+    const first = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-hermes-a', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'hermes-agent-a', requestId: 'disp-hermes-a', prompt: 'do work',
+      customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: binDirA },
+    });
+    const second = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-openclaw-b', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-2',
+      agentId: 'openclaw-agent-b', requestId: 'disp-openclaw-b', prompt: 'do more',
+      customAgent: { adapterKind: 'openclaw', command: 'openclaw', cwd: binDirB },
+    });
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['disp-hermes-a']);
+    });
+    // Hermes run 未结束时 OpenClaw run 不得开始（共享主目录顶层扫描根）。
+    expect(calls).not.toContain('disp-openclaw-b');
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(calls).toEqual(['disp-hermes-a', 'disp-openclaw-b']);
   });
 
   test('dispatch 结果在 socket 断开时入队，重连后补发，且不抛', async () => {
