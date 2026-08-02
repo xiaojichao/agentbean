@@ -50,7 +50,7 @@
 
     .app {
       display: grid;
-      grid-template-columns: 168px 210px minmax(500px, 1fr) 520px;
+      grid-template-columns: 168px 210px minmax(340px, 1fr) minmax(520px, 42vw);
       height: 100vh;
       min-width: 1280px;
       background: var(--panel);
@@ -694,25 +694,54 @@
       line-height: 1.4;
     }
     .thread-package .package-top {
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
     }
     .thread-package .package-actions {
-      justify-content: flex-end;
-      max-width: 190px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      justify-content: stretch;
+      max-width: none;
     }
     .thread-package .package-actions .pill-button,
     .thread-package .package-actions .solid-button {
-      flex: 0 0 auto;
+      width: 100%;
+      padding: 0 6px;
     }
     .thread-package .file-row {
-      grid-template-columns: 38px minmax(0, 1fr) auto auto;
+      grid-template-columns: 18px 36px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "check id main status"
+        ". . actions actions";
+      align-items: start;
+      gap: 7px 8px;
+      min-height: 72px;
+      padding: 10px 12px;
     }
-    .thread-package .file-row .pill-button {
-      display: inline-flex;
+    .thread-package .file-row .file-check { grid-area: check; margin-top: 4px; }
+    .thread-package .file-row .file-id { grid-area: id; }
+    .thread-package .file-row .file-main { grid-area: main; }
+    .thread-package .file-row > .chip { grid-area: status; }
+    .thread-package .file-row .row-actions {
+      grid-area: actions;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .thread-package .file-row .row-actions .pill-button {
+      height: 28px;
+      padding: 0 9px;
     }
     .thread-package .package-foot {
-      display: flex;
-      align-items: center;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
+    }
+    .thread-package .package-foot .inline-actions {
+      justify-content: flex-end;
     }
     .thread-foot {
       padding: 8px 10px;
