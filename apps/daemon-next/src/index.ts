@@ -18,7 +18,7 @@ import {
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-import { collectArtifacts, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
+import { collectArtifacts, type AdapterOutputRoot, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
@@ -732,8 +732,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
-          const adapterOutputDirs = resolveAdapterOutputDirs(request.customAgent?.adapterKind, {
-            codexGeneratedImagesDir,
+          const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
+          const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
+          const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {
             hermesHomeDir,
             openclawHomeDir,
           });
@@ -743,14 +744,15 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (workspace || adapterOutputDirs.length > 0 || configuredRoots.roots.length > 0);
+            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
               ...(workspace ? {
                 outputDir: workspace.outputDir,
                 ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
               } : {}),
-              extraOutputDirs: adapterOutputDirs,
+              extraOutputDirs: codexExtraOutputDirs,
+              adapterOutputRoots,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
               maxBytes: input.artifactMaxBytes,
@@ -1107,27 +1109,31 @@ function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
 }
 
 /**
- * Adapter 级默认产物根：与 Codex 的 ~/.codex/generated_images 同款语义，
- * 只收集本次运行窗口内（mtime > startedAt）新增或修改的受支持文件，
- * 默认归类为普通 Run artifact（adapter_generated source root）。
- * agentos-hosted 网关（Hermes/OpenClaw）把文件写在自己的数据目录而不写
- * AGENTBEAN_OUTPUT_DIR，缺省根会导致产物永远进不了 run 目录与频道文件索引。
+ * AgentOS-hosted（Hermes/OpenClaw）默认产物根。
+ *
+ * 只扫描两类范围，避免把数据目录里的内部状态（pairing/sessions/checkpoints/
+ * cache 等）当作产物上传：
+ * 1. 数据根目录顶层文件（非递归，扩展名白名单 + 跳过隐藏项）；
+ * 2. 数据根目录下的 output/ 子目录（递归）。
+ * 收集仍按本次运行窗口（mtime > startedAt）过滤，默认归类为运行产物。
  */
-function resolveAdapterOutputDirs(
+function resolveAdapterOutputRoots(
   adapterKind: string | undefined,
-  dirs: { codexGeneratedImagesDir: string; hermesHomeDir: string; openclawHomeDir: string },
-): string[] {
-  const output: string[] = [];
-  if (isCodexAdapterKind(adapterKind)) {
-    output.push(dirs.codexGeneratedImagesDir);
-  }
+  dirs: { hermesHomeDir: string; openclawHomeDir: string },
+): AdapterOutputRoot[] {
   if (adapterKind === 'hermes') {
-    output.push(dirs.hermesHomeDir);
+    return [
+      { dir: dirs.hermesHomeDir, recursive: false },
+      { dir: join(dirs.hermesHomeDir, 'output'), recursive: true },
+    ];
   }
   if (adapterKind === 'openclaw') {
-    output.push(dirs.openclawHomeDir);
+    return [
+      { dir: dirs.openclawHomeDir, recursive: false },
+      { dir: join(dirs.openclawHomeDir, 'output'), recursive: true },
+    ];
   }
-  return output;
+  return [];
 }
 
 function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {
