@@ -1,0 +1,1979 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentBean 文件包协作流程原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f5f3;
+      --panel: #ffffff;
+      --rail: #fbfbfa;
+      --channel: #fbf7e9;
+      --ink: #222426;
+      --muted: #68707a;
+      --subtle: #939aa3;
+      --line: #e4e2de;
+      --line-strong: #cbc8c1;
+      --pink: #f23f93;
+      --pink-soft: #fff0f7;
+      --amber: #efb12f;
+      --amber-soft: #fff6d9;
+      --blue: #246fbd;
+      --blue-soft: #edf6ff;
+      --green: #147a4d;
+      --green-soft: #eaf7ef;
+      --red: #b33b35;
+      --red-soft: #fff0ee;
+      --violet: #7651d6;
+      --violet-soft: #f3efff;
+      --shadow: 0 16px 44px rgba(30, 34, 40, .16);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background: #ececeb;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    button, input, textarea, select {
+      font: inherit;
+      letter-spacing: 0;
+    }
+    button { cursor: pointer; }
+
+    .app {
+      display: grid;
+      grid-template-columns: 168px 210px minmax(340px, 1fr) minmax(520px, 42vw);
+      grid-template-rows: minmax(0, 1fr);
+      height: 100vh;
+      min-width: 1280px;
+      overflow: hidden;
+      background: var(--panel);
+    }
+
+    .global-rail {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background: var(--rail);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 44px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .mark {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border-radius: 6px;
+      color: #fff;
+      background: #171717;
+      font-size: 13px;
+    }
+    .team-row {
+      display: grid;
+      grid-template-columns: 1fr 30px;
+      gap: 6px;
+      padding: 10px 8px;
+      border-bottom: 1px solid #efefed;
+    }
+    .team-button,
+    .small-square,
+    .icon-button,
+    .ghost-button,
+    .solid-button,
+    .pill-button,
+    .select-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-width: 0;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 0 9px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .team-button {
+      justify-content: space-between;
+      color: #363b40;
+    }
+    .small-square { width: 30px; padding: 0; }
+    .ghost-button {
+      border-color: transparent;
+      background: transparent;
+      color: #4e555d;
+    }
+    .ghost-button:hover,
+    .icon-button:hover,
+    .pill-button:hover,
+    .select-button:hover {
+      background: #f3f3f1;
+    }
+    .solid-button {
+      border-color: var(--pink);
+      color: #fff;
+      background: var(--pink);
+      font-weight: 700;
+    }
+    .solid-button.amber {
+      border-color: var(--amber);
+      background: var(--amber);
+      color: #1f2225;
+    }
+    .solid-button.blue {
+      border-color: var(--blue);
+      background: var(--blue);
+    }
+    .danger-button {
+      border-color: #f0c5c2;
+      color: var(--red);
+      background: var(--red-soft);
+    }
+    .nav {
+      display: grid;
+      gap: 3px;
+      padding: 10px 8px;
+    }
+    .nav button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 31px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #3f454c;
+      padding: 0 8px;
+      text-align: left;
+      font-size: 13px;
+    }
+    .nav button.active { background: #f0f0ef; font-weight: 700; }
+    .nav button:hover { background: #f4f4f3; }
+    .system-foot {
+      margin-top: auto;
+      padding: 10px 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .profile {
+      height: 34px;
+      padding: 9px 8px;
+      border-radius: 6px;
+      background: #fff;
+      box-shadow: 0 1px 9px rgba(0,0,0,.04);
+    }
+
+    .channel-rail {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background: var(--channel);
+      color: #3e444b;
+    }
+    .rail-title {
+      display: flex;
+      align-items: center;
+      height: 44px;
+      padding: 0 14px;
+      border-bottom: 1px solid rgba(222, 214, 190, .9);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .rail-section {
+      padding: 10px 8px 4px;
+      border-bottom: 1px solid rgba(222, 214, 190, .72);
+    }
+    .rail-item,
+    .channel-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      height: 30px;
+      border-radius: 6px;
+      color: #525a62;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+    .rail-item strong,
+    .channel-item strong { font-weight: 700; color: #2f343a; }
+    .rail-item.active,
+    .channel-item.active { background: #fff; box-shadow: 0 1px 3px rgba(34, 36, 38, .04); }
+    .rail-item .count {
+      min-width: 22px;
+      height: 18px;
+      border-radius: 5px;
+      background: var(--pink-soft);
+      color: var(--pink);
+      text-align: center;
+      line-height: 18px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .channel-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 8px 4px;
+      color: #8a8069;
+      font-size: 11px;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: 44px 1fr;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: #fff;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      height: 44px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 14px;
+    }
+    .channel-name {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--subtle);
+    }
+    .content {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 36px 1fr;
+      overflow: hidden;
+    }
+    .tabs {
+      display: flex;
+      align-items: flex-end;
+      gap: 22px;
+      height: 36px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+    }
+    .tab {
+      display: grid;
+      place-items: center;
+      height: 36px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: #6d747d;
+      padding: 0;
+    }
+    .tab.active {
+      color: #1f2225;
+      border-bottom-color: var(--amber);
+      font-weight: 800;
+    }
+
+    .view {
+      min-height: 0;
+      overflow: auto;
+      background: #fff;
+      scroll-padding-bottom: 82px;
+    }
+    .chat-view {
+      display: grid;
+      grid-template-rows: 1fr 76px;
+      height: 100%;
+    }
+    .message-list {
+      overflow: auto;
+      padding: 16px 16px 24px;
+    }
+    .message {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .avatar {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border-radius: 50%;
+      background: #eadbff;
+      color: #754bd3;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .avatar.agent { background: #e5f1ff; color: #246fbd; }
+    .message-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      height: 24px;
+      font-size: 12px;
+    }
+    .message-head strong { font-size: 13px; }
+    .time { color: var(--subtle); }
+    .you-badge {
+      min-width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      background: #dff8e6;
+      color: #17824e;
+      text-align: center;
+      line-height: 18px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .message-body {
+      color: #3d444c;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .compact-note {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+      margin-top: 8px;
+      padding: 7px 9px;
+      border: 1px solid #cfe6fa;
+      border-radius: 6px;
+      background: #f2f9ff;
+      color: #256fbd;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .topic-summary-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      margin-top: 10px;
+      border: 1px solid #cfe6fa;
+      border-radius: 8px;
+      background: #f7fbff;
+      padding: 10px;
+      color: #315d83;
+      font-size: 12px;
+    }
+    .topic-summary-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #1f5e9a;
+      font-size: 13px;
+    }
+    .topic-summary-card span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topic-list-note {
+      margin-bottom: 12px;
+      border: 1px solid #eadfbf;
+      border-radius: 8px;
+      background: #fffaf0;
+      color: #73540b;
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .topic-card {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+    }
+    .topic-card.active {
+      border-color: #b7d9f5;
+      background: #f8fcff;
+      box-shadow: 0 8px 22px rgba(36, 111, 189, .08);
+    }
+    .topic-card-main {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+    }
+    .topic-card-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #24292f;
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .topic-card-body {
+      color: #4c535b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .topic-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .package-card {
+      margin-top: 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 1px 0 rgba(36, 40, 44, .03);
+      overflow: hidden;
+    }
+    .package-card.emphasis {
+      border-color: #b7d9f5;
+      box-shadow: 0 10px 28px rgba(36, 111, 189, .10);
+    }
+    .package-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+    .package-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .package-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 850;
+      font-size: 14px;
+    }
+    .package-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .package-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      max-width: 290px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      max-width: 100%;
+      min-height: 20px;
+      border-radius: 6px;
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #515961;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .chip.blue { border-color: #cce2f7; background: var(--blue-soft); color: var(--blue); }
+    .chip.green { border-color: #c9ead6; background: var(--green-soft); color: var(--green); }
+    .chip.amber { border-color: #f0d99b; background: var(--amber-soft); color: #8b6208; }
+    .chip.red { border-color: #f1c1bd; background: var(--red-soft); color: var(--red); }
+    .chip.violet { border-color: #dcd1fb; background: var(--violet-soft); color: var(--violet); }
+    .file-list {
+      display: grid;
+      gap: 0;
+      padding: 0;
+    }
+    .file-row {
+      display: grid;
+      grid-template-columns: 18px 42px minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 7px 12px;
+      border-bottom: 1px solid #f0f0ee;
+      font-size: 12px;
+    }
+    .file-row:last-child { border-bottom: 0; }
+    .file-check {
+      width: 15px;
+      height: 15px;
+      accent-color: var(--amber);
+    }
+    .file-id {
+      display: inline-grid;
+      min-width: 31px;
+      height: 22px;
+      place-items: center;
+      border: 1px solid #d9e7f6;
+      border-radius: 5px;
+      background: #f4faff;
+      color: var(--blue);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .file-main {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .file-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 750;
+      color: #30363d;
+    }
+    .file-sub {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .package-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      background: #fcfcfb;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .package-foot strong { color: #2c3136; }
+    .inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .composer {
+      border-top: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+    }
+    .reference-strip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 22px;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .composer textarea {
+      min-height: 42px;
+      max-height: 64px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      color: #444b54;
+      font-size: 13px;
+    }
+
+    .discussion {
+      position: relative;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 56px 1fr 72px;
+      border-left: 1px solid var(--line);
+      background: #fff;
+    }
+    .discussion::before {
+      content: "";
+      position: absolute;
+      left: -4px;
+      top: 0;
+      bottom: 0;
+      width: 7px;
+      cursor: col-resize;
+      background: linear-gradient(to right, transparent, rgba(36,111,189,.12), transparent);
+    }
+    .thread-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .thread-title {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+      font-size: 13px;
+      font-weight: 850;
+    }
+    .thread-title span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .thread-body {
+      overflow: auto;
+      padding: 12px 10px 96px;
+      min-height: 0;
+      scroll-padding-bottom: 96px;
+    }
+    .thread-message {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+    .thread-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .thread-card.dark-preview {
+      background: #111;
+      color: #e8e8e8;
+      padding: 12px;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .request-banner {
+      margin: 10px 0 14px 40px;
+      border: 1px solid #f0d38a;
+      border-radius: 6px;
+      background: #fff9e8;
+      color: #8b6208;
+      padding: 7px 9px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .thread-package .package-top {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+    }
+    .thread-package .package-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      justify-content: stretch;
+      max-width: none;
+    }
+    .thread-package .package-actions .pill-button,
+    .thread-package .package-actions .solid-button {
+      width: 100%;
+      padding: 0 6px;
+    }
+    .thread-package .file-row {
+      grid-template-columns: 18px 36px minmax(0, 1fr) auto;
+      grid-template-areas:
+        "check id main status"
+        ". . actions actions";
+      align-items: start;
+      gap: 7px 8px;
+      min-height: 72px;
+      padding: 10px 12px;
+    }
+    .thread-package .file-row .file-check { grid-area: check; margin-top: 4px; }
+    .thread-package .file-row .file-id { grid-area: id; }
+    .thread-package .file-row .file-main { grid-area: main; }
+    .thread-package .file-row > .chip { grid-area: status; }
+    .thread-package .file-row .row-actions {
+      grid-area: actions;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .thread-package .file-row .row-actions .pill-button {
+      height: 28px;
+      padding: 0 9px;
+    }
+    .thread-package .package-foot {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
+    }
+    .thread-package .package-foot .inline-actions {
+      justify-content: flex-end;
+    }
+    .thread-foot {
+      padding: 8px 10px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+    .thread-foot input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 9px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .thread-foot textarea {
+      width: 100%;
+      min-height: 34px;
+      max-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      resize: none;
+      padding: 8px 9px;
+      color: #444b54;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .task-toolbar,
+    .file-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+    .screen-task {
+      min-height: 0;
+      overflow: auto;
+      scroll-padding-bottom: 96px;
+    }
+    .filters {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(210px, 1fr));
+      gap: 12px;
+      padding: 14px 14px 96px;
+      min-height: 620px;
+      background: #fcfcfb;
+    }
+    .task-column {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .column-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 38px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .column-body {
+      display: grid;
+      gap: 10px;
+      padding: 10px;
+    }
+    .task-card {
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      box-shadow: 0 1px 0 rgba(36, 40, 44, .03);
+    }
+    .task-card.active-card {
+      border-color: #bfdcf4;
+      box-shadow: 0 10px 24px rgba(36, 111, 189, .08);
+    }
+    .task-type {
+      color: var(--subtle);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .task-title {
+      color: #202428;
+      font-size: 14px;
+      font-weight: 850;
+      line-height: 1.35;
+    }
+    .task-meta-grid {
+      display: grid;
+      grid-template-columns: 62px minmax(0, 1fr);
+      gap: 6px 8px;
+      margin-top: 10px;
+      font-size: 12px;
+    }
+    .task-meta-grid .label { color: var(--muted); }
+    .task-meta-grid .value {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #333a42;
+      font-weight: 650;
+    }
+    .mini-package {
+      margin-top: 10px;
+      border: 1px solid #d5e8f8;
+      border-radius: 7px;
+      background: #f7fbff;
+      padding: 8px;
+      font-size: 12px;
+    }
+    .mini-package strong {
+      display: block;
+      color: #1f5e9a;
+      margin-bottom: 5px;
+    }
+    .review-panel {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+      border: 1px solid #efd58e;
+      border-radius: 8px;
+      background: #fffaf0;
+      padding: 8px;
+    }
+    .review-panel-title {
+      color: #7d5a07;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .review-panel p {
+      margin: 0;
+      color: #6b5b2d;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .review-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .review-action-group {
+      display: grid;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(239, 213, 142, .8);
+    }
+    .review-action-group:first-of-type {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .review-action-label {
+      color: #7d5a07;
+      font-size: 11px;
+      font-weight: 850;
+    }
+    .review-action-help {
+      margin: 0;
+      color: #6b5b2d;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .timeline {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .timeline div {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 6px;
+      align-items: start;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      margin: 4px auto 0;
+      border-radius: 50%;
+      background: var(--line-strong);
+    }
+    .dot.blue { background: var(--blue); }
+    .dot.green { background: var(--green); }
+    .dot.amber { background: var(--amber); }
+
+    .file-view {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .file-search {
+      flex: 1;
+      min-width: 220px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 10px;
+      color: #515961;
+      font-size: 12px;
+    }
+    .files-layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      min-height: 0;
+      overflow: hidden;
+    }
+    .collection-sidebar {
+      border-right: 1px solid var(--line);
+      background: #fcfcfb;
+      padding: 12px;
+      overflow: auto;
+    }
+    .collection-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .collection-card.active {
+      border-color: #bad9f2;
+      background: #f7fbff;
+    }
+    .collection-card-title {
+      font-size: 13px;
+      font-weight: 850;
+      margin-bottom: 6px;
+    }
+    .collection-card-meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .file-table-wrap {
+      min-width: 0;
+      overflow: auto;
+      padding: 12px 14px 32px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 880px;
+      font-size: 12px;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      height: 36px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      text-align: left;
+      font-weight: 800;
+    }
+    td {
+      height: 54px;
+      border-bottom: 1px solid #eeeeec;
+      color: #30363d;
+      vertical-align: middle;
+      padding-right: 12px;
+    }
+    .version-stack {
+      display: grid;
+      gap: 3px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .row-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .identity-note {
+      margin: 12px 0 0;
+      border: 1px solid #d8e9f8;
+      border-radius: 8px;
+      background: #f6fbff;
+      color: #33648f;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .implementation-note {
+      margin-top: 12px;
+      border: 1px solid #e2d4f7;
+      border-radius: 8px;
+      background: #fbf8ff;
+      color: #5b428b;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .implementation-note strong {
+      display: block;
+      margin-bottom: 5px;
+      color: #4d347d;
+    }
+    .implementation-note ul {
+      margin: 0;
+      padding-left: 17px;
+    }
+
+    .preview-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      z-index: 20;
+      background: rgba(18, 20, 23, .32);
+    }
+    body.preview-open .preview-overlay { display: grid; place-items: center; }
+    .preview-modal {
+      width: min(1120px, calc(100vw - 56px));
+      height: min(740px, calc(100vh - 56px));
+      display: grid;
+      grid-template-rows: 48px 1fr 48px;
+      border: 1px solid rgba(255,255,255,.8);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+    .modal-title {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 850;
+      font-size: 14px;
+    }
+    .modal-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 230px minmax(320px, 1fr) minmax(320px, 1fr);
+    }
+    .modal-files {
+      border-right: 1px solid var(--line);
+      background: #fcfcfb;
+      padding: 10px;
+      overflow: auto;
+    }
+    .modal-file {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    .modal-file.active {
+      border-color: #bad9f2;
+      background: #f7fbff;
+    }
+    .editor-pane,
+    .render-pane {
+      display: grid;
+      grid-template-rows: 38px 1fr;
+      min-width: 0;
+      min-height: 0;
+    }
+    .editor-pane { border-right: 1px solid var(--line); }
+    .pane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      padding: 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .editor-pane textarea {
+      min-width: 0;
+      min-height: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      resize: none;
+      outline: 0;
+      padding: 14px;
+      color: #22272e;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .markdown-preview {
+      overflow: auto;
+      padding: 14px 18px 28px;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .markdown-preview h1,
+    .markdown-preview h2,
+    .markdown-preview h3 {
+      margin: 0 0 12px;
+      line-height: 1.25;
+    }
+    .markdown-preview h1 { font-size: 20px; }
+    .markdown-preview h2 { font-size: 16px; margin-top: 18px; }
+    .markdown-preview p { margin: 0 0 10px; }
+    .markdown-preview ul { margin: 0 0 12px 18px; padding: 0; }
+    .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+      padding: 0 12px;
+    }
+    .server-state {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      color: #44515f;
+      font-size: 12px;
+    }
+    .server-state strong { color: #1f5e9a; }
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .toast {
+      position: fixed;
+      z-index: 25;
+      right: 350px;
+      bottom: 92px;
+      display: none;
+      max-width: 360px;
+      border: 1px solid #c5e3d0;
+      border-radius: 8px;
+      background: #f1fbf5;
+      color: #16633e;
+      box-shadow: 0 8px 24px rgba(22, 99, 62, .14);
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .toast.show { display: block; }
+
+    .switcher {
+      position: fixed;
+      z-index: 30;
+      left: 392px;
+      bottom: 14px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: center;
+      gap: 6px;
+      width: 340px;
+      padding: 6px;
+      border: 1px solid rgba(25, 27, 31, .16);
+      border-radius: 8px;
+      background: rgba(255,255,255,.94);
+      box-shadow: 0 10px 28px rgba(20, 24, 28, .18);
+      backdrop-filter: blur(8px);
+    }
+    .switcher button {
+      height: 30px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      padding: 0 8px;
+      color: #49515a;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .switcher button.active {
+      border-color: #e0c16d;
+      background: #fff6d9;
+      color: #6f4d00;
+    }
+
+    .screen { display: none; height: 100%; min-height: 0; }
+    body[data-screen="chat"] .screen-chat,
+    body[data-screen="task"] .screen-task,
+    body[data-screen="files"] .screen-files { display: block; }
+    body[data-screen="chat"] .tab-chat,
+    body[data-screen="task"] .tab-task,
+    body[data-screen="files"] .tab-files { color: #1f2225; border-bottom-color: var(--amber); font-weight: 800; }
+    body[data-screen="task"] .message-list,
+    body[data-screen="files"] .message-list { display: none; }
+
+    @media (max-width: 1260px) {
+      .app { grid-template-columns: 150px 190px minmax(460px, 1fr) 460px; }
+      .package-top { grid-template-columns: 1fr; }
+      .package-actions { max-width: none; justify-content: flex-start; }
+      .task-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body data-screen="chat">
+  <!-- Throwaway UI prototype: Agent output appears as a versioned file package inside the existing Chat / Task / File layout. -->
+  <div class="app">
+    <aside class="global-rail">
+      <div class="brand"><div class="mark">▣</div><span>AgentBean</span></div>
+      <div class="team-row">
+        <button class="team-button">testSNS <span>⌄</span></button>
+        <button class="small-square" title="新建">+</button>
+      </div>
+      <nav class="nav">
+        <button class="active">☰ 聊天</button>
+        <button>▦ 任务</button>
+        <button>♙ 成员</button>
+        <button>▱ 设备</button>
+      </nav>
+      <div class="system-foot">
+        <div class="profile">PI normal</div>
+        <div style="margin-top:10px;">⚙ 设置</div>
+      </div>
+    </aside>
+
+    <aside class="channel-rail">
+      <div class="rail-title">聊天</div>
+      <div class="rail-section">
+        <div class="rail-item">⌕ 搜索 <span>⌘K</span></div>
+        <div class="rail-item">⌁ 活动 <span class="count">62</span></div>
+        <div class="rail-item">♡ 收藏 <span class="chip">0</span></div>
+        <div class="rail-item">♧ 固定 <span class="chip">0</span></div>
+      </div>
+      <div class="channel-heading"><span>频道 <strong>4</strong></span><span>↕ +</span></div>
+      <div class="rail-section" style="border-bottom:0;">
+        <div class="channel-item"># all</div>
+        <div class="channel-item"># testchannel-1</div>
+        <div class="channel-item active"><strong>▣ 测试协同</strong></div>
+        <div class="channel-item"># AI 短剧</div>
+      </div>
+      <div class="channel-heading"><span>私聊 <strong>0</strong></span><span>↕</span></div>
+      <div class="rail-section" style="border-bottom:0;color:#9a9481;font-size:12px;">暂无私聊</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="channel-name">▣ 测试协同 <span class="chip amber">频道即项目空间</span></div>
+        <div class="top-actions">
+          <button class="ghost-button">⌕</button>
+          <button class="ghost-button">×</button>
+          <button class="ghost-button">⌁</button>
+          <button class="ghost-button">✎</button>
+          <button class="ghost-button">♙ 4</button>
+        </div>
+      </header>
+
+      <section class="content">
+        <nav class="tabs">
+          <button class="tab tab-chat" data-screen-target="chat">聊天</button>
+          <button class="tab tab-task" data-screen-target="task">任务</button>
+          <button class="tab tab-files" data-screen-target="files">文件</button>
+        </nav>
+
+        <div class="view">
+          <section class="screen screen-chat chat-view">
+            <div class="message-list">
+              <div class="topic-list-note">
+                主聊天区是话题入口列表。发送任何内容都会创建一个话题；回复、文件包、预览、引用和继续 @Agent 都在右侧当前话题的讨论串里完成。
+              </div>
+              <div class="implementation-note">
+                <strong>实现备注</strong>
+                <ul>
+                  <li>主聊天只承载话题入口，不承载连续跟帖。</li>
+                  <li>点击话题后，右侧讨论串才是回复、文件引用和 @智能体 的操作容器。</li>
+                  <li>频道消息不是项目事实源；任务状态、版本、审核和 final 都必须由 Server 写入。</li>
+                </ul>
+              </div>
+
+              <article class="topic-card">
+                <div class="avatar">D</div>
+                <div class="topic-card-main">
+                  <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
+                  <div class="topic-card-title">@某个智能体 基于 PKG-042 当前版本继续创作</div>
+                  <div class="topic-card-body">最新活动：讨论串里已引用 PKG-042 current projection，准备选择一个智能体继续执行。</div>
+                  <div class="topic-card-meta">
+                    <span class="chip violet">PKG-042 current</span>
+                    <span class="chip blue">F1 v4</span>
+                    <span class="chip">3 条回复</span>
+                    <span class="chip amber">待处理</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="topic-card active">
+                <div class="avatar">D</div>
+                <div class="topic-card-main">
+                  <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:25</span></div>
+                  <div class="topic-card-title">@剧本创作 帮我创作一个关于小学生扶老奶奶过马路的剧本</div>
+                  <div class="topic-card-body">当前选中的话题。右侧讨论串里包含 Agent 请求、Markdown 文件包、预览编辑和 @文件引用。</div>
+                  <div class="topic-card-meta">
+                    <span class="chip violet">#3 @Agent</span>
+                    <span class="chip">14 条回复</span>
+                    <span class="chip blue">WorkspaceRun wr_42</span>
+                    <span class="chip amber">文件包待审核</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="topic-card">
+                <div class="avatar agent">H</div>
+                <div class="topic-card-main">
+                  <div class="message-head"><strong>Hermes-Agent-xiao-mbp</strong><span class="time">07/16 16:14</span></div>
+                  <div class="topic-card-title">Arknote 首页音频入口和采集能力讨论</div>
+                  <div class="topic-card-body">任务仍在进行中；该话题有长文回复和 6 条讨论，未产生项目文件包。</div>
+                  <div class="topic-card-meta">
+                    <span class="chip blue">任务进行中</span>
+                    <span class="chip">6 条回复</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="composer">
+              <div class="reference-strip">
+                <span>发送后会创建新话题；后续回复会进入该话题讨论串。</span>
+              </div>
+              <div class="input-row">
+                <textarea>发起新话题到 #测试协同（输入 @ 提及成员）</textarea>
+                <button class="solid-button">发送</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="screen screen-task">
+            <div class="task-toolbar">
+              <div class="filters">
+                <button class="select-button">创建者 ⌄</button>
+                <button class="select-button">责任焦点 ⌄</button>
+                <button class="select-button">建议审核人：我 ⌄</button>
+                <span class="chip amber">当前视图：任务状态 + 审核动作</span>
+              </div>
+              <button class="solid-button">+ 新建任务</button>
+            </div>
+            <div class="task-grid">
+              <section class="task-column">
+                <div class="column-head"><span>进行中</span><span class="chip blue">3</span></div>
+                <div class="column-body">
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 未触发执行</div>
+                    <div class="task-title">下一步创作：等待在讨论串 @智能体</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">未开始</span>
+                      <span class="label">建议审核人</span><span class="value">未指定</span>
+                      <span class="label">输入</span><span class="value">等待引用 PKG-042 current / final</span>
+                      <span class="label">阻塞</span><span class="value">等待用户在讨论串提交指令</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>可作为下一步输入</strong>
+                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。任务页只提供“交给智能体处理”入口，点击后跳到讨论串并预填引用。
+                    </div>
+                    <div class="inline-actions" style="margin-top:8px; justify-content:flex-start;">
+                      <button class="pill-button">交给智能体处理</button>
+                    </div>
+                  </article>
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 讨论串已预填</div>
+                    <div class="task-title">下一步创作：等待发送 @智能体 指令</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">未开始</span>
+                      <span class="label">建议审核人</span><span class="value">未指定 · 任一成员可审核</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 current 已插入</span>
+                      <span class="label">状态</span><span class="value">尚未创建 AgentInvocation</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>任务页不直接选负责人</strong>
+                      只有用户在讨论串发送 @智能体 + 文件引用 + 指令后，Server 才创建 invocation，负责人再由执行事实回填。
+                    </div>
+                  </article>
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 执行中</div>
+                    <div class="task-title">下一步创作：讨论串 @智能体后已接收</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">@镜头拆分（执行中）</span>
+                      <span class="label">建议审核人</span><span class="value">未指定</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 current</span>
+                      <span class="label">来源</span><span class="value">讨论串 @智能体 创建</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>负责人是执行事实投影</strong>
+                      Agent accepted/running 后，任务责任焦点显示为该智能体；进入待审核后焦点会转到审核。
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <section class="task-column">
+                <div class="column-head"><span>待审核</span><span class="chip amber">1</span></div>
+                <div class="column-body">
+                  <article class="task-card active-card">
+                    <div class="task-type">阶段任务 · Agent 已交付</div>
+                    <div class="task-title">剧本创作：《温暖的一步》第一版输出</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">@剧本创作</span>
+                      <span class="label">建议审核人</span><span class="value">未指定 · 任一成员可审核</span>
+                      <span class="label">输出</span><span class="value">PKG-042 · 5 md / 1 image</span>
+                      <span class="label">状态</span><span class="value">等待人审；实际审核人待产生</span>
+                    </div>
+                    <div class="mini-package">
+                      <strong>待审核输出</strong>
+                      F1 第1集剧本.md v4（你手动修改）<br>
+                      F2 角色表.md v3（Agent 修订）<br>
+                      F3 分镜提示词.md v2（Agent 初稿）
+                    </div>
+                    <div class="review-panel">
+                      <div class="review-panel-title">任一频道成员都可以审核；实际审核人以点击者为准</div>
+                      <p>审核动作只处理当前输出版本；接下来由哪个智能体继续执行，在讨论串里通过 @智能体 + @文件包 来决定。</p>
+                      <div class="review-action-group">
+                        <div class="review-action-label">审核结论</div>
+                        <div class="review-actions">
+                          <button class="solid-button blue">通过审核</button>
+                          <button class="pill-button">要求修改</button>
+                          <button class="danger-button">拒绝此版本</button>
+                        </div>
+                        <p class="review-action-help">通过审核：把当前版本标为可被后续引用，任务可进入已通过。要求修改：保留版本并回到讨论串填写修改意见。拒绝此版本：标为不可用，需要重新生成或重做。</p>
+                      </div>
+                      <div class="review-action-group">
+                        <div class="review-action-label">版本选择</div>
+                        <div class="review-actions">
+                          <button class="solid-button amber">通过并设为最终版</button>
+                        </div>
+                        <p class="review-action-help">待审核版本不能直接设 final；这里使用“通过并设为最终版”，一次写入 ArtifactReview 和 finalVersionId。</p>
+                      </div>
+                      <div class="review-action-group">
+                        <div class="review-action-label">继续协作</div>
+                        <div class="review-actions">
+                          <button class="pill-button">回到讨论串继续</button>
+                        </div>
+                        <p class="review-action-help">不改状态，只定位到当前话题输入框，继续用 @智能体 + @PKG-042 或 @F1 @F2 指定下一步。</p>
+                      </div>
+                    </div>
+                    <div class="timeline">
+                      <div><span class="dot blue"></span><span>19:28 Agent 交付 PKG-042，任务从进行中进入待审核。</span></div>
+                      <div><span class="dot amber"></span><span>19:41 derrick 在预览浮窗修改 F1，Server 生成 script.ep01 v4。</span></div>
+                      <div><span class="dot"></span><span>下一步：在讨论串 @任意可见智能体，并引用 current / final 文件包作为输入。</span></div>
+                    </div>
+                    <div class="implementation-note">
+                      <strong>实现备注</strong>
+                      <ul>
+                        <li>审核结论写入 ArtifactReview，不等于 final。</li>
+                        <li>首版任一频道成员都可审核；实际审核人以点击审核按钮的人为准。</li>
+                        <li>待审核版本使用“通过并设为最终版”；已通过版本才显示“设为最终版”。</li>
+                        <li>负责人不在任务页下拉选择，由讨论串 invocation 执行事实投影。</li>
+                        <li>回到讨论串继续不改状态，只帮助用户用 @智能体 + @文件/文件包指定下一步。</li>
+                      </ul>
+                    </div>
+                  </article>
+                </div>
+              </section>
+
+              <section class="task-column">
+                <div class="column-head"><span>已完成</span><span class="chip green">1</span></div>
+                <div class="column-body">
+                  <article class="task-card">
+                    <div class="task-type">阶段任务 · 已通过</div>
+                    <div class="task-title">角色设定整理</div>
+                    <div class="task-meta-grid">
+                      <span class="label">负责人</span><span class="value">@剧本创作</span>
+                      <span class="label">审核人</span><span class="value">derrick（实际审核人）</span>
+                      <span class="label">最终版</span><span class="value">character.sheet v3</span>
+                      <span class="label">后续</span><span class="value">可被任意后续智能体引用</span>
+                    </div>
+                    <div class="timeline">
+                      <div><span class="dot green"></span><span>已通过并设为当前 final 指针；历史版本仍可追溯。</span></div>
+                    </div>
+                  </article>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section class="screen screen-files file-view">
+            <div class="file-toolbar">
+              <div class="filters" style="flex:1;">
+                <input class="file-search" value="按文件名、文件组、Agent 或版本搜索">
+                <button class="select-button">全部角色 ⌄</button>
+                <button class="select-button">全部状态 ⌄</button>
+              </div>
+              <button class="pill-button">多选引用</button>
+              <button class="pill-button">引用最终版包</button>
+              <button class="solid-button amber">引用当前包</button>
+            </div>
+            <div class="files-layout">
+              <aside class="collection-sidebar">
+                <div class="collection-card active">
+                  <div class="topic-card-meta"><span class="chip violet">输出包</span><span class="chip amber">最近活跃</span></div>
+                  <div class="collection-card-title">PKG-042 剧本输出包</div>
+                  <div class="collection-card-meta">6 个文件 · 剧本阶段 · current projection<br>F1 v4 / F2 v3 / F3 v2 / IMG v1</div>
+                </div>
+                <div class="collection-card">
+                  <div class="topic-card-meta"><span class="chip blue">文件集合</span><span class="chip green">有 final</span></div>
+                  <div class="collection-card-title">角色设定集合</div>
+                  <div class="collection-card-meta">2 个 Markdown · 已通过 · final v3</div>
+                </div>
+                <div class="collection-card">
+                  <div class="topic-card-meta"><span class="chip">等待上游</span></div>
+                  <div class="collection-card-title">分镜输出包</div>
+                  <div class="collection-card-meta">等待上游最终版 · 暂无产物</div>
+                </div>
+                <div class="identity-note">
+                  左侧是文件组卡片：输出包、文件集合和等待上游可以混排，默认按最近活跃排序。聊天里的 F1/F2 只是当前包编号。
+                </div>
+                <div class="implementation-note">
+                  <strong>左侧文件组</strong>
+                  <ul>
+                    <li>左侧不是文件夹树，不需要用户理解底层模型。</li>
+                    <li>PKG-042 表示一次 Agent 输出的一组文件；角色设定集合表示同一逻辑产物的多次版本。</li>
+                    <li>左侧摘要里的 F1/F2 只帮助用户识别当前讨论串文件，不能作为长期身份。</li>
+                  </ul>
+                </div>
+              </aside>
+              <div class="file-table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>名称</th>
+                      <th>类型 / 阶段</th>
+                      <th>来源</th>
+                      <th>当前版</th>
+                      <th>最终版</th>
+                      <th>审核</th>
+                      <th>动作</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>第1集剧本.md</strong><div class="file-sub">collection: script.ep01</div></td>
+                      <td><span class="chip blue">script</span><div class="file-sub">剧本创作</div></td>
+                      <td>@剧本创作 + derrick 手改<div class="file-sub">wr_42 · msg_19</div></td>
+                      <td><span class="chip amber">v4 current</span><div class="file-sub">server revision rev_4</div></td>
+                      <td><span class="chip">未设置</span></td>
+                      <td><span class="chip amber">待审核</span></td>
+                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">引用</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><strong>角色表.md</strong><div class="file-sub">collection: character.sheet</div></td>
+                      <td><span class="chip violet">character</span><div class="file-sub">剧本创作</div></td>
+                      <td>@剧本创作<div class="file-sub">wr_43 · Agent 修订</div></td>
+                      <td><span class="chip green">v3 current</span><div class="file-sub">server revision rev_3</div></td>
+                      <td><span class="chip green">v3 final</span></td>
+                      <td><span class="chip green">已通过</span></td>
+                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><strong>分镜提示词.md</strong><div class="file-sub">collection: storyboard.prompt</div></td>
+                      <td><span class="chip blue">prompt</span><div class="file-sub">剧本创作</div></td>
+                      <td>@剧本创作<div class="file-sub">wr_42 · 初稿</div></td>
+                      <td><span class="chip amber">v2 current</span><div class="file-sub">server revision rev_2</div></td>
+                      <td><span class="chip">未设置</span></td>
+                      <td><span class="chip amber">要求修改</span></td>
+                      <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">基于此修改</button></div></td>
+                    </tr>
+                    <tr>
+                      <td><strong>场景参考图.png</strong><div class="file-sub">collection: visual.reference.ep01</div></td>
+                      <td><span class="chip">image</span><div class="file-sub">剧本创作</div></td>
+                      <td>@剧本创作<div class="file-sub">wr_42 · generated artifact</div></td>
+                      <td><span class="chip blue">v1 current</span></td>
+                      <td><span class="chip">未设置</span></td>
+                      <td><span class="chip green">可用</span></td>
+                      <td><div class="row-actions"><button class="pill-button">查看</button><button class="pill-button">引用</button></div></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="identity-note">
+                  这里的“最终版”不是标签或文件名，而是 Server 保存的 finalVersionId。@PKG 默认引用 current；引用 final 必须显式选择。
+                </div>
+                <div class="implementation-note">
+                  <strong>表格字段说明</strong>
+                  <ul>
+                    <li>名称 = 文件名 + 长期文件 ID；类型 / 阶段 = 项目语义，不是文件来源。</li>
+                    <li>来源 = Agent、人类修改、WorkspaceRun 和消息位置。</li>
+                    <li>当前版 = currentVersionId，代表最新 Server 修订；最终版 = finalVersionId，代表人工确认指针。</li>
+                    <li>审核 = 当前版本是否可被后续引用；动作最终必须写回 Server 事实。</li>
+                  </ul>
+                </div>
+                <div class="implementation-note">
+                  <strong>整包引用规则</strong>
+                  <ul>
+                    <li>整包引用当前版本时，读取包内每个文件各自的 currentVersionId。</li>
+                    <li>用户手动修改和 Agent 修订都以 Server 最新修订为准，不回退到聊天旧正文。</li>
+                    <li>引用最终版包要求包内所有文件都有 finalVersionId，不能静默混用 final + current。</li>
+                    <li>被拒绝或要求修改的 current 不能作为默认正式输入，只能显式用于基于此修改。</li>
+                    <li>提交给后端时必须携带 artifactVersionId 或 artifactCollectionId，不能只传 F1/F2 或“第 3 个”。</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <aside class="discussion">
+      <div class="thread-head">
+        <div class="thread-title">
+          <strong>讨论串 - #测试协同</strong>
+          <span>#3 创作一个关于小学生扶老奶奶过马路的剧本</span>
+        </div>
+        <button class="ghost-button">×</button>
+      </div>
+      <div class="thread-body">
+        <article class="thread-message">
+          <div class="avatar">D</div>
+          <div>
+            <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:25</span></div>
+            <div class="message-body">我觉得你要以 markdown 文档的形式给我输出出来。@剧本创作</div>
+          </div>
+        </article>
+        <div class="request-banner">已记录 Agent 请求：提供 Markdown 格式的文档输出</div>
+        <article class="thread-message">
+          <div class="avatar agent">剧</div>
+          <div>
+            <div class="message-head"><strong>剧本创作</strong><span class="time">19:28</span><span class="chip blue">WorkspaceRun wr_42</span></div>
+            <div class="message-body" style="margin-bottom:8px;">已输出一组可审核的 Markdown 文件。系统已把它们提升为项目产物版本，当前阶段进入待审核。</div>
+            <div class="package-card emphasis thread-package">
+              <div class="package-top">
+                <div>
+                  <div class="package-title-row">
+                    <span class="chip violet">输出包 PKG-042</span>
+                    <div class="package-title">《温暖的一步》剧本创作输出包</div>
+                  </div>
+                  <div class="package-meta">
+                    <span>5 个 Markdown</span>
+                    <span>1 张参考图</span>
+                    <span>来源：@剧本创作</span>
+                    <span>任务：剧本创作</span>
+                  </div>
+                </div>
+                <div class="package-actions">
+                  <button class="pill-button js-open-preview">预览</button>
+                  <button class="pill-button js-open-preview">编辑</button>
+                  <button class="pill-button">引用最终版包</button>
+                  <button class="solid-button amber">引用当前包</button>
+                </div>
+              </div>
+              <div class="file-list">
+                <div class="file-row">
+                  <input class="file-check" type="checkbox" checked aria-label="选择 F1">
+                  <span class="file-id">F1</span>
+                  <div class="file-main">
+                    <span class="file-name">第1集剧本.md</span>
+                    <span class="file-sub">collection: script.ep01 · current server v4 · 手动修改于 19:41</span>
+                  </div>
+                  <span class="chip amber">待审核</span>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
+                </div>
+                <div class="file-row">
+                  <input class="file-check" type="checkbox" checked aria-label="选择 F2">
+                  <span class="file-id">F2</span>
+                  <div class="file-main">
+                    <span class="file-name">角色表.md</span>
+                    <span class="file-sub">collection: character.sheet · current server v3 · Agent 修订于 19:37</span>
+                  </div>
+                  <span class="chip green">已通过</span>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
+                </div>
+                <div class="file-row">
+                  <input class="file-check" type="checkbox" aria-label="选择 F3">
+                  <span class="file-id">F3</span>
+                  <div class="file-main">
+                    <span class="file-name">分镜提示词.md</span>
+                    <span class="file-sub">collection: storyboard.prompt · current server v2 · Agent 初稿</span>
+                  </div>
+                  <span class="chip amber">要求修改</span>
+                  <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">基于此修改</button></div>
+                </div>
+              </div>
+              <div class="package-foot">
+                <span><strong>多选引用</strong>会插入多个稳定文件 chip；<strong>引用当前包</strong>读取每个文件的 current，若 current 已拒绝/要求修改则先提示。</span>
+                <div class="inline-actions">
+                  <button class="pill-button">引用已选 2 个</button>
+                  <button class="pill-button">打开审核任务</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+        <article class="thread-message">
+          <div class="avatar">D</div>
+          <div>
+            <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
+            <div class="message-body">我改了 F1 的结尾，保存后可以在这里 @任意可见智能体，并基于最新 Server 修订继续。</div>
+            <div class="request-banner">轻量事件：derrick 手动修改 F1 第1集剧本.md，Server 生成 v4；final 未自动移动。</div>
+            <div class="implementation-note">
+              <strong>实现备注</strong>
+              <ul>
+                <li>讨论串输入框的 @ 选择器需要同时支持成员、智能体、文件和文件包。</li>
+                <li>@文件包 默认引用 current projection；引用 final 必须显式选择。</li>
+                <li>单个引用和多选引用都提交稳定 artifactVersionId 或 artifactCollectionId + versionPolicy。</li>
+                <li>手动编辑保存后生成新的 Server revision，更新 currentVersionId，并在讨论串留下轻量事件。</li>
+              </ul>
+            </div>
+          </div>
+        </article>
+      </div>
+      <div class="thread-foot">
+        <div class="reference-strip">
+          <span>引用中：</span>
+          <span class="chip violet">PKG-042 current</span>
+          <span class="chip blue">F1 第1集剧本.md v4</span>
+          <span class="chip blue">F2 角色表.md v3</span>
+        </div>
+        <textarea>回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）。例如：@某个智能体 请基于 @PKG-042 或 @F1 @F2 继续处理。</textarea>
+      </div>
+    </aside>
+  </div>
+
+  <div class="preview-overlay" role="dialog" aria-modal="true">
+    <section class="preview-modal">
+      <header class="modal-head">
+        <div class="modal-title">预览 / 编辑：PKG-042 · 第1集剧本.md</div>
+        <span class="chip blue">基于 Server v4</span>
+        <span class="chip amber">待审核</span>
+        <button class="ghost-button js-close-preview">×</button>
+      </header>
+      <div class="modal-body">
+        <aside class="modal-files">
+          <div class="modal-file active">
+            <div class="file-name">F1 第1集剧本.md</div>
+            <div class="file-sub">current v4 · 手动修改 · 待审核</div>
+          </div>
+          <div class="modal-file">
+            <div class="file-name">F2 角色表.md</div>
+            <div class="file-sub">current v3 · Agent 修订 · final</div>
+          </div>
+          <div class="modal-file">
+            <div class="file-name">F3 分镜提示词.md</div>
+            <div class="file-sub">current v2 · Agent 初稿 · 待审核</div>
+          </div>
+          <div class="modal-file">
+            <div class="file-name">IMG 场景参考图.png</div>
+            <div class="file-sub">v1 · generated artifact</div>
+          </div>
+          <div class="identity-note" style="margin-top:10px;">
+            保存后直接更新该文档的最新 Server 修订；后续引用当前包自动读取这个 current projection。是否同步到本地/Agent 工作区待文件同步架构确认。
+          </div>
+        </aside>
+        <section class="editor-pane">
+          <div class="pane-head">
+            <span>Markdown 源文</span>
+            <span class="chip">可直接改一句话</span>
+          </div>
+          <textarea id="markdownSource"># 《温暖的一步》
+
+**类型**：公益短剧 / 正能量
+**时长**：1-2 分钟（竖屏）
+**目标平台**：红果
+
+## 角色
+
+- 小宇：三年级学生，性格认真。
+- 奶奶：行动缓慢，但很亲切。
+- 路人：在关键时刻放慢脚步。
+
+## 场景 1：放学路口
+
+小宇背着书包走到斑马线前，看见奶奶拎着菜袋停在路边。
+
+小宇走上前：奶奶，我扶您过去吧。
+
+奶奶笑着点头：谢谢你，小朋友。
+
+## 结尾
+
+两人慢慢走过斑马线，路人停下脚步，镜头停在小宇主动伸出的手上。
+</textarea>
+        </section>
+        <section class="render-pane">
+          <div class="pane-head">
+            <span>Markdown 预览</span>
+            <span class="chip green">实时预览</span>
+          </div>
+          <div class="markdown-preview" id="markdownPreview"></div>
+        </section>
+      </div>
+      <footer class="modal-foot">
+        <div class="server-state" id="serverState">
+          <span class="chip blue">Server source of truth</span>
+          <span>当前编辑基于 <strong>script.ep01 v4</strong>；保存会生成 v5，并替换 current 指针，但不会自动移动 final。</span>
+        </div>
+        <div class="modal-actions">
+          <button class="pill-button" id="simulateConflict">模拟冲突</button>
+          <button class="pill-button">查看版本历史</button>
+          <button class="solid-button blue" id="saveServer">保存为 Server 新版本</button>
+          <button class="solid-button amber">保存并提交审核</button>
+        </div>
+      </footer>
+    </section>
+  </div>
+
+  <div class="toast" id="toast">已保存：Server 生成 script.ep01 v5，当前包 PKG-042 的 current projection 已更新。</div>
+
+  <nav class="switcher" aria-label="原型状态切换">
+    <button data-screen-target="chat" class="active">聊天：话题内文件包</button>
+    <button class="js-open-preview">预览 / 编辑浮窗</button>
+    <button data-screen-target="task">任务：审核流转</button>
+    <button data-screen-target="files">文件：版本与 final</button>
+  </nav>
+
+  <script>
+    const source = document.getElementById('markdownSource');
+    const preview = document.getElementById('markdownPreview');
+    const toast = document.getElementById('toast');
+    const serverState = document.getElementById('serverState');
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function renderMarkdown() {
+      const lines = source.value.split('\n');
+      let html = '';
+      let inList = false;
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+          if (inList) { html += '</ul>'; inList = false; }
+          continue;
+        }
+        if (line.startsWith('### ')) {
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<h3>' + escapeHtml(line.slice(4)) + '</h3>';
+        } else if (line.startsWith('## ')) {
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<h2>' + escapeHtml(line.slice(3)) + '</h2>';
+        } else if (line.startsWith('# ')) {
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<h1>' + escapeHtml(line.slice(2)) + '</h1>';
+        } else if (line.startsWith('- ')) {
+          if (!inList) { html += '<ul>'; inList = true; }
+          html += '<li>' + escapeHtml(line.slice(2)).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') + '</li>';
+        } else {
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<p>' + escapeHtml(line).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') + '</p>';
+        }
+      }
+      if (inList) html += '</ul>';
+      preview.innerHTML = html;
+    }
+
+    function setScreen(screen) {
+      document.body.dataset.screen = screen;
+      document.querySelectorAll('[data-screen-target]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.screenTarget === screen);
+      });
+    }
+
+    function openPreview() {
+      document.body.classList.add('preview-open');
+      renderMarkdown();
+    }
+
+    function closePreview() {
+      document.body.classList.remove('preview-open');
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      window.setTimeout(() => toast.classList.remove('show'), 2800);
+    }
+
+    document.querySelectorAll('[data-screen-target]').forEach((button) => {
+      button.addEventListener('click', () => setScreen(button.dataset.screenTarget));
+    });
+    document.querySelectorAll('.js-open-preview').forEach((button) => {
+      button.addEventListener('click', openPreview);
+    });
+    document.querySelectorAll('.js-close-preview').forEach((button) => {
+      button.addEventListener('click', closePreview);
+    });
+    document.querySelector('.preview-overlay').addEventListener('click', (event) => {
+      if (event.target.classList.contains('preview-overlay')) closePreview();
+    });
+    source.addEventListener('input', renderMarkdown);
+    document.getElementById('saveServer').addEventListener('click', () => {
+      serverState.innerHTML = '<span class="chip green">已保存</span><span>Server 已生成 <strong>script.ep01 v5</strong>；PKG-042 当前包现在读取 F1=v5，final 不自动移动。</span>';
+      showToast('已保存：Server 生成 script.ep01 v5，并在讨论串记录轻量事件。');
+    });
+    document.getElementById('simulateConflict').addEventListener('click', () => {
+      serverState.innerHTML = '<span class="chip red">冲突</span><span>Server 已有 <strong>script.ep01 v6</strong>；请先查看最新版，确认后再保存为 v7。</span>';
+      showToast('检测到冲突：当前草稿不是最新 Server 修订。');
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closePreview();
+    });
+    renderMarkdown();
+  </script>
+</body>
+</html>
