@@ -51,8 +51,10 @@
     .app {
       display: grid;
       grid-template-columns: 168px 210px minmax(340px, 1fr) minmax(520px, 42vw);
+      grid-template-rows: minmax(0, 1fr);
       height: 100vh;
       min-width: 1280px;
+      overflow: hidden;
       background: var(--panel);
     }
 
@@ -60,6 +62,8 @@
       display: flex;
       flex-direction: column;
       min-width: 0;
+      min-height: 0;
+      overflow: hidden;
       border-right: 1px solid var(--line);
       background: var(--rail);
     }
@@ -184,6 +188,8 @@
 
     .channel-rail {
       min-width: 0;
+      min-height: 0;
+      overflow: hidden;
       border-right: 1px solid var(--line);
       background: var(--channel);
       color: #3e444b;
@@ -241,6 +247,8 @@
       display: grid;
       grid-template-rows: 44px 1fr;
       min-width: 0;
+      min-height: 0;
+      overflow: hidden;
       background: #fff;
     }
     .topbar {
@@ -272,6 +280,7 @@
       min-height: 0;
       display: grid;
       grid-template-rows: 36px 1fr;
+      overflow: hidden;
     }
     .tabs {
       display: flex;
@@ -302,6 +311,7 @@
       min-height: 0;
       overflow: auto;
       background: #fff;
+      scroll-padding-bottom: 82px;
     }
     .chat-view {
       display: grid;
@@ -620,6 +630,8 @@
     .discussion {
       position: relative;
       min-width: 0;
+      min-height: 0;
+      overflow: hidden;
       display: grid;
       grid-template-rows: 56px 1fr 72px;
       border-left: 1px solid var(--line);
@@ -660,7 +672,9 @@
     }
     .thread-body {
       overflow: auto;
-      padding: 12px 10px 18px;
+      padding: 12px 10px 96px;
+      min-height: 0;
+      scroll-padding-bottom: 96px;
     }
     .thread-message {
       display: grid;
@@ -779,6 +793,11 @@
       padding: 12px 14px;
       border-bottom: 1px solid var(--line);
     }
+    .screen-task {
+      min-height: 0;
+      overflow: auto;
+      scroll-padding-bottom: 96px;
+    }
     .filters {
       display: flex;
       align-items: center;
@@ -789,7 +808,7 @@
       display: grid;
       grid-template-columns: repeat(3, minmax(210px, 1fr));
       gap: 12px;
-      padding: 14px;
+      padding: 14px 14px 96px;
       min-height: 620px;
       background: #fcfcfb;
     }
@@ -942,6 +961,8 @@
       display: grid;
       grid-template-rows: auto 1fr;
       height: 100%;
+      min-height: 0;
+      overflow: hidden;
     }
     .file-search {
       flex: 1;
@@ -957,6 +978,7 @@
       display: grid;
       grid-template-columns: 250px minmax(0, 1fr);
       min-height: 0;
+      overflow: hidden;
     }
     .collection-sidebar {
       border-right: 1px solid var(--line);
@@ -1208,12 +1230,13 @@
     .switcher {
       position: fixed;
       z-index: 30;
-      left: 50%;
+      left: 392px;
       bottom: 14px;
-      transform: translateX(-50%);
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       align-items: center;
       gap: 6px;
+      width: 340px;
       padding: 6px;
       border: 1px solid rgba(25, 27, 31, .16);
       border-radius: 8px;
@@ -1226,10 +1249,11 @@
       border: 1px solid transparent;
       border-radius: 6px;
       background: transparent;
-      padding: 0 10px;
+      padding: 0 8px;
       color: #49515a;
       font-size: 12px;
       font-weight: 750;
+      white-space: nowrap;
     }
     .switcher button.active {
       border-color: #e0c16d;
