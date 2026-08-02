@@ -23,6 +23,8 @@ const ERROR_LOG_SUMMARY_MAX_CHARS = 800;
 export const UPDATE_LOCK_STALE_MS = 10 * 60_000;
 /** 换包前将当前全局安装整体移出 node_modules 的备份目录名。 */
 export const PACKAGE_SNAPSHOT_DIR_NAME = 'agentbean-daemon-update-backup';
+/** Device Service 启动未就绪时的额外重试次数（启动期服务端连接闪断时先重试再回滚）。 */
+export const SERVICE_START_RETRY_ATTEMPTS = 2;
 
 export const UPDATE_CLI_EXIT = {
   success: 0,
@@ -235,10 +237,12 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
       );
       return UPDATE_CLI_EXIT.rejected;
     }
-    const serviceRestored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
-      'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
-    ]);
-    stderr(serviceRestored.exitCode === 0
+    const serviceRestored = await prepareDeviceServiceWithRetry(
+      runAgentBean, agentBeanExecutable,
+      ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
+      confirmServiceReady, current.version,
+    );
+    stderr(serviceRestored.confirmed
       ? `AgentBean 更新安装验证失败，已恢复 ${current.version} 并恢复 Device Service（UPDATE_INSTALL_FAILED）。`
         + formatDetail(installed.detail)
       : 'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。'
@@ -255,13 +259,15 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     return UPDATE_CLI_EXIT.success;
   }
 
-  const prepared = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
-    'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
-  ]);
   // 运行级健康确认：service run 报告就绪还不够，还要确认运行中的版本与目标一致。
-  const confirmed = prepared.exitCode === 0
-    && await safeBoolean(() => confirmServiceReady(latest));
-  if (prepared.exitCode === 0 && confirmed) {
+  // 启动期服务端连接闪断（required announce 抛错）会让首次 install 未就绪；
+  // 先重试 device restart（等价手动 install && restart 的恢复路径），而不是立刻回滚。
+  const prepared = await prepareDeviceServiceWithRetry(
+    runAgentBean, agentBeanExecutable,
+    ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
+    confirmServiceReady, latest,
+  );
+  if (prepared.confirmed) {
     await safeBoolean(async () => {
       await discardSnapshot(backupRoot);
       return true;
@@ -270,7 +276,7 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     return UPDATE_CLI_EXIT.success;
   }
 
-  const startDetail = [prepared.stderr, prepared.stdout]
+  const startDetail = [prepared.firstAttempt.stderr, prepared.firstAttempt.stdout]
     .map((part) => part.trim())
     .filter(Boolean)
     .join('\n');
@@ -278,7 +284,9 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     ? deps.readServiceErrorSummary()
     : readServiceErrorSummary(servicePathsInput));
   const reasonSummary = [
-    prepared.exitCode === 0 && !confirmed ? 'Device Service 已安装但版本/健康确认失败。' : '',
+    prepared.firstAttempt.exitCode === 0 && !prepared.confirmed
+      ? 'Device Service 已安装但版本/健康确认失败。'
+      : '',
     startDetail,
     errorLog,
   ].filter(Boolean).join('\n').slice(0, ERROR_LOG_SUMMARY_MAX_CHARS);
@@ -295,10 +303,12 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     );
     return UPDATE_CLI_EXIT.rejected;
   }
-  const serviceRestored = await safeRunAgentBean(runAgentBean, agentBeanExecutable, [
-    'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
-  ]);
-  if (serviceRestored.exitCode === 0) {
+  const serviceRestored = await prepareDeviceServiceWithRetry(
+    runAgentBean, agentBeanExecutable,
+    ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
+    confirmServiceReady, current.version,
+  );
+  if (serviceRestored.confirmed) {
     stderr(
       `新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`
       + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : ''),
@@ -313,6 +323,31 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
   );
   return UPDATE_CLI_EXIT.rejected;
+}
+
+/**
+ * 启动 Device Service 并在未就绪时有限重试（device restart）。
+ * 启动期服务端连接闪断会让首次 install 超时；手动 `device install && device restart`
+ * 能恢复的根源就在这里，update 不应把瞬时连接抖动当成版本问题直接回滚。
+ */
+async function prepareDeviceServiceWithRetry(
+  runAgentBean: (executable: string, argv: readonly string[]) => Promise<PlatformCommandResult>,
+  executable: string,
+  firstArgv: readonly string[],
+  confirmServiceReady: (expectedVersion: string) => Promise<boolean>,
+  expectedVersion: string,
+): Promise<{ confirmed: boolean; firstAttempt: PlatformCommandResult }> {
+  const firstAttempt = await safeRunAgentBean(runAgentBean, executable, firstArgv);
+  let confirmed = firstAttempt.exitCode === 0
+    && await safeBoolean(() => confirmServiceReady(expectedVersion));
+  for (let attempt = 0; attempt < SERVICE_START_RETRY_ATTEMPTS && !confirmed; attempt += 1) {
+    const restarted = await safeRunAgentBean(runAgentBean, executable, [
+      'device', 'restart', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
+    ]);
+    confirmed = restarted.exitCode === 0
+      && await safeBoolean(() => confirmServiceReady(expectedVersion));
+  }
+  return { confirmed, firstAttempt };
 }
 
 /**

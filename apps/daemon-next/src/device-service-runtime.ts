@@ -82,7 +82,10 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
           core = created.core;
         },
       });
-    } catch {
+    } catch (error) {
+      console.error(
+        `daemon profile ${config.profileId} start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return failedProfileRunner(config.profileId);
     }
     if (!core) return failedProfileRunner(config.profileId);
