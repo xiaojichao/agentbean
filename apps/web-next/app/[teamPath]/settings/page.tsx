@@ -706,7 +706,10 @@ function ReleasesPanel() {
   );
 }
 
-const SECTION_STYLE: Record<ChangeType, { label: string; badge: string; item: string }> = {
+/** 英文旧格式分类的 badge 样式（存量历史块渲染）；中文三分分类走分组渲染。 */
+type LegacyChangeType = Exclude<ChangeType, '新功能' | '改进' | '修复'>;
+
+const SECTION_STYLE: Record<LegacyChangeType, { label: string; badge: string; item: string }> = {
   Added:      { label: 'NEW', badge: 'bg-emerald-50 text-emerald-700', item: 'text-neutral-900 font-medium' },
   Changed:    { label: 'IMPROVED', badge: 'bg-blue-50 text-blue-700', item: 'text-neutral-700' },
   Deprecated: { label: 'DEPRECATED', badge: 'bg-yellow-50 text-yellow-700', item: 'text-neutral-700' },
@@ -715,9 +718,18 @@ const SECTION_STYLE: Record<ChangeType, { label: string; badge: string; item: st
   Security:   { label: 'SECURITY', badge: 'bg-purple-50 text-purple-700', item: 'text-neutral-900 font-medium' },
 };
 
+/** 中文三分分类：卡片内分组渲染（组标题 + 列表，无 badge）。 */
+const USER_FACING_TYPES = new Set<ChangeType>(['新功能', '改进', '修复']);
+const USER_FACING_ORDER: ChangeType[] = ['新功能', '改进', '修复'];
+
 function ReleaseEntry({ release }: { release: Release }) {
   const sections = release.sections.filter((s) => s.items.length > 0);
   const version = formatReleaseVersion(release.version);
+  const userFacing = sections.filter((s) => USER_FACING_TYPES.has(s.type));
+  // filter 谓词把类型收窄到 LegacyChangeType（SECTION_STYLE 只覆盖英文旧格式分类）。
+  const legacy = sections.filter(
+    (s): s is (typeof sections)[number] & { type: LegacyChangeType } => !USER_FACING_TYPES.has(s.type),
+  );
   return (
     <article className="rounded-lg border border-neutral-200 bg-white p-5" data-smoke="settings-release-entry">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -728,7 +740,24 @@ function ReleaseEntry({ release }: { release: Release }) {
       </div>
 
       <div className="space-y-2.5">
-        {sections.flatMap((s) => (
+        {/* 中文三分类：分组渲染（无 badge） */}
+        {USER_FACING_ORDER
+          .filter((type) => userFacing.some((s) => s.type === type))
+          .map((type) => {
+            const items = userFacing.find((s) => s.type === type)!.items;
+            return (
+              <div key={type}>
+                <div className="text-xs font-semibold text-neutral-500">{type}</div>
+                <ul className="mt-1 space-y-1 pl-4">
+                  {items.map((n, i) => (
+                    <li key={i} className="text-sm text-neutral-700 list-disc">{n}</li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        {/* 旧英文分类：保留 badge 渲染（存量历史块） */}
+        {legacy.flatMap((s) =>
           s.items.map((n, i) => (
             <div key={`${s.type}-${i}`} className="flex items-start gap-2.5">
               <span className={`inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase leading-none ${SECTION_STYLE[s.type].badge}`}>
@@ -736,8 +765,8 @@ function ReleaseEntry({ release }: { release: Release }) {
               </span>
               <span className={`min-w-0 flex-1 text-left text-sm leading-5 ${SECTION_STYLE[s.type].item}`}>{n}</span>
             </div>
-          ))
-        ))}
+          )),
+        )}
       </div>
     </article>
   );

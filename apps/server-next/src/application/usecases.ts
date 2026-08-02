@@ -217,6 +217,7 @@ import {
 } from '../../../../packages/contracts/src/index.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import { createCapabilitySummarizer } from './capability-summarizer.js';
+import { createChangelogSummarizer } from './changelog-summarizer.js';
 import {
   compareChannelFileSnapshots,
   createChannelFileMetrics,
@@ -581,6 +582,10 @@ export interface ServerNextUseCases {
   listTasks(input: ListTasksInput): Promise<Ack<{ tasks: TaskDto[] }>>;
   getTaskDag(input: { userId: string; teamId: string; rootTaskId: string }): Promise<Ack<{ dag: TaskDagViewDto }>>;
   summarizeAgentMetrics(input: { userId: string; teamId: string }): Promise<Ack<{ summaries: AgentMetricsSummary[] }>>;
+  /** 每日更新日志 LLM 兜底（仅 CI 内部端点调用，见 dev-server handleChangelogSummarizeHttp）。 */
+  summarizeChangelogEntries(input: {
+    pulls: { number: number; title: string; body: string }[];
+  }): Promise<Ack<{ results: { number: number; entries: { type: '新功能' | '改进' | '修复'; text: string }[] }[] }>>;
   createTask(input: CreateTaskInput): Promise<Ack<{ task: TaskDto }>>;
   updateTask(input: UpdateTaskInput): Promise<Ack<{ task: TaskDto; message?: MessageDto }>>;
   deleteTask(input: DeleteTaskInput): Promise<Ack<{ task: TaskDto }>>;
@@ -2305,21 +2310,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     ids,
     teamPiAuthorityMigrations: repositories.teamPiAuthorityMigrations,
   });
+  // 解析当前 Active PI Model 为可调用目标（unavailable → 跳过 LLM 类能力）。
+  // 注意：独立函数无上下文类型，'unavailable' 需 as const 保持字面量（内联时由期望类型收窄）。
+  async function resolveActivePiModelTarget() {
+    const active = await repositories.piProviderUnitOfWork.run(
+      (piRepositories) => piRepositories.activeModel.get(),
+    );
+    if (!active) {
+      return { kind: 'unavailable' as const, diagnosticCode: 'PI_ACTIVE_MODEL_NOT_SET' };
+    }
+    return piProvider.resolveInvocationTarget({
+      cardId: active.cardId,
+      revisionId: active.revisionId,
+    });
+  }
+
   // Agent capability LLM 总结（混合提取慢路径）：机械提取为空/内容变化时，
   // 用 Active PI Model 对 AGENTS.md 全文总结一次，结果标「AI 总结」候选。
   const capabilitySummarizer = createCapabilitySummarizer({
-    resolveActiveTarget: async () => {
-      const active = await repositories.piProviderUnitOfWork.run(
-        (piRepositories) => piRepositories.activeModel.get(),
-      );
-      if (!active) {
-        return { kind: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_SET' };
-      }
-      return piProvider.resolveInvocationTarget({
-        cardId: active.cardId,
-        revisionId: active.revisionId,
-      });
-    },
+    resolveActiveTarget: resolveActivePiModelTarget,
     updateSummarized: async ({ agentId, capabilitiesSummarized, timestamp }) =>
       repositories.agents.updateSummarizedCapabilities({
         agentId,
@@ -2327,6 +2336,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         timestamp,
       }),
     clock,
+  });
+  // 每日更新日志 LLM 兜底：PR 未写用户向小节时，用 Active PI Model 生成条目。
+  const changelogSummarizer = createChangelogSummarizer({
+    resolveActiveTarget: resolveActivePiModelTarget,
   });
   // 来源失效是删除之后的反应式级联：best-effort，绝不阻塞或回滚已成功的删除。
   // 失败时由读取侧懒检查（evaluateMemoryInjection 的 allSourcesAvailable）兜底。
@@ -8609,6 +8622,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const dispatches = await repositories.dispatches.listByTeam(metricsInput.teamId);
       return makeSuccess({ summaries: summarizeDispatchMetrics(dispatches) });
+    },
+
+    async summarizeChangelogEntries(metricsInput) {
+      if (!Array.isArray(metricsInput.pulls) || metricsInput.pulls.length === 0 || metricsInput.pulls.length > 100) {
+        return makeFailure('VALIDATION_ERROR', 'pulls must be a non-empty array of at most 100 items');
+      }
+      const results = await changelogSummarizer.summarize(metricsInput.pulls);
+      return makeSuccess({ results });
     },
 
     async createTask(taskInput) {

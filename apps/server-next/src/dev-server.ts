@@ -90,6 +90,8 @@ export interface ServerNextDevConfig {
     queueTimeoutMs?: number;
     leaseTtlMs?: number;
   };
+  /** CI 每日更新日志兜底端点（/api/internal/changelog-summarize）的 Bearer token；未配置时端点 503。 */
+  changelogInternalToken?: string;
 }
 
 export interface ParseServerNextDevConfigInput {
@@ -199,6 +201,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
   const workerPoolId = env.AGENTBEAN_NEXT_SERVER_WORKER_POOL_ID;
   const providerCredentialRef = env.AGENTBEAN_NEXT_SERVER_WORKER_PROVIDER_CREDENTIAL_REF;
   const serverWorkerAuthToken = env.AGENTBEAN_NEXT_SERVER_WORKER_AUTH_TOKEN;
+  const changelogInternalToken = env.AGENTBEAN_CHANGELOG_INTERNAL_TOKEN;
   const maxArtifactBytes = parsePositiveByteLimit(env.AGENTBEAN_NEXT_MAX_ARTIFACT_BYTES, 'AGENTBEAN_NEXT_MAX_ARTIFACT_BYTES');
   const serverWorkerValues = [workerPoolId, providerCredentialRef, serverWorkerAuthToken];
   const hasAnyServerWorkerConfig = serverWorkerValues.some((value) => Boolean(value));
@@ -241,6 +244,7 @@ export function parseServerNextDevConfig(input: ParseServerNextDevConfigInput = 
     projectCollaborationRollout,
     ...(maxArtifactBytes ? { maxArtifactBytes } : {}),
     ...(serverWorker ? { serverWorker } : {}),
+    ...(changelogInternalToken ? { changelogInternalToken } : {}),
   };
 }
 
@@ -335,6 +339,10 @@ export async function startServerNextDevServer(
         return;
       }
       if (await handleAgentEnvHttp({ app, config, request, response, url })) {
+        return;
+      }
+      // 每日更新日志 LLM 兜底（CI 内部调用）：PR 未写用户向小节时，用 Active PI Model 生成条目。
+      if (await handleChangelogSummarizeHttp({ app, config, request, response, url })) {
         return;
       }
       if (webApp) {
@@ -674,6 +682,65 @@ async function handleAgentEnvHttp(input: ArtifactHttpInput): Promise<boolean> {
     return true;
   }
   writeJson(input.response, 200, { ok: true, env: result.env });
+  return true;
+}
+
+/**
+ * CI 每日更新日志 LLM 兜底端点（仅内部调用）：
+ * POST /api/internal/changelog-summarize，Bearer token（env AGENTBEAN_CHANGELOG_INTERNAL_TOKEN）。
+ * 请求 { pulls: [{ number, title, body }] }；响应 { ok, results: [{ number, entries: [{ type, text }] }] }。
+ * 未配置 token → 503；token 不匹配 → 401；输入非法 → 400。模型 fail-open 由 usecase 保证。
+ */
+async function handleChangelogSummarizeHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const { app, config, request, response, url } = input;
+  if (url.pathname !== '/api/internal/changelog-summarize') {
+    return false;
+  }
+  if (request.method !== 'POST') {
+    writeJson(response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  }
+  const expected = config.changelogInternalToken;
+  if (!expected) {
+    writeJson(response, 503, { ok: false, error: 'INTERNAL_ENDPOINT_NOT_CONFIGURED' });
+    return true;
+  }
+  const auth = request.headers.authorization ?? '';
+  if (auth !== `Bearer ${expected}`) {
+    writeJson(response, 401, { ok: false, error: 'UNAUTHORIZED' });
+    return true;
+  }
+  let body: { pulls?: unknown };
+  try {
+    body = (await readJsonBody(request)) as { pulls?: unknown };
+  } catch {
+    // readJsonBody 对非法 JSON 抛异常：作为 400 返回，避免落入外层 500 路径。
+    writeJson(response, 400, { ok: false, error: 'INVALID_JSON_BODY' });
+    return true;
+  }
+  const rawPulls = body.pulls;
+  if (
+    !Array.isArray(rawPulls) || rawPulls.length === 0 || rawPulls.length > 100
+    || rawPulls.some((item) => typeof item !== 'object' || item === null)
+  ) {
+    writeJson(response, 400, { ok: false, error: 'INVALID_PULLS' });
+    return true;
+  }
+  const pulls = rawPulls.map((item) => {
+    const pull = item as { number?: unknown; title?: unknown; body?: unknown };
+    return {
+      number: Number(pull.number),
+      title: typeof pull.title === 'string' ? pull.title : '',
+      body: typeof pull.body === 'string' ? pull.body : '',
+    };
+  });
+  const result = await app.summarizeChangelogEntries({ pulls });
+  if (!result.ok) {
+    writeAckFailure(response, result);
+    return true;
+  }
+  // SuccessAck 为属性展开（{ ok: true } & payload），成功载荷直接是 results。
+  writeJson(response, 200, { ok: true, results: result.results });
   return true;
 }
 
