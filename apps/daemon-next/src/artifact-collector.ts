@@ -46,6 +46,36 @@ export interface CollectedArtifact {
 export interface AdapterOutputRoot {
   dir: string;
   recursive: boolean;
+  /**
+   * 共享目录（如用户主目录顶层）：只收集 run 窗口内新建的文件，
+   * 避免把其他进程在窗口内修改的既有文件当作产物上传。
+   */
+  createdInWindow?: boolean;
+}
+
+/**
+ * 窗口过滤：mtime 必须落在 run 窗口内；当 createdInWindow=true 时，
+ * 还要求文件是在窗口内新建的（birthtime > startedAt，允许少量偏差），
+ * 平台不提供 birthtime（<=0）时退化为仅按 mtime 判断。
+ */
+export function shouldCollectWindowedFile(input: {
+  mtimeMs: number;
+  birthtimeMs: number;
+  startedAt: number;
+  createdInWindow?: boolean;
+  birthtimeSkewMs?: number;
+}): boolean {
+  if (input.mtimeMs <= input.startedAt) {
+    return false;
+  }
+  if (!input.createdInWindow) {
+    return true;
+  }
+  if (input.birthtimeMs <= 0) {
+    return true;
+  }
+  const skew = input.birthtimeSkewMs ?? 30_000;
+  return input.birthtimeMs > input.startedAt - skew;
 }
 
 export interface CollectArtifactsInput {
@@ -106,6 +136,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     reportRootFailure = true,
     fileExtRe: RegExp = OUTPUT_FILE_EXT_RE,
     skipHidden = false,
+    createdInWindow = false,
   ): Promise<void> => {
     let visited = 0;
     const stack: string[] = [rootAbs];
@@ -148,7 +179,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             });
             continue;
           }
-          if (timeFilter && stat.mtimeMs <= input.startedAt) {
+          if (timeFilter && !shouldCollectWindowedFile({
+            mtimeMs: stat.mtimeMs,
+            birthtimeMs: stat.birthtimeMs,
+            startedAt: input.startedAt,
+            createdInWindow,
+          })) {
             continue;
           }
           const relativePath = relative(rootForRelative, abs);
@@ -257,6 +293,7 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
       false,
       ADAPTER_OUTPUT_FILE_EXT_RE,
       true,
+      adapterRoot.createdInWindow,
     );
   }
   if (input.cwd) {

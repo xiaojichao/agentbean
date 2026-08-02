@@ -692,6 +692,51 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(calls.sort()).toEqual(['disp-codex-1', 'disp-codex-2']);
   });
 
+  test('Hermes 与 OpenClaw dispatch 共享同一串行键（共享主目录扫描根）', async () => {
+    const harness = createFakeSocket();
+    const binDirA = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-agentos-serial-a-')));
+    const binDirB = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-agentos-serial-b-')));
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [], agents: [],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async (request) => {
+        calls.push(request.id);
+        if (request.id === 'disp-hermes-a') {
+          await firstGate;
+        }
+        return { body: 'done' };
+      },
+    });
+    await client.start();
+
+    const first = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-hermes-a', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
+      agentId: 'hermes-agent-a', requestId: 'disp-hermes-a', prompt: 'do work',
+      customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: binDirA },
+    });
+    const second = harness.deliver(AGENT_EVENTS.dispatch.request, {
+      id: 'disp-openclaw-b', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-2',
+      agentId: 'openclaw-agent-b', requestId: 'disp-openclaw-b', prompt: 'do more',
+      customAgent: { adapterKind: 'openclaw', command: 'openclaw', cwd: binDirB },
+    });
+    await vi.waitFor(() => {
+      expect(calls).toEqual(['disp-hermes-a']);
+    });
+    // Hermes run 未结束时 OpenClaw run 不得开始（共享主目录顶层扫描根）。
+    expect(calls).not.toContain('disp-openclaw-b');
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(calls).toEqual(['disp-hermes-a', 'disp-openclaw-b']);
+  });
+
   test('dispatch 结果在 socket 断开时入队，重连后补发，且不抛', async () => {
     const harness = createFakeSocket();
     const client = createDaemonProtocolClient({

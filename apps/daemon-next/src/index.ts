@@ -1098,13 +1098,13 @@ function isCodexAdapterKind(adapterKind: string | undefined): boolean {
 
 /**
  * 同一执行串行键内的 dispatch 逐个执行。普通 Agent 按 agentId 串行；
- * agentos-hosted 网关共享 adapter 产物根，按 adapter 类型在整台设备上串行，
- * 避免并发 run 互相收集对方的产物。
+ * agentos-hosted 网关共享主目录顶层扫描根与 adapter 产物根，全部用同一个
+ * 串行键在整台设备上串行，避免并发 run 互相收集对方的产物。
  */
 function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
   const adapterKind = request.customAgent?.adapterKind;
   if (adapterKind === 'hermes' || adapterKind === 'openclaw') {
-    return `agentos-adapter:${adapterKind}`;
+    return 'agentos-adapter:shared-output-roots';
   }
   return `agent:${request.agentId}`;
 }
@@ -1114,9 +1114,9 @@ function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
  *
  * 只扫描受限范围，避免把数据目录里的内部状态（pairing/sessions/checkpoints/
  * cache 等）当作产物上传：
- * 1. 用户主目录顶层文件（非递归）——AgentOS oneshot 网关可能把交付文件直接
- *    写到主目录顶层（实测 Hermes 如此），非递归 + 扩展名白名单 + mtime 窗口
- *    不会进入任何子目录；
+ * 1. 用户主目录顶层文件（非递归 + 仅新建）——AgentOS oneshot 网关可能把交付
+ *    文件直接写到主目录顶层（实测 Hermes 如此），只收集 run 窗口内新建的文件
+ *    （birthtime 过滤），避免其他进程在窗口内修改的既有文件被当作产物；
  * 2. 数据根目录顶层文件（非递归，扩展名白名单 + 跳过隐藏项）；
  * 3. 数据根目录下的 output/ 子目录（递归）。
  * 收集仍按本次运行窗口（mtime > startedAt）过滤，默认归类为运行产物。
@@ -1127,14 +1127,14 @@ function resolveAdapterOutputRoots(
 ): AdapterOutputRoot[] {
   if (adapterKind === 'hermes') {
     return [
-      { dir: dirs.homeDir, recursive: false },
+      { dir: dirs.homeDir, recursive: false, createdInWindow: true },
       { dir: dirs.hermesHomeDir, recursive: false },
       { dir: join(dirs.hermesHomeDir, 'output'), recursive: true },
     ];
   }
   if (adapterKind === 'openclaw') {
     return [
-      { dir: dirs.homeDir, recursive: false },
+      { dir: dirs.homeDir, recursive: false, createdInWindow: true },
       { dir: dirs.openclawHomeDir, recursive: false },
       { dir: join(dirs.openclawHomeDir, 'output'), recursive: true },
     ];
