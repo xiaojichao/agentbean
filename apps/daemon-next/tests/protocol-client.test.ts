@@ -987,6 +987,24 @@ describe('daemon-next protocol client', () => {
 
     await expect(client.start()).rejects.toThrow('socket has been disconnected');
   });
+
+  test('times out a single announce attempt that never settles', async () => {
+    const socket = new FakeAgentSocket();
+    socket.hangRuntimes = true;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'stub',
+      device: { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' },
+      runtimes: [],
+      agents: [],
+      sleep: async () => {},
+      announceRetryMaxAttempts: 1,
+      announceRetryDelayMs: 1,
+      announceAttemptTimeoutMs: 20,
+    });
+
+    await expect(client.start()).rejects.toThrow('initial announce timed out after 20ms');
+  });
 });
 
 class FakeAgentSocket implements DaemonProtocolSocket {
@@ -995,6 +1013,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   readonly helloAcks: unknown[] = [];
   readonly dispatchAcceptedAcks: unknown[] = [];
   runtimesFailuresRemaining = 0;
+  hangRuntimes = false;
   private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
@@ -1018,6 +1037,9 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     if (event === AGENT_EVENTS.device.runtimes && this.runtimesFailuresRemaining > 0) {
       this.runtimesFailuresRemaining -= 1;
       throw new Error('socket has been disconnected');
+    }
+    if (event === AGENT_EVENTS.device.runtimes && this.hangRuntimes) {
+      return new Promise<unknown>(() => {});
     }
     return { ok: true };
   }

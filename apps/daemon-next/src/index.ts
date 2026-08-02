@@ -331,6 +331,8 @@ export interface CreateDaemonProtocolClientInput {
    */
   announceRetryMaxAttempts?: number;
   announceRetryDelayMs?: number;
+  /** 单次报到尝试的超时；socket.io 在断线期间可能缓存发送导致 emitWithAck 一直等待。 */
+  announceAttemptTimeoutMs?: number;
   rescanIntervalMs?: number;
   /**
    * Home directory used for scanning custom-agent skills (e.g. ~/.claude/skills).
@@ -474,6 +476,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         sleep,
         maxAttempts: input.announceRetryMaxAttempts ?? 6,
         delayMs: input.announceRetryDelayMs ?? 5_000,
+        attemptTimeoutMs: input.announceAttemptTimeoutMs ?? 30_000,
       });
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
@@ -1253,6 +1256,7 @@ interface AnnounceWithStartRetryInput {
   readonly sleep: (ms: number) => Promise<void>;
   readonly maxAttempts: number;
   readonly delayMs: number;
+  readonly attemptTimeoutMs: number;
 }
 
 /**
@@ -1265,9 +1269,13 @@ async function announceWithStartRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
     try {
-      return await announceDeviceSnapshot(input.socket, input.device, input.runtimes, input.agents, {
-        onDeviceRemoved: input.onDeviceRemoved,
-      });
+      return await withTimeout(
+        announceDeviceSnapshot(input.socket, input.device, input.runtimes, input.agents, {
+          onDeviceRemoved: input.onDeviceRemoved,
+        }),
+        input.attemptTimeoutMs,
+        `initial announce timed out after ${input.attemptTimeoutMs}ms`,
+      );
     } catch (error) {
       if (error instanceof Error && /revoked/i.test(error.message)) throw error;
       lastError = error;
@@ -1280,6 +1288,22 @@ async function announceWithStartRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function reportDeviceSnapshot(
