@@ -475,14 +475,15 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-hermes-home-')));
     const hermesHomeDir = join(homeDir, '.hermes');
     mkdirSync(hermesHomeDir, { recursive: true });
-    // Hermes 不写 AGENTBEAN_OUTPUT_DIR，而是落盘到自己的数据目录（mtime 在 run 窗口内）。
-    await touchFile(join(hermesHomeDir, '总结.md'), 5000);
-    // 内部状态/配置不得被当作产物上传（顶层非递归 + 扩展名白名单 + 隐藏项跳过）。
+    // Hermes oneshot 把交付文件直接写到用户主目录顶层（mtime 在 run 窗口内）。
+    await touchFile(join(homeDir, 'HyperFrames视频制作完全指南-摘要.md'), 5000);
+    // 内部状态/配置不得被当作产物上传（非递归 + 扩展名白名单 + 隐藏项跳过）。
     mkdirSync(join(hermesHomeDir, 'pairing'), { recursive: true });
     await touchFile(join(hermesHomeDir, 'pairing', 'weixin-state.json'), 5000);
     await touchFile(join(hermesHomeDir, 'gateway_state.json'), 5000);
     mkdirSync(join(hermesHomeDir, '.claude'), { recursive: true });
     await touchFile(join(hermesHomeDir, '.claude', 'settings.local.json'), 5000);
+    await touchFile(join(homeDir, 'notes.json'), 5000);
     const harness = createFakeSocket();
     const uploadFetch = vi.fn<typeof fetch>(async (input) => {
       if (String(input).includes('/artifacts/upload')) {
@@ -516,7 +517,7 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
     expect(resultEmit).toBeTruthy();
     expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['srv-hermes-file']);
-    // 只有 总结.md 被收集上传，内部 .json 状态文件全部被排除。
+    // 只有主目录顶层的摘要 .md 被收集上传，内部 .json 状态文件全部被排除。
     const uploadCalls = uploadFetch.mock.calls.filter(([input]) => String(input).includes('/artifacts/upload'));
     expect(uploadCalls).toHaveLength(1);
     expect(uploadCalls[0]?.[0]).toContain('/artifacts/upload');

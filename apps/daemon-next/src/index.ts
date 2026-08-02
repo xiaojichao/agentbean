@@ -735,6 +735,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
           const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {
+            homeDir: home,
             hermesHomeDir,
             openclawHomeDir,
           });
@@ -1111,24 +1112,29 @@ function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
 /**
  * AgentOS-hosted（Hermes/OpenClaw）默认产物根。
  *
- * 只扫描两类范围，避免把数据目录里的内部状态（pairing/sessions/checkpoints/
+ * 只扫描受限范围，避免把数据目录里的内部状态（pairing/sessions/checkpoints/
  * cache 等）当作产物上传：
- * 1. 数据根目录顶层文件（非递归，扩展名白名单 + 跳过隐藏项）；
- * 2. 数据根目录下的 output/ 子目录（递归）。
+ * 1. 用户主目录顶层文件（非递归）——AgentOS oneshot 网关可能把交付文件直接
+ *    写到主目录顶层（实测 Hermes 如此），非递归 + 扩展名白名单 + mtime 窗口
+ *    不会进入任何子目录；
+ * 2. 数据根目录顶层文件（非递归，扩展名白名单 + 跳过隐藏项）；
+ * 3. 数据根目录下的 output/ 子目录（递归）。
  * 收集仍按本次运行窗口（mtime > startedAt）过滤，默认归类为运行产物。
  */
 function resolveAdapterOutputRoots(
   adapterKind: string | undefined,
-  dirs: { hermesHomeDir: string; openclawHomeDir: string },
+  dirs: { homeDir: string; hermesHomeDir: string; openclawHomeDir: string },
 ): AdapterOutputRoot[] {
   if (adapterKind === 'hermes') {
     return [
+      { dir: dirs.homeDir, recursive: false },
       { dir: dirs.hermesHomeDir, recursive: false },
       { dir: join(dirs.hermesHomeDir, 'output'), recursive: true },
     ];
   }
   if (adapterKind === 'openclaw') {
     return [
+      { dir: dirs.homeDir, recursive: false },
       { dir: dirs.openclawHomeDir, recursive: false },
       { dir: join(dirs.openclawHomeDir, 'output'), recursive: true },
     ];
