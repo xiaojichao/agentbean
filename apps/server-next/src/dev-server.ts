@@ -710,12 +710,23 @@ async function handleChangelogSummarizeHttp(input: ArtifactHttpInput): Promise<b
     writeJson(response, 401, { ok: false, error: 'UNAUTHORIZED' });
     return true;
   }
-  const body = (await readJsonBody(request)) as { pulls?: unknown };
-  if (!Array.isArray(body.pulls) || body.pulls.length === 0 || body.pulls.length > 100) {
+  let body: { pulls?: unknown };
+  try {
+    body = (await readJsonBody(request)) as { pulls?: unknown };
+  } catch {
+    // readJsonBody 对非法 JSON 抛异常：作为 400 返回，避免落入外层 500 路径。
+    writeJson(response, 400, { ok: false, error: 'INVALID_JSON_BODY' });
+    return true;
+  }
+  const rawPulls = body.pulls;
+  if (
+    !Array.isArray(rawPulls) || rawPulls.length === 0 || rawPulls.length > 100
+    || rawPulls.some((item) => typeof item !== 'object' || item === null)
+  ) {
     writeJson(response, 400, { ok: false, error: 'INVALID_PULLS' });
     return true;
   }
-  const pulls = body.pulls.map((item) => {
+  const pulls = rawPulls.map((item) => {
     const pull = item as { number?: unknown; title?: unknown; body?: unknown };
     return {
       number: Number(pull.number),
