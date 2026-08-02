@@ -82,6 +82,34 @@ describe('artifact-collector', () => {
     expect(diagnostics).toEqual([]);
   });
 
+  test('adapter output roots collect only whitelisted top-level and output/ files', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-adapter-')));
+    const outputDir = join(cwd, 'outputs');
+    mkdirSync(outputDir, { recursive: true });
+    await touch(join(cwd, '总结.md'), 5000);
+    await touch(join(cwd, 'gateway_state.json'), 5000);
+    await touch(join(cwd, 'config.yaml'), 5000);
+    await touch(join(cwd, '.hidden.md'), 5000);
+    await touch(join(cwd, 'old.md'), 500);
+    mkdirSync(join(cwd, 'pairing'), { recursive: true });
+    await touch(join(cwd, 'pairing', 'weixin.json'), 5000);
+    mkdirSync(join(cwd, 'output', '20260801'), { recursive: true });
+    await touch(join(cwd, 'output', '20260801', 'report.md'), 5000);
+
+    const collected = await collectArtifacts({
+      outputDir,
+      adapterOutputRoots: [
+        { dir: cwd, recursive: false },
+        { dir: join(cwd, 'output'), recursive: true },
+      ],
+      startedAt: 1000,
+    });
+
+    const names = collected.map((c) => c.filename).sort();
+    expect(names).toEqual(['report.md', '总结.md']);
+    expect(collected.every((artifact) => artifact.sourceRoot.kind === 'adapter_generated')).toBe(true);
+  });
+
   test('extra output dirs do not let many old files hide a new generated image', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-')));
     const outputDir = join(cwd, 'outputs');
