@@ -324,6 +324,13 @@ export interface CreateDaemonProtocolClientInput {
   artifactRunMaxBytes?: number;
   envResolver?: AgentEnvResolver;
   sleep?(ms: number): Promise<void>;
+  /**
+   * 启动报到（device.hello + required snapshot）的有限重试参数：
+   * 服务端 socket 在启动瞬间闪断时 required emit 会抛错，一次失败就判服务
+   * 启动失败会让 update 误回滚；socket.io 会自动重连，稍等后重试即可恢复。
+   */
+  announceRetryMaxAttempts?: number;
+  announceRetryDelayMs?: number;
   rescanIntervalMs?: number;
   /**
    * Home directory used for scanning custom-agent skills (e.g. ~/.claude/skills).
@@ -458,7 +465,16 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   return {
     get deviceId() { return currentDeviceId || undefined; },
     async start() {
-      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
+      const initialAnnouncement = await announceWithStartRetry({
+        socket,
+        device,
+        runtimes: latestSnapshot.runtimes,
+        agents: latestSnapshot.agents,
+        onDeviceRemoved: input.onDeviceRemoved,
+        sleep,
+        maxAttempts: input.announceRetryMaxAttempts ?? 6,
+        delayMs: input.announceRetryDelayMs ?? 5_000,
+      });
       currentDeviceId = initialAnnouncement.deviceId;
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
@@ -1226,6 +1242,44 @@ async function announceDeviceSnapshot(
 
       await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents, { required: true });
   return { deviceId, ...(credentials ? { credentials } : {}) };
+}
+
+interface AnnounceWithStartRetryInput {
+  readonly socket: DaemonProtocolSocket;
+  readonly device: DaemonDeviceConfig;
+  readonly runtimes: DaemonRuntimeReport[];
+  readonly agents: DaemonAgentReport[];
+  readonly onDeviceRemoved?: () => Promise<void> | void;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly maxAttempts: number;
+  readonly delayMs: number;
+}
+
+/**
+ * 启动报到带有限重试。服务端明确删除设备（DEVICE_REVOKED）时不重试；
+ * 其余瞬时错误（socket 闪断、ack 超时等）等待 socket.io 自动重连后重试。
+ */
+async function announceWithStartRetry(
+  input: AnnounceWithStartRetryInput,
+): Promise<{ deviceId: string; credentials?: DaemonDeviceCredentialsUpdate }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
+    try {
+      return await announceDeviceSnapshot(input.socket, input.device, input.runtimes, input.agents, {
+        onDeviceRemoved: input.onDeviceRemoved,
+      });
+    } catch (error) {
+      if (error instanceof Error && /revoked/i.test(error.message)) throw error;
+      lastError = error;
+      if (attempt < input.maxAttempts) {
+        console.warn(
+          `daemon initial announce failed (retry ${attempt}/${input.maxAttempts - 1}, non-blocking): ${readErrorMessage(error)}`,
+        );
+        await input.sleep(input.delayMs);
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function reportDeviceSnapshot(

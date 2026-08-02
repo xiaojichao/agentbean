@@ -1039,6 +1039,8 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       serverUrl: 'http://server.test',
       fetch: async () => new Response('{}', { status: 200 }),
       executor: async () => ({ body: 'x' }),
+      announceRetryMaxAttempts: 1,
+      announceRetryDelayMs: 1,
     });
 
     await expect(client.start()).rejects.toThrow('socket has been disconnected');

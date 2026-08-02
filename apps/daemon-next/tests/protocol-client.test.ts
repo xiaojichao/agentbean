@@ -952,6 +952,41 @@ describe('daemon-next protocol client', () => {
     // 收到 device:removed → 上抛 onDeviceRemoved，由 cli 层负责关重连+退出进程。
     expect(onDeviceRemoved).toHaveBeenCalledTimes(1);
   });
+
+  test('retries the initial announce when the socket disconnects transiently', async () => {
+    const socket = new FakeAgentSocket();
+    socket.runtimesFailuresRemaining = 1;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'stub',
+      device: { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' },
+      runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
+      agents: [{ name: 'Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      sleep: async () => {},
+      announceRetryMaxAttempts: 3,
+      announceRetryDelayMs: 1,
+    });
+
+    await expect(client.start()).resolves.toBeUndefined();
+    expect(socket.emitted.filter(([event]) => event === AGENT_EVENTS.device.runtimes)).toHaveLength(2);
+  });
+
+  test('fails the initial announce after retries are exhausted', async () => {
+    const socket = new FakeAgentSocket();
+    socket.runtimesFailuresRemaining = 99;
+    const client = createDaemonProtocolClient({
+      socket,
+      executor: async () => 'stub',
+      device: { teamId: 'team-1', ownerId: 'user-1', machineId: 'machine-1', profileId: 'default' },
+      runtimes: [],
+      agents: [],
+      sleep: async () => {},
+      announceRetryMaxAttempts: 2,
+      announceRetryDelayMs: 1,
+    });
+
+    await expect(client.start()).rejects.toThrow('socket has been disconnected');
+  });
 });
 
 class FakeAgentSocket implements DaemonProtocolSocket {
@@ -959,6 +994,7 @@ class FakeAgentSocket implements DaemonProtocolSocket {
   readonly helloPayloads: unknown[] = [];
   readonly helloAcks: unknown[] = [];
   readonly dispatchAcceptedAcks: unknown[] = [];
+  runtimesFailuresRemaining = 0;
   private readonly handlers = new Map<string, (payload: unknown, ack?: (result: unknown) => void) => Promise<void>>();
   private reconnectHandler: (() => Promise<void>) | undefined;
   private deviceCounter = 0;
@@ -978,6 +1014,10 @@ class FakeAgentSocket implements DaemonProtocolSocket {
     }
     if (event === AGENT_EVENTS.dispatch.accepted) {
       return this.dispatchAcceptedAcks.shift() ?? { ok: false, error: 'NO_CLAIM_ACK' };
+    }
+    if (event === AGENT_EVENTS.device.runtimes && this.runtimesFailuresRemaining > 0) {
+      this.runtimesFailuresRemaining -= 1;
+      throw new Error('socket has been disconnected');
     }
     return { ok: true };
   }

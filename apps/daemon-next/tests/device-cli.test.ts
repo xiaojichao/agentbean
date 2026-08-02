@@ -656,6 +656,19 @@ describe('agentbean device CLI', () => {
     await expect(runDeviceCli(['run'], { platform: 'darwin', runService })).resolves.toBe(DEVICE_CLI_EXIT.success);
     expect(runService).toHaveBeenCalledTimes(1);
   });
+
+  test('run surfaces the actual startup error instead of a generic message', async () => {
+    const stderr = vi.fn();
+    const runService = vi.fn(async () => {
+      throw new Error('socket has been disconnected');
+    });
+    await expect(runDeviceCli(['run'], {
+      platform: 'darwin', runService, stderr,
+    })).resolves.toBe(DEVICE_CLI_EXIT.platform);
+    expect(stderr).toHaveBeenCalledWith(
+      'Device Service 启动失败（socket has been disconnected）。请运行 `agentbean device status` 查看状态。',
+    );
+  });
 });
 
 describe('Device Service production wiring', () => {
