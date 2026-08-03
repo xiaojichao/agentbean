@@ -716,14 +716,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 无论 Agent 是否配置 custom cwd，项目协作状态都进入本机 Channel projection；
           // custom cwd 只作为显式执行进程 cwd，不参与默认文件扫描。
           const explicitWorkspaceCwd = request.customAgent?.cwd;
-          const taskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
-          const taskAttempt = request.taskAttempt ?? 1;
-          const workspaceRunId = request.workspaceRunId ?? request.id;
-          // The snapshot namespace identifies the immutable input directory; it
-          // is not the Server workspace CAS baseline.  Publish must continue to
-          // use the revision granted on the dispatch (or the normal legacy
-          // baseline lookup), otherwise every snapshot run would conflict.
-          const frozenWorkspaceRevisionId = request.workspaceRevisionId;
+          const taskId = request.workspaceSnapshot?.provenance.taskId
+            ?? request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
+          const taskAttempt = request.workspaceSnapshot?.provenance.taskAttempt ?? request.taskAttempt ?? 1;
+          const workspaceRunId = request.workspaceSnapshot?.provenance.workspaceRunId
+            ?? request.workspaceRunId ?? request.id;
+          // A real Server workspace revision is the publish CAS baseline.  The
+          // dispatch helper uses a namespaced placeholder when no workspace
+          // exists; that placeholder must not become a false CAS conflict.
+          const snapshotBaseline = request.workspaceSnapshot?.workspaceRevisionId;
+          const frozenWorkspaceRevisionId = snapshotBaseline && !snapshotBaseline.startsWith('dispatch:')
+            ? snapshotBaseline
+            : request.workspaceRevisionId;
           const workspace = typeof request.teamId === 'string' && typeof request.channelId === 'string'
             && request.teamId.length > 0 && request.channelId.length > 0
             ? prepareChannelWorkspaceRun({
@@ -742,9 +746,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             if (!workspace || !request.workspaceSnapshot.workspaceRevisionId) {
               throw new Error('DEVICE_WORKSPACE_SNAPSHOT_RUNTIME_UNAVAILABLE');
             }
-            const snapshotTaskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
-            const snapshotAttempt = request.taskAttempt ?? 1;
-            const snapshotRunId = request.workspaceRunId ?? request.id;
+            const snapshotTaskId = request.workspaceSnapshot.provenance.taskId;
+            const snapshotAttempt = request.workspaceSnapshot.provenance.taskAttempt;
+            const snapshotRunId = request.workspaceSnapshot.provenance.workspaceRunId;
             if (request.agentId !== request.workspaceSnapshot.provenance.agentId
               || snapshotTaskId !== request.workspaceSnapshot.provenance.taskId
               || snapshotAttempt !== request.workspaceSnapshot.provenance.taskAttempt
@@ -758,7 +762,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               'channels',
               request.channelId,
               'snapshots',
-              request.workspaceSnapshot.workspaceRevisionId,
+              request.workspaceSnapshot.id,
             );
             const materialized = await materializeDeviceWorkspaceSnapshot({
               snapshot: request.workspaceSnapshot,
