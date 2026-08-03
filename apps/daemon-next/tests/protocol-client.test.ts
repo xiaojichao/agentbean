@@ -327,7 +327,7 @@ describe('daemon-next protocol client', () => {
           ],
           workspaceRun: {
             status: 'succeeded',
-            cwd: '/workspace',
+            cwd: '.',
             command: 'codex --model gpt-5.4',
             logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
             exitCode: 0,
@@ -714,6 +714,7 @@ describe('daemon-next protocol client', () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'proto-envref-workspace-')));
+    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/request-1/1/dispatch-1`;
     const client = createDaemonProtocolClient({
       socket,
       executor: async (request) => {
@@ -724,6 +725,7 @@ describe('daemon-next protocol client', () => {
       runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
       agents: [{ name: 'Custom Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
       serverUrl: 'http://server.test',
+      homeDir: cwd,
       envResolver: async () => ({ SECRET_TOKEN: 'secret-value' }),
     });
 
@@ -745,9 +747,9 @@ describe('daemon-next protocol client', () => {
 
     expect(received[0]?.customAgent?.env).toEqual({
       AGENTBEAN_RUN_ID: 'dispatch-1',
-      AGENTBEAN_WORKSPACE: `${cwd}/.agentbean/runs/dispatch-1`,
-      AGENTBEAN_INPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/inputs`,
-      AGENTBEAN_OUTPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/outputs`,
+      AGENTBEAN_WORKSPACE: workspace,
+      AGENTBEAN_INPUT_DIR: `${workspace}/inputs`,
+      AGENTBEAN_OUTPUT_DIR: `${workspace}/outputs`,
       SECRET_TOKEN: 'secret-value',
     });
   });
@@ -885,6 +887,7 @@ describe('daemon-next protocol client', () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'proto-env-')));
+    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/request-1/1/dispatch-1`;
     const client = createDaemonProtocolClient({
       socket,
       executor: async (request) => {
@@ -894,6 +897,7 @@ describe('daemon-next protocol client', () => {
       device: { teamId: 'team-1', ownerId: 'user-1' },
       runtimes: [{ adapterKind: 'codex-cli', name: 'Codex CLI' }],
       agents: [{ name: 'Custom Codex', adapterKind: 'codex-cli', category: 'executor-hosted' }],
+      homeDir: cwd,
     });
 
     await client.start();
@@ -920,9 +924,9 @@ describe('daemon-next protocol client', () => {
     // The user's secret env reaches the executor merged with the per-run workspace env.
     expect(received[0]?.customAgent?.env).toEqual({
       AGENTBEAN_RUN_ID: 'dispatch-1',
-      AGENTBEAN_WORKSPACE: `${cwd}/.agentbean/runs/dispatch-1`,
-      AGENTBEAN_INPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/inputs`,
-      AGENTBEAN_OUTPUT_DIR: `${cwd}/.agentbean/runs/dispatch-1/outputs`,
+      AGENTBEAN_WORKSPACE: workspace,
+      AGENTBEAN_INPUT_DIR: `${workspace}/inputs`,
+      AGENTBEAN_OUTPUT_DIR: `${workspace}/outputs`,
       SECRET_TOKEN: 'secret-value',
     });
     await vi.waitFor(() => {
