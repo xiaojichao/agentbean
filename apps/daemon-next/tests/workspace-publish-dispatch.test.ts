@@ -468,4 +468,103 @@ describe('workspace publish dispatch (#1044)', () => {
       else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
     }
   });
+
+  test('#1051 Hermes 交付到主目录顶层且回复报告同一路径：升级经原子发布，不再 legacy 双发', async () => {
+    const home = tempDir('publish-1051-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const customCwd = tempDir('publish-1051-cwd-');
+    // 0.3.26 的 adapter 根场景：Hermes 把交付写到主目录顶层（adapter 默认根覆盖范围），
+    // 并在回复里报告同一路径。
+    const deliveryPath = join(home, 'HyperFrames视频制作完全指南-摘要.md');
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    try {
+      const harness = fakeSocket();
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fakeStagingFetch(staging),
+        homeDir: home,
+        executor: async () => {
+          writeFileSync(deliveryPath, '摘要正文');
+          return {
+            body: `搞定了，摘要已保存到 ${deliveryPath}`,
+            workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-1051-1', requestId: 'req-1051-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '整理视频制作指南摘要',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: customCwd },
+      });
+
+      // 精确声明优先于 adapter 根猜测兜底：文件经 outputs/<publishIdentity> 原子发布
+      // 进入 Workspace revision，而不是只走 legacy upload。
+      expect(staging.plans).toHaveLength(1);
+      expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path))
+        .toEqual(['HyperFrames视频制作完全指南-摘要.md']);
+      expect(staging.commits).toHaveLength(1);
+      // 同一内容只出现一次：adapter 版本已被升级移除，不经 legacy 双发。
+      expect(staging.legacyUploads).toEqual([]);
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds)
+        .toEqual(['art-HyperFrames视频制作完全指南-摘要.md']);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1051 OpenClaw 交付到主目录顶层且回复报告同一路径：升级经原子发布，不再 legacy 双发', async () => {
+    const home = tempDir('publish-1051-oc-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const customCwd = tempDir('publish-1051-oc-cwd-');
+    const deliveryPath = join(home, '频道周报名.md');
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    try {
+      const harness = fakeSocket();
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fakeStagingFetch(staging),
+        homeDir: home,
+        executor: async () => {
+          writeFileSync(deliveryPath, '周报正文');
+          return {
+            body: `周报已保存到 ${deliveryPath}`,
+            workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-1051-2', requestId: 'req-1051-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '写本周频道周报',
+        customAgent: { adapterKind: 'openclaw', command: 'openclaw', cwd: customCwd },
+      });
+
+      // OpenClaw 与 Hermes 共用 adapter 根布局：主目录顶层撞车同样升级为受控发布。
+      expect(staging.plans).toHaveLength(1);
+      expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path))
+        .toEqual(['频道周报名.md']);
+      expect(staging.commits).toHaveLength(1);
+      expect(staging.legacyUploads).toEqual([]);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
 });

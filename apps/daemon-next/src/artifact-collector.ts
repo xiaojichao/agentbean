@@ -119,6 +119,8 @@ export interface CollectArtifactsInput {
    * .agentbean 内部、不在 reportedOutputExcludedPathPrefixes 内、非敏感文件名、
    * 严格 run 窗口（mtime 与 birthtime 均在窗口内）、大小上限。通过校验的文件
    * 以 REPORTED_OUTPUT_SOURCE_ROOT（kind=run_output）归入受管 run output。
+   * 明确声明优先于猜测兜底（#1051）：与 adapter/configured/cwd 扫描结果按绝对
+   * 路径或 sha256 撞车时，非受管旧条目被移除，由 reported 版本接替发布。
    */
   reportedOutputPaths?: string[];
   /**
@@ -398,6 +400,14 @@ async function hashFileWithLimit(abs: string, maxBytes: number): Promise<{ sha25
  * 把 Agent 回复报告的交付文件归入受管 run output 候选。
  * 安全拒绝（穿越/隐藏段/内部前缀/敏感名/symlink 逃逸）只记路径无关诊断；
  * 窗口外、不存在与重复属于正常噪音，静默跳过；超限走 onSkipped 用户可见。
+ *
+ * 判同语义（#1051 通道升级）：reported 是 Agent 的明确声明，优先于
+ * adapter/configured/cwd 扫描的猜测兜底。按绝对路径或 sha256 命中既有条目时——
+ * 受管 run_output 已收录：reported 跳过（只发布一次），且非受管的同内容副本
+ * 一并移除，避免 legacy + revision 双发；
+ * 仅非受管来源命中：旧条目在 reported 通过全部安全校验后被移除，由 reported
+ * 版本接替进入 outputs/<publishIdentity>。安全校验未通过时旧条目保留，
+ * 交付通道不因升级逻辑回退。
  */
 async function collectReportedOutputs(
   input: CollectArtifactsInput,
@@ -412,13 +422,19 @@ async function collectReportedOutputs(
       return resolve(prefix);
     }
   });
-  const collectedByAbs = new Set([...byRootPath.values()].map((artifact) => artifact.absolutePath));
-  const collectedBySha = new Set([...byRootPath.values()].map((artifact) => artifact.sha256));
+  // 「受管 run_output」是本函数的核心判谓：跳过守卫与删除守卫共用同一语义。
+  type DuplicateEntry = [string, CollectedArtifact];
+  const isManagedRunOutput = (artifact: CollectedArtifact): boolean =>
+    artifact.sourceRoot.kind === 'run_output';
   const runOutputRelativePaths = new Set(
     [...byRootPath.values()]
-      .filter((artifact) => artifact.sourceRoot.kind === 'run_output')
+      .filter(isManagedRunOutput)
       .map((artifact) => artifact.relativePath),
   );
+  const findDuplicates = (match: (artifact: CollectedArtifact) => boolean): DuplicateEntry[] =>
+    [...byRootPath.entries()].filter(([, artifact]) => match(artifact));
+  const hasManagedRunOutput = (entries: DuplicateEntry[]): boolean =>
+    entries.some(([, artifact]) => isManagedRunOutput(artifact));
   const reject = (filename: string) => {
     input.onDiagnostic?.({
       code: 'REPORTED_PATH_REJECTED',
@@ -435,7 +451,23 @@ async function collectReportedOutputs(
     } catch {
       continue; // 不存在或不可达：Agent 报告了未落盘的路径，正常噪音。
     }
-    if (collectedByAbs.has(reportedPath) || collectedByAbs.has(realPath)) continue;
+    const absDuplicates = findDuplicates(
+      (artifact) => artifact.absolutePath === reportedPath || artifact.absolutePath === realPath,
+    );
+    // 受管通道已收录同一路径（含前一条 reported 条目）：只发布一次，静默跳过。
+    // 顺带清理：受管已有此文件时，非受管的同内容副本（如 Agent 同时把交付
+    // 拷进 adapter 默认根）只会 legacy + revision 双发，按 sha256 判同移除（#1051）。
+    // 清理只删既有条目、不新增发布内容，故无需经过下方安全校验；超限读不出
+    // hash 时保守不动。
+    if (hasManagedRunOutput(absDuplicates)) {
+      const hashed = await hashFileWithLimit(realPath, maxBytes);
+      if (hashed) {
+        for (const [key, artifact] of findDuplicates((artifact) => artifact.sha256 === hashed.sha256)) {
+          if (!isManagedRunOutput(artifact)) byRootPath.delete(key);
+        }
+      }
+      continue;
+    }
     if (!isCollectableReportedPath(realPath, excludedPrefixes)) {
       reject(basename(reportedPath));
       continue;
@@ -476,8 +508,14 @@ async function collectReportedOutputs(
       });
       continue;
     }
-    // AC4：同一文件经受管目录与回复路径重复发现时只发布一次（按内容判同）。
-    if (collectedBySha.has(hashed.sha256)) continue;
+    // 全部校验通过，现在才允许触碰既有条目：移除非受管的重复（绝对路径重复的
+    // 旧内容版本 + 同 sha256 的猜测兜底副本），保证同一内容只发布一次（#1051）。
+    const shaDuplicates = findDuplicates((artifact) => artifact.sha256 === hashed.sha256);
+    for (const [key, artifact] of new Map([...absDuplicates, ...shaDuplicates])) {
+      if (!isManagedRunOutput(artifact)) byRootPath.delete(key);
+    }
+    // AC4：受管通道已有同内容——reported 不重复收录，上一步已清掉非受管双发副本。
+    if (hasManagedRunOutput(shaDuplicates)) continue;
     // 同名不同内容与受管 run output 冲突时隔离到 reported/ 前缀，避免
     // stageRunOutputsToPublishOutput 因 relativePath 重复而整批失败。
     let relativePath = filename;
@@ -493,8 +531,6 @@ async function collectReportedOutputs(
       sourceRoot: REPORTED_OUTPUT_SOURCE_ROOT,
       role: 'run_output',
     });
-    collectedByAbs.add(realPath);
-    collectedBySha.add(hashed.sha256);
   }
 }
 
