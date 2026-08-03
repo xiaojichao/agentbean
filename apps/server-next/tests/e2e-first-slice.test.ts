@@ -162,7 +162,7 @@ describe('AgentBean Next first-slice smoke', () => {
             senderKind: 'agent',
             body: 'preview:@Codex hello',
             workspaceRun: {
-              cwd,
+              cwd: '.',
               command: '/opt/homebrew/bin/codex --model gpt-5.4',
               logExcerpt: 'OPENAI_API_KEY=[redacted]\nfinished',
               exitCode: 0,

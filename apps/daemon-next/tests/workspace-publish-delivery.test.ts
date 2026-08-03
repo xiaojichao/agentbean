@@ -66,8 +66,10 @@ describe('workspace-publish-delivery (#1003)', () => {
     const item = collected(fileRoot, 'out.txt', 'hello-staging');
 
     let putCalls = 0;
+    let beginProvenance: unknown;
     const client: StagingRemoteClient = {
-      async begin() {
+      async begin(input) {
+        beginProvenance = input.provenance;
         return {
           ok: true,
           staging: {
@@ -118,6 +120,7 @@ describe('workspace-publish-delivery (#1003)', () => {
       collected: [item],
       publishId: 'pub-deliver-1',
       now: 1000,
+      provenance: { agentId: 'agent-1', taskId: 'task-1', taskAttempt: 3 },
     });
 
     expect(result).toEqual({
@@ -128,6 +131,8 @@ describe('workspace-publish-delivery (#1003)', () => {
       files: [{ path: 'out.txt', artifactId: 'art-out' }],
     });
     expect(putCalls).toBe(1);
+    expect(beginProvenance).toEqual({ agentId: 'agent-1', taskId: 'task-1', taskAttempt: 3 });
+    expect(store.get('pub-deliver-1')?.provenance).toEqual({ agentId: 'agent-1', taskId: 'task-1', taskAttempt: 3 });
     expect(store.get('pub-deliver-1')?.status).toBe('committed');
     expect(store.listPending()).toHaveLength(0);
   });

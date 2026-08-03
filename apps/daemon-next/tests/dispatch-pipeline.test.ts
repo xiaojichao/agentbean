@@ -146,21 +146,22 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       serverUrl: 'http://server.test',
       fetch: fakeFetch,
       homeDir,
-      executor: async () => ({
-        body: 'done',
-        artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
-        workspaceRun: { status: 'succeeded', cwd, exitCode: 0, startedAt: 1000, completedAt: 2000 },
-        collaborationProposals: [{
-          schemaVersion: 1, sourceInvocationId: 'invocation-live', sourceAgentId: 'agent-1',
-          toAgentId: 'agent-2', kind: 'consult', objective: '请复核结果', reason: '需要第二视角',
-          contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
-          returnMode: 'return_to_manager',
-        }],
-      }),
+      executor: async (request) => {
+        writeFileSync(join(request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR ?? '', 'result.png'), 'png-bytes');
+        return {
+          body: 'done',
+          artifacts: [{ id: 'workspace-log-x', filename: 'workspace-run.log', mimeType: 'text/plain', contentBase64: 'bG9n' }],
+          workspaceRun: { status: 'succeeded', cwd, exitCode: 0, startedAt: 1000, completedAt: 2000 },
+          collaborationProposals: [{
+            schemaVersion: 1, sourceInvocationId: 'invocation-live', sourceAgentId: 'agent-1',
+            toAgentId: 'agent-2', kind: 'consult', objective: '请复核结果', reason: '需要第二视角',
+            contextRefs: [], dependencyResults: [], acceptanceCriteria: [], attachmentIds: [],
+            returnMode: 'return_to_manager',
+          }],
+        };
+      },
     });
     await client.start();
-
-    writeFileSync(join(cwd, 'result.png'), 'png-bytes');
 
     await harness.deliver(AGENT_EVENTS.dispatch.request, {
       id: 'disp-1', teamId: 'team-1', channelId: 'chan-1', messageId: 'msg-1',
@@ -176,9 +177,9 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(ids).toEqual(['workspace-log-x']);
     expect(payload.artifactIds).toEqual(['srv-art-1']);
 
-    const inputsDir = join(cwd, '.agentbean', 'runs', 'disp-1', 'inputs');
+    const inputsDir = join(homeDir, '.agentbean', 'workspaces', 'team-1', 'channels', 'chan-1', 'runs', 'agent-1', 'disp-1', '1', 'disp-1', 'inputs');
     expect(readdirSync(inputsDir)).toEqual(['att-1-in.txt']);
-    const manifestPath = join(cwd, '.agentbean', 'runs', 'disp-1', 'manifest.json');
+    const manifestPath = join(homeDir, '.agentbean', 'workspaces', 'team-1', 'channels', 'chan-1', 'runs', 'agent-1', 'disp-1', '1', 'disp-1', 'manifest.json');
     await vi.waitFor(() => {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
       expect(typeof manifest.reportedAt).toBe('number');
@@ -253,9 +254,14 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     const inputPath = join(
       homeDir,
       '.agentbean',
-      'attachment-workspaces',
-      '.agentbean',
+      'workspaces',
+      'team-1',
+      'channels',
+      'channel-1',
       'runs',
+      'agent-1',
+      'request-1',
+      '1',
       'dispatch-reference-no-cwd',
       'inputs',
       'artifact-revision-3-plan.md',
@@ -269,7 +275,6 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
   test('returns stable skipped-file diagnostics in the Run result', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-artifact-diagnostic-')));
     const harness = createFakeSocket();
-    writeFileSync(join(cwd, 'oversized.txt'), '12345');
     const client = createDaemonProtocolClient({
       socket: harness.socket,
       device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
@@ -277,10 +282,13 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       agents: [],
       serverUrl: 'http://server.test',
       artifactMaxBytes: 4,
-      executor: async () => ({
-        body: 'done',
-        workspaceRun: { status: 'succeeded', cwd, startedAt: 1, completedAt: 2 },
-      }),
+      executor: async (request) => {
+        writeFileSync(join(request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR ?? '', 'oversized.txt'), '12345');
+        return {
+          body: 'done',
+          workspaceRun: { status: 'succeeded', cwd, startedAt: 1, completedAt: 2 },
+        };
+      },
     });
     await client.start();
 

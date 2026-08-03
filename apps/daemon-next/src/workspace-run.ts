@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
+import { basename, join, relative, resolve } from 'node:path';
 import {
   parseAgentCollaborationProposalV1,
   type AgentCollaborationProposalV1,
@@ -15,6 +15,42 @@ export interface WorkspaceRunDir {
   logsDir: string;
   manifestPath: string;
   responsePath: string;
+  projection?: WorkspaceProjectionIdentity;
+}
+
+export interface WorkspaceProjectionIdentity {
+  agentBeanHome: string;
+  deviceId: string;
+  teamId: string;
+  channelId: string;
+  agentId: string;
+  taskId: string;
+  taskAttempt: number;
+  workspaceRunId: string;
+  workspaceRevisionId?: string;
+}
+
+export interface ChannelProjectionOptions {
+  agentBeanHome: string;
+  deviceId: string;
+  teamId: string;
+  channelId: string;
+  agentId: string;
+  taskId: string;
+  taskAttempt: number;
+  workspaceRunId: string;
+  workspaceRevisionId?: string;
+}
+
+export interface DeviceProjectionManifest {
+  schemaVersion: 1;
+  deviceId: string;
+  teamId: string;
+  updatedAt: number;
+}
+
+export interface ChannelWorkspaceOutputOptions extends Pick<ChannelProjectionOptions, 'agentBeanHome' | 'deviceId' | 'teamId' | 'channelId'> {
+  publishIdentity: string;
 }
 
 export interface WorkspaceRunManifestFile {
@@ -52,6 +88,16 @@ export interface WorkspaceRunManifest {
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
   projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
   reportedAt?: number;
+  deviceId?: string;
+  teamId?: string;
+  taskId?: string;
+  taskAttempt?: number;
+  workspaceRunId?: string;
+  workspaceRevisionId?: string;
+  provenance?: {
+    relativePath: string;
+    source: 'run-output' | 'snapshot' | 'response' | 'log';
+  }[];
   files: WorkspaceRunManifestFile[];
 }
 
@@ -101,6 +147,134 @@ export function prepareWorkspaceRun(cwd: string, runId: string): WorkspaceRunDir
   };
 }
 
+/**
+ * 为一次 dispatch 创建 Channel-first 受管执行目录。
+ * 旧的 prepareWorkspaceRun(cwd, runId) 保留给历史恢复/兼容调用；新的
+ * dispatch 必须使用本函数，避免 custom Agent cwd 成为项目协作状态根。
+ */
+export function prepareChannelWorkspaceRun(options: ChannelProjectionOptions): WorkspaceRunDir {
+  const projection = normalizeProjectionOptions(options);
+  const channelRoot = channelProjectionRoot(projection);
+  const runDir = join(
+    channelRoot,
+    'runs',
+    projection.agentId,
+    projection.taskId,
+    String(projection.taskAttempt),
+    projection.workspaceRunId,
+  );
+  const inputDir = join(runDir, 'inputs');
+  const outputDir = join(runDir, 'outputs');
+  const logsDir = join(runDir, 'logs');
+  ensureDirectoryNoSymlink(runDir, projection.agentBeanHome);
+  for (const dir of [inputDir, outputDir, logsDir, join(runDir, 'intermediates'), join(channelRoot, 'outputs'), join(channelRoot, 'cache', 'blobs')]) {
+    ensureDirectoryNoSymlink(dir, projection.agentBeanHome);
+  }
+  if (projection.workspaceRevisionId) {
+    const snapshotDir = join(channelRoot, 'snapshots', projection.workspaceRevisionId);
+    ensureDirectoryNoSymlink(snapshotDir, projection.agentBeanHome);
+    const snapshotManifest = join(snapshotDir, 'manifest.json');
+    if (!existsSync(snapshotManifest)) {
+      writeFileSync(snapshotManifest, `${JSON.stringify({
+        schemaVersion: 1,
+        deviceId: projection.deviceId,
+        teamId: projection.teamId,
+        channelId: projection.channelId,
+        workspaceRevisionId: projection.workspaceRevisionId,
+      }, null, 2)}\n`, { flag: 'wx' });
+    }
+  }
+  return {
+    cwd: runDir,
+    runId: projection.workspaceRunId,
+    runDir,
+    inputDir,
+    outputDir,
+    logsDir,
+    manifestPath: join(runDir, 'manifest.json'),
+    responsePath: join(runDir, 'response.md'),
+    projection,
+  };
+}
+
+export function prepareChannelWorkspaceOutput(options: ChannelWorkspaceOutputOptions): string {
+  const root = channelProjectionRoot(options);
+  assertSafeSegment(options.deviceId, 'deviceId');
+  assertSafeSegment(options.publishIdentity, 'publishIdentity');
+  const outputDir = join(root, 'outputs', options.publishIdentity);
+  ensureDirectoryNoSymlink(outputDir, resolve(options.agentBeanHome));
+  return outputDir;
+}
+
+export function stageChannelWorkspaceOutputs(
+  outputDir: string,
+  artifacts: readonly { absolutePath: string; relativePath: string; sha256: string; sizeBytes: number; filename: string }[],
+  metadata: {
+    publishIdentity?: string;
+    baselineRevisionId?: string;
+    deviceId?: string;
+    teamId?: string;
+    channelId?: string;
+  } = {},
+): void {
+  for (const artifact of artifacts) {
+    const relativePath = artifact.relativePath.replaceAll('\\', '/');
+    if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..' || !part)) {
+      throw new Error('WORKSPACE_PROJECTION_INVALID_PROVENANCE');
+    }
+    const destination = resolve(outputDir, relativePath);
+    const root = resolve(outputDir);
+    if (destination !== root && !destination.startsWith(`${root}/`)) throw new Error('WORKSPACE_PROJECTION_PATH_ESCAPE');
+    ensureDirectoryNoSymlink(join(destination, '..'), root);
+    copyFileSync(artifact.absolutePath, destination);
+  }
+  writeFileSync(join(outputDir, 'manifest.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    ...metadata,
+    files: artifacts.map((artifact) => ({
+      relativePath: artifact.relativePath,
+      sha256: artifact.sha256,
+      sizeBytes: artifact.sizeBytes,
+      filename: artifact.filename,
+    })),
+  }, null, 2)}\n`);
+}
+
+export function channelProjectionRoot(options: Pick<ChannelProjectionOptions, 'agentBeanHome' | 'teamId' | 'channelId'>): string {
+  const home = resolve(options.agentBeanHome);
+  assertSafeSegment(options.teamId, 'teamId');
+  assertSafeSegment(options.channelId, 'channelId');
+  return join(home, 'workspaces', options.teamId, 'channels', options.channelId);
+}
+
+export function persistDeviceProjectionManifest(
+  agentBeanHome: string,
+  manifest: DeviceProjectionManifest,
+): string {
+  ensureDirectoryNoSymlink(agentBeanHome, resolve(agentBeanHome));
+  const path = join(resolve(agentBeanHome), 'device.json');
+  const existing = readDeviceProjectionManifest(path);
+  if (existing && existing.deviceId !== manifest.deviceId) {
+    // 设备身份切换不能把旧设备目录当作当前投影；旧 runs 仍保留供显式迁移处理。
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  } else if (!existing) {
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+  } else {
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  return path;
+}
+
+export function readDeviceProjectionManifest(path: string): DeviceProjectionManifest | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<DeviceProjectionManifest>;
+    if (parsed.schemaVersion !== 1 || typeof parsed.deviceId !== 'string' || typeof parsed.teamId !== 'string') return undefined;
+    return parsed as DeviceProjectionManifest;
+  } catch {
+    return undefined;
+  }
+}
+
 export function workspaceRunEnv(ws: WorkspaceRunDir): Record<string, string> {
   return {
     AGENTBEAN_RUN_ID: ws.runId,
@@ -116,6 +290,11 @@ export function persistWorkspaceRunManifest(ws: WorkspaceRunDir, manifest: Works
 
 export function persistWorkspaceRunResponse(ws: WorkspaceRunDir, body: string): void {
   writeFileSync(ws.responsePath, body);
+}
+
+export function relativeWorkspacePath(ws: WorkspaceRunDir, path: string): string {
+  const value = relative(ws.runDir, path);
+  return value && !value.startsWith('..') ? value : '.';
 }
 
 export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWorkspaceRun[] {
@@ -195,6 +374,27 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
   return runs;
 }
 
+export function discoverRecoverableChannelWorkspaceRuns(options: {
+  agentBeanHome: string;
+  deviceId: string;
+}): RecoverableWorkspaceRun[] {
+  const home = resolve(options.agentBeanHome);
+  const device = readDeviceProjectionManifest(join(home, 'device.json'));
+  if (!device || device.deviceId !== options.deviceId) return [];
+  const runs: RecoverableWorkspaceRun[] = [];
+  const workspacesRoot = join(home, 'workspaces');
+  for (const teamEntry of safeDirectoryEntries(workspacesRoot)) {
+    if (!teamEntry.isDirectory() || !isSafeSegment(teamEntry.name)) continue;
+    const channelsRoot = join(workspacesRoot, teamEntry.name, 'channels');
+    for (const channelEntry of safeDirectoryEntries(channelsRoot)) {
+      if (!channelEntry.isDirectory() || !isSafeSegment(channelEntry.name)) continue;
+      const runsRoot = join(channelsRoot, channelEntry.name, 'runs');
+      walkChannelRuns(runsRoot, options.deviceId, teamEntry.name, channelEntry.name, runs);
+    }
+  }
+  return runs;
+}
+
 export function markWorkspaceRunReported(run: RecoverableWorkspaceRun, reportedAt: number): void {
   markWorkspaceRunManifestReported(run.manifestPath, reportedAt);
 }
@@ -220,6 +420,126 @@ function readWorkspaceRunManifest(path: string): WorkspaceRunManifest | undefine
     return { ...manifest, files: Array.isArray(manifest.files) ? manifest.files : [] } as WorkspaceRunManifest;
   } catch {
     return undefined;
+  }
+}
+
+function normalizeProjectionOptions(options: ChannelProjectionOptions): ChannelProjectionOptions {
+  const taskAttempt = Number.isInteger(options.taskAttempt) && options.taskAttempt > 0
+    ? options.taskAttempt
+    : (() => { throw new Error('WORKSPACE_PROJECTION_INVALID_TASK_ATTEMPT'); })();
+  for (const [name, value] of Object.entries({
+    deviceId: options.deviceId,
+    teamId: options.teamId,
+    channelId: options.channelId,
+    agentId: options.agentId,
+    taskId: options.taskId,
+    workspaceRunId: options.workspaceRunId,
+    workspaceRevisionId: options.workspaceRevisionId,
+  })) {
+    if (value !== undefined) assertSafeSegment(value, name);
+  }
+  const agentBeanHome = resolve(options.agentBeanHome);
+  ensureDirectoryNoSymlink(agentBeanHome, agentBeanHome);
+  return { ...options, agentBeanHome, taskAttempt };
+}
+
+function assertSafeSegment(value: string, label: string): void {
+  if (!isSafeSegment(value)) throw new Error(`WORKSPACE_PROJECTION_INVALID_${label.toUpperCase()}`);
+}
+
+function isSafeSegment(value: string): boolean {
+  return value.length > 0
+    && value.length <= 128
+    && value !== '.'
+    && value !== '..'
+    && /^[A-Za-z0-9][A-Za-z0-9._~-]*$/.test(value);
+}
+
+function ensureDirectoryNoSymlink(target: string, root: string): void {
+  const resolvedRoot = resolve(root);
+  const resolvedTarget = resolve(target);
+  const rel = relative(resolvedRoot, resolvedTarget);
+  if (rel.startsWith('..') || rel === resolvedRoot || rel.includes('\0')) {
+    if (resolvedTarget !== resolvedRoot) throw new Error('WORKSPACE_PROJECTION_PATH_ESCAPE');
+  }
+  mkdirSync(resolvedRoot, { recursive: true });
+  try {
+    const rootStat = lstatSync(resolvedRoot);
+    if (rootStat.isSymbolicLink()) throw new Error('WORKSPACE_PROJECTION_SYMLINK_ESCAPE');
+    if (!rootStat.isDirectory()) throw new Error('WORKSPACE_PROJECTION_NOT_DIRECTORY');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    mkdirSync(resolvedRoot, { recursive: true });
+  }
+  const parts = resolvedTarget === resolvedRoot ? [] : relative(resolvedRoot, resolvedTarget).split('/');
+  let current = resolvedRoot;
+  for (const part of parts) {
+    current = join(current, part);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) throw new Error('WORKSPACE_PROJECTION_SYMLINK_ESCAPE');
+      if (!stat.isDirectory()) throw new Error('WORKSPACE_PROJECTION_NOT_DIRECTORY');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      mkdirSync(current);
+    }
+  }
+}
+
+function safeDirectoryEntries(path: string): Dirent<string>[] {
+  try {
+    return readdirSync(path, { withFileTypes: true, encoding: 'utf8' });
+  } catch {
+    return [];
+  }
+}
+
+function walkChannelRuns(
+  runsRoot: string,
+  deviceId: string,
+  teamId: string,
+  channelId: string,
+  output: RecoverableWorkspaceRun[],
+): void {
+  const entries = safeDirectoryEntries(runsRoot);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isSafeSegment(entry.name)) continue;
+    const child = join(runsRoot, entry.name);
+    let stat;
+    try { stat = lstatSync(child); } catch { continue; }
+    if (stat.isSymbolicLink()) continue;
+    const manifestPath = join(child, 'manifest.json');
+    const responsePath = join(child, 'response.md');
+    const manifest = readWorkspaceRunManifest(manifestPath);
+    if (manifest?.deviceId !== deviceId || !manifest || manifest.reportedAt !== undefined) {
+      const nested = safeDirectoryEntries(child);
+      if (nested.some((item) => item.isDirectory())) walkChannelRuns(child, deviceId, teamId, channelId, output);
+      continue;
+    }
+    const status = normalizeRecoverableStatus(manifest.status);
+    if (!status || manifest.teamId !== teamId || manifest.channelId !== channelId || typeof manifest.agentId !== 'string') continue;
+    if (!existsSync(responsePath)) continue;
+    const body = readTextFile(responsePath);
+    if (body === undefined) continue;
+    output.push({
+      runId: manifest.runId || basename(child),
+      agentId: manifest.agentId,
+      channelId: manifest.channelId,
+      body,
+      manifestPath,
+      manifest,
+      workspaceRun: {
+        status,
+        cwd: manifest.cwd ?? '.',
+        ...(manifest.command ? { command: manifest.command } : {}),
+        ...(manifest.logExcerpt ? { logExcerpt: manifest.logExcerpt } : {}),
+        ...(typeof manifest.exitCode === 'number' ? { exitCode: manifest.exitCode } : {}),
+        ...(typeof manifest.startedAt === 'number' ? { startedAt: manifest.startedAt } : {}),
+        ...(typeof manifest.completedAt === 'number' ? { completedAt: manifest.completedAt } : {}),
+      },
+      ...(Array.isArray(manifest.artifactIds) && manifest.artifactIds.length > 0 ? { artifactIds: manifest.artifactIds } : {}),
+      ...(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0 ? { artifacts: manifest.artifacts.filter(isWorkspaceRunManifestArtifact) } : {}),
+    });
   }
 }
 
