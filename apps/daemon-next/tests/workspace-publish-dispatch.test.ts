@@ -390,7 +390,9 @@ describe('workspace publish dispatch (#1044)', () => {
             body: [
               `已读取附件 ${attachmentPath}`,
               `日志在 ${join(env.AGENTBEAN_WORKSPACE ?? '', 'logs', 'run.md')}`,
-              `还有 ${escapeLink}`,
+              // #1053：提取器只接受交付语境；把逃逸链接冒充交付物报告才会进入
+              // 收集阶段，realpath 命中排除前缀后被拒绝并记诊断。
+              `交付 ${escapeLink}`,
               `交付已保存到 ${delivery}`,
             ].join('\n'),
             workspaceRun: { status: 'succeeded', cwd: external, startedAt: 1000, completedAt: 2000 },
@@ -562,6 +564,134 @@ describe('workspace publish dispatch (#1044)', () => {
         .toEqual(['频道周报名.md']);
       expect(staging.commits).toHaveLength(1);
       expect(staging.legacyUploads).toEqual([]);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1053 staging begin 失败时 reported 路径不回退 legacy upload，明确失败并留诊断', async () => {
+    const home = tempDir('publish-1053-fail-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const customCwd = tempDir('publish-1053-fail-cwd-');
+    const external = tempDir('publish-1053-fail-external-');
+    const reportedPath = join(external, 'reported-交付.md');
+    const legacyUploads: string[] = [];
+    try {
+      const harness = fakeSocket();
+      // begin 即失败：deliver 返回 kind=failed（PUBLISH_FAILED）。
+      const failingFetch = (async (input: unknown, init?: { method?: string; body?: unknown }) => {
+        const url = String(input);
+        const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+          status, headers: { 'content-type': 'application/json' },
+        });
+        if (url.includes('/workspace-publish-staging/begin')) {
+          return json({ ok: false, error: 'INTERNAL', message: 'storage down' }, 500);
+        }
+        if (url.includes('/artifacts/upload')) {
+          const form = init?.body as FormData;
+          const file = form.get('file') as File | null;
+          legacyUploads.push(file?.name ?? 'unknown');
+          return json({ ok: true, artifact: { id: `legacy-${file?.name ?? 'unknown'}` } });
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch;
+      let outputDir = '';
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: failingFetch,
+        homeDir: home,
+        executor: async (request) => {
+          outputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR ?? '';
+          // 受管 outputs/ 的交付（非 reported）：staging 失败时仍按既有行为回退 legacy。
+          writeFileSync(join(outputDir, 'managed-交付.md'), '受管目录交付');
+          writeFileSync(reportedPath, '外部报告交付');
+          return {
+            body: `交付已保存到 ${reportedPath}`,
+            workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-1053-fail', requestId: 'req-1053-fail', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '输出文档',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: customCwd },
+      });
+
+      // reported 外部路径绝不回退 legacy upload；受管 outputs/ 产物维持既有回退行为。
+      expect(legacyUploads).toEqual(['managed-交付.md']);
+      expect(legacyUploads).not.toContain('reported-交付.md');
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      const payload = resultEmit!.payload as { body?: string; workspaceRun?: { logExcerpt?: string } };
+      expect(payload.body).toContain('[workspace-publish:REPORTED_OUTPUTS_NOT_PUBLISHED] count=1 reason=PUBLISH_FAILED');
+      expect(payload.body).toContain('reported-交付.md');
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1053 无 baseline revision 时 reported 路径不回退 legacy upload（BASELINE_UNAVAILABLE）', async () => {
+    const home = tempDir('publish-1053-nobase-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const customCwd = tempDir('publish-1053-nobase-cwd-');
+    const external = tempDir('publish-1053-nobase-external-');
+    const reportedPath = join(external, 'reported-交付.md');
+    const legacyUploads: string[] = [];
+    try {
+      const harness = fakeSocket();
+      // 无 workspaceRevisionId 且 workspace current 查询 404：baseline 缺失，staging 不可用。
+      const fetchNoBaseline = (async (input: unknown, init?: { body?: unknown }) => {
+        const url = String(input);
+        const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
+          status, headers: { 'content-type': 'application/json' },
+        });
+        if (url.includes('/artifacts/upload')) {
+          const form = init?.body as FormData;
+          const file = form.get('file') as File | null;
+          legacyUploads.push(file?.name ?? 'unknown');
+          return json({ ok: true, artifact: { id: `legacy-${file?.name ?? 'unknown'}` } });
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch;
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fetchNoBaseline,
+        homeDir: home,
+        executor: async () => {
+          writeFileSync(reportedPath, '外部报告交付');
+          return {
+            body: `交付已保存到 ${reportedPath}`,
+            workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-1053-nobase', requestId: 'req-1053-nobase', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        prompt: '输出文档',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: customCwd },
+      });
+
+      expect(legacyUploads).toEqual([]);
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      const payload = resultEmit!.payload as { body?: string };
+      expect(payload.body).toContain('[workspace-publish:REPORTED_OUTPUTS_NOT_PUBLISHED] count=1 reason=BASELINE_UNAVAILABLE');
     } finally {
       if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
       else process.env.AGENTBEAN_HOME = previousAgentBeanHome;

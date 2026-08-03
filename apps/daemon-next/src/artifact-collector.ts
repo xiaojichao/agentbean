@@ -18,9 +18,42 @@ const ADAPTER_OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|md|mp4|mov
 /**
  * Agent 回复中明确报告的交付文件绝对路径。AgentOS oneshot（Hermes/OpenClaw）
  * 会把交付文件写到任意位置并在回复里报告路径；解析这些路径比猜目录更可靠。
- * 只接受本机绝对路径 + 交付物扩展名白名单，收集阶段再做存在性/窗口/安全校验。
+ * #1053：只接受明确交付语境（"已生成/已保存/交付/输出"等，或交付标题小节/
+ * 交付声明冒号换行等结构化交付声明）中的路径；仅作为引用、来源或参考资料
+ * 出现的路径不得进入输出候选。支持带引号且包含空格的 Unix 绝对路径与
+ * Windows 绝对交付路径；收集阶段再做 realpath/窗口/大小/敏感名/隐藏段/
+ * symlink 安全校验。
  */
-const REPORTED_OUTPUT_PATH_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|`]+\.(?:md|txt|pdf|png|jpe?g|gif|webp|svg|mp4|mov|zip))/gi;
+const REPORTED_PATH_EXT = '(?:md|txt|pdf|png|jpe?g|gif|webp|svg|mp4|mov|zip)';
+/** 引号（含中文弯引号）包裹的绝对路径：允许空格，不允许跨行。 */
+const QUOTED_REPORTED_PATH_RE = new RegExp(
+  `["'“”‘’]((?:\\/[^"'“”‘’\\n]*?|[A-Za-z]:[\\\\/][^"'“”‘’\\n]*?)\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])["'“”‘’]`,
+  'gi',
+);
+/** 未加引号的 Unix 绝对路径（不含空格）。 */
+const UNIX_REPORTED_PATH_RE = new RegExp(
+  `(?<![A-Za-z0-9_./])(\\/[^\\s"'<>|\`]+?\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])`,
+  'gi',
+);
+/** 未加引号的 Windows 绝对路径（盘符 + 分隔符，不含空格；含空格须加引号）。 */
+const WINDOWS_REPORTED_PATH_RE = new RegExp(
+  `(?<![A-Za-z0-9_./\\\\:])([A-Za-z]:[\\\\/][^\\s"'<>|\`]+?\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])`,
+  'gi',
+);
+/**
+ * 交付语境关键词：路径必须与交付动词/交付名词同行，或处于交付标题小节、
+ * 交付声明冒号的下一行。引用/来源/参考资料等语境不含这些词，天然被排除。
+ */
+const DELIVERY_CONTEXT_RE = new RegExp(
+  [
+    '已生成', '已保存', '已写入', '已交付', '已创建', '已整理',
+    '保存到', '保存在', '保存于', '写入到', '写出到', '生成到', '生成于',
+    '交付', '输出',
+    '\\bgenerated\\b', '\\bsaved\\b', '\\bwritten\\b', '\\bwrote\\b', '\\bcreated\\b',
+    '\\bdelivered\\b', '\\bexported\\b', '\\bproduced\\b', '\\bdeliverables?\\b', '\\boutputs?\\b',
+  ].join('|'),
+  'i',
+);
 /**
  * 显式敏感文件名防线：即使扩展名落在交付物白名单内（credentials.md、id_rsa.txt），
  * 也永远不得作为交付物发布。隐藏目录（.ssh/.gnupg/.aws）由隐藏路径段规则兜底。
@@ -152,28 +185,91 @@ export interface ArtifactCollectionDiagnostic {
 
 /**
  * 从 Agent 回复正文提取明确报告的交付文件绝对路径，去重保序。
- * 仅返回本机绝对路径 + 交付物扩展名白名单的候选；路径穿越（`..`）与隐藏
- * 路径段（`/.`）在提取时直接拒绝，其余安全校验在收集阶段对 realpath 进行
- * （见 collectArtifacts 的 reportedOutputPaths 处理）。
+ * #1053：候选路径必须通过两道门——
+ * 1) 交付语境：与"已生成/已保存/交付/输出"等交付词同行，或在交付标题小节
+ *    内，或是交付声明冒号的下一行；仅作为引用、来源或参考资料出现的路径
+ *    不进入候选；
+ * 2) 结构校验：本机绝对路径（Unix 或 Windows 盘符）、交付物扩展名白名单、
+ *    拒绝路径穿越（`..`）与隐藏路径段（`.` 开头段）。
+ * 其余安全校验（realpath/时间窗口/大小/敏感文件名/排除前缀/symlink）在收集
+ * 阶段对 realpath 进行（见 collectArtifacts 的 reportedOutputPaths 处理）。
  */
 export function extractReportedOutputPaths(body: string | undefined): string[] {
   if (!body) return [];
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const match of body.matchAll(REPORTED_OUTPUT_PATH_RE)) {
-    const raw = (match[1] ?? '').trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
-    if (!raw.startsWith('//')
-      && !raw.endsWith('.')
-      && !raw.includes('/.')
-      && !raw.includes('..')
-      && ADAPTER_OUTPUT_FILE_EXT_RE.test(raw)) {
-      if (!seen.has(raw)) {
-        seen.add(raw);
-        paths.push(raw);
-      }
+  const lines = body.split('\n');
+  const lineStarts: number[] = [];
+  {
+    let offset = 0;
+    for (const line of lines) {
+      lineStarts.push(offset);
+      offset += line.length + 1;
     }
   }
+  const lineIndexOf = (position: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (lineStarts[mid]! <= position) low = mid;
+      else high = mid - 1;
+    }
+    return low;
+  };
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  const accept = (raw: string | undefined, position: number | undefined): void => {
+    if (!raw || position === undefined) return;
+    // 紧接盘符冒号的 / 是 Windows 路径（C:/...）的组成部分，不当 Unix 绝对路径重复提取。
+    if (raw.startsWith('/') && position >= 2
+      && body[position - 1] === ':' && /[A-Za-z]/.test(body[position - 2] ?? '')
+      && (position === 2 || !/[A-Za-z0-9_./\\]/.test(body[position - 3] ?? ''))) {
+      return;
+    }
+    const candidate = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    if (!isPlausibleReportedPath(candidate)) return;
+    if (!isDeliveryContextLine(lines, lineIndexOf(position))) return;
+    if (!seen.has(candidate)) {
+      seen.add(candidate);
+      paths.push(candidate);
+    }
+  };
+  for (const match of body.matchAll(QUOTED_REPORTED_PATH_RE)) accept(match[1], match.index);
+  for (const match of body.matchAll(UNIX_REPORTED_PATH_RE)) accept(match[1], match.index);
+  for (const match of body.matchAll(WINDOWS_REPORTED_PATH_RE)) accept(match[1], match.index);
   return paths;
+}
+
+/** 结构化校验：绝对路径（Unix/Windows）、无穿越、无隐藏段、扩展名白名单。 */
+function isPlausibleReportedPath(raw: string): boolean {
+  if (!raw || raw.startsWith('//') || raw.endsWith('.') || raw.includes('..')) return false;
+  const isWindows = /^[A-Za-z]:[\\/]/.test(raw);
+  if (!isWindows && !raw.startsWith('/')) return false;
+  const segments = raw.split(isWindows ? /[\\/]/ : '/');
+  // 隐藏路径段（.ssh/.gnupg/.agentbean 等）永不进入候选。
+  if (segments.some((segment) => segment.startsWith('.'))) return false;
+  return ADAPTER_OUTPUT_FILE_EXT_RE.test(raw);
+}
+
+/**
+ * 交付语境判定：本行含交付词；或上方最近非空行以冒号收尾且含交付词
+ * （"报告已生成："换行/空行后给路径）；或最近的 markdown 标题含交付词
+ * （交付小节内的列表项）。
+ */
+function isDeliveryContextLine(lines: readonly string[], index: number): boolean {
+  const line = lines[index] ?? '';
+  if (DELIVERY_CONTEXT_RE.test(line)) return true;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const previous = lines[i]!.trim();
+    if (!previous) continue;
+    if (/[:：]$/.test(previous) && DELIVERY_CONTEXT_RE.test(previous)) return true;
+    break;
+  }
+  for (let i = index; i >= 0; i -= 1) {
+    const heading = /^\s{0,3}#{1,6}\s+(.*)$/.exec(lines[i]!);
+    if (heading) return DELIVERY_CONTEXT_RE.test(heading[1] ?? '');
+  }
+  return false;
 }
 
 /**
@@ -367,15 +463,24 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   return [...byRootPath.values()];
 }
 
+/** 分隔符无关的 basename：Windows realpath 返回反斜杠路径时安全校验仍然生效。 */
+function reportedPathBasename(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
 /** realpath 后仍须通过全部安全校验，symlink 逃逸目标因此无法借别名混入。 */
 function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly string[]): boolean {
-  if (!ADAPTER_OUTPUT_FILE_EXT_RE.test(basename(realPath))) return false;
-  const segments = realPath.split('/');
+  const base = reportedPathBasename(realPath);
+  if (!ADAPTER_OUTPUT_FILE_EXT_RE.test(base)) return false;
   // 隐藏路径段（.ssh/.gnupg/.config 等）与 .agentbean 内部永不发布。
+  // Windows 路径段以反斜杠分隔，统一按两种分隔符切分保证防线不失效。
+  const segments = realPath.split(/[\\/]/);
   if (segments.some((segment) => segment.startsWith('.'))) return false;
-  if (SENSITIVE_REPORTED_BASENAME_RE.test(basename(realPath))) return false;
+  if (SENSITIVE_REPORTED_BASENAME_RE.test(base)) return false;
+  const normalizedPath = realPath.replaceAll('\\', '/');
   for (const prefix of excludedPrefixes) {
-    if (realPath === prefix || realPath.startsWith(`${prefix}/`)) return false;
+    const normalizedPrefix = prefix.replaceAll('\\', '/');
+    if (normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`)) return false;
   }
   return true;
 }

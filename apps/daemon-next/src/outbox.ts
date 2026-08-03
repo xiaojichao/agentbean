@@ -29,6 +29,12 @@ export interface CreateDispatchOutboxOptions {
 export interface DispatchOutboxSendOptions {
   isDeliveredAck?: (ack: unknown) => boolean;
   onDelivered?: () => void;
+  /**
+   * 终态拒绝判定（如 Server 以 NOT_FOUND 拒绝恢复回报——dispatch 身份无法确认，
+   * 重试永远不会成功）。命中时出队并回调 onTerminal，不再重试（#1053）。
+   */
+  isTerminalAck?: (ack: unknown) => boolean;
+  onTerminal?: (ack: unknown) => void;
 }
 
 type OutboxItem = { event: string; payload: unknown; options?: DispatchOutboxSendOptions };
@@ -66,17 +72,31 @@ export function createDispatchOutbox(
     }
   }
 
-  async function trySend(item: OutboxItem): Promise<boolean> {
+  function notifyTerminal(item: OutboxItem, ack: unknown): void {
+    try {
+      item.options?.onTerminal?.(ack);
+    } catch (error) {
+      onWarn(`dispatch outbox terminal callback failed for ${item.event}: ${describeError(error)}`);
+    }
+  }
+
+  type SendResult = { outcome: 'delivered' | 'retry' | 'terminal'; ack?: unknown };
+
+  async function trySend(item: OutboxItem): Promise<SendResult> {
     try {
       const ack = await socket.emitWithAck(item.event, item.payload);
       if (!isDelivered(item, ack)) {
+        if (item.options?.isTerminalAck?.(ack)) {
+          onWarn(`dispatch outbox emit was terminally rejected for ${item.event}`);
+          return { outcome: 'terminal', ack };
+        }
         onWarn(`dispatch outbox emit was rejected for ${item.event}`);
-        return false;
+        return { outcome: 'retry' };
       }
-      return true;
+      return { outcome: 'delivered', ack };
     } catch (error) {
       onWarn(`dispatch outbox emit failed for ${item.event}: ${describeError(error)}`);
-      return false;
+      return { outcome: 'retry' };
     }
   }
 
@@ -89,8 +109,9 @@ export function createDispatchOutbox(
         void (async () => {
           pendingSends += 1;
           try {
-            const ok = await trySend(item);
-            if (ok) notifyDelivered(item);
+            const result = await trySend(item);
+            if (result.outcome === 'delivered') notifyDelivered(item);
+            if (result.outcome === 'terminal') notifyTerminal(item, result.ack);
           } finally {
             pendingSends -= 1;
           }
@@ -104,8 +125,12 @@ export function createDispatchOutbox(
       void (async () => {
         pendingSends += 1;
         try {
-          const ok = await trySend(item);
-          if (!ok) {
+          const result = await trySend(item);
+          if (result.outcome === 'terminal') {
+            notifyTerminal(item, result.ack);
+            return;
+          }
+          if (result.outcome === 'retry') {
             queue.set(dispatchId, item);
             return;
           }
@@ -120,12 +145,17 @@ export function createDispatchOutbox(
       flushing = true;
       try {
         for (const [dispatchId, item] of Array.from(queue.entries())) {
-          const ok = await trySend(item);
-          if (ok) {
+          const result = await trySend(item);
+          if (result.outcome === 'delivered') {
             if (queue.get(dispatchId) === item) {
               queue.delete(dispatchId);
               notifyDelivered(item);
             }
+          } else if (result.outcome === 'terminal') {
+            if (queue.get(dispatchId) === item) {
+              queue.delete(dispatchId);
+            }
+            notifyTerminal(item, result.ack);
           }
         }
       } finally {

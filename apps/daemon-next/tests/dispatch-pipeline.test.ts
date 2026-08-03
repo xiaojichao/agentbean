@@ -260,7 +260,8 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       'channel-1',
       'runs',
       'agent-1',
-      'request-1',
+      // #1053：无 taskContext 时 taskId 回退为安全的 dispatch id（不再是 requestId）。
+      'dispatch-reference-no-cwd',
       '1',
       'dispatch-reference-no-cwd',
       'inputs',
@@ -935,7 +936,8 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
   test('recovery keeps unaccepted ACK runs unreported and retries them on reconnect', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
     const harness = createFakeSocket();
-    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'NOT_FOUND' });
+    // 非终态拒绝（非 NOT_FOUND）：保持未回报并在重连后重试（#1053 终态语义见下一条测试）。
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'INTERNAL' });
     const workspace = prepareWorkspaceRun(cwd, 'disp-retry');
     persistWorkspaceRunResponse(workspace, 'retry reply');
     persistWorkspaceRunManifest(workspace, {
@@ -982,6 +984,61 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
       const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
       expect(typeof reportedManifest.reportedAt).toBe('number');
     });
+  });
+
+  // #1053：Server 以 NOT_FOUND 拒绝恢复回报 = dispatch 身份无法确认（终态）。
+  // fail closed：写 unreportable 标记保留可诊断状态，不再无限重试。
+  test('recovery marks run unreportable on terminal NOT_FOUND and stops retrying', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const harness = createFakeSocket();
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'NOT_FOUND' });
+    const workspace = prepareWorkspaceRun(cwd, 'disp-terminal');
+    persistWorkspaceRunResponse(workspace, 'terminal reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'disp-terminal',
+      agentId: 'agent-1',
+      channelId: 'chan-1',
+      status: 'succeeded',
+      cwd,
+      startedAt: 1000,
+      completedAt: 2000,
+      files: [],
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [{
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        command: 'codex',
+        cwd,
+      }],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'should not run' }),
+    });
+
+    await client.start();
+    await vi.waitFor(() => {
+      const manifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
+      expect(manifest.reportedAt).toBeUndefined();
+      expect(typeof manifest.unreportableAt).toBe('number');
+      expect(manifest.unreportableReason).toBe('DISPATCH_RESULT_NOT_FOUND');
+    });
+
+    // 终态后不再重试：重连也不会重发该 run 的回报。
+    const resultEmitCount = () => harness.emits.filter(
+      (e) => e.event === AGENT_EVENTS.dispatch.result
+        && (e.payload as { dispatchId?: string }).dispatchId === 'disp-terminal',
+    ).length;
+    const before = resultEmitCount();
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: true });
+    await harness.reconnect();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(resultEmitCount()).toBe(before);
   });
 
   test('scanRequested custom agent cwd makes persisted workspace runs recoverable', async () => {
