@@ -12684,9 +12684,10 @@ async function buildDispatchWorkspaceSnapshot(
     });
   }
 
-  const taskContext = input.managementInvocation?.intent.schemaVersion === 2
-    ? input.managementInvocation.intent.taskContext
-    : undefined;
+  // V1 and V2 invocations both carry the frozen task context.  It must be
+  // authoritative for provenance; schema V2 is the InputSet gate, not the
+  // boundary for task identity.
+  const taskContext = input.managementInvocation?.intent.taskContext;
   const taskId: string = taskContext?.taskId
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
     ?? input.dispatch.id;
