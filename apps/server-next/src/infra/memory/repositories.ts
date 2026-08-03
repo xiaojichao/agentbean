@@ -25,6 +25,7 @@ import type {
   PublishWorkspaceRevisionOutcome,
   WorkspacePublishStagingRecord,
 } from '../../application/repositories.js';
+import type { DeviceWorkspaceSnapshotDto } from '../../../../../packages/contracts/src/index.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
 import {
@@ -140,6 +141,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectChannelWorkspaces = new Map<string, ProjectChannelWorkspaceRecord>();
   const projectChannelWorkspaceRevisions = new Map<string, ProjectChannelWorkspaceRevisionRecord>();
   const workspacePublishStagings = new Map<string, WorkspacePublishStagingRecord>();
+  const deviceWorkspaceSnapshots = new Map<string, DeviceWorkspaceSnapshotDto>();
   const tasks = new Map<string, TaskRecord>();
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
@@ -1756,6 +1758,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async delete(input) {
         workspacePublishStagings.delete(`${input.teamId}:${input.publishId}`);
+      },
+    },
+    deviceWorkspaceSnapshots: {
+      async create(snapshot) {
+        const existing = deviceWorkspaceSnapshots.get(snapshot.id);
+        if (existing) return structuredClone(existing);
+        const stored = structuredClone(snapshot);
+        deviceWorkspaceSnapshots.set(snapshot.id, stored);
+        return structuredClone(stored);
+      },
+      async getById(input) {
+        const snapshot = deviceWorkspaceSnapshots.get(input.snapshotId);
+        if (!snapshot || snapshot.teamId !== input.teamId || snapshot.channelId !== input.channelId) return null;
+        return structuredClone(snapshot);
       },
     },
     tasks: {

@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -42,6 +42,11 @@ import {
   createFilesystemWorkspacePublishRecoveryStore,
   resumeLocalWorkspacePublish,
 } from './workspace-publish-recovery.js';
+import {
+  assertDeviceWorkspaceSnapshotReady,
+  materializeDeviceWorkspaceSnapshot,
+  materializeSnapshotInputs,
+} from './workspace-snapshot.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -49,6 +54,12 @@ export { createCommandExecutor } from './executor.js';
 export type { CommandExecutorOptions } from './executor.js';
 export { downloadAttachments } from './attachments.js';
 export { materializeProjectDocumentInputSet } from './project-document-input-set.js';
+export {
+  assertDeviceWorkspaceSnapshotReady,
+  isDeviceWorkspaceSnapshotReady,
+  materializeDeviceWorkspaceSnapshot,
+  materializeSnapshotInputs,
+} from './workspace-snapshot.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
 export {
   discoverRecoverableWorkspaceRuns,
@@ -286,6 +297,8 @@ export interface DispatchRequestPayload {
   memoryContext?: readonly DispatchMemoryContextItemDto[];
   projectReferenceSets?: readonly ProjectReferenceSetDto[];
   projectDocumentInputSet?: ProjectDocumentInputSetV1;
+  /** #1043 Server 冻结的不可变 Device snapshot；run 启动不得回读 current/final。 */
+  workspaceSnapshot?: DeviceWorkspaceSnapshotDto;
   /**
    * #1003 / #966：执行时冻结的 Project Channel Workspace revisionId。
    * claim 路径可来自 execution snapshot；未提供时交付阶段会尝试读取频道当前 revision 作为 baseline。
@@ -706,6 +719,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const taskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
           const taskAttempt = request.taskAttempt ?? 1;
           const workspaceRunId = request.workspaceRunId ?? request.id;
+          const frozenWorkspaceRevisionId = request.workspaceSnapshot?.workspaceRevisionId ?? request.workspaceRevisionId;
           const workspace = typeof request.teamId === 'string' && typeof request.channelId === 'string'
             && request.teamId.length > 0 && request.channelId.length > 0
             ? prepareChannelWorkspaceRun({
@@ -717,9 +731,44 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 taskId,
                 taskAttempt,
                 workspaceRunId,
-                ...(request.workspaceRevisionId ? { workspaceRevisionId: request.workspaceRevisionId } : {}),
+                ...(frozenWorkspaceRevisionId ? { workspaceRevisionId: frozenWorkspaceRevisionId } : {}),
               })
             : (explicitWorkspaceCwd ? prepareWorkspaceRun(explicitWorkspaceCwd, request.id) : undefined);
+          if (request.workspaceSnapshot) {
+            if (!workspace || !request.workspaceSnapshot.workspaceRevisionId) {
+              throw new Error('DEVICE_WORKSPACE_SNAPSHOT_RUNTIME_UNAVAILABLE');
+            }
+            const snapshotTaskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
+            const snapshotAttempt = request.taskAttempt ?? 1;
+            const snapshotRunId = request.workspaceRunId ?? request.id;
+            if (request.agentId !== request.workspaceSnapshot.provenance.agentId
+              || snapshotTaskId !== request.workspaceSnapshot.provenance.taskId
+              || snapshotAttempt !== request.workspaceSnapshot.provenance.taskAttempt
+              || snapshotRunId !== request.workspaceSnapshot.provenance.workspaceRunId) {
+              throw new Error('DEVICE_WORKSPACE_SNAPSHOT_AUTHORITY_MISMATCH');
+            }
+            const snapshotDir = join(
+              agentBeanHome,
+              'workspaces',
+              request.teamId,
+              'channels',
+              request.channelId,
+              'snapshots',
+              request.workspaceSnapshot.workspaceRevisionId,
+            );
+            const materialized = await materializeDeviceWorkspaceSnapshot({
+              snapshot: request.workspaceSnapshot,
+              snapshotDir,
+              serverUrl,
+              token: device.token ?? '',
+              teamId: device.teamId,
+              channelId: request.channelId,
+              fetch: fetchFn,
+            });
+            if (!materialized.ok) throw new Error(`DEVICE_WORKSPACE_SNAPSHOT_${materialized.error}`);
+            await materializeSnapshotInputs(snapshotDir, workspace.inputDir, request.workspaceSnapshot);
+            request.prompt = `${request.prompt}\n\n## 不可变 Workspace snapshot\nworkspaceRevisionId=${request.workspaceSnapshot.workspaceRevisionId}\n输入已物化到 ${workspace.inputDir}，不得读取 current/final 或频道缓存。`;
+          }
           if (request.attachments?.length && device.token) {
             if (!workspace) throw new Error('WORKSPACE_PROJECTION_REQUIRED');
             const downloaded = await downloadAttachments(
@@ -825,7 +874,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               // #1003：频道存在 Project Channel Workspace 时走 staging 原子发布；否则回退 legacy upload。
               // 无 serverUrl 时（部分 e2e stub）不走 staging。
               let usedStaging = false;
-              let baselineRevisionId = request.workspaceRevisionId;
+              let baselineRevisionId = frozenWorkspaceRevisionId;
               if (serverUrl && !baselineRevisionId) {
                 const current = await fetchProjectChannelWorkspaceCurrent({
                   serverUrl,
@@ -1003,7 +1052,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 taskId,
                 taskAttempt,
                 workspaceRunId,
-                ...(request.workspaceRevisionId ? { workspaceRevisionId: request.workspaceRevisionId } : {}),
+                ...(frozenWorkspaceRevisionId ? { workspaceRevisionId: frozenWorkspaceRevisionId } : {}),
+                ...(request.workspaceSnapshot ? { workspaceSnapshotId: request.workspaceSnapshot.id } : {}),
                 provenance: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   source: 'run-output' as const,

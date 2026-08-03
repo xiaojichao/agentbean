@@ -36,6 +36,7 @@ import type {
   ProjectDocumentBundleBackfillMode,
   SkillDto,
 } from '../../../../../packages/contracts/src/index.js';
+import type { DeviceWorkspaceSnapshotDto } from '../../../../../packages/contracts/src/index.js';
 import { createSqliteManagementPersistence } from './management-repositories.js';
 import { createSqliteTaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { createTaskCoordinationUnitOfWork } from '../../application/task-coordination-unit-of-work.js';
@@ -260,6 +261,7 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0073_pi_authority_cutover.sql');
   // #1005：staging 内容磁盘路径（BLOB 可选，大文件不入 team DB）。
   applyMigration(db, 'team/0074_workspace_staging_storage_path.sql');
+  applyMigration(db, 'team/0075_device_workspace_snapshots.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2390,6 +2392,32 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             .run(input.teamId, input.publishId);
         });
         tx();
+      },
+    },
+    deviceWorkspaceSnapshots: {
+      async create(snapshot: DeviceWorkspaceSnapshotDto) {
+        teamDb.prepare(`INSERT OR IGNORE INTO device_workspace_snapshots
+          (id, team_id, channel_id, snapshot_json, created_at)
+          VALUES (?, ?, ?, ?, ?)`).run(
+          snapshot.id,
+          snapshot.teamId,
+          snapshot.channelId,
+          JSON.stringify(snapshot),
+          snapshot.provenance.createdAt,
+        );
+        const row = teamDb.prepare('SELECT snapshot_json FROM device_workspace_snapshots WHERE id = ?').get(snapshot.id) as { snapshot_json?: unknown } | undefined;
+        if (!row || typeof row.snapshot_json !== 'string') throw new Error('DEVICE_WORKSPACE_SNAPSHOT_PERSIST_FAILED');
+        return JSON.parse(row.snapshot_json) as DeviceWorkspaceSnapshotDto;
+      },
+      async getById(input) {
+        const row = teamDb.prepare(`SELECT snapshot_json FROM device_workspace_snapshots
+          WHERE id = ? AND team_id = ? AND channel_id = ?`).get(
+          input.snapshotId,
+          input.teamId,
+          input.channelId,
+        ) as { snapshot_json?: unknown } | undefined;
+        if (!row || typeof row.snapshot_json !== 'string') return null;
+        return JSON.parse(row.snapshot_json) as DeviceWorkspaceSnapshotDto;
       },
     },
     channelDocuments: {

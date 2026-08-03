@@ -5,10 +5,141 @@ import type { ArtifactRole } from './artifact.js';
 export interface ProjectChannelWorkspaceFileDto {
   path: string;
   artifactId: ID;
+  /** #1043：稳定的 ProjectArtifactVersion 身份；旧 workspace revision 可缺省。 */
+  artifactVersionId?: ID;
+  collectionId?: ID;
   filename: string;
   mimeType: string;
   sizeBytes: number;
   sha256?: string;
+}
+
+/** #1043 执行前解析的稳定版本选择。current/final/file_package 只允许在 Server 端解析一次；file_package 使用包成员的 current projection。 */
+export type DeviceWorkspaceSnapshotSelectionDto =
+  | { readonly kind: 'current' | 'final' | 'file_package'; readonly collectionId: ID }
+  | { readonly kind: 'version'; readonly collectionId: ID; readonly versionId: ID };
+
+export interface DeviceWorkspaceSnapshotInputSetItemDto {
+  readonly collectionId: ID;
+  readonly artifactVersionId: ID;
+  readonly artifactId: ID;
+  readonly path: string;
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+}
+
+export interface DeviceWorkspaceSnapshotInputSetDto {
+  readonly id: ID;
+  readonly contractVersion: 1;
+  readonly selections: readonly DeviceWorkspaceSnapshotSelectionDto[];
+  readonly items: readonly DeviceWorkspaceSnapshotInputSetItemDto[];
+}
+
+export interface DeviceWorkspaceSnapshotProvenanceDto {
+  readonly createdByDeviceId: ID;
+  readonly agentId: ID;
+  readonly taskId: ID;
+  readonly taskAttempt: number;
+  readonly workspaceRunId: ID;
+  readonly createdAt: UnixMs;
+}
+
+/** #1043 Server 创建、Device 物化并在 run 启动时只读使用的不可变 snapshot。 */
+export interface DeviceWorkspaceSnapshotDto {
+  readonly id: ID;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly workspaceRevisionId: ID;
+  readonly inputSet: DeviceWorkspaceSnapshotInputSetDto;
+  readonly provenance: DeviceWorkspaceSnapshotProvenanceDto;
+  readonly immutable: true;
+}
+
+export interface CreateDeviceWorkspaceSnapshotInput {
+  readonly token: string;
+  readonly teamId: ID;
+  readonly channelId: ID;
+  readonly agentId: ID;
+  readonly taskId: ID;
+  readonly taskAttempt: number;
+  readonly workspaceRunId: ID;
+  readonly selections: readonly DeviceWorkspaceSnapshotSelectionDto[];
+}
+
+/** #1043 runtime boundary：Device/Server 不接受带漂移字段或未知 key 的 snapshot。 */
+export function parseDeviceWorkspaceSnapshot(value: unknown): DeviceWorkspaceSnapshotDto {
+  const snapshot = asRecord(value);
+  exactKeys(snapshot, ['id', 'teamId', 'channelId', 'workspaceRevisionId', 'inputSet', 'provenance', 'immutable']);
+  const inputSet = asRecord(snapshot.inputSet);
+  exactKeys(inputSet, ['id', 'contractVersion', 'selections', 'items']);
+  if (!isId(snapshot.id) || !isId(snapshot.teamId) || !isId(snapshot.channelId)
+    || !isId(snapshot.workspaceRevisionId) || snapshot.immutable !== true
+    || !isId(inputSet.id) || inputSet.contractVersion !== 1 || !Array.isArray(inputSet.selections) || !Array.isArray(inputSet.items)) invalidSnapshot();
+  const provenance = asRecord(snapshot.provenance);
+  exactKeys(provenance, ['createdByDeviceId', 'agentId', 'taskId', 'taskAttempt', 'workspaceRunId', 'createdAt']);
+  if (!isId(provenance.createdByDeviceId) || !isId(provenance.agentId) || !isId(provenance.taskId)
+    || !isId(provenance.workspaceRunId) || typeof provenance.taskAttempt !== 'number'
+    || !Number.isSafeInteger(provenance.taskAttempt) || provenance.taskAttempt < 1
+    || typeof provenance.createdAt !== 'number' || !Number.isSafeInteger(provenance.createdAt)) invalidSnapshot();
+  const selections = inputSet.selections.map(parseDeviceWorkspaceSnapshotSelection);
+  const items = inputSet.items.map((item) => {
+    const record = asRecord(item);
+    exactKeys(record, ['collectionId', 'artifactVersionId', 'artifactId', 'path', 'filename', 'mimeType', 'sizeBytes', 'sha256']);
+    if (!isId(record.collectionId) || !isId(record.artifactVersionId) || !isId(record.artifactId)
+      || !isText(record.path) || !isText(record.filename) || !isText(record.mimeType)
+      || typeof record.sizeBytes !== 'number' || !Number.isSafeInteger(record.sizeBytes) || record.sizeBytes < 0
+      || !/^[a-f0-9]{64}$/i.test(String(record.sha256))) invalidSnapshot();
+    return record as unknown as DeviceWorkspaceSnapshotInputSetItemDto;
+  });
+  return structuredClone({
+    id: snapshot.id as ID,
+    teamId: snapshot.teamId as ID,
+    channelId: snapshot.channelId as ID,
+    workspaceRevisionId: snapshot.workspaceRevisionId as ID,
+    inputSet: { id: inputSet.id as ID, contractVersion: 1 as const, selections, items },
+    provenance: provenance as unknown as DeviceWorkspaceSnapshotDto['provenance'],
+    immutable: true as const,
+  });
+}
+
+export function parseDeviceWorkspaceSnapshotSelection(value: unknown): DeviceWorkspaceSnapshotSelectionDto {
+  const selection = asRecord(value);
+  if (selection.kind === 'version') {
+    exactKeys(selection, ['kind', 'collectionId', 'versionId']);
+    if (!isId(selection.collectionId) || !isId(selection.versionId)) invalidSnapshot();
+    return selection as unknown as DeviceWorkspaceSnapshotSelectionDto;
+  }
+  if (selection.kind === 'current' || selection.kind === 'final' || selection.kind === 'file_package') {
+    exactKeys(selection, ['kind', 'collectionId']);
+    if (!isId(selection.collectionId)) invalidSnapshot();
+    return selection as unknown as DeviceWorkspaceSnapshotSelectionDto;
+  }
+  invalidSnapshot();
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalidSnapshot();
+  return value as Record<string, unknown>;
+}
+
+function exactKeys(value: Record<string, unknown>, required: readonly string[]): void {
+  const actual = Object.keys(value).sort();
+  const expected = [...required].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) invalidSnapshot();
+}
+
+function isId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function invalidSnapshot(): never {
+  throw new Error('DEVICE_WORKSPACE_SNAPSHOT_INVALID');
 }
 
 /**

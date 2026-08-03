@@ -1,4 +1,4 @@
-import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DispatchDto, HumanMemberDto, ID, MessageDto, ProjectChannelWorkspaceRevisionDto, ProjectChannelWorkspaceDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
+import type { AgentDto, ArtifactDto, ChannelDocumentDto, ChannelDocumentRevisionDto, ChannelDto, DeviceDto, DeviceWorkspaceSnapshotDto, DispatchDto, HumanMemberDto, ID, MessageDto, ProjectChannelWorkspaceRevisionDto, ProjectChannelWorkspaceDto, RuntimeDto, SkillDto, TaskDto, TeamDto, UnixMs, UserDto, WorkspaceRunDto, WorkspaceRunStatus } from '../../../../packages/contracts/src/index.js';
 import type { ManagementRepositories } from './management-repositories.js';
 import type { ManagementUnitOfWork } from './management-unit-of-work.js';
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
@@ -525,6 +525,12 @@ export interface TaskRepository {
   delete(input: { taskId: ID }): Promise<TaskRecord | null>;
 }
 
+/** #1043 Server-authoritative immutable snapshot persistence. */
+export interface DeviceWorkspaceSnapshotRepository {
+  create(snapshot: DeviceWorkspaceSnapshotDto): Promise<DeviceWorkspaceSnapshotDto>;
+  getById(input: { teamId: ID; channelId: ID; snapshotId: ID }): Promise<DeviceWorkspaceSnapshotDto | null>;
+}
+
 export interface ServerNextRepositories {
   management: ManagementRepositories;
   managementUnitOfWork: ManagementUnitOfWork;
@@ -562,6 +568,7 @@ export interface ServerNextRepositories {
   projectChannelWorkspaces: ProjectChannelWorkspaceRepository;
   /** #967 Workspace 大文件暂存（publish identity 续传 / 幂等提交）。 */
   workspacePublishStagings: WorkspacePublishStagingRepository;
+  deviceWorkspaceSnapshots: DeviceWorkspaceSnapshotRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;

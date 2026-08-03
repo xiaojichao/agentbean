@@ -5,6 +5,11 @@ import type {
   ProjectDocumentInputSetResultDto,
   ProjectDocumentInputSetResultProposalV1,
 } from '../../../../packages/contracts/src/index.js';
+import type {
+  CreateDeviceWorkspaceSnapshotInput,
+  DeviceWorkspaceSnapshotDto,
+  DeviceWorkspaceSnapshotInputSetItemDto,
+} from '../../../../packages/contracts/src/project-channel-workspace.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
 import { formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDescriptorDto, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type WorkspacePublishStagingDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
@@ -488,6 +493,10 @@ export interface ServerNextUseCases {
   exportProjectChannelWorkspace(input: ExportProjectChannelWorkspaceInput): Promise<Ack<{ manifest: ArchiveExportManifestDto }>>;
   /** #969 列出 workspace 全部 revision（最新在前）。 */
   listProjectChannelWorkspaceRevisions(input: ListProjectChannelWorkspaceInput): Promise<Ack<{ revisions: ProjectChannelWorkspaceRevisionDto[] }>>;
+  /** #1043 将 current/final/整包/显式版本解析为不可变 Device snapshot。 */
+  createDeviceWorkspaceSnapshot(input: CreateDeviceWorkspaceSnapshotInput): Promise<Ack<{ snapshot: DeviceWorkspaceSnapshotDto }>>;
+  /** #1043 按已冻结身份读取 snapshot；不存在或跨 Team/Channel 均拒绝。 */
+  getDeviceWorkspaceSnapshot(input: { token: string; teamId: string; channelId: string; snapshotId: string }): Promise<Ack<{ snapshot: DeviceWorkspaceSnapshotDto }>>;
   /**
    * #967 开启或续用稳定 publish identity 的暂存会话。
    * 上传中内容不进 revision / 频道索引；同 identity + 兼容 plan 幂等返回现有会话。
@@ -1370,6 +1379,8 @@ export interface DeviceGetArtifactInput {
   token: string;
   teamId: string;
   artifactId: string;
+  /** #1043：Device 下载 snapshot 时必须绑定并复验稳定版本身份。 */
+  expectedArtifactVersionId?: string;
 }
 
 export interface GetWorkspaceRunInput {
@@ -5543,8 +5554,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!path || paths.has(path)) return makeFailure('VALIDATION_ERROR', 'Workspace paths must be unique and relative');
         const artifact = await repositories.artifacts.getForTeam({ teamId: workspaceInput.teamId, artifactId: file.artifactId });
         if (!artifact || artifact.channelId !== workspaceInput.channelId) return makeFailure('NOT_FOUND', 'Workspace artifact not found');
+        const artifactVersion = await repositories.channelProjects.getArtifactVersionByArtifact({ teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, artifactId: artifact.id });
         paths.add(path);
-        files.push({ path, artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes, ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}) });
+        files.push({ path, artifactId: artifact.id, ...(artifactVersion ? { artifactVersionId: artifactVersion.id, collectionId: artifactVersion.collectionId } : {}), filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes, ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}) });
       }
       const now = clock.now();
       const revision: ProjectChannelWorkspaceRevisionRecord = { id: ids.nextId(), teamId: workspaceInput.teamId, channelId: workspaceInput.channelId, revision: 1, files, createdBy: workspaceInput.userId, createdAt: now };
@@ -5619,8 +5631,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!artifact || artifact.channelId !== importInput.channelId) {
           return makeFailure('NOT_FOUND', 'Workspace artifact not found');
         }
+        const artifactVersion = await repositories.channelProjects.getArtifactVersionByArtifact({ teamId: importInput.teamId, channelId: importInput.channelId, artifactId: artifact.id });
         files.push({
           path, artifactId: artifact.id,
+          ...(artifactVersion ? { artifactVersionId: artifactVersion.id, collectionId: artifactVersion.collectionId } : {}),
           filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes,
           ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
         });
@@ -5657,8 +5671,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!artifact || artifact.channelId !== publishInput.channelId) {
           return makeFailure('NOT_FOUND', 'Workspace artifact not found');
         }
+        const artifactVersion = await repositories.channelProjects.getArtifactVersionByArtifact({ teamId: publishInput.teamId, channelId: publishInput.channelId, artifactId: artifact.id });
         files.push({
           path, artifactId: artifact.id,
+          ...(artifactVersion ? { artifactVersionId: artifactVersion.id, collectionId: artifactVersion.collectionId } : {}),
           filename: artifact.filename, mimeType: artifact.mimeType, sizeBytes: artifact.sizeBytes,
           ...(artifact.sha256 ? { sha256: artifact.sha256 } : {}),
         });
@@ -5723,6 +5739,143 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // The manifest returned is the immutable file list (paths + artifact refs + size/sha).
       // The server never receives the local target directory (no absolute-path leakage).
       return resolveProjectChannelWorkspaceRevision(repositories, workspace, materializeInput.revisionId);
+    },
+
+    async createDeviceWorkspaceSnapshot(snapshotInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, snapshotInput);
+      if (!actor.ok) return actor;
+      const credentials = verifyDeviceToken(snapshotInput.token, sessionSecret);
+      const deviceId = credentials?.deviceId;
+      if (!deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
+      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+        userId: actor.userId,
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+      });
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels reject new snapshots');
+      if (!Number.isSafeInteger(snapshotInput.taskAttempt) || snapshotInput.taskAttempt < 1
+        || !snapshotInput.taskId?.trim()
+        || !snapshotInput.workspaceRunId?.trim()
+        || !Array.isArray(snapshotInput.selections)
+        || snapshotInput.selections.length === 0) {
+        return makeFailure('VALIDATION_ERROR', 'Snapshot taskAttempt and selections are required');
+      }
+      const agent = await repositories.agents.getById(snapshotInput.agentId);
+      if (!agent
+        || agent.primaryTeamId !== snapshotInput.teamId
+        || agent.deviceId !== deviceId
+        || !agent.visibleTeamIds.includes(snapshotInput.teamId)
+        || !access.channel.agentMemberIds.includes(agent.id)) {
+        return makeFailure('FORBIDDEN', 'Device is not authorized for this Agent');
+      }
+      const collections = await repositories.channelProjects.listArtifactCollections({
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+      });
+      const versions = await repositories.channelProjects.listArtifactVersions({
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+      });
+      const selectedVersionIds = new Set<string>();
+      for (const selection of snapshotInput.selections) {
+        const collection = collections.find((candidate) => candidate.id === selection.collectionId);
+        if (!collection) return makeFailure('NOT_FOUND', 'Snapshot collection not found');
+        if (selection.kind === 'current' || selection.kind === 'file_package') {
+          selectedVersionIds.add(collection.currentVersionId);
+        } else if (selection.kind === 'final') {
+          if (!collection.finalVersionId) return makeFailure('NOT_FOUND', 'Snapshot final version is missing');
+          selectedVersionIds.add(collection.finalVersionId);
+        } else if (selection.kind === 'version') {
+          const requested = versions.find((candidate) => candidate.id === selection.versionId);
+          if (!requested || requested.collectionId !== collection.id) {
+            return makeFailure('NOT_FOUND', 'Snapshot artifact version not found');
+          }
+          selectedVersionIds.add(requested.id);
+        }
+      }
+      if (selectedVersionIds.size === 0) return makeFailure('VALIDATION_ERROR', 'Snapshot resolved to no artifact versions');
+      const selectedItems: DeviceWorkspaceSnapshotInputSetItemDto[] = [];
+      const paths = new Set<string>();
+      for (const versionId of selectedVersionIds) {
+        const version = versions.find((candidate) => candidate.id === versionId);
+        if (!version) return makeFailure('NOT_FOUND', 'Snapshot artifact version is missing');
+        const artifact = await repositories.artifacts.getForTeam({ teamId: snapshotInput.teamId, artifactId: version.artifactId });
+        if (!artifact || artifact.channelId !== snapshotInput.channelId
+          || !(await isPublicChannelFileArtifact(repositories, artifact))) {
+          return makeFailure('FORBIDDEN', 'Snapshot artifact is no longer visible');
+        }
+        if (!artifact.sha256 || !/^[a-f0-9]{64}$/i.test(artifact.sha256) || !Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 0) {
+          return makeFailure('CONFLICT', 'Snapshot artifact is missing stable hash or size');
+        }
+        const path = normalizeWorkspacePath(artifact.filename);
+        if (!path || paths.has(path)) return makeFailure('VALIDATION_ERROR', 'Snapshot contains ambiguous file paths');
+        paths.add(path);
+        selectedItems.push({
+          collectionId: version.collectionId,
+          artifactVersionId: version.id,
+          artifactId: version.artifactId,
+          path,
+          filename: artifact.filename,
+          mimeType: artifact.mimeType,
+          sizeBytes: artifact.sizeBytes,
+          sha256: artifact.sha256.toLowerCase(),
+        });
+      }
+      const now = clock.now();
+      const snapshot: DeviceWorkspaceSnapshotDto = {
+        id: ids.nextId(),
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+        workspaceRevisionId: ids.nextId(),
+        inputSet: {
+          id: ids.nextId(),
+          contractVersion: 1,
+          selections: structuredClone(snapshotInput.selections),
+          items: structuredClone(selectedItems),
+        },
+        provenance: {
+          createdByDeviceId: deviceId,
+          agentId: snapshotInput.agentId,
+          taskId: snapshotInput.taskId,
+          taskAttempt: snapshotInput.taskAttempt,
+          workspaceRunId: snapshotInput.workspaceRunId,
+          createdAt: now,
+        },
+        immutable: true,
+      };
+      await repositories.deviceWorkspaceSnapshots.create(snapshot);
+      return makeSuccess({ snapshot: structuredClone(snapshot) });
+    },
+
+    async getDeviceWorkspaceSnapshot(snapshotInput) {
+      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, snapshotInput);
+      if (!actor.ok) return actor;
+      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+        userId: actor.userId,
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+      });
+      if (!access.ok) return access;
+      if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels reject snapshot materialization');
+      const snapshot = await repositories.deviceWorkspaceSnapshots.getById({
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+        snapshotId: snapshotInput.snapshotId,
+      });
+      if (!snapshot) {
+        return makeFailure('NOT_FOUND', 'Device workspace snapshot not found');
+      }
+      const credentials = verifyDeviceToken(snapshotInput.token, sessionSecret);
+      const agent = await repositories.agents.getById(snapshot.provenance.agentId);
+      if (!credentials?.deviceId || !agent
+        || agent.primaryTeamId !== snapshotInput.teamId
+        || agent.deviceId !== credentials.deviceId
+        || !agent.visibleTeamIds.includes(snapshotInput.teamId)
+        || !access.channel.agentMemberIds.includes(agent.id)) {
+        return makeFailure('FORBIDDEN', 'Device or Agent authority was revoked');
+      }
+      return makeSuccess({ snapshot: structuredClone(snapshot) });
     },
 
     // #967 Workspace 大文件暂存 / 断网续传 / 可恢复原子发布
@@ -9083,11 +9236,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!actor.ok) {
         return actor;
       }
-      return this.getArtifactFile({
+      const result = await this.getArtifactFile({
         userId: actor.userId,
         teamId: artifactInput.teamId,
         artifactId: artifactInput.artifactId,
       });
+      if (!result.ok || !artifactInput.expectedArtifactVersionId) return result;
+      const versions = await repositories.channelProjects.listArtifactVersions({
+        teamId: artifactInput.teamId,
+        channelId: result.artifact.channelId,
+      });
+      const version = versions.find((candidate) =>
+        candidate.id === artifactInput.expectedArtifactVersionId
+        && candidate.artifactId === result.artifact.id,
+      );
+      if (!version) return makeFailure('NOT_FOUND', 'Artifact version not found');
+      return result;
     },
 
     async getWorkspaceRun(runInput) {

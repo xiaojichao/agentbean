@@ -12,6 +12,7 @@ import {
   makeFailure,
   makeSuccess,
   normalizeArtifactMimeType,
+  parseDeviceWorkspaceSnapshot,
   supportsArtifactPreviewDerivativeMimeType,
   type Ack,
   type AgentDto,
@@ -59,6 +60,20 @@ import {
 } from '../src/index';
 
 describe('first-slice contract result shape', () => {
+  test('#1043 rejects unknown snapshot keys at the runtime boundary', () => {
+    const snapshot = {
+      id: 'snapshot-1', teamId: 'team-1', channelId: 'channel-1', workspaceRevisionId: 'revision-1', immutable: true,
+      inputSet: {
+        id: 'input-set-1', contractVersion: 1,
+        selections: [{ kind: 'version', collectionId: 'collection-1', versionId: 'version-1' }],
+        items: [{ collectionId: 'collection-1', artifactVersionId: 'version-1', artifactId: 'artifact-1', path: 'a.txt', filename: 'a.txt', mimeType: 'text/plain', sizeBytes: 1, sha256: 'a'.repeat(64) }],
+      },
+      provenance: { createdByDeviceId: 'device-1', agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1', createdAt: 1 },
+    };
+    expect(parseDeviceWorkspaceSnapshot(snapshot).inputSet.items[0]!.artifactVersionId).toBe('version-1');
+    expect(() => parseDeviceWorkspaceSnapshot({ ...snapshot, unexpected: true })).toThrow('DEVICE_WORKSPACE_SNAPSHOT_INVALID');
+  });
+
   test('keeps artifact inline and derivative MIME policies explicit', () => {
     expect(normalizeArtifactMimeType('Text/Plain; charset=utf-8')).toBe('text/plain');
     expect(isSafeArtifactInlinePreviewMimeType('video/mp4')).toBe(true);

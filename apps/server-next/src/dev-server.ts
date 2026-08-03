@@ -1192,7 +1192,12 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
     }
     const disposition = match[3] === 'download' ? 'attachment' : 'inline';
     if (input.request.method === 'GET' && artifactId) {
-      await handleArtifactRead(input, { teamId, artifactId, disposition });
+      await handleArtifactRead(input, {
+        teamId,
+        artifactId,
+        disposition,
+        expectedArtifactVersionId: readOptionalQueryString(input.url, 'artifactVersionId'),
+      });
       return true;
     }
     writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
@@ -1293,11 +1298,21 @@ async function handleArtifactDerivativeRead(
 
 async function handleArtifactRead(
   input: ArtifactHttpInput,
-  options: { teamId: string; artifactId: string; disposition: 'inline' | 'attachment' },
+  options: {
+    teamId: string;
+    artifactId: string;
+    disposition: 'inline' | 'attachment';
+    expectedArtifactVersionId?: string;
+  },
 ): Promise<void> {
   const token = readToken(input.url, input.request);
   const result = isDeviceToken(token)
-    ? await input.app.getArtifactFileForDevice({ token, teamId: options.teamId, artifactId: options.artifactId })
+    ? await input.app.getArtifactFileForDevice({
+        token,
+        teamId: options.teamId,
+        artifactId: options.artifactId,
+        ...(options.expectedArtifactVersionId ? { expectedArtifactVersionId: options.expectedArtifactVersionId } : {}),
+      })
     : await getArtifactFileForSession(input, token, options);
   if (!result.ok) {
     writeAckFailure(input.response, result);
@@ -1309,6 +1324,10 @@ async function handleArtifactRead(
     return;
   }
   const fileSize = statSync(stored.absolutePath).size;
+  if (options.expectedArtifactVersionId && result.artifact.sizeBytes !== fileSize) {
+    writeJson(input.response, 409, { ok: false, error: 'ARTIFACT_SIZE_MISMATCH' });
+    return;
+  }
   const markdownPreview = options.disposition === 'inline'
     && (result.artifact.mimeType === 'text/markdown' || /\.(?:md|markdown)$/i.test(result.artifact.filename));
   if (markdownPreview) {
@@ -1359,6 +1378,7 @@ async function handleArtifactRead(
     'content-disposition': buildContentDisposition(disposition, result.artifact.filename),
     ...(streamingEnabled ? { 'accept-ranges': 'bytes' } : {}),
     ...(range.kind === 'partial' ? { 'content-range': `bytes ${start}-${end}/${fileSize}` } : {}),
+    ...(options.expectedArtifactVersionId ? { 'x-artifact-version-id': options.expectedArtifactVersionId } : {}),
   });
   if (contentLength === 0) {
     input.response.end();
