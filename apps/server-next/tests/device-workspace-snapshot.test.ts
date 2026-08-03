@@ -57,10 +57,16 @@ describe('#1043 Server Device workspace snapshot', () => {
     const promoted2 = await app.promoteArtifactToProjectVersion({ userId: registered.user.id, teamId, channelId: channel.channel.id, idempotencyKey: 'promote-2', artifactId: artifact2.id, stageId, collectionId: promoted1.collection.id, expectedCollectionRevision: 1 });
     expect(promoted2).toMatchObject({ ok: true, collection: { currentVersionId: expect.not.stringMatching(promoted1.version.id) } });
     expect(snapshot.snapshot.inputSet.items[0]!.artifactVersionId).toBe(promoted1.version.id);
+    const artifact3 = await repositories.artifacts.create({ id: 'artifact-3', teamId, channelId: channel.channel.id, uploaderId: registered.user.id, filename: 'c.txt', mimeType: 'text/plain', sizeBytes: 5, sha256: sha256('third'), pathKind: 'upload', role: 'attachment', createdAt: 3 });
+    const promoted3 = await app.promoteArtifactToProjectVersion({ userId: registered.user.id, teamId, channelId: channel.channel.id, idempotencyKey: 'promote-3', artifactId: artifact3.id, stageId, collection: { name: 'other-files', kind: 'bundle' } });
+    if (!promoted3.ok) throw new Error(promoted3.error);
     const packageSnapshot = await app.createDeviceWorkspaceSnapshot({
-      token: hello.credentials.token, teamId, channelId: channel.channel.id, agentId, taskId: task.id, taskAttempt: 2, workspaceRunId: 'run-package', selections: [{ kind: 'file_package', collectionId: promoted1.collection.id }],
+      token: hello.credentials.token, teamId, channelId: channel.channel.id, agentId, taskId: task.id, taskAttempt: 2, workspaceRunId: 'run-package', selections: [{ kind: 'file_package', collectionId: promoted1.collection.id, memberCollectionIds: [promoted1.collection.id, promoted3.collection.id] }],
     });
-    expect(packageSnapshot).toMatchObject({ ok: true, snapshot: { inputSet: { items: [{ artifactVersionId: promoted2.version.id, artifactId: 'artifact-2' }] } } });
+    expect(packageSnapshot.ok).toBe(true);
+    if (!packageSnapshot.ok) throw new Error(packageSnapshot.error);
+    expect(packageSnapshot.snapshot.inputSet.items.map((item) => item.artifactId)).toEqual(['artifact-2', 'artifact-3']);
+    expect(packageSnapshot.snapshot.inputSet.items.map((item) => item.artifactVersionId)).toEqual([promoted2.version.id, promoted3.version.id]);
     await expect(app.createDeviceWorkspaceSnapshot({
       token: hello.credentials.token, teamId, channelId: channel.channel.id, agentId, taskId: task.id, taskAttempt: 2, workspaceRunId: 'run-2', selections: [{ kind: 'final', collectionId: promoted1.collection.id }],
     })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });

@@ -10,6 +10,7 @@ export type DeviceWorkspaceSnapshotMaterializeError =
   | 'IDENTITY_MISMATCH'
   | 'SIZE_MISMATCH'
   | 'SHA_MISMATCH'
+  | 'AUTHORITY_REVOKED'
   | 'PERMISSION'
   | 'WRITE_FAILED';
 
@@ -25,6 +26,8 @@ export interface MaterializeDeviceWorkspaceSnapshotInput {
   readonly teamId: string;
   readonly channelId: string;
   readonly fetch?: typeof fetch;
+  /** Online refresh against Server authority before any new bytes are downloaded. */
+  readonly refreshSnapshot?: () => Promise<DeviceWorkspaceSnapshotDto | null>;
 }
 
 function safeRelativePath(value: string): boolean {
@@ -126,6 +129,21 @@ export async function materializeDeviceWorkspaceSnapshot(
   if (await verifyLocalSnapshot(snapshotDir, snapshot)) {
     return { ok: true, snapshotDir, written: snapshot.inputSet.items.map((item) => item.path), offline: true };
   }
+  if (input.refreshSnapshot) {
+    let refreshed: DeviceWorkspaceSnapshotDto | null;
+    try {
+      refreshed = await input.refreshSnapshot();
+    } catch {
+      return { ok: false, error: 'AUTHORITY_REVOKED' };
+    }
+    if (!refreshed) return { ok: false, error: 'AUTHORITY_REVOKED' };
+    try {
+      const parsed = parseDeviceWorkspaceSnapshot(refreshed);
+      if (canonicalJson(parsed) !== canonicalJson(snapshot)) return { ok: false, error: 'IDENTITY_MISMATCH' };
+    } catch {
+      return { ok: false, error: 'AUTHORITY_REVOKED' };
+    }
+  }
   const fetchFn = input.fetch ?? fetch;
   const stagingDir = `${snapshotDir}.agentbean-snapshot-staging`;
   try {
@@ -180,7 +198,7 @@ export async function materializeDeviceWorkspaceSnapshot(
   } catch (error) {
     await rm(stagingDir, { recursive: true, force: true });
     const code = error instanceof Error ? error.message : '';
-    if (code === 'DOWNLOAD_FAILED' || code === 'IDENTITY_MISMATCH' || code === 'SIZE_MISMATCH' || code === 'SHA_MISMATCH') {
+    if (code === 'DOWNLOAD_FAILED' || code === 'IDENTITY_MISMATCH' || code === 'SIZE_MISMATCH' || code === 'SHA_MISMATCH' || code === 'AUTHORITY_REVOKED') {
       return { ok: false, error: code };
     }
     return { ok: false, error: permissionError(error) ? 'PERMISSION' : 'WRITE_FAILED' };

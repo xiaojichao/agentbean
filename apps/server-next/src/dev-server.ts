@@ -334,6 +334,9 @@ export async function startServerNextDevServer(
       if (await handleArtifactHttp({ app, config, request, response, url, previewService: appWithCleanup.artifactPreviewService })) {
         return;
       }
+      if (await handleDeviceWorkspaceSnapshotHttp({ app, config, request, response, url })) {
+        return;
+      }
       // #967 hardening：Workspace publish staging 分块续传 HTTP 入口。
       if (await handleWorkspacePublishStagingHttp({ app, config, request, response, url })) {
         return;
@@ -620,6 +623,31 @@ interface ArtifactHttpInput {
   response: ServerResponse;
   url: URL;
   previewService?: ArtifactPreviewService;
+}
+
+/** #1043 Device-only snapshot refresh; authority is rechecked by the use case. */
+async function handleDeviceWorkspaceSnapshotHttp(input: ArtifactHttpInput): Promise<boolean> {
+  const match = input.url.pathname.match(/^\/api\/teams\/([^/]+)\/channels\/([^/]+)\/device-workspace-snapshots\/([^/]+)$/);
+  if (!match) return false;
+  if (input.request.method !== 'GET') {
+    writeJson(input.response, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return true;
+  }
+  const token = readToken(input.url, input.request);
+  if (!token) {
+    writeJson(input.response, 401, { ok: false, error: 'UNAUTHENTICATED' });
+    return true;
+  }
+  const teamId = decodeURIComponent(match[1] ?? '');
+  const channelId = decodeURIComponent(match[2] ?? '');
+  const snapshotId = decodeURIComponent(match[3] ?? '');
+  const result = await input.app.getDeviceWorkspaceSnapshot({ token, teamId, channelId, snapshotId });
+  if (!result.ok) {
+    writeAckFailure(input.response, result);
+    return true;
+  }
+  writeJson(input.response, 200, { ok: true, snapshot: result.snapshot });
+  return true;
 }
 
 async function handleAgentWorkspaceHttp(input: ArtifactHttpInput): Promise<boolean> {

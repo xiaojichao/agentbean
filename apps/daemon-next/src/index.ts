@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -719,7 +719,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const taskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
           const taskAttempt = request.taskAttempt ?? 1;
           const workspaceRunId = request.workspaceRunId ?? request.id;
-          const frozenWorkspaceRevisionId = request.workspaceSnapshot?.workspaceRevisionId ?? request.workspaceRevisionId;
+          // The snapshot namespace identifies the immutable input directory; it
+          // is not the Server workspace CAS baseline.  Publish must continue to
+          // use the revision granted on the dispatch (or the normal legacy
+          // baseline lookup), otherwise every snapshot run would conflict.
+          const frozenWorkspaceRevisionId = request.workspaceRevisionId;
           const workspace = typeof request.teamId === 'string' && typeof request.channelId === 'string'
             && request.teamId.length > 0 && request.channelId.length > 0
             ? prepareChannelWorkspaceRun({
@@ -764,6 +768,17 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               teamId: device.teamId,
               channelId: request.channelId,
               fetch: fetchFn,
+              refreshSnapshot: async () => {
+                const refreshUrl = `${serverUrl.replace(/\/$/, '')}/api/teams/${encodeURIComponent(device.teamId)}/channels/${encodeURIComponent(request.channelId)}/device-workspace-snapshots/${encodeURIComponent(request.workspaceSnapshot!.id)}`;
+                try {
+                  const response = await (fetchFn ?? fetch)(refreshUrl, { headers: { Authorization: `Bearer ${device.token ?? ''}` } });
+                  if (!response.ok) return null;
+                  const body = await response.json() as { ok?: boolean; snapshot?: unknown };
+                  return body.ok && body.snapshot ? parseDeviceWorkspaceSnapshot(body.snapshot) : null;
+                } catch {
+                  return null;
+                }
+              },
             });
             if (!materialized.ok) throw new Error(`DEVICE_WORKSPACE_SNAPSHOT_${materialized.error}`);
             await materializeSnapshotInputs(snapshotDir, workspace.inputDir, request.workspaceSnapshot);

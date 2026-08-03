@@ -16,7 +16,13 @@ export interface ProjectChannelWorkspaceFileDto {
 
 /** #1043 执行前解析的稳定版本选择。current/final/file_package 只允许在 Server 端解析一次；file_package 使用包成员的 current projection。 */
 export type DeviceWorkspaceSnapshotSelectionDto =
-  | { readonly kind: 'current' | 'final' | 'file_package'; readonly collectionId: ID }
+  | { readonly kind: 'current' | 'final'; readonly collectionId: ID }
+  /**
+   * File package selections carry the frozen package membership explicitly.
+   * The Server resolves each member collection's current projection; it must
+   * never infer package membership by scanning the whole channel library.
+   */
+  | { readonly kind: 'file_package'; readonly collectionId: ID; readonly memberCollectionIds: readonly ID[] }
   | { readonly kind: 'version'; readonly collectionId: ID; readonly versionId: ID };
 
 export interface DeviceWorkspaceSnapshotInputSetItemDto {
@@ -111,9 +117,16 @@ export function parseDeviceWorkspaceSnapshotSelection(value: unknown): DeviceWor
     if (!isId(selection.collectionId) || !isId(selection.versionId)) invalidSnapshot();
     return selection as unknown as DeviceWorkspaceSnapshotSelectionDto;
   }
-  if (selection.kind === 'current' || selection.kind === 'final' || selection.kind === 'file_package') {
+  if (selection.kind === 'current' || selection.kind === 'final') {
     exactKeys(selection, ['kind', 'collectionId']);
     if (!isId(selection.collectionId)) invalidSnapshot();
+    return selection as unknown as DeviceWorkspaceSnapshotSelectionDto;
+  }
+  if (selection.kind === 'file_package') {
+    exactKeys(selection, ['kind', 'collectionId', 'memberCollectionIds']);
+    if (!isId(selection.collectionId) || !Array.isArray(selection.memberCollectionIds)
+      || selection.memberCollectionIds.length === 0
+      || selection.memberCollectionIds.some((id) => !isId(id))) invalidSnapshot();
     return selection as unknown as DeviceWorkspaceSnapshotSelectionDto;
   }
   invalidSnapshot();

@@ -5779,19 +5779,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       const selectedVersionIds = new Set<string>();
       for (const selection of snapshotInput.selections) {
-        const collection = collections.find((candidate) => candidate.id === selection.collectionId);
-        if (!collection) return makeFailure('NOT_FOUND', 'Snapshot collection not found');
-        if (selection.kind === 'current' || selection.kind === 'file_package') {
-          selectedVersionIds.add(collection.currentVersionId);
-        } else if (selection.kind === 'final') {
-          if (!collection.finalVersionId) return makeFailure('NOT_FOUND', 'Snapshot final version is missing');
-          selectedVersionIds.add(collection.finalVersionId);
-        } else if (selection.kind === 'version') {
-          const requested = versions.find((candidate) => candidate.id === selection.versionId);
-          if (!requested || requested.collectionId !== collection.id) {
-            return makeFailure('NOT_FOUND', 'Snapshot artifact version not found');
+        const collectionIds = selection.kind === 'file_package'
+          ? selection.memberCollectionIds
+          : [selection.collectionId];
+        if (selection.kind === 'file_package'
+          && (!selection.memberCollectionIds.length || !selection.memberCollectionIds.includes(selection.collectionId))) {
+          return makeFailure('VALIDATION_ERROR', 'File package members must include the package collection');
+        }
+        for (const collectionId of collectionIds) {
+          const collection = collections.find((candidate) => candidate.id === collectionId);
+          if (!collection) return makeFailure('NOT_FOUND', 'Snapshot collection member not found');
+          if (selection.kind === 'current' || selection.kind === 'file_package') {
+            selectedVersionIds.add(collection.currentVersionId);
+          } else if (selection.kind === 'final') {
+            if (!collection.finalVersionId) return makeFailure('NOT_FOUND', 'Snapshot final version is missing');
+            selectedVersionIds.add(collection.finalVersionId);
+          } else if (selection.kind === 'version') {
+            const requested = versions.find((candidate) => candidate.id === selection.versionId);
+            if (!requested || requested.collectionId !== collection.id) {
+              return makeFailure('NOT_FOUND', 'Snapshot artifact version not found');
+            }
+            selectedVersionIds.add(requested.id);
           }
-          selectedVersionIds.add(requested.id);
         }
       }
       if (selectedVersionIds.size === 0) return makeFailure('VALIDATION_ERROR', 'Snapshot resolved to no artifact versions');
@@ -5823,11 +5832,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
       const now = clock.now();
+      const workspace = await repositories.projectChannelWorkspaces.getForTeam({
+        teamId: snapshotInput.teamId,
+        channelId: snapshotInput.channelId,
+      });
       const snapshot: DeviceWorkspaceSnapshotDto = {
         id: ids.nextId(),
         teamId: snapshotInput.teamId,
         channelId: snapshotInput.channelId,
-        workspaceRevisionId: ids.nextId(),
+        // Use the authoritative workspace revision when one exists.  A channel
+        // without a workspace still receives a stable snapshot namespace, but
+        // that namespace is never used as the publish CAS baseline by daemon.
+        workspaceRevisionId: workspace?.currentRevisionId ?? ids.nextId(),
         inputSet: {
           id: ids.nextId(),
           contractVersion: 1,
@@ -12525,6 +12541,16 @@ async function buildDispatchRequest(
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
   const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
+  const workspaceSnapshot = includeRuntimeMemory
+    ? await buildDispatchWorkspaceSnapshot(repositories, {
+        dispatch,
+        agent,
+        now,
+        originMessage,
+        managementInvocation,
+        projectReferenceSets,
+      })
+    : undefined;
 
   return {
     id: dispatch.id,
@@ -12549,6 +12575,7 @@ async function buildDispatchRequest(
     ...(projectReferenceSets.length > 0
       ? { projectReferenceSets: projectReferenceSets.map(toProjectReferenceSetDto) }
       : {}),
+    ...(workspaceSnapshot ? { workspaceSnapshot } : {}),
     ...(managementInvocation?.intent.schemaVersion === 2
       ? { projectDocumentInputSet: managementInvocation.intent.projectDocumentInputSet }
       : {}),
@@ -12580,6 +12607,122 @@ async function buildDispatchRequest(
         }
       : {}),
   };
+}
+
+/**
+ * Dispatch execution seam for #1043.  Message references already contain
+ * concrete artifact version identities; persist one deterministic snapshot per
+ * dispatch so retries/reconnects do not re-resolve mutable current/final
+ * pointers.  This intentionally uses only the referenced versions and never
+ * mirrors the channel library.
+ */
+async function buildDispatchWorkspaceSnapshot(
+  repositories: ServerNextRepositories,
+  input: {
+    dispatch: DispatchRecord;
+    agent: AgentRecord;
+    now: UnixMs;
+    originMessage: MessageRecord | null;
+    managementInvocation: Awaited<ReturnType<ServerNextRepositories['management']['invocations']['getById']>>;
+    projectReferenceSets: readonly ProjectReferenceSetRecord[];
+  },
+): Promise<DeviceWorkspaceSnapshotDto | undefined> {
+  const references = input.projectReferenceSets.flatMap((set) => set.selections.flatMap((selection) => selection.items))
+    .filter((item) => item.kind === 'artifact_version'
+      && typeof item.collectionId === 'string'
+      && typeof item.versionId === 'string'
+      && typeof item.artifactId === 'string')
+    .map((item) => ({
+      collectionId: item.collectionId!,
+      versionId: item.versionId!,
+      artifactId: item.artifactId!,
+    }));
+  if (references.length === 0) return undefined;
+  const deviceId = input.agent.deviceId;
+  if (!deviceId) throw new Error('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+
+  const snapshotId = `dispatch:${input.dispatch.id}:workspace-snapshot`;
+  const existing = await repositories.deviceWorkspaceSnapshots.getById({
+    teamId: input.dispatch.teamId,
+    channelId: input.dispatch.channelId,
+    snapshotId,
+  });
+  if (existing) return existing;
+
+  const versions = await repositories.channelProjects.listArtifactVersions({
+    teamId: input.dispatch.teamId,
+    channelId: input.dispatch.channelId,
+  });
+  const uniqueReferences = Array.from(new Map(references.map((item) => [item.versionId, item])).values());
+  const items: DeviceWorkspaceSnapshotInputSetItemDto[] = [];
+  const paths = new Set<string>();
+  for (const reference of uniqueReferences) {
+    const version = versions.find((candidate) => candidate.id === reference.versionId
+      && candidate.collectionId === reference.collectionId
+      && candidate.artifactId === reference.artifactId);
+    const artifact = version
+      ? await repositories.artifacts.getForTeam({ teamId: input.dispatch.teamId, artifactId: version.artifactId })
+      : null;
+    if (!version || !artifact || artifact.channelId !== input.dispatch.channelId
+      || !(await isPublicChannelFileArtifact(repositories, artifact))
+      || !artifact.sha256 || !/^[a-f0-9]{64}$/i.test(artifact.sha256)
+      || !Number.isSafeInteger(artifact.sizeBytes) || artifact.sizeBytes < 0) {
+      throw new Error('DEVICE_WORKSPACE_SNAPSHOT_UNAVAILABLE');
+    }
+    const path = normalizeWorkspacePath(artifact.filename);
+    if (!path || paths.has(path)) throw new Error('DEVICE_WORKSPACE_SNAPSHOT_AMBIGUOUS');
+    paths.add(path);
+    items.push({
+      collectionId: version.collectionId,
+      artifactVersionId: version.id,
+      artifactId: version.artifactId,
+      path,
+      filename: artifact.filename,
+      mimeType: artifact.mimeType,
+      sizeBytes: artifact.sizeBytes,
+      sha256: artifact.sha256.toLowerCase(),
+    });
+  }
+
+  const taskContext = input.managementInvocation?.intent.schemaVersion === 2
+    ? input.managementInvocation.intent.taskContext
+    : undefined;
+  const taskId: string = taskContext?.taskId
+    ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
+    ?? input.dispatch.requestId;
+  const taskAttempt = taskContext?.taskAttempt ?? 1;
+  const workspaceRunId = input.managementInvocation?.managementRunId ?? input.dispatch.requestId;
+  const workspace = await repositories.projectChannelWorkspaces.getForTeam({
+    teamId: input.dispatch.teamId,
+    channelId: input.dispatch.channelId,
+  });
+  const snapshot: DeviceWorkspaceSnapshotDto = {
+    id: snapshotId,
+    teamId: input.dispatch.teamId,
+    channelId: input.dispatch.channelId,
+    workspaceRevisionId: workspace?.currentRevisionId ?? `dispatch:${input.dispatch.id}:workspace-revision`,
+    inputSet: {
+      id: `${snapshotId}:input-set`,
+      contractVersion: 1,
+      selections: uniqueReferences.map((reference) => ({
+        kind: 'version' as const,
+        collectionId: reference.collectionId,
+        versionId: reference.versionId,
+      })),
+      items,
+    },
+    provenance: {
+      createdByDeviceId: deviceId,
+      agentId: input.agent.id,
+      taskId,
+      taskAttempt,
+      workspaceRunId,
+      createdAt: input.now,
+    },
+    immutable: true,
+  };
+  await repositories.deviceWorkspaceSnapshots.create(snapshot);
+  return snapshot;
 }
 
 function parseAgentArtifactSourceRoots(

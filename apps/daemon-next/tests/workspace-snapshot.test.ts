@@ -77,6 +77,18 @@ describe('#1043 Device immutable snapshot', () => {
     expect(result).toMatchObject({ ok: false, error: 'SNAPSHOT_INVALID' });
   });
 
+  test('online materialization rechecks Server snapshot authority before downloading bytes', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'agentbean-snapshot-authority-'));
+    const result = await materializeDeviceWorkspaceSnapshot({
+      snapshot: snapshot(), snapshotDir: join(home, 'snapshots', 'revision-1'), serverUrl: 'https://server.test', token: 'token', teamId: 'team-1', channelId: 'channel-1',
+      refreshSnapshot: async () => null,
+      fetch: async () => {
+        throw new Error('revoked snapshot must not download');
+      },
+    });
+    expect(result).toMatchObject({ ok: false, error: 'AUTHORITY_REVOKED' });
+  });
+
   test('complete snapshot remains usable when server is unavailable', async () => {
     const home = mkdtempSync(join(tmpdir(), 'agentbean-snapshot-offline-'));
     const target = join(home, 'snapshots', 'revision-1');
