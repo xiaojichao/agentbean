@@ -962,7 +962,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 const current = await fetchProjectChannelWorkspaceCurrent({
                   serverUrl,
                   token: device.token,
-                  teamId: device.teamId,
+                  // #1056：Workspace 属于 dispatch 目标 Team，跨 Team 可见 Agent 不能
+                  // 回 Device primary Team 查询/发布。
+                  teamId: request.teamId,
                   channelId: request.channelId,
                   fetch: fetchFn,
                 });
@@ -1024,7 +1026,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   const delivered = await deliverWorkspaceOutputsViaStaging({
                     store: publishOutputStore,
                     client,
-                    teamId: device.teamId,
+                    teamId: request.teamId,
                     channelId: request.channelId,
                     baselineRevisionId,
                     collected: stagedForPublish,
@@ -1081,7 +1083,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   {
                     serverUrl,
                     token: device.token,
-                    teamId: device.teamId,
+                    // #1056：legacy upload 同样归属 dispatch 目标 Team。
+                    teamId: request.teamId,
                     channelId: request.channelId,
                     fetch: fetchFn,
                     maxBytes: input.artifactMaxBytes,
