@@ -230,6 +230,164 @@ describe('artifact-collector', () => {
     });
   });
 
+  describe('collectArtifacts reported 通道升级 (#1051)', () => {
+    test('回复报告 adapter 默认根已发现的同一文件：升级为受管 run output 且只收一次', async () => {
+      const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-home-')));
+      const target = join(homeDir, 'HyperFrames视频制作完全指南-摘要.md');
+      writeFileSync(target, '交付内容');
+
+      const collected = await collectArtifacts({
+        adapterOutputRoots: [{ dir: homeDir, recursive: false, createdInWindow: true }],
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [join(homeDir, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      // 精确声明优先于猜测兜底：adapter 版本被移除，reported 版本进入受管通道。
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.sourceRoot).toEqual({
+        id: 'agent-reported-outputs', kind: 'run_output', label: 'Agent 报告的输出',
+      });
+      expect(collected[0]!.role).toBe('run_output');
+      expect(collected[0]!.absolutePath).toBe(target);
+    });
+
+    test('symlink 别名与 adapter 根同内容撞车：按 sha256 升级而非跳过', async () => {
+      const realHome = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-sha-real-')));
+      const linkParent = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-sha-link-')));
+      const linkHome = join(linkParent, 'home-link');
+      symlinkSync(realHome, linkHome);
+      writeFileSync(join(realHome, 'report.md'), '同内容');
+
+      const collected = await collectArtifacts({
+        // adapter 根经 symlink 目录扫描，绝对路径文本与 realpath 不同，
+        // abs 判同必然落空，只有 sha256 判同能命中——锁定 sha 升级路径。
+        adapterOutputRoots: [{ dir: linkHome, recursive: false, createdInWindow: true }],
+        reportedOutputPaths: [join(realHome, 'report.md')],
+        reportedOutputExcludedPathPrefixes: [join(realHome, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.sourceRoot.id).toBe('agent-reported-outputs');
+      expect(collected[0]!.absolutePath).toBe(join(realHome, 'report.md'));
+    });
+
+    test('受管目录已有同内容时：reported 跳过且 adapter 同内容副本被移除（同内容只发一次）', async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-managed-')));
+      const outputDir = join(root, 'outputs');
+      mkdirSync(outputDir, { recursive: true });
+      const managed = join(outputDir, '交付.md');
+      writeFileSync(managed, '完全相同的内容');
+      const homeDir = join(root, 'home');
+      mkdirSync(homeDir);
+      const adapterCopy = join(homeDir, '交付-副本.md');
+      writeFileSync(adapterCopy, '完全相同的内容');
+
+      const collected = await collectArtifacts({
+        outputDir,
+        adapterOutputRoots: [{ dir: homeDir, recursive: false, createdInWindow: true }],
+        reportedOutputPaths: [adapterCopy],
+        reportedOutputExcludedPathPrefixes: [join(root, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.absolutePath).toBe(managed);
+      expect(collected[0]!.sourceRoot.kind).toBe('run_output');
+    });
+
+    test('报告受管目录内路径时：同内容 adapter 副本被顺带移除（AC2 闭环）', async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-abs-managed-')));
+      const outputDir = join(root, 'outputs');
+      mkdirSync(outputDir, { recursive: true });
+      const managed = join(outputDir, '交付.md');
+      writeFileSync(managed, '完全相同的内容');
+      const homeDir = join(root, 'home');
+      mkdirSync(homeDir);
+      // Agent 把同一交付同时拷进 adapter 默认根，但回复报告的是受管目录内路径。
+      const adapterCopy = join(homeDir, '交付.md');
+      writeFileSync(adapterCopy, '完全相同的内容');
+
+      const collected = await collectArtifacts({
+        outputDir,
+        adapterOutputRoots: [{ dir: homeDir, recursive: false, createdInWindow: true }],
+        reportedOutputPaths: [managed],
+        reportedOutputExcludedPathPrefixes: [join(root, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      // 受管版本只发一次；adapter 副本若保留会 legacy + revision 双发。
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.absolutePath).toBe(managed);
+      expect(collected[0]!.sourceRoot.kind).toBe('run_output');
+    });
+
+    test('adapter 与配置根重复发现的同一文件：升级时两个猜测条目都被移除', async () => {
+      const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-multi-')));
+      const target = join(homeDir, '交付.md');
+      writeFileSync(target, '交付内容');
+
+      const collected = await collectArtifacts({
+        adapterOutputRoots: [{ dir: homeDir, recursive: false, createdInWindow: true }],
+        configuredOutputRoots: [{ id: 'shared', path: homeDir, label: '共享目录' }],
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [join(homeDir, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.sourceRoot.id).toBe('agent-reported-outputs');
+      expect(collected[0]!.absolutePath).toBe(target);
+    });
+
+    test('升级目标未通过安全校验时保留既有 adapter 条目（交付不回退）', async () => {
+      const homeDir = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-keep-')));
+      const target = join(homeDir, 'credentials.md');
+      writeFileSync(target, 'token = abc');
+      const diagnostics: string[] = [];
+
+      const collected = await collectArtifacts({
+        adapterOutputRoots: [{ dir: homeDir, recursive: false, createdInWindow: true }],
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [join(homeDir, '.agentbean')],
+        startedAt: 1000,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
+      });
+
+      // 敏感文件名被 reported 安全校验拒绝时不得误删已收集的 adapter 版本——
+      // 通道升级只在 reported 版本通过全部校验后发生。
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.sourceRoot.kind).toBe('adapter_generated');
+      expect(diagnostics).toContain('REPORTED_PATH_REJECTED');
+    });
+
+    test('隐藏数据根（.hermes/output）撞车：升级不穿透隐藏段边界，adapter 条目保留走 legacy', async () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-hidden-')));
+      const outputRoot = join(root, '.hermes', 'output');
+      mkdirSync(join(outputRoot, '20260803'), { recursive: true });
+      const target = join(outputRoot, '20260803', 'report.md');
+      writeFileSync(target, '数据根交付');
+      const diagnostics: string[] = [];
+
+      const collected = await collectArtifacts({
+        // adapter 默认根覆盖数据根 output/（recursive）；但 reported 通道的隐藏
+        // 路径段防线（#1045 提取期+收集期双重）对 .hermes 内路径永远拒绝——
+        // 通道升级不得在隐藏目录上开口子。
+        adapterOutputRoots: [{ dir: outputRoot, recursive: true }],
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [join(root, '.agentbean')],
+        startedAt: 1000,
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic.code),
+      });
+
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.sourceRoot.kind).toBe('adapter_generated');
+      expect(collected[0]!.relativePath).toBe(join('20260803', 'report.md'));
+      expect(diagnostics).toContain('REPORTED_PATH_REJECTED');
+    });
+  });
+
   test('shouldCollectWindowedFile 只收 run 窗口内新建的共享目录文件', () => {
     const startedAt = Date.now() - 60_000;
     // 窗口内新建：mtime 与 birthtime 都在窗口内 → 收集。
