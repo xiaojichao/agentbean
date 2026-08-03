@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, utimesSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { collectArtifacts, shouldCollectWindowedFile } from '../src/artifact-collector';
+import { collectArtifacts, extractReportedOutputPaths, shouldCollectWindowedFile } from '../src/artifact-collector';
 
 async function touch(path: string, mtimeMs: number): Promise<void> {
   writeFileSync(path, 'x');
@@ -11,6 +11,225 @@ async function touch(path: string, mtimeMs: number): Promise<void> {
 }
 
 describe('artifact-collector', () => {
+  describe('extractReportedOutputPaths (#1045)', () => {
+    test('提取回复中明确报告的交付文件路径并去重保序', () => {
+      const body = [
+        '搞定！总结文件已生成，保存在桌面上：',
+        '',
+        '/Users/shaw/Desktop/短视频二次创作总结.md',
+        '',
+        '参考了 /Users/shaw/notes.md 与 https://example.com/a.pdf',
+        '已保存到：/Users/shaw/Documents/report.md。',
+      ].join('\n');
+      expect(extractReportedOutputPaths(body)).toEqual([
+        '/Users/shaw/Desktop/短视频二次创作总结.md',
+        '/Users/shaw/notes.md',
+        '/Users/shaw/Documents/report.md',
+      ]);
+    });
+
+    test('忽略非交付扩展名、相对路径、缺失正文并处理尾部标点', () => {
+      expect(extractReportedOutputPaths('参考 /Users/a/state.json，路径 /Users/a/tmp.log')).toEqual([]);
+      expect(extractReportedOutputPaths('使用 docs/a.md 作为模板')).toEqual([]);
+      expect(extractReportedOutputPaths('文件在：/Users/x/报告.md。')).toEqual(['/Users/x/报告.md']);
+      expect(extractReportedOutputPaths('a\n/Users/x/a.md\nb\n/Users/x/a.md')).toEqual(['/Users/x/a.md']);
+      expect(extractReportedOutputPaths(undefined)).toEqual([]);
+    });
+
+    test('拒绝路径穿越与隐藏路径段', () => {
+      expect(extractReportedOutputPaths('输出在 /Users/x/../etc/passwd.md')).toEqual([]);
+      expect(extractReportedOutputPaths('密钥 /Users/x/.ssh/config.md')).toEqual([]);
+      expect(extractReportedOutputPaths('内部 /Users/x/.agentbean/device.md')).toEqual([]);
+      expect(extractReportedOutputPaths('协议相对 //nas/share/a.md')).toEqual([]);
+    });
+  });
+
+  describe('collectArtifacts reported outputs (#1045)', () => {
+    test('收集回复报告的交付文件并标记为受管 run output 通道', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-')));
+      const agentBeanHome = join(cwd, '.agentbean');
+      mkdirSync(agentBeanHome, { recursive: true });
+      const desktopDir = join(cwd, 'Desktop');
+      mkdirSync(desktopDir, { recursive: true });
+      const target = join(desktopDir, '短视频二次创作总结.md');
+      writeFileSync(target, '交付内容');
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [agentBeanHome],
+        startedAt: Date.now() - 60_000,
+      });
+
+      expect(collected.map((artifact) => artifact.filename)).toEqual(['短视频二次创作总结.md']);
+      expect(collected[0]!.sourceRoot).toEqual({
+        id: 'agent-reported-outputs', kind: 'run_output', label: 'Agent 报告的输出',
+      });
+      expect(collected[0]!.role).toBe('run_output');
+      expect(collected[0]!.relativePath).toBe('短视频二次创作总结.md');
+      expect(collected[0]!.absolutePath).toBe(target);
+    });
+
+    test('拒绝窗口外、不存在、.agentbean 内部与排除前缀内的报告路径', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-reject-')));
+      const agentBeanHome = join(cwd, '.agentbean');
+      const inputDir = join(agentBeanHome, 'workspaces', 't', 'channels', 'c', 'runs', 'a', 'tk', '1', 'r', 'inputs');
+      mkdirSync(inputDir, { recursive: true });
+      const external = join(cwd, 'external');
+      mkdirSync(external);
+      const fresh = join(external, 'fresh.md');
+      writeFileSync(fresh, 'new');
+      const stale = join(external, 'stale.md');
+      await touch(stale, 500);
+      const attachment = join(inputDir, 'att-1-seed.md');
+      writeFileSync(attachment, '输入附件');
+      const internal = join(agentBeanHome, 'device.md');
+      writeFileSync(internal, 'internal');
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [fresh, stale, join(external, 'missing.md'), attachment, internal],
+        reportedOutputExcludedPathPrefixes: [agentBeanHome],
+        startedAt: 1000,
+      });
+
+      expect(collected.map((artifact) => artifact.filename)).toEqual(['fresh.md']);
+    });
+
+    test('symlink 逃逸被拒绝：链接目标落在排除前缀或隐藏路径内', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-symlink-')));
+      const agentBeanHome = join(cwd, '.agentbean');
+      mkdirSync(agentBeanHome, { recursive: true });
+      const secretDir = join(cwd, '.secrets');
+      mkdirSync(secretDir);
+      const internalFile = join(agentBeanHome, 'state.md');
+      writeFileSync(internalFile, '内部状态');
+      const hiddenFile = join(secretDir, 'hidden.md');
+      writeFileSync(hiddenFile, '隐藏内容');
+      const publicFile = join(cwd, 'public.md');
+      writeFileSync(publicFile, '合法交付');
+      const linkDir = join(cwd, 'links');
+      mkdirSync(linkDir);
+      const escapeInternal = join(linkDir, 'escape-internal.md');
+      const escapeHidden = join(linkDir, 'escape-hidden.md');
+      const legitLink = join(linkDir, 'legit.md');
+      symlinkSync(internalFile, escapeInternal);
+      symlinkSync(hiddenFile, escapeHidden);
+      symlinkSync(publicFile, legitLink);
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [escapeInternal, escapeHidden, legitLink],
+        reportedOutputExcludedPathPrefixes: [agentBeanHome],
+        startedAt: Date.now() - 60_000,
+      });
+
+      // 合法 symlink 解析到通过全部校验的真实路径后仍可收集（macOS /tmp 同理）；
+      // 指向排除前缀与隐藏路径的逃逸被明确拒绝。
+      expect(collected.map((artifact) => artifact.filename)).toEqual(['public.md']);
+      expect(collected[0]!.absolutePath).toBe(publicFile);
+    });
+
+    test('报告路径与受管输出目录发现同一文件时只收一次', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-dedupe-')));
+      const outputDir = join(cwd, 'outputs');
+      mkdirSync(outputDir, { recursive: true });
+      const target = join(outputDir, '交付.md');
+      writeFileSync(target, 'same');
+
+      const collected = await collectArtifacts({
+        outputDir,
+        reportedOutputPaths: [target],
+        reportedOutputExcludedPathPrefixes: [join(cwd, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected.filter((artifact) => artifact.filename === '交付.md')).toHaveLength(1);
+    });
+
+    test('内容相同的不同路径文件只收一次（AC4 只发布一次）', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-sha-')));
+      const outputDir = join(cwd, 'outputs');
+      mkdirSync(outputDir, { recursive: true });
+      const managed = join(outputDir, '交付.md');
+      writeFileSync(managed, '完全相同的内容');
+      const externalDir = join(cwd, 'Desktop');
+      mkdirSync(externalDir);
+      const reported = join(externalDir, '交付-副本.md');
+      writeFileSync(reported, '完全相同的内容');
+
+      const collected = await collectArtifacts({
+        outputDir,
+        reportedOutputPaths: [reported],
+        reportedOutputExcludedPathPrefixes: [join(cwd, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected).toHaveLength(1);
+      expect(collected[0]!.absolutePath).toBe(managed);
+    });
+
+    test('同名不同内容的报告文件进入 reported/ 前缀避免覆盖受管输出', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-conflict-')));
+      const outputDir = join(cwd, 'outputs');
+      mkdirSync(outputDir, { recursive: true });
+      writeFileSync(join(outputDir, '报告.md'), '受管版本');
+      const externalDir = join(cwd, 'Desktop');
+      mkdirSync(externalDir);
+      const reported = join(externalDir, '报告.md');
+      writeFileSync(reported, '报告的不同版本');
+
+      const collected = await collectArtifacts({
+        outputDir,
+        reportedOutputPaths: [reported],
+        reportedOutputExcludedPathPrefixes: [join(cwd, '.agentbean')],
+        startedAt: 1000,
+      });
+
+      expect(collected.map((artifact) => artifact.relativePath).sort()).toEqual(['reported/报告.md', '报告.md']);
+    });
+
+    test('敏感文件名被拒绝并记录路径无关诊断', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-sensitive-')));
+      const credentials = join(cwd, 'credentials.md');
+      writeFileSync(credentials, 'token = abc');
+      const key = join(cwd, 'id_rsa.txt');
+      writeFileSync(key, 'PRIVATE KEY');
+      const normal = join(cwd, 'normal.md');
+      writeFileSync(normal, 'ok');
+      const diagnostics: string[] = [];
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [credentials, key, normal],
+        reportedOutputExcludedPathPrefixes: [join(cwd, '.agentbean')],
+        startedAt: Date.now() - 60_000,
+        onDiagnostic: (diagnostic) => diagnostics.push(`${diagnostic.code}:${diagnostic.relativePath ?? ''}`),
+      });
+
+      expect(collected.map((artifact) => artifact.filename)).toEqual(['normal.md']);
+      expect(diagnostics).toHaveLength(2);
+      for (const line of diagnostics) {
+        expect(line.startsWith('REPORTED_PATH_REJECTED:')).toBe(true);
+        expect(line).not.toContain(cwd);
+      }
+    });
+
+    test('超限报告文件跳过并报告 FILE_TOO_LARGE', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-large-')));
+      const big = join(cwd, 'big.md');
+      writeFileSync(big, 'x'.repeat(64));
+      const skipped: Array<{ filename: string; reason: string }> = [];
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [big],
+        reportedOutputExcludedPathPrefixes: [join(cwd, '.agentbean')],
+        startedAt: Date.now() - 60_000,
+        maxBytes: 8,
+        onSkipped: (artifact) => skipped.push({ filename: artifact.filename, reason: artifact.reason }),
+      });
+
+      expect(collected).toEqual([]);
+      expect(skipped).toEqual([{ filename: 'big.md', reason: 'FILE_TOO_LARGE' }]);
+    });
+  });
+
   test('shouldCollectWindowedFile 只收 run 窗口内新建的共享目录文件', () => {
     const startedAt = Date.now() - 60_000;
     // 窗口内新建：mtime 与 birthtime 都在窗口内 → 收集。

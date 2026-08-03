@@ -5,7 +5,7 @@
  * - AC5：结果回报送达后写 reportedAt 稳定标记
  * - AC8：Device-local Memory 正文注入 prompt,但不得进入 publish manifest、staged 文件或执行回报
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -285,6 +285,184 @@ describe('workspace publish dispatch (#1044)', () => {
 
       const runDir = join(agentBeanHome, 'workspaces', 'team-1', 'channels', 'channel-1', 'runs', 'agent-1', 'task-1', '1', 'run-1');
       expect(readFileSync(join(runDir, 'manifest.json'), 'utf8')).not.toContain(canary);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1045 Hermes 回复报告的外部交付文件经 publish identity 原子发布', async () => {
+    const home = tempDir('publish-reported-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    // Hermes 把交付写到 projection 之外的任意目录（实测 Desktop）。
+    const desktop = tempDir('publish-reported-desktop-');
+    const reportedPath = join(desktop, '短视频二次创作总结.md');
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    try {
+      const harness = fakeSocket();
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fakeStagingFetch(staging),
+        homeDir: home,
+        executor: async () => {
+          writeFileSync(reportedPath, '二次创作总结正文');
+          return {
+            body: `搞定！总结文件已生成，保存在桌面上：\n\n${reportedPath}\n\n需要调整可以跟我说~`,
+            workspaceRun: { status: 'succeeded', cwd: desktop, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-rep-1', requestId: 'req-rep-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '总结附件',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: desktop },
+      });
+
+      // 报告文件经 staging 原子发布，不走 legacy upload。
+      expect(staging.plans).toHaveLength(1);
+      expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path))
+        .toEqual(['短视频二次创作总结.md']);
+      expect(staging.commits).toHaveLength(1);
+      expect(staging.legacyUploads).toEqual([]);
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds)
+        .toEqual(['art-短视频二次创作总结.md']);
+
+      // 批次落盘于 outputs/<publishIdentity>；manifest 不含任何外部绝对路径。
+      const outputsRoot = join(agentBeanHome, 'workspaces', 'team-1', 'channels', 'channel-1', 'outputs');
+      const batches = readdirSync(outputsRoot);
+      expect(batches).toHaveLength(1);
+      const batchDir = join(outputsRoot, batches[0]!);
+      expect(readFileSync(join(batchDir, '短视频二次创作总结.md'), 'utf8')).toBe('二次创作总结正文');
+      const manifest = readWorkspacePublishOutputManifest(batchDir);
+      expect(manifest).toMatchObject({ status: 'committed', baselineRevisionId: 'rev-1' });
+      expect(JSON.stringify(manifest)).not.toContain(desktop);
+
+      // 本机 run manifest 以 response 来源标记报告路径产物（可审计）。
+      const runManifest = JSON.parse(readFileSync(join(
+        agentBeanHome, 'workspaces', 'team-1', 'channels', 'channel-1',
+        'runs', 'agent-1', 'task-1', '1', 'run-1', 'manifest.json',
+      ), 'utf8')) as { provenance?: Array<{ relativePath: string; source: string }> };
+      expect(runManifest.provenance).toEqual([{ relativePath: '短视频二次创作总结.md', source: 'response' }]);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1045 回复报告的输入附件与 projection 内部路径被拒绝', async () => {
+    const home = tempDir('publish-reject-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const external = tempDir('publish-reject-external-');
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    try {
+      const harness = fakeSocket();
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fakeStagingFetch(staging),
+        homeDir: home,
+        executor: async (request) => {
+          const env = request.customAgent?.env ?? {};
+          // 输入附件已物化到 run inputs；snapshot 与内部状态同在 agentBeanHome 下。
+          const attachmentPath = join(env.AGENTBEAN_INPUT_DIR ?? '', 'att-1-seed.md');
+          writeFileSync(attachmentPath, '用户附件原文');
+          writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'logs', 'run.md'), 'log line');
+          // symlink 逃逸：链接路径本身在合法外部目录，realpath 后命中 projection 内部。
+          const escapeLink = join(external, 'escape.md');
+          symlinkSync(attachmentPath, escapeLink);
+          const delivery = join(external, '交付.md');
+          writeFileSync(delivery, '真正的交付');
+          return {
+            body: [
+              `已读取附件 ${attachmentPath}`,
+              `日志在 ${join(env.AGENTBEAN_WORKSPACE ?? '', 'logs', 'run.md')}`,
+              `还有 ${escapeLink}`,
+              `交付已保存到 ${delivery}`,
+            ].join('\n'),
+            workspaceRun: { status: 'succeeded', cwd: external, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-rep-2', requestId: 'req-rep-2', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '基于附件输出',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: external },
+      });
+
+      // 只有真正的外部交付进入原子发布；输入附件与 run 日志被明确拒绝。
+      expect(staging.plans).toHaveLength(1);
+      expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path))
+        .toEqual(['交付.md']);
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['art-交付.md']);
+      // symlink 逃逸在收集阶段经 realpath 命中排除前缀，记拒绝诊断；
+      // 诊断行只含 code+label，不泄露本机目录。
+      const payload = resultEmit!.payload as { workspaceRun?: { logExcerpt?: string } };
+      expect(payload.workspaceRun?.logExcerpt).toContain('REPORTED_PATH_REJECTED');
+      expect(payload.workspaceRun?.logExcerpt).not.toContain(home);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
+
+  test('#1045 OpenClaw 报告与受管目录发现同一文件只发布一次', async () => {
+    const home = tempDir('publish-dedupe-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    try {
+      const harness = fakeSocket();
+      let outputDir = '';
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: fakeStagingFetch(staging),
+        homeDir: home,
+        executor: async (request) => {
+          outputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR ?? '';
+          const managed = join(outputDir, '交付.md');
+          writeFileSync(managed, '受管目录版本');
+          return {
+            body: `交付已保存到 ${managed}`,
+            workspaceRun: { status: 'succeeded', cwd: home, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-rep-3', requestId: 'req-rep-3', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-1', prompt: '输出文档',
+        customAgent: { adapterKind: 'openclaw', command: 'openclaw', cwd: home },
+      });
+
+      // 同一文件同时被受管 outputs/ 与回复路径发现：只发布一次。
+      expect(staging.plans).toHaveLength(1);
+      expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path))
+        .toEqual(['交付.md']);
+      expect(staging.commits).toEqual([staging.commits[0]]);
+      expect(staging.commits).toHaveLength(1);
     } finally {
       if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
       else process.env.AGENTBEAN_HOME = previousAgentBeanHome;

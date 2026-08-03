@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, readdirSync, statSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { createReadStream, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, join, relative, resolve } from 'node:path';
 import {
   DEFAULT_ARTIFACT_MAX_BYTES,
   type ArtifactRole,
@@ -15,6 +15,17 @@ const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mo
  * 数据目录里的内部状态（pairing/sessions/checkpoints 等）上传到频道。
  */
 const ADAPTER_OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|md|mp4|mov|zip)$/i;
+/**
+ * Agent 回复中明确报告的交付文件绝对路径。AgentOS oneshot（Hermes/OpenClaw）
+ * 会把交付文件写到任意位置并在回复里报告路径；解析这些路径比猜目录更可靠。
+ * 只接受本机绝对路径 + 交付物扩展名白名单，收集阶段再做存在性/窗口/安全校验。
+ */
+const REPORTED_OUTPUT_PATH_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|`]+\.(?:md|txt|pdf|png|jpe?g|gif|webp|svg|mp4|mov|zip))/gi;
+/**
+ * 显式敏感文件名防线：即使扩展名落在交付物白名单内（credentials.md、id_rsa.txt），
+ * 也永远不得作为交付物发布。隐藏目录（.ssh/.gnupg/.aws）由隐藏路径段规则兜底。
+ */
+const SENSITIVE_REPORTED_BASENAME_RE = /^(id_rsa|id_dsa|id_ecdsa|id_ed25519|authorized_keys|known_hosts|credentials?|secrets?)(\.|$)/i;
 const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
@@ -27,6 +38,17 @@ export interface ArtifactSourceRoot {
   kind: ArtifactSourceRootKind;
   label: string;
 }
+
+/**
+ * Agent 回复报告的交付文件来源根：稳定 id 供本机审计；kind=run_output 使报告
+ * 文件只进入受管 run output 通道（`outputs/<publishIdentity>` → Server 原子发布），
+ * 不会走 legacy upload 直接创建频道 Artifact（#1045）。
+ */
+export const REPORTED_OUTPUT_SOURCE_ROOT: ArtifactSourceRoot = {
+  id: 'agent-reported-outputs',
+  kind: 'run_output',
+  label: 'Agent 报告的输出',
+};
 
 export interface CollectedArtifact {
   absolutePath: string;
@@ -91,6 +113,20 @@ export interface CollectArtifactsInput {
    * 且跳过隐藏文件/目录，避免把 AgentOS 内部状态当作产物上传。
    */
   adapterOutputRoots?: AdapterOutputRoot[];
+  /**
+   * Agent 回复中明确报告的交付文件绝对路径（extractReportedOutputPaths 的输出）。
+   * 每条路径经 realpath 解析后校验：交付物扩展名白名单、非隐藏路径段、非
+   * .agentbean 内部、不在 reportedOutputExcludedPathPrefixes 内、非敏感文件名、
+   * 严格 run 窗口（mtime 与 birthtime 均在窗口内）、大小上限。通过校验的文件
+   * 以 REPORTED_OUTPUT_SOURCE_ROOT（kind=run_output）归入受管 run output。
+   */
+  reportedOutputPaths?: string[];
+  /**
+   * 报告路径的拒绝前缀（realpath 后比较）：传入 agentBeanHome 与 run inputDir
+   * 等本机投影边界，确保 snapshot、输入附件、日志与内部状态永远不会因为
+   * Agent 在回复里报告了路径就进入发布。
+   */
+  reportedOutputExcludedPathPrefixes?: string[];
   /** Additional roots with safe public labels; absolute paths never leave the daemon. */
   configuredOutputRoots?: Array<{ id?: string; path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
   /** Stable public label for the agent workspace root. */
@@ -106,10 +142,36 @@ export interface CollectArtifactsInput {
 }
 
 export interface ArtifactCollectionDiagnostic {
-  code: 'SOURCE_ROOT_MISSING' | 'SOURCE_ROOT_INVALID' | 'SOURCE_ROOT_UNREADABLE' | 'ARTIFACT_FILE_UNREADABLE' | 'ARTIFACT_FILE_TOO_LARGE' | 'ARTIFACT_FILE_LIMIT_REACHED';
+  code: 'SOURCE_ROOT_MISSING' | 'SOURCE_ROOT_INVALID' | 'SOURCE_ROOT_UNREADABLE' | 'ARTIFACT_FILE_UNREADABLE' | 'ARTIFACT_FILE_TOO_LARGE' | 'ARTIFACT_FILE_LIMIT_REACHED' | 'REPORTED_PATH_REJECTED';
   sourceRootId: string;
   sourceRootLabel: string;
   relativePath?: string;
+}
+
+/**
+ * 从 Agent 回复正文提取明确报告的交付文件绝对路径，去重保序。
+ * 仅返回本机绝对路径 + 交付物扩展名白名单的候选；路径穿越（`..`）与隐藏
+ * 路径段（`/.`）在提取时直接拒绝，其余安全校验在收集阶段对 realpath 进行
+ * （见 collectArtifacts 的 reportedOutputPaths 处理）。
+ */
+export function extractReportedOutputPaths(body: string | undefined): string[] {
+  if (!body) return [];
+  const seen = new Set<string>();
+  const paths: string[] = [];
+  for (const match of body.matchAll(REPORTED_OUTPUT_PATH_RE)) {
+    const raw = (match[1] ?? '').trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    if (!raw.startsWith('//')
+      && !raw.endsWith('.')
+      && !raw.includes('/.')
+      && !raw.includes('..')
+      && ADAPTER_OUTPUT_FILE_EXT_RE.test(raw)) {
+      if (!seen.has(raw)) {
+        seen.add(raw);
+        paths.push(raw);
+      }
+    }
+  }
+  return paths;
 }
 
 /**
@@ -299,7 +361,141 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
   if (input.cwd) {
     await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'run_output');
   }
+  await collectReportedOutputs(input, byRootPath, maxBytes);
   return [...byRootPath.values()];
+}
+
+/** realpath 后仍须通过全部安全校验，symlink 逃逸目标因此无法借别名混入。 */
+function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly string[]): boolean {
+  if (!ADAPTER_OUTPUT_FILE_EXT_RE.test(basename(realPath))) return false;
+  const segments = realPath.split('/');
+  // 隐藏路径段（.ssh/.gnupg/.config 等）与 .agentbean 内部永不发布。
+  if (segments.some((segment) => segment.startsWith('.'))) return false;
+  if (SENSITIVE_REPORTED_BASENAME_RE.test(basename(realPath))) return false;
+  for (const prefix of excludedPrefixes) {
+    if (realPath === prefix || realPath.startsWith(`${prefix}/`)) return false;
+  }
+  return true;
+}
+
+async function hashFileWithLimit(abs: string, maxBytes: number): Promise<{ sha256: string; sizeBytes: number } | null> {
+  const hash = createHash('sha256');
+  let sizeBytes = 0;
+  try {
+    for await (const chunk of createReadStream(abs)) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      sizeBytes += buffer.length;
+      hash.update(buffer);
+      if (sizeBytes > maxBytes) return null;
+    }
+  } catch {
+    return null;
+  }
+  return sizeBytes > maxBytes ? null : { sha256: hash.digest('hex'), sizeBytes };
+}
+
+/**
+ * 把 Agent 回复报告的交付文件归入受管 run output 候选。
+ * 安全拒绝（穿越/隐藏段/内部前缀/敏感名/symlink 逃逸）只记路径无关诊断；
+ * 窗口外、不存在与重复属于正常噪音，静默跳过；超限走 onSkipped 用户可见。
+ */
+async function collectReportedOutputs(
+  input: CollectArtifactsInput,
+  byRootPath: Map<string, CollectedArtifact>,
+  maxBytes: number,
+): Promise<void> {
+  if (!input.reportedOutputPaths || input.reportedOutputPaths.length === 0) return;
+  const excludedPrefixes = (input.reportedOutputExcludedPathPrefixes ?? []).map((prefix) => {
+    try {
+      return realpathSync(prefix);
+    } catch {
+      return resolve(prefix);
+    }
+  });
+  const collectedByAbs = new Set([...byRootPath.values()].map((artifact) => artifact.absolutePath));
+  const collectedBySha = new Set([...byRootPath.values()].map((artifact) => artifact.sha256));
+  const runOutputRelativePaths = new Set(
+    [...byRootPath.values()]
+      .filter((artifact) => artifact.sourceRoot.kind === 'run_output')
+      .map((artifact) => artifact.relativePath),
+  );
+  const reject = (filename: string) => {
+    input.onDiagnostic?.({
+      code: 'REPORTED_PATH_REJECTED',
+      sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+      sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+      // 只暴露 basename：诊断行会随 run 回报上 Server，不得泄露本机目录结构。
+      relativePath: filename,
+    });
+  };
+  for (const reportedPath of input.reportedOutputPaths) {
+    let realPath: string;
+    try {
+      realPath = realpathSync(reportedPath);
+    } catch {
+      continue; // 不存在或不可达：Agent 报告了未落盘的路径，正常噪音。
+    }
+    if (collectedByAbs.has(reportedPath) || collectedByAbs.has(realPath)) continue;
+    if (!isCollectableReportedPath(realPath, excludedPrefixes)) {
+      reject(basename(reportedPath));
+      continue;
+    }
+    let stat;
+    try {
+      stat = statSync(realPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    if (!shouldCollectWindowedFile({
+      mtimeMs: stat.mtimeMs,
+      birthtimeMs: stat.birthtimeMs,
+      startedAt: input.startedAt,
+      createdInWindow: true,
+    })) {
+      continue;
+    }
+    const filename = basename(realPath);
+    if (stat.size > maxBytes) {
+      input.onSkipped?.({ filename, relativePath: filename, sizeBytes: stat.size, reason: 'FILE_TOO_LARGE' }, REPORTED_OUTPUT_SOURCE_ROOT);
+      input.onDiagnostic?.({
+        code: 'ARTIFACT_FILE_TOO_LARGE',
+        sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+        sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+        relativePath: filename,
+      });
+      continue;
+    }
+    const hashed = await hashFileWithLimit(realPath, maxBytes);
+    if (!hashed || hashed.sizeBytes !== stat.size) {
+      input.onDiagnostic?.({
+        code: 'ARTIFACT_FILE_UNREADABLE',
+        sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+        sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+        relativePath: filename,
+      });
+      continue;
+    }
+    // AC4：同一文件经受管目录与回复路径重复发现时只发布一次（按内容判同）。
+    if (collectedBySha.has(hashed.sha256)) continue;
+    // 同名不同内容与受管 run output 冲突时隔离到 reported/ 前缀，避免
+    // stageRunOutputsToPublishOutput 因 relativePath 重复而整批失败。
+    let relativePath = filename;
+    if (runOutputRelativePaths.has(relativePath)) relativePath = `reported/${filename}`;
+    if (runOutputRelativePaths.has(relativePath)) relativePath = `reported/${hashed.sha256.slice(0, 8)}-${filename}`;
+    runOutputRelativePaths.add(relativePath);
+    byRootPath.set(`reported:${realPath}`, {
+      absolutePath: realPath,
+      relativePath,
+      sha256: hashed.sha256,
+      sizeBytes: hashed.sizeBytes,
+      filename,
+      sourceRoot: REPORTED_OUTPUT_SOURCE_ROOT,
+      role: 'run_output',
+    });
+    collectedByAbs.add(realPath);
+    collectedBySha.add(hashed.sha256);
+  }
 }
 
 function makeSourceRoot(kind: ArtifactSourceRootKind, label: string, localIdentity: string): ArtifactSourceRoot {

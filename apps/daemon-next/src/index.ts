@@ -21,7 +21,13 @@ import {
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-import { collectArtifacts, type AdapterOutputRoot, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
+import {
+  collectArtifacts,
+  extractReportedOutputPaths,
+  REPORTED_OUTPUT_SOURCE_ROOT,
+  type AdapterOutputRoot,
+  type ArtifactCollectionDiagnostic,
+} from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
@@ -84,7 +90,7 @@ export type {
   WorkspaceRunDir,
   WorkspaceRunManifest,
 } from './workspace-run.js';
-export { collectArtifacts } from './artifact-collector.js';
+export { collectArtifacts, extractReportedOutputPaths } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
 export type { UploadedArtifact } from './artifact-uploader.js';
@@ -880,6 +886,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
+          // #1045：AgentOS oneshot（Hermes/OpenClaw）把交付文件写到任意位置，但在回复里
+          // 明确报告路径；解析回复比继续扩大猜测目录更可靠。报告路径只成为本次
+          // WorkspaceRun 的受管 run output 候选，经 outputs/<publishIdentity> 原子发布。
+          const reportedOutputPaths = extractReportedOutputPaths(result.body);
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
           const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {
@@ -893,7 +903,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0 || configuredRoots.roots.length > 0);
+            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0
+              || configuredRoots.roots.length > 0 || reportedOutputPaths.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
               ...(workspace ? {
@@ -903,6 +914,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               extraOutputDirs: codexExtraOutputDirs,
               adapterOutputRoots,
               configuredOutputRoots: configuredRoots.roots,
+              reportedOutputPaths,
+              // agentBeanHome 前缀覆盖整个本机投影：snapshot、run inputs（输入附件）、
+              // logs、cache 与内部状态永远不会因回复报告路径而进入发布。
+              reportedOutputExcludedPathPrefixes: [agentBeanHome],
               startedAt,
               maxBytes: input.artifactMaxBytes,
               onSkipped: (artifact, sourceRoot) => {
@@ -1133,7 +1148,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 ...(request.workspaceSnapshot ? { workspaceSnapshotId: request.workspaceSnapshot.id } : {}),
                 provenance: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
-                  source: 'run-output' as const,
+                  // #1045：回复报告路径收集的文件在本机 run manifest 中标记为
+                  // response 来源，与受管 outputs/ 目录产物区分，可审计。
+                  source: (c.sourceRoot.id === REPORTED_OUTPUT_SOURCE_ROOT.id ? 'response' : 'run-output') as 'response' | 'run-output',
                 })),
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
