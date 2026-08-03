@@ -325,4 +325,54 @@ describe('workspace publish output (#1044)', () => {
     expect(again).toEqual({ kind: 'committed', committedRevisionId: 'rev-2' });
     expect(puts).toHaveLength(1);
   });
+
+  test('#1045 回复报告的外部文件:原文件删除后仍从 staged copy 恢复发布', async () => {
+    const home = seedHome();
+    // reported 交付物在 projection 之外的任意目录（如 Desktop）。
+    const externalDir = tempDir('publish-output-external-');
+    const collected = [makeCollected(externalDir, 'Desktop-交付.md', '外部交付内容')];
+    collected[0]!.sourceRoot = { id: 'agent-reported-outputs', kind: 'run_output', label: 'Agent 报告的输出' };
+    const staged = stageRunOutputsToPublishOutput(stageInput(home, collected));
+    const store = createWorkspacePublishOutputStore({ agentBeanHome: home, deviceId: 'device-1' });
+
+    // 原始外部文件被用户移走/删除：恢复只能依赖 staged copy。
+    rmSync(externalDir, { recursive: true, force: true });
+
+    const puts: Array<{ path: string; offset: number; length: number }> = [];
+    const client: StagingRemoteClient = {
+      async begin() {
+        return {
+          ok: true,
+          staging: { status: 'open', files: [{ path: 'Desktop-交付.md', receivedBytes: 0, complete: false }] },
+        };
+      },
+      async putChunk(input) {
+        puts.push({ path: input.path, offset: input.offset, length: input.content.length });
+        return {
+          ok: true,
+          staging: { files: [{ path: input.path, receivedBytes: input.offset + input.content.length, complete: true }] },
+        };
+      },
+      async get() {
+        return {
+          ok: true,
+          staging: { status: 'open', files: [{ path: 'Desktop-交付.md', receivedBytes: 0, complete: false }] },
+        };
+      },
+      async commit() {
+        return {
+          ok: true,
+          staging: { status: 'committed', committedRevisionId: 'rev-2' },
+          workspace: { currentRevisionId: 'rev-2' },
+        };
+      },
+    };
+
+    const result = await resumeLocalWorkspacePublish({ store, client, publishId: 'pub-test-1', now: 500 });
+    expect(result).toEqual({ kind: 'committed', committedRevisionId: 'rev-2' });
+    expect(puts).toEqual([{ path: 'Desktop-交付.md', offset: 0, length: Buffer.byteLength('外部交付内容') }]);
+    const manifest = readWorkspacePublishOutputManifest(staged.outputDir);
+    expect(manifest).toMatchObject({ status: 'committed', committedRevisionId: 'rev-2' });
+    expect(JSON.stringify(manifest)).not.toContain(externalDir);
+  });
 });
