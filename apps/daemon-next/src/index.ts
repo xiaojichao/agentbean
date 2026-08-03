@@ -1545,15 +1545,16 @@ function isDispatchResultDeliveredAck(ack: unknown): boolean {
 }
 
 /**
- * #1053：Server 以 NOT_FOUND 拒绝 dispatch:result 表示 dispatch 身份无法确认
- * （record 不存在），重试永远不会成功——恢复回报按终态处理。
+ * #1053：只有 "Dispatch not found" 是终态——dispatch 身份无法确认，重试永远不会
+ * 成功。同为 NOT_FOUND 的 "Project document InputSet output is disabled"（rollout
+ * 关闭）不终态：dispatch 仍存在，rollout 翻转后重试可成功，保持排队重试。
  */
 function isDispatchResultTerminalAck(ack: unknown): boolean {
   if (!ack || typeof ack !== 'object') {
     return false;
   }
-  const fields = ack as { ok?: unknown; error?: unknown };
-  return fields.ok === false && fields.error === 'NOT_FOUND';
+  const fields = ack as { ok?: unknown; error?: unknown; message?: unknown };
+  return fields.ok === false && fields.error === 'NOT_FOUND' && fields.message === 'Dispatch not found';
 }
 
 async function announceDeviceSnapshot(

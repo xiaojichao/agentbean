@@ -33,6 +33,15 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('## 参考资料\n- /Users/a/notes.md\n- /tmp/source.pdf')).toEqual([]);
     });
 
+    test('交付语境绑定到路径所在分句：同行其他分句的交付词不救引用路径（#1053 codex P1）', () => {
+      // codex 指出的泄露场景：引用路径与交付词同行但不同分句，不得提取。
+      expect(extractReportedOutputPaths('参考 "/tmp/customer data.pdf"，输出已经完成')).toEqual([]);
+      expect(extractReportedOutputPaths('输出 "/a/x.md"，参考 "/b/y.md"')).toEqual(['/a/x.md']);
+      expect(extractReportedOutputPaths('整理自 /tmp/source.md，已生成 /tmp/final.md')).toEqual(['/tmp/final.md']);
+      // 交付词后置也成立：路径所在分句的后续文本含交付词。
+      expect(extractReportedOutputPaths('/tmp/report.md 已生成')).toEqual(['/tmp/report.md']);
+    });
+
     test('交付标题小节与交付声明冒号换行算结构化交付声明（#1053）', () => {
       expect(extractReportedOutputPaths('## 交付物\n- /Users/a/report.md\n- /tmp/final.pdf')).toEqual([
         '/Users/a/report.md',

@@ -41,8 +41,9 @@ const WINDOWS_REPORTED_PATH_RE = new RegExp(
   'gi',
 );
 /**
- * 交付语境关键词：路径必须与交付动词/交付名词同行，或处于交付标题小节、
- * 交付声明冒号的下一行。引用/来源/参考资料等语境不含这些词，天然被排除。
+ * 交付语境关键词：路径所在分句必须含交付动词/交付名词，或处于交付标题小节、
+ * 交付声明冒号的下一行。引用/来源语境优先排除（codex P1：整行级判断会把
+ * 「参考 "/tmp/customer data.pdf"，输出已经完成」里的引用路径误当交付物）。
  */
 const DELIVERY_CONTEXT_RE = new RegExp(
   [
@@ -54,6 +55,10 @@ const DELIVERY_CONTEXT_RE = new RegExp(
   ].join('|'),
   'i',
 );
+/** 引用/来源语境：与路径同分句出现时优先于交付词排除该路径。 */
+const REFERENCE_CONTEXT_RE = /参考|来源|引用|参阅|参见|来自|\bbased on\b|\breference(?:d|s)?\b|\bsource[sd]?\b|\bsee\b/i;
+/** 分句边界：中英文逗号、句号、分号、感叹、问号。 */
+const CLAUSE_BOUNDARY_RE = /[，,。;；！!？?]/;
 /**
  * 显式敏感文件名防线：即使扩展名落在交付物白名单内（credentials.md、id_rsa.txt），
  * 也永远不得作为交付物发布。隐藏目录（.ssh/.gnupg/.aws）由隐藏路径段规则兜底。
@@ -218,25 +223,28 @@ export function extractReportedOutputPaths(body: string | undefined): string[] {
 
   const seen = new Set<string>();
   const paths: string[] = [];
-  const accept = (raw: string | undefined, position: number | undefined): void => {
-    if (!raw || position === undefined) return;
+  const accept = (raw: string | undefined, matchText: string | undefined, position: number | undefined): void => {
+    if (!raw || matchText === undefined || position === undefined) return;
+    const pathStart = position + matchText.indexOf(raw);
+    const lineIndex = lineIndexOf(pathStart);
+    const colStart = pathStart - lineStarts[lineIndex]!;
     // 紧接盘符冒号的 / 是 Windows 路径（C:/...）的组成部分，不当 Unix 绝对路径重复提取。
-    if (raw.startsWith('/') && position >= 2
-      && body[position - 1] === ':' && /[A-Za-z]/.test(body[position - 2] ?? '')
-      && (position === 2 || !/[A-Za-z0-9_./\\]/.test(body[position - 3] ?? ''))) {
+    if (raw.startsWith('/') && pathStart >= 2
+      && body[pathStart - 1] === ':' && /[A-Za-z]/.test(body[pathStart - 2] ?? '')
+      && (pathStart === 2 || !/[A-Za-z0-9_./\\]/.test(body[pathStart - 3] ?? ''))) {
       return;
     }
     const candidate = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
     if (!isPlausibleReportedPath(candidate)) return;
-    if (!isDeliveryContextLine(lines, lineIndexOf(position))) return;
+    if (!isDeliveryContextAt(lines, lineIndex, colStart, colStart + raw.length)) return;
     if (!seen.has(candidate)) {
       seen.add(candidate);
       paths.push(candidate);
     }
   };
-  for (const match of body.matchAll(QUOTED_REPORTED_PATH_RE)) accept(match[1], match.index);
-  for (const match of body.matchAll(UNIX_REPORTED_PATH_RE)) accept(match[1], match.index);
-  for (const match of body.matchAll(WINDOWS_REPORTED_PATH_RE)) accept(match[1], match.index);
+  for (const match of body.matchAll(QUOTED_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
+  for (const match of body.matchAll(UNIX_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
+  for (const match of body.matchAll(WINDOWS_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
   return paths;
 }
 
@@ -252,22 +260,40 @@ function isPlausibleReportedPath(raw: string): boolean {
 }
 
 /**
- * 交付语境判定：本行含交付词；或上方最近非空行以冒号收尾且含交付词
- * （"报告已生成："换行/空行后给路径）；或最近的 markdown 标题含交付词
- * （交付小节内的列表项）。
+ * 交付语境判定（codex P1 修复：绑定到路径所在分句，而非整行）——
+ * 1) 路径所在分句（标点切分）含交付词；动词可前置（"已生成 /a.md"）或
+ *    后置（"/a.md 已生成"）；同分句出现 参考/来源/引用 等引用词时优先排除；
+ * 2) 上方最近非空行以冒号收尾且含交付词（"报告已生成："换行/空行后给路径）；
+ * 3) 最近的 markdown 标题含交付词（交付小节内的列表项）。
  */
-function isDeliveryContextLine(lines: readonly string[], index: number): boolean {
+function isDeliveryContextAt(lines: readonly string[], index: number, colStart: number, colEnd: number): boolean {
   const line = lines[index] ?? '';
-  if (DELIVERY_CONTEXT_RE.test(line)) return true;
+  let clauseStart = 0;
+  for (let i = colStart - 1; i >= 0; i -= 1) {
+    if (CLAUSE_BOUNDARY_RE.test(line[i]!)) { clauseStart = i + 1; break; }
+  }
+  let clauseEnd = line.length;
+  for (let i = colEnd; i < line.length; i += 1) {
+    if (CLAUSE_BOUNDARY_RE.test(line[i]!)) { clauseEnd = i; break; }
+  }
+  const clauseBefore = line.slice(clauseStart, colStart);
+  const clauseAfter = line.slice(colEnd, clauseEnd);
+  if (!REFERENCE_CONTEXT_RE.test(clauseBefore)
+    && (DELIVERY_CONTEXT_RE.test(clauseBefore) || DELIVERY_CONTEXT_RE.test(clauseAfter))) {
+    return true;
+  }
   for (let i = index - 1; i >= 0; i -= 1) {
     const previous = lines[i]!.trim();
     if (!previous) continue;
-    if (/[:：]$/.test(previous) && DELIVERY_CONTEXT_RE.test(previous)) return true;
+    if (/[:：]$/.test(previous) && DELIVERY_CONTEXT_RE.test(previous) && !REFERENCE_CONTEXT_RE.test(previous)) return true;
     break;
   }
   for (let i = index; i >= 0; i -= 1) {
     const heading = /^\s{0,3}#{1,6}\s+(.*)$/.exec(lines[i]!);
-    if (heading) return DELIVERY_CONTEXT_RE.test(heading[1] ?? '');
+    if (heading) {
+      const title = heading[1] ?? '';
+      return DELIVERY_CONTEXT_RE.test(title) && !REFERENCE_CONTEXT_RE.test(title);
+    }
   }
   return false;
 }

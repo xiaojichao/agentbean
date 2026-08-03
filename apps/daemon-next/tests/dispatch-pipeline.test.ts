@@ -986,12 +986,12 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     });
   });
 
-  // #1053：Server 以 NOT_FOUND 拒绝恢复回报 = dispatch 身份无法确认（终态）。
+  // #1053：Server 以 "Dispatch not found" 拒绝恢复回报 = dispatch 身份无法确认（终态）。
   // fail closed：写 unreportable 标记保留可诊断状态，不再无限重试。
   test('recovery marks run unreportable on terminal NOT_FOUND and stops retrying', async () => {
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
     const harness = createFakeSocket();
-    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'NOT_FOUND' });
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: false, error: 'NOT_FOUND', message: 'Dispatch not found' });
     const workspace = prepareWorkspaceRun(cwd, 'disp-terminal');
     persistWorkspaceRunResponse(workspace, 'terminal reply');
     persistWorkspaceRunManifest(workspace, {
@@ -1039,6 +1039,65 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     await harness.reconnect();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(resultEmitCount()).toBe(before);
+  });
+
+  // #1053 codex P1：同为 NOT_FOUND 的 "Project document InputSet output is disabled"
+  // （rollout 关闭）不是身份缺失——dispatch 仍存在，保持重试而非写 unreportable。
+  test('recovery keeps retrying on non-identity NOT_FOUND (rollout disabled)', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'pipe-')));
+    const harness = createFakeSocket();
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, {
+      ok: false, error: 'NOT_FOUND', message: 'Project document InputSet output is disabled',
+    });
+    const workspace = prepareWorkspaceRun(cwd, 'disp-rollout-off');
+    persistWorkspaceRunResponse(workspace, 'rollout reply');
+    persistWorkspaceRunManifest(workspace, {
+      runId: 'disp-rollout-off',
+      agentId: 'agent-1',
+      channelId: 'chan-1',
+      status: 'succeeded',
+      cwd,
+      startedAt: 1000,
+      completedAt: 2000,
+      files: [],
+    });
+
+    const client = createDaemonProtocolClient({
+      socket: harness.socket,
+      device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
+      runtimes: [],
+      agents: [{
+        name: 'Codex',
+        adapterKind: 'codex',
+        category: 'agentos-hosted',
+        command: 'codex',
+        cwd,
+      }],
+      serverUrl: 'http://server.test',
+      fetch: async () => new Response('{}', { status: 200 }),
+      executor: async () => ({ body: 'should not run' }),
+    });
+
+    await client.start();
+    await vi.waitFor(() => {
+      expect(
+        harness.emits.some(
+          (e) => e.event === AGENT_EVENTS.dispatch.result
+            && (e.payload as { dispatchId?: string }).dispatchId === 'disp-rollout-off',
+        ),
+      ).toBe(true);
+    });
+    const manifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
+    expect(manifest.reportedAt).toBeUndefined();
+    expect(manifest.unreportableAt).toBeUndefined();
+
+    // rollout 翻转后重连重试成功。
+    harness.setEmitAck(AGENT_EVENTS.dispatch.result, { ok: true });
+    await harness.reconnect();
+    await vi.waitFor(() => {
+      const reportedManifest = JSON.parse(readFileSync(workspace.manifestPath, 'utf8'));
+      expect(typeof reportedManifest.reportedAt).toBe('number');
+    });
   });
 
   test('scanRequested custom agent cwd makes persisted workspace runs recoverable', async () => {
