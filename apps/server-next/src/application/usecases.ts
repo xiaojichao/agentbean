@@ -12691,9 +12691,12 @@ async function buildDispatchWorkspaceSnapshot(
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
     ?? input.dispatch.requestId;
   const taskAttempt = taskContext?.taskAttempt ?? 1;
-  // A management run may contain multiple invocations; each dispatch needs a
-  // unique WorkspaceRun identity so one invocation cannot overwrite another.
-  const workspaceRunId = input.managementInvocation?.id ?? input.dispatch.requestId;
+  // A management invocation may be retried.  The dispatch request id is
+  // allocated per attempt (`management:<invocation>:<attempt>`), so use it as
+  // the immutable run identity instead of reusing the invocation id across
+  // attempts (which would make retries share cached output and overwrite the
+  // prior WorkspaceRun record).
+  const workspaceRunId = input.dispatch.requestId;
   const workspace = await repositories.projectChannelWorkspaces.getForTeam({
     teamId: input.dispatch.teamId,
     channelId: input.dispatch.channelId,
