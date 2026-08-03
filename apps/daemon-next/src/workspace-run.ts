@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import {
   parseAgentCollaborationProposalV1,
@@ -205,40 +205,6 @@ export function prepareChannelWorkspaceOutput(options: ChannelWorkspaceOutputOpt
   const outputDir = join(root, 'outputs', options.publishIdentity);
   ensureDirectoryNoSymlink(outputDir, resolve(options.agentBeanHome));
   return outputDir;
-}
-
-export function stageChannelWorkspaceOutputs(
-  outputDir: string,
-  artifacts: readonly { absolutePath: string; relativePath: string; sha256: string; sizeBytes: number; filename: string }[],
-  metadata: {
-    publishIdentity?: string;
-    baselineRevisionId?: string;
-    deviceId?: string;
-    teamId?: string;
-    channelId?: string;
-  } = {},
-): void {
-  for (const artifact of artifacts) {
-    const relativePath = artifact.relativePath.replaceAll('\\', '/');
-    if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..' || !part)) {
-      throw new Error('WORKSPACE_PROJECTION_INVALID_PROVENANCE');
-    }
-    const destination = resolve(outputDir, relativePath);
-    const root = resolve(outputDir);
-    if (destination !== root && !destination.startsWith(`${root}/`)) throw new Error('WORKSPACE_PROJECTION_PATH_ESCAPE');
-    ensureDirectoryNoSymlink(join(destination, '..'), root);
-    copyFileSync(artifact.absolutePath, destination);
-  }
-  writeFileSync(join(outputDir, 'manifest.json'), `${JSON.stringify({
-    schemaVersion: 1,
-    ...metadata,
-    files: artifacts.map((artifact) => ({
-      relativePath: artifact.relativePath,
-      sha256: artifact.sha256,
-      sizeBytes: artifact.sizeBytes,
-      filename: artifact.filename,
-    })),
-  }, null, 2)}\n`);
 }
 
 export function channelProjectionRoot(options: Pick<ChannelProjectionOptions, 'agentBeanHome' | 'teamId' | 'channelId'>): string {

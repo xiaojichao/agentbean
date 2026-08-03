@@ -183,6 +183,10 @@ export interface WorkspacePublishProvenanceDto {
   readonly baselineRevisionId: ID;
   /** When the publish happened (server-assigned timestamp). */
   readonly publishedAt: UnixMs;
+  /** #1044 交付本次 revision 的 Device(device publish 路径记录;旧 revision 可缺省)。 */
+  readonly deviceId?: ID;
+  /** #1044 产出本次交付的 WorkspaceRun(旧 revision 可缺省)。 */
+  readonly workspaceRunId?: ID;
 }
 
 /** Discriminated provenance for a workspace revision. */
@@ -299,6 +303,9 @@ export interface WorkspacePublishStagingDto {
     agentId: ID;
     taskId: ID;
     taskAttempt: number;
+    /** #1044 可选追溯：产出交付的 WorkspaceRun 与交付 Device。 */
+    workspaceRunId?: ID;
+    deviceId?: ID;
   };
 }
 

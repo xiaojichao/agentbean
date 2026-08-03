@@ -84,6 +84,10 @@ export async function deliverWorkspaceOutputsViaStaging(
       files: [],
     };
   }
+  // #1044：已判终态冲突的批次不再重复上传（同 baseline 冲突不可恢复）。
+  if (existing?.status === 'abandoned') {
+    return { kind: 'conflict', publishId };
+  }
 
   const record: LocalWorkspacePublishRecord = {
     publishId,
@@ -134,6 +138,12 @@ export async function deliverWorkspaceOutputsViaStaging(
   }
 
   const remoteFiles = status.ok ? status.staging.files : began.staging.files;
+  // #1044：以 Server 进度为权威同步本机批次 manifest（崩溃窗口可能丢失最后一次回写）。
+  for (const remote of remoteFiles) {
+    if (remote.receivedBytes > 0 || remote.complete) {
+      input.store.markProgress(publishId, remote.path, remote.receivedBytes, remote.complete, input.now);
+    }
+  }
   for (const file of files) {
     const remote = remoteFiles.find((f) => f.path === file.path);
     if (remote?.complete) continue;
@@ -155,6 +165,14 @@ export async function deliverWorkspaceOutputsViaStaging(
     if (!put.ok) {
       return { kind: 'failed', publishId, error: put.error };
     }
+    const updated = put.staging.files.find((f) => f.path === file.path);
+    input.store.markProgress(
+      publishId,
+      file.path,
+      updated?.receivedBytes ?? offset + chunk.length,
+      updated?.complete ?? false,
+      input.now,
+    );
   }
 
   const committed = await input.client.commit({
@@ -164,6 +182,8 @@ export async function deliverWorkspaceOutputsViaStaging(
   });
   if (!committed.ok) {
     if (committed.error === 'CONFLICT' || committed.details?.conflictingPaths) {
+      // 同 baseline 冲突是终态（重试需新 baseline → 新 publishId）；标记 abandoned 保留诊断。
+      input.store.markAbandoned(publishId, input.now);
       return {
         kind: 'conflict',
         publishId,
@@ -199,7 +219,8 @@ function normalizeRelativePath(value: string): string {
   return value.replaceAll('\\', '/').replace(/^\.?\//, '');
 }
 
-function mimeTypeForFilename(filename: string): string {
+/** #1044 提升到模块级导出：publish output manifest 与 delivery 必须使用同一 mime 推断。 */
+export function mimeTypeForFilename(filename: string): string {
   const lower = filename.toLowerCase();
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';

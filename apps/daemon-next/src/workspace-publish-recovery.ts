@@ -19,6 +19,9 @@ export interface LocalWorkspacePublishFile {
   readonly mimeType: string;
   readonly expectedSizeBytes: number;
   readonly expectedSha256: string;
+  /** #1044 本机上传进度镜像（Server receivedBytes 仍是权威；此处仅支撑 manifest 可检查性）。 */
+  readonly uploadedBytes?: number;
+  readonly complete?: boolean;
 }
 
 export interface LocalWorkspacePublishRecord {
@@ -35,6 +38,9 @@ export interface LocalWorkspacePublishRecord {
     readonly agentId: string;
     readonly taskId: string;
     readonly taskAttempt: number;
+    /** #1044 可选追溯：产出交付的 WorkspaceRun 与交付 Device。 */
+    readonly workspaceRunId?: string;
+    readonly deviceId?: string;
   };
 }
 
@@ -43,6 +49,10 @@ export interface WorkspacePublishRecoveryStore {
   get(publishId: string): LocalWorkspacePublishRecord | null;
   listPending(): LocalWorkspacePublishRecord[];
   markCommitted(publishId: string, committedRevisionId: string, now: number): void;
+  /** #1044 回写单文件上传进度（每个 put 成功后与 resume 同步 Server 进度时调用）。 */
+  markProgress(publishId: string, path: string, uploadedBytes: number, complete: boolean, now: number): void;
+  /** #1044 冲突/不可恢复批次标记为 abandoned：保留可诊断状态，不再参与自动 resume。 */
+  markAbandoned(publishId: string, now: number): void;
   remove(publishId: string): void;
 }
 
@@ -90,6 +100,22 @@ export function createFilesystemWorkspacePublishRecoveryStore(
         committedRevisionId,
         updatedAt: now,
       });
+    },
+    markProgress(publishId, path, uploadedBytes, complete, now) {
+      const existing = this.get(publishId);
+      if (!existing) return;
+      this.save({
+        ...existing,
+        files: existing.files.map((file) => file.path === path
+          ? { ...file, uploadedBytes, complete }
+          : file),
+        updatedAt: now,
+      });
+    },
+    markAbandoned(publishId, now) {
+      const existing = this.get(publishId);
+      if (!existing || existing.status === 'committed') return;
+      this.save({ ...existing, status: 'abandoned', updatedAt: now });
     },
     remove(publishId) {
       const target = pathFor(publishId);
@@ -217,6 +243,19 @@ export async function resumeLocalWorkspacePublish(input: {
     staging = refreshed.staging;
   }
 
+  // #1044：以 Server 进度为权威同步本机 manifest（崩溃窗口可能丢失最后一次回写）。
+  for (const remoteFile of staging.files) {
+    if (remoteFile.receivedBytes > 0 || remoteFile.complete) {
+      input.store.markProgress(
+        record.publishId,
+        remoteFile.path,
+        remoteFile.receivedBytes,
+        remoteFile.complete,
+        input.now,
+      );
+    }
+  }
+
   const readFile = input.readFile ?? ((p: string) => readFileSync(p));
   for (const file of record.files) {
     const remoteFile = staging.files.find((f) => f.path === file.path);
@@ -238,6 +277,14 @@ export async function resumeLocalWorkspacePublish(input: {
       content: Buffer.from(chunk),
     });
     if (!put.ok) return { kind: 'failed', error: put.error };
+    const updated = put.staging.files.find((f) => f.path === file.path);
+    input.store.markProgress(
+      record.publishId,
+      file.path,
+      updated?.receivedBytes ?? offset + chunk.length,
+      updated?.complete ?? false,
+      input.now,
+    );
   }
 
   const committed = await input.client.commit({
@@ -247,6 +294,8 @@ export async function resumeLocalWorkspacePublish(input: {
   });
   if (!committed.ok) {
     if (committed.error === 'CONFLICT' || committed.details?.conflictingPaths) {
+      // 同 baseline 冲突是终态（重试需新 baseline → 新 publishId）；标记 abandoned 保留诊断。
+      input.store.markAbandoned(record.publishId, input.now);
       return { kind: 'conflict', conflictingPaths: committed.details?.conflictingPaths };
     }
     return { kind: 'failed', error: committed.error };

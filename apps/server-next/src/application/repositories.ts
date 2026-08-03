@@ -488,6 +488,9 @@ export interface WorkspacePublishStagingRecord {
     agentId: ID;
     taskId: ID;
     taskAttempt: number;
+    /** #1044 可选追溯：产出交付的 WorkspaceRun 与交付 Device。 */
+    workspaceRunId?: ID;
+    deviceId?: ID;
   };
 }
 

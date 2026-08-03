@@ -137,7 +137,7 @@ describe('workspace-publish-delivery (#1003)', () => {
     expect(store.listPending()).toHaveLength(0);
   });
 
-  test('commit CONFLICT 不伪造已发布，pending 仍保留', async () => {
+  test('commit CONFLICT 不伪造已发布，批次标记 abandoned 保留诊断（同 baseline 冲突是终态）', async () => {
     const root = tempDir();
     const store = createFilesystemWorkspacePublishRecoveryStore(root);
     const fileRoot = tempDir();
@@ -187,8 +187,10 @@ describe('workspace-publish-delivery (#1003)', () => {
       publishId: 'pub-conflict',
       conflictingPaths: ['a.bin'],
     });
-    expect(store.get('pub-conflict')?.status).toBe('pending');
-    expect(store.listPending()).toHaveLength(1);
+    // #1044：同 baseline 冲突不可恢复（重试需新 baseline → 新 publishId），
+    // 标记 abandoned 保留可诊断状态，不再参与自动 resume。
+    expect(store.get('pub-conflict')?.status).toBe('abandoned');
+    expect(store.listPending()).toHaveLength(0);
   });
 
   test('已 committed 的 publishId 幂等收敛', async () => {
@@ -226,5 +228,38 @@ describe('workspace-publish-delivery (#1003)', () => {
       publishId: 'pub-done',
       committedRevisionId: 'rev-9',
     });
+  });
+
+  test('已 abandoned 的批次不再重复上传(同 baseline 冲突是终态)', async () => {
+    const root = tempDir();
+    const store = createFilesystemWorkspacePublishRecoveryStore(root);
+    store.save({
+      publishId: 'pub-abandoned',
+      teamId: 't',
+      channelId: 'c',
+      baselineRevisionId: 'rev-1',
+      files: [],
+      status: 'abandoned',
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const client: StagingRemoteClient = {
+      async begin() { throw new Error('no begin'); },
+      async putChunk() { throw new Error('no put'); },
+      async get() { throw new Error('no get'); },
+      async commit() { throw new Error('no commit'); },
+    };
+    const result = await deliverWorkspaceOutputsViaStaging({
+      store,
+      client,
+      teamId: 't',
+      channelId: 'c',
+      baselineRevisionId: 'rev-1',
+      collected: [collected(tempDir(), 'x.txt', 'x')],
+      publishId: 'pub-abandoned',
+      now: 99,
+    });
+    expect(result).toEqual({ kind: 'conflict', publishId: 'pub-abandoned' });
+    expect(store.get('pub-abandoned')?.status).toBe('abandoned');
   });
 });

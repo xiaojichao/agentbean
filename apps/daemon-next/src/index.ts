@@ -16,8 +16,6 @@ import {
   markWorkspaceRunReported,
   persistDeviceProjectionManifest,
   prepareChannelWorkspaceRun,
-  prepareChannelWorkspaceOutput,
-  stageChannelWorkspaceOutputs,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
@@ -41,7 +39,13 @@ import {
 import {
   createFilesystemWorkspacePublishRecoveryStore,
   resumeLocalWorkspacePublish,
+  type WorkspacePublishRecoveryStore,
 } from './workspace-publish-recovery.js';
+import {
+  createWorkspacePublishOutputStore,
+  markWorkspacePublishOutputReported,
+  stageRunOutputsToPublishOutput,
+} from './workspace-publish-output.js';
 import {
   assertDeviceWorkspaceSnapshotReady,
   materializeDeviceWorkspaceSnapshot,
@@ -67,7 +71,6 @@ export {
   markWorkspaceRunManifestReported,
   markWorkspaceRunReported,
   prepareChannelWorkspaceOutput,
-  stageChannelWorkspaceOutputs,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
@@ -106,6 +109,17 @@ export type {
   StagingRemoteClient,
   WorkspacePublishRecoveryStore,
 } from './workspace-publish-recovery.js';
+export {
+  createWorkspacePublishOutputStore,
+  discoverWorkspacePublishOutputs,
+  markWorkspacePublishOutputReported,
+  readWorkspacePublishOutputManifest,
+  stageRunOutputsToPublishOutput,
+} from './workspace-publish-output.js';
+export type {
+  DiscoveredWorkspacePublishOutput,
+  WorkspacePublishOutputManifest,
+} from './workspace-publish-output.js';
 export { createDeviceServiceCore } from './device-service-core.js';
 export type { DeviceServiceComponent, DeviceServiceCore } from './device-service-core.js';
 export { createDeviceServiceHost, bindDeviceServiceSignals } from './device-service-host.js';
@@ -425,28 +439,39 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       token: device.token,
       fetch: fetchFn,
     });
-    for (const pending of workspacePublishStore.listPending()) {
+    const resumeOne = async (store: WorkspacePublishRecoveryStore, publishId: string) => {
       try {
         const result = await resumeLocalWorkspacePublish({
-          store: workspacePublishStore,
+          store,
           client,
-          publishId: pending.publishId,
+          publishId,
           now: Date.now(),
         });
         if (result.kind === 'failed') {
           console.warn(
-            `daemon workspace-publish resume ${pending.publishId} failed (non-blocking): ${result.error}`,
+            `daemon workspace-publish resume ${publishId} failed (non-blocking): ${result.error}`,
           );
         } else if (result.kind === 'conflict') {
           console.warn(
-            `daemon workspace-publish resume ${pending.publishId} conflict (non-blocking)`
+            `daemon workspace-publish resume ${publishId} conflict (non-blocking)`
             + (result.conflictingPaths?.length ? `: ${result.conflictingPaths.join(',')}` : ''),
           );
         }
       } catch (error) {
         console.warn(
-          `daemon workspace-publish resume ${pending.publishId} threw (non-blocking): ${readErrorMessage(error)}`,
+          `daemon workspace-publish resume ${publishId} threw (non-blocking): ${readErrorMessage(error)}`,
         );
+      }
+    };
+    // 旧扁平 store：升级前 in-flight 记录的只读兼容恢复（不再写入新记录）。
+    for (const pending of workspacePublishStore.listPending()) {
+      await resumeOne(workspacePublishStore, pending.publishId);
+    }
+    // #1044：以 outputs/<publishIdentity>/manifest.json 为权威的批次恢复。
+    if (currentDeviceId) {
+      const outputStore = createWorkspacePublishOutputStore({ agentBeanHome, deviceId: currentDeviceId });
+      for (const pending of outputStore.listPending()) {
+        await resumeOne(outputStore, pending.publishId);
       }
     }
   };
@@ -850,6 +875,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
 
           // Scan outputs + cwd fallback, upload, then merge with the executor's log artifact.
           let productArtifactIds: string[] = [];
+          // #1044：本次 staging 已 committed 的 publish identity（run 回报送达后写 reportedAt 稳定标记）。
+          let committedPublishIdentity: string | undefined;
           const collectedProductArtifacts: Awaited<ReturnType<typeof collectArtifacts>> = [];
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
@@ -915,59 +942,80 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   channelId: request.channelId,
                   baselineRevisionId,
                 });
+                // #1044：先把本次 run 确认的输出登记进 outputs/<publishIdentity>，上传与断点
+                // 恢复都以 staged copy 为源（run 目录被清理后仍可按同一 publish identity 恢复）。
+                // stage 失败则不进行 staging 交付（避免 manifest 与上传源不一致），回退 legacy upload。
+                let stagedForPublish: typeof collected | undefined;
+                let publishOutputStore: WorkspacePublishRecoveryStore | undefined;
                 try {
-                  const pendingOutputDir = prepareChannelWorkspaceOutput({
+                  const staged = stageRunOutputsToPublishOutput({
                     agentBeanHome,
                     deviceId: currentDeviceId,
                     teamId: request.teamId,
                     channelId: request.channelId,
                     publishIdentity: publishId,
-                  });
-                  stageChannelWorkspaceOutputs(pendingOutputDir, collected, {
-                    publishIdentity: publishId,
                     baselineRevisionId,
-                    deviceId: currentDeviceId,
-                    teamId: request.teamId,
-                    channelId: request.channelId,
-                  });
-                } catch (error) {
-                  console.warn(`daemon channel workspace output staging failed (non-blocking): ${readErrorMessage(error)}`);
-                }
-                const delivered = await deliverWorkspaceOutputsViaStaging({
-                  store: workspacePublishStore,
-                  client,
-                  teamId: device.teamId,
-                  channelId: request.channelId,
-                  baselineRevisionId,
-                  collected,
-                  publishId,
-                  now: Date.now(),
-                  provenance: {
+                    now: Date.now(),
                     agentId: request.agentId,
                     taskId,
                     taskAttempt,
-                  },
-                });
-                if (delivered.kind === 'committed') {
-                  usedStaging = true;
-                  productArtifactIds = delivered.artifactIds;
-                } else if (delivered.kind === 'conflict') {
-                  const diagnostic = `[workspace-publish:CONFLICT] publishId=${delivered.publishId}`
-                    + (delivered.conflictingPaths?.length
-                      ? ` paths=${delivered.conflictingPaths.join(',')}`
-                      : '');
-                  result.body = appendDiagnostic(result.body, diagnostic);
-                  if (result.workspaceRun) {
-                    result.workspaceRun.logExcerpt = appendDiagnostic(
-                      result.workspaceRun.logExcerpt,
-                      diagnostic,
+                    workspaceRunId,
+                    collected,
+                  });
+                  publishOutputStore = createWorkspacePublishOutputStore({
+                    agentBeanHome,
+                    deviceId: currentDeviceId,
+                  });
+                  stagedForPublish = collected.map((artifact) => ({
+                    ...artifact,
+                    absolutePath: join(
+                      staged.outputDir,
+                      ...artifact.relativePath.replaceAll('\\', '/').split('/'),
+                    ),
+                  }));
+                } catch (error) {
+                  console.warn(`daemon channel workspace output staging failed, fallback upload: ${readErrorMessage(error)}`);
+                }
+                if (stagedForPublish && publishOutputStore) {
+                  const delivered = await deliverWorkspaceOutputsViaStaging({
+                    store: publishOutputStore,
+                    client,
+                    teamId: device.teamId,
+                    channelId: request.channelId,
+                    baselineRevisionId,
+                    collected: stagedForPublish,
+                    publishId,
+                    now: Date.now(),
+                    provenance: {
+                      agentId: request.agentId,
+                      taskId,
+                      taskAttempt,
+                      workspaceRunId,
+                      deviceId: currentDeviceId,
+                    },
+                  });
+                  if (delivered.kind === 'committed') {
+                    usedStaging = true;
+                    productArtifactIds = delivered.artifactIds;
+                    committedPublishIdentity = publishId;
+                  } else if (delivered.kind === 'conflict') {
+                    const diagnostic = `[workspace-publish:CONFLICT] publishId=${delivered.publishId}`
+                      + (delivered.conflictingPaths?.length
+                        ? ` paths=${delivered.conflictingPaths.join(',')}`
+                        : '');
+                    result.body = appendDiagnostic(result.body, diagnostic);
+                    if (result.workspaceRun) {
+                      result.workspaceRun.logExcerpt = appendDiagnostic(
+                        result.workspaceRun.logExcerpt,
+                        diagnostic,
+                      );
+                    }
+                    // 冲突不伪造 revision；仍回退 upload 保证 dispatch 可见产物（非 workspace 半成品）。
+                  } else if (delivered.kind === 'failed') {
+                    console.warn(
+                      `daemon workspace-publish ${delivered.publishId} failed, fallback upload: ${delivered.error}`,
                     );
                   }
-                  // 冲突不伪造 revision；仍回退 upload 保证 dispatch 可见产物（非 workspace 半成品）。
-                } else if (delivered.kind === 'failed') {
-                  console.warn(
-                    `daemon workspace-publish ${delivered.publishId} failed, fallback upload: ${delivered.error}`,
-                  );
                 }
               }
               if (!usedStaging) {
@@ -1115,9 +1163,24 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           }, {
             isDeliveredAck: isDispatchResultDeliveredAck,
-            ...(reportedManifestPath
-              ? { onDelivered: () => markWorkspaceRunManifestReported(reportedManifestPath, Date.now()) }
-              : {}),
+            onDelivered: () => {
+              if (reportedManifestPath) {
+                markWorkspaceRunManifestReported(reportedManifestPath, Date.now());
+              }
+              // #1044：发布结果已随 run 回报送达,写稳定标记防止再次回报/误恢复。
+              if (committedPublishIdentity && currentDeviceId) {
+                try {
+                  markWorkspacePublishOutputReported({
+                    agentBeanHome,
+                    deviceId: currentDeviceId,
+                    publishId: committedPublishIdentity,
+                    now: Date.now(),
+                  });
+                } catch {
+                  // 稳定标记 best-effort;committed 状态本身已阻止重复发布。
+                }
+              }
+            },
           });
           scheduleOutcomeObservation(request, result);
         } catch (error) {

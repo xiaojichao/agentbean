@@ -206,6 +206,7 @@ describe('workspace-publish-recovery (#967 断网/重启可恢复发布)', () =>
       store, client, publishId: 'pub-conflict', now: 10,
     });
     expect(result).toEqual({ kind: 'conflict', conflictingPaths: ['a.bin'] });
-    expect(store.get('pub-conflict')?.status).toBe('pending');
+    // #1044：同 baseline 冲突是终态，标记 abandoned 保留诊断，不再每次启动重复 resume。
+    expect(store.get('pub-conflict')?.status).toBe('abandoned');
   });
 });
