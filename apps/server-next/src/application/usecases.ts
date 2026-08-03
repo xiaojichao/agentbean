@@ -12691,7 +12691,9 @@ async function buildDispatchWorkspaceSnapshot(
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
     ?? input.dispatch.requestId;
   const taskAttempt = taskContext?.taskAttempt ?? 1;
-  const workspaceRunId = input.managementInvocation?.managementRunId ?? input.dispatch.requestId;
+  // A management run may contain multiple invocations; each dispatch needs a
+  // unique WorkspaceRun identity so one invocation cannot overwrite another.
+  const workspaceRunId = input.managementInvocation?.id ?? input.dispatch.requestId;
   const workspace = await repositories.projectChannelWorkspaces.getForTeam({
     teamId: input.dispatch.teamId,
     channelId: input.dispatch.channelId,
