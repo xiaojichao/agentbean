@@ -12,35 +12,81 @@ async function touch(path: string, mtimeMs: number): Promise<void> {
 
 describe('artifact-collector', () => {
   describe('extractReportedOutputPaths (#1045)', () => {
-    test('提取回复中明确报告的交付文件路径并去重保序', () => {
+    test('提取交付语境中的路径并去重保序', () => {
       const body = [
         '搞定！总结文件已生成，保存在桌面上：',
         '',
         '/Users/shaw/Desktop/短视频二次创作总结.md',
         '',
-        '参考了 /Users/shaw/notes.md 与 https://example.com/a.pdf',
         '已保存到：/Users/shaw/Documents/report.md。',
       ].join('\n');
       expect(extractReportedOutputPaths(body)).toEqual([
         '/Users/shaw/Desktop/短视频二次创作总结.md',
-        '/Users/shaw/notes.md',
         '/Users/shaw/Documents/report.md',
       ]);
     });
 
+    test('仅作为引用、来源或参考资料出现的路径不得进入候选（#1053）', () => {
+      expect(extractReportedOutputPaths('参考了 /Users/shaw/notes.md 与 https://example.com/a.pdf')).toEqual([]);
+      expect(extractReportedOutputPaths('数据来自 /Users/shaw/source.pdf，引用 /tmp/input.md')).toEqual([]);
+      expect(extractReportedOutputPaths('based on /Users/a/notes.md, see /tmp/ref.pdf')).toEqual([]);
+      expect(extractReportedOutputPaths('## 参考资料\n- /Users/a/notes.md\n- /tmp/source.pdf')).toEqual([]);
+    });
+
+    test('交付语境绑定到路径所在分句：同行其他分句的交付词不救引用路径（#1053 codex P1）', () => {
+      // codex 指出的泄露场景：引用路径与交付词同行但不同分句，不得提取。
+      expect(extractReportedOutputPaths('参考 "/tmp/customer data.pdf"，输出已经完成')).toEqual([]);
+      expect(extractReportedOutputPaths('输出 "/a/x.md"，参考 "/b/y.md"')).toEqual(['/a/x.md']);
+      expect(extractReportedOutputPaths('整理自 /tmp/source.md，已生成 /tmp/final.md')).toEqual(['/tmp/final.md']);
+      // 交付词后置也成立：路径所在分句的后续文本含交付词。
+      expect(extractReportedOutputPaths('/tmp/report.md 已生成')).toEqual(['/tmp/report.md']);
+    });
+
+    test('交付标题小节与交付声明冒号换行算结构化交付声明（#1053）', () => {
+      expect(extractReportedOutputPaths('## 交付物\n- /Users/a/report.md\n- /tmp/final.pdf')).toEqual([
+        '/Users/a/report.md',
+        '/tmp/final.pdf',
+      ]);
+      expect(extractReportedOutputPaths('## Deliverables\n- /Users/a/report.md')).toEqual(['/Users/a/report.md']);
+      expect(extractReportedOutputPaths('文件已生成：\n/Users/a/report.md')).toEqual(['/Users/a/report.md']);
+    });
+
     test('忽略非交付扩展名、相对路径、缺失正文并处理尾部标点', () => {
-      expect(extractReportedOutputPaths('参考 /Users/a/state.json，路径 /Users/a/tmp.log')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 /Users/a/state.json，输出 /Users/a/tmp.log')).toEqual([]);
       expect(extractReportedOutputPaths('使用 docs/a.md 作为模板')).toEqual([]);
-      expect(extractReportedOutputPaths('文件在：/Users/x/报告.md。')).toEqual(['/Users/x/报告.md']);
-      expect(extractReportedOutputPaths('a\n/Users/x/a.md\nb\n/Users/x/a.md')).toEqual(['/Users/x/a.md']);
+      expect(extractReportedOutputPaths('交付：/Users/x/报告.md。')).toEqual(['/Users/x/报告.md']);
+      expect(extractReportedOutputPaths('已生成：\n/Users/x/a.md\n输出 /Users/x/a.md')).toEqual(['/Users/x/a.md']);
       expect(extractReportedOutputPaths(undefined)).toEqual([]);
+    });
+
+    test('支持带引号且包含空格的 Unix 绝对路径（#1053）', () => {
+      expect(extractReportedOutputPaths('已生成 "/Users/a/Desktop/final report.pdf"')).toEqual([
+        '/Users/a/Desktop/final report.pdf',
+      ]);
+      expect(extractReportedOutputPaths("报告已保存到 '/Users/a/My Documents/报告.md'")).toEqual([
+        '/Users/a/My Documents/报告.md',
+      ]);
+      expect(extractReportedOutputPaths('交付 “/Users/a/季度 总结.md”')).toEqual(['/Users/a/季度 总结.md']);
+    });
+
+    test('支持 Windows 绝对交付路径（#1053）', () => {
+      expect(extractReportedOutputPaths('已生成 C:\\Users\\a\\Desktop\\report.md')).toEqual([
+        'C:\\Users\\a\\Desktop\\report.md',
+      ]);
+      expect(extractReportedOutputPaths('已保存到 "D:\\My Documents\\final report.pdf"')).toEqual([
+        'D:\\My Documents\\final report.pdf',
+      ]);
+      expect(extractReportedOutputPaths('输出 C:/Users/a/report.zip。')).toEqual(['C:/Users/a/report.zip']);
+      expect(extractReportedOutputPaths('参考 C:\\Users\\a\\notes.md')).toEqual([]);
     });
 
     test('拒绝路径穿越与隐藏路径段', () => {
       expect(extractReportedOutputPaths('输出在 /Users/x/../etc/passwd.md')).toEqual([]);
-      expect(extractReportedOutputPaths('密钥 /Users/x/.ssh/config.md')).toEqual([]);
-      expect(extractReportedOutputPaths('内部 /Users/x/.agentbean/device.md')).toEqual([]);
-      expect(extractReportedOutputPaths('协议相对 //nas/share/a.md')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 /Users/x/.ssh/config.md')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 /Users/x/.agentbean/device.md')).toEqual([]);
+      expect(extractReportedOutputPaths('输出 //nas/share/a.md')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 "C:\\Users\\a\\.ssh\\config.md"')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 "C:\\Users\\a\\..\\x.md"')).toEqual([]);
     });
   });
 

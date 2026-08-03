@@ -14,6 +14,7 @@ import {
   discoverRecoverableChannelWorkspaceRuns,
   markWorkspaceRunManifestReported,
   markWorkspaceRunReported,
+  markWorkspaceRunUnreportable,
   persistDeviceProjectionManifest,
   prepareChannelWorkspaceRun,
   prepareWorkspaceRun,
@@ -76,6 +77,7 @@ export {
   discoverRecoverableChannelWorkspaceRuns,
   markWorkspaceRunManifestReported,
   markWorkspaceRunReported,
+  markWorkspaceRunUnreportable,
   prepareChannelWorkspaceOutput,
   prepareWorkspaceRun,
   workspaceRunEnv,
@@ -747,9 +749,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 无论 Agent 是否配置 custom cwd，项目协作状态都进入本机 Channel projection；
           // custom cwd 只作为显式执行进程 cwd，不参与默认文件扫描。
           const explicitWorkspaceCwd = request.customAgent?.cwd;
+          // #1053：受管 dispatch 的真实 task 身份只经 managementContext.taskContext 下发
+          // （server 从不设置顶层 taskId/taskAttempt）。invocation/request 身份不是 taskId
+          // 的合法回退——requestId 形如 management:<invocation>:<attempt>，含冒号会被
+          // projection 段校验拒绝；没有 Task context 时只能回退到安全且唯一的 dispatch id
+          // （与 server 端 snapshot provenance 的回退一致）。
+          const taskContext = request.managementContext?.taskContext;
           const taskId = request.workspaceSnapshot?.provenance.taskId
-            ?? request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
-          const taskAttempt = request.workspaceSnapshot?.provenance.taskAttempt ?? request.taskAttempt ?? 1;
+            ?? taskContext?.taskId
+            ?? request.taskId ?? request.id;
+          const taskAttempt = request.workspaceSnapshot?.provenance.taskAttempt
+            ?? taskContext?.taskAttempt
+            ?? request.taskAttempt ?? 1;
           const workspaceRunId = request.workspaceSnapshot?.provenance.workspaceRunId
             ?? request.workspaceRunId ?? request.id;
           // A real Server workspace revision is the publish CAS baseline.  The
@@ -800,11 +811,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               snapshotDir,
               serverUrl,
               token: device.token ?? '',
-              teamId: device.teamId,
+              // #1053：snapshot 属于 dispatch 目标 Team（request.teamId），不是 Device
+              // primary Team；跨 Team 可见 Agent 用 device.teamId 会在本机门禁
+              // （SNAPSHOT_INVALID）与 Server 授权上双重失败。
+              teamId: request.teamId,
               channelId: request.channelId,
               fetch: fetchFn,
               refreshSnapshot: async () => {
-                const refreshUrl = `${serverUrl.replace(/\/$/, '')}/api/teams/${encodeURIComponent(device.teamId)}/channels/${encodeURIComponent(request.channelId)}/device-workspace-snapshots/${encodeURIComponent(request.workspaceSnapshot!.id)}`;
+                const refreshUrl = `${serverUrl.replace(/\/$/, '')}/api/teams/${encodeURIComponent(request.teamId)}/channels/${encodeURIComponent(request.channelId)}/device-workspace-snapshots/${encodeURIComponent(request.workspaceSnapshot!.id)}`;
                 try {
                   const response = await (fetchFn ?? fetch)(refreshUrl, { headers: { Authorization: `Bearer ${device.token ?? ''}` } });
                   if (!response.ok) return null;
@@ -822,7 +836,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           if (request.attachments?.length && device.token) {
             if (!workspace) throw new Error('WORKSPACE_PROJECTION_REQUIRED');
             const downloaded = await downloadAttachments(
-              { serverUrl, token: device.token, teamId: device.teamId, inputDir: workspace.inputDir, fetch: fetchFn },
+              // #1053：附件属于 dispatch 目标频道（request.teamId 的 request.channelId），
+              // 与 snapshot 下载同源；跨 Team 可见 Agent 不能回 Device primary Team 下载。
+              { serverUrl, token: device.token, teamId: request.teamId, inputDir: workspace.inputDir, fetch: fetchFn },
               request.attachments,
             );
             if (downloaded.length > 0) {
@@ -934,7 +950,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 .map((artifact) => `${artifact.relativePath}:${artifact.sizeBytes}`));
               // #1003：频道存在 Project Channel Workspace 时走 staging 原子发布；否则回退 legacy upload。
               // 无 serverUrl 时（部分 e2e stub）不走 staging。
+              // #1053：Agent 回复报告的外部路径（REPORTED_OUTPUT_SOURCE_ROOT）任何失败
+              // 形态下都不得回退 legacy upload——只能保留为受管 publish candidate 或明确
+              // 失败（诊断可见），不允许绕过 outputs/<publishIdentity> 受控边界。
+              const isReportedOutput = (artifact: (typeof collected)[number]): boolean =>
+                artifact.sourceRoot.id === REPORTED_OUTPUT_SOURCE_ROOT.id;
               let usedStaging = false;
+              let reportedStagingDropReason: string | undefined;
               let baselineRevisionId = frozenWorkspaceRevisionId;
               if (serverUrl && !baselineRevisionId) {
                 const current = await fetchProjectChannelWorkspaceCurrent({
@@ -994,6 +1016,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                     }));
                   }
                 } catch (error) {
+                  // #1053：stage 失败时 reported 路径不得回退 legacy upload，明确失败。
+                  reportedStagingDropReason = 'STAGING_FAILED';
                   console.warn(`daemon channel workspace output staging failed, fallback upload: ${readErrorMessage(error)}`);
                 }
                 if (stagedForPublish && publishOutputStore) {
@@ -1030,19 +1054,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                         diagnostic,
                       );
                     }
-                    // 冲突不伪造 revision；仍回退 upload 保证 dispatch 可见产物（非 workspace 半成品）。
+                    // 冲突不伪造 revision。非 reported 产物仍回退 upload 保证 dispatch 可见；
+                    // #1053：reported 路径绝不回退 legacy upload——冲突为终态（同 baseline
+                    // 不可恢复），staged copy 与 abandoned manifest 保留在本机供诊断。
+                    reportedStagingDropReason = 'CONFLICT';
                   } else if (delivered.kind === 'failed') {
+                    // #1053：commit/begin/put 失败时 reported 路径不得回退 legacy upload。
+                    reportedStagingDropReason = 'PUBLISH_FAILED';
                     console.warn(
                       `daemon workspace-publish ${delivered.publishId} failed, fallback upload: ${delivered.error}`,
                     );
                   }
                 }
+              } else if (collected.some(isReportedOutput)) {
+                // #1053：无 baseline/无 serverUrl 时 staging 不可用，reported 路径明确失败。
+                reportedStagingDropReason = 'BASELINE_UNAVAILABLE';
               }
               // 已进入 Workspace revision 的仅是 projection run outputs；其余来源仍须
               // 按 legacy artifact upload 交付，避免 configured/adapter/cwd 产物丢失。
-              const legacyArtifacts = usedStaging
-                ? collected.filter((artifact) => artifact.sourceRoot.kind !== 'run_output')
-                : collected;
+              // #1053：reported 路径从 legacy 集合中始终排除（无论 staging 是否成功）。
+              const legacyArtifacts = collected.filter((artifact) =>
+                !isReportedOutput(artifact)
+                && (!usedStaging || artifact.sourceRoot.kind !== 'run_output'));
               if (legacyArtifacts.length > 0) {
                 const uploaded = await uploadArtifacts(
                   {
@@ -1062,6 +1095,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   legacyArtifacts,
                 );
                 productArtifactIds.push(...uploaded.map((u) => u.id));
+              }
+              // #1053：reported 路径未经受管发布 committed 时明确失败——诊断进回报正文
+              // 与 skipped 列表，绝不静默丢失，也绝不回退 legacy upload。staging 失败
+              // （begin/put/commit 瞬态错误）时 staged copy 保留在 outputs/<publishIdentity>
+              // 供恢复续传；baseline 冲突为终态，abandoned manifest 保留供诊断。
+              if (!usedStaging) {
+                const droppedReported = collected.filter(isReportedOutput);
+                if (droppedReported.length > 0) {
+                  const reason = reportedStagingDropReason ?? 'STAGING_UNAVAILABLE';
+                  const diagnostic = `[workspace-publish:REPORTED_OUTPUTS_NOT_PUBLISHED]`
+                    + ` count=${droppedReported.length} reason=${reason}`;
+                  result.body = appendDiagnostic(result.body, diagnostic);
+                  if (result.workspaceRun) {
+                    result.workspaceRun.logExcerpt = appendDiagnostic(result.workspaceRun.logExcerpt, diagnostic);
+                  }
+                  skippedProductArtifacts.push(...droppedReported.map((artifact) => ({
+                    filename: artifact.filename,
+                    relativePath: artifact.relativePath,
+                    sizeBytes: artifact.sizeBytes,
+                    reason: 'UPLOAD_FAILED' as const,
+                  })));
+                }
               }
             } else if (collected.length > 0) {
               skippedProductArtifacts.push(...collected
@@ -1124,6 +1179,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               persistWorkspaceRunResponse(workspace, result.body);
               const manifest = {
                 runId: workspace.runId,
+                // #1053：runId 是 workspaceRunId（运行/产物 provenance）；恢复回报必须用
+                // 原始 dispatchId，两者分离持久化，避免 Server 以 Dispatch not found 拒绝。
+                dispatchId: request.id,
                 agentId: request.agentId,
                 channelId: request.channelId,
                 status: result.workspaceRun.status ?? 'succeeded',
@@ -1281,8 +1339,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     ];
     for (const run of runs) {
       try {
+        // #1053：恢复回报使用 manifest 中独立持久化的原始 dispatchId；旧 manifest 没有
+        // 该字段时回退 runId（等价于旧行为，常见情形下 runId === dispatchId）。若 Server
+        // 以 NOT_FOUND 终态拒绝（无法确认 dispatch 身份），写 unreportable 标记 fail
+        // closed，保留 manifest 全部数据供诊断，不再无限重试。
+        const reportDispatchId = run.dispatchId ?? run.runId;
         const payload = {
-          dispatchId: run.runId,
+          dispatchId: reportDispatchId,
           agentId: run.agentId,
           body: run.body,
           ...(run.artifactIds && run.artifactIds.length > 0 ? { artifactIds: run.artifactIds } : {}),
@@ -1298,6 +1361,14 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, payload, {
           isDeliveredAck: isDispatchResultDeliveredAck,
           onDelivered: () => markWorkspaceRunReported(run, Date.now()),
+          isTerminalAck: isDispatchResultTerminalAck,
+          onTerminal: () => {
+            markWorkspaceRunUnreportable(run, 'DISPATCH_RESULT_NOT_FOUND', Date.now());
+            console.warn(
+              `daemon recover workspace run ${run.runId} terminally rejected by server`
+                + ` (dispatchId=${reportDispatchId}, manifest=${run.manifestPath}); marked unreportable`,
+            );
+          },
         });
         scheduleOutcomeObservation({
           id: run.runId,
@@ -1471,6 +1542,19 @@ function isDispatchResultDeliveredAck(ack: unknown): boolean {
   }
   const fields = ack as { ok?: unknown; error?: unknown };
   return fields.ok === true || (fields.ok === false && fields.error === 'CONFLICT');
+}
+
+/**
+ * #1053：只有 "Dispatch not found" 是终态——dispatch 身份无法确认，重试永远不会
+ * 成功。同为 NOT_FOUND 的 "Project document InputSet output is disabled"（rollout
+ * 关闭）不终态：dispatch 仍存在，rollout 翻转后重试可成功，保持排队重试。
+ */
+function isDispatchResultTerminalAck(ack: unknown): boolean {
+  if (!ack || typeof ack !== 'object') {
+    return false;
+  }
+  const fields = ack as { ok?: unknown; error?: unknown; message?: unknown };
+  return fields.ok === false && fields.error === 'NOT_FOUND' && fields.message === 'Dispatch not found';
 }
 
 async function announceDeviceSnapshot(

@@ -74,6 +74,13 @@ export interface WorkspaceRunManifestArtifact {
 
 export interface WorkspaceRunManifest {
   runId: string;
+  /**
+   * #1053：原始 dispatch 身份。Channel run 的 runId 是 workspaceRunId（运行与产物
+   * provenance），恢复回报 Server 时必须使用原始 dispatchId；旧 manifest 没有此
+   * 字段时回退 runId（等价于旧行为），无法确认身份被 Server 拒绝后写
+   * unreportableAt 终结标记，不无限重试。
+   */
+  dispatchId?: string;
   agentId?: string;
   channelId?: string;
   status?: string;
@@ -88,6 +95,9 @@ export interface WorkspaceRunManifest {
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
   projectDocumentInputSetResult?: ProjectDocumentInputSetResultProposalV1;
   reportedAt?: number;
+  /** 恢复回报被 Server 终态拒绝（如 Dispatch not found）后的 fail-closed 标记。 */
+  unreportableAt?: number;
+  unreportableReason?: string;
   deviceId?: string;
   teamId?: string;
   taskId?: string;
@@ -104,6 +114,8 @@ export interface WorkspaceRunManifest {
 
 export interface RecoverableWorkspaceRun {
   runId: string;
+  /** 原始 dispatch 身份（#1053）；旧 manifest 缺失时由调用方回退 runId。 */
+  dispatchId?: string;
   agentId: string;
   channelId: string;
   body: string;
@@ -291,7 +303,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
       const responsePath = join(runDir, 'response.md');
       const manifest = readWorkspaceRunManifest(manifestPath);
       const status = normalizeRecoverableStatus(manifest?.status);
-      if (!manifest || !status || manifest.reportedAt !== undefined) {
+      if (!manifest || !status || manifest.reportedAt !== undefined || manifest.unreportableAt !== undefined) {
         continue;
       }
       if (typeof manifest.agentId !== 'string' || typeof manifest.channelId !== 'string') {
@@ -324,6 +336,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
       );
       runs.push({
         runId: manifest.runId || entry.name,
+        ...(typeof manifest.dispatchId === 'string' ? { dispatchId: manifest.dispatchId } : {}),
         agentId: manifest.agentId,
         channelId: manifest.channelId,
         body,
@@ -379,6 +392,19 @@ export function markWorkspaceRunManifestReported(manifestPath: string, reportedA
     return;
   }
   writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, reportedAt }, null, 2)}\n`);
+}
+
+/**
+ * #1053：恢复回报被 Server 终态拒绝（无法确认 dispatch 身份）时写 fail-closed
+ * 标记。manifest 全部数据保留供诊断（unreportableReason + 路径即诊断状态），
+ * discovery 跳过它，不再每轮重启/重连无限重试一个注定失败的回报。
+ */
+export function markWorkspaceRunUnreportable(run: RecoverableWorkspaceRun, reason: string, at: number): void {
+  const manifest = readWorkspaceRunManifest(run.manifestPath);
+  if (!manifest || manifest.reportedAt !== undefined) {
+    return;
+  }
+  writeFileSync(run.manifestPath, `${JSON.stringify({ ...manifest, unreportableAt: at, unreportableReason: reason }, null, 2)}\n`);
 }
 
 function readWorkspaceRunManifest(path: string): WorkspaceRunManifest | undefined {
@@ -485,7 +511,8 @@ function walkChannelRuns(
     const manifestPath = join(child, 'manifest.json');
     const responsePath = join(child, 'response.md');
     const manifest = readWorkspaceRunManifest(manifestPath);
-    if (manifest?.deviceId !== deviceId || !manifest || manifest.reportedAt !== undefined) {
+    if (manifest?.deviceId !== deviceId || !manifest || manifest.reportedAt !== undefined
+      || manifest.unreportableAt !== undefined) {
       const nested = safeDirectoryEntries(child);
       if (nested.some((item) => item.isDirectory())) walkChannelRuns(child, deviceId, teamId, channelId, output);
       continue;
@@ -495,8 +522,23 @@ function walkChannelRuns(
     if (!existsSync(responsePath)) continue;
     const body = readTextFile(responsePath);
     if (body === undefined) continue;
+    // #1053：Channel run 恢复同样还原协作结果（对齐 legacy 路径），重启后
+    // collaboration proposal 与 InputSet result 不丢。
+    const collaborationProposals = Array.isArray(manifest.collaborationProposals)
+      ? manifest.collaborationProposals.flatMap((proposal) => {
+          try {
+            return [parseAgentCollaborationProposalV1(proposal)];
+          } catch {
+            return [];
+          }
+        })
+      : [];
+    const projectDocumentInputSetResult = parseProjectDocumentInputSetResultProposal(
+      manifest.projectDocumentInputSetResult,
+    );
     output.push({
       runId: manifest.runId || basename(child),
+      ...(typeof manifest.dispatchId === 'string' ? { dispatchId: manifest.dispatchId } : {}),
       agentId: manifest.agentId,
       channelId: manifest.channelId,
       body,
@@ -513,6 +555,8 @@ function walkChannelRuns(
       },
       ...(Array.isArray(manifest.artifactIds) && manifest.artifactIds.length > 0 ? { artifactIds: manifest.artifactIds } : {}),
       ...(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0 ? { artifacts: manifest.artifacts.filter(isWorkspaceRunManifestArtifact) } : {}),
+      ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+      ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
     });
   }
 }

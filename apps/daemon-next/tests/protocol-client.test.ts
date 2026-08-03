@@ -714,7 +714,7 @@ describe('daemon-next protocol client', () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'proto-envref-workspace-')));
-    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/request-1/1/dispatch-1`;
+    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/dispatch-1/1/dispatch-1`;
     const client = createDaemonProtocolClient({
       socket,
       executor: async (request) => {
@@ -887,7 +887,7 @@ describe('daemon-next protocol client', () => {
     const socket = new FakeAgentSocket();
     const received: DispatchRequestPayload[] = [];
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'proto-env-')));
-    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/request-1/1/dispatch-1`;
+    const workspace = `${cwd}/.agentbean/workspaces/team-1/channels/channel-1/runs/agent-1/dispatch-1/1/dispatch-1`;
     const client = createDaemonProtocolClient({
       socket,
       executor: async (request) => {

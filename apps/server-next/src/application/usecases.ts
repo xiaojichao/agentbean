@@ -5746,12 +5746,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async createDeviceWorkspaceSnapshot(snapshotInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, snapshotInput);
+      // #1053：device token 只证明 home Team 身份；目标 Team 访问由 Agent 授权承担，
+      // 允许 visibleTeamIds 覆盖目标 Team 的跨 Team 合法执行。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, snapshotInput);
       if (!actor.ok) return actor;
-      const credentials = verifyDeviceToken(snapshotInput.token, sessionSecret);
-      const deviceId = credentials?.deviceId;
+      const deviceId = actor.deviceId;
       if (!deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
-      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+      const access = await ensureSnapshotChannelAccess(repositories, {
         userId: actor.userId,
         teamId: snapshotInput.teamId,
         channelId: snapshotInput.channelId,
@@ -5765,9 +5766,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         || snapshotInput.selections.length === 0) {
         return makeFailure('VALIDATION_ERROR', 'Snapshot taskAttempt and selections are required');
       }
+      // #1053：跨 Team 可见 Agent 的授权基础是 visibleTeamIds + Channel membership +
+      // device 绑定，不再要求 primaryTeamId === 目标 Team；换绑/visible Team 移除/
+      // membership 移除仍在此 fail closed。
       const agent = await repositories.agents.getById(snapshotInput.agentId);
       if (!agent
-        || agent.primaryTeamId !== snapshotInput.teamId
         || agent.deviceId !== deviceId
         || !agent.visibleTeamIds.includes(snapshotInput.teamId)
         || !access.channel.agentMemberIds.includes(agent.id)) {
@@ -5869,9 +5872,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getDeviceWorkspaceSnapshot(snapshotInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, snapshotInput);
+      // #1053：与 create 同一跨 Team 授权模型（device home Team 身份 + Agent 目标
+      // Team 授权）；物化前每次实时复验，撤权即 fail closed。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, snapshotInput);
       if (!actor.ok) return actor;
-      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+      const access = await ensureSnapshotChannelAccess(repositories, {
         userId: actor.userId,
         teamId: snapshotInput.teamId,
         channelId: snapshotInput.channelId,
@@ -5886,11 +5891,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!snapshot) {
         return makeFailure('NOT_FOUND', 'Device workspace snapshot not found');
       }
-      const credentials = verifyDeviceToken(snapshotInput.token, sessionSecret);
       const agent = await repositories.agents.getById(snapshot.provenance.agentId);
-      if (!credentials?.deviceId || !agent
-        || agent.primaryTeamId !== snapshotInput.teamId
-        || agent.deviceId !== credentials.deviceId
+      if (!actor.deviceId || !agent
+        || agent.deviceId !== actor.deviceId
         || !agent.visibleTeamIds.includes(snapshotInput.teamId)
         || !access.channel.agentMemberIds.includes(agent.id)) {
         return makeFailure('FORBIDDEN', 'Device or Agent authority was revoked');
@@ -9294,26 +9297,67 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getArtifactFileForDevice(artifactInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
-      if (!actor.ok) {
-        return actor;
+      const tokenCredentials = verifyDeviceToken(artifactInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === artifactInput.teamId) {
+        // 同 Team 路径维持原有完整人类可见性校验。
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
+        if (!actor.ok) {
+          return actor;
+        }
+        const result = await this.getArtifactFile({
+          userId: actor.userId,
+          teamId: artifactInput.teamId,
+          artifactId: artifactInput.artifactId,
+        });
+        if (!result.ok || !artifactInput.expectedArtifactVersionId) return result;
+        const versions = await repositories.channelProjects.listArtifactVersions({
+          teamId: artifactInput.teamId,
+          channelId: result.artifact.channelId,
+        });
+        const version = versions.find((candidate) =>
+          candidate.id === artifactInput.expectedArtifactVersionId
+          && candidate.artifactId === result.artifact.id,
+        );
+        if (!version) return makeFailure('NOT_FOUND', 'Artifact version not found');
+        return result;
       }
-      const result = await this.getArtifactFile({
-        userId: actor.userId,
+      // #1053 跨 Team：device token 只证明 home Team 身份；目标 Team 的 artifact
+      // 下载（snapshot 物化、dispatch 附件）由该 Device 托管 Agent 的
+      // visibleTeamIds + artifact 所在 Channel membership 授权。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, artifactInput);
+      if (!actor.ok) return actor;
+      if (!actor.deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
+      const artifact = await repositories.artifacts.getForTeam({
         teamId: artifactInput.teamId,
         artifactId: artifactInput.artifactId,
       });
-      if (!result.ok || !artifactInput.expectedArtifactVersionId) return result;
-      const versions = await repositories.channelProjects.listArtifactVersions({
-        teamId: artifactInput.teamId,
-        channelId: result.artifact.channelId,
-      });
-      const version = versions.find((candidate) =>
-        candidate.id === artifactInput.expectedArtifactVersionId
-        && candidate.artifactId === result.artifact.id,
+      if (!artifact) return makeFailure('NOT_FOUND', 'Artifact not found');
+      const channel = await repositories.channels.getById(artifact.channelId);
+      if (!channel || channel.teamId !== artifactInput.teamId) return makeFailure('NOT_FOUND', 'Artifact not found');
+      const hostedAgents = await repositories.agents.listByDevice(actor.deviceId);
+      const authorized = hostedAgents.some((agent) =>
+        agent.visibleTeamIds.includes(artifactInput.teamId)
+        && channel.agentMemberIds.includes(agent.id),
       );
-      if (!version) return makeFailure('NOT_FOUND', 'Artifact version not found');
-      return result;
+      if (!authorized) return makeFailure('FORBIDDEN', 'Device is not authorized for this channel');
+      if (!(await isPublicArtifact(repositories, artifact))) {
+        return makeFailure('NOT_FOUND', 'Artifact not found');
+      }
+      if (artifactInput.expectedArtifactVersionId) {
+        const versions = await repositories.channelProjects.listArtifactVersions({
+          teamId: artifactInput.teamId,
+          channelId: artifact.channelId,
+        });
+        const version = versions.find((candidate) =>
+          candidate.id === artifactInput.expectedArtifactVersionId
+          && candidate.artifactId === artifact.id,
+        );
+        if (!version) return makeFailure('NOT_FOUND', 'Artifact version not found');
+      }
+      return makeSuccess({
+        artifact: toArtifactDto(artifact),
+        storagePath: artifact.storagePath,
+      });
     },
 
     async getWorkspaceRun(runInput) {
@@ -11369,6 +11413,34 @@ async function resolveDeviceTokenActor(
     return makeFailure('FORBIDDEN', 'Device owner is not a team member');
   }
   return { ok: true, userId: credentials.ownerId };
+}
+
+/**
+ * #1053 跨 Team device 身份解析：device token 证明的是 Device 在其 home Team 内的
+ * 身份（token 签名有效、device 记录与 token 自洽、owner 仍是 home Team 成员），
+ * 不要求 token.teamId === 目标 Team。目标 Team 的资源访问授权由调用方基于该
+ * Device 托管 Agent 的 visibleTeamIds + 目标 Channel membership 判定（Agent/Device
+ * 换绑、visible Team 移除、membership 移除、archive 均继续 fail closed）。
+ */
+async function resolveHostedDeviceTokenActor(
+  repositories: ServerNextRepositories,
+  sessionSecret: string,
+  input: { token: string },
+): Promise<{ ok: true; userId: string; deviceId?: string; homeTeamId: string } | Ack<Record<string, never>>> {
+  const credentials = verifyDeviceToken(input.token, sessionSecret);
+  if (!credentials) {
+    return makeFailure('UNAUTHENTICATED', 'Invalid device credentials');
+  }
+  const device = credentials.deviceId
+    ? await repositories.devices.getById(credentials.deviceId)
+    : await findDeviceByCredentials(repositories, credentials.teamId, credentials);
+  if (!device || device.teamId !== credentials.teamId) {
+    return makeFailure('UNAUTHENTICATED', 'Unknown device for team');
+  }
+  if (!(await repositories.teams.isMember(credentials.teamId, credentials.ownerId))) {
+    return makeFailure('FORBIDDEN', 'Device owner is not a team member');
+  }
+  return { ok: true, userId: credentials.ownerId, deviceId: device.id, homeTeamId: credentials.teamId };
 }
 
 async function getAuthorizedArtifact(
@@ -15377,6 +15449,26 @@ async function ensureUserCanViewProjectWorkspace(
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
   if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
+  return makeSuccess({ channel });
+}
+
+/**
+ * #1053：device snapshot 端点的频道访问判定。owner 是目标 Team 成员时维持原有
+ * 人类可见性校验（含私有频道 human membership）；owner 不是目标 Team 成员时
+ * （跨 Team 可见 Agent 合法执行），人类在目标 Team 没有可见性立场，频道访问由
+ * 调用点的 Agent 授权（visibleTeamIds + channel agentMemberIds + device 绑定）
+ * 承担，这里只校验频道存在、归属目标 Team 且不是 DM/all 内置频道。
+ */
+async function ensureSnapshotChannelAccess(
+  repositories: ServerNextRepositories,
+  input: { userId: string; teamId: string; channelId: string },
+): Promise<Ack<{ channel: ChannelRecord }>> {
+  if (await repositories.teams.isMember(input.teamId, input.userId)) {
+    return ensureUserCanViewProjectWorkspace(repositories, input);
+  }
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
+  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   return makeSuccess({ channel });
 }
 
