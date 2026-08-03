@@ -12689,7 +12689,7 @@ async function buildDispatchWorkspaceSnapshot(
     : undefined;
   const taskId: string = taskContext?.taskId
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
-    ?? input.dispatch.requestId;
+    ?? input.dispatch.id;
   const taskAttempt = taskContext?.taskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per
   // attempt and is already a safe path segment, so use it as the immutable run
