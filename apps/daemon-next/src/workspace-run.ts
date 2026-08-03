@@ -225,7 +225,14 @@ export function persistDeviceProjectionManifest(
     // 设备身份切换不能把旧设备目录当作当前投影；旧 runs 仍保留供显式迁移处理。
     writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
   } else if (!existing) {
-    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+    try {
+      writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+    } catch (error) {
+      // 两个 daemon client 并发启动时都可能在 read→create 窗口观察到文件不存在。
+      // EEXIST 表示另一方已创建；按既有 identity 切换语义收敛为当前 manifest。
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
+      writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    }
   } else {
     writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
   }
