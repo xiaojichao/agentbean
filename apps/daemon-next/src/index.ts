@@ -840,8 +840,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   now: Date.now(),
                   provenance: {
                     agentId: request.agentId,
-                    taskId: request.managementInvocationId ?? request.id,
-                    taskAttempt: 1,
+                    taskId,
+                    taskAttempt,
                   },
                 });
                 if (delivered.kind === 'committed') {
