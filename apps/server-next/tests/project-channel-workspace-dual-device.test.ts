@@ -117,6 +117,9 @@ async function seedDualDeviceProject(options?: {
   });
   if (!agentsB.ok) throw new Error(agentsB.error);
   const agentBId = agentsB.agents[0]!.id;
+  // #1044：publish provenance 的 Agent 必须是频道成员（dispatch/publish authority 一致）。
+  const membership = await app.addChannelAgentMember({ userId, teamId, channelId, agentId: agentBId });
+  if (!membership.ok) throw new Error(membership.error);
 
   return {
     repositories,

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import {
   parseAgentCollaborationProposalV1,
@@ -207,40 +207,6 @@ export function prepareChannelWorkspaceOutput(options: ChannelWorkspaceOutputOpt
   return outputDir;
 }
 
-export function stageChannelWorkspaceOutputs(
-  outputDir: string,
-  artifacts: readonly { absolutePath: string; relativePath: string; sha256: string; sizeBytes: number; filename: string }[],
-  metadata: {
-    publishIdentity?: string;
-    baselineRevisionId?: string;
-    deviceId?: string;
-    teamId?: string;
-    channelId?: string;
-  } = {},
-): void {
-  for (const artifact of artifacts) {
-    const relativePath = artifact.relativePath.replaceAll('\\', '/');
-    if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..' || !part)) {
-      throw new Error('WORKSPACE_PROJECTION_INVALID_PROVENANCE');
-    }
-    const destination = resolve(outputDir, relativePath);
-    const root = resolve(outputDir);
-    if (destination !== root && !destination.startsWith(`${root}/`)) throw new Error('WORKSPACE_PROJECTION_PATH_ESCAPE');
-    ensureDirectoryNoSymlink(join(destination, '..'), root);
-    copyFileSync(artifact.absolutePath, destination);
-  }
-  writeFileSync(join(outputDir, 'manifest.json'), `${JSON.stringify({
-    schemaVersion: 1,
-    ...metadata,
-    files: artifacts.map((artifact) => ({
-      relativePath: artifact.relativePath,
-      sha256: artifact.sha256,
-      sizeBytes: artifact.sizeBytes,
-      filename: artifact.filename,
-    })),
-  }, null, 2)}\n`);
-}
-
 export function channelProjectionRoot(options: Pick<ChannelProjectionOptions, 'agentBeanHome' | 'teamId' | 'channelId'>): string {
   const home = resolve(options.agentBeanHome);
   assertSafeSegment(options.teamId, 'teamId');
@@ -259,7 +225,14 @@ export function persistDeviceProjectionManifest(
     // 设备身份切换不能把旧设备目录当作当前投影；旧 runs 仍保留供显式迁移处理。
     writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
   } else if (!existing) {
-    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+    try {
+      writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+    } catch (error) {
+      // 两个 daemon client 并发启动时都可能在 read→create 窗口观察到文件不存在。
+      // EEXIST 表示另一方已创建；按既有 identity 切换语义收敛为当前 manifest。
+      if ((error as NodeJS.ErrnoException)?.code !== 'EEXIST') throw error;
+      writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    }
   } else {
     writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
   }

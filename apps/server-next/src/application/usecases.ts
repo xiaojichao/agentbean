@@ -1181,9 +1181,11 @@ export interface BeginWorkspacePublishStagingInput {
     expectedSizeBytes: number;
     expectedSha256: string;
   }>;
-  provenance?: { agentId: string; taskId: string; taskAttempt: number };
+  provenance?: { agentId: string; taskId: string; taskAttempt: number; workspaceRunId?: string; deviceId?: string };
   /** 可选覆盖 Server 默认上限（测试用）；生产由配置注入。 */
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+  /** #1044 device 路径内部透传：commit 重验 device↔agent 绑定用；HTTP/socket 合同不暴露。 */
+  deviceId?: string;
 }
 
 export interface PutWorkspacePublishStagingFileInput {
@@ -1241,6 +1243,8 @@ export interface CommitWorkspacePublishStagingInput {
   channelId: string;
   publishId: string;
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+  /** #1044 device 路径内部透传：commit 重验 device↔agent 绑定用；HTTP/socket 合同不暴露。 */
+  deviceId?: string;
 }
 
 export interface DeviceCommitWorkspacePublishStagingInput {
@@ -5961,6 +5965,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (existing.status === 'committed') {
           return makeSuccess({ staging: toWorkspacePublishStagingDto(existing) });
         }
+        // #1044：existing open staging 续传前 fail-fast 复验 provenance authority（commit 还会权威复验）。
+        const existingAuthority = await ensureWorkspacePublishProvenanceAuthority(repositories, {
+          teamId: beginInput.teamId,
+          channel: access.channel,
+          provenance: existing.provenance ?? beginInput.provenance,
+          ...(beginInput.deviceId ? { deviceId: beginInput.deviceId } : {}),
+        });
+        if (!existingAuthority.ok) return existingAuthority;
         const compatible = isCompatibleWorkspaceStagingBegin({
           existing: {
             teamId: existing.teamId,
@@ -5989,6 +6001,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeSuccess({ staging: toWorkspacePublishStagingDto(existing) });
       }
       const now = clock.now();
+      // #1044：新建 staging 前 fail-fast 复验 provenance authority，撤权后不再开启新上传会话。
+      const authority = await ensureWorkspacePublishProvenanceAuthority(repositories, {
+        teamId: beginInput.teamId,
+        channel: access.channel,
+        provenance: beginInput.provenance,
+        ...(beginInput.deviceId ? { deviceId: beginInput.deviceId } : {}),
+      });
+      if (!authority.ok) return authority;
       const created = await repositories.workspacePublishStagings.create({
         publishId,
         teamId: beginInput.teamId,
@@ -6014,6 +6034,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (raced.status === 'committed') {
           return makeSuccess({ staging: toWorkspacePublishStagingDto(raced) });
         }
+        const racedAuthority = await ensureWorkspacePublishProvenanceAuthority(repositories, {
+          teamId: beginInput.teamId,
+          channel: access.channel,
+          provenance: raced.provenance ?? beginInput.provenance,
+          ...(beginInput.deviceId ? { deviceId: beginInput.deviceId } : {}),
+        });
+        if (!racedAuthority.ok) return racedAuthority;
         const compatible = isCompatibleWorkspaceStagingBegin({
           existing: {
             teamId: raced.teamId,
@@ -6047,6 +6074,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async beginWorkspacePublishStagingForDevice(deviceBeginInput) {
       const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceBeginInput);
       if (!actor.ok) return actor;
+      // #1044：device 路径透传 deviceId，begin/commit 复验 device↔agent 绑定。
+      const deviceId = verifyDeviceToken(deviceBeginInput.token, sessionSecret)?.deviceId;
       return this.beginWorkspacePublishStaging({
         userId: actor.userId,
         teamId: deviceBeginInput.teamId,
@@ -6056,6 +6085,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         files: deviceBeginInput.files,
         ...(deviceBeginInput.provenance ? { provenance: deviceBeginInput.provenance } : {}),
         ...(deviceBeginInput.limits ? { limits: deviceBeginInput.limits } : {}),
+        ...(deviceId ? { deviceId } : {}),
       });
     },
 
@@ -6088,12 +6118,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async commitWorkspacePublishStagingForDevice(deviceCommitInput) {
       const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceCommitInput);
       if (!actor.ok) return actor;
+      // #1044：device 路径透传 deviceId，commit 复验 device↔agent 绑定。
+      const deviceId = verifyDeviceToken(deviceCommitInput.token, sessionSecret)?.deviceId;
       return this.commitWorkspacePublishStaging({
         userId: actor.userId,
         teamId: deviceCommitInput.teamId,
         channelId: deviceCommitInput.channelId,
         publishId: deviceCommitInput.publishId,
         ...(deviceCommitInput.limits ? { limits: deviceCommitInput.limits } : {}),
+        ...(deviceId ? { deviceId } : {}),
       });
     },
 
@@ -6403,6 +6436,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return recovered;
       }
 
+      // #1044：半态恢复之后、物化任何 artifact 之前，权威复验 provenance 的 Agent/Task/Device
+      // authority。撤权 → FORBIDDEN，staging 保持 open 可诊断，Workspace 不留部分 revision。
+      const provenanceAuthority = await ensureWorkspacePublishProvenanceAuthority(repositories, {
+        teamId: commitInput.teamId,
+        channel: access.channel,
+        provenance: staging.provenance,
+        ...(commitInput.deviceId ? { deviceId: commitInput.deviceId } : {}),
+      });
+      if (!provenanceAuthority.ok) return provenanceAuthority;
+
       // 预判基线/空清单：在创建任何公开 artifact 之前失败，避免冲突后残留频道可见半成品。
       // 提交清单用占位 artifactId（仅用于路径集合冲突计算；真实 id 在通过后分配）。
       const provisionalEntries = staging.files.map((file) => ({
@@ -6516,6 +6559,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   taskAttempt: staging.provenance.taskAttempt,
                   baselineRevisionId: staging.baselineRevisionId,
                   publishedAt: now,
+                  // #1044：可选追溯字段随 revision 固化，发布后可回溯到 Device 与 WorkspaceRun。
+                  ...(staging.provenance.deviceId ? { deviceId: staging.provenance.deviceId } : {}),
+                  ...(staging.provenance.workspaceRunId ? { workspaceRunId: staging.provenance.workspaceRunId } : {}),
                 },
               }
             : {}),
@@ -15332,6 +15378,42 @@ async function ensureUserCanViewProjectWorkspace(
   if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
   return makeSuccess({ channel });
+}
+
+/**
+ * #1044 publish provenance 的 Agent/Task authority 复验。
+ * begin(fail-fast)与 commit(权威,物化任何 artifact 之前)都要过这一关:
+ * 离线期间发生的 Agent 解绑/删除、Device 换绑或 Task 跨频道漂移必须阻止过期提交,
+ * 且不得在 Workspace 里留下部分 revision。
+ * 无 provenance 的 staging(纯用户手工发布)不做 Agent/Task 校验。
+ * taskId 可能是 daemon 合成 fallback(dispatch.id),只在命中真实 Task 记录时校验归属。
+ */
+async function ensureWorkspacePublishProvenanceAuthority(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: ID;
+    channel: ChannelRecord;
+    provenance?: { agentId: ID; taskId: ID; taskAttempt: number; workspaceRunId?: ID; deviceId?: ID };
+    deviceId?: ID;
+  },
+): Promise<Ack<{ ok: true }>> {
+  const provenance = input.provenance;
+  if (!provenance) return makeSuccess({ ok: true });
+  const agent = await repositories.agents.getById(provenance.agentId);
+  if (!agent
+    || agent.primaryTeamId !== input.teamId
+    || !agent.visibleTeamIds.includes(input.teamId)
+    || !input.channel.agentMemberIds.includes(agent.id)
+    || (input.deviceId !== undefined && agent.deviceId !== input.deviceId)
+    || (provenance.deviceId !== undefined && agent.deviceId !== provenance.deviceId)) {
+    return makeFailure('FORBIDDEN', 'Publish Agent authority was revoked', { reason: 'agent-authority-revoked' });
+  }
+  const task = await repositories.tasks.getById(provenance.taskId);
+  if (task && (task.teamId !== input.teamId
+    || (task.channelId != null && task.channelId !== input.channel.id))) {
+    return makeFailure('FORBIDDEN', 'Publish Task authority does not match this channel', { reason: 'task-authority-mismatch' });
+  }
+  return makeSuccess({ ok: true });
 }
 
 /**
