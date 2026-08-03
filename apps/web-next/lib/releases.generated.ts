@@ -2,6 +2,49 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-08-02",
+    "date": "2026-08-02",
+    "sections": [
+      {
+        "type": "改进",
+        "items": [
+          "当日无面向用户的代码变更，服务保持稳定运行。"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "Daily 2026-08-01",
+    "date": "2026-08-01",
+    "sections": [
+      {
+        "type": "Added",
+        "items": [
+          "聊天页讨论串分隔线支持拖拽调宽并持久化",
+          "合并门禁支持 Codex 额度不足时的替代 review 通道",
+          "发布流程不再静默跳过 daemon 发版：跳过时明确标注，latest 仅在真正发布后提升"
+        ]
+      },
+      {
+        "type": "Changed",
+        "items": [
+          "daemon 发版 0.3.24：将 0.3.23 之后已合入 main 的 update 加固推到 npm latest",
+          "daemon 发版 0.3.23：将 0.3.22 之后已合入 main 的设备侧能力推到 npm latest",
+          "记录 2026-07-31 每日更新日志"
+        ]
+      },
+      {
+        "type": "Fixed",
+        "items": [
+          "修复 Hermes 等 Agent 运行产物未同步到频道文件索引，新增产物收集目录配置",
+          "聊天消息 UI 修复——进度/取消置底、输入附件只读、中文文件名不乱码",
+          "agentbean update 加并发锁与快照回滚，杜绝 npm 并发写坏全局包",
+          "DM 任务型消息自动沉淀讨论串，协调者感知消息附件"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-07-31",
     "date": "2026-07-31",
     "sections": [

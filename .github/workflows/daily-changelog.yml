@@ -65,6 +65,11 @@ jobs:
           echo "date=$changelog_date" >> "$GITHUB_OUTPUT"
 
       - name: Update changelog source
+        env:
+          # server 内部端点（/api/internal/changelog-summarize）配置：PR 未写用户向
+          # 小节时由内置 PI Manager 生成兜底条目。未配置时流水线跳过兜底（fail-open）。
+          AGENTBEAN_CHANGELOG_SERVER_URL: ${{ secrets.AGENTBEAN_CHANGELOG_SERVER_URL }}
+          AGENTBEAN_CHANGELOG_SERVER_TOKEN: ${{ secrets.AGENTBEAN_CHANGELOG_SERVER_TOKEN }}
         run: node_modules/.bin/tsx scripts/update-daily-changelog.ts --date "${{ steps.changelog-date.outputs.date }}"
 
       - name: Regenerate web changelog bundle

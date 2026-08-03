@@ -23,7 +23,7 @@ import {
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-import { collectArtifacts, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
+import { collectArtifacts, type AdapterOutputRoot, type ArtifactCollectionDiagnostic } from './artifact-collector.js';
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
@@ -343,6 +343,15 @@ export interface CreateDaemonProtocolClientInput {
   artifactRunMaxBytes?: number;
   envResolver?: AgentEnvResolver;
   sleep?(ms: number): Promise<void>;
+  /**
+   * 启动报到（device.hello + required snapshot）的有限重试参数：
+   * 服务端 socket 在启动瞬间闪断时 required emit 会抛错，一次失败就判服务
+   * 启动失败会让 update 误回滚；socket.io 会自动重连，稍等后重试即可恢复。
+   */
+  announceRetryMaxAttempts?: number;
+  announceRetryDelayMs?: number;
+  /** 单次报到尝试的超时；socket.io 在断线期间可能缓存发送导致 emitWithAck 一直等待。 */
+  announceAttemptTimeoutMs?: number;
   rescanIntervalMs?: number;
   /**
    * Home directory used for scanning custom-agent skills (e.g. ~/.claude/skills).
@@ -379,6 +388,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const home = input.homeDir ?? homedir();
   const agentBeanHome = process.env.AGENTBEAN_HOME ?? join(home, '.agentbean');
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
+  // agentos-hosted（Hermes/OpenClaw）原生产物目录：它们不写 AGENTBEAN_OUTPUT_DIR，
+  // 而是落到自己的数据目录，因此作为 adapter 默认 source root 参与 mtime 过滤收集。
+  const hermesHomeDir = join(home, '.hermes');
+  const openclawHomeDir = join(home, '.openclaw');
   const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
   // #1003：可恢复 Workspace publish 本地 pending 根（profile/home 下，与 attachment 隔离）。
   const workspacePublishStore = createFilesystemWorkspacePublishRecoveryStore(
@@ -474,7 +487,17 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   return {
     get deviceId() { return currentDeviceId || undefined; },
     async start() {
-      const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
+      const initialAnnouncement = await announceWithStartRetry({
+        socket,
+        device,
+        runtimes: latestSnapshot.runtimes,
+        agents: latestSnapshot.agents,
+        onDeviceRemoved: input.onDeviceRemoved,
+        sleep,
+        maxAttempts: input.announceRetryMaxAttempts ?? 6,
+        delayMs: input.announceRetryDelayMs ?? 5_000,
+        attemptTimeoutMs: input.announceAttemptTimeoutMs ?? 30_000,
+      });
       currentDeviceId = initialAnnouncement.deviceId;
       persistDeviceProjectionManifest(agentBeanHome, {
         schemaVersion: 1,
@@ -631,12 +654,16 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         if (!acceptingDispatches) return;
         activeDispatchCount += 1;
         const incomingRequest = payload as DispatchRequestPayload;
-        const previousExecution = dispatchExecutionTails.get(incomingRequest.agentId) ?? Promise.resolve();
+        // agentos-hosted（Hermes/OpenClaw）共享同一 adapter 数据目录（~/.hermes、~/.openclaw），
+        // 产物收集只按 mtime > startedAt 过滤；若同一设备上多个这类 Agent 并发执行，后运行者写入的
+        // 文件会落进先运行者的收集窗口，造成跨 run/跨频道产物串线。按 adapter 根串行整个执行窗口。
+        const executionSerialKey = dispatchExecutionSerialKey(incomingRequest);
+        const previousExecution = dispatchExecutionTails.get(executionSerialKey) ?? Promise.resolve();
         let releaseExecution: (() => void) | undefined;
         const executionTail = new Promise<void>((resolve) => {
           releaseExecution = resolve;
         });
-        dispatchExecutionTails.set(incomingRequest.agentId, executionTail);
+        dispatchExecutionTails.set(executionSerialKey, executionTail);
         await previousExecution;
         let request = incomingRequest;
         try {
@@ -759,18 +786,27 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           const skippedProductArtifacts: SkippedArtifactDiagnostic[] = [];
           const startedAt = result.workspaceRun?.startedAt;
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
-          const generatedImageDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
+          const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
+          const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {
+            homeDir: home,
+            hermesHomeDir,
+            openclawHomeDir,
+          });
           const configuredRoots = resolveConfiguredArtifactRoots(
             request.customAgent?.artifactSourceRoots,
             request.customAgent?.env,
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (generatedImageDirs.length > 0 || configuredRoots.roots.length > 0 || workspace !== undefined);
+            && (workspace || codexExtraOutputDirs.length > 0 || adapterOutputRoots.length > 0 || configuredRoots.roots.length > 0);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
-              ...(workspace ? { outputDir: workspace.outputDir } : {}),
-              extraOutputDirs: generatedImageDirs,
+              ...(workspace ? {
+                outputDir: workspace.outputDir,
+                ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
+              } : {}),
+              extraOutputDirs: codexExtraOutputDirs,
+              adapterOutputRoots,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
               maxBytes: input.artifactMaxBytes,
@@ -1029,8 +1065,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // cancel suppresses a late result, but only the executor actually returning makes
           // it safe to start another request for the same Agent.
           releaseExecution?.();
-          if (dispatchExecutionTails.get(incomingRequest.agentId) === executionTail) {
-            dispatchExecutionTails.delete(incomingRequest.agentId);
+          if (dispatchExecutionTails.get(executionSerialKey) === executionTail) {
+            dispatchExecutionTails.delete(executionSerialKey);
           }
         }
       });
@@ -1153,6 +1189,52 @@ function isCodexAdapterKind(adapterKind: string | undefined): boolean {
   return adapterKind === 'codex' || adapterKind === 'codex-cli';
 }
 
+/**
+ * 同一执行串行键内的 dispatch 逐个执行。普通 Agent 按 agentId 串行；
+ * agentos-hosted 网关共享主目录顶层扫描根与 adapter 产物根，全部用同一个
+ * 串行键在整台设备上串行，避免并发 run 互相收集对方的产物。
+ */
+function dispatchExecutionSerialKey(request: DispatchRequestPayload): string {
+  const adapterKind = request.customAgent?.adapterKind;
+  if (adapterKind === 'hermes' || adapterKind === 'openclaw') {
+    return 'agentos-adapter:shared-output-roots';
+  }
+  return `agent:${request.agentId}`;
+}
+
+/**
+ * AgentOS-hosted（Hermes/OpenClaw）默认产物根。
+ *
+ * 只扫描受限范围，避免把数据目录里的内部状态（pairing/sessions/checkpoints/
+ * cache 等）当作产物上传：
+ * 1. 用户主目录顶层文件（非递归 + 仅新建）——AgentOS oneshot 网关可能把交付
+ *    文件直接写到主目录顶层（实测 Hermes 如此），只收集 run 窗口内新建的文件
+ *    （birthtime 过滤），避免其他进程在窗口内修改的既有文件被当作产物；
+ * 2. 数据根目录顶层文件（非递归，扩展名白名单 + 跳过隐藏项）；
+ * 3. 数据根目录下的 output/ 子目录（递归）。
+ * 收集仍按本次运行窗口（mtime > startedAt）过滤，默认归类为运行产物。
+ */
+function resolveAdapterOutputRoots(
+  adapterKind: string | undefined,
+  dirs: { homeDir: string; hermesHomeDir: string; openclawHomeDir: string },
+): AdapterOutputRoot[] {
+  if (adapterKind === 'hermes') {
+    return [
+      { dir: dirs.homeDir, recursive: false, createdInWindow: true },
+      { dir: dirs.hermesHomeDir, recursive: false },
+      { dir: join(dirs.hermesHomeDir, 'output'), recursive: true },
+    ];
+  }
+  if (adapterKind === 'openclaw') {
+    return [
+      { dir: dirs.homeDir, recursive: false, createdInWindow: true },
+      { dir: dirs.openclawHomeDir, recursive: false },
+      { dir: join(dirs.openclawHomeDir, 'output'), recursive: true },
+    ];
+  }
+  return [];
+}
+
 function normalizeDispatchResult(result: string | DaemonDispatchResult): DaemonDispatchResult {
   if (typeof result === 'string') {
     return { body: result };
@@ -1254,6 +1336,65 @@ async function announceDeviceSnapshot(
 
       await reportDeviceSnapshot(socket, device.teamId, deviceId, runtimes, agents, { required: true });
   return { deviceId, ...(credentials ? { credentials } : {}) };
+}
+
+interface AnnounceWithStartRetryInput {
+  readonly socket: DaemonProtocolSocket;
+  readonly device: DaemonDeviceConfig;
+  readonly runtimes: DaemonRuntimeReport[];
+  readonly agents: DaemonAgentReport[];
+  readonly onDeviceRemoved?: () => Promise<void> | void;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly maxAttempts: number;
+  readonly delayMs: number;
+  readonly attemptTimeoutMs: number;
+}
+
+/**
+ * 启动报到带有限重试。服务端明确删除设备（DEVICE_REVOKED）时不重试；
+ * 其余瞬时错误（socket 闪断、ack 超时等）等待 socket.io 自动重连后重试。
+ */
+async function announceWithStartRetry(
+  input: AnnounceWithStartRetryInput,
+): Promise<{ deviceId: string; credentials?: DaemonDeviceCredentialsUpdate }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= input.maxAttempts; attempt += 1) {
+    try {
+      return await withTimeout(
+        announceDeviceSnapshot(input.socket, input.device, input.runtimes, input.agents, {
+          onDeviceRemoved: input.onDeviceRemoved,
+        }),
+        input.attemptTimeoutMs,
+        `initial announce timed out after ${input.attemptTimeoutMs}ms`,
+      );
+    } catch (error) {
+      if (error instanceof Error && /revoked/i.test(error.message)) throw error;
+      lastError = error;
+      if (attempt < input.maxAttempts) {
+        console.warn(
+          `daemon initial announce failed (retry ${attempt}/${input.maxAttempts - 1}, non-blocking): ${readErrorMessage(error)}`,
+        );
+        await input.sleep(input.delayMs);
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function reportDeviceSnapshot(

@@ -9,6 +9,12 @@ import {
 } from '../../../packages/contracts/src/index.js';
 
 const OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|csv|json|md|mp4|mov|zip)$/i;
+/**
+ * Adapter 默认产物根的扩展名白名单：只收集看起来像交付物的文档/图片/归档，
+ * 排除 .json/.csv 等最容易承载配置、会话与状态的文件，避免把 AgentOS
+ * 数据目录里的内部状态（pairing/sessions/checkpoints 等）上传到频道。
+ */
+const ADAPTER_OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|md|mp4|mov|zip)$/i;
 const IGNORED_OUTPUT_DIRS = new Set([
   '.git', '.hg', '.svn', '.cache', '.next', '.nuxt', '.turbo', 'node_modules', 'vendor', '.agentbean',
 ]);
@@ -32,6 +38,46 @@ export interface CollectedArtifact {
   role: ArtifactRole;
 }
 
+/**
+ * Adapter 级默认产物根：只扫声明的目录，配合 mtime > startedAt 过滤。
+ * recursive=false 表示只收集该目录顶层文件（不进入子目录），用于安全地
+ * 覆盖 AgentOS 数据根目录顶层的交付文件，而不会递归进会话/状态子目录。
+ */
+export interface AdapterOutputRoot {
+  dir: string;
+  recursive: boolean;
+  /**
+   * 共享目录（如用户主目录顶层）：只收集 run 窗口内新建的文件，
+   * 避免把其他进程在窗口内修改的既有文件当作产物上传。
+   */
+  createdInWindow?: boolean;
+}
+
+/**
+ * 窗口过滤：mtime 必须落在 run 窗口内；当 createdInWindow=true 时，
+ * 还要求文件是在窗口内新建的（birthtime > startedAt，允许少量偏差），
+ * 平台不提供 birthtime（<=0）时退化为仅按 mtime 判断。
+ */
+export function shouldCollectWindowedFile(input: {
+  mtimeMs: number;
+  birthtimeMs: number;
+  startedAt: number;
+  createdInWindow?: boolean;
+  birthtimeSkewMs?: number;
+}): boolean {
+  if (input.mtimeMs <= input.startedAt) {
+    return false;
+  }
+  if (!input.createdInWindow) {
+    return true;
+  }
+  if (input.birthtimeMs <= 0) {
+    return true;
+  }
+  const skew = input.birthtimeSkewMs ?? 30_000;
+  return input.birthtimeMs > input.startedAt - skew;
+}
+
 export interface CollectArtifactsInput {
   /** per-run outputs/ directory; all matching files are collected regardless of mtime. */
   outputDir?: string;
@@ -39,6 +85,12 @@ export interface CollectArtifactsInput {
   cwd?: string;
   /** Extra output roots such as Codex-native generated_images; mtime filtered. */
   extraOutputDirs?: string[];
+  /**
+   * Adapter 默认产物根（如 Hermes/OpenClaw 的数据目录顶层与 output/）。
+   * 与 extraOutputDirs 相同地按 mtime 过滤，但只使用交付物扩展名白名单，
+   * 且跳过隐藏文件/目录，避免把 AgentOS 内部状态当作产物上传。
+   */
+  adapterOutputRoots?: AdapterOutputRoot[];
   /** Additional roots with safe public labels; absolute paths never leave the daemon. */
   configuredOutputRoots?: Array<{ id?: string; path: string; label: string; envVar?: string; defaultRole?: ArtifactRole; recursive?: boolean }>;
   /** Stable public label for the agent workspace root. */
@@ -82,6 +134,9 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
     role: ArtifactRole,
     recursive = true,
     reportRootFailure = true,
+    fileExtRe: RegExp = OUTPUT_FILE_EXT_RE,
+    skipHidden = false,
+    createdInWindow = false,
   ): Promise<void> => {
     let visited = 0;
     const stack: string[] = [rootAbs];
@@ -102,12 +157,15 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
       }
       for (const entry of entries) {
         const abs = join(current, entry.name);
+        if (skipHidden && entry.name.startsWith('.')) {
+          continue;
+        }
         if (entry.isDirectory()) {
           if (IGNORED_OUTPUT_DIRS.has(entry.name)) {
             continue;
           }
           if (recursive && !(sourceRoot.kind === 'agent_workspace' && excludedNestedRoots.has(abs))) stack.push(abs);
-        } else if (entry.isFile() && OUTPUT_FILE_EXT_RE.test(entry.name)) {
+        } else if (entry.isFile() && fileExtRe.test(entry.name)) {
           visited += 1;
           let stat;
           try {
@@ -121,7 +179,12 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
             });
             continue;
           }
-          if (timeFilter && stat.mtimeMs <= input.startedAt) {
+          if (timeFilter && !shouldCollectWindowedFile({
+            mtimeMs: stat.mtimeMs,
+            birthtimeMs: stat.birthtimeMs,
+            startedAt: input.startedAt,
+            createdInWindow,
+          })) {
             continue;
           }
           const relativePath = relative(rootForRelative, abs);
@@ -218,6 +281,20 @@ export async function collectArtifacts(input: CollectArtifactsInput): Promise<Co
       ? { id: root.id, kind: 'configured_output' as const, label: root.label }
       : makeSourceRoot('configured_output', root.label, root.path);
     await ingest(root.path, root.path, true, sourceRoot, root.defaultRole ?? 'run_output', root.recursive ?? true);
+  }
+  for (const adapterRoot of input.adapterOutputRoots ?? []) {
+    await ingest(
+      adapterRoot.dir,
+      adapterRoot.dir,
+      true,
+      makeSourceRoot('adapter_generated', 'Agent 默认输出目录', adapterRoot.dir),
+      'run_output',
+      adapterRoot.recursive,
+      false,
+      ADAPTER_OUTPUT_FILE_EXT_RE,
+      true,
+      adapterRoot.createdInWindow,
+    );
   }
   if (input.cwd) {
     await ingest(input.cwd, input.cwd, true, makeSourceRoot('agent_workspace', input.workspaceLabel ?? 'Agent 工作目录', input.cwd), 'run_output');

@@ -8,6 +8,7 @@ import {
   restorePackageSnapshot,
   runUpdateCli,
   SERVICE_INSTALL_DEADLINE_MS,
+  SERVICE_START_RETRY_ATTEMPTS,
   snapshotInstalledPackage,
   UPDATE_CLI_EXIT,
   verifyInstalledPackage,
@@ -52,6 +53,17 @@ function npmRunner(latest = '0.3.13') {
 
 const passVerify = async () => ({ ok: true as const });
 const backupRoot = '/opt/agentbean/lib/agentbean-daemon-update-backup';
+const notReady = { exitCode: 6, stdout: '', stderr: 'Device Service 安装后未在截止时间内就绪。' };
+
+/** 首次 install 未就绪，重试全部失败，最后恢复 install 成功。 */
+function failingStartThenRestore() {
+  const mock = vi.fn().mockResolvedValueOnce(notReady);
+  for (let attempt = 0; attempt < SERVICE_START_RETRY_ATTEMPTS; attempt += 1) {
+    mock.mockResolvedValueOnce(notReady);
+  }
+  mock.mockResolvedValueOnce(success());
+  return mock;
+}
 
 describe('agentbean update', () => {
   test('does nothing when the canonical package is already current', async () => {
@@ -189,9 +201,7 @@ describe('agentbean update', () => {
   test('rolls back via package snapshot and restores the service when the new version cannot start', async () => {
     const runNpm = npmRunner();
     const fenceDeviceService = vi.fn(async () => true);
-    const runAgentBean = vi.fn()
-      .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'Device Service 安装后未在截止时间内就绪。' })
-      .mockResolvedValueOnce(success());
+    const runAgentBean = failingStartThenRestore();
     const fakes = updateFakes();
     const stderr = vi.fn();
     await expect(runUpdateCli([], {
@@ -208,11 +218,36 @@ describe('agentbean update', () => {
     expect(runNpm.mock.calls.some((call) => call[0]?.at(-1) === '@agentbean/daemon@0.3.12')).toBe(false);
     expect(fakes.restorePackageSnapshot).toHaveBeenCalledOnce();
     expect(fakes.discardPackageSnapshot).not.toHaveBeenCalled();
-    expect(runAgentBean).toHaveBeenCalledTimes(2);
+    // install + SERVICE_START_RETRY_ATTEMPTS 次 restart + 恢复 install
+    expect(runAgentBean).toHaveBeenCalledTimes(1 + SERVICE_START_RETRY_ATTEMPTS + 1);
     expect(runAgentBean).toHaveBeenLastCalledWith('/opt/agentbean/bin/agentbean', [
       'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
     ]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('已回滚到 0.3.12'));
+  });
+
+  test('recovers by restarting the service when the first install is not ready', async () => {
+    const runNpm = npmRunner();
+    const runAgentBean = vi.fn()
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce(success());
+    const stdout = vi.fn();
+    const fakes = updateFakes();
+    await expect(runUpdateCli([], {
+      platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
+      runNpm, runAgentBean, getDeviceServiceStatus: async () => serviceStatus(true),
+      fenceDeviceService: async () => true,
+      verifyInstalledPackage: passVerify,
+      stdout, ...fakes,
+    })).resolves.toBe(UPDATE_CLI_EXIT.success);
+    // 瞬时连接抖动：install 未就绪，restart 后即恢复，不回滚、不恢复快照
+    expect(fakes.restorePackageSnapshot).not.toHaveBeenCalled();
+    expect(runAgentBean).toHaveBeenCalledTimes(2);
+    expect(runAgentBean).toHaveBeenLastCalledWith('/opt/agentbean/bin/agentbean', [
+      'device', 'restart', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
+    ]);
+    expect(fakes.discardPackageSnapshot).toHaveBeenCalledWith(backupRoot);
+    expect(stdout).toHaveBeenCalledWith('AgentBean 已更新到 0.3.13，Device Service 已安全重启。');
   });
 
   test('includes service error log summary when new version fails to become ready', async () => {
@@ -221,9 +256,7 @@ describe('agentbean update', () => {
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
       runNpm,
-      runAgentBean: vi.fn()
-        .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'Device Service 安装后未在截止时间内就绪。' })
-        .mockResolvedValueOnce(success()),
+      runAgentBean: failingStartThenRestore(),
       getDeviceServiceStatus: async () => serviceStatus(true),
       fenceDeviceService: async () => true,
       verifyInstalledPackage: passVerify,
@@ -238,7 +271,7 @@ describe('agentbean update', () => {
     const fakes = updateFakes();
     fakes.restorePackageSnapshot.mockResolvedValue(false);
     const runNpm = npmRunner();
-    const runAgentBean = vi.fn().mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' });
+    const runAgentBean = vi.fn(async () => notReady);
     const stderr = vi.fn();
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
@@ -255,9 +288,7 @@ describe('agentbean update', () => {
 
   test('does not report recovery-required when rollback restores the service after fence fails on rollback', async () => {
     const runNpm = npmRunner();
-    const runAgentBean = vi.fn()
-      .mockResolvedValueOnce({ exitCode: 6, stdout: '', stderr: 'not ready' })
-      .mockResolvedValueOnce(success());
+    const runAgentBean = failingStartThenRestore();
     const fenceDeviceService = vi.fn()
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
@@ -278,7 +309,7 @@ describe('agentbean update', () => {
       'device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
     ]);
     expect(stderr).toHaveBeenCalledWith(
-      '新版本 0.3.13 未能就绪，已回滚到 0.3.12 并恢复 Device Service。\n原因摘要：\nnot ready',
+      '新版本 0.3.13 未能就绪，已回滚到 0.3.12 并恢复 Device Service。\n原因摘要：\nDevice Service 安装后未在截止时间内就绪。',
     );
   });
 
@@ -389,7 +420,8 @@ describe('agentbean update', () => {
 
   test('rolls back when the running service does not report the target version', async () => {
     const fakes = updateFakes();
-    fakes.confirmServiceReady.mockResolvedValue(false);
+    // 新版本 0.3.13 的健康确认失败，回滚后 0.3.12 健康确认通过
+    fakes.confirmServiceReady.mockImplementation(async (version: string) => version === '0.3.12');
     const runNpm = npmRunner();
     const runAgentBean = vi.fn(async () => success());
     const stderr = vi.fn();
@@ -403,7 +435,8 @@ describe('agentbean update', () => {
     })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
     expect(fakes.confirmServiceReady).toHaveBeenCalledWith('0.3.13');
     expect(fakes.restorePackageSnapshot).toHaveBeenCalledOnce();
-    expect(runAgentBean).toHaveBeenCalledTimes(2);
+    // install + SERVICE_START_RETRY_ATTEMPTS 次 restart + 恢复 install
+    expect(runAgentBean).toHaveBeenCalledTimes(1 + SERVICE_START_RETRY_ATTEMPTS + 1);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining('已回滚到 0.3.12'));
   });
 

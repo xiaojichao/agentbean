@@ -155,8 +155,9 @@ export async function runDeviceCli(argv: readonly string[], deps: DeviceCliDeps 
     try {
       await (deps.runService ?? (() => runDeviceService({ ...(deps.baseDir ? { baseDir: deps.baseDir } : {}) })))();
       return DEVICE_CLI_EXIT.success;
-    } catch {
-      stderr('Device Service 启动失败。请运行 `agentbean device status` 查看状态。');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      stderr(`Device Service 启动失败（${reason}）。请运行 \`agentbean device status\` 查看状态。`);
       return DEVICE_CLI_EXIT.platform;
     }
   }

@@ -3,6 +3,8 @@
 本文件记录 AgentBean 产品的版本变更，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范。
 
 ### Fixed
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.26：修复 Hermes/OpenClaw 运行产物收集漏掉写进用户主目录顶层的交付文件（adapter 默认根增加主目录顶层非递归扫描，扩展名白名单 + mtime 窗口 + 跳过隐藏项，不进入任何子目录；数据根顶层与 `output/` 范围保持不变）
+- 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.25：Hermes/OpenClaw（agentos-hosted）运行产物默认从数据根目录顶层与 `output/` 子目录收集（交付物扩展名白名单 + 跳过隐藏项，避免把配对/会话/checkpoint 等内部状态上传），并按 adapter 根串行执行 dispatch 防止并发 run 共享产物目录串线；此前修复已合入 main 但版本未 bump，CI 因 already published 跳过 publish
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.24：修复 `agentbean update` 并发 npm 写坏全局包导致 Device Service `ERR_MODULE_NOT_FOUND` 与 `UPDATE_RECOVERY_REQUIRED`（更新锁 + 快照换包/回滚 + 运行级版本确认）；此前修复已合入 main 但版本未 bump，CI 因 already published 跳过 publish
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.23：将 0.3.22 之后已合入 main 的设备侧能力推到 npm latest（Workspace 大文件暂存、断网续传与可恢复发布及已发布 revision 安全本地应用、PI worker lifecycle tool 注册、Team PI authority cutover 与 legacy 兼容退役、Agent Exposure 能力自动扫描与确定性快路径 + LLM 总结的混合提取）；此前代码已合入但版本未 bump，CI 因 already published 跳过 publish
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.22：远程 Claude Code 与 Codex CLI 强制使用最高权限、非交互模式，修复频道写文件任务等待本机授权或被只读 sandbox 拒绝
@@ -22,6 +24,25 @@
 ### Changed
 - 添加设备对话框改为展示可复制的系统服务连接与生命周期命令，设备详情不再保留已使用的历史邀请命令
 - 发布 `@agentbean/daemon` / `@agentbean/daemon-next` 0.3.14，作为新设备连接命令的最小可用版本
+
+## [Daily 2026-08-02] - 2026-08-02
+### 改进
+- 当日无面向用户的代码变更，服务保持稳定运行。
+
+## [Daily 2026-08-01] - 2026-08-01
+### Added
+- 聊天页讨论串分隔线支持拖拽调宽并持久化
+- 合并门禁支持 Codex 额度不足时的替代 review 通道
+- 发布流程不再静默跳过 daemon 发版：跳过时明确标注，latest 仅在真正发布后提升
+### Changed
+- daemon 发版 0.3.24：将 0.3.23 之后已合入 main 的 update 加固推到 npm latest
+- daemon 发版 0.3.23：将 0.3.22 之后已合入 main 的设备侧能力推到 npm latest
+- 记录 2026-07-31 每日更新日志
+### Fixed
+- 修复 Hermes 等 Agent 运行产物未同步到频道文件索引，新增产物收集目录配置
+- 聊天消息 UI 修复——进度/取消置底、输入附件只读、中文文件名不乱码
+- agentbean update 加并发锁与快照回滚，杜绝 npm 并发写坏全局包
+- DM 任务型消息自动沉淀讨论串，协调者感知消息附件
 
 ## [Daily 2026-07-31] - 2026-07-31
 ### Added
