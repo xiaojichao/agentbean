@@ -803,7 +803,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const collected = await collectArtifacts({
               ...(workspace ? {
                 outputDir: workspace.outputDir,
-                ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
+                ...(!workspace.projection && explicitWorkspaceCwd ? { cwd: explicitWorkspaceCwd } : {}),
               } : {}),
               extraOutputDirs: codexExtraOutputDirs,
               adapterOutputRoots,
