@@ -6,6 +6,7 @@ import type { AgentInvocationTaskContextV1, DependencyResultRefDto } from './inv
 import type { AcceptanceCriterionDto, EvidenceRefDto } from './task-coordination.js';
 import type { ProjectReferenceSetDto } from './project-reference.js';
 import type { ProjectDocumentInputSetV1 } from './project-document-input-set.js';
+import type { DeviceWorkspaceSnapshotDto } from './project-channel-workspace.js';
 import type {
   LocalMemoryScopeType,
   MemoryKind,
@@ -120,6 +121,8 @@ export interface DispatchRequestDto {
   projectReferenceSets?: readonly ProjectReferenceSetDto[];
   /** 必需输入；Device 必须完整物化并校验后才可启动 Agent。 */
   projectDocumentInputSet?: ProjectDocumentInputSetV1;
+  /** #1043 不可变 Device snapshot；执行端不得回读 current/final。 */
+  workspaceSnapshot?: DeviceWorkspaceSnapshotDto;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachmentDto[];

@@ -94,6 +94,7 @@ export interface WorkspaceRunManifest {
   taskAttempt?: number;
   workspaceRunId?: string;
   workspaceRevisionId?: string;
+  workspaceSnapshotId?: string;
   provenance?: {
     relativePath: string;
     source: 'run-output' | 'snapshot' | 'response' | 'log';
