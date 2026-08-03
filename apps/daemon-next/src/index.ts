@@ -11,8 +11,13 @@ import {
 } from './project-document-input-set.js';
 import {
   discoverRecoverableWorkspaceRuns,
+  discoverRecoverableChannelWorkspaceRuns,
   markWorkspaceRunManifestReported,
   markWorkspaceRunReported,
+  persistDeviceProjectionManifest,
+  prepareChannelWorkspaceRun,
+  prepareChannelWorkspaceOutput,
+  stageChannelWorkspaceOutputs,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
@@ -47,14 +52,24 @@ export { materializeProjectDocumentInputSet } from './project-document-input-set
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
 export {
   discoverRecoverableWorkspaceRuns,
+  discoverRecoverableChannelWorkspaceRuns,
   markWorkspaceRunManifestReported,
   markWorkspaceRunReported,
+  prepareChannelWorkspaceOutput,
+  stageChannelWorkspaceOutputs,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
 } from './workspace-run.js';
-export type { RecoverableWorkspaceRun, WorkspaceRunDir, WorkspaceRunManifest } from './workspace-run.js';
+export type {
+  ChannelProjectionOptions,
+  DeviceProjectionManifest,
+  RecoverableWorkspaceRun,
+  WorkspaceProjectionIdentity,
+  WorkspaceRunDir,
+  WorkspaceRunManifest,
+} from './workspace-run.js';
 export { collectArtifacts } from './artifact-collector.js';
 export type { CollectedArtifact } from './artifact-collector.js';
 export { uploadArtifacts } from './artifact-uploader.js';
@@ -276,6 +291,10 @@ export interface DispatchRequestPayload {
    * claim 路径可来自 execution snapshot；未提供时交付阶段会尝试读取频道当前 revision 作为 baseline。
    */
   workspaceRevisionId?: string;
+  /** Channel-first task/run identity; legacy callers may omit and use dispatch id. */
+  taskId?: string;
+  taskAttempt?: number;
+  workspaceRunId?: string;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -358,6 +377,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   const sleep = input.sleep ?? sleepFor;
   // 复用 scanner 同款 home 解析；默认 homedir()。custom-agent skills 扫描必须用同一个 home。
   const home = input.homeDir ?? homedir();
+  const agentBeanHome = process.env.AGENTBEAN_HOME ?? join(home, '.agentbean');
   const codexGeneratedImagesDir = join(home, '.codex', 'generated_images');
   const attachmentWorkspaceRoot = join(home, '.agentbean', 'attachment-workspaces');
   // #1003：可恢复 Workspace publish 本地 pending 根（profile/home 下，与 attachment 隔离）。
@@ -456,6 +476,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     async start() {
       const initialAnnouncement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
       currentDeviceId = initialAnnouncement.deviceId;
+      persistDeviceProjectionManifest(agentBeanHome, {
+        schemaVersion: 1,
+        deviceId: currentDeviceId,
+        teamId: device.teamId,
+        updatedAt: Date.now(),
+      });
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
       const dispatchExecutionTails = new Map<string, Promise<void>>();
@@ -477,10 +503,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         rememberRecoveryCwds(cwds);
         void recoverPersistedWorkspaceRuns(outbox, Array.from(knownRecoveryCwds));
       };
-      rememberRecoveryCwds([
-        ...latestSnapshot.agents.map((agent) => agent.cwd),
-        attachmentWorkspaceRoot,
-      ]);
+      rememberRecoveryCwds([...latestSnapshot.agents.map((agent) => agent.cwd), attachmentWorkspaceRoot]);
       // #1003：启动时恢复未完成的 Workspace publish（不以本地 pending 证明已发布）。
       void resumePendingWorkspacePublishes();
       socket.onReconnect?.(async () => {
@@ -650,17 +673,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             request.projectReferenceSets,
           );
 
-          // 未配置 agent cwd 时仍以 daemon home 作为受控 workspace 根目录，
-          // 保证普通附件和冻结引用内容都能下载并通过绝对路径暴露给执行器。
+          // 无论 Agent 是否配置 custom cwd，项目协作状态都进入本机 Channel projection；
+          // custom cwd 只作为显式执行进程 cwd，不参与默认文件扫描。
           const explicitWorkspaceCwd = request.customAgent?.cwd;
-          const workspaceRoot = explicitWorkspaceCwd
-            ?? (request.attachments?.length || request.projectDocumentInputSet
-              ? attachmentWorkspaceRoot
-              : undefined);
-          const workspace = workspaceRoot
-            ? prepareWorkspaceRun(workspaceRoot, request.id)
-            : undefined;
-          if (workspace && request.attachments?.length && device.token) {
+          const taskId = request.taskId ?? request.managementInvocationId ?? request.requestId ?? request.id;
+          const taskAttempt = request.taskAttempt ?? 1;
+          const workspaceRunId = request.workspaceRunId ?? request.id;
+          const workspace = typeof request.teamId === 'string' && typeof request.channelId === 'string'
+            && request.teamId.length > 0 && request.channelId.length > 0
+            ? prepareChannelWorkspaceRun({
+                agentBeanHome,
+                deviceId: currentDeviceId,
+                teamId: request.teamId,
+                channelId: request.channelId,
+                agentId: request.agentId,
+                taskId,
+                taskAttempt,
+                workspaceRunId,
+                ...(request.workspaceRevisionId ? { workspaceRevisionId: request.workspaceRevisionId } : {}),
+              })
+            : (explicitWorkspaceCwd ? prepareWorkspaceRun(explicitWorkspaceCwd, request.id) : undefined);
+          if (request.attachments?.length && device.token) {
+            if (!workspace) throw new Error('WORKSPACE_PROJECTION_REQUIRED');
             const downloaded = await downloadAttachments(
               { serverUrl, token: device.token, teamId: device.teamId, inputDir: workspace.inputDir, fetch: fetchFn },
               request.attachments,
@@ -701,7 +735,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               };
             }
           }
-          if (workspace && request.customAgent) {
+          if (request.customAgent && workspace) {
             request.customAgent = {
               ...request.customAgent,
               env: { ...(request.customAgent.env ?? {}), ...workspaceRunEnv(workspace) },
@@ -732,13 +766,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           );
           const artifactDiagnostics = [...configuredRoots.diagnostics];
           const shouldCollectProductArtifacts = startedAt !== undefined
-            && (workspace || generatedImageDirs.length > 0 || configuredRoots.roots.length > 0);
+            && (generatedImageDirs.length > 0 || configuredRoots.roots.length > 0 || workspace !== undefined);
           if (shouldCollectProductArtifacts) {
             const collected = await collectArtifacts({
-              ...(workspace ? {
-                outputDir: workspace.outputDir,
-                ...(explicitWorkspaceCwd ? { cwd: workspace.cwd } : {}),
-              } : {}),
+              ...(workspace ? { outputDir: workspace.outputDir } : {}),
               extraOutputDirs: generatedImageDirs,
               configuredOutputRoots: configuredRoots.roots,
               startedAt,
@@ -780,6 +811,24 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   channelId: request.channelId,
                   baselineRevisionId,
                 });
+                try {
+                  const pendingOutputDir = prepareChannelWorkspaceOutput({
+                    agentBeanHome,
+                    deviceId: currentDeviceId,
+                    teamId: request.teamId,
+                    channelId: request.channelId,
+                    publishIdentity: publishId,
+                  });
+                  stageChannelWorkspaceOutputs(pendingOutputDir, collected, {
+                    publishIdentity: publishId,
+                    baselineRevisionId,
+                    deviceId: currentDeviceId,
+                    teamId: request.teamId,
+                    channelId: request.channelId,
+                  });
+                } catch (error) {
+                  console.warn(`daemon channel workspace output staging failed (non-blocking): ${readErrorMessage(error)}`);
+                }
                 const delivered = await deliverWorkspaceOutputsViaStaging({
                   store: workspacePublishStore,
                   client,
@@ -901,9 +950,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 agentId: request.agentId,
                 channelId: request.channelId,
                 status: result.workspaceRun.status ?? 'succeeded',
-                cwd: result.workspaceRun.cwd ?? workspace.cwd,
+                cwd: '.',
                 command: result.workspaceRun.command,
-                logExcerpt: result.workspaceRun.logExcerpt,
+                logExcerpt: sanitizeWorkspaceText(result.workspaceRun.logExcerpt, [workspace.runDir, explicitWorkspaceCwd]),
                 startedAt: result.workspaceRun.startedAt,
                 completedAt: result.workspaceRun.completedAt,
                 exitCode: result.workspaceRun.exitCode,
@@ -913,6 +962,16 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   ? { collaborationProposals: result.collaborationProposals }
                   : {}),
                 ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
+                deviceId: currentDeviceId,
+                teamId: request.teamId,
+                taskId,
+                taskAttempt,
+                workspaceRunId,
+                ...(request.workspaceRevisionId ? { workspaceRevisionId: request.workspaceRevisionId } : {}),
+                provenance: collectedProductArtifacts.map((c) => ({
+                  relativePath: c.relativePath,
+                  source: 'run-output' as const,
+                })),
                 files: collectedProductArtifacts.map((c) => ({
                   relativePath: c.relativePath,
                   sha256: c.sha256,
@@ -929,13 +988,22 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             }
           }
 
+          const reportedWorkspaceRun = result.workspaceRun
+            ? {
+                ...result.workspaceRun,
+                cwd: '.',
+                ...(result.workspaceRun.logExcerpt
+                  ? { logExcerpt: sanitizeWorkspaceText(result.workspaceRun.logExcerpt, [workspace?.runDir, explicitWorkspaceCwd]) }
+                  : {}),
+              }
+            : undefined;
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
             ...(artifactIds.length > 0 ? { artifactIds } : {}),
             ...(artifacts.length > 0 ? { artifacts } : {}),
-            ...(result.workspaceRun ? { workspaceRun: result.workspaceRun } : {}),
+            ...(reportedWorkspaceRun ? { workspaceRun: reportedWorkspaceRun } : {}),
             ...(result.collaborationProposals?.length
               ? { collaborationProposals: result.collaborationProposals }
               : {}),
@@ -1012,7 +1080,10 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
     outbox: DispatchOutbox,
     cwds: string[],
   ): Promise<void> {
-    const runs = discoverRecoverableWorkspaceRuns(cwds);
+    const runs = [
+      ...discoverRecoverableChannelWorkspaceRuns({ agentBeanHome, deviceId: currentDeviceId }),
+      ...discoverRecoverableWorkspaceRuns(cwds),
+    ];
     for (const run of runs) {
       try {
         const payload = {
@@ -1097,6 +1168,17 @@ function formatArtifactSkipDiagnostics(skipped: readonly SkippedArtifactDiagnost
 
 function appendDiagnostic(current: string | undefined, diagnostic: string): string {
   return current ? `${current}\n\n${diagnostic}` : diagnostic;
+}
+
+function sanitizeWorkspaceText(value: string | undefined, paths: Array<string | undefined>): string | undefined {
+  if (value === undefined) return undefined;
+  let sanitized = value;
+  for (const path of paths) {
+    if (path) sanitized = sanitized.split(path).join('.');
+  }
+  // Execution logs may contain a path discovered by the Agent rather than the
+  // configured cwd. Keep diagnostics useful without exporting host filesystem paths.
+  return sanitized.replace(/(^|[\s("'=])\/(?:[^\s"'`)]+)+/g, '$1[path]');
 }
 
 async function claimDispatchRequest(
