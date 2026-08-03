@@ -1023,7 +1023,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   }
                 }
               }
-              if (!usedStaging) {
+              // 已进入 Workspace revision 的仅是 projection run outputs；其余来源仍须
+              // 按 legacy artifact upload 交付，避免 configured/adapter/cwd 产物丢失。
+              const legacyArtifacts = usedStaging
+                ? collected.filter((artifact) => artifact.sourceRoot.kind !== 'run_output')
+                : collected;
+              if (legacyArtifacts.length > 0) {
                 const uploaded = await uploadArtifacts(
                   {
                     serverUrl,
@@ -1039,9 +1044,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                       }
                     },
                   },
-                  collected,
+                  legacyArtifacts,
                 );
-                productArtifactIds = uploaded.map((u) => u.id);
+                productArtifactIds.push(...uploaded.map((u) => u.id));
               }
             } else if (collected.length > 0) {
               skippedProductArtifacts.push(...collected

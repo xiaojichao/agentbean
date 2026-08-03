@@ -52,6 +52,7 @@ function fakeStagingFetch(state: {
   plans: Array<{ publishId: string; baselineRevisionId: string; files: Array<{ path: string }> }>;
   puts: Array<{ path: string; offset: number; length: number }>;
   commits: string[];
+  legacyUploads?: string[];
 }): typeof fetch {
   const files = new Map<string, { receivedBytes: number; complete: boolean; expected: number }>();
   return (async (input: unknown, init?: { method?: string; headers?: Record<string, string>; body?: unknown }) => {
@@ -116,6 +117,12 @@ function fakeStagingFetch(state: {
         },
       });
     }
+    if (url.includes('/artifacts/upload')) {
+      const form = init?.body as FormData;
+      const file = form.get('file') as File | null;
+      state.legacyUploads?.push(file?.name ?? 'unknown');
+      return json({ ok: true, artifact: { id: `legacy-${file?.name ?? 'unknown'}` } });
+    }
     return new Response('not found', { status: 404 });
   }) as typeof fetch;
 }
@@ -131,7 +138,7 @@ describe('workspace publish dispatch (#1044)', () => {
     process.env.AGENTBEAN_HOME = join(home, '.agentbean');
     const customCwd = tempDir('publish-dispatch-cwd-');
     const configuredOutputRoot = tempDir('publish-dispatch-configured-');
-    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[] };
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
     try {
       const harness = fakeSocket();
       const client = createDaemonProtocolClient({
@@ -176,7 +183,7 @@ describe('workspace publish dispatch (#1044)', () => {
       });
 
       // 只发布 outputs/answer.md;inputs/logs/intermediates/cache/snapshots/response
-      // 以及配置根的文件均不进入 Workspace revision。
+      // 配置根文件不进入 Workspace revision，但仍走 legacy artifact upload。
       expect(staging.plans).toHaveLength(1);
       expect(staging.plans[0]).toMatchObject({ baselineRevisionId: 'rev-1' });
       expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path)).toEqual(['answer.md']);
@@ -184,7 +191,8 @@ describe('workspace publish dispatch (#1044)', () => {
 
       const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
       const payload = resultEmit!.payload as { artifactIds?: string[] };
-      expect(payload.artifactIds).toEqual(['art-answer.md']);
+      expect(payload.artifactIds).toEqual(['art-answer.md', 'legacy-other-process.md']);
+      expect(staging.legacyUploads).toEqual(['other-process.md']);
 
       // 批次落盘:outputs/<publishIdentity> 只有确认输出;manifest 记录进度与 Server 返回身份。
       const outputsRoot = join(home, '.agentbean', 'workspaces', 'team-1', 'channels', 'channel-1', 'outputs');
