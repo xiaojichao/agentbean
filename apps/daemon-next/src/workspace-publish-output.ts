@@ -63,6 +63,9 @@ export interface StagedWorkspacePublishOutput {
   readonly manifest: WorkspacePublishOutputManifest;
 }
 
+// 控制面与用户输出分离：用户完全可以合法产出根级 manifest.json。
+// `.agentbean-publish` 是 staging 批次的保留元数据目录，不参与交付清单。
+const PUBLISH_OUTPUT_METADATA_DIR = '.agentbean-publish';
 const PUBLISH_OUTPUT_MANIFEST = 'manifest.json';
 
 /** 与 workspace-run.ts 相同的单段安全约束（projection 内所有身份段共用）。 */
@@ -87,15 +90,30 @@ function sha256File(path: string): string {
 }
 
 function writeManifestAtomic(outputDir: string, manifest: WorkspacePublishOutputManifest): void {
-  const target = join(outputDir, PUBLISH_OUTPUT_MANIFEST);
+  const target = publishManifestPath(outputDir, true);
   const temp = `${target}.${process.pid}.tmp`;
   writeFileSync(temp, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   renameSync(temp, target);
 }
 
+function publishManifestPath(outputDir: string, createMetadataDirectory = false): string {
+  const metadataDir = join(outputDir, PUBLISH_OUTPUT_METADATA_DIR);
+  try {
+    const stat = lstatSync(metadataDir);
+    if (stat.isSymbolicLink()) throw new Error('WORKSPACE_PROJECTION_SYMLINK_ESCAPE');
+    if (!stat.isDirectory()) throw new Error('WORKSPACE_PROJECTION_NOT_DIRECTORY');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+    if (createMetadataDirectory) {
+      mkdirSync(metadataDir);
+    }
+  }
+  return join(metadataDir, PUBLISH_OUTPUT_MANIFEST);
+}
+
 export function readWorkspacePublishOutputManifest(outputDir: string): WorkspacePublishOutputManifest | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(join(outputDir, PUBLISH_OUTPUT_MANIFEST), 'utf8')) as unknown;
+    const parsed = JSON.parse(readFileSync(publishManifestPath(outputDir), 'utf8')) as unknown;
     if (!parsed || typeof parsed !== 'object') return undefined;
     const candidate = parsed as Partial<WorkspacePublishOutputManifest>;
     if (candidate.schemaVersion !== 2
@@ -111,17 +129,22 @@ export function readWorkspacePublishOutputManifest(outputDir: string): Workspace
       return undefined;
     }
     // 文件条目形状校验:篡改/截断的 manifest 不得流入恢复流程。
+    const paths = new Set<string>();
     for (const file of candidate.files as Array<Partial<WorkspacePublishOutputFileEntry>>) {
       if (!file || typeof file !== 'object'
-        || typeof file.relativePath !== 'string'
+        || !isSafeOutputRelativePath(file.relativePath)
         || typeof file.filename !== 'string'
         || typeof file.mimeType !== 'string'
-        || typeof file.sha256 !== 'string'
-        || typeof file.sizeBytes !== 'number'
-        || typeof file.uploadedBytes !== 'number'
-        || typeof file.complete !== 'boolean') {
+        || !/^[a-f0-9]{64}$/i.test(file.sha256 ?? '')
+        || !isNonNegativeSafeInteger(file.sizeBytes)
+        || !isNonNegativeSafeInteger(file.uploadedBytes)
+        || file.uploadedBytes! > file.sizeBytes!
+        || typeof file.complete !== 'boolean'
+        || (file.complete && file.uploadedBytes !== file.sizeBytes)
+        || paths.has(file.relativePath)) {
         return undefined;
       }
+      paths.add(file.relativePath);
     }
     return candidate as WorkspacePublishOutputManifest;
   } catch {
@@ -166,7 +189,7 @@ export function stageRunOutputsToPublishOutput(input: {
 
   const planned = input.collected.map((artifact) => {
     const relativePath = artifact.relativePath.replaceAll('\\', '/');
-    if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..' || !part)) {
+    if (!isSafeOutputRelativePath(relativePath)) {
       throw new Error('WORKSPACE_PROJECTION_INVALID_PROVENANCE');
     }
     return {
@@ -178,10 +201,17 @@ export function stageRunOutputsToPublishOutput(input: {
       source: artifact.absolutePath,
     };
   });
+  if (new Set(planned.map((entry) => entry.relativePath)).size !== planned.length) {
+    throw new Error('WORKSPACE_PROJECTION_INVALID_PROVENANCE');
+  }
 
   const existing = readWorkspacePublishOutputManifest(outputDir);
   if (existing) {
-    const samePlan = existing.baselineRevisionId === input.baselineRevisionId
+    const samePlan = existing.publishIdentity === input.publishIdentity
+      && existing.teamId === input.teamId
+      && existing.channelId === input.channelId
+      && existing.deviceId === input.deviceId
+      && existing.baselineRevisionId === input.baselineRevisionId
       && existing.files.length === planned.length
       && existing.files.every((file) => planned.some((entry) => entry.relativePath === file.relativePath
         && entry.sha256 === file.sha256
@@ -226,6 +256,47 @@ export function stageRunOutputsToPublishOutput(input: {
   };
   writeManifestAtomic(outputDir, manifest);
   return { outputDir, manifest };
+}
+
+function isSafeOutputRelativePath(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.startsWith('/') || value.includes('\\') || value.includes('\0')) {
+    return false;
+  }
+  const parts = value.split('/');
+  return parts.every((part) => part.length > 0
+    && part !== '.'
+    && part !== '..'
+    && part !== PUBLISH_OUTPUT_METADATA_DIR);
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isSafeStagedFile(outputDir: string, relativePath: string): boolean {
+  const root = resolve(outputDir);
+  const target = resolve(root, ...relativePath.split('/'));
+  if (target === root || !target.startsWith(`${root}/`)) return false;
+  let current = root;
+  for (const segment of relativePath.split('/')) {
+    current = join(current, segment);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) return false;
+      if (current === target) return stat.isFile();
+      if (!stat.isDirectory()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function hasSafeStagedFiles(
+  outputDir: string,
+  files: readonly WorkspacePublishOutputFileEntry[],
+): boolean {
+  return files.every((file) => isSafeStagedFile(outputDir, file.relativePath));
 }
 
 function copyVerified(
@@ -294,7 +365,8 @@ export function discoverWorkspacePublishOutputs(input: {
           || manifest.publishIdentity !== outputEntry.name
           || manifest.deviceId !== input.deviceId
           || manifest.teamId !== teamEntry.name
-          || manifest.channelId !== channelEntry.name) {
+          || manifest.channelId !== channelEntry.name
+          || !hasSafeStagedFiles(outputDir, manifest.files)) {
           continue;
         }
         if (input.status && manifest.status !== input.status) continue;
@@ -458,7 +530,7 @@ export function createWorkspacePublishOutputStore(input: {
       const located = locate(publishId);
       if (!located) return;
       // 只摘 manifest（批次记录）；staged 文件保留在 outputs/ 供人工诊断/清理。
-      rmSync(join(located.outputDir, PUBLISH_OUTPUT_MANIFEST), { force: true });
+      rmSync(publishManifestPath(located.outputDir), { force: true });
     },
   };
 }

@@ -30,7 +30,9 @@
 
 ### A. daemon 新模块 `workspace-publish-output.ts`:publish manifest 成为本机权威批次记录
 
-`outputs/<publishIdentity>/manifest.json` schema v2(原子 tmp+rename 写):
+`outputs/<publishIdentity>/.agentbean-publish/manifest.json` schema v2(原子 tmp+rename 写):
+控制 manifest 放在保留元数据目录，避免覆盖合法的用户交付物 `manifest.json`；元数据目录不参与
+发布文件清单。
 
 ```ts
 {
@@ -47,7 +49,7 @@
 
 - 不含任何外部绝对路径(跨 Device 合同干净);staged copy 路径由 outputDir + relativePath 运行时拼出,不落盘。
 - `stageRunOutputsToPublishOutput()`:复制 run 确认文件到 `outputs/<publishIdentity>/` 并写 manifest。同 identity 同 plan 重复调用幂等(保留已有进度);plan 不同抛 `WORKSPACE_PUBLISH_OUTPUT_PLAN_MISMATCH`。
-- `discoverRecoverableWorkspacePublishOutputs({agentBeanHome, deviceId})`:扫 `workspaces/*/channels/*/outputs/*/manifest.json`,校验 `device.json` 与 manifest.deviceId,返回 status==='pending' 的批次。
+- `discoverRecoverableWorkspacePublishOutputs({agentBeanHome, deviceId})`:扫 `workspaces/*/channels/*/outputs/*/.agentbean-publish/manifest.json`,校验 `device.json` 与 manifest.deviceId,返回 status==='pending' 的批次。
 - `createWorkspacePublishOutputStore({agentBeanHome, deviceId})`:实现既有 `WorkspacePublishRecoveryStore` 接口,以 manifest 为存储;`absolutePath` 指向 staged copy。delivery/resume 代码路径不变。
 
 ### B. delivery/recovery 切 staged copy + 进度回写

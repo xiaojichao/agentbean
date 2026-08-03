@@ -5,7 +5,7 @@
  * - AC5：结果回报送达后写 reportedAt 稳定标记
  * - AC8：Device-local Memory 正文注入 prompt,但不得进入 publish manifest、staged 文件或执行回报
  */
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -130,6 +130,7 @@ describe('workspace publish dispatch (#1044)', () => {
     const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
     process.env.AGENTBEAN_HOME = join(home, '.agentbean');
     const customCwd = tempDir('publish-dispatch-cwd-');
+    const configuredOutputRoot = tempDir('publish-dispatch-configured-');
     const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[] };
     try {
       const harness = fakeSocket();
@@ -148,6 +149,12 @@ describe('workspace publish dispatch (#1044)', () => {
           writeFileSync(join(env.AGENTBEAN_INPUT_DIR ?? '', 'seed.md'), 'frozen input');
           writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'logs', 'run.md'), 'log line');
           writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'intermediates', 'draft.md'), 'draft');
+          mkdirSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'cache'), { recursive: true });
+          writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'cache', 'cached.md'), 'cache');
+          mkdirSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'snapshots', 'snapshot-1'), { recursive: true });
+          writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'snapshots', 'snapshot-1', 'frozen.md'), 'snapshot');
+          writeFileSync(join(env.AGENTBEAN_WORKSPACE ?? '', 'response.md'), 'response');
+          writeFileSync(join(configuredOutputRoot, 'other-process.md'), 'not a projection output');
           return {
             body: 'done',
             workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
@@ -159,10 +166,17 @@ describe('workspace publish dispatch (#1044)', () => {
         id: 'disp-pub-1', requestId: 'req-pub-1', teamId: 'team-1', channelId: 'channel-1', messageId: 'msg-1',
         agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
         workspaceRevisionId: 'rev-1', prompt: 'run',
-        customAgent: { adapterKind: 'codex', command: 'codex', cwd: customCwd },
+        customAgent: {
+          adapterKind: 'codex', command: 'codex', cwd: customCwd,
+          env: { EXTRA_OUTPUT_DIR: configuredOutputRoot },
+          artifactSourceRoots: [{
+            id: 'configured-root', label: '额外输出', envVarName: 'EXTRA_OUTPUT_DIR', defaultRole: 'run_output', recursive: true,
+          }],
+        },
       });
 
-      // 只发布 outputs/answer.md;inputs/logs/intermediates 与 run 簿记不进入发布。
+      // 只发布 outputs/answer.md;inputs/logs/intermediates/cache/snapshots/response
+      // 以及配置根的文件均不进入 Workspace revision。
       expect(staging.plans).toHaveLength(1);
       expect(staging.plans[0]).toMatchObject({ baselineRevisionId: 'rev-1' });
       expect((staging.plans[0] as { files: Array<{ path: string }> }).files.map((f) => f.path)).toEqual(['answer.md']);
@@ -177,7 +191,7 @@ describe('workspace publish dispatch (#1044)', () => {
       const batches = readdirSync(outputsRoot);
       expect(batches).toHaveLength(1);
       const batchDir = join(outputsRoot, batches[0]!);
-      expect(readdirSync(batchDir).sort()).toEqual(['answer.md', 'manifest.json']);
+      expect(readdirSync(batchDir).sort()).toEqual(['.agentbean-publish', 'answer.md']);
       const manifest = readWorkspacePublishOutputManifest(batchDir);
       expect(manifest).toMatchObject({
         publishIdentity: batches[0],
@@ -256,7 +270,7 @@ describe('workspace publish dispatch (#1044)', () => {
       expect(batches).toHaveLength(1);
       const batchDir = join(outputsRoot, batches[0]!);
       expect(readFileSync(join(batchDir, 'answer.md'), 'utf8')).not.toContain(canary);
-      expect(readFileSync(join(batchDir, 'manifest.json'), 'utf8')).not.toContain(canary);
+      expect(readFileSync(join(batchDir, '.agentbean-publish', 'manifest.json'), 'utf8')).not.toContain(canary);
 
       const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
       expect(JSON.stringify(resultEmit?.payload)).not.toContain(canary);

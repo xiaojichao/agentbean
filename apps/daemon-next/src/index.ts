@@ -947,8 +947,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 // stage 失败则不进行 staging 交付（避免 manifest 与上传源不一致），回退 legacy upload。
                 let stagedForPublish: typeof collected | undefined;
                 let publishOutputStore: WorkspacePublishRecoveryStore | undefined;
+                // Channel Workspace revision 只接收本次 projection 的 AGENTBEAN_OUTPUT_DIR。
+                // 配置根、adapter 生成目录与 cwd fallback 仍走既有 artifact upload，不能混入原子 revision。
+                const projectionRunOutputs = collected.filter((artifact) => artifact.sourceRoot.kind === 'run_output');
                 try {
-                  const staged = stageRunOutputsToPublishOutput({
+                  const staged = projectionRunOutputs.length > 0 ? stageRunOutputsToPublishOutput({
                     agentBeanHome,
                     deviceId: currentDeviceId,
                     teamId: request.teamId,
@@ -960,19 +963,21 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                     taskId,
                     taskAttempt,
                     workspaceRunId,
-                    collected,
-                  });
-                  publishOutputStore = createWorkspacePublishOutputStore({
-                    agentBeanHome,
-                    deviceId: currentDeviceId,
-                  });
-                  stagedForPublish = collected.map((artifact) => ({
-                    ...artifact,
-                    absolutePath: join(
-                      staged.outputDir,
-                      ...artifact.relativePath.replaceAll('\\', '/').split('/'),
-                    ),
-                  }));
+                    collected: projectionRunOutputs,
+                  }) : undefined;
+                  if (staged) {
+                    publishOutputStore = createWorkspacePublishOutputStore({
+                      agentBeanHome,
+                      deviceId: currentDeviceId,
+                    });
+                    stagedForPublish = projectionRunOutputs.map((artifact) => ({
+                      ...artifact,
+                      absolutePath: join(
+                        staged.outputDir,
+                        ...artifact.relativePath.replaceAll('\\', '/').split('/'),
+                      ),
+                    }));
+                  }
                 } catch (error) {
                   console.warn(`daemon channel workspace output staging failed, fallback upload: ${readErrorMessage(error)}`);
                 }

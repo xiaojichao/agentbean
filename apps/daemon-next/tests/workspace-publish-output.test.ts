@@ -113,6 +113,29 @@ describe('workspace publish output (#1044)', () => {
     expect(JSON.stringify(manifest)).not.toContain('absolutePath');
   });
 
+  test('根级 manifest.json 是用户交付物，不会被控制 manifest 覆盖', () => {
+    const home = seedHome();
+    const runDir = tempDir('publish-output-run-');
+    const staged = stageRunOutputsToPublishOutput(stageInput(home, [
+      makeCollected(runDir, 'manifest.json', '{"user":"artifact"}'),
+    ]));
+
+    expect(readFileSync(join(staged.outputDir, 'manifest.json'), 'utf8')).toBe('{"user":"artifact"}');
+    expect(readWorkspacePublishOutputManifest(staged.outputDir)?.files)
+      .toEqual([expect.objectContaining({ relativePath: 'manifest.json' })]);
+  });
+
+  test('拒绝篡改 manifest 的路径逃逸', () => {
+    const home = seedHome();
+    const runDir = tempDir('publish-output-run-');
+    const staged = stageRunOutputsToPublishOutput(stageInput(home, [makeCollected(runDir, 'safe.md', 'safe')]));
+    const control = join(staged.outputDir, '.agentbean-publish', 'manifest.json');
+    const valid = JSON.parse(readFileSync(control, 'utf8')) as { files: Array<Record<string, unknown>> };
+    valid.files[0]!.relativePath = '../../outside.md';
+    writeFileSync(control, JSON.stringify(valid));
+    expect(readWorkspacePublishOutputManifest(staged.outputDir)).toBeUndefined();
+  });
+
   test('重复 stage 幂等保留上传进度;plan 漂移直接拒绝', () => {
     const home = seedHome();
     const runDir = tempDir('publish-output-run-');
@@ -208,7 +231,7 @@ describe('workspace publish output (#1044)', () => {
       .find((candidate) => candidate.manifest.publishIdentity === 'pub-test-1');
     expect(located?.manifest.reportedAt).toBe(400);
 
-    // remove 只摘 manifest,staged 文件保留供诊断。
+    // remove 只摘控制 manifest,staged 文件保留供诊断。
     store.remove('pub-2');
     expect(store.get('pub-2')).toBeNull();
     const pub2Dir = join(home, 'workspaces', 'team-1', 'channels', 'channel-1', 'outputs', 'pub-2');
