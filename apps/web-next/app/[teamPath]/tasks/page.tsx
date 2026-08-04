@@ -26,8 +26,9 @@ import {
   User,
   X,
 } from 'lucide-react';
-import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
-import { WEB_EVENTS, type TaskDagViewDto } from '@agentbean/contracts';
+import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, projectEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
+import { OutputPackageList } from '@/components/project/OutputPackageList';
+import { WEB_EVENTS, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
 import { TaskSystemActivitySection } from '@/components/TaskSystemActivitySection';
@@ -1116,6 +1117,13 @@ function TaskThreadPanel({
           : taskDag
             ? <TaskDagPanel dag={taskDag} teamPath={teamPath} />
             : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
+        {teamId && task.channelId ? (
+          <TaskOutputPackageSummary
+            teamId={teamId}
+            channelId={task.channelId}
+            taskId={task.id}
+          />
+        ) : null}
         {teamId && userId ? (
           <TaskSystemActivitySection
             taskId={task.id}
@@ -1246,6 +1254,36 @@ function ThreadMessage({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** #1060 Task 交付摘要:读取同一 Server 事实的 packages + pendingDeliveries,按 taskId 过滤。 */
+function TaskOutputPackageSummary({
+  teamId,
+  channelId,
+  taskId,
+}: {
+  teamId: string;
+  channelId: string;
+  taskId: string;
+}) {
+  const [packages, setPackages] = useState<OutputPackageSummaryDto[]>([]);
+  const [pendings, setPendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
+  useEffect(() => {
+    let active = true;
+    setPackages([]);
+    setPendings([]);
+    void projectEvents().listOutputPackages({ channelId, taskId }).then((result) => {
+      if (!active) return;
+      setPackages(result.ok ? result.packages ?? [] : []);
+      setPendings(result.ok ? result.pendingDeliveries ?? [] : []);
+    });
+    return () => { active = false; };
+  }, [teamId, channelId, taskId]);
+  return (
+    <div className="border-b border-neutral-100 px-4 py-3">
+      <OutputPackageList packages={packages} pendingDeliveries={pendings} title="当前交付" />
     </div>
   );
 }

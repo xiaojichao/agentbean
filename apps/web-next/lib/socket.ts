@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto } from '@agentbean/contracts';
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -987,6 +987,22 @@ export interface ProjectEvents {
     message?: string;
   }>;
   onArtifactsUpdated(channelId: string, handler: (library: ProjectArtifactLibraryDto | null) => void): () => void;
+  /** #1060 列出频道 OutputPackage(含 pendingDeliveries「交付处理中」)。 */
+  listOutputPackages(payload: { channelId: string; taskId?: string; limit?: number }): Promise<{
+    ok: boolean;
+    packages?: OutputPackageSummaryDto[];
+    pendingDeliveries?: OutputPackagePendingDeliveryDto[];
+    nextCursor?: { createdAt: number; packageId: string };
+    error?: string;
+    message?: string;
+  }>;
+  /** #1060 获取单个 OutputPackage(含冻结成员)。 */
+  getOutputPackage(payload: { channelId: string; packageId: string }): Promise<{
+    ok: boolean;
+    package?: OutputPackageDto;
+    error?: string;
+    message?: string;
+  }>;
   /** #825 按一次 Agent 输出读取固定成员的 Markdown 文档包。 */
   documentBundles(channelId: string): Promise<{
     ok: boolean;
@@ -1063,6 +1079,12 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
       };
       socket.on(WEB_EVENTS.project.artifactsUpdated, listener);
       return () => { socket.off(WEB_EVENTS.project.artifactsUpdated, listener); };
+    },
+    listOutputPackages(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.listOutputPackages, payload);
+    },
+    getOutputPackage(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.getOutputPackage, payload);
     },
     documentBundles(channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.project.documentBundles, { channelId });

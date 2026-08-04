@@ -153,6 +153,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectArtifactReviews = new Map<string, ProjectArtifactReviewRecord>();
   const projectArtifactFinalizations = new Map<string, ProjectArtifactFinalizationRecord>();
   const projectArtifactDecisionMutations = new Map<string, ProjectArtifactDecisionMutationRecord>();
+  // #1060 OutputPackage(创建后不可变;无 update/delete 路径)。
+  const outputPackages = new Map<string, import('../../application/output-package-repositories.js').OutputPackageRecord>();
+  const outputPackageMembers = new Map<string, import('../../application/output-package-repositories.js').OutputPackageMemberRecord[]>();
+  const outputPackageReceipts = new Map<string, import('../../application/output-package-repositories.js').OutputPackageReceiptRecord>();
+  const outputPackageTombstones = new Map<string, import('../../application/output-package-repositories.js').OutputPackageTombstoneRecord>();
   const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
   const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
   const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
@@ -1756,6 +1761,17 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .slice(0, input.limit)
           .map(cloneWorkspacePublishStaging);
       },
+      async listCommittedByChannel(input) {
+        return Array.from(workspacePublishStagings.values())
+          .filter((row) =>
+            row.teamId === input.teamId
+            && row.channelId === input.channelId
+            && row.status === 'committed'
+            && row.provenance !== undefined
+            && (input.taskId ? row.provenance.taskId === input.taskId : true))
+          .sort((a, b) => a.createdAt - b.createdAt || a.publishId.localeCompare(b.publishId))
+          .map(cloneWorkspacePublishStaging);
+      },
       async delete(input) {
         workspacePublishStagings.delete(`${input.teamId}:${input.publishId}`);
       },
@@ -2140,6 +2156,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!artifact || artifact.teamId !== input.teamId || artifact.channelId !== input.channelId) {
           return { kind: 'artifact_scope_conflict' };
         }
+        // #1060:promote 路径仍要求显式 Stage(人类提交);仅交付形成路径允许 stageId 缺省。
+        if (!input.version.stageId) {
+          return { kind: 'stage_scope_conflict' };
+        }
         const stage = projectStages.get(input.version.stageId);
         if (!stage
           || stage.teamId !== input.teamId
@@ -2286,6 +2306,196 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           collection: updatedCollection,
           finalization: input.finalization,
         };
+      },
+    },
+    // #1060 OutputPackage:validate-then-write(memory 单线程,复核全部前置后再一次性写入,
+    // 不产生部分事实);聚合只暴露 create/读取,无 update/delete。
+    outputPackages: {
+      async recordPackageFormation(input) {
+        const teamId = input.record.teamId;
+        const channelId = input.record.channelId;
+        // 自然幂等:同 (teamId, publishId) 已有 package → replay 既有事实。
+        const existing = Array.from(outputPackages.values()).find((row) =>
+          row.teamId === teamId && row.publishId === input.record.publishId);
+        if (existing) {
+          const members = outputPackageMembers.get(`${teamId}:${existing.packageId}`) ?? [];
+          return { kind: 'replayed' as const, package: existing, members };
+        }
+        // verify+apply 单循环:memory 单线程,逐项先验证后写;复核失败回 conflict。
+        // collection 写入指令(name/kind)与版本号在同一成员内确定,避免跨成员联合收窄。
+        const now = input.record.createdAt;
+        const memberRecords: import('../../application/output-package-repositories.js').OutputPackageMemberRecord[] = [];
+        for (const member of input.members) {
+          const existingVersion = Array.from(projectArtifactVersions.values()).find((version) =>
+            version.teamId === teamId
+            && version.channelId === channelId
+            && version.artifactId === member.version.artifactId);
+          if (existingVersion && existingVersion.id !== member.version.id) {
+            return { kind: 'conflict' as const, reason: 'artifact-version-conflict' as const };
+          }
+          const collectionWrite = member.collection;
+          let collectionId: string;
+          let versionNumber: number;
+          if (collectionWrite.mode === 'reuse') {
+            // 复用既有 version:校验 artifact 自然键与该 version 归属的 collection 一致。
+            if (!existingVersion
+              || existingVersion.id !== collectionWrite.expectedVersionId
+              || existingVersion.collectionId !== collectionWrite.collectionId) {
+              return { kind: 'conflict' as const, reason: 'artifact-version-conflict' as const };
+            }
+            collectionId = collectionWrite.collectionId;
+            versionNumber = existingVersion.versionNumber;
+            memberRecords.push({
+              teamId,
+              packageId: input.record.packageId,
+              channelId,
+              sequence: member.sequence,
+              shortLabel: member.shortLabel,
+              collectionId,
+              artifactVersionId: existingVersion.id,
+              role: member.role,
+              requiredForFinal: member.requiredForFinal,
+              sourcePath: member.sourcePath,
+              filename: member.filename,
+              ...(member.sha256 ? { sha256: member.sha256 } : {}),
+              sizeBytes: member.sizeBytes,
+            });
+            continue;
+          }
+          if (collectionWrite.mode === 'create') {
+            const byName = Array.from(projectArtifactCollections.values()).find((collection) =>
+              collection.teamId === teamId
+              && collection.channelId === channelId
+              && collection.name === collectionWrite.name);
+            if (byName) {
+              // 并发下另一 formation 已建同名 collection → 退化为 append(确定性收敛)。
+              collectionId = byName.id;
+              versionNumber = byName.versionCount + 1;
+              projectArtifactCollections.set(collectionId, {
+                ...byName,
+                revision: byName.revision + 1,
+                currentVersionId: member.version.id,
+                versionCount: versionNumber,
+                updatedAt: now,
+              });
+            } else {
+              collectionId = collectionWrite.collectionId;
+              versionNumber = 1;
+              projectArtifactCollections.set(collectionId, {
+                id: collectionId,
+                teamId,
+                channelId,
+                name: collectionWrite.name,
+                kind: collectionWrite.kind,
+                revision: 1,
+                currentVersionId: member.version.id,
+                versionCount: 1,
+                createdBy: input.record.agentId,
+                createdAt: now,
+                updatedAt: now,
+              });
+            }
+          } else {
+            const collection = projectArtifactCollections.get(collectionWrite.collectionId);
+            if (!collection || collection.teamId !== teamId || collection.channelId !== channelId
+              || collection.revision !== collectionWrite.expectedRevision
+              || collection.versionCount !== collectionWrite.expectedVersionCount) {
+              return { kind: 'conflict' as const, reason: 'collection-revision-stale' as const };
+            }
+            collectionId = collection.id;
+            versionNumber = collection.versionCount + 1;
+            projectArtifactCollections.set(collectionId, {
+              ...collection,
+              revision: collection.revision + 1,
+              currentVersionId: member.version.id,
+              versionCount: versionNumber,
+              updatedAt: now,
+            });
+          }
+          projectArtifactVersions.set(member.version.id, {
+            id: member.version.id,
+            teamId,
+            channelId,
+            collectionId,
+            versionNumber,
+            artifactId: member.version.artifactId,
+            ...(member.version.stageId ? { stageId: member.version.stageId } : {}),
+            taskId: member.version.taskId,
+            taskRevision: member.version.taskRevision,
+            ...(member.version.sourceWorkspaceRunId
+              ? { sourceWorkspaceRunId: member.version.sourceWorkspaceRunId } : {}),
+            ...(member.version.sourceInvocationId
+              ? { sourceInvocationId: member.version.sourceInvocationId } : {}),
+            lineage: [],
+            promotedBy: input.record.agentId,
+            createdAt: now,
+          });
+          memberRecords.push({
+            teamId,
+            packageId: input.record.packageId,
+            channelId,
+            sequence: member.sequence,
+            shortLabel: member.shortLabel,
+            collectionId,
+            artifactVersionId: member.version.id,
+            role: member.role,
+            requiredForFinal: member.requiredForFinal,
+            sourcePath: member.sourcePath,
+            filename: member.filename,
+            ...(member.sha256 ? { sha256: member.sha256 } : {}),
+            sizeBytes: member.sizeBytes,
+          });
+        }
+        const key = `${teamId}:${input.record.packageId}`;
+        outputPackages.set(key, input.record);
+        outputPackageMembers.set(key, memberRecords);
+        outputPackageReceipts.set(`${teamId}:${input.receipt.idempotencyKey}`, input.receipt);
+        outputPackageTombstones.set(`${teamId}:${input.tombstone.idempotencyKey}`, input.tombstone);
+        return { kind: 'created' as const, package: input.record, members: memberRecords };
+      },
+      async getPackageById(input) {
+        const record = outputPackages.get(`${input.teamId}:${input.packageId}`);
+        if (!record) return null;
+        return {
+          package: record,
+          members: outputPackageMembers.get(`${input.teamId}:${input.packageId}`) ?? [],
+        };
+      },
+      async getPackageByPublishId(input) {
+        const record = Array.from(outputPackages.values()).find((row) =>
+          row.teamId === input.teamId && row.publishId === input.publishId) ?? null;
+        if (!record) return null;
+        return {
+          package: record,
+          members: outputPackageMembers.get(`${input.teamId}:${record.packageId}`) ?? [],
+        };
+      },
+      async listPackagesByChannel(input) {
+        return Array.from(outputPackages.values())
+          .filter((row) => row.teamId === input.teamId && row.channelId === input.channelId)
+          .filter((row) => (input.taskId ? row.taskId === input.taskId : true))
+          .filter((row) => (input.cursor
+            ? row.createdAt < input.cursor.createdAt
+              || (row.createdAt === input.cursor.createdAt && row.packageId < input.cursor.packageId)
+            : true))
+          .sort((a, b) => b.createdAt - a.createdAt || b.packageId.localeCompare(a.packageId))
+          .slice(0, input.limit);
+      },
+      async listPackagePublishIdsByChannel(input) {
+        return Array.from(outputPackages.values())
+          .filter((row) => row.teamId === input.teamId && row.channelId === input.channelId)
+          .filter((row) => (input.taskId ? row.taskId === input.taskId : true))
+          .map((row) => row.publishId);
+      },
+      receipts: {
+        async getByIdempotencyKey(input) {
+          return outputPackageReceipts.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
+      },
+      tombstones: {
+        async getByIdempotencyKey(input) {
+          return outputPackageTombstones.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
       },
     },
     projectDocumentBundles: {

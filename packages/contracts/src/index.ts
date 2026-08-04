@@ -38,6 +38,7 @@ export * from './project-document-bundle.js';
 export * from './project-reference.js';
 export * from './project-document-input-set.js';
 export * from './project-channel-workspace.js';
+export * from './output-package.js';
 export * from './task-lifecycle.js';
 export * from './task-failure-remediation.js';
 export * from './system-activity.js';
