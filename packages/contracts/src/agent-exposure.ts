@@ -1,5 +1,6 @@
 import type { ID, UnixMs } from './common.js';
 import type { ChannelCoordinationRiskLevel } from './pi-coordination.js';
+import type { FrozenProjectInputItemDto } from './frozen-project-input.js';
 
 /**
  * #710 Team Agent Exposure Manifest。
@@ -387,6 +388,12 @@ export interface TaskOfferDto {
    * fail-closed（不产 Claim）。manifestRevision 此时为占位 0（无 active manifest）。
    */
   readonly requirementConfirmation: boolean;
+  /**
+   * #1064：Task-linked @Agent 请求冻结的项目输入（发送时刻解析的具体 artifactVersionId）。
+   * acceptance 事务据此复验 package/version basis（AC6），Invocation intent 据此写入
+   * immutable intent（AC7）；offer 本身不授予输入访问（AC4 最小 preview 见 objective.inputs）。
+   */
+  readonly frozenInputs?: readonly FrozenProjectInputItemDto[];
   readonly status: TaskOfferStatus;
   readonly createdAt: UnixMs;
   readonly updatedAt: UnixMs;

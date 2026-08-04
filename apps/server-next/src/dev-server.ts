@@ -2177,6 +2177,16 @@ function createDefaultApp(
       resolvePiHealthy,
       resolveProjectStageCandidates: (taskId, options) =>
         taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
+      // #1064：Task-linked @Agent 请求的 eligibility 解析（复用 broker resolveCandidates，
+      // 含 operation restriction / Team visibility / 渠道门禁；fail closed 由复验链兜底）。
+      resolveTaskLinkedEligibleAgentIds: async (taskId) => {
+        try {
+          const resolution = await taskClaimBroker.resolveCandidates(taskId);
+          return resolution.candidates.filter((candidate) => candidate.eligible).map((candidate) => candidate.agentId);
+        } catch {
+          return [];
+        }
+      },
       ...(projectCollaborationRollout.managerAutoAdvance
         ? {
             onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {
@@ -2273,6 +2283,14 @@ function createDefaultApp(
     resolvePiHealthy,
     resolveProjectStageCandidates: (taskId, options) =>
       taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
+    resolveTaskLinkedEligibleAgentIds: async (taskId) => {
+      try {
+        const resolution = await taskClaimBroker.resolveCandidates(taskId);
+        return resolution.candidates.filter((candidate) => candidate.eligible).map((candidate) => candidate.agentId);
+      } catch {
+        return [];
+      }
+    },
     ...(projectCollaborationRollout.managerAutoAdvance
       ? {
           onProjectFactsChanged: async (scope: { teamId: string; channelId: string }) => {

@@ -1,4 +1,4 @@
-import type { EvidenceRefDto, InputBindingDeclarationDto, OutputSlotDeclarationDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus, TaskRequirementAttestationV1 } from '../../../../../packages/contracts/src/index.js';
+import type { EvidenceRefDto, FrozenProjectInputItemDto, InputBindingDeclarationDto, OutputSlotDeclarationDto, TaskOfferObjectiveDto, TaskOfferResponseRecordDto, TaskOfferStatus, TaskRequirementAttestationV1 } from '../../../../../packages/contracts/src/index.js';
 import type {
   EvidenceSnapshotRecord,
   OutputSnapshotRecord,
@@ -313,13 +313,14 @@ export function createSqliteTaskCoordinationRepositories(
           (id, team_id, task_id, agent_id, task_revision, task_attempt, manifest_revision,
            objective_json, offer_ttl_ms, offer_expires_at, hard_specified, requirement_confirmation,
            status, response_kind, response_detail, responded_at, response_attestation_json,
-           created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+           frozen_inputs_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.id, record.teamId, record.taskId, record.agentId, record.taskRevision,
             record.taskAttempt, record.manifestRevision, json(record.objective), record.offerTtlMs,
             record.offerExpiresAt, record.hardSpecified ? 1 : 0, record.requirementConfirmation ? 1 : 0,
             record.status,
-            ...responseColumns(record.response), record.createdAt, record.updatedAt);
+            ...responseColumns(record.response),
+            record.frozenInputs ? json(record.frozenInputs) : null, record.createdAt, record.updatedAt);
         return record;
       },
       async getById(id) {
@@ -497,6 +498,9 @@ function mapOffer(value: unknown): TaskOfferRecord | null {
     offerTtlMs: number(value, 'offer_ttl_ms'), offerExpiresAt: number(value, 'offer_expires_at'),
     hardSpecified: number(value, 'hard_specified') === 1,
     requirementConfirmation: number(value, 'requirement_confirmation') === 1,
+    ...(nullableText(value, 'frozen_inputs_json')
+      ? { frozenInputs: parse<FrozenProjectInputItemDto[]>(nullableText(value, 'frozen_inputs_json') as string) }
+      : {}),
     status: text(value, 'status') as TaskOfferStatus,
     response: (() => {
       if (!responseKind) return null;

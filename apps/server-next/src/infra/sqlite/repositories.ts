@@ -304,6 +304,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     // (0079 已被 #1063 占用,本票顺延 0080)。
     applyMigration(db, 'team/0080_artifact_version_revision.sql');
   }
+  // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
+  applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

@@ -8,6 +8,7 @@ import type {
   ProjectDocumentInputSetV1,
 } from './project-document-input-set.js';
 import type { ProjectStageInputFenceDto } from './project.js';
+import type { FrozenProjectInputItemDto } from './frozen-project-input.js';
 
 export type AgentInvocationTargetKind = 'custom' | 'agentos-hosted';
 
@@ -49,6 +50,11 @@ export interface AgentInvocationIntentV1 {
   readonly attachmentIds: readonly ID[];
   /** #829 项目阶段稳定输入精确 fence；属于 immutable intent 与 intentHash。 */
   readonly projectStageInputFence?: ProjectStageInputFenceDto;
+  /**
+   * #1064：冻结的项目输入（Task-linked 请求经 Offer/claim 带入）。写入后执行期间
+   * 不重新解析 current/final 指针；属于 immutable intent 与 intentHash。
+   */
+  readonly frozenInputs?: readonly FrozenProjectInputItemDto[];
   readonly deadlineAt?: UnixMs;
 }
 

@@ -67,6 +67,7 @@ export * from './workspace-apply-policy.js';
 export * from './archive-export-policy.js';
 export * from './device-agent-lifecycle-policy.js';
 export * from './task-failure-remediation-policy.js';
+export * from './task-linked-request-policy.js';
 export * from './system-activity-policy.js';
 export * from './system-activity-event-map.js';
 export * from './pi-authority-cutover-policy.js';

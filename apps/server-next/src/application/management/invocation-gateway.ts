@@ -8,6 +8,7 @@ import type {
   AcceptanceCriterionDto,
   DependencyResultRefDto,
   DispatchStatus,
+  FrozenProjectInputItemDto,
   MemoryCapsuleRefDto,
   ProjectDocumentInputSetItemV1,
   ProjectStageStableInputDto,
@@ -141,6 +142,15 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
           throw new InvocationGatewayError('INVOCATION_TARGET_FORBIDDEN');
         }
         const targetKind = agent.category === 'agentos-hosted' ? 'agentos-hosted' as const : 'custom' as const;
+        // #1064 AC7：从 claim 关联的 accepted Offer 取冻结输入（发送时刻解析的具体
+        // artifactVersionId + review/finalization basis），写入 immutable intent——
+        // 执行期间不重新解析 current/final，上游版本变化不改变本事实。
+        const claimFrozenInputs = await resolveClaimFrozenInputs(repositories, {
+          taskId: input.taskId,
+          taskRevision: input.expectedTaskRevision,
+          taskAttempt: input.taskAttempt,
+          agentId: authority.targetAgentId,
+        });
         const baseIntent: AgentInvocationIntentV1 = {
           schemaVersion: 1,
           teamId: run.teamId,
@@ -164,6 +174,7 @@ export function createInvocationGateway(dependencies: InvocationGatewayDependenc
               inputs: stableResolution.inputs,
             },
           }),
+          ...(claimFrozenInputs.length > 0 ? { frozenInputs: claimFrozenInputs } : {}),
           ...(input.memoryCapsuleRef && { memoryCapsuleRef: input.memoryCapsuleRef }),
           ...(input.deadlineAt !== undefined && { deadlineAt: input.deadlineAt }),
         };
@@ -757,6 +768,27 @@ function deriveStatus(status: DispatchStatus | undefined): AgentInvocationStatus
 
 function hashIntent(intent: AgentInvocationIntent): string {
   return createHash('sha256').update(canonicalizeAgentInvocationIntent(intent)).digest('hex');
+}
+
+/**
+ * #1064 AC7：从 claim 关联的 accepted Offer 取冻结输入。
+ * claim 与 offer 无直接外键（既有模型）；用 taskId+agentId+taskRevision 定位
+ * 该 claim 对应的 accepted offer（acceptance 时冻结的 frozenInputs 原样继承）。
+ * 无冻结输入（普通 subtask 路径）→ []（向后兼容，不改变既有 intent）。
+ */
+async function resolveClaimFrozenInputs(
+  repositories: ServerNextRepositories,
+  input: { taskId: string; taskRevision: number; taskAttempt: number; agentId: string },
+): Promise<readonly FrozenProjectInputItemDto[]> {
+  const offers = await repositories.taskCoordination.offers.listByTask(input.taskId);
+  // 按 taskAttempt 精确匹配当前 claim 对应的 accepted offer：remediation 翻 attempt 后
+  // 旧 attempt 的 accepted offer 不得遮蔽当前 claim 的冻结输入。
+  const accepted = offers.find((offer) =>
+    offer.agentId === input.agentId
+    && offer.taskRevision === input.taskRevision
+    && offer.taskAttempt === input.taskAttempt
+    && offer.status === 'accepted');
+  return accepted?.frozenInputs ?? [];
 }
 
 async function attachProjectDocumentInputSet(
