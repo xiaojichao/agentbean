@@ -1826,6 +1826,17 @@ export default function ChatPage() {
     if (taskMessage) openTaskDetail(taskMessage);
   }, [openTaskDetail, visibleMessages]);
 
+  // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
+  // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
+  const continueWithAgentFromCard = useCallback((packageId: string, taskTitle?: string) => {
+    setInput(taskTitle ? `请基于交付文件包继续处理任务「${taskTitle}」：` : '请基于交付文件包继续处理：');
+    setProjectReferenceSelections((current) => [
+      ...current.filter((item) => item.kind !== 'package_projection' || item.packageId !== packageId),
+      { kind: 'package_projection', packageId, policy: 'delivered' },
+    ]);
+    textareaRef.current?.focus();
+  }, [setProjectReferenceSelections]);
+
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
     setChatTaskMenuTarget(null);
@@ -2288,6 +2299,7 @@ export default function ChatPage() {
                         onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
+                        onContinueWithAgent={continueWithAgentFromCard}
                         onOpenTaskDetailById={openTaskDetailById}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -2631,6 +2643,7 @@ export default function ChatPage() {
             onViewInChannel={viewThreadRootInChannel}
             onClose={closeThread}
             onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
+            onContinueWithAgent={continueWithAgentFromCard}
           />
         </>
       )}
@@ -4115,6 +4128,7 @@ function ThreadPanel({
   onViewInChannel,
   onClose,
   onReviseVersion,
+  onContinueWithAgent,
 }: {
   width: number;
   root: ChatMessage;
@@ -4169,6 +4183,8 @@ function ThreadPanel({
   onClose: () => void;
   /** #1062 「基于此修改」:成员可修订时打开修订编辑器(Server 动作驱动)。 */
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
+  /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
+  onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
@@ -4288,6 +4304,7 @@ function ThreadPanel({
         onTaskMenu={(open) => onTaskMenu(open && task ? msg.id : null)}
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
         onReviseVersion={onReviseVersion}
+        onContinueWithAgent={onContinueWithAgent}
         replyCount={replyCount}
         showReplyAction={false}
         showReplyCount={false}
@@ -4658,6 +4675,7 @@ function ChatBubble({
   onTaskMenu,
   onTaskStatus,
   onReviseVersion,
+  onContinueWithAgent,
   replyCount,
   showReplyAction = true,
   showReplyCount = true,
@@ -4697,6 +4715,8 @@ function ChatBubble({
   onTaskStatus?: (status: TaskStatus) => void;
   /** #1062 「基于此修改」:成员可修订时打开修订编辑器(Server 动作驱动)。 */
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
+  /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
+  onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
   replyCount: number;
   showReplyAction?: boolean;
   showReplyCount?: boolean;
@@ -5049,6 +5069,10 @@ function ChatBubble({
             channelId={msg.channelId}
             onAddReference={onAddPackageReference}
             onReviseVersion={(request) => onReviseVersion?.({ ...request, channelId: msg.channelId })}
+            // #1065 AC2：「打开审核 Task」导航到 Task 详情;「继续 @Agent」只预填
+            // composer(delivered 整包引用 + 说明文本 + 焦点),未发送不创建任何事实。
+            onOpenTask={onOpenTaskDetailById}
+            onContinueWithAgent={onContinueWithAgent}
           />
         )}
         {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (

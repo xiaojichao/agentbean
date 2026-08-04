@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Clock, Package, PackageOpen } from 'lucide-react';
+import { reviewStateLabel } from '@/lib/delivery-labels';
 import type {
   OutputPackagePendingDeliveryDto,
   OutputPackageSummaryDto,
@@ -15,13 +16,7 @@ import type {
  * 收敛中)——UI 只显示「交付处理中」,不伪造完整交付(#1060 AC8)。
  * 本组件是纯展示投影,不承载业务状态、不推进 Task。
  */
-/** #1061 AC11：Server 计算的聚合审核状态标签(客户端不推断)。 */
-const REVIEW_STATE_LABELS: Record<string, string> = {
-  pending: '待审核',
-  approved: '已通过',
-  changes_requested: '要求修改',
-  rejected: '已拒绝',
-};
+// #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射)。
 
 export function OutputPackageList({
   packages,
@@ -57,7 +52,7 @@ export function OutputPackageList({
               className="shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600"
               data-smoke="output-package-review-state"
             >
-              {REVIEW_STATE_LABELS[pkg.reviewState] ?? pkg.reviewState}
+              {reviewStateLabel(pkg.reviewState)}
             </span>
             <span className="ml-auto text-xs text-neutral-500">
               {pkg.taskBinding === 'managed' && pkg.taskRevision !== undefined

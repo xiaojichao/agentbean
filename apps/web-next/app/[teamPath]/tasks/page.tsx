@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, projectEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
+import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { WEB_EVENTS, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
@@ -1160,12 +1161,24 @@ function TaskThreadPanel({
             ? <TaskDagPanel dag={taskDag} teamPath={teamPath} />
             : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
         {teamId && task.channelId ? (
-          <TaskOutputPackageSummary
-            teamId={teamId}
-            channelId={task.channelId}
-            taskId={task.id}
-            onPackages={onPackages}
-          />
+          <>
+            {/* #1065 AC3/AC4：交付视图(目标/acceptance/焦点/availableActions/时间线) */}
+            <TaskDeliveryOverview
+              teamId={teamId}
+              channelId={task.channelId}
+              taskId={task.id}
+              onAction={(action) => {
+                // #1065 AC9：可发现性动作;delegate 复用 #1064 预填导航,其余动作由 Server 复验。
+                if (action === 'delegate-to-agent') onDelegateToAgent();
+              }}
+            />
+            <TaskOutputPackageSummary
+              teamId={teamId}
+              channelId={task.channelId}
+              taskId={task.id}
+              onPackages={onPackages}
+            />
+          </>
         ) : null}
         {teamId && userId ? (
           <TaskSystemActivitySection
