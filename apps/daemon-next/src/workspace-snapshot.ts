@@ -154,7 +154,9 @@ export async function materializeDeviceWorkspaceSnapshot(
   }
   try {
     for (const item of snapshot.inputSet.items) {
-      const url = `${trimTrailingSlash(input.serverUrl)}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/${encodeURIComponent(item.artifactId)}/download?artifactVersionId=${encodeURIComponent(item.artifactVersionId)}`;
+      // #1056：跨 Team 下载按 snapshot 冻结的执行 Agent 逐 Agent 授权（服务端复验
+      // 该 Agent 的 device 绑定 + visibleTeamIds + Channel membership）。
+      const url = `${trimTrailingSlash(input.serverUrl)}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/${encodeURIComponent(item.artifactId)}/download?artifactVersionId=${encodeURIComponent(item.artifactVersionId)}&agentId=${encodeURIComponent(snapshot.provenance.agentId)}`;
       let response: Response;
       try {
         response = await fetchFn(url, { headers: { Authorization: `Bearer ${input.token}` } });

@@ -838,7 +838,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const downloaded = await downloadAttachments(
               // #1053：附件属于 dispatch 目标频道（request.teamId 的 request.channelId），
               // 与 snapshot 下载同源；跨 Team 可见 Agent 不能回 Device primary Team 下载。
-              { serverUrl, token: device.token, teamId: request.teamId, inputDir: workspace.inputDir, fetch: fetchFn },
+              { serverUrl, token: device.token, teamId: request.teamId, inputDir: workspace.inputDir, fetch: fetchFn, agentId: request.agentId },
               request.attachments,
             );
             if (downloaded.length > 0) {
@@ -966,6 +966,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                   // 回 Device primary Team 查询/发布。
                   teamId: request.teamId,
                   channelId: request.channelId,
+                  agentId: request.agentId,
                   fetch: fetchFn,
                 });
                 if (current.ok) baselineRevisionId = current.currentRevisionId;
@@ -1086,6 +1087,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                     // #1056：legacy upload 同样归属 dispatch 目标 Team。
                     teamId: request.teamId,
                     channelId: request.channelId,
+                    agentId: request.agentId,
                     fetch: fetchFn,
                     maxBytes: input.artifactMaxBytes,
                     maxTotalBytes: input.artifactRunMaxBytes,

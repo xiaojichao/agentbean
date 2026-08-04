@@ -387,6 +387,7 @@ interface CrossTeamSeed {
   agentId: string;
   baselineRevisionId: string;
   close: () => void;
+  globalDb?: DatabaseWithClose;
 }
 
 async function seedCrossTeam(variant: (typeof variants)[number]): Promise<CrossTeamSeed> {
@@ -449,6 +450,7 @@ async function seedCrossTeam(variant: (typeof variants)[number]): Promise<CrossT
     agentId,
     baselineRevisionId: workspace.workspace.currentRevisionId,
     close,
+    ...(globalDb ? { globalDb } : {}),
   };
 }
 
@@ -499,11 +501,12 @@ for (const variant of variants) {
       expect(committed).toMatchObject({ ok: true, staging: { status: 'committed' } });
       if (!committed.ok) throw new Error(committed.error);
       expect(committed.workspace?.currentRevision?.files.some((f) => f.path === 'out/result.txt')).toBe(true);
-      // legacy upload（非投影产物）跨 Team 同样放行。
+      // legacy upload（非投影产物）跨 Team 按声明的执行 Agent 逐 Agent 授权放行。
       const uploaded = await seedValue.app.uploadArtifactForDevice({
         token: seedValue.deviceA.token,
         teamId: seedValue.teamB,
         channelId: seedValue.channelId,
+        agentId: seedValue.agentId,
         filename: 'note.md',
         mimeType: 'text/markdown',
         sizeBytes: 3,
@@ -716,6 +719,96 @@ for (const variant of variants) {
         files: planFiles(),
       });
       expect(plain).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    });
+
+    test('codex P1：同设备其他 Agent 是成员不代表本次执行 Agent 有权上传', async () => {
+      seedValue = await seedCrossTeam(variant);
+      // 同一 Device 上的另一个 Agent：可见 Team B 但不是频道成员（模拟本次执行
+      // Agent 已被移出/从未加入，而设备上另一个 Agent 仍是成员的场景）。
+      await seedValue.repositories.agents.upsert({
+        id: 'agent-cross-not-member', primaryTeamId: seedValue.teamA,
+        visibleTeamIds: seedValue.globalDb ? [seedValue.teamA] : [seedValue.teamA, seedValue.teamB],
+        name: 'not-member-agent', source: 'discovered', category: 'agentos-hosted',
+        adapterKind: 'hermes', ownerId: seedValue.ownerA, deviceId: seedValue.deviceA.id,
+        status: 'online', lastSeenAt: 1000,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      // sqlite 变体：补发布行使该 Agent 可见 Team B（但仍不是频道成员）——
+      // 精确复现 codex 场景：可见但非成员的 Agent 上传必须失败，即使同设备
+      // 另一个 Agent（agent-cross-publish）是成员。
+      seedValue.globalDb?.prepare(
+        'INSERT OR IGNORE INTO agent_publications (agent_id, team_id, published_by, published_at) VALUES (?, ?, ?, ?)',
+      ).run('agent-cross-not-member', seedValue.teamB, seedValue.ownerA, 1);
+      const uploaded = await seedValue.app.uploadArtifactForDevice({
+        token: seedValue.deviceA.token,
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+        agentId: 'agent-cross-not-member',
+        filename: 'note.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 3,
+        storagePath: 'x/note.md',
+      });
+      expect(uploaded).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      // 未声明执行 Agent 也拒绝。
+      const anonymous = await seedValue.app.uploadArtifactForDevice({
+        token: seedValue.deviceA.token,
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+        filename: 'note.md',
+        mimeType: 'text/markdown',
+        sizeBytes: 3,
+        storagePath: 'x/note.md',
+      });
+      expect(anonymous).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    });
+
+    test('codex P1：跨 Team baseline 查询（materialize）按声明的执行 Agent 逐 Agent 授权', async () => {
+      seedValue = await seedCrossTeam(variant);
+      // 声明执行 Agent：返回目标 Team 的 current revision manifest。
+      const ok = await seedValue.app.materializeProjectChannelWorkspace({
+        token: seedValue.deviceA.token,
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+        agentId: seedValue.agentId,
+      });
+      expect(ok).toMatchObject({ ok: true });
+      if (!ok.ok) throw new Error(ok.error);
+      expect(ok.workspace.currentRevisionId).toBe(seedValue.baselineRevisionId);
+      // 未声明执行 Agent：FORBIDDEN。
+      const anonymous = await seedValue.app.materializeProjectChannelWorkspace({
+        token: seedValue.deviceA.token,
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+      });
+      expect(anonymous).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      // 声明非成员 Agent：FORBIDDEN。
+      await seedValue.repositories.agents.upsert({
+        id: 'agent-x-not-member-2', primaryTeamId: seedValue.teamA,
+        visibleTeamIds: seedValue.globalDb ? [seedValue.teamA] : [seedValue.teamA, seedValue.teamB],
+        name: 'not-member-2', source: 'discovered', category: 'agentos-hosted',
+        adapterKind: 'hermes', ownerId: seedValue.ownerA, deviceId: seedValue.deviceA.id,
+        status: 'online', lastSeenAt: 1000,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      seedValue.globalDb?.prepare(
+        'INSERT OR IGNORE INTO agent_publications (agent_id, team_id, published_by, published_at) VALUES (?, ?, ?, ?)',
+      ).run('agent-x-not-member-2', seedValue.teamB, seedValue.ownerA, 1);
+      const notMember = await seedValue.app.materializeProjectChannelWorkspace({
+        token: seedValue.deviceA.token,
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+        agentId: 'agent-x-not-member-2',
+      });
+      expect(notMember).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      // 无效 token：UNAUTHENTICATED。
+      const bad = await seedValue.app.materializeProjectChannelWorkspace({
+        token: 'abn_device.garbage.sig',
+        teamId: seedValue.teamB,
+        channelId: seedValue.channelId,
+        agentId: seedValue.agentId,
+      });
+      expect(bad).toMatchObject({ ok: false, error: 'UNAUTHENTICATED' });
     });
   });
 }

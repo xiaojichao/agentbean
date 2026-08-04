@@ -19,6 +19,8 @@ export interface DownloadAttachmentsInput {
   teamId: string;
   inputDir: string;
   fetch?: typeof fetch;
+  /** #1056：本次执行 Agent——跨 Team 下载服务端按该 Agent 逐 Agent 授权。 */
+  agentId?: string;
 }
 
 export function safeAttachmentFilename(filename: string): string {
@@ -39,7 +41,7 @@ export async function downloadAttachments(
   const fetchFn = input.fetch ?? fetch;
   const results: DownloadedAttachment[] = [];
   for (const attachment of attachments) {
-    const url = `${input.serverUrl}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/${encodeURIComponent(attachment.id)}/download`;
+    const url = `${input.serverUrl}/api/teams/${encodeURIComponent(input.teamId)}/artifacts/${encodeURIComponent(attachment.id)}/download${input.agentId ? `?agentId=${encodeURIComponent(input.agentId)}` : ''}`;
     try {
       const response = await fetchFn(url, { headers: { Authorization: `Bearer ${input.token}` } });
       if (!response.ok) {
