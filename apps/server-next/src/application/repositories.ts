@@ -583,6 +583,8 @@ export interface ServerNextRepositories {
   workspacePublishStagings: WorkspacePublishStagingRepository;
   /** #1060 一次成功 Agent 交付的可审核 OutputPackage(创建后不可变)。 */
   outputPackages: import('./output-package-repositories.js').OutputPackageRepository;
+  /** #1061 文件审核/验收/最终化命令的幂等 receipt(review 落库复用 channelProjects)。 */
+  packageReviews: import('./package-review-repositories.js').PackageReviewRepository;
   deviceWorkspaceSnapshots: DeviceWorkspaceSnapshotRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;

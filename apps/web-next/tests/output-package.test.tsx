@@ -118,6 +118,7 @@ describe('OutputPackageList (#1060)', () => {
         taskRevision: 3,
         taskAttempt: 2,
         memberCount: 2,
+        reviewState: 'pending',
         status: 'recorded',
         createdAt: 1000,
       }]}

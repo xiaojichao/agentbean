@@ -519,6 +519,22 @@ export function registerWebSocketHandlers(
     // `manager` 只能由受信 Server Manager 入口注入，不能接受 Web 客户端自报身份。
     augmentInput: withoutManagerContext,
   });
+  // #1061 文件审核/Task 验收/finalization 组合命令只暴露在已认证的人类 Web 会话上(AC2/AC11)。
+  bind(socket, WEB_EVENTS.project.submitPackageArtifactReview, app, 'submitPackageArtifactReview',
+    (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    });
+  bind(socket, WEB_EVENTS.project.submitPackageReviewAndFinalize, app, 'submitPackageReviewAndFinalize',
+    (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    });
+  bind(socket, WEB_EVENTS.project.submitPackageReviewAndRejectDelivery, app, 'submitPackageReviewAndRejectDelivery',
+    (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    });
   bind(socket, WEB_EVENTS.project.documentBundles, app, 'listProjectDocumentBundles', undefined, {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,

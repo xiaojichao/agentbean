@@ -178,6 +178,8 @@ async function createReviewHarness() {
     requiredCapabilities: [],
     acceptanceCriteria: [{ id: 'criterion-root', description: 'root done', evidenceRequired: false }],
     maxAttempts: 1,
+    // #1061 AC4：root Human review authority 创建时预绑定（验收人为 user-1）。
+    humanReviewAuthorityIds: ['user-1'],
   });
 
   await repositories.tasks.update({

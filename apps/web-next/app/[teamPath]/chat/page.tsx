@@ -4762,7 +4762,7 @@ function ChatBubble({
           />
         )}
         {!isDeleted && !editing && outputPackageFromMeta(msg.meta) && (
-          <OutputPackageCard packageMeta={outputPackageFromMeta(msg.meta)!} />
+          <OutputPackageCard packageMeta={outputPackageFromMeta(msg.meta)!} channelId={msg.channelId} />
         )}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">

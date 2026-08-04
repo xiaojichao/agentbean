@@ -24,15 +24,18 @@ export function createSqliteTaskCoordinationRepositories(
           (task_id, team_id, management_run_id, root_task_id, parent_task_id, node_kind,
            review_policy, claim_policy, required_capabilities_json, required_skills_json,
            preferred_skills_json, output_slots_json, input_bindings_json, atomicity_hint,
+           human_acceptance_authority_ids_json,
            task_revision, attempt, max_attempts, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .run(record.taskId, record.teamId, record.managementRunId, record.rootTaskId ?? null,
             record.parentTaskId ?? null, record.nodeKind, record.reviewPolicy, record.claimPolicy,
             json(record.requiredCapabilities), record.requiredSkills ? json(record.requiredSkills) : null,
             record.preferredSkills ? json(record.preferredSkills) : null,
             record.outputSlots ? json(record.outputSlots) : null,
             record.inputBindings ? json(record.inputBindings) : null,
-            record.atomicityHint ?? null, record.taskRevision, record.attempt, record.maxAttempts,
+            record.atomicityHint ?? null,
+            record.humanAcceptanceAuthorityIds ? json(record.humanAcceptanceAuthorityIds) : '[]',
+            record.taskRevision, record.attempt, record.maxAttempts,
             record.createdAt, record.updatedAt);
         return record;
       },
@@ -50,6 +53,7 @@ export function createSqliteTaskCoordinationRepositories(
           management_run_id = ?, root_task_id = ?, parent_task_id = ?, node_kind = ?,
           review_policy = ?, claim_policy = ?, required_capabilities_json = ?, required_skills_json = ?,
           preferred_skills_json = ?, output_slots_json = ?, input_bindings_json = ?, atomicity_hint = ?,
+          human_acceptance_authority_ids_json = ?,
           task_revision = ?, attempt = ?, max_attempts = ?, updated_at = ?
           WHERE task_id = ? AND task_revision = ?`)
           .run(record.managementRunId, record.rootTaskId ?? null, record.parentTaskId ?? null,
@@ -58,6 +62,7 @@ export function createSqliteTaskCoordinationRepositories(
             record.preferredSkills ? json(record.preferredSkills) : null,
             record.outputSlots ? json(record.outputSlots) : null,
             record.inputBindings ? json(record.inputBindings) : null, record.atomicityHint ?? null,
+            record.humanAcceptanceAuthorityIds ? json(record.humanAcceptanceAuthorityIds) : '[]',
             record.taskRevision, record.attempt, record.maxAttempts, record.updatedAt, record.taskId,
             input.expectedTaskRevision);
         return changes(result) === 1 ? record : null;
@@ -451,6 +456,8 @@ function mapCoordination(value: unknown): TaskCoordinationRecord | null {
     inputBindings: nullableText(value, 'input_bindings_json')
       ? parse<InputBindingDeclarationDto[]>(text(value, 'input_bindings_json')) : [],
     atomicityHint: nullableText(value, 'atomicity_hint') as TaskCoordinationRecord['atomicityHint'],
+    humanAcceptanceAuthorityIds: nullableText(value, 'human_acceptance_authority_ids_json')
+      ? parse<string[]>(text(value, 'human_acceptance_authority_ids_json')) : [],
     taskRevision: number(value, 'task_revision'), attempt: number(value, 'attempt'),
     maxAttempts: number(value, 'max_attempts'),
     createdAt: number(value, 'created_at'), updatedAt: number(value, 'updated_at'),

@@ -599,6 +599,7 @@ export function createPromotionGateHandler(
         });
 
         // Root coordination（task-coordination-kernel.ts:152-157 字段）
+        // #1061 AC4：root Human review authority 创建时预绑定 = requester。
         await repos.coordination.coordinations.create({
           schemaVersion: 1,
           taskId,
@@ -609,6 +610,7 @@ export function createPromotionGateHandler(
           reviewPolicy: 'human',
           claimPolicy: 'open',
           requiredCapabilities: [],
+          humanAcceptanceAuthorityIds: [requesterId],
           taskRevision: task.revision,
           attempt: 1,
           maxAttempts: 3,

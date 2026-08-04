@@ -1,6 +1,7 @@
 import type {
   ChannelProjectOverviewDto,
   ID,
+  PackageReviewAuthorityBasisKind,
   ProjectArtifactFinalizationActorKind,
   ProjectArtifactHumanConfirmationRefDto,
   ProjectArtifactLineageRefDto,
@@ -166,7 +167,19 @@ export interface ProjectArtifactReviewRecord {
   channelId: ID;
   collectionId: ID;
   versionId: ID;
-  stageId: ID;
+  /**
+   * #1061：受审版本所属 Stage，写入时从版本自身读取。可空——#1060 交付形成的版本可能
+   * 无 Stage 来源(0076)；#824 人工 promote 路径仍有 Stage。
+   */
+  stageId?: ID;
+  /** #1061 AC1：审核绑定的 package 上下文（交付来源）。人工 promote 路径无 package。 */
+  packageId?: ID;
+  deliveryId?: ID;
+  taskId?: ID;
+  taskRevision?: number;
+  taskAttempt?: number;
+  /** #1061 AC1：本次审核依据的 authority basis（审计区分三类事实来源）。 */
+  authorityBasis: PackageReviewAuthorityBasisKind;
   decision: ProjectArtifactReviewDecision;
   comment: string;
   basis: ProjectArtifactReviewBasisRefDto[];

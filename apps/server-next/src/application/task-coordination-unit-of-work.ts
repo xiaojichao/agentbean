@@ -10,6 +10,7 @@ import type {
 import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import type { PromotionGateRepositories } from './promotion-gate-repositories.js';
 import type { TaskLifecycleRepositories } from './task-lifecycle-repositories.js';
+import type { PackageReviewRepository } from './package-review-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -32,6 +33,12 @@ export interface TaskCoordinationTransactionRepositories {
    * status change + event + receipt + tombstone。
    */
   readonly lifecycle: TaskLifecycleRepositories;
+  /**
+   * #1061 Package review：文件审核/验收/最终化命令的 review 落库与幂等 receipt。
+   * 挂在本 UoW 上，使 review-and-reject-delivery 组合命令能在单事务里原子提交
+   * review 记录 + Task transition(AC6)。
+   */
+  readonly packageReviews: PackageReviewRepository;
 }
 
 export interface TaskCoordinationUnitOfWork {

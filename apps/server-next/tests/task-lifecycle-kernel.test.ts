@@ -276,6 +276,8 @@ async function createHarness(repositories: ServerNextRepositories) {
     claimPolicy: 'open' as const, requiredCapabilities: [],
     acceptanceCriteria: [{ id: 'criterion-root', description: 'root done', evidenceRequired: false }],
     maxAttempts: 1,
+    // #1061 AC4：root Human review authority 创建时预绑定（human accept 测试的 actor）。
+    humanReviewAuthorityIds: ['worker-1'],
   });
 
   const lifecycleDeps: TaskLifecycleKernelDependencies = {

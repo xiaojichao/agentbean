@@ -217,6 +217,10 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.promoteArtifact,
       WEB_EVENTS.project.submitArtifactReview,
       WEB_EVENTS.project.setArtifactFinalVersion,
+      // #1061 package review 三个命令(人类审核/组合验收/最终化)。
+      WEB_EVENTS.project.submitPackageArtifactReview,
+      WEB_EVENTS.project.submitPackageReviewAndFinalize,
+      WEB_EVENTS.project.submitPackageReviewAndRejectDelivery,
       WEB_EVENTS.project.documentBundles,
       WEB_EVENTS.project.documentBundle,
       WEB_EVENTS.project.createDocumentBundle,

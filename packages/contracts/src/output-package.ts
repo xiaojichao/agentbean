@@ -1,6 +1,8 @@
 import type { ID, UnixMs } from './common.js';
 import { COMMAND_PROVENANCE_KINDS, type CommandProvenanceKind, type CommandProvenanceRefV1 } from './message-tracer.js';
 import type { ConsistencyTokenV1 } from './system-activity.js';
+import { PACKAGE_REVIEW_ACTIONS, type PackageReviewAction } from './package-review.js';
+import type { ProjectArtifactVersionReviewState } from './project.js';
 
 /**
  * OutputPackage 命令/查询合同(issue #1060,父规格 #1059 §3/§4/§9/§10;ADR-0067 Command registry)。
@@ -176,6 +178,22 @@ export interface OutputPackageDto {
   readonly createdAt: UnixMs;
 }
 
+/**
+ * #1061 AC11：package 成员的可执行动作（Server 计算）。
+ * `actions` 为空数组 = 当前用户无任何审核/验收/最终化权（客户端不显示任何按钮）。
+ */
+export interface PackageMemberAvailableActionsDto {
+  readonly collectionId: ID;
+  readonly versionId: ID;
+  /** 成员版本的最新审核状态（Server 派生，客户端不推断）。 */
+  readonly reviewState: ProjectArtifactVersionReviewState;
+  /** 集合 final 指针是否为该版本（Server 事实）。 */
+  readonly isFinalVersion: boolean;
+  /** 集合当前 revision（AC9 组合命令的 fence，Server 事实，客户端不推断）。 */
+  readonly collectionRevision: number;
+  readonly actions: readonly PackageReviewAction[];
+}
+
 /** Files/Task 投影用的包摘要(与 OutputPackageDto 同源,不含成员明细)。 */
 export interface OutputPackageSummaryDto {
   readonly schemaVersion: 1;
@@ -192,6 +210,12 @@ export interface OutputPackageSummaryDto {
   readonly taskRevision?: number;
   readonly taskAttempt: number;
   readonly memberCount: number;
+  /**
+   * #1061 AC11：全部成员 reviewState 的聚合(Server 计算)。
+   * 任一 rejected → rejected;任一 changes_requested → changes_requested;
+   * 全部 approved → approved;否则 pending。客户端不自行推断。
+   */
+  readonly reviewState: ProjectArtifactVersionReviewState;
   readonly status: 'recorded';
   readonly createdAt: UnixMs;
 }
@@ -327,6 +351,11 @@ export interface OutputPackageQueryInputMapV1 {
 export interface OutputPackageQueryOutputMapV1 {
   readonly 'get-output-package': {
     readonly package: OutputPackageDto;
+    /**
+     * #1061 AC11：Server 按当前用户计算的可执行动作（成员级）。
+     * 客户端只渲染 Server 给出的动作，绝不依据按钮可见性或角色名称推断权限。
+     */
+    readonly availableActions: readonly PackageMemberAvailableActionsDto[];
   };
   readonly 'list-channel-output-packages': {
     readonly packages: readonly OutputPackageSummaryDto[];
@@ -468,10 +497,14 @@ function assertSummaryDto(value: unknown): void {
   assertExactKeys(value,
     ['schemaVersion', 'packageId', 'teamId', 'channelId', 'revision', 'deliveryId', 'publishId',
       'workspaceRevisionId', 'agentId', 'taskId', 'taskBinding', 'taskRevision', 'taskAttempt',
-      'memberCount', 'status', 'createdAt'],
+      'memberCount', 'reviewState', 'status', 'createdAt'],
     ['schemaVersion', 'packageId', 'teamId', 'channelId', 'revision', 'deliveryId', 'publishId',
       'workspaceRevisionId', 'agentId', 'taskId', 'taskBinding', 'taskAttempt',
-      'memberCount', 'status', 'createdAt']);
+      'memberCount', 'reviewState', 'status', 'createdAt']);
+  if (value.reviewState !== 'pending' && value.reviewState !== 'approved'
+    && value.reviewState !== 'rejected' && value.reviewState !== 'changes_requested') {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
   if (value.schemaVersion !== 1) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
   assertId(value.packageId);
   assertId(value.teamId);
@@ -490,6 +523,26 @@ function assertSummaryDto(value: unknown): void {
   assertInteger(value.memberCount, 0);
   if (value.status !== 'recorded') throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
   assertInteger(value.createdAt, 0);
+}
+
+function assertMemberAvailableActions(value: unknown): void {
+  assertExactKeys(value,
+    ['collectionId', 'versionId', 'reviewState', 'isFinalVersion', 'collectionRevision', 'actions'],
+    ['collectionId', 'versionId', 'reviewState', 'isFinalVersion', 'collectionRevision', 'actions']);
+  assertId(value.collectionId);
+  assertId(value.versionId);
+  if (value.reviewState !== 'pending' && value.reviewState !== 'approved'
+    && value.reviewState !== 'rejected' && value.reviewState !== 'changes_requested') {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
+  if (typeof value.isFinalVersion !== 'boolean') throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  assertInteger(value.collectionRevision, 1);
+  if (!Array.isArray(value.actions)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  for (const action of value.actions) {
+    if (!PACKAGE_REVIEW_ACTIONS.includes(action as PackageReviewAction)) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+  }
 }
 
 function assertPendingDeliveryDto(value: unknown): void {
@@ -680,8 +733,12 @@ export function parseOutputPackageQueryResponseV1(value: unknown): OutputPackage
     }
     const result = value.result as Record<string, unknown>;
     if (value.queryName === 'get-output-package') {
-      assertExactKeys(result, ['queryName', 'package'], ['queryName', 'package']);
+      assertExactKeys(result, ['queryName', 'package', 'availableActions'], ['queryName', 'package']);
       assertPackageDto(result.package);
+      if (result.availableActions !== undefined) {
+        if (!Array.isArray(result.availableActions)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+        result.availableActions.forEach(assertMemberAvailableActions);
+      }
     } else {
       assertExactKeys(result, ['queryName', 'packages', 'pendingDeliveries', 'nextCursor'],
         ['queryName', 'packages', 'pendingDeliveries']);

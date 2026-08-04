@@ -1,5 +1,22 @@
 'use client';
-import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type PublicPiHealthDto, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto } from '@agentbean/contracts';
+
+/** #1061 三个 package review 命令的 socket payload(userId/teamId 由 Server 注入)。 */
+export type PackageReviewCommandSocketPayload = {
+  channelId: string;
+  packageId: string;
+  collectionId: string;
+  versionId: string;
+  decision: PackageReviewDto['decision'];
+  comment: string;
+  idempotencyKey: string;
+  expectedCollectionRevision?: number;
+  expectedTaskRevision?: number;
+  expectedTaskAttempt?: number;
+  rejectReason?: string;
+};
+
+export type { PackageMemberAvailableActionsDto, PackageReviewAction };
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
@@ -1000,6 +1017,35 @@ export interface ProjectEvents {
   getOutputPackage(payload: { channelId: string; packageId: string }): Promise<{
     ok: boolean;
     package?: OutputPackageDto;
+    /** #1061 AC11:Server 按当前用户计算的可执行动作(web 只渲染 Server 给的动作)。 */
+    availableActions?: PackageMemberAvailableActionsDto[];
+    error?: string;
+    message?: string;
+  }>;
+  /** #1061 AC1:对 package 成员版本提交审核(approved/changes_requested/rejected)。 */
+  submitPackageArtifactReview(payload: Omit<PackageReviewCommandSocketPayload, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    review?: PackageReviewDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
+  /** #1061 AC9:"通过并设为最终版"(一个事务两个独立事实)。 */
+  submitPackageReviewAndFinalize(payload: Omit<PackageReviewCommandSocketPayload, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    review?: PackageReviewDto;
+    finalization?: ProjectArtifactFinalizationDto;
+    collection?: ProjectArtifactCollectionDto;
+    replayed?: boolean;
+    error?: string;
+    message?: string;
+  }>;
+  /** #1061 AC6:审核(changes_requested/rejected)与退回 Task delivery 原子提交。 */
+  submitPackageReviewAndRejectDelivery(payload: Omit<PackageReviewCommandSocketPayload, 'userId' | 'teamId'>): Promise<{
+    ok: boolean;
+    review?: PackageReviewDto;
+    task?: { taskId: string; taskRevision: number; taskAttempt: number; status: string };
+    replayed?: boolean;
     error?: string;
     message?: string;
   }>;
@@ -1085,6 +1131,15 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     getOutputPackage(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.getOutputPackage, payload);
+    },
+    submitPackageArtifactReview(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageArtifactReview, payload);
+    },
+    submitPackageReviewAndFinalize(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageReviewAndFinalize, payload);
+    },
+    submitPackageReviewAndRejectDelivery(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageReviewAndRejectDelivery, payload);
     },
     documentBundles(channelId) {
       return emitWithTimeout(socket, WEB_EVENTS.project.documentBundles, { channelId });
