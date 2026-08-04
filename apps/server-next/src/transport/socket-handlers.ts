@@ -535,6 +535,12 @@ export function registerWebSocketHandlers(
       authenticatedUser: options.authenticatedUser,
       requireAuthenticatedUser: true,
     });
+  // #1062 基于明确版本保存 Markdown 修订(人类 Web 会话;stale → 结构化 conflict)。
+  bind(socket, WEB_EVENTS.project.saveArtifactVersionRevision, app, 'saveArtifactVersionRevision',
+    (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    });
   bind(socket, WEB_EVENTS.project.documentBundles, app, 'listProjectDocumentBundles', undefined, {
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,

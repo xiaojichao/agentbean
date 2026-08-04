@@ -251,6 +251,8 @@ export const WEB_EVENTS = {
     submitPackageReviewAndRejectDelivery: 'project:submit-package-review-and-reject-delivery',
     /** #1061 package 审核/最终版事实变化后的推送(三投影刷新)。 */
     packageReviewUpdated: 'project:package-review-updated',
+    /** #1062 基于明确版本保存 Markdown 修订(原子产生新版本并移动 current)。 */
+    saveArtifactVersionRevision: 'project:save-artifact-version-revision',
   },
   dm: {
     start: 'dm:start',

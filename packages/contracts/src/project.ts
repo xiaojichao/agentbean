@@ -376,10 +376,29 @@ export interface ProjectArtifactVersionDto {
   lineage: ProjectArtifactLineageRefDto[];
   promotedBy: ID;
   createdAt: UnixMs;
+  /**
+   * #1062 修订 provenance:本版本由「基于此修改」产生时记录冻结依据
+   * (来源版本/审核/package/delivery);交付形成或人工 promote 的版本为空。
+   */
+  revisionBasis?: ProjectArtifactVersionRevisionBasisDto;
   /** #824 该版本的完整审核历史，按时间升序；append-only。 */
   reviews: ProjectArtifactReviewDto[];
   /** #824 由 `reviews` 最新一条派生的审核状态。 */
   reviewState: ProjectArtifactVersionReviewState;
+}
+
+/**
+ * #1062 修订 provenance:新版本保留从旧 version、review、Task delivery 派生的 lineage;
+ * 短标识或「刚才那个」不充当长期身份。
+ */
+export interface ProjectArtifactVersionRevisionBasisDto {
+  /** 基于此修改的明确来源版本。 */
+  revisedFromVersionId: ID;
+  /** 回应的 rejected/changes_requested 审核记录。 */
+  basisReviewId?: ID;
+  /** 来源 package / delivery(冻结成员身份)。 */
+  packageId?: ID;
+  deliveryId?: ID;
 }
 
 export interface ProjectArtifactCollectionDto {

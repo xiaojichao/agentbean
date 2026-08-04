@@ -160,6 +160,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const outputPackageTombstones = new Map<string, import('../../application/output-package-repositories.js').OutputPackageTombstoneRecord>();
   const packageReviewReceipts = new Map<string, import('../../application/package-review-repositories.js').PackageReviewReceiptRecord>();
   const packageReviewTombstones = new Map<string, import('../../application/package-review-repositories.js').PackageReviewTombstoneRecord>();
+  const artifactRevisionReceipts = new Map<string, import('../../application/artifact-revision-repositories.js').ArtifactRevisionReceiptRecord>();
+  const artifactRevisionTombstones = new Map<string, import('../../application/artifact-revision-repositories.js').ArtifactRevisionTombstoneRecord>();
   const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
   const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
   const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
@@ -2626,10 +2628,54 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         },
       },
     },
+    artifactRevisions: {
+      async recordArtifactVersionRevision(input) {
+        // 幂等:同 key 同 hash → replay(返回首次版本);异 hash → conflict。
+        const receiptKey = `${input.teamId}:${input.receipt.idempotencyKey}`;
+        const existingReceipt = artifactRevisionReceipts.get(receiptKey);
+        if (existingReceipt) {
+          if (existingReceipt.commandHash !== input.receipt.commandHash) {
+            return { kind: 'idempotency_conflict' };
+          }
+          const versionId = existingReceipt.committedRevisions
+            .find((revision) => revision.streamKind === 'project-artifact-version')?.streamId;
+          const version = versionId ? projectArtifactVersions.get(versionId) : undefined;
+          return version ? { kind: 'replayed', version } : { kind: 'idempotency_conflict' };
+        }
+        // 双 fence 复核必须先于任何写入(与 sqlite 条件 UPDATE 同语义)。
+        const collection = projectArtifactCollections.get(input.collection.id);
+        if (!collection
+          || collection.teamId !== input.teamId
+          || collection.channelId !== input.channelId
+          || collection.revision !== input.expectedCollectionRevision
+          || collection.currentVersionId !== input.expectedCurrentVersionId) {
+          return { kind: 'conflict' };
+        }
+        // 主键/唯一键冲突即整体放弃(等价 sqlite 事务回滚),零部分写入。
+        if (artifacts.has(input.artifact.id) || projectArtifactVersions.has(input.version.id)) {
+          return { kind: 'conflict' };
+        }
+        artifacts.set(input.artifact.id, input.artifact);
+        projectArtifactVersions.set(input.version.id, input.version);
+        projectArtifactCollections.set(input.collection.id, input.collection);
+        artifactRevisionReceipts.set(receiptKey, input.receipt);
+        artifactRevisionTombstones.set(`${input.teamId}:${input.tombstone.idempotencyKey}`, input.tombstone);
+        return { kind: 'created', version: input.version };
+      },
+      receipts: {
+        async getByIdempotencyKey(input) {
+          return artifactRevisionReceipts.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
+      },
+      tombstones: {
+        async getByIdempotencyKey(input) {
+          return artifactRevisionTombstones.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
+      },
+    },
     projectDocumentBundles: {
       async list(input) {
-        return Array.from(projectDocumentBundles.values())
-          .filter((bundle) => bundle.teamId === input.teamId && bundle.channelId === input.channelId)
+        return Array.from(projectDocumentBundles.values())          .filter((bundle) => bundle.teamId === input.teamId && bundle.channelId === input.channelId)
           .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
       },
       async getById(input) {

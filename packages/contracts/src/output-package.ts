@@ -2,6 +2,7 @@ import type { ID, UnixMs } from './common.js';
 import { COMMAND_PROVENANCE_KINDS, type CommandProvenanceKind, type CommandProvenanceRefV1 } from './message-tracer.js';
 import type { ConsistencyTokenV1 } from './system-activity.js';
 import { PACKAGE_REVIEW_ACTIONS, type PackageReviewAction } from './package-review.js';
+import { ARTIFACT_REVISION_ACTIONS, type ArtifactRevisionAction } from './artifact-revision.js';
 import type { ProjectArtifactVersionReviewState } from './project.js';
 
 /**
@@ -263,6 +264,7 @@ export interface OutputPackageDto {
 /**
  * #1061 AC11：package 成员的可执行动作（Server 计算）。
  * `actions` 为空数组 = 当前用户无任何审核/验收/最终化权（客户端不显示任何按钮）。
+ * #1062：动作集合放宽为 review 动作 + 修订动作（`revise-version`，AC1「基于此修改」入口）。
  */
 export interface PackageMemberAvailableActionsDto {
   readonly collectionId: ID;
@@ -273,7 +275,12 @@ export interface PackageMemberAvailableActionsDto {
   readonly isFinalVersion: boolean;
   /** 集合当前 revision（AC9 组合命令的 fence，Server 事实，客户端不推断）。 */
   readonly collectionRevision: number;
-  readonly actions: readonly PackageReviewAction[];
+  /**
+   * #1062：成员版本最新一条 review 的 id（仅 reviewState 为 rejected/changes_requested
+   * 时下发；供「基于此修改」冻结 review basis,客户端不从历史列表猜测）。
+   */
+  readonly latestReviewId?: ID;
+  readonly actions: readonly (PackageReviewAction | ArtifactRevisionAction)[];
 }
 
 /** Files/Task 投影用的包摘要(与 OutputPackageDto 同源,不含成员明细)。 */
@@ -616,7 +623,7 @@ function assertSummaryDto(value: unknown): void {
 
 function assertMemberAvailableActions(value: unknown): void {
   assertExactKeys(value,
-    ['collectionId', 'versionId', 'reviewState', 'isFinalVersion', 'collectionRevision', 'actions'],
+    ['collectionId', 'versionId', 'reviewState', 'isFinalVersion', 'collectionRevision', 'latestReviewId', 'actions'],
     ['collectionId', 'versionId', 'reviewState', 'isFinalVersion', 'collectionRevision', 'actions']);
   assertId(value.collectionId);
   assertId(value.versionId);
@@ -626,9 +633,11 @@ function assertMemberAvailableActions(value: unknown): void {
   }
   if (typeof value.isFinalVersion !== 'boolean') throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
   assertInteger(value.collectionRevision, 1);
+  if (value.latestReviewId !== undefined) assertId(value.latestReviewId);
   if (!Array.isArray(value.actions)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
   for (const action of value.actions) {
-    if (!PACKAGE_REVIEW_ACTIONS.includes(action as PackageReviewAction)) {
+    if (!PACKAGE_REVIEW_ACTIONS.includes(action as PackageReviewAction)
+      && !ARTIFACT_REVISION_ACTIONS.includes(action as ArtifactRevisionAction)) {
       throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
     }
   }

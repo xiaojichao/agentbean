@@ -585,6 +585,8 @@ export interface ServerNextRepositories {
   outputPackages: import('./output-package-repositories.js').OutputPackageRepository;
   /** #1061 文件审核/验收/最终化命令的幂等 receipt(review 落库复用 channelProjects)。 */
   packageReviews: import('./package-review-repositories.js').PackageReviewRepository;
+  /** #1062 明确版本修订命令的原子写入与幂等 receipt(版本/集合落库单事务)。 */
+  artifactRevisions: import('./artifact-revision-repositories.js').ArtifactRevisionRepository;
   deviceWorkspaceSnapshots: DeviceWorkspaceSnapshotRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;

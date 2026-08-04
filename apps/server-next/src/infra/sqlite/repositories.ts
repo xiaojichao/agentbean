@@ -108,6 +108,13 @@ import type {
   RecordPackageReviewInput,
   RecordPackageReviewResult,
 } from '../../application/package-review-repositories.js';
+import type {
+  ArtifactRevisionReceiptRecord,
+  ArtifactRevisionRepository,
+  ArtifactRevisionTombstoneRecord,
+  RecordArtifactVersionRevisionInput,
+  RecordArtifactVersionRevisionResult,
+} from '../../application/artifact-revision-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -293,6 +300,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0078_package_review.sql', { disableForeignKeys: true });
     // #1063：reference selections 的 package 投影列 + items 的 collection revision basis。
     applyMigration(db, 'team/0079_project_reference_package_selections.sql', { disableForeignKeys: true });
+    // #1062：版本修订 provenance 四列 + save-artifact-version-revision 命令 receipt
+    // (0079 已被 #1063 占用,本票顺延 0080)。
+    applyMigration(db, 'team/0080_artifact_version_revision.sql');
   }
 }
 
@@ -2470,6 +2480,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     // 任一步失败整体回滚(UNIQUE 约束抛错即回滚)。聚合只 create/读,无 update/delete。
     outputPackages: createSqliteOutputPackageRepository(teamDb),
     packageReviews: createSqlitePackageReviewRepository(teamDb),
+    // #1062 版本修订:单事务原子保存(artifact+version+collection 指针+receipt)。
+    artifactRevisions: createSqliteArtifactRevisionRepository(teamDb),
     channelDocuments: {
       async create(input) {
         const insert = teamDb.transaction(() => {
@@ -4949,6 +4961,11 @@ function mapProjectArtifactVersion(row: unknown): ProjectArtifactVersionRecord |
   const sourceInvocationId = sqliteNullableText(row, 'source_invocation_id');
   // #1060：交付形成的版本允许无 Stage 来源(stage_id 可空)。
   const stageId = sqliteNullableText(row, 'stage_id');
+  // #1062：修订 provenance(交付/promote 版本为 NULL)。
+  const revisedFromVersionId = sqliteNullableText(row, 'revised_from_version_id');
+  const revisionBasisReviewId = sqliteNullableText(row, 'revision_basis_review_id');
+  const revisionPackageId = sqliteNullableText(row, 'revision_package_id');
+  const revisionDeliveryId = sqliteNullableText(row, 'revision_delivery_id');
   return {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
@@ -4966,6 +4983,10 @@ function mapProjectArtifactVersion(row: unknown): ProjectArtifactVersionRecord |
       sqliteNullableText(row, 'lineage_json'),
     ) ?? [],
     promotedBy: sqliteText(row, 'promoted_by'),
+    ...(revisedFromVersionId === undefined ? {} : { revisedFromVersionId }),
+    ...(revisionBasisReviewId === undefined ? {} : { revisionBasisReviewId }),
+    ...(revisionPackageId === undefined ? {} : { revisionPackageId }),
+    ...(revisionDeliveryId === undefined ? {} : { revisionDeliveryId }),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }
@@ -5575,6 +5596,214 @@ function createSqlitePackageReviewRepository(teamDb: SqliteDatabase): PackageRev
           `SELECT * FROM package_review_idempotency_tombstones WHERE team_id = ? AND idempotency_key = ?`,
         ).get(input.teamId, input.idempotencyKey) as Record<string, unknown> | undefined;
         return row ? mapPackageReviewTombstoneRecord(row) : null;
+      },
+    },
+  };
+}
+
+function mapArtifactRevisionReceiptRecord(row: unknown): ArtifactRevisionReceiptRecord | null {
+  if (!row) return null;
+  const resultJson = sqliteNullableText(row, 'result_json');
+  return {
+    receiptId: sqliteText(row, 'receipt_id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: sqliteText(row, 'command_name') as ArtifactRevisionReceiptRecord['commandName'],
+    commandSchemaVersion: sqliteNumber(row, 'command_schema_version'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    outcome: sqliteText(row, 'outcome') as ArtifactRevisionReceiptRecord['outcome'],
+    committedRevisions: parseJsonValue<ArtifactRevisionReceiptRecord['committedRevisions']>(
+      sqliteNullableText(row, 'committed_revisions_json'),
+    ) ?? [],
+    eventRefs: parseJsonValue<ArtifactRevisionReceiptRecord['eventRefs']>(
+      sqliteNullableText(row, 'event_refs_json'),
+    ) ?? [],
+    commitTime: sqliteNumber(row, 'commit_time'),
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    ...(resultJson === undefined ? {} : { resultJson }),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapArtifactRevisionTombstoneRecord(row: unknown): ArtifactRevisionTombstoneRecord | null {
+  if (!row) return null;
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: sqliteText(row, 'command_name') as ArtifactRevisionTombstoneRecord['commandName'],
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    receiptId: sqliteText(row, 'receipt_id'),
+    outcome: sqliteText(row, 'outcome') as ArtifactRevisionTombstoneRecord['outcome'],
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+/**
+ * #1062 save-artifact-version-revision 的单事务落库:
+ * receipt 预查 → 双 fence 条件 UPDATE(先于任何 INSERT)→ strict INSERT artifact
+ * (主键冲突即事务失败回滚,不用 OR IGNORE/upsert,不静默覆盖)→ INSERT version
+ * (含修订 provenance 四列)→ INSERT receipt/tombstone。任何中段失败整体回滚(AC6)。
+ */
+function createSqliteArtifactRevisionRepository(teamDb: SqliteDatabase): ArtifactRevisionRepository {
+  return {
+    async recordArtifactVersionRevision(
+      input: RecordArtifactVersionRevisionInput,
+    ): Promise<RecordArtifactVersionRevisionResult> {
+      const run = teamDb.transaction(() => {
+        // 幂等:同 key 同 hash → replay(返回首次版本);异 hash → conflict。
+        const existingReceipt = mapArtifactRevisionReceiptRecord(teamDb.prepare(
+          `SELECT * FROM artifact_revision_command_receipts WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.receipt.idempotencyKey));
+        if (existingReceipt) {
+          if (existingReceipt.commandHash !== input.receipt.commandHash) {
+            return { kind: 'idempotency_conflict' as const };
+          }
+          const versionId = existingReceipt.committedRevisions
+            .find((revision) => revision.streamKind === 'project-artifact-version')?.streamId;
+          const version = versionId
+            ? mapProjectArtifactVersion(teamDb.prepare(
+              'SELECT * FROM project_artifact_versions WHERE id = ?',
+            ).get(versionId))
+            : null;
+          return version
+            ? { kind: 'replayed' as const, version }
+            : { kind: 'idempotency_conflict' as const };
+        }
+        // 双 fence 复核必须先于任何写入:并发修订/append/finalization 已推进即整体放弃。
+        const updated = sqliteChanges(teamDb.prepare(
+          `UPDATE project_artifact_collections
+           SET revision = ?, current_version_id = ?, version_count = ?, updated_at = ?
+           WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ? AND current_version_id = ?`,
+        ).run(
+          input.collection.revision,
+          input.collection.currentVersionId,
+          input.collection.versionCount,
+          input.collection.updatedAt,
+          input.collection.id,
+          input.teamId,
+          input.channelId,
+          input.expectedCollectionRevision,
+          input.expectedCurrentVersionId,
+        ));
+        if (updated !== 1) return { kind: 'conflict' as const };
+        teamDb.prepare(
+          `INSERT INTO artifacts (
+            id, team_id, channel_id, message_id, dispatch_id, workspace_run_id, uploader_id,
+            filename, mime_type, size_bytes, storage_path, relative_path, path_kind, artifact_role,
+            source_root_id, source_root_kind, source_root_label, sha256, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.artifact.id,
+          input.artifact.teamId,
+          input.artifact.channelId,
+          input.artifact.messageId ?? null,
+          input.artifact.dispatchId ?? null,
+          input.artifact.workspaceRunId ?? null,
+          input.artifact.uploaderId,
+          input.artifact.filename,
+          input.artifact.mimeType,
+          input.artifact.sizeBytes,
+          input.artifact.storagePath ?? null,
+          input.artifact.relativePath ?? null,
+          input.artifact.pathKind ?? null,
+          input.artifact.role ?? null,
+          input.artifact.sourceRoot?.id ?? null,
+          input.artifact.sourceRoot?.kind ?? null,
+          input.artifact.sourceRoot?.label ?? null,
+          input.artifact.sha256 ?? null,
+          input.artifact.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO project_artifact_versions (
+            id, team_id, channel_id, collection_id, version_number, artifact_id, stage_id,
+            task_id, task_revision, source_message_id, source_workspace_run_id,
+            source_invocation_id, lineage_json, promoted_by,
+            revised_from_version_id, revision_basis_review_id,
+            revision_package_id, revision_delivery_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.version.id,
+          input.version.teamId,
+          input.version.channelId,
+          input.version.collectionId,
+          input.version.versionNumber,
+          input.version.artifactId,
+          input.version.stageId ?? null,
+          input.version.taskId,
+          input.version.taskRevision,
+          input.version.sourceMessageId ?? null,
+          input.version.sourceWorkspaceRunId ?? null,
+          input.version.sourceInvocationId ?? null,
+          JSON.stringify(input.version.lineage),
+          input.version.promotedBy,
+          input.version.revisedFromVersionId ?? null,
+          input.version.revisionBasisReviewId ?? null,
+          input.version.revisionPackageId ?? null,
+          input.version.revisionDeliveryId ?? null,
+          input.version.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO artifact_revision_command_receipts (
+            receipt_id, team_id, command_name, command_schema_version, idempotency_key,
+            command_hash, outcome, committed_revisions_json, event_refs_json,
+            result_available, result_json, commit_time, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.receipt.receiptId,
+          input.receipt.teamId,
+          input.receipt.commandName,
+          input.receipt.commandSchemaVersion,
+          input.receipt.idempotencyKey,
+          input.receipt.commandHash,
+          input.receipt.outcome,
+          JSON.stringify(input.receipt.committedRevisions),
+          JSON.stringify(input.receipt.eventRefs),
+          input.receipt.resultAvailable ? 1 : 0,
+          input.receipt.resultJson ?? null,
+          input.receipt.commitTime,
+          input.receipt.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO artifact_revision_idempotency_tombstones (
+            id, team_id, command_name, idempotency_key, command_hash, receipt_id,
+            outcome, result_available, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.tombstone.id,
+          input.tombstone.teamId,
+          input.tombstone.commandName,
+          input.tombstone.idempotencyKey,
+          input.tombstone.commandHash,
+          input.tombstone.receiptId,
+          input.tombstone.outcome,
+          input.tombstone.resultAvailable ? 1 : 0,
+          input.tombstone.createdAt,
+        );
+        return { kind: 'created' as const, version: input.version };
+      });
+      try {
+        return run.immediate ? run.immediate() : run();
+      } catch {
+        // 中段失败(唯一键/FK):事务已整体回滚,零部分行;调用方重读后再判。
+        return { kind: 'conflict' as const };
+      }
+    },
+    receipts: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM artifact_revision_command_receipts WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey);
+        return mapArtifactRevisionReceiptRecord(row);
+      },
+    },
+    tombstones: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM artifact_revision_idempotency_tombstones WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey);
+        return mapArtifactRevisionTombstoneRecord(row);
       },
     },
   };
