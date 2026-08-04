@@ -37,7 +37,9 @@ import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
 } from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
-import { OutputPackageCard } from '@/components/OutputPackageCard';
+import { OutputPackageCard, type ReviseVersionRequest } from '@/components/OutputPackageCard';
+import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
+import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
 import { outputPackageFromMeta } from '@/lib/output-package';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
@@ -130,6 +132,24 @@ interface OpenChannelDocument {
   readOnly: boolean;
   readOnlyReason?: string;
   notice?: string;
+}
+
+/** #1062 修订编辑器状态:「基于此修改」打开时冻结来源版本与 review basis(AC1)。 */
+interface OpenArtifactRevision {
+  collectionId: string;
+  collectionName: string;
+  filename: string;
+  content: string;
+  /** 内容 base = 当前 collection current 版本。 */
+  baseVersionId: string;
+  /** 「基于此修改」的明确来源版本(通常=base,人工合并后可不同)。 */
+  sourceVersionId: string;
+  /** 回应的 rejected/changes_requested 审核(冻结 basis)。 */
+  basisReviewId?: string;
+  packageId?: string;
+  deliveryId?: string;
+  /** 打开时的 collection revision(保存 fence)。 */
+  collectionRevision: number;
 }
 
 interface ChannelMemberEntry {
@@ -329,6 +349,8 @@ export default function ChatPage() {
   const [channelFileDirectories, setChannelFileDirectories] = useState<NonNullable<ChannelFilesResultDto['directories']>>([]);
   const [channelFilesLoading, setChannelFilesLoading] = useState(false);
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
+  // #1062 「基于此修改」修订编辑器(复用 MarkdownDocumentEditor,独立于 Channel document)。
+  const [openArtifactRevision, setOpenArtifactRevision] = useState<OpenArtifactRevision | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
   const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('files');
@@ -556,6 +578,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeChannel) return;
     return projectEvents().onArtifactsUpdated(activeChannel, setProjectArtifactLibrary);
+  }, [activeChannel]);
+
+  // #1062 修订保存后刷新 Files 投影(新 current revision 立即可见)。
+  const refreshProjectArtifactLibrary = useCallback(() => {
+    if (!activeChannel) return;
+    void projectEvents().artifactCollections(activeChannel).then((result) => {
+      if (result.ok && result.library) setProjectArtifactLibrary(result.library);
+    });
   }, [activeChannel]);
 
   useEffect(() => {
@@ -1033,6 +1063,113 @@ export default function ChatPage() {
       revisionId: result.document.currentRevisionId,
     };
   }, [activeChannel, openChannelDocument]);
+
+  // #1062 「基于此修改」:从 package 成员打开修订编辑器(AC1 入口)。
+  const openArtifactRevisionEditor = useCallback(async (input: {
+    channelId: string;
+    collectionId: string;
+    collectionName: string;
+    filename: string;
+    baseVersionId: string;
+    sourceVersionId: string;
+    basisReviewId?: string;
+    packageId?: string;
+    deliveryId?: string;
+    collectionRevision: number;
+  }) => {
+    if (!activeChannel || activeChannel !== input.channelId) {
+      window.alert('请先打开该频道再修订');
+      return;
+    }
+    // 内容 base 来自 Server 当前版本:预览 URL 加载,不信任客户端缓存。
+    const library = await projectEvents().artifactCollections(input.channelId);
+    if (!library.ok || !library.library) {
+      window.alert('逻辑产物加载失败');
+      return;
+    }
+    const collection = library.library.collections.find((c) => c.id === input.collectionId);
+    const current = collection?.versions.find((v) => v.id === input.baseVersionId);
+    if (!collection || !current) {
+      window.alert('该版本已不可用，请刷新后重试');
+      return;
+    }
+    const previewUrl = messageArtifactUrl(current.artifact as Artifact, 'preview', current.artifact.teamId);
+    if (!previewUrl) {
+      window.alert('该版本没有可用的在线内容');
+      return;
+    }
+    const response = await fetch(previewUrl);
+    if (!response.ok) {
+      window.alert(response.status === 415 ? '该版本不是 UTF-8，仅支持下载' : '版本内容加载失败');
+      return;
+    }
+    setOpenArtifactRevision({
+      collectionId: input.collectionId,
+      collectionName: input.collectionName,
+      filename: current.artifact.filename,
+      content: await response.text(),
+      baseVersionId: input.baseVersionId,
+      sourceVersionId: input.sourceVersionId,
+      ...(input.basisReviewId ? { basisReviewId: input.basisReviewId } : {}),
+      ...(input.packageId ? { packageId: input.packageId } : {}),
+      ...(input.deliveryId ? { deliveryId: input.deliveryId } : {}),
+      collectionRevision: collection.revision,
+    });
+  }, [activeChannel]);
+
+  const saveOpenArtifactRevision = useCallback(async (content: string, filename: string, baseRevisionId?: string) => {
+    if (!activeChannel || !openArtifactRevision) throw new Error('修订已关闭');
+    const result = await projectEvents().saveArtifactVersionRevision({
+      channelId: activeChannel,
+      collectionId: openArtifactRevision.collectionId,
+      baseVersionId: baseRevisionId ?? openArtifactRevision.baseVersionId,
+      content,
+      filename,
+      expectedCollectionRevision: openArtifactRevision.collectionRevision,
+      revisionBasis: {
+        sourceVersionId: openArtifactRevision.sourceVersionId,
+        ...(openArtifactRevision.basisReviewId ? { basisReviewId: openArtifactRevision.basisReviewId } : {}),
+        ...(openArtifactRevision.packageId ? { packageId: openArtifactRevision.packageId } : {}),
+        ...(openArtifactRevision.deliveryId ? { deliveryId: openArtifactRevision.deliveryId } : {}),
+      },
+      idempotencyKey: `artifact-revision:${openArtifactRevision.collectionId}:${openArtifactRevision.baseVersionId}:${openArtifactRevision.sourceVersionId}`,
+    });
+    if (!result.ok) {
+      if (result.error === 'CONFLICT' && result.revisionConflict) {
+        // AC6/AC7:结构化 conflict——编辑器展示当前 base/Server 最新/草稿保留,走查看最新版+人工合并。
+        return {
+          ok: false as const,
+          conflict: true as const,
+          message: result.revisionConflict.code === 'revision-basis-stale'
+            ? '该版本的审核依据已被更新，请查看最新版后重新修订'
+            : `文档已被其他成员更新（Server 最新为 v${result.revisionConflict.serverCurrentVersionNumber}），草稿已保留，请查看最新版后手工合并`,
+        };
+      }
+      throw new Error(result.error ?? '保存失败');
+    }
+    setOpenArtifactRevision((current) => current ? { ...current, baseVersionId: result.revision!.versionId } : null);
+    // 保存后刷新 Files 投影(Files 显示新 current revision;final 不移动由 Server 保证)。
+    refreshProjectArtifactLibrary();
+    return { ok: true as const, revisionId: result.revision!.versionId };
+  }, [activeChannel, openArtifactRevision, refreshProjectArtifactLibrary]);
+
+  const loadLatestArtifactRevision = useCallback(async () => {
+    if (!activeChannel || !openArtifactRevision) throw new Error('修订已关闭');
+    const library = await projectEvents().artifactCollections(activeChannel);
+    if (!library.ok || !library.library) throw new Error('最新版加载失败');
+    const collection = library.library.collections.find((c) => c.id === openArtifactRevision.collectionId);
+    const current = collection?.versions.find((v) => v.id === collection?.currentVersionId);
+    if (!collection || !current) throw new Error('最新版不可用');
+    const previewUrl = messageArtifactUrl(current.artifact as Artifact, 'preview', current.artifact.teamId);
+    if (!previewUrl) throw new Error('最新版没有可用的在线内容');
+    const response = await fetch(previewUrl);
+    if (!response.ok) throw new Error('最新版内容加载失败');
+    return {
+      content: await response.text(),
+      filename: current.artifact.filename,
+      revisionId: current.id,
+    };
+  }, [activeChannel, openArtifactRevision]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
   const canManageActiveChannel = Boolean(
@@ -2295,6 +2432,10 @@ export default function ChatPage() {
                 }}
                 onReview={reviewChannelArtifact}
                 onFinalize={finalizeChannelArtifact}
+                onReviseVersion={(request) => {
+                  if (!activeChannel) return;
+                  void openArtifactRevisionEditor({ ...request, channelId: activeChannel });
+                }}
                   />
                 </div>
               </div>
@@ -2455,6 +2596,7 @@ export default function ChatPage() {
             onTaskStatus={updateTaskStatus}
             onViewInChannel={viewThreadRootInChannel}
             onClose={closeThread}
+            onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
           />
         </>
       )}
@@ -2488,6 +2630,34 @@ export default function ChatPage() {
               ) ?? undefined}
               onLoadLatest={loadLatestOpenMarkdownDocument}
               onClose={() => setOpenChannelDocument(null)}
+              renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
+            />
+          </div>
+        </div>
+      )}
+
+      {openArtifactRevision && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-neutral-950/60 p-4" role="dialog" aria-modal="true" aria-label={openArtifactRevision.filename}>
+          <div className="flex h-[min(90vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white p-4 shadow-2xl">
+            <MarkdownDocumentEditor
+              {...(currentUser?.id && currentTeamId ? {
+                draftIdentity: {
+                  userId: currentUser.id,
+                  teamId: currentTeamId,
+                  documentId: `artifact-version:${openArtifactRevision.collectionId}:${openArtifactRevision.sourceVersionId}`,
+                  baseRevisionId: openArtifactRevision.baseVersionId,
+                },
+              } : {})}
+              filename={openArtifactRevision.filename}
+              initialContent={openArtifactRevision.content}
+              revisions={[]}
+              readOnly={false}
+              notice={openArtifactRevision.basisReviewId
+                ? `基于版本 v${openArtifactRevision.sourceVersionId.slice(-4)} 修订（回应审核意见）；保存将产生新版本，不移动最终版。`
+                : `基于版本 v${openArtifactRevision.sourceVersionId.slice(-4)} 修订；保存将产生新版本，不移动最终版。`}
+              onSave={saveOpenArtifactRevision}
+              onLoadLatest={loadLatestArtifactRevision}
+              onClose={() => setOpenArtifactRevision(null)}
               renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
             />
           </div>
@@ -3883,6 +4053,7 @@ function ThreadPanel({
   onTaskStatus,
   onViewInChannel,
   onClose,
+  onReviseVersion,
 }: {
   width: number;
   root: ChatMessage;
@@ -3930,6 +4101,8 @@ function ThreadPanel({
   onTaskStatus: (task: TaskItem, status: TaskStatus) => void;
   onViewInChannel: () => void;
   onClose: () => void;
+  /** #1062 「基于此修改」:成员可修订时打开修订编辑器(Server 动作驱动)。 */
+  onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
@@ -4049,6 +4222,7 @@ function ThreadPanel({
         onUnfollowThread={() => onUnfollowThread(msg)}
         onTaskMenu={(open) => onTaskMenu(open && task ? msg.id : null)}
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
+        onReviseVersion={onReviseVersion}
         replyCount={replyCount}
         showReplyAction={false}
         showReplyCount={false}
@@ -4397,6 +4571,7 @@ function ChatBubble({
   onUnfollowThread,
   onTaskMenu,
   onTaskStatus,
+  onReviseVersion,
   replyCount,
   showReplyAction = true,
   showReplyCount = true,
@@ -4434,6 +4609,8 @@ function ChatBubble({
   onUnfollowThread: () => void;
   onTaskMenu?: (open: boolean) => void;
   onTaskStatus?: (status: TaskStatus) => void;
+  /** #1062 「基于此修改」:成员可修订时打开修订编辑器(Server 动作驱动)。 */
+  onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   replyCount: number;
   showReplyAction?: boolean;
   showReplyCount?: boolean;
@@ -4785,7 +4962,11 @@ function ChatBubble({
             packageMeta={outputPackageFromMeta(msg.meta)!}
             channelId={msg.channelId}
             onAddReference={onAddPackageReference}
+            onReviseVersion={(request) => onReviseVersion?.({ ...request, channelId: msg.channelId })}
           />
+        )}
+        {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (
+          <ArtifactVersionRevisionActivity meta={artifactVersionRevisionFromMeta(msg.meta)!} />
         )}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">

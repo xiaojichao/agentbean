@@ -61,6 +61,7 @@ export function ProjectArtifactLibrary({
   onReferenceSelection,
   onReview,
   onFinalize,
+  onReviseVersion,
 }: {
   library: ProjectArtifactLibraryDto | null;
   stages: ProjectArtifactStageOption[];
@@ -72,6 +73,16 @@ export function ProjectArtifactLibrary({
   onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
+  /** #1062 AC1:对被拒绝/要求修改的 Markdown 版本发起「基于此修改」(冻结 sourceVersion/basis)。 */
+  onReviseVersion?: (request: {
+    collectionId: string;
+    collectionName: string;
+    filename: string;
+    baseVersionId: string;
+    sourceVersionId: string;
+    basisReviewId?: string;
+    collectionRevision: number;
+  }) => void;
 }) {
   const [showPromote, setShowPromote] = useState(false);
   const collections = library?.collections ?? [];
@@ -132,6 +143,7 @@ export function ProjectArtifactLibrary({
               canDecideVersion={archived ? undefined : canDecideVersion}
               onReview={onReview}
               onFinalize={onFinalize}
+              onReviseVersion={archived ? undefined : onReviseVersion}
             />
           ))}
         </div>
@@ -147,16 +159,50 @@ function CollectionCard({
   canDecideVersion,
   onReview,
   onFinalize,
+  onReviseVersion,
 }: {
   collection: ProjectArtifactCollectionDto;
   canDecideVersion?: (version: ProjectArtifactVersionDto) => boolean;
   onReview?: (draft: SubmitArtifactReviewDraft) => Promise<string | null>;
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
+  onReviseVersion?: (request: {
+    collectionId: string;
+    collectionName: string;
+    filename: string;
+    baseVersionId: string;
+    sourceVersionId: string;
+    basisReviewId?: string;
+    collectionRevision: number;
+  }) => void;
   referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
   onReferenceSelection?: (selection: ProjectReferenceSelectionRequestDto | null, versionId: string) => void;
 }) {
   const currentVersion = collection.versions.find((version) => version.id === collection.currentVersionId);
+  // 历史版本列表包含 current:VersionDecisionPanel(审核/最终化)只在历史行渲染,
+  // 过滤会破坏「current 版本也能审核」的既有能力。
   const history = [...collection.versions].sort((left, right) => right.versionNumber - left.versionNumber);
+  // #1062:被拒绝/要求修改的 Markdown 版本可「基于此修改」(reviewState 与 reviews 是 Server 事实)。
+  const canRevise = (version: ProjectArtifactVersionDto): boolean => {
+    if (!onReviseVersion) return false;
+    if (version.reviewState !== 'rejected' && version.reviewState !== 'changes_requested') return false;
+    if (!/\.(?:md|markdown)$/i.test(version.artifact.filename)) return false;
+    return version.reviews.length > 0;
+  };
+  const reviseBasis = (version: ProjectArtifactVersionDto): string | undefined => {
+    const latest = version.reviews.at(-1);
+    return (latest?.decision === 'rejected' || latest?.decision === 'changes_requested')
+      ? latest.id
+      : undefined;
+  };
+  const reviseRequest = (version: ProjectArtifactVersionDto) => onReviseVersion?.({
+    collectionId: collection.id,
+    collectionName: collection.name,
+    filename: version.artifact.filename,
+    baseVersionId: version.id,
+    sourceVersionId: version.id,
+    ...(reviseBasis(version) ? { basisReviewId: reviseBasis(version) } : {}),
+    collectionRevision: collection.revision,
+  });
   return (
     <article
       data-smoke="project-artifact-collection"
@@ -182,6 +228,16 @@ function CollectionCard({
             )}
           </div>
           <VersionSource version={currentVersion} />
+          {canRevise(currentVersion) && (
+            <button
+              type="button"
+              data-smoke="project-artifact-revise-version"
+              onClick={() => reviseRequest(currentVersion)}
+              className="mt-1 border border-neutral-300 bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 hover:border-neutral-900"
+            >
+              基于此修改
+            </button>
+          )}
         </div>
       )}
       <details className="mt-2 text-xs text-neutral-500">
@@ -230,6 +286,16 @@ function CollectionCard({
                   <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-800">最终</span>
                 )}
                 <ReviewStateBadge state={version.reviewState} />
+                {canRevise(version) && (
+                  <button
+                    type="button"
+                    data-smoke="project-artifact-revise-version"
+                    onClick={() => reviseRequest(version)}
+                    className="border border-neutral-300 bg-white px-2 py-0.5 text-[10px] font-medium text-neutral-600 hover:border-neutral-900"
+                  >
+                    基于此修改
+                  </button>
+                )}
               </div>
               <VersionSource version={version} />
               <VersionDecisionPanel

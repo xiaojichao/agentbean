@@ -78,6 +78,12 @@ import {
   isMarkdownArtifact,
   sanitizeMarkdownFilename,
 } from './channel-document-policy.js';
+import {
+  saveArtifactVersionRevisionCommand,
+  type SaveArtifactVersionRevisionResult,
+} from './artifact-revision-handler.js';
+import type { ArtifactRevisionConflictDto } from '../../../../packages/contracts/src/index.js';
+import { parseArtifactRevisionCommandInputV1 } from '../../../../packages/contracts/src/index.js';
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
@@ -174,6 +180,8 @@ import type {
   PackageMemberAvailableActionsDto,
   PackageReviewAction,
   ConsistencyTokenV1,
+  ArtifactRevisionAction,
+  ArtifactVersionRevisionSaveResultDto,
   ProjectStageBlockingReasonDto,
   ProjectStageEdgeDto,
   ProjectStageMissingRequiredInputDto,
@@ -349,6 +357,15 @@ export interface ArtifactContentStore {
     filename: string;
   }): Promise<ArtifactContentStoreWriteResult>;
   deleteContent?(input: { teamId: string; artifactId: string }): Promise<void>;
+}
+
+/** 无 content store 时的兜底:保存直接失败(不产生无内容版本事实)。 */
+function dummyContentStore(): ArtifactContentStore {
+  return {
+    async writeContent() {
+      throw new Error('Artifact content store is not configured');
+    },
+  };
 }
 
 export interface ServerNextUseCases {
@@ -663,6 +680,29 @@ export interface ServerNextUseCases {
     asOf: number;
     audienceScope: string;
   }>>;
+  /** #1062 基于明确版本保存 Markdown 修订(原子产生新版本并移动 current;stale → 结构化 conflict)。 */
+  saveArtifactVersionRevision(input: {
+    userId: string;
+    teamId: string;
+    channelId: string;
+    collectionId: string;
+    baseVersionId: string;
+    content: string;
+    filename?: string;
+    expectedCollectionRevision: number;
+    revisionBasis: {
+      sourceVersionId: string;
+      basisReviewId?: string;
+      packageId?: string;
+      deliveryId?: string;
+    };
+    idempotencyKey: string;
+  }): Promise<
+    Ack<{
+      revision: ArtifactVersionRevisionSaveResultDto;
+      replayed: boolean;
+    }>
+  >;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
@@ -7233,6 +7273,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           artifacts: [result.document.currentRevision.artifact],
         },
       });
+    },
+
+    // #1062 基于明确版本保存 Markdown 修订(AC1-AC10)。
+    async saveArtifactVersionRevision(revisionInput) {
+      const { userId, teamId, ...wireInput } = revisionInput;
+      const parsed = parseArtifactRevisionCommandInputV1('save-artifact-version-revision', wireInput);
+      return artifactRevisionCommandAck(repositories, await saveArtifactVersionRevisionCommand(
+        {
+          repositories,
+          artifactContentStore: artifactContentStore ?? dummyContentStore(),
+          clock,
+          ids,
+          editingEnabled: channelFileRollout.markdownEditing,
+        },
+        {
+          teamId,
+          userId,
+          channelId: parsed.channelId,
+          collectionId: parsed.collectionId,
+          baseVersionId: parsed.baseVersionId,
+          content: parsed.content,
+          ...(parsed.filename !== undefined ? { filename: parsed.filename } : {}),
+          expectedCollectionRevision: parsed.expectedCollectionRevision,
+          revisionBasis: parsed.revisionBasis,
+          idempotencyKey: parsed.idempotencyKey,
+        },
+      ));
     },
 
     async searchMessages(searchInput) {
@@ -15604,6 +15671,22 @@ function projectArtifactVersionDto(
     },
     lineage: version.lineage,
     promotedBy: version.promotedBy,
+    ...(version.revisedFromVersionId !== undefined
+      ? {
+        revisionBasis: {
+          revisedFromVersionId: version.revisedFromVersionId,
+          ...(version.revisionBasisReviewId !== undefined
+            ? { basisReviewId: version.revisionBasisReviewId }
+            : {}),
+          ...(version.revisionPackageId !== undefined
+            ? { packageId: version.revisionPackageId }
+            : {}),
+          ...(version.revisionDeliveryId !== undefined
+            ? { deliveryId: version.revisionDeliveryId }
+            : {}),
+        },
+      }
+      : {}),
     createdAt: version.createdAt,
     reviews: reviewDtos,
     reviewState: deriveProjectArtifactVersionReviewState(reviews),
@@ -15867,6 +15950,17 @@ async function computePackageMemberAvailableActions(
     ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
     : null;
 
+  // #1062:预读可修订成员对应 Artifact(Markdown 判定),避免在 map 回调里 await。
+  const memberArtifacts = new Map<string, Awaited<ReturnType<ServerNextRepositories['artifacts']['getForTeam']>>>();
+  for (const member of input.packageProjection.members) {
+    const version = versions.find((candidate) => candidate.id === member.artifactVersionId);
+    if (!version) continue;
+    memberArtifacts.set(
+      member.artifactVersionId,
+      await repositories.artifacts.getForTeam({ teamId, artifactId: version.artifactId }),
+    );
+  }
+
   return input.packageProjection.members.map((member) => {
     const collection = collections.find((candidate) => candidate.id === member.collectionId);
     const version = versions.find((candidate) => candidate.id === member.artifactVersionId);
@@ -15915,7 +16009,7 @@ async function computePackageMemberAvailableActions(
     const canReview = authority.kind === 'allowed';
     const canFinalize = canReview; // #824 合同:review 与 finalization authority 同源。
 
-    const actions: PackageReviewAction[] = [];
+    const actions: (PackageReviewAction | ArtifactRevisionAction)[] = [];
     if (canReview) {
       actions.push('review-approved', 'review-changes-requested', 'review-rejected');
       if (task && coordination
@@ -15930,12 +16024,30 @@ async function computePackageMemberAvailableActions(
     if (canFinalize && collection && reviewState === 'approved' && !isFinalVersion) {
       actions.push('set-final');
     }
+    // #1062 AC1:被拒绝/要求修改的 Markdown 交付版本可「基于此修改」。
+    // 频道可见人类 + 未归档即可编辑(与 Channel document 编辑同一权限口径);
+    // reviewState 由 Server 从版本自身 reviews 派生,客户端不推断。
+    const latestReview = memberReviews
+      .slice()
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+      .at(-1);
+    if (collection && version && !isFinalVersion
+      && (reviewState === 'rejected' || reviewState === 'changes_requested')
+      && latestReview) {
+      const memberArtifact = memberArtifacts.get(member.artifactVersionId);
+      if (memberArtifact && isMarkdownArtifact(memberArtifact)) {
+        actions.push('revise-version');
+      }
+    }
     return {
       collectionId: member.collectionId,
       versionId: member.artifactVersionId,
       reviewState,
       isFinalVersion,
       collectionRevision: collection?.revision ?? 0,
+      ...(reviewState === 'rejected' || reviewState === 'changes_requested'
+        ? { latestReviewId: latestReview?.id }
+        : {}),
       actions,
     };
   });
@@ -16100,6 +16212,53 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
     });
   }
   return makeSuccess({ review: projectArtifactReviewDto(result.review) as PackageReviewDto, replayed: false });
+}
+
+/**
+ * #1062 save-artifact-version-revision 结果 → Ack 映射。
+ * - conflict(stale fence 三态) → CONFLICT + details.revisionConflict 结构化 payload(AC6/AC7);
+ * - replayed → 从 receipt.resultJson 恢复首次结果,不重跑业务(AC10);
+ * - rejected → FORBIDDEN/VALIDATION_ERROR 按语义(权限类 FORBIDDEN,内容/作用域类 VALIDATION)。
+ */
+async function artifactRevisionCommandAck(
+  _repositories: ServerNextRepositories,
+  result: SaveArtifactVersionRevisionResult,
+): Promise<Ack<{ revision: ArtifactVersionRevisionSaveResultDto; replayed: boolean }>> {
+  if (result.kind === 'conflict') {
+    if (result.revisionConflict) {
+      return makeFailure('CONFLICT', `Artifact revision conflict: ${result.reasonCode}`, {
+        revisionConflict: result.revisionConflict,
+      });
+    }
+    return makeFailure('CONFLICT', `Artifact revision conflict: ${result.reasonCode}`);
+  }
+  if (result.kind === 'rejected') {
+    // 作用域/内容/编辑开关 → VALIDATION_ERROR;权限/归档/越权 → FORBIDDEN。
+    if (result.reasonCode === 'revision-editing-disabled'
+      || result.reasonCode === 'content-invalid'
+      || result.reasonCode === 'version-not-in-collection'
+      || result.reasonCode === 'not-markdown-version'
+      || result.reasonCode === 'revision-basis-mismatch'
+      || result.reasonCode === 'collection-not-found'
+      || result.reasonCode === 'channel-not-found'
+      || result.reasonCode === 'invalid-request') {
+      return makeFailure('VALIDATION_ERROR', `Artifact revision rejected: ${result.reasonCode}`);
+    }
+    return makeFailure('FORBIDDEN', `Artifact revision rejected: ${result.reasonCode}`);
+  }
+  if (result.kind === 'replayed') {
+    let parsed: ArtifactVersionRevisionSaveResultDto | undefined;
+    try {
+      parsed = JSON.parse(result.receipt.resultJson ?? '{}') as ArtifactVersionRevisionSaveResultDto;
+    } catch {
+      // 治理压缩后的 receipt 无 result。
+    }
+    if (!parsed?.versionId) {
+      return makeFailure('CONFLICT', 'Recorded artifact revision result is no longer available');
+    }
+    return makeSuccess({ revision: parsed, replayed: true });
+  }
+  return makeSuccess({ revision: result.saveResult, replayed: false });
 }
 
 async function projectArtifactAuthorityFacts(

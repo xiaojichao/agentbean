@@ -128,6 +128,11 @@ export interface ProjectArtifactVersionRecord {
   sourceInvocationId?: ID;
   lineage: ProjectArtifactLineageRefDto[];
   promotedBy: ID;
+  /** #1062：「基于此修改」产生的版本记录冻结修订依据;交付/promote 版本为空。 */
+  revisedFromVersionId?: ID;
+  revisionBasisReviewId?: ID;
+  revisionPackageId?: ID;
+  revisionDeliveryId?: ID;
   createdAt: UnixMs;
 }
 

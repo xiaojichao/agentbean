@@ -9,6 +9,7 @@ import type {
   PackageMemberAvailableActionsDto,
   PackageReviewAction,
   ProjectReferenceSelectionRequestDto,
+  ArtifactRevisionAction,
 } from '@agentbean/contracts';
 
 /**
@@ -27,13 +28,14 @@ import type {
  * (“选择”→ checkbox + 计数)与“基于此修改”(显式选择 rejected/changes_requested 版本)。
  */
 
-const ACTION_LABELS: Record<PackageReviewAction, string> = {
+const ACTION_LABELS: Record<PackageReviewAction | ArtifactRevisionAction, string> = {
   'review-approved': '通过',
   'review-changes-requested': '要求修改',
   'review-rejected': '拒绝',
   'review-and-finalize': '通过并设为最终版',
   'review-and-reject-delivery': '退回交付',
   'set-final': '设为最终版',
+  'revise-version': '基于此修改',
 };
 
 const REVIEW_STATE_LABELS: Record<string, string> = {
@@ -49,19 +51,37 @@ const POLICY_LABELS: Record<string, string> = {
   final: '最终版',
 };
 
+/** #1062 AC1:「基于此修改」回调——成员被 Server 标记可修订时携带冻结 provenance。 */
+export interface ReviseVersionRequest {
+  collectionId: string;
+  collectionName: string;
+  filename: string;
+  baseVersionId: string;
+  sourceVersionId: string;
+  basisReviewId?: string;
+  packageId: string;
+  deliveryId?: string;
+  collectionRevision: number;
+}
+
 export function OutputPackageCard({
   packageMeta,
   channelId,
   onAddReference,
+  onReviseVersion,
 }: {
   packageMeta: OutputPackageMeta;
   channelId?: string;
   /** #1063:父组件注入——把选择加进 composer(chat page 的 onAddPackageReference)。 */
   onAddReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
+  /** #1062 AC1:「基于此修改」——成员可修订时打开修订编辑器(Server 动作驱动)。 */
+  onReviseVersion?: (request: ReviseVersionRequest) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
   const [frozenTaskRevision, setFrozenTaskRevision] = useState<number | undefined>(undefined);
   const [frozenTaskAttempt, setFrozenTaskAttempt] = useState<number | undefined>(undefined);
+  // #1062 AC1:来源 delivery(冻结修订 provenance 的成对字段;web 从 package DTO 读取,不猜测)。
+  const [frozenDeliveryId, setFrozenDeliveryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   // #1063 引用交互状态。
   const [referencing, setReferencing] = useState(false);
@@ -77,6 +97,7 @@ export function OutputPackageCard({
       setMemberActions(result.availableActions ?? []);
       setFrozenTaskRevision(result.package?.taskRevision);
       setFrozenTaskAttempt(result.package?.taskAttempt);
+      setFrozenDeliveryId(result.package?.deliveryId);
     }
   }, [channelId, packageMeta.packageId]);
 
@@ -91,6 +112,7 @@ export function OutputPackageCard({
           setMemberActions(result.availableActions ?? []);
           setFrozenTaskRevision(result.package?.taskRevision);
           setFrozenTaskAttempt(result.package?.taskAttempt);
+          setFrozenDeliveryId(result.package?.deliveryId);
         }
       })
       .catch(() => {
@@ -101,10 +123,31 @@ export function OutputPackageCard({
     };
   }, [channelId, packageMeta.packageId]);
 
-  const runAction = useCallback(async (member: PackageMemberAvailableActionsDto, action: PackageReviewAction) => {
+  const runAction = useCallback(async (member: PackageMemberAvailableActionsDto, action: PackageReviewAction | ArtifactRevisionAction) => {
     if (!channelId) return;
     setBusy(true);
     try {
+      if (action === 'revise-version') {
+        // #1062 AC1:交给上层打开修订编辑器(冻结 sourceVersion/review basis/package/delivery)。
+        const memberMeta = packageMeta.members.find((m) => m.artifactVersionId === member.versionId);
+        if (!frozenDeliveryId) {
+          // delivery 是 package 冻结事实;取不到(未加载/包异常)则不伪造,刷新后重试。
+          await refresh();
+          return;
+        }
+        onReviseVersion?.({
+          collectionId: member.collectionId,
+          collectionName: memberMeta?.filename ?? member.collectionId,
+          filename: memberMeta?.filename ?? 'document.md',
+          baseVersionId: member.versionId,
+          sourceVersionId: member.versionId,
+          ...(member.latestReviewId ? { basisReviewId: member.latestReviewId } : {}),
+          packageId: packageMeta.packageId,
+          deliveryId: frozenDeliveryId,
+          collectionRevision: member.collectionRevision,
+        });
+        return;
+      }
       const base = {
         channelId,
         packageId: packageMeta.packageId,
@@ -151,7 +194,7 @@ export function OutputPackageCard({
     } finally {
       setBusy(false);
     }
-  }, [channelId, packageMeta.packageId, frozenTaskRevision, frozenTaskAttempt, refresh]);
+  }, [channelId, packageMeta.packageId, packageMeta.members, frozenDeliveryId, frozenTaskRevision, frozenTaskAttempt, refresh, onReviseVersion]);
 
   // #1063:整包投影选择。预览 ready → 产生选择;not_ready → 展示阻断清单。
   const addProjectionReference = useCallback(async (policy: 'delivered' | 'current' | 'final') => {
@@ -313,19 +356,23 @@ export function OutputPackageCard({
                     {REVIEW_STATE_LABELS[actions.reviewState] ?? actions.reviewState}
                     {actions.isFinalVersion ? ' · 最终版' : ''}
                   </span>
-                  {actions.actions.map((action) => (
-                    <button
-                      key={action}
-                      type="button"
-                      disabled={busy}
-                      onClick={() => runAction(actions, action)}
-                      className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-                      data-smoke="package-review-action"
-                      data-action={action}
-                    >
-                      {ACTION_LABELS[action]}
-                    </button>
-                  ))}
+                  {actions.actions
+                    // #1062:无 onReviseVersion(纯展示场景,如 channel-message)时不渲染
+                    // revise-version 按钮——Server 下发动作但客户端无法执行时不得静默 no-op。
+                    .filter((action) => action !== 'revise-version' || Boolean(onReviseVersion))
+                    .map((action) => (
+                      <button
+                        key={action}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => runAction(actions, action)}
+                        className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+                        data-smoke="package-review-action"
+                        data-action={action}
+                      >
+                        {ACTION_LABELS[action]}
+                      </button>
+                    ))}
                 </>
               ) : null}
               {/* #1063 单文件引用与“基于此修改” */}

@@ -221,6 +221,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.submitPackageArtifactReview,
       WEB_EVENTS.project.submitPackageReviewAndFinalize,
       WEB_EVENTS.project.submitPackageReviewAndRejectDelivery,
+      // #1062 基于明确版本保存 Markdown 修订。
+      WEB_EVENTS.project.saveArtifactVersionRevision,
       WEB_EVENTS.project.documentBundles,
       WEB_EVENTS.project.documentBundle,
       WEB_EVENTS.project.createDocumentBundle,
