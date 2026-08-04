@@ -462,8 +462,10 @@ export function OutputPackageCard({
           {onContinueWithAgent ? (
             <button
               type="button"
+              disabled={!packageMeta.taskId}
               onClick={() => onContinueWithAgent(packageMeta.packageId, packageMeta.taskTitle)}
-              className="rounded-md border border-violet-300 bg-white px-2 py-1 text-xs text-violet-700 hover:bg-violet-50"
+              title={packageMeta.taskId ? undefined : '未关联 Task,无法交接给 Agent'}
+              className="rounded-md border border-violet-300 bg-white px-2 py-1 text-xs text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40"
               data-smoke="output-package-continue-agent"
             >
               继续 @Agent

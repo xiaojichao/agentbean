@@ -1110,6 +1110,8 @@ function TaskThreadPanel({
   onDelegateToAgent: () => void;
   delegatePackageId: string | null;
 }) {
+  // #1065 AC9：可发现性动作的导航(「审核交付包」→ 频道 Files 视图)。
+  const router = useRouter();
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
@@ -1168,8 +1170,13 @@ function TaskThreadPanel({
               channelId={task.channelId}
               taskId={task.id}
               onAction={(action) => {
-                // #1065 AC9：可发现性动作;delegate 复用 #1064 预填导航,其余动作由 Server 复验。
-                if (action === 'delegate-to-agent') onDelegateToAgent();
+                // #1065 AC9：可发现性动作只是入口;实际 command 提交时 Server 仍完整复验。
+                if (action === 'delegate-to-agent') {
+                  onDelegateToAgent();
+                } else if (action === 'review-package') {
+                  // 审核面在频道 Files 视图(交付包列表/成员审核按钮)。
+                  router.push(`/${teamPath}/channel/${task.channelId}?chatTab=files`);
+                }
               }}
             />
             <TaskOutputPackageSummary

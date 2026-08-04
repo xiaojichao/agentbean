@@ -141,6 +141,12 @@ export function TaskDeliveryOverview({
               ))}
             </ul>
           ) : null}
+          {/* #1065 AC3：required review coverage(final 必需成员 vs 已 final,Server 投影)。 */}
+          <div className="mt-1 text-[11px]" data-smoke="task-review-coverage">
+            {overview.acceptanceContract.requiredReviewCoverage.complete
+              ? `最终版覆盖完整(${overview.acceptanceContract.requiredReviewCoverage.finalizedCount}/${overview.acceptanceContract.requiredReviewCoverage.requiredForFinalCount} 个必需成员已设最终版)`
+              : `最终版未覆盖完整(${overview.acceptanceContract.requiredReviewCoverage.finalizedCount}/${overview.acceptanceContract.requiredReviewCoverage.requiredForFinalCount} 个必需成员已设最终版)`}
+          </div>
         </div>
       </div>
 

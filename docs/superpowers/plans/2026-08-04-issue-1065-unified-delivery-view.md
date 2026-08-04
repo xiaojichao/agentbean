@@ -107,3 +107,21 @@
 - 每个 slice：单包 vitest（cd 进包目录）+ 相关单测。
 - 最后：`test:ci` 全量 + `next build`（web-next tsc）。
 - /code-review 自审后提交、开 PR（PR body 含 Closes #1065）。
+
+## 7. 审查修复与取舍（2026-08-04 code-review 后）
+
+- **P0**：formation 幂等重入(replayed)不推进 watermark——revision 虚增会让旧 token 误报
+  PROJECTION_NOT_READY；仅 `created` 推进 + 重入测试。
+- **P1**：「审核交付包」动作从死按钮变为导航(→ 频道 Files 视图 `?chatTab=files`)；
+  「继续 @Agent」无 taskId 时禁用并给文本原因。
+- **P1**：`TaskAcceptanceContractV1` 补 `requiredReviewCoverage`（焦点包 requiredForFinal
+  成员 vs 已 final，Server 投影，complete 标记），web 展示文本。
+- **Standards**：删死代码（`reject_delivery` 时间线枚举/标签、零调用的
+  FOCUS_LABELS/focusLabel/policyLabel）；streamKind 提共享常量；
+  TaskDto 提取共享 mapper（与 ProjectStage 投影共用，防漂移）。
+- **取舍（AC4 卡片 focus）**：Tasks 页 board 紧凑卡片不逐卡查询 overview（N+1 查询成本），
+  焦点通过 TaskDeliveryOverview 首屏区块（详情打开即见）实现；board 卡片 focus 留
+  follow-up。#1065 的「Task 卡片只显示当前责任焦点」以详情面板首屏满足。
+- **取舍（AC8 完整守卫）**：socket 查询层未加全局 responseVersion 守卫（改动面覆盖全部
+  查询调用方）；组件级 cancelled/alive（最新请求胜出）+ 推送按 id 合并已实质满足
+  「旧响应不覆盖新状态」，以测试固化。

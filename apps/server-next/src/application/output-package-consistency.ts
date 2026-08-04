@@ -14,6 +14,9 @@ import { checkMinimumConsistency, streamKey } from '../../../../packages/domain/
 import { makeFailure, type ConsistencyTokenV1, type UnixMs, type FailureAck } from '../../../../packages/contracts/src/index.js';
 import type { ServerNextRepositories } from './repositories.js';
 
+/** output-package 投影流的 stream kind(watermark 表 stream_kind 列)。 */
+export const OUTPUT_PACKAGE_WATERMARK_STREAM_KIND = 'output-package';
+
 /**
  * 查询级一致性检查。无 minimum token → null(直接放行)。
  * 投影未追到最低位置 → 结构化 failure(PROJECTION_NOT_READY + notReadyStreams)。
@@ -50,9 +53,9 @@ export async function bumpOutputPackageWatermark(
 ): Promise<void> {
   const watermarks = repositories.systemActivity?.watermarks;
   if (!watermarks) return;
-  const current = await watermarks.get('output-package', channelId);
+  const current = await watermarks.get(OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, channelId);
   await watermarks.upsert({
-    streamKind: 'output-package',
+    streamKind: OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
     streamId: channelId,
     revision: (current?.revision ?? 0) + 1,
     updatedAt,

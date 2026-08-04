@@ -50,6 +50,15 @@ export interface TaskAcceptanceContractV1 {
   readonly taskRevision: number;
   readonly attempt: number;
   readonly maxAttempts: number;
+  /**
+   * #1065 AC3：当前焦点交付包的 required review coverage——final 必需成员数与
+   * 已达 final 数(Server 投影;final 缺失时 complete=false,UI 显示缺口)。
+   */
+  readonly requiredReviewCoverage: {
+    readonly requiredForFinalCount: number;
+    readonly finalizedCount: number;
+    readonly complete: boolean;
+  };
 }
 
 /** 可审计执行链事件(AC4:Offer→acceptance→claim→execution→delivery→修改→review/final→交接)。 */
@@ -62,7 +71,6 @@ export const TASK_TIMELINE_EVENT_KINDS = [
   'human_revision',
   'review',
   'finalization',
-  'reject_delivery',
   'handoff',
 ] as const;
 export type TaskTimelineEventKind = (typeof TASK_TIMELINE_EVENT_KINDS)[number];

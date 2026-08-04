@@ -283,8 +283,13 @@ import {
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import { attemptOutputPackageFormation } from './output-package-handler.js';
-import { bumpOutputPackageWatermark, ensureOutputPackageConsistency } from './output-package-consistency.js';
+import {
+  bumpOutputPackageWatermark,
+  ensureOutputPackageConsistency,
+  OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
+} from './output-package-consistency.js';
 import type {
+  TaskAcceptanceContractV1,
   TaskDeliveryOverviewV1,
   TaskLevelAvailableActionDto,
   TaskResponsibilityFocusV1,
@@ -15967,6 +15972,24 @@ function toOutputPackageSummaryDto(
 // #1065：OutputPackage 列表/Task 交付聚合视图共用的 summary 组装(同一组 Server 事实)。
 // ---------------------------------------------------------------------------
 
+/** TaskRecord → TaskDto(交付聚合视图与 ProjectStage 投影共用,防字段漂移)。 */
+function toTaskDto(task: TaskRecord): TaskDto {
+  return {
+    id: task.id,
+    teamId: task.teamId,
+    title: task.title,
+    ...(task.description === undefined ? {} : { description: task.description }),
+    status: task.status,
+    creatorId: task.creatorId,
+    ...(task.assigneeId === undefined ? {} : { assigneeId: task.assigneeId }),
+    ...(task.channelId === undefined ? {} : { channelId: task.channelId }),
+    tags: task.tags,
+    sortOrder: task.sortOrder,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
 async function summarizeOutputPackages(
   repositories: ServerNextRepositories,
   input: { teamId: ID; channelId: ID },
@@ -16082,12 +16105,37 @@ async function buildTaskDeliveryOverview(
   }
 
   // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
-  const [reviews, finalizations, versions, deliveries] = await Promise.all([
+  const [reviews, finalizations, versions, deliveries, collections] = await Promise.all([
     repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
     repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
     repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
     coordination ? repositories.taskCoordination.deliveries.listByTask(taskId) : Promise.resolve([]),
+    repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
   ]);
+
+  // #1065 AC3：required review coverage——焦点交付包中 final 必需成员数 vs 已达 final 数。
+  let requiredReviewCoverage: TaskAcceptanceContractV1['requiredReviewCoverage'] = {
+    requiredForFinalCount: 0,
+    finalizedCount: 0,
+    complete: false,
+  };
+  const focusRecord = packageRecords[packageRecords.length - 1];
+  if (focusRecord) {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId,
+      packageId: focusRecord.packageId,
+    });
+    const requiredMembers = (projection?.members ?? []).filter((member) => member.requiredForFinal);
+    const finalVersionIds = new Set(
+      collections.map((collection) => collection.finalVersionId).filter((id): id is string => Boolean(id)),
+    );
+    const finalizedCount = requiredMembers.filter((member) => finalVersionIds.has(member.artifactVersionId)).length;
+    requiredReviewCoverage = {
+      requiredForFinalCount: requiredMembers.length,
+      finalizedCount,
+      complete: requiredMembers.length > 0 && finalizedCount === requiredMembers.length,
+    };
+  }
   const taskReviews = reviews.filter((review) => review.taskId === taskId);
   const taskFinalizations = finalizations.filter((fin) => taskReviews.some((review) => review.id === fin.basisReviewId));
   // #1062「基于此修改」产生的新版本 = 人工修改事件(revisionPackageId 冻结来源包)。
@@ -16211,25 +16259,13 @@ async function buildTaskDeliveryOverview(
       : { action: 'review-package', label: '审核交付包', disabled: true, disabledReason: '当前无待审核交付' },
   ];
 
-  const watermark = await repositories.systemActivity?.watermarks.get('output-package', channelId) ?? null;
+  const watermark = await repositories.systemActivity?.watermarks
+    .get(OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, channelId) ?? null;
   return {
     schemaVersion: 1,
     taskId,
     channelId,
-    task: {
-      id: task.id,
-      teamId: task.teamId,
-      title: task.title,
-      description: task.description ?? '',
-      status: task.status,
-      creatorId: task.creatorId,
-      assigneeId: task.assigneeId ?? undefined,
-      channelId: task.channelId ?? undefined,
-      tags: [...(task.tags ?? [])],
-      sortOrder: task.sortOrder,
-      createdAt: task.createdAt,
-      updatedAt: task.updatedAt,
-    },
+    task: toTaskDto(task),
     ...(stage ? { stage } : {}),
     acceptanceContract: {
       nodeKind: coordination?.nodeKind ?? 'root',
@@ -16240,6 +16276,7 @@ async function buildTaskDeliveryOverview(
       taskRevision: coordination?.taskRevision ?? task.revision,
       attempt: coordination?.attempt ?? 1,
       maxAttempts: coordination?.maxAttempts ?? 1,
+      requiredReviewCoverage,
     },
     responsibilityFocus: focus,
     delivery: {
@@ -16253,7 +16290,7 @@ async function buildTaskDeliveryOverview(
     audienceScope: `${teamId}:${channelId}:${input.userId}`,
     consistencyToken: {
       schemaVersion: 1,
-      entries: [{ streamKind: 'output-package', streamId: channelId, revision: watermark?.revision ?? 0 }],
+      entries: [{ streamKind: OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, streamId: channelId, revision: watermark?.revision ?? 0 }],
     },
   };
 }
@@ -16998,20 +17035,7 @@ async function projectStageDto(
     stableInputFenceCurrent: true,
     eligibleAgentIds: candidateAgentIds,
   });
-  const taskDto: TaskDto = {
-    id: task.id,
-    teamId: task.teamId,
-    title: task.title,
-    ...(task.description === undefined ? {} : { description: task.description }),
-    status: task.status,
-    creatorId: task.creatorId,
-    ...(task.assigneeId === undefined ? {} : { assigneeId: task.assigneeId }),
-    ...(task.channelId === undefined ? {} : { channelId: task.channelId }),
-    tags: task.tags,
-    sortOrder: task.sortOrder,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-  };
+  const taskDto = toTaskDto(task);
   return {
     id: record.id,
     teamId: record.teamId,

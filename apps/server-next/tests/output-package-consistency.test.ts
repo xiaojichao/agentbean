@@ -374,6 +374,30 @@ for (const variant of variants) {
       if (!stale.ok) expect(stale.error).toBe('PROJECTION_NOT_READY');
     });
 
+    test('幂等重入(replayed)不推进水位:同 publishId 重复提交 watermark 不变', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-consistency-replay';
+      await seedManagedTask(seedValue, taskId, 1, 'in_progress');
+      await commitDelivery(seedValue, 'pub-replay', [{ path: 'docs/r.md', body: Buffer.from('v1') }], {
+        agentId: seedValue.agentId, taskId, taskAttempt: 1,
+      });
+      expect(await watermarkRevision(seedValue, seedValue.channelId)).toBe(1);
+      // 同一 publishId 重复提交:commit 幂等重入路径(formation replayed,无新事实)。
+      const replay = await commitDelivery(seedValue, 'pub-replay', [{ path: 'docs/r.md', body: Buffer.from('v1') }], {
+        agentId: seedValue.agentId, taskId, taskAttempt: 1,
+      });
+      expect(replay.ok).toBe(true);
+      if (!replay.ok) throw new Error(replay.error);
+      // 水位不得虚增——旧 token 查询不应被误报 not_ready。
+      expect(await watermarkRevision(seedValue, seedValue.channelId)).toBe(1);
+      const current = await seedValue.app.listOutputPackages({
+        userId: seedValue.userId, teamId: seedValue.teamId, channelId: seedValue.channelId,
+        minimumConsistency: token(seedValue.channelId, 1),
+      });
+      expect(current.ok).toBe(true);
+    });
+
     test('跨频道隔离:一频道的写命令不推进另一频道水位', async () => {
       const seedValue = await seed(variant);
       cleanups.push(seedValue.close);

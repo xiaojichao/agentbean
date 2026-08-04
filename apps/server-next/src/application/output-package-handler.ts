@@ -403,9 +403,12 @@ export async function attemptOutputPackageFormation(
   if (formation.kind === 'conflict') {
     return { kind: 'conflict', reasonCode: formation.reason };
   }
-  // #1065 AC7：package 成形推进该频道 output-package stream 水位。
-  // best-effort:水位失败不阻塞已提交的 package 事实(下次写命令会继续推进)。
-  await bumpOutputPackageWatermark(repositories, input.channelId, now);
+  // #1065 AC7：仅首次成形(created)推进水位——replayed(幂等重入,同 publishId
+  // 包已存在、无新事实)不得虚增 revision,否则持旧 token 的客户端被误报
+  // PROJECTION_NOT_READY。best-effort:水位失败不阻塞已提交的 package 事实。
+  if (formation.kind === 'created') {
+    await bumpOutputPackageWatermark(repositories, input.channelId, now);
+  }
   // 讨论串投影:package 成形后追加 system 消息,meta 快照与冻结成员一一对应。
   // best-effort:消息追加失败不改写已提交的 package 事实,可由重入路径补齐。
   await appendOutputPackageSystemMessage(repositories, ids, {

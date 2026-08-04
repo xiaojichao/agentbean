@@ -43,6 +43,7 @@ const overviewFixture: TaskDeliveryOverviewV1 = {
     taskRevision: 1,
     attempt: 1,
     maxAttempts: 3,
+    requiredReviewCoverage: { requiredForFinalCount: 1, finalizedCount: 1, complete: true },
   },
   responsibilityFocus: {
     kind: 'review_wait',

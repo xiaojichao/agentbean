@@ -50,4 +50,10 @@ describe('贯通 Chat/Task/Files 一致交付视图（#1065）', () => {
     expect(socketSource).toContain('queryTaskDeliveryOverview');
     expect(socketSource).toContain('WEB_EVENTS.task.deliveryOverview');
   });
+
+  test('AC13:Markdown conflict 场景有结构化反馈文案(#1062)', () => {
+    // 基于此修改保存遇到 stale revision 时展示冲突界面:保留草稿 + 查看最新版提示。
+    expect(chatSource).toContain('文档已被其他成员更新');
+    expect(chatSource).toContain('请查看最新版后手工合并');
+  });
 });
