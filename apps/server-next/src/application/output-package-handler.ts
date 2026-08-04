@@ -12,6 +12,7 @@ import {
   type OutputPackageFormationDecision,
 } from '../../../../packages/domain/src/index.js';
 import type { ChannelRecord, ServerNextRepositories } from './repositories.js';
+import { bumpOutputPackageWatermark } from './output-package-consistency.js';
 import type {
   OutputPackageMemberWrite,
   OutputPackageRecord,
@@ -402,6 +403,9 @@ export async function attemptOutputPackageFormation(
   if (formation.kind === 'conflict') {
     return { kind: 'conflict', reasonCode: formation.reason };
   }
+  // #1065 AC7：package 成形推进该频道 output-package stream 水位。
+  // best-effort:水位失败不阻塞已提交的 package 事实(下次写命令会继续推进)。
+  await bumpOutputPackageWatermark(repositories, input.channelId, now);
   // 讨论串投影:package 成形后追加 system 消息,meta 快照与冻结成员一一对应。
   // best-effort:消息追加失败不改写已提交的 package 事实,可由重入路径补齐。
   await appendOutputPackageSystemMessage(repositories, ids, {

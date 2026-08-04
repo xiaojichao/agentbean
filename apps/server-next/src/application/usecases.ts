@@ -277,6 +277,7 @@ import {
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import { attemptOutputPackageFormation } from './output-package-handler.js';
+import { bumpOutputPackageWatermark, ensureOutputPackageConsistency } from './output-package-consistency.js';
 import {
   submitPackageReviewCommand,
   type SubmitPackageReviewCommandInput,
@@ -669,7 +670,7 @@ export interface ServerNextUseCases {
   ): Promise<Ack<ResolveProjectReferenceOrdinalResultDto>>;
   /** #1060 列出频道 OutputPackage(三处投影共用同一 Server 事实)。 */
   listOutputPackages(
-    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string } },
+    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string }; minimumConsistency?: ConsistencyTokenV1 },
   ): Promise<Ack<{ packages: OutputPackageSummaryDto[]; pendingDeliveries: OutputPackagePendingDeliveryDto[]; nextCursor?: { createdAt: number; packageId: string } }>>;
   /** #1060 获取单个 OutputPackage(含冻结成员);#1063 支持可选 projection 请求。 */
   getOutputPackage(
@@ -679,6 +680,7 @@ export interface ServerNextUseCases {
       packageId: string;
       userId: string;
       projection?: { policy: OutputPackageProjectionPolicy; versions?: { collectionId: string; versionId: string }[] };
+      minimumConsistency?: ConsistencyTokenV1;
     },
   ): Promise<Ack<{
     package: OutputPackageDto;
@@ -7376,7 +7378,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async saveArtifactVersionRevision(revisionInput) {
       const { userId, teamId, ...wireInput } = revisionInput;
       const parsed = parseArtifactRevisionCommandInputV1('save-artifact-version-revision', wireInput);
-      return artifactRevisionCommandAck(repositories, await saveArtifactVersionRevisionCommand(
+      const result = await saveArtifactVersionRevisionCommand(
         {
           repositories,
           artifactContentStore: artifactContentStore ?? dummyContentStore(),
@@ -7396,7 +7398,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           revisionBasis: parsed.revisionBasis,
           idempotencyKey: parsed.idempotencyKey,
         },
-      ));
+      );
+      // #1065 AC7：新版本更新了 collection current,影响 package current 投影,同样推进水位。
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, parsed.channelId, clock.now());
+      }
+      return artifactRevisionCommandAck(repositories, result);
     },
 
     async searchMessages(searchInput) {
@@ -8786,7 +8793,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async submitPackageArtifactReview(reviewInput) {
-      return packageReviewCommandAck(repositories, await submitPackageReviewCommand(
+      const result = await submitPackageReviewCommand(
         { repositories, clock, ids },
         {
           teamId: reviewInput.teamId,
@@ -8800,7 +8807,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           comment: reviewInput.comment,
           idempotencyKey: reviewInput.idempotencyKey,
         },
-      ), 'review');
+      );
+      // #1065 AC7：应用成功后推进该频道 output-package 水位,旧 consistency token 查询随之 not_ready。
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
+      return packageReviewCommandAck(repositories, result, 'review');
     },
 
     async submitPackageReviewAndFinalize(reviewInput) {
@@ -8820,6 +8832,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           expectedCollectionRevision: reviewInput.expectedCollectionRevision,
         },
       );
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
 
@@ -8842,6 +8857,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           rejectReason: reviewInput.rejectReason,
         },
       );
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
       return packageReviewCommandAck(repositories, result, 'reject-delivery');
     },
 
@@ -8901,6 +8919,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const access = await ensureUserCanViewChannel(repositories, parsed);
       if (!access.ok) return access;
+      // #1065 AC7：带 minimumConsistency 时对照 output-package stream 水位,
+      // 投影未追到最低位置 → projection_not_ready,不以旧数据伪装成功。
+      const notReady = await ensureOutputPackageConsistency(repositories, parsed.minimumConsistency);
+      if (notReady) return notReady;
       const limit = parsed.limit ?? 50;
       const records = await repositories.outputPackages.listPackagesByChannel({
         teamId: parsed.teamId,
@@ -8970,6 +8992,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const access = await ensureUserCanViewChannel(repositories, parsed);
       if (!access.ok) return access;
+      // #1065 AC7：与 listOutputPackages 同一水位检查(三处投影共用同一 Server 事实)。
+      const notReady = await ensureOutputPackageConsistency(repositories, parsed.minimumConsistency);
+      if (notReady) return notReady;
       const result = await repositories.outputPackages.getPackageById({
         teamId: parsed.teamId,
         packageId: parsed.packageId,
