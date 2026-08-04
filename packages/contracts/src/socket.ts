@@ -292,6 +292,8 @@ export const WEB_EVENTS = {
     /** #995 根交付人审：具名 lifecycle command，禁止用 task:update 旁路进 done。 */
     acceptRootDelivery: 'task:accept-root-delivery',
     rejectRootDelivery: 'task:reject-root-delivery',
+    /** #1065 AC3/AC4：Task 交付聚合视图(目标/acceptance/焦点/availableActions/时间线)。 */
+    deliveryOverview: 'task:delivery-overview',
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },

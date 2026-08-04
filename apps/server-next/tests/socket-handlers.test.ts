@@ -340,6 +340,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.task.close,
       WEB_EVENTS.task.acceptRootDelivery,
       WEB_EVENTS.task.rejectRootDelivery,
+      WEB_EVENTS.task.deliveryOverview,
     ]);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.listTeams);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.deleteTeam);
