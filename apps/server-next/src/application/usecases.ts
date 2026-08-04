@@ -130,7 +130,7 @@ import type {
   TaskCoordinationRecord,
   TaskCoordinationRepositories,
 } from './task-coordination-repositories.js';
-import type { ProjectStageDto } from '../../../../packages/contracts/src/project.js';
+import type { PackageMembershipRefDto, ProjectStageDto } from '../../../../packages/contracts/src/project.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
@@ -15778,6 +15778,34 @@ async function buildProjectArtifactLibrary(
     bucket.push(projectArtifactFinalizationDto(finalization));
     finalizationsByCollection.set(finalization.collectionId, bucket);
   }
+  // #1065 AC5：一次交付 OutputPackage 与跨版本逻辑产物明确区分;version 的
+  // packageMemberships 由 Server 投影(该版本作为成员出现在哪些交付包)。
+  const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+    teamId: channel.teamId,
+    channelId: channel.id,
+    limit: 200,
+  });
+  const membershipsByVersion = new Map<string, PackageMembershipRefDto[]>();
+  for (const record of packageRecords) {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId: channel.teamId,
+      packageId: record.packageId,
+    });
+    for (const member of projection?.members ?? []) {
+      const bucket = membershipsByVersion.get(member.artifactVersionId) ?? [];
+      bucket.push({
+        packageId: record.packageId,
+        sequence: member.sequence,
+        shortLabel: member.shortLabel,
+        deliveredAt: record.createdAt,
+        ...(record.taskId ? { taskId: record.taskId } : {}),
+      });
+      membershipsByVersion.set(member.artifactVersionId, bucket);
+    }
+  }
+  for (const membershipBuckets of membershipsByVersion.values()) {
+    membershipBuckets.sort((left, right) => left.deliveredAt - right.deliveredAt);
+  }
   const versionsByCollection = new Map<string, ProjectArtifactVersionDto[]>();
   for (const version of versions) {
     const artifact = await repositories.artifacts.getForTeam({
@@ -15792,6 +15820,7 @@ async function buildProjectArtifactLibrary(
       version,
       artifact,
       reviewsByVersion.get(version.id) ?? [],
+      membershipsByVersion.get(version.id) ?? [],
     ));
     versionsByCollection.set(version.collectionId, bucket);
   }
@@ -15820,6 +15849,7 @@ function projectArtifactVersionDto(
   version: ProjectArtifactVersionRecord,
   artifact: ArtifactRecord,
   reviews: readonly ProjectArtifactReviewRecord[],
+  packageMemberships: readonly PackageMembershipRefDto[] = [],
 ): ProjectArtifactVersionDto {
   const reviewDtos = reviews
     .slice()
@@ -15861,6 +15891,7 @@ function projectArtifactVersionDto(
     createdAt: version.createdAt,
     reviews: reviewDtos,
     reviewState: deriveProjectArtifactVersionReviewState(reviews),
+    packageMemberships: packageMemberships.map((membership) => ({ ...membership })),
   };
 }
 

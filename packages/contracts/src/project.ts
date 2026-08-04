@@ -385,6 +385,22 @@ export interface ProjectArtifactVersionDto {
   reviews: ProjectArtifactReviewDto[];
   /** #824 由 `reviews` 最新一条派生的审核状态。 */
   reviewState: ProjectArtifactVersionReviewState;
+  /** #1065 AC5：本版本作为成员出现在哪些交付包(按时间升序；非交付形成版本为空)。 */
+  packageMemberships: PackageMembershipRefDto[];
+}
+
+/**
+ * #1065 AC5 Files 侧 package membership：一次交付 OutputPackage 与跨版本逻辑产物
+ * ProjectArtifactCollection 明确区分;某版本「属于哪个交付包」由 Server 投影,
+ * web 不自行按文件名/时间推断。
+ */
+export interface PackageMembershipRefDto {
+  readonly packageId: ID;
+  readonly sequence: number;
+  readonly shortLabel: string;
+  readonly deliveredAt: UnixMs;
+  readonly taskId?: ID;
+  readonly taskTitle?: string;
 }
 
 /**
