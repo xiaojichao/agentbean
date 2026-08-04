@@ -1,6 +1,8 @@
 import type { ID, UnixMs } from './common.js';
 import type { ArtifactDto } from './artifact.js';
 import type { TaskDto } from './task.js';
+// type-only 循环引用安全:package-review.js 只 import project.js 的 decision 类型。
+import type { PackageReviewAuthorityBasisKind } from './package-review.js';
 
 export type ProjectStageAggregateStatus = 'pending' | 'active' | 'in_review' | 'complete';
 
@@ -284,6 +286,8 @@ export interface ProjectArtifactReviewBasisRefDto {
 /**
  * #824 append-only 审核记录：一条记录就是一次不可覆盖的决定。
  * 仓储只提供 list/append，没有 update/delete —— 「只追加不覆盖」是接口层结构性保证。
+ * #1061：审核绑定 package/delivery/Task revision/attempt 与 reviewer authority basis（AC1）；
+ * stageId 可空（#1060 交付形成的版本可能无 Stage 来源）。
  */
 export interface ProjectArtifactReviewDto {
   id: ID;
@@ -292,8 +296,16 @@ export interface ProjectArtifactReviewDto {
   collectionId: ID;
   /** 明确的受审版本：审核对象永远是具体版本，不是集合。 */
   versionId: ID;
-  /** 审核语境：受审版本所属 Stage。 */
-  stageId: ID;
+  /** 审核语境：受审版本所属 Stage；交付形成的版本可能无 Stage。 */
+  stageId?: ID;
+  /** #1061：审核绑定的 package 上下文（交付来源）；人工 promote 路径无。 */
+  packageId?: ID;
+  deliveryId?: ID;
+  taskId?: ID;
+  taskRevision?: number;
+  taskAttempt?: number;
+  /** #1061：本次审核依据的 authority basis。 */
+  authorityBasis: PackageReviewAuthorityBasisKind;
   decision: ProjectArtifactReviewDecision;
   comment: string;
   basis: ProjectArtifactReviewBasisRefDto[];

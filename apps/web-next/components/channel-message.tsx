@@ -175,7 +175,7 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
         />
       )}
       {outputPackageFromMeta(meta) && (
-        <OutputPackageCard packageMeta={outputPackageFromMeta(meta)!} />
+        <OutputPackageCard packageMeta={outputPackageFromMeta(meta)!} channelId={msg.channelId} />
       )}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">

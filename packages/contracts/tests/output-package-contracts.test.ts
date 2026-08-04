@@ -237,7 +237,7 @@ describe('query parsers', () => {
           schemaVersion: 1, packageId: 'pkg-1', teamId: 'team-1', channelId: 'ch-1', revision: 1,
           deliveryId: 'del-1', publishId: 'pub-1', workspaceRevisionId: 'rev-1',
           agentId: 'agent-1', taskId: 'task-1', taskBinding: 'managed', taskRevision: 3,
-          taskAttempt: 2, memberCount: 1, status: 'recorded', createdAt: 1000,
+          taskAttempt: 2, memberCount: 1, reviewState: 'pending', status: 'recorded', createdAt: 1000,
         }],
         pendingDeliveries: [{
           publishId: 'pub-2', workspaceRevisionId: 'rev-2', agentId: 'agent-1',

@@ -158,6 +158,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const outputPackageMembers = new Map<string, import('../../application/output-package-repositories.js').OutputPackageMemberRecord[]>();
   const outputPackageReceipts = new Map<string, import('../../application/output-package-repositories.js').OutputPackageReceiptRecord>();
   const outputPackageTombstones = new Map<string, import('../../application/output-package-repositories.js').OutputPackageTombstoneRecord>();
+  const packageReviewReceipts = new Map<string, import('../../application/package-review-repositories.js').PackageReviewReceiptRecord>();
+  const packageReviewTombstones = new Map<string, import('../../application/package-review-repositories.js').PackageReviewTombstoneRecord>();
   const projectDocumentBundles = new Map<string, ProjectDocumentBundleRecord>();
   const projectDocumentBundleMembers = new Map<string, ProjectDocumentBundleMemberRecord[]>();
   const projectDocumentBundleMutations = new Map<string, ProjectDocumentBundleMutationRecord>();
@@ -417,6 +419,14 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const taskCoordinationDispatchSnapshot = new Map(dispatches);
         const coordinationSnapshot = cloneTaskCoordinationMemoryState(taskCoordinationState);
         const promotionSnapshot = clonePromotionGateMemoryState(promotionState);
+        // #1061 AC6/AC12：组合命令(review + Task transition)在 memory seam 也必须原子——
+        // review 落库与幂等 receipt 的 maps 一并快照,任一步失败整体回滚,不留部分事实。
+        const artifactReviewsSnapshot = new Map(projectArtifactReviews);
+        const artifactDecisionMutationsSnapshot = new Map(projectArtifactDecisionMutations);
+        const artifactFinalizationsSnapshot = new Map(projectArtifactFinalizations);
+        const artifactCollectionsSnapshot = new Map(projectArtifactCollections);
+        const packageReviewReceiptsSnapshot = new Map(packageReviewReceipts);
+        const packageReviewTombstonesSnapshot = new Map(packageReviewTombstones);
         try {
           return await operation({
             tasks: repositories.tasks,
@@ -429,6 +439,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             channels: repositories.channels,
             promotion,
             lifecycle,
+            packageReviews: repositories.packageReviews,
           });
         } catch (error) {
           tasks.clear();
@@ -437,6 +448,26 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           for (const [id, dispatch] of taskCoordinationDispatchSnapshot) dispatches.set(id, dispatch);
           restoreTaskCoordinationMemoryState(taskCoordinationState, coordinationSnapshot);
           restorePromotionGateMemoryState(promotionState, promotionSnapshot);
+          projectArtifactReviews.clear();
+          for (const [id, review] of artifactReviewsSnapshot) projectArtifactReviews.set(id, review);
+          projectArtifactDecisionMutations.clear();
+          for (const [id, mutation] of artifactDecisionMutationsSnapshot) {
+            projectArtifactDecisionMutations.set(id, mutation);
+          }
+          projectArtifactFinalizations.clear();
+          for (const [id, finalization] of artifactFinalizationsSnapshot) {
+            projectArtifactFinalizations.set(id, finalization);
+          }
+          projectArtifactCollections.clear();
+          for (const [id, collection] of artifactCollectionsSnapshot) {
+            projectArtifactCollections.set(id, collection);
+          }
+          packageReviewReceipts.clear();
+          for (const [id, receipt] of packageReviewReceiptsSnapshot) packageReviewReceipts.set(id, receipt);
+          packageReviewTombstones.clear();
+          for (const [id, tombstone] of packageReviewTombstonesSnapshot) {
+            packageReviewTombstones.set(id, tombstone);
+          }
           throw error;
         }
       }),
@@ -2236,16 +2267,21 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             : { kind: 'idempotency_conflict' };
         }
         const version = projectArtifactVersions.get(input.review.versionId);
-        const stage = projectStages.get(input.review.stageId);
         if (!version
           || version.teamId !== input.review.teamId
           || version.channelId !== input.review.channelId
-          || version.collectionId !== input.review.collectionId
-          || version.stageId !== input.review.stageId
-          || !stage
-          || stage.teamId !== input.review.teamId
-          || stage.channelId !== input.review.channelId) {
+          || version.collectionId !== input.review.collectionId) {
           return { kind: 'version_scope_conflict' };
+        }
+        // #1061：review.stageId 可空（交付版本可能无 Stage 来源）；非空时必须与版本一致且 Stage 存在。
+        if ((input.review.stageId ?? undefined) !== (version.stageId ?? undefined)) {
+          return { kind: 'version_scope_conflict' };
+        }
+        if (input.review.stageId !== undefined) {
+          const stage = projectStages.get(input.review.stageId);
+          if (!stage || stage.teamId !== input.review.teamId || stage.channelId !== input.review.channelId) {
+            return { kind: 'version_scope_conflict' };
+          }
         }
         projectArtifactReviews.set(input.review.id, input.review);
         projectArtifactDecisionMutations.set(mutationKey, input.mutation);
@@ -2495,6 +2531,98 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       tombstones: {
         async getByIdempotencyKey(input) {
           return outputPackageTombstones.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
+      },
+    },
+    packageReviews: {
+      async recordPackageReview(input) {
+        const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
+        // 幂等:同 key 同 fingerprint → replay;不同 fingerprint → conflict。
+        const existingMutation = projectArtifactDecisionMutations.get(mutationKey);
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+            || existingMutation.kind !== 'review'
+            || !existingMutation.reviewId) {
+            return { kind: 'idempotency_conflict' };
+          }
+          const review = projectArtifactReviews.get(existingMutation.reviewId);
+          // 同 key replay 必然首次来自 package review 命令(package 字段非空)。
+          return review
+            ? { kind: 'replayed', review: review as import('../../application/package-review-repositories.js').PackageReviewRecord }
+            : { kind: 'idempotency_conflict' };
+        }
+        // version 作用域复核(与 channelProjects.appendArtifactReview 同款)。
+        const version = projectArtifactVersions.get(input.review.versionId);
+        if (!version
+          || version.teamId !== input.review.teamId
+          || version.channelId !== input.review.channelId
+          || version.collectionId !== input.review.collectionId) {
+          return { kind: 'version_scope_conflict' };
+        }
+        if ((input.review.stageId ?? undefined) !== (version.stageId ?? undefined)) {
+          return { kind: 'version_scope_conflict' };
+        }
+        if (input.review.stageId !== undefined) {
+          const stage = projectStages.get(input.review.stageId);
+          if (!stage || stage.teamId !== input.review.teamId || stage.channelId !== input.review.channelId) {
+            return { kind: 'version_scope_conflict' };
+          }
+        }
+        // AC9 组合原子性:finalization 的 revision fence 必须**先于** review 写入复核。
+        if (input.finalization) {
+          const fin = input.finalization;
+          const collection = projectArtifactCollections.get(fin.collectionId);
+          if (!collection
+            || collection.teamId !== input.review.teamId
+            || collection.channelId !== input.review.channelId
+            || collection.revision !== fin.expectedCollectionRevision) {
+            return { kind: 'finalization_conflict' };
+          }
+        }
+        projectArtifactReviews.set(input.review.id, input.review);
+        projectArtifactDecisionMutations.set(mutationKey, {
+          teamId: input.mutation.teamId,
+          channelId: input.mutation.channelId,
+          idempotencyKey: input.mutation.idempotencyKey,
+          requestFingerprint: input.mutation.requestFingerprint,
+          kind: 'review',
+          collectionId: input.review.collectionId,
+          versionId: input.review.versionId,
+          reviewId: input.review.id,
+          createdAt: input.mutation.createdAt,
+        });
+        packageReviewReceipts.set(
+          `${input.review.teamId}:${input.receipt.idempotencyKey}`,
+          input.receipt,
+        );
+        packageReviewTombstones.set(
+          `${input.review.teamId}:${input.tombstone.idempotencyKey}`,
+          input.tombstone,
+        );
+        // AC9 组合:同事务写 finalization 审计并移动 final 指针(revision fence 已在上方 review
+        // 写入前复核,此处只执行写入——复核失败时 review 也不会落库)。
+        if (input.finalization) {
+          const fin = input.finalization;
+          const targetCollection = projectArtifactCollections.get(fin.collectionId);
+          if (!targetCollection) return { kind: 'finalization_conflict' };
+          projectArtifactFinalizations.set(fin.finalization.id, fin.finalization);
+          projectArtifactCollections.set(fin.collectionId, {
+            ...targetCollection,
+            finalVersionId: fin.finalization.versionId,
+            revision: fin.nextRevision,
+            updatedAt: fin.updatedAt,
+          });
+        }
+        return { kind: 'created', review: input.review };
+      },
+      receipts: {
+        async getByIdempotencyKey(input) {
+          return packageReviewReceipts.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
+        },
+      },
+      tombstones: {
+        async getByIdempotencyKey(input) {
+          return packageReviewTombstones.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;
         },
       },
     },

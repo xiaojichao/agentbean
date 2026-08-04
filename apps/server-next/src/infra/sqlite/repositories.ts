@@ -30,6 +30,10 @@ import type {
   WorkspacePublishStagingRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
+import {
+  PACKAGE_REVIEW_AUTHORITY_BASIS_KINDS,
+  type PackageReviewAuthorityBasisKind,
+} from '../../../../../packages/contracts/src/index.js';
 import type {
   ChannelCoordinationDecisionRecord,
   ChannelCoordinationJobRecord,
@@ -96,6 +100,14 @@ import type {
   RecordOutputPackageFormationResult,
   OutputPackageRepository,
 } from '../../application/output-package-repositories.js';
+import type {
+  PackageReviewReceiptRecord,
+  PackageReviewRecord,
+  PackageReviewRepository,
+  PackageReviewTombstoneRecord,
+  RecordPackageReviewInput,
+  RecordPackageReviewResult,
+} from '../../application/package-review-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -277,6 +289,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'project_artifact_collections')) {
     applyMigration(db, 'team/0076_project_artifact_versions_nullable_stage.sql', { disableForeignKeys: true });
     applyMigration(db, 'team/0077_output_packages.sql');
+    // #1061：package 绑定审核 + authority token + 新命令 receipt（依赖 0077 的 packages 事实）。
+    applyMigration(db, 'team/0078_package_review.sql', { disableForeignKeys: true });
   }
 }
 
@@ -592,6 +606,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           channels: repositories.channels,
           promotion,
           lifecycle,
+          packageReviews: repositories.packageReviews,
         })),
     ),
     memory,
@@ -2452,6 +2467,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     // #1060 OutputPackage:单事务原子成形——collection/version 写入 + package/members/receipt/tombstone
     // 任一步失败整体回滚(UNIQUE 约束抛错即回滚)。聚合只 create/读,无 update/delete。
     outputPackages: createSqliteOutputPackageRepository(teamDb),
+    packageReviews: createSqlitePackageReviewRepository(teamDb),
     channelDocuments: {
       async create(input) {
         const insert = teamDb.transaction(() => {
@@ -3601,27 +3617,39 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             input.review.teamId,
             input.review.channelId,
           );
-          if (!version || sqliteText(version, 'stage_id') !== input.review.stageId) {
+          if (!version) return { kind: 'version_scope_conflict' as const };
+          // #1061：review.stageId 可空（交付版本可能无 Stage 来源）；非空时必须与版本一致且 Stage 存在。
+          const versionStageId = sqliteNullableText(version, 'stage_id');
+          if ((input.review.stageId ?? undefined) !== versionStageId) {
             return { kind: 'version_scope_conflict' as const };
           }
-          const stage = teamDb.prepare(
-            `SELECT 1 FROM project_stages
-             WHERE id = ? AND team_id = ? AND channel_id = ?`,
-          ).get(input.review.stageId, input.review.teamId, input.review.channelId);
-          if (!stage) return { kind: 'version_scope_conflict' as const };
+          if (input.review.stageId !== undefined) {
+            const stage = teamDb.prepare(
+              `SELECT 1 FROM project_stages
+               WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(input.review.stageId, input.review.teamId, input.review.channelId);
+            if (!stage) return { kind: 'version_scope_conflict' as const };
+          }
 
           teamDb.prepare(
             `INSERT INTO project_artifact_reviews (
               id, team_id, channel_id, collection_id, version_id, stage_id,
-              decision, comment, basis_json, reviewed_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              package_id, delivery_id, task_id, task_revision, task_attempt,
+              authority_basis, decision, comment, basis_json, reviewed_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             input.review.id,
             input.review.teamId,
             input.review.channelId,
             input.review.collectionId,
             input.review.versionId,
-            input.review.stageId,
+            input.review.stageId ?? null,
+            input.review.packageId ?? null,
+            input.review.deliveryId ?? null,
+            input.review.taskId ?? null,
+            input.review.taskRevision ?? null,
+            input.review.taskAttempt ?? null,
+            input.review.authorityBasis,
             input.review.decision,
             input.review.comment,
             JSON.stringify(input.review.basis),
@@ -5311,6 +5339,245 @@ function createSqliteOutputPackageRepository(teamDb: SqliteDatabase): OutputPack
   };
 }
 
+function mapPackageReviewReceiptRecord(row: unknown): PackageReviewReceiptRecord {
+  const resultJson = sqliteNullableText(row, 'result_json');
+  return {
+    receiptId: sqliteText(row, 'receipt_id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: sqliteText(row, 'command_name') as PackageReviewReceiptRecord['commandName'],
+    commandSchemaVersion: sqliteNumber(row, 'command_schema_version'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    outcome: sqliteText(row, 'outcome') as 'applied' | 'no_op',
+    committedRevisions: JSON.parse(sqliteText(row, 'committed_revisions_json')) as { streamKind: string; streamId: string; revision: number }[],
+    eventRefs: JSON.parse(sqliteText(row, 'event_refs_json')) as { streamKind: string; streamId: string; sequence: number }[],
+    commitTime: sqliteNumber(row, 'commit_time'),
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    ...(resultJson ? { resultJson } : {}),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapPackageReviewTombstoneRecord(row: unknown): PackageReviewTombstoneRecord {
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: sqliteText(row, 'command_name') as PackageReviewTombstoneRecord['commandName'],
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    receiptId: sqliteText(row, 'receipt_id'),
+    outcome: sqliteText(row, 'outcome') as 'applied' | 'no_op',
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+/** #1061 package review 命令仓储:review 落库 + 幂等 receipt/tombstone 单事务。 */
+function createSqlitePackageReviewRepository(teamDb: SqliteDatabase): PackageReviewRepository {
+  return {
+    async recordPackageReview(input: RecordPackageReviewInput): Promise<RecordPackageReviewResult> {
+      const teamId = input.review.teamId;
+      const result = teamDb.transaction(() => {
+        // 幂等:同 key 同 fingerprint → replay;不同 fingerprint → conflict。
+        const existingMutation = mapProjectArtifactDecisionMutation(teamDb.prepare(
+          `SELECT * FROM project_artifact_decision_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.mutation.teamId, input.mutation.channelId, input.mutation.idempotencyKey));
+        if (existingMutation) {
+          if (existingMutation.requestFingerprint !== input.mutation.requestFingerprint
+            || existingMutation.kind !== 'review'
+            || !existingMutation.reviewId) {
+            return { kind: 'idempotency_conflict' as const };
+          }
+          const review = mapProjectArtifactReview(teamDb.prepare(
+            `SELECT * FROM project_artifact_reviews WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(existingMutation.reviewId, teamId, input.review.channelId));
+          // 同 key replay 必然首次来自 package review 命令(package 字段非空)。
+          return review
+            ? { kind: 'replayed' as const, review: review as PackageReviewRecord }
+            : { kind: 'idempotency_conflict' as const };
+        }
+        // version 作用域复核(与 channelProjects.appendArtifactReview 同款)。
+        const version = teamDb.prepare(
+          `SELECT stage_id FROM project_artifact_versions
+           WHERE id = ? AND collection_id = ? AND team_id = ? AND channel_id = ?`,
+        ).get(
+          input.review.versionId,
+          input.review.collectionId,
+          teamId,
+          input.review.channelId,
+        );
+        if (!version) return { kind: 'version_scope_conflict' as const };
+        const versionStageId = sqliteNullableText(version, 'stage_id');
+        if ((input.review.stageId ?? undefined) !== versionStageId) {
+          return { kind: 'version_scope_conflict' as const };
+        }
+        if (input.review.stageId !== undefined) {
+          const stage = teamDb.prepare(
+            `SELECT 1 FROM project_stages WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(input.review.stageId, teamId, input.review.channelId);
+          if (!stage) return { kind: 'version_scope_conflict' as const };
+        }
+        // AC9 组合原子性：finalization 的 revision fence 必须**先于** review 写入复核——
+        // 任一校验失败都不得留下部分 review 事实(组合命令同 idempotencyKey 重试时,
+        // 已提交的 review 会让重试命中 receipt 而静默吞掉 finalization)。
+        if (input.finalization) {
+          const fin = input.finalization;
+          const collection = mapProjectArtifactCollection(teamDb.prepare(
+            `SELECT * FROM project_artifact_collections
+             WHERE id = ? AND team_id = ? AND channel_id = ?`,
+          ).get(fin.collectionId, teamId, input.review.channelId));
+          if (!collection || collection.revision !== fin.expectedCollectionRevision) {
+            return { kind: 'finalization_conflict' as const };
+          }
+        }
+        teamDb.prepare(
+          `INSERT INTO project_artifact_reviews (
+            id, team_id, channel_id, collection_id, version_id, stage_id,
+            package_id, delivery_id, task_id, task_revision, task_attempt,
+            authority_basis, decision, comment, basis_json, reviewed_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.review.id,
+          input.review.teamId,
+          input.review.channelId,
+          input.review.collectionId,
+          input.review.versionId,
+          input.review.stageId ?? null,
+          input.review.packageId,
+          input.review.deliveryId,
+          input.review.taskId,
+          input.review.taskRevision,
+          input.review.taskAttempt,
+          input.review.authorityBasis,
+          input.review.decision,
+          input.review.comment,
+          JSON.stringify(input.review.basis),
+          input.review.reviewedBy,
+          input.review.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO project_artifact_decision_mutations (
+            team_id, channel_id, idempotency_key, request_fingerprint, kind,
+            collection_id, version_id, review_id, finalization_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.mutation.teamId,
+          input.mutation.channelId,
+          input.mutation.idempotencyKey,
+          input.mutation.requestFingerprint,
+          'review',
+          input.review.collectionId,
+          input.review.versionId,
+          input.review.id,
+          null,
+          input.mutation.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO package_review_command_receipts (
+            receipt_id, team_id, command_name, command_schema_version, idempotency_key,
+            command_hash, outcome, committed_revisions_json, event_refs_json,
+            result_available, result_json, commit_time, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.receipt.receiptId,
+          input.receipt.teamId,
+          input.receipt.commandName,
+          input.receipt.commandSchemaVersion,
+          input.receipt.idempotencyKey,
+          input.receipt.commandHash,
+          input.receipt.outcome,
+          JSON.stringify(input.receipt.committedRevisions),
+          JSON.stringify(input.receipt.eventRefs),
+          input.receipt.resultAvailable ? 1 : 0,
+          input.receipt.resultJson ?? null,
+          input.receipt.commitTime,
+          input.receipt.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO package_review_idempotency_tombstones (
+            id, team_id, command_name, idempotency_key, command_hash, receipt_id,
+            outcome, result_available, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.tombstone.id,
+          input.tombstone.teamId,
+          input.tombstone.commandName,
+          input.tombstone.idempotencyKey,
+          input.tombstone.commandHash,
+          input.tombstone.receiptId,
+          input.tombstone.outcome,
+          input.tombstone.resultAvailable ? 1 : 0,
+          input.tombstone.createdAt,
+        );
+        // AC9 组合:同事务写 finalization 审计并移动 final 指针(revision fence 已在上方 review
+        // 写入前复核,此处只执行写入——复核失败时 review 也不会落库)。
+        if (input.finalization) {
+          const fin = input.finalization;
+          teamDb.prepare(
+            `INSERT INTO project_artifact_finalizations (
+              id, team_id, channel_id, collection_id, version_id, previous_version_id,
+              basis_review_id, actor_kind, finalized_by, management_run_id,
+              human_confirmation_kind, human_confirmation_ref_id, human_confirmation_by,
+              reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            fin.finalization.id,
+            fin.finalization.teamId,
+            fin.finalization.channelId,
+            fin.finalization.collectionId,
+            fin.finalization.versionId,
+            fin.finalization.previousVersionId ?? null,
+            fin.finalization.basisReviewId,
+            fin.finalization.actorKind,
+            fin.finalization.finalizedBy,
+            fin.finalization.managementRunId ?? null,
+            fin.finalization.humanConfirmation?.kind ?? null,
+            fin.finalization.humanConfirmation?.refId ?? null,
+            fin.finalization.humanConfirmation?.confirmedBy ?? null,
+            fin.finalization.reason ?? null,
+            fin.finalization.createdAt,
+          );
+          const changed = sqliteChanges(teamDb.prepare(
+            `UPDATE project_artifact_collections
+             SET final_version_id = ?, revision = ?, updated_at = ?
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?`,
+          ).run(
+            fin.finalization.versionId,
+            fin.nextRevision,
+            fin.updatedAt,
+            fin.collectionId,
+            teamId,
+            input.review.channelId,
+            fin.expectedCollectionRevision,
+          ));
+          if (changed !== 1) {
+            return { kind: 'finalization_conflict' as const };
+          }
+        }
+        return { kind: 'created' as const, review: input.review };
+      });
+      return result.immediate ? result.immediate() : result();
+    },
+    receipts: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM package_review_command_receipts WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey) as Record<string, unknown> | undefined;
+        return row ? mapPackageReviewReceiptRecord(row) : null;
+      },
+    },
+    tombstones: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM package_review_idempotency_tombstones WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey) as Record<string, unknown> | undefined;
+        return row ? mapPackageReviewTombstoneRecord(row) : null;
+      },
+    },
+  };
+}
+
 function createSqliteProjectReferenceSetRepository(
   db: SqliteDatabase,
 ): ProjectReferenceSetRepository {
@@ -5565,13 +5832,29 @@ function mapProjectArtifactReview(row: unknown): ProjectArtifactReviewRecord | n
   if (decision !== 'approved' && decision !== 'rejected' && decision !== 'changes_requested') {
     throw new Error('Project artifact review decision is invalid');
   }
+  const authorityBasis = sqliteText(row, 'authority_basis');
+  if (!PACKAGE_REVIEW_AUTHORITY_BASIS_KINDS.includes(authorityBasis as PackageReviewAuthorityBasisKind)) {
+    throw new Error('Project artifact review authority basis is invalid');
+  }
+  const stageId = sqliteNullableText(row, 'stage_id');
+  const packageId = sqliteNullableText(row, 'package_id');
+  const deliveryId = sqliteNullableText(row, 'delivery_id');
+  const taskId = sqliteNullableText(row, 'task_id');
+  const taskRevision = sqliteNullableNumber(row, 'task_revision');
+  const taskAttempt = sqliteNullableNumber(row, 'task_attempt');
   return {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
     channelId: sqliteText(row, 'channel_id'),
     collectionId: sqliteText(row, 'collection_id'),
     versionId: sqliteText(row, 'version_id'),
-    stageId: sqliteText(row, 'stage_id'),
+    ...(stageId ? { stageId } : {}),
+    ...(packageId ? { packageId } : {}),
+    ...(deliveryId ? { deliveryId } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(taskRevision !== undefined ? { taskRevision } : {}),
+    ...(taskAttempt !== undefined ? { taskAttempt } : {}),
+    authorityBasis: authorityBasis as PackageReviewAuthorityBasisKind,
     decision,
     comment: sqliteText(row, 'comment'),
     basis: parseJsonValue<ProjectArtifactReviewRecord['basis']>(

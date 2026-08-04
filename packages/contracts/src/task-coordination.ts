@@ -66,6 +66,12 @@ export interface TaskCoordinationDto {
   readonly outputSlots?: readonly OutputSlotDeclarationDto[];
   /** #948-G：声明的 input bindings；缺省视为 []（向后兼容）。 */
   readonly inputBindings?: readonly InputBindingDeclarationDto[];
+  /**
+   * #1061 AC3/AC4：创建时预绑定的人类验收 authority（user ids）。
+   * root = Human review authority；subtask = Subtask human acceptance authority。
+   * 缺省视为 []（未绑定 = 人类验收 fail closed；子 Task 客观验收仍由 PI authority 执行）。
+   */
+  readonly humanAcceptanceAuthorityIds?: readonly ID[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly dependencyTaskIds: readonly ID[];
   readonly attempt: number;

@@ -12,7 +12,9 @@ import {
   evaluateRejectRevision,
   evaluateRevisionFencing,
   evaluateRootCascadeCloseout,
+  evaluateRootHumanReviewAuthority,
   evaluateSubtaskAcceptance,
+  evaluateSubtaskHumanAcceptanceAuthority,
   resolveOutputSlots,
   validateTaskLifecycleTransition,
   type SubtaskCascadeState,
@@ -212,8 +214,12 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
 
       const actorKind: 'manager' | 'human' | 'system' = authorityKind === 'human' ? 'human'
         : authorityKind === 'pi_driver' ? 'manager' : 'system';
+      // #1061 AC3/AC4：human authority 的 actorId 必须是真实用户 id——usecase 层把 userId
+      // 放进 workerId 注入(kernel 的 human 入口约定);显式 userId 字段优先,workerId 兜底,
+      // 绝不让预绑定 authority 校验退化为匿名 'human'。
       const actorId = authorityKind === 'pi_driver' ? authority.workerId
-        : authorityKind === 'human' ? (authority as { userId?: string }).userId ?? 'human'
+        : authorityKind === 'human'
+          ? (authority as { userId?: string }).userId ?? authority.workerId
           : 'system';
 
       const result = await fn(repos, now, { ch, actorKind, actorId });
@@ -441,11 +447,24 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       assertRevision(task.revision, input.expectedTaskRevision);
       const coord = await requireCoordForTask(repos, task.id);
       if (coord.nodeKind !== 'root') conflict('TASK_ROOT_REQUIRED');
+      // #1061 AC4：root delivery 验收只接受当前 Human review authority。
+      // 预绑定顺序：coordination 显式预绑定 > run.initiatedByUserId(requester,旧链路 device-hosted
+      // PI 创建的 coordination 无预绑定字段,回退到任务发起者);两者皆空才 fail closed。
+      const run = await repos.management.runs.getById(coord.managementRunId);
+      const prebound = coord.humanAcceptanceAuthorityIds ?? [];
+      const authorityIds = prebound.length > 0
+        ? prebound
+        : (run?.initiatedByUserId ? [run.initiatedByUserId] : []);
+      if (evaluateRootHumanReviewAuthority({
+        actorId,
+        preboundAuthorityIds: authorityIds,
+      }).kind === 'rejected') {
+        conflict('TASK_ACCEPTANCE_AUTHORITY_MISMATCH');
+      }
       const vt = validateTaskLifecycleTransition(task.status, 'done');
       if (vt.kind === 'rejected') conflict(vt.reason ?? 'INVALID_TRANSITION');
       if (task.status !== 'in_review') conflict('TASK_NOT_IN_REVIEW');
 
-      const run = await repos.management.runs.getById(coord.managementRunId);
       if (!run) conflict('MANAGEMENT_RUN_NOT_FOUND');
       if (run.status !== 'in_review') conflict('MANAGEMENT_RUN_NOT_IN_REVIEW');
 
@@ -559,6 +578,15 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       const task = await requireTask(repos, acceptance.taskId);
       const coord = await requireCoordForTask(repos, task.id);
       if (coord.nodeKind !== 'subtask') conflict('TASK_SUBTASK_REQUIRED');
+      // #1061 AC3：主观/高风险验收必须由创建时预绑定的 Subtask human acceptance authority 执行。
+      // 未绑定(空数组)= 人类不得验收(fail closed),客观验收由 pi_driver 路径负责。
+      if (authorityKind === 'human'
+        && evaluateSubtaskHumanAcceptanceAuthority({
+          actorId,
+          preboundAuthorityIds: coord.humanAcceptanceAuthorityIds ?? [],
+        }).kind === 'rejected') {
+        conflict('TASK_ACCEPTANCE_AUTHORITY_MISMATCH');
+      }
       assertRevision(task.revision, acceptance.expectedTaskRevision);
       if (coord.attempt !== acceptance.taskAttempt) conflict('TASK_ATTEMPT_CONFLICT');
       if (task.status !== 'in_review') conflict('TASK_ACCEPTANCE_STATE_CONFLICT');
@@ -577,7 +605,10 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       if (claim.status !== 'active' || currentClaim?.id !== claim.id) conflict('TASK_CLAIM_NOT_ACTIVE');
       if (await repos.coordination.acceptances.getCanonicalByDelivery(delivery.id)) conflict('TASK_ACCEPTANCE_ALREADY_DECIDED');
 
-      if (acceptance.decision === 'accepted') {
+      if (acceptance.decision === 'accepted' && authorityKind !== 'human') {
+        // #1061 AC3：客观验收(criteria/evidence)只约束 PI authority(pi_driver);
+        // 人类路径已由创建时预绑定的 Subtask human acceptance authority 授权,
+        // 人类判定本身就是主观授权,不再强制客观 criteria 证明。
         const criteria = activeCriteria(await repos.coordination.criteria.list(task.id), task.revision);
         const snapshots = (await repos.coordination.evidenceSnapshots.listByTask(task.id))
           .filter((s) => s.taskRevision === task.revision && s.taskAttempt === coord.attempt && s.invocationId === delivery.invocationId);

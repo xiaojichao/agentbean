@@ -243,6 +243,14 @@ export const WEB_EVENTS = {
     listOutputPackages: 'project:list-output-packages',
     /** #1060 获取单个 OutputPackage(含冻结成员)。 */
     getOutputPackage: 'project:get-output-package',
+    /** #1061 对 package 成员版本提交审核(approved/changes_requested/rejected)。 */
+    submitPackageArtifactReview: 'project:submit-package-artifact-review',
+    /** #1061 "通过并设为最终版":一个事务写 review 与 finalization 两个独立事实。 */
+    submitPackageReviewAndFinalize: 'project:submit-package-review-and-finalize',
+    /** #1061 审核(changes_requested/rejected)与退回 Task delivery 原子提交。 */
+    submitPackageReviewAndRejectDelivery: 'project:submit-package-review-and-reject-delivery',
+    /** #1061 package 审核/最终版事实变化后的推送(三投影刷新)。 */
+    packageReviewUpdated: 'project:package-review-updated',
   },
   dm: {
     start: 'dm:start',

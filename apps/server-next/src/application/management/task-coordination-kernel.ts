@@ -84,6 +84,11 @@ export interface CreateRootCoordinationInput extends TaskCoordinationCommandInpu
   readonly requiredCapabilities: readonly string[];
   readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
   readonly maxAttempts: number;
+  /**
+   * #1061 AC4：创建时预绑定的根 Task Human review authority（user ids）。
+   * 缺省 [] = 未绑定（人类验收 fail closed）。production 由 promotion gate 传 requesterId。
+   */
+  readonly humanReviewAuthorityIds?: readonly string[];
 }
 
 export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
@@ -114,6 +119,11 @@ export interface CreateSubtasksInput extends TaskCoordinationCommandInput {
     readonly outputSlots?: readonly OutputSlotDeclarationDto[];
     /** #948-G ADR-0064：该子 Task 声明的 input bindings（显式引用上游 output slot，数据依赖）。缺省视为 []。 */
     readonly inputBindings?: readonly InputBindingDeclarationDto[];
+    /**
+     * #1061 AC3：创建时预绑定的 Subtask human acceptance authority（user ids）。
+     * 缺省 [] = 人类不得验收（主观/高风险验收必须显式预绑定）。
+     */
+    readonly humanAcceptanceAuthorityIds?: readonly string[];
     readonly acceptanceCriteria: readonly AcceptanceCriterionDto[];
     readonly maxAttempts: number;
   }[];
@@ -225,6 +235,9 @@ export function createTaskCoordinationKernel(
           schemaVersion: 1, taskId: task.id, teamId: task.teamId, managementRunId: run.id,
           rootTaskId: task.id, nodeKind: 'root', reviewPolicy: 'human',
           claimPolicy: input.claimPolicy, requiredCapabilities: [...input.requiredCapabilities],
+          ...(input.humanReviewAuthorityIds?.length
+            ? { humanAcceptanceAuthorityIds: [...input.humanReviewAuthorityIds] }
+            : {}),
           taskRevision: task.revision, attempt: 1, maxAttempts: input.maxAttempts,
           createdAt: now, updatedAt: now,
         };
@@ -312,6 +325,9 @@ export function createTaskCoordinationKernel(
             preferredSkills: draft.preferredSkills ? [...draft.preferredSkills] : [],
             outputSlots: draft.outputSlots ? [...draft.outputSlots] : [],
             inputBindings: draft.inputBindings ? [...draft.inputBindings] : [],
+            ...(draft.humanAcceptanceAuthorityIds?.length
+              ? { humanAcceptanceAuthorityIds: [...draft.humanAcceptanceAuthorityIds] }
+              : {}),
             atomicityHint: input.atomicityHint ?? 'decomposable',
             taskRevision: task.revision, attempt: 1, maxAttempts: draft.maxAttempts,
             createdAt: now, updatedAt: now,

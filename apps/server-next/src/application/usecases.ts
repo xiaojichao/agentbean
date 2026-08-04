@@ -149,6 +149,9 @@ import type {
   ListProjectDocumentBundlesInput,
   ProjectArtifactCollectionDto,
   ProjectArtifactFinalizationDto,
+  ProjectArtifactReviewDecision,
+  ProjectArtifactVersionReviewState,
+  PackageReviewDto,
   ProjectArtifactLibraryDto,
   ProjectArtifactLineageRefDto,
   ProjectArtifactReviewBasisRefDto,
@@ -165,6 +168,8 @@ import type {
   OutputPackageDto,
   OutputPackageSummaryDto,
   OutputPackagePendingDeliveryDto,
+  PackageMemberAvailableActionsDto,
+  PackageReviewAction,
   ProjectStageBlockingReasonDto,
   ProjectStageEdgeDto,
   ProjectStageMissingRequiredInputDto,
@@ -174,9 +179,11 @@ import type {
   SubmitProjectArtifactReviewInput,
 } from '../../../../packages/contracts/src/index.js';
 import {
+  deriveAuthorityBasis,
   deriveProjectArtifactVersionReviewState,
   evaluateArtifactReviewAuthority,
   evaluateArtifactPromotion,
+  evaluatePackageArtifactReviewAuthority,
   evaluateBundleComposition,
   evaluateProjectArtifactFinalization,
   evaluateProjectArtifactLineage,
@@ -245,6 +252,27 @@ import {
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import { attemptOutputPackageFormation } from './output-package-handler.js';
+import {
+  submitPackageReviewCommand,
+  type SubmitPackageReviewCommandInput,
+  type SubmitPackageReviewResult,
+} from './package-review-handler.js';
+
+/** #1061 三个 package review 命令的 socket 输入(teamId 由 socket 会话解析,userId 由 Server 注入)。 */
+export interface PackageReviewCommandSocketInput {
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly packageId: string;
+  readonly collectionId: string;
+  readonly versionId: string;
+  readonly decision: 'approved' | 'changes_requested' | 'rejected';
+  readonly comment: string;
+  readonly idempotencyKey: string;
+  readonly expectedCollectionRevision?: number;
+  readonly expectedTaskRevision?: number;
+  readonly expectedTaskAttempt?: number;
+  readonly rejectReason?: string;
+}
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -570,6 +598,24 @@ export interface ServerNextUseCases {
     collection: ProjectArtifactCollectionDto;
     version: ProjectArtifactVersionDto;
     finalization: ProjectArtifactFinalizationDto;
+    replayed: boolean;
+  }>>;
+  /** #1061 对 package 成员版本提交审核(AC1),append-only。 */
+  submitPackageArtifactReview(input: PackageReviewCommandSocketInput & { userId: string }): Promise<Ack<{
+    review: PackageReviewDto;
+    replayed: boolean;
+  }>>;
+  /** #1061 "通过并设为最终版":一个事务写 review 与 finalization 两个独立事实(AC9)。 */
+  submitPackageReviewAndFinalize(input: PackageReviewCommandSocketInput & { userId: string }): Promise<Ack<{
+    review: PackageReviewDto;
+    finalization: ProjectArtifactFinalizationDto;
+    collection: ProjectArtifactCollectionDto;
+    replayed: boolean;
+  }>>;
+  /** #1061 审核(changes_requested/rejected)与退回 Task delivery 原子提交(AC6)。 */
+  submitPackageReviewAndRejectDelivery(input: PackageReviewCommandSocketInput & { userId: string }): Promise<Ack<{
+    review: PackageReviewDto;
+    task: { taskId: string; taskRevision: number; taskAttempt: number; status: string };
     replayed: boolean;
   }>>;
   listProjectDocumentBundles(
@@ -8240,6 +8286,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         versionId: version.id,
         // stage 已在上方按 version.stageId 找到(stage-less 交付版本在 L8111 处 fail-closed)。
         stageId: stage.id,
+        // #1061：记录本次审核依据的 authority basis(基于已通过的 #824 authority 判定)。
+        authorityBasis: deriveAuthorityBasis(actorFacts),
         decision: projectInput.decision,
         comment,
         basis,
@@ -8551,6 +8599,66 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async submitPackageArtifactReview(reviewInput) {
+      return packageReviewCommandAck(repositories, await submitPackageReviewCommand(
+        { repositories, clock, ids },
+        {
+          teamId: reviewInput.teamId,
+          userId: reviewInput.userId,
+          commandName: 'submit-package-artifact-review',
+          channelId: reviewInput.channelId,
+          packageId: reviewInput.packageId,
+          collectionId: reviewInput.collectionId,
+          versionId: reviewInput.versionId,
+          decision: reviewInput.decision,
+          comment: reviewInput.comment,
+          idempotencyKey: reviewInput.idempotencyKey,
+        },
+      ), 'review');
+    },
+
+    async submitPackageReviewAndFinalize(reviewInput) {
+      const result = await submitPackageReviewCommand(
+        { repositories, clock, ids },
+        {
+          teamId: reviewInput.teamId,
+          userId: reviewInput.userId,
+          commandName: 'submit-package-review-and-finalize',
+          channelId: reviewInput.channelId,
+          packageId: reviewInput.packageId,
+          collectionId: reviewInput.collectionId,
+          versionId: reviewInput.versionId,
+          decision: reviewInput.decision,
+          comment: reviewInput.comment,
+          idempotencyKey: reviewInput.idempotencyKey,
+          expectedCollectionRevision: reviewInput.expectedCollectionRevision,
+        },
+      );
+      return packageReviewCommandAck(repositories, result, 'finalize');
+    },
+
+    async submitPackageReviewAndRejectDelivery(reviewInput) {
+      const result = await submitPackageReviewCommand(
+        { repositories, clock, ids },
+        {
+          teamId: reviewInput.teamId,
+          userId: reviewInput.userId,
+          commandName: 'submit-package-review-and-reject-delivery',
+          channelId: reviewInput.channelId,
+          packageId: reviewInput.packageId,
+          collectionId: reviewInput.collectionId,
+          versionId: reviewInput.versionId,
+          decision: reviewInput.decision,
+          comment: reviewInput.comment,
+          idempotencyKey: reviewInput.idempotencyKey,
+          expectedTaskRevision: reviewInput.expectedTaskRevision,
+          expectedTaskAttempt: reviewInput.expectedTaskAttempt,
+          rejectReason: reviewInput.rejectReason,
+        },
+      );
+      return packageReviewCommandAck(repositories, result, 'reject-delivery');
+    },
+
     async listProjectDocumentBundles(bundleInput) {
       if (!projectCollaborationRollout.bundleSelection) {
         projectCollaborationMetrics.recordMutationFailure('disabled');
@@ -8617,7 +8725,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
       const hasMore = records.length > limit;
       const page = hasMore ? records.slice(0, limit) : records;
-      const summaries = page.map(toOutputPackageSummaryDto);
+      // #1061 AC11：summary 携带成员 reviewState 的聚合(Server 计算,Files/Task 直接展示)。
+      const allReviews = await repositories.channelProjects.listArtifactReviews({
+        teamId: parsed.teamId,
+        channelId: parsed.channelId,
+      });
+      const summaries = [];
+      for (const record of page) {
+        const projection = await repositories.outputPackages.getPackageById({
+          teamId: parsed.teamId,
+          packageId: record.packageId,
+        });
+        const memberReviews = (projection?.members ?? []).flatMap((member) =>
+          allReviews.filter((review) => review.versionId === member.artifactVersionId));
+        summaries.push(toOutputPackageSummaryDto(record, aggregatePackageReviewState(memberReviews)));
+      }
       // pendingDeliveries:committed 且有 provenance 但尚未形成 package 的交付(UI「交付处理中」)。
       // 差集必须基于**全频道**已形成 publishId(分页会漏判后页已成形 package);taskId 过滤与 packages 一致。
       const committedStagings = await repositories.workspacePublishStagings.listCommittedByChannel({
@@ -8669,7 +8791,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!result || result.package.channelId !== packageInput.channelId) {
         return makeFailure('NOT_FOUND', 'Output package not found');
       }
-      return makeSuccess({ package: toOutputPackageDto(result.package, result.members) });
+      // #1061 AC11：Server 按当前用户计算可执行动作,web 只渲染 Server 给的动作。
+      const availableActions = await computePackageMemberAvailableActions(repositories, {
+        teamId: parsed.teamId,
+        userId: parsed.userId,
+        channelId: parsed.channelId,
+        packageProjection: result,
+      });
+      return makeSuccess({
+        package: toOutputPackageDto(result.package, result.members),
+        availableActions,
+      });
     },
 
     async createProjectDocumentBundle(bundleInput) {
@@ -15285,7 +15417,13 @@ function projectArtifactReviewDto(record: ProjectArtifactReviewRecord): ProjectA
     channelId: record.channelId,
     collectionId: record.collectionId,
     versionId: record.versionId,
-    stageId: record.stageId,
+    ...(record.stageId ? { stageId: record.stageId } : {}),
+    ...(record.packageId ? { packageId: record.packageId } : {}),
+    ...(record.deliveryId ? { deliveryId: record.deliveryId } : {}),
+    ...(record.taskId ? { taskId: record.taskId } : {}),
+    ...(record.taskRevision !== undefined ? { taskRevision: record.taskRevision } : {}),
+    ...(record.taskAttempt !== undefined ? { taskAttempt: record.taskAttempt } : {}),
+    authorityBasis: record.authorityBasis,
     decision: record.decision,
     comment: record.comment,
     basis: record.basis,
@@ -15295,7 +15433,30 @@ function projectArtifactReviewDto(record: ProjectArtifactReviewRecord): ProjectA
 }
 
 // #1060 OutputPackage DTO 映射:record → 冻结的不可变投影(创建后成员/版本永不改写)。
-function toOutputPackageSummaryDto(record: OutputPackageRecord): OutputPackageSummaryDto {
+/**
+ * #1061 AC11：聚合 package 成员 reviewState——任一 rejected → rejected;任一
+ * changes_requested → changes_requested;全部 approved → approved;否则 pending。
+ */
+function aggregatePackageReviewState(
+  memberReviews: readonly { versionId: string; decision: ProjectArtifactReviewDecision }[],
+): ProjectArtifactVersionReviewState {
+  if (memberReviews.length === 0) return 'pending';
+  // 每个成员取最新一条 review(与 #824 的 deriveProjectArtifactVersionReviewState 一致)。
+  const latestByVersion = new Map<string, ProjectArtifactReviewDecision>();
+  for (const review of memberReviews) {
+    latestByVersion.set(review.versionId, review.decision);
+  }
+  const latest = [...latestByVersion.values()];
+  if (latest.some((decision) => decision === 'rejected')) return 'rejected';
+  if (latest.some((decision) => decision === 'changes_requested')) return 'changes_requested';
+  if (latest.every((decision) => decision === 'approved')) return 'approved';
+  return 'pending';
+}
+
+function toOutputPackageSummaryDto(
+  record: OutputPackageRecord,
+  reviewState: ProjectArtifactVersionReviewState,
+): OutputPackageSummaryDto {
   return {
     schemaVersion: 1,
     packageId: record.packageId,
@@ -15311,6 +15472,7 @@ function toOutputPackageSummaryDto(record: OutputPackageRecord): OutputPackageSu
     ...(record.taskRevision !== undefined ? { taskRevision: record.taskRevision } : {}),
     taskAttempt: record.taskAttempt,
     memberCount: record.memberCount,
+    reviewState,
     status: 'recorded',
     createdAt: record.createdAt,
   };
@@ -15416,6 +15578,106 @@ async function resolveProjectArtifactLineageScope(
   return { teamId: artifact.teamId, channelId: artifact.channelId };
 }
 
+/**
+ * #1061 AC11：按当前用户计算 package 成员的可执行动作。
+ * 权限判定完全复用 domain 纯函数(review/finalization authority 与 #824 合同同源),
+ * 客户端不得自行推断——按钮可见性只由这里的结果决定。
+ */
+async function computePackageMemberAvailableActions(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: string;
+    userId: string;
+    channelId: string;
+    packageProjection: { package: OutputPackageRecord; members: OutputPackageMemberRecord[] };
+  },
+): Promise<PackageMemberAvailableActionsDto[]> {
+  const { teamId, userId, channelId } = input;
+  const profile = await repositories.channelProjects.getProfile({ teamId, channelId });
+  const collections = await repositories.channelProjects.listArtifactCollections({ teamId, channelId });
+  const versions = await repositories.channelProjects.listArtifactVersions({ teamId, channelId });
+  const reviews = await repositories.channelProjects.listArtifactReviews({ teamId, channelId });
+  const stages = await repositories.channelProjects.listStages({ teamId, channelId });
+  const teamRole = await repositories.teams.getMemberRole(teamId, userId);
+  const task = await repositories.tasks.getById(input.packageProjection.package.taskId);
+  const coordination = task
+    ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
+    : null;
+
+  return input.packageProjection.members.map((member) => {
+    const collection = collections.find((candidate) => candidate.id === member.collectionId);
+    const version = versions.find((candidate) => candidate.id === member.artifactVersionId);
+    const stage = version?.stageId
+      ? stages.find((candidate) => candidate.id === version.stageId) ?? null
+      : null;
+    const memberReviews = reviews.filter((candidate) => candidate.versionId === member.artifactVersionId);
+    const reviewState = deriveProjectArtifactVersionReviewState(
+      memberReviews.map((record) => ({
+        id: record.id,
+        versionId: record.versionId,
+        decision: record.decision,
+        createdAt: record.createdAt,
+      })),
+    );
+    const isFinalVersion = collection?.finalVersionId === member.artifactVersionId;
+
+    const authority = evaluatePackageArtifactReviewAuthority({
+      actorKind: 'human',
+      facts: {
+        teamId,
+        channelId,
+        actorFacts: {
+          userId,
+          teamRole,
+          projectLeadId: profile?.projectLeadId ?? '',
+          stageReviewerIds: stage?.reviewerIds ?? [],
+        },
+        package: {
+          id: input.packageProjection.package.packageId,
+          teamId: input.packageProjection.package.teamId,
+          channelId: input.packageProjection.package.channelId,
+          members: input.packageProjection.members.map((m) => ({
+            collectionId: m.collectionId,
+            artifactVersionId: m.artifactVersionId,
+          })),
+        },
+        versionScope: {
+          collectionId: member.collectionId,
+          versionId: member.artifactVersionId,
+          versionCollectionId: version?.collectionId,
+        },
+      },
+      decision: 'approved',
+    });
+    const canReview = authority.kind === 'allowed';
+    const canFinalize = canReview; // #824 合同:review 与 finalization authority 同源。
+
+    const actions: PackageReviewAction[] = [];
+    if (canReview) {
+      actions.push('review-approved', 'review-changes-requested', 'review-rejected');
+      if (task && coordination
+        && task.status === 'in_review'
+        && input.packageProjection.package.taskId === task.id) {
+        actions.push('review-and-reject-delivery');
+      }
+      if (canFinalize && collection) {
+        actions.push('review-and-finalize');
+      }
+    }
+    if (canFinalize && collection && reviewState === 'approved' && !isFinalVersion) {
+      actions.push('set-final');
+    }
+    return {
+      collectionId: member.collectionId,
+      versionId: member.artifactVersionId,
+      reviewState,
+      isFinalVersion,
+      collectionRevision: collection?.revision ?? 0,
+      actions,
+    };
+  });
+}
+
 function projectArtifactPromotionFailure(
   reasonCode: ProjectArtifactPromotionRejectionCode,
 ): ReturnType<typeof makeFailure> {
@@ -15433,6 +15695,148 @@ function projectArtifactPromotionFailure(
     default:
       return makeFailure('VALIDATION_ERROR', 'Ambiguous logical artifact collection target');
   }
+}
+
+/**
+ * #1061 三个 package review 命令的结果 → Ack 映射。
+ * - conflict/rejected → 结构化失败(AC10:stale/越权/replay 冲突返回明确 outcome);
+ * - replayed → 从 receipt 的完整 resultJson 恢复既有事实,不重跑业务(AC10 同 key replay);
+ * - applied → 各命令自己的成功事实(review / review+finalization / review+task transition)。
+ */
+/** #1061 AC10：stale/幂等类拒绝码 → CONFLICT 语义(其余权限类 → FORBIDDEN)。 */
+const PACKAGE_REVIEW_CONFLICT_CODES: readonly string[] = [
+  'collection-revision-stale',
+  'task-revision-stale',
+  'task-attempt-stale',
+  'version-not-in-package',
+  'version-not-in-collection',
+  'delivery-not-reviewable',
+  'package-out-of-scope',
+  'review-required-before-reject',
+  'idempotency-conflict',
+];
+
+/** #1061 三个命令的成功 payload 按 mode 映射。 */
+export interface PackageReviewAckPayloadMap {
+  readonly review: { review: PackageReviewDto; replayed: boolean };
+  readonly finalize: {
+    review: PackageReviewDto;
+    finalization: ProjectArtifactFinalizationDto;
+    collection: ProjectArtifactCollectionDto;
+    replayed: boolean;
+  };
+  readonly 'reject-delivery': {
+    review: PackageReviewDto;
+    task: { taskId: string; taskRevision: number; taskAttempt: number; status: string };
+    replayed: boolean;
+  };
+}
+
+async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMap>(
+  repositories: ServerNextRepositories,
+  result: SubmitPackageReviewResult,
+  mode: M,
+): Promise<Ack<PackageReviewAckPayloadMap[M]>> {
+  if (result.kind === 'conflict') {
+    return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`);
+  }
+  if (result.kind === 'rejected') {
+    // #1061 AC10：stale revision / 幂等冲突是 conflict 语义,权限类是 FORBIDDEN。
+    if (PACKAGE_REVIEW_CONFLICT_CODES.includes(result.reasonCode)) {
+      return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`);
+    }
+    if (result.reasonCode === 'invalid-decision' || result.reasonCode === 'reject-reason-required') {
+      return makeFailure('VALIDATION_ERROR', `Package review rejected: ${result.reasonCode}`);
+    }
+    return makeFailure('FORBIDDEN', `Package review rejected: ${result.reasonCode}`);
+  }
+  if (result.kind === 'replayed') {
+    // 同 key replay:从首次 receipt 的完整 resultJson 恢复既有事实(AC10)。
+    let parsed: { review?: PackageReviewDto } = {};
+    try {
+      parsed = JSON.parse(result.receipt.resultJson ?? '{}') as { review?: PackageReviewDto };
+    } catch {
+      // 治理压缩后的 receipt 无 result:返回冲突,调用方刷新。
+    }
+    if (!parsed.review) {
+      return makeFailure('CONFLICT', 'Recorded package review result is no longer available');
+    }
+    if (mode === 'finalize') {
+      const finalizations = await repositories.channelProjects.listArtifactFinalizations({
+        teamId: result.receipt.teamId,
+        channelId: parsed.review.channelId ?? '',
+      });
+      const finalization = finalizations.find((candidate) => candidate.basisReviewId === parsed.review!.id);
+      // 组合事实必须完整可恢复;治理压缩导致任一缺失 → conflict,不伪造(AC10)。
+      if (!finalization) {
+        return makeFailure('CONFLICT', 'Recorded package review finalization result is no longer available');
+      }
+      const channel = await repositories.channels.getById(parsed.review.channelId ?? '');
+      const projection = channel
+        ? await projectArtifactPromotionResult(repositories, channel, {
+          collectionId: parsed.review.collectionId ?? '',
+          versionId: parsed.review.versionId ?? '',
+        })
+        : null;
+      if (!projection) {
+        return makeFailure('CONFLICT', 'Recorded package review finalization result is no longer available');
+      }
+      return makeSuccess({
+        review: parsed.review,
+        finalization: projectArtifactFinalizationDto(finalization),
+        collection: projection.collection,
+        replayed: true,
+      });
+    }
+    if (mode === 'reject-delivery') {
+      let parsedTask: { taskId: string; taskStatusAfterReject: string } | undefined;
+      try {
+        parsedTask = (JSON.parse(result.receipt.resultJson ?? '{}') as { task?: typeof parsedTask }).task;
+      } catch {
+        // 治理压缩后的 receipt 无 result。
+      }
+      if (!parsedTask) {
+        return makeFailure('CONFLICT', 'Recorded package review result is no longer available');
+      }
+      return makeSuccess({
+        review: parsed.review,
+        task: {
+          taskId: parsedTask.taskId,
+          taskRevision: parsed.review.taskRevision ?? 1,
+          taskAttempt: parsed.review.taskAttempt ?? 1,
+          status: parsedTask.taskStatusAfterReject,
+        },
+        replayed: true,
+      });
+    }
+    return makeSuccess({ review: parsed.review, replayed: true });
+  }
+  if (mode === 'finalize' && result.finalization) {
+    const collection = await repositories.channelProjects.getArtifactCollection({
+      teamId: result.finalization.teamId,
+      channelId: result.finalization.channelId,
+      collectionId: result.finalization.collectionId,
+    });
+    return makeSuccess({
+      review: projectArtifactReviewDto(result.review) as PackageReviewDto,
+      finalization: projectArtifactFinalizationDto(result.finalization),
+      collection: collection ?? { id: result.finalization.collectionId } as never,
+      replayed: false,
+    } as never);
+  }
+  if (mode === 'reject-delivery' && result.taskTransition) {
+    return makeSuccess({
+      review: projectArtifactReviewDto(result.review) as PackageReviewDto,
+      task: {
+        taskId: result.taskTransition.taskId,
+        taskRevision: result.taskTransition.taskRevision,
+        taskAttempt: result.taskTransition.taskAttempt,
+        status: result.taskTransition.status,
+      },
+      replayed: false,
+    });
+  }
+  return makeSuccess({ review: projectArtifactReviewDto(result.review) as PackageReviewDto, replayed: false });
 }
 
 async function projectArtifactAuthorityFacts(
