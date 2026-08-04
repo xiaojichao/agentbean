@@ -2692,6 +2692,22 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         const channel = channels.get(input.set.channelId);
         const message = messages.get(input.set.messageId);
+        // #1063 提交点 fence(memory 与 sqlite 同语义):
+        // - package 语境必须落在本 Team/Channel 且 package 存在(软引用,事务内显式复核);
+        // - 带 collectionRevision basis 的 artifact item 复核 collection.revision 未漂移。
+        const packageContextsAreValid = input.selections.every((selection) => {
+          if (!selection.packageId) return true;
+          const record = outputPackages.get(`${input.set.teamId}:${selection.packageId}`);
+          return Boolean(record) && record!.channelId === input.set.channelId;
+        });
+        const collectionRevisionsAreCurrent = input.items.every((item) => {
+          if (item.kind !== 'artifact_version' || item.collectionRevision === undefined) return true;
+          const collection = item.collectionId ? projectArtifactCollections.get(item.collectionId) : null;
+          return Boolean(collection)
+            && collection!.teamId === input.set.teamId
+            && collection!.channelId === input.set.channelId
+            && collection!.revision === item.collectionRevision;
+        });
         if (!channel
           || channel.teamId !== input.set.teamId
           || channel.archivedAt != null
@@ -2705,7 +2721,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
               || document.teamId !== input.set.teamId
               || document.channelId !== input.set.channelId
               || document.currentRevisionId !== item.revisionId;
-          })) {
+          })
+          || !packageContextsAreValid
+          || !collectionRevisionsAreCurrent) {
           return { kind: 'reference_fact_conflict' };
         }
         projectReferenceSets.set(input.set.id, {

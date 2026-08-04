@@ -291,6 +291,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0077_output_packages.sql');
     // #1061：package 绑定审核 + authority token + 新命令 receipt（依赖 0077 的 packages 事实）。
     applyMigration(db, 'team/0078_package_review.sql', { disableForeignKeys: true });
+    // #1063：reference selections 的 package 投影列 + items 的 collection revision basis。
+    applyMigration(db, 'team/0079_project_reference_package_selections.sql', { disableForeignKeys: true });
   }
 }
 
@@ -5644,7 +5646,35 @@ function createSqliteProjectReferenceSetRepository(
             item.revisionId,
           ));
         });
-        if (!channel || !documentFactsAreCurrent) {
+        // #1063 提交点 fence:
+        // - package 语境(selections 带 packageId)必须落在本 Team/Channel 且 package 存在
+        //   (对 output_packages 软引用,故在事务内显式复核);
+        // - 带 collectionRevision basis 的 artifact item(current/final 指针解析)必须复核
+        //   对应 collection 的 revision 未漂移——current 移动与 final 移动都推进 revision。
+        const packageContextsAreValid = input.selections.every((selection) => {
+          if (!selection.packageId) return true;
+          return Boolean(db.prepare(
+            `SELECT package_id FROM output_packages
+             WHERE team_id = ? AND channel_id = ? AND package_id = ?`,
+          ).get(
+            input.set.teamId,
+            input.set.channelId,
+            selection.packageId,
+          ));
+        });
+        const collectionRevisionsAreCurrent = input.items.every((item) => {
+          if (item.kind !== 'artifact_version' || item.collectionRevision === undefined) return true;
+          return Boolean(db.prepare(
+            `SELECT id FROM project_artifact_collections
+             WHERE id = ? AND team_id = ? AND channel_id = ? AND revision = ?`,
+          ).get(
+            item.collectionId,
+            input.set.teamId,
+            input.set.channelId,
+            item.collectionRevision,
+          ));
+        });
+        if (!channel || !documentFactsAreCurrent || !packageContextsAreValid || !collectionRevisionsAreCurrent) {
           return { kind: 'reference_fact_conflict' as const };
         }
 
@@ -5664,8 +5694,9 @@ function createSqliteProjectReferenceSetRepository(
         const insertSelection = db.prepare(
           `INSERT INTO project_reference_selections (
              id, reference_set_id, source_kind, position, bundle_id, bundle_name,
-             bundle_member_count, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             bundle_member_count, package_id, package_projection,
+             package_member_count, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const selection of input.selections) {
           insertSelection.run(
@@ -5676,6 +5707,9 @@ function createSqliteProjectReferenceSetRepository(
             selection.bundleId ?? null,
             selection.bundleName ?? null,
             selection.bundleMemberCount ?? null,
+            selection.packageId ?? null,
+            selection.packageProjection ?? null,
+            selection.packageMemberCount ?? null,
             selection.createdAt,
           );
         }
@@ -5683,8 +5717,8 @@ function createSqliteProjectReferenceSetRepository(
           `INSERT INTO project_reference_items (
              id, selection_id, kind, position, document_id, revision_id, revision_number,
              filename, bundle_position, collection_id, version_id, version_number,
-             artifact_id, artifact_filename, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             artifact_id, artifact_filename, collection_revision, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const item of input.items) {
           insertItem.run(
@@ -5702,6 +5736,7 @@ function createSqliteProjectReferenceSetRepository(
             item.versionNumber ?? null,
             item.artifactId ?? null,
             item.artifactFilename ?? null,
+            item.collectionRevision ?? null,
             item.createdAt,
           );
         }
@@ -5867,6 +5902,9 @@ function mapProjectArtifactReview(row: unknown): ProjectArtifactReviewRecord | n
 
 function mapProjectReferenceSelection(row: unknown): ProjectReferenceSelectionRecord | null {
   if (!row) return null;
+  const packageId = sqliteNullableText(row, 'package_id');
+  const packageProjection = sqliteNullableText(row, 'package_projection');
+  const packageMemberCount = sqliteNullableNumber(row, 'package_member_count');
   return {
     id: sqliteText(row, 'id'),
     referenceSetId: sqliteText(row, 'reference_set_id'),
@@ -5875,6 +5913,11 @@ function mapProjectReferenceSelection(row: unknown): ProjectReferenceSelectionRe
     bundleId: sqliteNullableText(row, 'bundle_id'),
     bundleName: sqliteNullableText(row, 'bundle_name'),
     bundleMemberCount: sqliteNullableNumber(row, 'bundle_member_count'),
+    ...(packageId === undefined ? {} : { packageId }),
+    ...(packageProjection === undefined
+      ? {}
+      : { packageProjection: packageProjection as NonNullable<ProjectReferenceSelectionRecord['packageProjection']> }),
+    ...(packageMemberCount === undefined ? {} : { packageMemberCount }),
     createdAt: sqliteNumber(row, 'created_at'),
     items: [],
   };
@@ -5897,6 +5940,7 @@ function mapProjectReferenceItem(row: unknown): ProjectReferenceItemRecord | nul
     versionNumber: sqliteNullableNumber(row, 'version_number'),
     artifactId: sqliteNullableText(row, 'artifact_id'),
     artifactFilename: sqliteNullableText(row, 'artifact_filename'),
+    collectionRevision: sqliteNullableNumber(row, 'collection_revision'),
     createdAt: sqliteNumber(row, 'created_at'),
   };
 }

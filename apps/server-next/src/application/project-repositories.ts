@@ -411,17 +411,24 @@ export interface ProjectReferenceItemRecord {
   versionNumber?: number;
   artifactId?: ID;
   artifactFilename?: string;
+  /** #1063：current/final 指针解析 item 冻结的 collection revision basis。 */
+  collectionRevision?: number;
   createdAt: UnixMs;
 }
 
 export interface ProjectReferenceSelectionRecord {
   id: ID;
   referenceSetId: ID;
-  sourceKind: 'bundle_all' | 'bundle_subset' | 'document' | 'artifact_version';
+  sourceKind: 'bundle_all' | 'bundle_subset' | 'document' | 'artifact_version'
+    | 'package_delivered' | 'package_current' | 'package_final' | 'package_specified';
   position: number;
   bundleId?: ID;
   bundleName?: string;
   bundleMemberCount?: number;
+  /** #1063：package 语境快照(package 不可变;policy=来源投影策略)。 */
+  packageId?: ID;
+  packageProjection?: 'delivered' | 'current' | 'final' | 'specified';
+  packageMemberCount?: number;
   createdAt: UnixMs;
   items: ProjectReferenceItemRecord[];
 }
