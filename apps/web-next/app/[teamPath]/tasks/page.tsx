@@ -288,6 +288,26 @@ export default function TasksPage() {
     return taskId ? tasks.find((task) => task.id === taskId) ?? null : null;
   }, [tasks, threadMessages, threadTarget]);
 
+  // #1064：「交给 Agent 处理」预填最近交付包（listOutputPackages 按 created_at DESC，首项=最新）。
+  const [taskPackages, setTaskPackages] = useState<OutputPackageSummaryDto[]>([]);
+  useEffect(() => {
+    setTaskPackages([]);
+  }, [selectedTask?.id]);
+  const handleTaskPackages = useCallback((packages: OutputPackageSummaryDto[]) => {
+    setTaskPackages(packages);
+  }, []);
+  const delegatePackage = taskPackages[0] ?? null;
+  const handleDelegateToAgent = () => {
+    if (!selectedTask?.channelId || !threadRoot?.id || !delegatePackage) return;
+    const routeKind = dms.some((dm) => dm.id === selectedTask.channelId) ? 'dm' : 'channel';
+    // 预填不创建任何事实：只有 text + selections 进 URL，composer 收到后仅写本地 state。
+    const compose = JSON.stringify({
+      text: `请基于交付文件包 ${delegatePackage.packageId}（delivered 投影）继续处理任务「${selectedTask.title}」：`,
+      selections: [{ kind: 'package_projection', packageId: delegatePackage.packageId, policy: 'delivered' }],
+    });
+    router.push(`/${np}/${routeKind}/${selectedTask.channelId}?thread=${encodeURIComponent(`${selectedTask.channelId}:${threadRoot.id}`)}&compose=${encodeURIComponent(compose)}`);
+  };
+
   useEffect(() => {
     if (!selectedTask) {
       setTaskDag(null);
@@ -656,6 +676,9 @@ export default function TasksPage() {
             const routeKind = dms.some((dm) => dm.id === selectedTask.channelId) ? 'dm' : 'channel';
             router.push(`/${np}/${routeKind}/${selectedTask.channelId}?message=${encodeURIComponent(`${selectedTask.channelId}:${threadRoot.id}`)}`);
           }}
+          onPackages={handleTaskPackages}
+          onDelegateToAgent={handleDelegateToAgent}
+          delegatePackageId={delegatePackage?.packageId ?? null}
         />
       )}
     </div>
@@ -1050,6 +1073,9 @@ function TaskThreadPanel({
   onReply,
   onClose,
   onViewInChannel,
+  onPackages,
+  onDelegateToAgent,
+  delegatePackageId,
 }: {
   task: Task;
   root: ChatMessage | null;
@@ -1078,6 +1104,10 @@ function TaskThreadPanel({
   onReply: (msg: ChatMessage) => void;
   onClose: () => void;
   onViewInChannel: () => void;
+  /** #1064：交付包投影回调（「交给 Agent 处理」按钮据此预填最近交付包）。 */
+  onPackages?: (packages: OutputPackageSummaryDto[]) => void;
+  onDelegateToAgent: () => void;
+  delegatePackageId: string | null;
 }) {
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white">
@@ -1087,6 +1117,18 @@ function TaskThreadPanel({
           <div className="truncate text-xs text-neutral-400">{task.title}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* #1064 AC1/AC2：只导航到讨论串并预填引用，不创建 Message/Offer/claim/Invocation。
+              无交付包（delegatePackageId 为空）时不可用——预填必须引用具体 package。 */}
+          <button
+            onClick={onDelegateToAgent}
+            disabled={!task.channelId || !root || !delegatePackageId}
+            className="inline-flex h-8 items-center gap-1 rounded-md border border-pink-200 bg-pink-50 px-2 text-xs font-medium text-pink-700 hover:bg-pink-100 hover:text-pink-900 disabled:opacity-40"
+            title="跳到讨论串并预填交付文件引用，继续 @Agent 处理"
+            data-smoke="task-delegate-to-agent"
+          >
+            <Send size={13} />
+            <span>交给 Agent 处理</span>
+          </button>
           <button onClick={onViewInChannel} disabled={!task.channelId || !root} className="inline-flex h-8 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-40" title="在频道中查看">
             <ExternalLink size={13} />
             <span>在频道中查看</span>
@@ -1122,6 +1164,7 @@ function TaskThreadPanel({
             teamId={teamId}
             channelId={task.channelId}
             taskId={task.id}
+            onPackages={onPackages}
           />
         ) : null}
         {teamId && userId ? (
@@ -1263,10 +1306,13 @@ function TaskOutputPackageSummary({
   teamId,
   channelId,
   taskId,
+  onPackages,
 }: {
   teamId: string;
   channelId: string;
   taskId: string;
+  /** #1064：「交给 Agent 处理」需要知道该 task 的交付包（预填 delivered 选择）。 */
+  onPackages?: (packages: OutputPackageSummaryDto[]) => void;
 }) {
   const [packages, setPackages] = useState<OutputPackageSummaryDto[]>([]);
   const [pendings, setPendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
@@ -1276,11 +1322,14 @@ function TaskOutputPackageSummary({
     setPendings([]);
     void projectEvents().listOutputPackages({ channelId, taskId }).then((result) => {
       if (!active) return;
-      setPackages(result.ok ? result.packages ?? [] : []);
+      const next = result.ok ? result.packages ?? [] : [];
+      setPackages(next);
       setPendings(result.ok ? result.pendingDeliveries ?? [] : []);
+      onPackages?.(next);
     });
     return () => { active = false; };
-  }, [teamId, channelId, taskId]);
+    // onPackages 由父组件 useCallback 包裹，taskId 变化时随任务切换重置。
+  }, [teamId, channelId, taskId, onPackages]);
   return (
     <div className="border-b border-neutral-100 px-4 py-3">
       <OutputPackageList packages={packages} pendingDeliveries={pendings} title="当前交付" />

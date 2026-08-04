@@ -2,6 +2,7 @@ import type {
   AcceptanceCriterionDto,
   EvidenceKind,
   EvidenceRefDto,
+  FrozenProjectInputItemDto,
   ID,
   InputBindingDeclarationDto,
   OutputSlotDeclarationDto,
@@ -150,6 +151,11 @@ export interface TaskOfferRecord {
   readonly hardSpecified: boolean;
   /** ADR-0064 §3 Requirement-confirmation Offer 标记（#947 PR1）。 */
   readonly requirementConfirmation: boolean;
+  /**
+   * #1064：Task-linked @Agent 请求冻结的项目输入（发送时刻解析的具体 artifactVersionId）。
+   * acceptance 事务据此复验 package/version basis（AC6）；offer 不授予输入访问。
+   */
+  readonly frozenInputs?: readonly FrozenProjectInputItemDto[];
   readonly status: TaskOfferStatus;
   readonly response: TaskOfferResponseRecordDto | null;
   readonly createdAt: UnixMs;

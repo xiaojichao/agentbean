@@ -294,6 +294,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     // #1063：reference selections 的 package 投影列 + items 的 collection revision basis。
     applyMigration(db, 'team/0079_project_reference_package_selections.sql', { disableForeignKeys: true });
   }
+  // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
+  applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

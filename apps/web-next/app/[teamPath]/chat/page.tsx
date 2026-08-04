@@ -272,6 +272,9 @@ export default function ChatPage() {
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
   const threadParam = searchParams.get('thread');
+  // #1064：Task 页「交给 Agent 处理」预填导航——JSON { text, selections }，仅写本地 state，
+  // 未发送前不创建任何 Message/Offer/claim/Invocation 事实。
+  const composeParam = searchParams.get('compose');
   const messageParam = searchParams.get('message');
   const profileParam = searchParams.get('profile');
   const taskParam = searchParams.get('task');
@@ -346,6 +349,9 @@ export default function ChatPage() {
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
+  // #1064：线程 composer 的项目引用选择（Task 页预填导航写入；与主 composer 的
+  // projectReferenceSelections 同型，发送时随 threadId 一起冻结为消息 ProjectReferenceSet）。
+  const [threadSelections, setThreadSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
@@ -366,6 +372,8 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const threadImageInputRef = useRef<HTMLInputElement>(null);
   const threadFileInputRef = useRef<HTMLInputElement>(null);
+  // #1064：线程 composer 焦点（Task 页「交给 Agent 处理」预填后移焦）。
+  const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
   const dmsRef = useRef(dms);
   const activeChannelRef = useRef(activeChannel);
   activeChannelRef.current = activeChannel;
@@ -1169,6 +1177,7 @@ export default function ChatPage() {
   const closeThread = useCallback(() => {
     setThreadRootId(null);
     setThreadInput('');
+    setThreadSelections([]);
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1231,6 +1240,31 @@ export default function ChatPage() {
       return threadParam === null ? null : prev;
     });
   }, [activeChannel, threadParam]);
+
+  // #1064 AC1/AC2：Task 页「交给 Agent 处理」预填导航。compose 参数只携带 text +
+  // selections，落笔均为本地 state——未发送不创建 Message/Offer/claim/Invocation/负责人事实。
+  // 填充一次后立即从 URL 移除（history.replaceState），刷新/回退不会重复填充。
+  useEffect(() => {
+    if (!activeChannel || !composeParam || !threadRootId) return;
+    let parsed: { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+    try {
+      parsed = JSON.parse(composeParam) as { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+    } catch {
+      return;
+    }
+    if (typeof parsed.text === 'string' && parsed.text.trim()) {
+      setThreadInput((prev) => (prev.trim() ? prev : parsed.text!.trim()));
+    }
+    if (Array.isArray(parsed.selections) && parsed.selections.length > 0) {
+      setThreadSelections(parsed.selections);
+    }
+    requestAnimationFrame(() => threadTextareaRef.current?.focus());
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete('compose');
+    const query = params.toString();
+    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChannel, composeParam, threadRootId]);
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -1408,7 +1442,7 @@ export default function ChatPage() {
   const sendThreadMessage = () => {
     const artifacts = readyArtifacts(threadAttachments);
     if (
-      (!threadInput.trim() && artifacts.length === 0)
+      (!threadInput.trim() && artifacts.length === 0 && threadSelections.length === 0)
       || !activeChannel
       || !threadRootId
       || hasUploadingAttachments(threadAttachments)
@@ -1419,9 +1453,16 @@ export default function ChatPage() {
     const artifactIds = artifacts.map((a) => a.id);
     const mentions = extractMentions(body, visibleMentionMembers);
     const clientMessageId = createClientMessageId('chat-thread');
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
+    // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
+    // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
+    // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
+        setThreadInput('');
+        setThreadSelections([]);
+        threadAttachments.forEach(revokeComposerPreview);
+        setThreadAttachments([]);
         return;
       }
       appendMessage({
@@ -1434,9 +1475,6 @@ export default function ChatPage() {
         metaJson: JSON.stringify({ kind: 'send-fail' }),
       });
     });
-    setThreadInput('');
-    threadAttachments.forEach(revokeComposerPreview);
-    setThreadAttachments([]);
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
@@ -1473,6 +1511,7 @@ export default function ChatPage() {
       setThreadRootId(null);
     }
     setThreadInput('');
+    setThreadSelections([]);
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1635,6 +1674,7 @@ export default function ChatPage() {
     setTaskDetailMessageId(msg.id);
     setThreadRootId(null);
     setThreadInput('');
+    setThreadSelections([]);
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1728,6 +1768,7 @@ export default function ChatPage() {
     setTab('chat');
     setThreadRootId(null);
     setThreadInput('');
+    setThreadSelections([]);
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -2156,17 +2197,7 @@ export default function ChatPage() {
                   {projectReferenceSelections.length > 0 && (
                     <div data-smoke="project-reference-composer-chips" className="flex flex-wrap gap-1.5 px-3 pb-2">
                       {projectReferenceSelections.map((selection, index) => {
-                        const label = selection.kind === 'bundle_all'
-                          ? `整包：${projectDocumentBundles.find((bundle) => bundle.id === selection.bundleId)?.name ?? selection.bundleId}`
-                          : selection.kind === 'bundle_subset'
-                            ? `包内 ${selection.documentIds.length} 项`
-                            : selection.kind === 'artifact_version'
-                              ? `产物版本：${selection.versionId}`
-                              : selection.kind === 'package_projection'
-                                ? `整包${selection.policy === 'current' ? '当前' : selection.policy === 'final' ? '最终' : '交付'}版：${selection.packageId}`
-                                : selection.kind === 'package_members'
-                                  ? `包内 ${selection.members.length} 项`
-                                  : `文档：${selection.documentId}`;
+                        const label = projectReferenceSelectionLabel(selection, projectDocumentBundles);
                         return (
                           <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
                             {label}
@@ -2413,9 +2444,12 @@ export default function ChatPage() {
             title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
             input={threadInput}
             attachments={threadAttachments}
+            selections={threadSelections}
+            onRemoveSelection={(index) => setThreadSelections((current) => current.filter((_, i) => i !== index))}
             uploading={uploading}
             imageInputRef={threadImageInputRef}
             fileInputRef={threadFileInputRef}
+            threadTextareaRef={threadTextareaRef}
             savedIds={savedIds}
             pinnedIds={pinnedIds}
             reactionEmojis={reactionEmojis}
@@ -3836,6 +3870,30 @@ function TaskRunMeta({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * #1064：项目引用选择 chip 的展示名（主 composer 与线程 composer 共用）。
+ * bundle 名称查找是可选增强——找不到时回退稳定 id，不阻塞展示。
+ */
+function projectReferenceSelectionLabel(
+  selection: ProjectReferenceSelectionRequestDto,
+  bundles?: ProjectDocumentBundleDto[],
+): string {
+  switch (selection.kind) {
+    case 'bundle_all':
+      return `整包：${bundles?.find((bundle) => bundle.id === selection.bundleId)?.name ?? selection.bundleId}`;
+    case 'bundle_subset':
+      return `包内 ${selection.documentIds.length} 项`;
+    case 'artifact_version':
+      return `产物版本：${selection.versionId}`;
+    case 'package_projection':
+      return `整包${selection.policy === 'current' ? '当前' : selection.policy === 'final' ? '最终' : '交付'}版：${selection.packageId}`;
+    case 'package_members':
+      return `包内 ${selection.members.length} 项`;
+    default:
+      return `文档：${selection.documentId}`;
+  }
+}
+
 function ThreadPanel({
   width,
   root,
@@ -3845,9 +3903,12 @@ function ThreadPanel({
   title,
   input,
   attachments,
+  selections,
+  onRemoveSelection,
   uploading,
   imageInputRef,
   fileInputRef,
+  threadTextareaRef,
   savedIds,
   pinnedIds,
   reactionEmojis,
@@ -3892,9 +3953,14 @@ function ThreadPanel({
   title: string;
   input: string;
   attachments: ComposerAttachment[];
+  /** #1064：线程 composer 的项目引用选择（Task 页预填 / 后续扩展选择入口）。 */
+  selections: ProjectReferenceSelectionRequestDto[];
+  onRemoveSelection: (index: number) => void;
   uploading: boolean;
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
+  /** #1064：线程 composer 焦点（ChatPage 持有，预填导航后移焦）。 */
+  threadTextareaRef: RefObject<HTMLTextAreaElement>;
   savedIds: Set<string>;
   pinnedIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
@@ -3934,7 +4000,6 @@ function ThreadPanel({
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
   const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [showThreadMention, setShowThreadMention] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
   const [threadMentionIndex, setThreadMentionIndex] = useState(0);
@@ -4112,6 +4177,27 @@ function ThreadPanel({
             data-smoke="thread-message-input"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
+          {/* #1064：线程 composer 引用 chips（Task 页「交给 Agent 处理」预填；可逐个移除） */}
+          {selections.length > 0 && (
+            <div data-smoke="thread-reference-composer-chips" className="flex flex-wrap gap-1.5 px-3 pb-2">
+              {selections.map((selection, index) => {
+                const label = projectReferenceSelectionLabel(selection);
+                return (
+                  <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
+                    {label}
+                    <button
+                      type="button"
+                      aria-label={`移除${label}`}
+                      onClick={() => onRemoveSelection(index)}
+                      className="text-sky-500 hover:text-sky-900"
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
           <div className="flex items-center justify-between px-2 pb-2">
             <div className="flex items-center gap-1">
@@ -4124,7 +4210,7 @@ function ThreadPanel({
                 <Paperclip size={16} />
               </button>
             </div>
-            <button onClick={onSend} disabled={uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
+            <button onClick={onSend} disabled={uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0 && selections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
               <Send size={14} />
             </button>
           </div>

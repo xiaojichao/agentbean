@@ -39,6 +39,7 @@ import {
   resolveProjectStageStableInputs,
 } from '../project-stage-advance-service.js';
 import type { AgentRecord, ServerNextRepositories, TaskRecord } from '../repositories.js';
+import type { ProjectArtifactReviewRecord } from '../project-repositories.js';
 import type { TaskClaimLeaseRecord, TaskCoordinationRecord, TaskOfferRecord } from '../task-coordination-repositories.js';
 import {
   appendValidatedManagementEventInTransaction,
@@ -1151,6 +1152,52 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
                 coordination.attempt !== offer.taskAttempt || !['todo', 'in_progress'].includes(task.status)) {
               // AC#4：task 已变 → 回滚，不留 accepted 无 claim
               throw new TaskClaimConflict('TASK_CLAIM_OFFER_STALE');
+            }
+            // #1064 AC6/AC8：frozen inputs 复验——offer 冻结的具体版本必须仍存在且
+            // collection 归属不变；review/final basis 变化（被拒/重审/新 final）或
+            // Channel 归档时 fail closed，不建立部分 claim/grant。
+            if (offer.frozenInputs && offer.frozenInputs.length > 0) {
+              if (!task.channelId) throw new TaskClaimConflict('TASK_CLAIM_FROZEN_INPUT_STALE');
+              const channel = await input.repositories.channels.getById(task.channelId);
+              if (channel?.archivedAt != null) {
+                throw new TaskClaimConflict('TASK_CLAIM_CHANNEL_ARCHIVED');
+              }
+              const [versions, collections, reviews] = await Promise.all([
+                input.repositories.channelProjects.listArtifactVersions({
+                  teamId: offer.teamId,
+                  channelId: task.channelId,
+                }),
+                input.repositories.channelProjects.listArtifactCollections({
+                  teamId: offer.teamId,
+                  channelId: task.channelId,
+                }),
+                input.repositories.channelProjects.listArtifactReviews({
+                  teamId: offer.teamId,
+                  channelId: task.channelId,
+                }),
+              ]);
+              const versionById = new Map(versions.map((version) => [version.id, version]));
+              const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
+              // 同一 version 可能有多条 review（append-only 历史）；按 created_at 取最新决策。
+              const latestReviewByVersion = new Map<string, ProjectArtifactReviewRecord>();
+              for (const review of reviews) {
+                const existing = latestReviewByVersion.get(review.versionId);
+                if (!existing || review.createdAt > existing.createdAt) {
+                  latestReviewByVersion.set(review.versionId, review);
+                }
+              }
+              for (const item of offer.frozenInputs) {
+                const version = versionById.get(item.artifactVersionId);
+                if (!version || version.collectionId !== item.collectionId) {
+                  throw new TaskClaimConflict('TASK_CLAIM_FROZEN_INPUT_STALE');
+                }
+                const collection = collectionById.get(item.collectionId);
+                const currentIsFinal = collection?.finalVersionId === item.artifactVersionId;
+                const currentReview = latestReviewByVersion.get(item.artifactVersionId)?.decision ?? 'pending';
+                if (item.isFinal !== currentIsFinal || item.reviewState !== currentReview) {
+                  throw new TaskClaimConflict('TASK_CLAIM_FROZEN_BASIS_CHANGED');
+                }
+              }
             }
             if (offer.objective.constraints.includes(PROJECT_STAGE_AUTO_CONSTRAINT)
               && !(await projectStageAutoOfferStillCurrent(input, offer, now))) {

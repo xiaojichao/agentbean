@@ -126,6 +126,12 @@ import { createCollaborationService } from './management/collaboration-service.j
 import { appendManagementEventInTransaction, createManagementKernel } from './management/management-kernel.js';
 import { createManagementRouter, type ManagementRoutingResult } from './management/management-router.js';
 import { createTaskCoordinationKernel } from './management/task-coordination-kernel.js';
+import {
+  evaluateTaskLinkedRequestContext,
+  publishTaskLinkedOffers,
+  type TaskLinkedRequestContext,
+  type TaskLinkedRequestEvaluation,
+} from './task-linked-request-handler.js';
 import { createTaskLifecycleKernel } from './management/task-lifecycle-kernel.js';
 import { resolveProjectStageExecutionGate } from './project-stage-execution-gate.js';
 import { createMemorySourceInvalidationService } from './memory-source-invalidation-service.js';
@@ -1796,6 +1802,12 @@ export interface CreateServerNextUseCasesInput {
   }) => Promise<{
     candidates: readonly { agentId: string; eligible: boolean }[];
   }>;
+  /**
+   * #1064：Task-linked @Agent 请求的 Agent eligibility 解析（复用 broker
+   * `resolveCandidates`——含 operation restriction / Team visibility / 渠道门禁）。
+   * dev-server 注入；缺省（未接线测试环境）用简单可见性兜底（fail closed 语义由复验链兜底）。
+   */
+  resolveTaskLinkedEligibleAgentIds?: (taskId: string) => Promise<readonly string[]>;
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
@@ -1818,6 +1830,24 @@ export interface CreateServerNextUseCasesInput {
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
+  // #1064：Task-linked @Agent 请求的 eligibility 解析。dev-server 注入 broker
+  // resolveCandidates；缺省用简单可见性兜底（未接线测试环境；fail closed 由复验链保证）。
+  const resolveTaskLinkedEligibleAgentIds = input.resolveTaskLinkedEligibleAgentIds
+    ?? (async (taskId: string) => {
+      const task = await repositories.tasks.getById(taskId);
+      if (!task) return [];
+      const agents = (await repositories.agents.listAll()).filter((agent) =>
+        agent.primaryTeamId === task.teamId || agent.visibleTeamIds.includes(task.teamId));
+      return agents
+        .filter((agent) => agent.status === 'online' && agent.deletedAt === undefined)
+        .map((agent) => agent.id);
+    });
+  const taskLinkedHandlerDeps = {
+    repositories,
+    ids,
+    clock,
+    resolveEligibleAgentIds: resolveTaskLinkedEligibleAgentIds,
+  } as const;
   const resolveProjectPiHealthy = input.resolvePiHealthy
     ?? (async () => !getEmergencyStopActive());
   const notifyProjectFactsChanged = async (scope: { teamId: string; channelId: string }) => {
@@ -5266,6 +5296,58 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             selections: messageInput.selections ?? [],
           });
           if (!frozen.ok) return { kind: 'rejected' as const, failure: frozen };
+          // #1064 AC3：task-linked @Agent 请求复验——既有 task 讨论串回复 + @Agent + 项目引用。
+          // 复验失败 → 拒绝整条消息（消息未创建，客户端保留草稿与引用，#1059 §11）；
+          // 通过 → 记录上下文，消息提交后发布 Offer（AC4）。
+          let taskLinked: {
+            context: TaskLinkedRequestContext;
+            evaluation: Extract<TaskLinkedRequestEvaluation, { kind: 'ready' }>;
+          } | null = null;
+          // 只对显式 @Agent 触发 task-linked；纯 @人类 提及回到既有 dispatch 路径（AC9）。
+          const agentMentions = mentions.filter((mention) => mention.kind === 'agent');
+          if (messageInput.threadId
+            && agentMentions.length > 0
+            && (messageInput.selections?.length ?? 0) > 0
+            && frozen.selections.length > 0) {
+            const linkedRoot = await repositories.messages.getById(messageInput.threadId);
+            const linkedTaskId = typeof linkedRoot?.meta?.taskId === 'string'
+              ? linkedRoot.meta.taskId
+              : undefined;
+            if (linkedTaskId) {
+              const linkedTask = await repositories.tasks.getById(linkedTaskId);
+              if (linkedTask && linkedTask.teamId === messageInput.teamId) {
+                const linkedCoordination = await repositories.taskCoordination.coordinations
+                  .getByTaskId(linkedTaskId);
+                const linkedContext: TaskLinkedRequestContext = {
+                  teamId: messageInput.teamId,
+                  channelId: messageInput.channelId,
+                  senderUserId: messageInput.userId,
+                  channelArchived: channel.archivedAt != null,
+                  task: linkedTask,
+                  coordination: linkedCoordination,
+                  // revision/attempt fence（AC3）：本复验在消息提交事务内执行，读取即
+                  // 提交点快照（无并发漂移窗口）；事务外的漂移由 Offer 冻结的
+                  // taskRevision/attempt 在 acceptance 时二次比对兜底（TASK_CLAIM_OFFER_STALE）。
+                  expectedTaskRevision: linkedTask.revision,
+                  ...(linkedCoordination ? { expectedTaskAttempt: linkedCoordination.attempt } : {}),
+                  requestedAgentIds: agentMentions.map((mention) => mention.id),
+                  previews: frozen.selections,
+                  selectionRequests: messageInput.selections ?? [],
+                  sourceMessageId: messageInput.threadId,
+                };
+                const evaluation = await evaluateTaskLinkedRequestContext(
+                  taskLinkedHandlerDeps,
+                  linkedContext,
+                );
+                if (evaluation.kind === 'rejected') {
+                  return { kind: 'rejected' as const, failure: taskLinkedRequestFailure(evaluation) };
+                }
+                if (evaluation.kind === 'ready') {
+                  taskLinked = { context: linkedContext, evaluation };
+                }
+              }
+            }
+          }
           const messageId = messageInput.messageId ?? ids.nextId();
           const message = await transaction.messages.append({
             id: messageId,
@@ -5325,6 +5407,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             artifacts: attachedArtifacts,
             referenceSet,
             legacyCoordinationFenced: legacyFenced,
+            // #1064：task-linked 复验通过后，消息提交成功路径据此发布 Offer（事务外）。
+            taskLinked,
           };
         });
       }).catch((error: unknown) => {
@@ -5348,6 +5432,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       if (channelFileRollout.markdownEditing) {
         await createInitialChannelDocuments(repositories, outcome.artifacts, messageInput.userId, now);
+      }
+
+      // #1064 AC4：task-linked 复验通过后，在消息提交成功后发布 targeted Offer（事务外，
+      // 与既有 dispatch 创建同款模式）。Offer 冻结输入但不建立 claim/Invocation。
+      if (outcome.kind === 'saved' && outcome.taskLinked) {
+        await publishTaskLinkedOffers(
+          taskLinkedHandlerDeps,
+          outcome.taskLinked.context,
+          outcome.taskLinked.evaluation,
+        );
       }
 
       // Replay: return already-created dispatches/tasks without re-executing side effects.
@@ -5488,7 +5582,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const dispatches: DispatchDto[] = [];
       let acknowledgementMessage: MessageDto | undefined;
-      if (route.kind === 'dispatch' && management.kind !== 'managed') {
+      // #1064 AC4/AC9：task-linked 复验通过的请求已发布 targeted Offer（唯一 authority 路径），
+      // 不再走 direct dispatch，避免同一请求双重投递。
+      const taskLinkedOffered = outcome.kind === 'saved' && outcome.taskLinked != null;
+      if (route.kind === 'dispatch' && management.kind !== 'managed' && !taskLinkedOffered) {
         const dispatch = await repositories.dispatches.create({
           id: ids.nextId(),
           teamId: messageInput.teamId,
@@ -13811,6 +13908,32 @@ function shouldAutoCreateTaskThread(input: {
     return false;
   }
   return /(?:总结|整理|改写|撰写|写(?:一|个|篇|份)?|生成|制作|调用|画|分析一下|调研|搜索|查找|实现|修复|测试|review|code\s*review|top\s*\d+|top\d+|新闻|报告|文章|封面|配图|图片|代码|上线|部署)/i.test(plain);
+}
+
+/**
+ * #1064 AC3/AC11：task-linked 复验失败的结构化失败（消息未创建，客户端保留草稿与引用）。
+ * code 与 blockedVersionIds 供 composer 精确提示；web 端失败不清空输入。
+ */
+function taskLinkedRequestFailure(
+  evaluation: Extract<TaskLinkedRequestEvaluation, { kind: 'rejected' }>,
+): ReturnType<typeof makeFailure> {
+  const messageByCode: Record<string, string> = {
+    CHANNEL_ARCHIVED: '频道已归档，无法向 Agent 交办任务',
+    TASK_CHANNEL_MISMATCH: '任务不属于当前频道，无法交办',
+    TASK_AUTHORITY_DENIED: '你不是该任务的负责人或验收 authority，无法交办',
+    TASK_REVISION_STALE: '任务已更新，请刷新后重试',
+    TASK_ATTEMPT_STALE: '任务执行轮次已变化，请刷新后重试',
+    TASK_NOT_OPEN: '任务已结束，无法交办',
+    AGENT_NOT_ELIGIBLE: '目标 Agent 当前不满足执行条件（不可见/离线/能力不足），不会静默改派',
+    ARTIFACT_VISIBILITY_DENIED: '引用文件对目标 Agent 不可见',
+    INPUT_BINDING_UNRESOLVED: '任务输入绑定尚未解析完成',
+    REVIEW_BASIS_BLOCKED: '引用版本未通过审核，不能作为默认输入（可显式「基于此修改」）',
+  };
+  return makeFailure('CONFLICT', messageByCode[evaluation.code] ?? 'Task-linked 请求被拒绝', {
+    reason: 'task_link_rejected',
+    taskLinkedCode: evaluation.code,
+    ...(evaluation.blockedVersionIds ? { blockedVersionIds: evaluation.blockedVersionIds } : {}),
+  });
 }
 
 function shouldNestDispatchReplyInThread(originMessage: MessageRecord | null | undefined): boolean {
