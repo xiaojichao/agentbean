@@ -997,6 +997,11 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.task.close, app, 'closeTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.acceptRootDelivery, app, 'acceptRootDelivery', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.rejectRootDelivery, app, 'rejectRootDelivery', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
+  // #1065 AC3/AC4：Task 交付聚合视图(只读查询,requireAuthenticatedUser)。
+  bind(socket, WEB_EVENTS.task.deliveryOverview, app, 'queryTaskDeliveryOverview', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
 }
 
 export function registerAgentSocketHandlers(

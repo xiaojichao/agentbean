@@ -124,7 +124,13 @@ import type {
   OutputPackageMemberRecord,
   OutputPackageRecord,
 } from './output-package-repositories.js';
-import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
+import type {
+  TaskClaimLeaseRecord,
+  TaskOfferRecord,
+  TaskCoordinationRecord,
+  TaskCoordinationRepositories,
+} from './task-coordination-repositories.js';
+import type { PackageMembershipRefDto, ProjectStageDto } from '../../../../packages/contracts/src/project.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
 import { createInvocationGateway } from './management/invocation-gateway.js';
@@ -277,6 +283,18 @@ import {
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
 import { attemptOutputPackageFormation } from './output-package-handler.js';
+import {
+  bumpOutputPackageWatermark,
+  ensureOutputPackageConsistency,
+  OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
+} from './output-package-consistency.js';
+import type {
+  TaskAcceptanceContractV1,
+  TaskDeliveryOverviewV1,
+  TaskLevelAvailableActionDto,
+  TaskResponsibilityFocusV1,
+  TaskTimelineEventV1,
+} from '../../../../packages/contracts/src/task-delivery-overview.js';
 import {
   submitPackageReviewCommand,
   type SubmitPackageReviewCommandInput,
@@ -669,7 +687,7 @@ export interface ServerNextUseCases {
   ): Promise<Ack<ResolveProjectReferenceOrdinalResultDto>>;
   /** #1060 列出频道 OutputPackage(三处投影共用同一 Server 事实)。 */
   listOutputPackages(
-    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string } },
+    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string }; minimumConsistency?: ConsistencyTokenV1 },
   ): Promise<Ack<{ packages: OutputPackageSummaryDto[]; pendingDeliveries: OutputPackagePendingDeliveryDto[]; nextCursor?: { createdAt: number; packageId: string } }>>;
   /** #1060 获取单个 OutputPackage(含冻结成员);#1063 支持可选 projection 请求。 */
   getOutputPackage(
@@ -679,6 +697,7 @@ export interface ServerNextUseCases {
       packageId: string;
       userId: string;
       projection?: { policy: OutputPackageProjectionPolicy; versions?: { collectionId: string; versionId: string }[] };
+      minimumConsistency?: ConsistencyTokenV1;
     },
   ): Promise<Ack<{
     package: OutputPackageDto;
@@ -686,6 +705,10 @@ export interface ServerNextUseCases {
     asOf: number;
     audienceScope: string;
   }>>;
+  /** #1065 AC3/AC4：Task 交付聚合视图(目标/acceptance/焦点/availableActions/时间线)。 */
+  queryTaskDeliveryOverview(
+    input: { teamId: string; channelId: string; taskId: string; userId: string; minimumConsistency?: ConsistencyTokenV1 },
+  ): Promise<Ack<{ overview: TaskDeliveryOverviewV1 }>>;
   /** #1062 基于明确版本保存 Markdown 修订(原子产生新版本并移动 current;stale → 结构化 conflict)。 */
   saveArtifactVersionRevision(input: {
     userId: string;
@@ -7376,7 +7399,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     async saveArtifactVersionRevision(revisionInput) {
       const { userId, teamId, ...wireInput } = revisionInput;
       const parsed = parseArtifactRevisionCommandInputV1('save-artifact-version-revision', wireInput);
-      return artifactRevisionCommandAck(repositories, await saveArtifactVersionRevisionCommand(
+      const result = await saveArtifactVersionRevisionCommand(
         {
           repositories,
           artifactContentStore: artifactContentStore ?? dummyContentStore(),
@@ -7396,7 +7419,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           revisionBasis: parsed.revisionBasis,
           idempotencyKey: parsed.idempotencyKey,
         },
-      ));
+      );
+      // #1065 AC7：新版本更新了 collection current,影响 package current 投影,同样推进水位。
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, parsed.channelId, clock.now());
+      }
+      return artifactRevisionCommandAck(repositories, result);
     },
 
     async searchMessages(searchInput) {
@@ -8786,7 +8814,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async submitPackageArtifactReview(reviewInput) {
-      return packageReviewCommandAck(repositories, await submitPackageReviewCommand(
+      const result = await submitPackageReviewCommand(
         { repositories, clock, ids },
         {
           teamId: reviewInput.teamId,
@@ -8800,7 +8828,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           comment: reviewInput.comment,
           idempotencyKey: reviewInput.idempotencyKey,
         },
-      ), 'review');
+      );
+      // #1065 AC7：应用成功后推进该频道 output-package 水位,旧 consistency token 查询随之 not_ready。
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
+      return packageReviewCommandAck(repositories, result, 'review');
     },
 
     async submitPackageReviewAndFinalize(reviewInput) {
@@ -8820,6 +8853,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           expectedCollectionRevision: reviewInput.expectedCollectionRevision,
         },
       );
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
 
@@ -8842,6 +8878,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           rejectReason: reviewInput.rejectReason,
         },
       );
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
+      }
       return packageReviewCommandAck(repositories, result, 'reject-delivery');
     },
 
@@ -8901,6 +8940,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const access = await ensureUserCanViewChannel(repositories, parsed);
       if (!access.ok) return access;
+      // #1065 AC7：带 minimumConsistency 时对照 output-package stream 水位,
+      // 投影未追到最低位置 → projection_not_ready,不以旧数据伪装成功。
+      const notReady = await ensureOutputPackageConsistency(repositories, parsed.minimumConsistency);
+      if (notReady) return notReady;
       const limit = parsed.limit ?? 50;
       const records = await repositories.outputPackages.listPackagesByChannel({
         teamId: parsed.teamId,
@@ -8912,44 +8955,19 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const hasMore = records.length > limit;
       const page = hasMore ? records.slice(0, limit) : records;
       // #1061 AC11：summary 携带成员 reviewState 的聚合(Server 计算,Files/Task 直接展示)。
-      const allReviews = await repositories.channelProjects.listArtifactReviews({
-        teamId: parsed.teamId,
-        channelId: parsed.channelId,
-      });
-      const summaries = [];
-      for (const record of page) {
-        const projection = await repositories.outputPackages.getPackageById({
-          teamId: parsed.teamId,
-          packageId: record.packageId,
-        });
-        const memberReviews = (projection?.members ?? []).flatMap((member) =>
-          allReviews.filter((review) => review.versionId === member.artifactVersionId));
-        summaries.push(toOutputPackageSummaryDto(record, aggregatePackageReviewState(memberReviews)));
-      }
+      // #1065：与 Task 交付聚合视图共用同一组 Server 事实(summarizeOutputPackages)。
+      const summaries = await summarizeOutputPackages(
+        repositories,
+        { teamId: parsed.teamId, channelId: parsed.channelId },
+        page,
+      );
       // pendingDeliveries:committed 且有 provenance 但尚未形成 package 的交付(UI「交付处理中」)。
       // 差集必须基于**全频道**已形成 publishId(分页会漏判后页已成形 package);taskId 过滤与 packages 一致。
-      const committedStagings = await repositories.workspacePublishStagings.listCommittedByChannel({
+      const pendingDeliveries = await listPendingOutputDeliveries(repositories, {
         teamId: parsed.teamId,
         channelId: parsed.channelId,
         ...(parsed.taskId ? { taskId: parsed.taskId } : {}),
       });
-      const formedPublishIds = new Set(
-        await repositories.outputPackages.listPackagePublishIdsByChannel({
-          teamId: parsed.teamId,
-          channelId: parsed.channelId,
-          ...(parsed.taskId ? { taskId: parsed.taskId } : {}),
-        }),
-      );
-      const pendingDeliveries: OutputPackagePendingDeliveryDto[] = committedStagings
-        .filter((staging) => staging.provenance && !formedPublishIds.has(staging.publishId))
-        .map((staging) => ({
-          publishId: staging.publishId,
-          workspaceRevisionId: staging.committedRevisionId ?? '',
-          agentId: staging.provenance!.agentId,
-          taskId: staging.provenance!.taskId,
-          taskAttempt: staging.provenance!.taskAttempt,
-          committedAt: staging.updatedAt,
-        }));
       return makeSuccess({
         packages: summaries,
         pendingDeliveries,
@@ -8970,6 +8988,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const access = await ensureUserCanViewChannel(repositories, parsed);
       if (!access.ok) return access;
+      // #1065 AC7：与 listOutputPackages 同一水位检查(三处投影共用同一 Server 事实)。
+      const notReady = await ensureOutputPackageConsistency(repositories, parsed.minimumConsistency);
+      if (notReady) return notReady;
       const result = await repositories.outputPackages.getPackageById({
         teamId: parsed.teamId,
         packageId: parsed.packageId,
@@ -9003,6 +9024,38 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         asOf,
         audienceScope: `${parsed.teamId}:${parsed.channelId}:${parsed.userId}`,
       });
+    },
+
+    async queryTaskDeliveryOverview(overviewInput) {
+      const { userId, teamId } = overviewInput;
+      if (!(await repositories.teams.isMember(teamId, userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, {
+        userId,
+        teamId,
+        channelId: overviewInput.channelId,
+      });
+      if (!access.ok) return access;
+      // #1065 AC7：与 output-package 查询同一水位语义,投影未追上 → not_ready。
+      const notReady = await ensureOutputPackageConsistency(repositories, overviewInput.minimumConsistency);
+      if (notReady) return notReady;
+      const overview = await buildTaskDeliveryOverview(repositories, {
+        teamId,
+        channelId: overviewInput.channelId,
+        taskId: overviewInput.taskId,
+        userId,
+        now: clock.now(),
+        piHealthy: await resolveProjectPiHealthy(),
+        includeStage: projectCollaborationRollout.projectStage,
+        ...(input.resolveProjectStageCandidates
+          ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
+          : {}),
+      });
+      if (!overview) {
+        return makeFailure('NOT_FOUND', 'Task delivery overview not found');
+      }
+      return makeSuccess({ overview });
     },
 
     async createProjectDocumentBundle(bundleInput) {
@@ -15730,6 +15783,34 @@ async function buildProjectArtifactLibrary(
     bucket.push(projectArtifactFinalizationDto(finalization));
     finalizationsByCollection.set(finalization.collectionId, bucket);
   }
+  // #1065 AC5：一次交付 OutputPackage 与跨版本逻辑产物明确区分;version 的
+  // packageMemberships 由 Server 投影(该版本作为成员出现在哪些交付包)。
+  const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+    teamId: channel.teamId,
+    channelId: channel.id,
+    limit: 200,
+  });
+  const membershipsByVersion = new Map<string, PackageMembershipRefDto[]>();
+  for (const record of packageRecords) {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId: channel.teamId,
+      packageId: record.packageId,
+    });
+    for (const member of projection?.members ?? []) {
+      const bucket = membershipsByVersion.get(member.artifactVersionId) ?? [];
+      bucket.push({
+        packageId: record.packageId,
+        sequence: member.sequence,
+        shortLabel: member.shortLabel,
+        deliveredAt: record.createdAt,
+        ...(record.taskId ? { taskId: record.taskId } : {}),
+      });
+      membershipsByVersion.set(member.artifactVersionId, bucket);
+    }
+  }
+  for (const membershipBuckets of membershipsByVersion.values()) {
+    membershipBuckets.sort((left, right) => left.deliveredAt - right.deliveredAt);
+  }
   const versionsByCollection = new Map<string, ProjectArtifactVersionDto[]>();
   for (const version of versions) {
     const artifact = await repositories.artifacts.getForTeam({
@@ -15744,6 +15825,7 @@ async function buildProjectArtifactLibrary(
       version,
       artifact,
       reviewsByVersion.get(version.id) ?? [],
+      membershipsByVersion.get(version.id) ?? [],
     ));
     versionsByCollection.set(version.collectionId, bucket);
   }
@@ -15772,6 +15854,7 @@ function projectArtifactVersionDto(
   version: ProjectArtifactVersionRecord,
   artifact: ArtifactRecord,
   reviews: readonly ProjectArtifactReviewRecord[],
+  packageMemberships: readonly PackageMembershipRefDto[] = [],
 ): ProjectArtifactVersionDto {
   const reviewDtos = reviews
     .slice()
@@ -15813,6 +15896,7 @@ function projectArtifactVersionDto(
     createdAt: version.createdAt,
     reviews: reviewDtos,
     reviewState: deriveProjectArtifactVersionReviewState(reviews),
+    packageMemberships: packageMemberships.map((membership) => ({ ...membership })),
   };
 }
 
@@ -15882,6 +15966,385 @@ function toOutputPackageSummaryDto(
     status: 'recorded',
     createdAt: record.createdAt,
   };
+}
+
+// ---------------------------------------------------------------------------
+// #1065：OutputPackage 列表/Task 交付聚合视图共用的 summary 组装(同一组 Server 事实)。
+// ---------------------------------------------------------------------------
+
+/** TaskRecord → TaskDto(交付聚合视图与 ProjectStage 投影共用,防字段漂移)。 */
+function toTaskDto(task: TaskRecord): TaskDto {
+  return {
+    id: task.id,
+    teamId: task.teamId,
+    title: task.title,
+    ...(task.description === undefined ? {} : { description: task.description }),
+    status: task.status,
+    creatorId: task.creatorId,
+    ...(task.assigneeId === undefined ? {} : { assigneeId: task.assigneeId }),
+    ...(task.channelId === undefined ? {} : { channelId: task.channelId }),
+    tags: task.tags,
+    sortOrder: task.sortOrder,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+async function summarizeOutputPackages(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; channelId: ID },
+  records: readonly OutputPackageRecord[],
+): Promise<OutputPackageSummaryDto[]> {
+  const allReviews = await repositories.channelProjects.listArtifactReviews({
+    teamId: input.teamId,
+    channelId: input.channelId,
+  });
+  const summaries = [];
+  for (const record of records) {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId: input.teamId,
+      packageId: record.packageId,
+    });
+    const memberReviews = (projection?.members ?? []).flatMap((member) =>
+      allReviews.filter((review) => review.versionId === member.artifactVersionId));
+    summaries.push(toOutputPackageSummaryDto(record, aggregatePackageReviewState(memberReviews)));
+  }
+  return summaries;
+}
+
+async function listPendingOutputDeliveries(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; channelId: ID; taskId?: ID },
+): Promise<OutputPackagePendingDeliveryDto[]> {
+  const committedStagings = await repositories.workspacePublishStagings.listCommittedByChannel({
+    teamId: input.teamId,
+    channelId: input.channelId,
+    ...(input.taskId ? { taskId: input.taskId } : {}),
+  });
+  const formedPublishIds = new Set(
+    await repositories.outputPackages.listPackagePublishIdsByChannel({
+      teamId: input.teamId,
+      channelId: input.channelId,
+      ...(input.taskId ? { taskId: input.taskId } : {}),
+    }),
+  );
+  return committedStagings
+    .filter((staging) => staging.provenance && !formedPublishIds.has(staging.publishId))
+    .map((staging) => ({
+      publishId: staging.publishId,
+      workspaceRevisionId: staging.committedRevisionId ?? '',
+      agentId: staging.provenance!.agentId,
+      taskId: staging.provenance!.taskId,
+      taskAttempt: staging.provenance!.taskAttempt,
+      committedAt: staging.updatedAt,
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// #1065 AC3/AC4：Task 交付聚合视图(单一 Server 投影,web 只渲染)。
+// ---------------------------------------------------------------------------
+
+async function buildTaskDeliveryOverview(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: ID;
+    channelId: ID;
+    taskId: ID;
+    userId: ID;
+    now: UnixMs;
+    piHealthy: boolean;
+    /** #822 阶段功能开关由调用方(闭包内)判定后传入。 */
+    includeStage: boolean;
+    resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'];
+  },
+): Promise<TaskDeliveryOverviewV1 | null> {
+  const { teamId, channelId, taskId } = input;
+  const task = await repositories.tasks.getById(taskId);
+  if (!task || task.teamId !== teamId || (task.channelId !== undefined && task.channelId !== channelId)) {
+    return null;
+  }
+  const coordination = await repositories.taskCoordination.coordinations.getByTaskId(taskId);
+  const [criteria, offers] = await Promise.all([
+    coordination ? repositories.taskCoordination.criteria.list(taskId) : Promise.resolve([]),
+    repositories.taskCoordination.offers.listByTask(taskId),
+  ]);
+  const claim = coordination
+    ? await repositories.taskCoordination.claimLeases.getLatest({
+      taskId,
+      taskRevision: coordination.taskRevision,
+      taskAttempt: coordination.attempt,
+    })
+    : null;
+
+  // 当前 delivery/package(与 listOutputPackages 同一组 Server 事实,AC6)。
+  const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+    teamId,
+    channelId,
+    taskId,
+    limit: 50,
+  });
+  const [packages, pendingDeliveries] = await Promise.all([
+    summarizeOutputPackages(repositories, { teamId, channelId }, packageRecords),
+    listPendingOutputDeliveries(repositories, { teamId, channelId, taskId }),
+  ]);
+
+  // stage:该 task 绑定 ProjectStage 时携带(目标/依赖/executionAllowed,AC3)。
+  let stage: ProjectStageDto | undefined;
+  if (input.includeStage) {
+    const channel = await repositories.channels.getById(channelId);
+    if (channel && channel.teamId === teamId) {
+      const overview = await buildChannelProjectOverview(
+        repositories,
+        channel,
+        input.piHealthy,
+        input.now,
+        input.resolveProjectStageCandidates,
+      );
+      stage = overview?.stages.find((candidate) => candidate.task.id === taskId);
+    }
+  }
+
+  // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
+  const [reviews, finalizations, versions, deliveries, collections] = await Promise.all([
+    repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
+    repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
+    repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
+    coordination ? repositories.taskCoordination.deliveries.listByTask(taskId) : Promise.resolve([]),
+    repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
+  ]);
+
+  // #1065 AC3：required review coverage——焦点交付包中 final 必需成员数 vs 已达 final 数。
+  let requiredReviewCoverage: TaskAcceptanceContractV1['requiredReviewCoverage'] = {
+    requiredForFinalCount: 0,
+    finalizedCount: 0,
+    complete: false,
+  };
+  const focusRecord = packageRecords[packageRecords.length - 1];
+  if (focusRecord) {
+    const projection = await repositories.outputPackages.getPackageById({
+      teamId,
+      packageId: focusRecord.packageId,
+    });
+    const requiredMembers = (projection?.members ?? []).filter((member) => member.requiredForFinal);
+    const finalVersionIds = new Set(
+      collections.map((collection) => collection.finalVersionId).filter((id): id is string => Boolean(id)),
+    );
+    const finalizedCount = requiredMembers.filter((member) => finalVersionIds.has(member.artifactVersionId)).length;
+    requiredReviewCoverage = {
+      requiredForFinalCount: requiredMembers.length,
+      finalizedCount,
+      complete: requiredMembers.length > 0 && finalizedCount === requiredMembers.length,
+    };
+  }
+  const taskReviews = reviews.filter((review) => review.taskId === taskId);
+  const taskFinalizations = finalizations.filter((fin) => taskReviews.some((review) => review.id === fin.basisReviewId));
+  // #1062「基于此修改」产生的新版本 = 人工修改事件(revisionPackageId 冻结来源包)。
+  const taskHumanRevisions = versions.filter((version) => version.taskId === taskId && version.revisionPackageId);
+
+  const timeline: TaskTimelineEventV1[] = [];
+  const agentNameOf = async (agentId: ID): Promise<string> => {
+    const agent = await repositories.agents.getById(agentId);
+    return agent?.name ?? agentId;
+  };
+  for (const offer of offers) {
+    const name = await agentNameOf(offer.agentId);
+    const isHandoff = (offer.frozenInputs?.length ?? 0) > 0;
+    timeline.push({
+      id: `${isHandoff ? 'handoff' : 'offer'}-${offer.id}`,
+      kind: isHandoff ? 'handoff' : 'offer',
+      at: offer.createdAt,
+      actorKind: 'system',
+      summary: isHandoff ? `将冻结文件包交给 Agent「${name}」` : `向 Agent「${name}」发布工作 Offer`,
+    });
+    if (offer.response?.kind === 'accepted') {
+      timeline.push({
+        id: `accept-${offer.id}`,
+        kind: 'acceptance',
+        at: offer.updatedAt,
+        actorKind: 'agent',
+        actorName: name,
+        summary: `Agent「${name}」接受 Offer`,
+      });
+    }
+  }
+  if (claim) {
+    const name = await agentNameOf(claim.agentId);
+    timeline.push({
+      id: `claim-${claim.id}`,
+      kind: 'claim',
+      at: claim.acquiredAt,
+      actorKind: 'agent',
+      actorName: name,
+      summary: `Agent「${name}」建立执行 claim`,
+    });
+    // #948 E:execution-start 投影 = task.status 进入 in_progress;时刻以 claim.acquiredAt 保守近似。
+    if (task.status === 'in_progress') {
+      timeline.push({
+        id: `start-${claim.id}`,
+        kind: 'execution_start',
+        at: claim.acquiredAt,
+        actorKind: 'agent',
+        actorName: name,
+        summary: `Agent「${name}」开始执行`,
+      });
+    }
+  }
+  for (const delivery of deliveries) {
+    const name = claim ? await agentNameOf(claim.agentId) : 'Agent';
+    timeline.push({
+      id: `delivery-${delivery.id}`,
+      kind: 'delivery',
+      at: delivery.createdAt,
+      actorKind: 'agent',
+      actorName: name,
+      summary: `Agent「${name}」提交交付`,
+    });
+  }
+  for (const record of packageRecords) {
+    timeline.push({
+      id: `package-${record.packageId}`,
+      kind: 'delivery',
+      at: record.createdAt,
+      actorKind: 'system',
+      summary: `交付文件包形成(${record.memberCount} 个文件)`,
+    });
+  }
+  for (const version of taskHumanRevisions) {
+    timeline.push({
+      id: `revise-${version.id}`,
+      kind: 'human_revision',
+      at: version.createdAt,
+      actorKind: 'human',
+      summary: `人工修订产物版本 v${version.versionNumber}`,
+    });
+  }
+  for (const review of taskReviews) {
+    const decisionLabel = review.decision === 'approved' ? '通过'
+      : review.decision === 'changes_requested' ? '要求修改'
+        : review.decision === 'rejected' ? '拒绝'
+          : review.decision;
+    timeline.push({
+      id: `review-${review.id}`,
+      kind: 'review',
+      at: review.createdAt,
+      actorKind: 'human',
+      summary: `审核${decisionLabel}「${review.comment || '无备注'}」`,
+    });
+  }
+  for (const fin of taskFinalizations) {
+    timeline.push({
+      id: `final-${fin.id}`,
+      kind: 'finalization',
+      at: fin.createdAt,
+      actorKind: fin.actorKind === 'human' ? 'human' : 'pi',
+      summary: `设为最终版(${fin.reason ?? '验收通过'})`,
+    });
+  }
+  timeline.sort((a, b) => a.at - b.at);
+
+  // 当前责任焦点(AC3/AC10:只由 Offer/claim/execution/delivery/review 等 Server 事实投影)。
+  const focus = await deriveTaskResponsibilityFocus(
+    repositories,
+    { task, coordination, offers, claim },
+  );
+
+  // Task 级可发现性动作(AC9:Server 计算,web 只渲染;command 提交仍完整复验)。
+  const availableActions: TaskLevelAvailableActionDto[] = [
+    { action: 'open-task', label: '打开 Task' },
+    packages.length > 0
+      ? { action: 'delegate-to-agent', label: '交给 Agent 处理' }
+      : { action: 'delegate-to-agent', label: '交给 Agent 处理', disabled: true, disabledReason: '暂无交付文件包' },
+    task.status === 'in_review' && packages.length > 0
+      ? { action: 'review-package', label: '审核交付包' }
+      : { action: 'review-package', label: '审核交付包', disabled: true, disabledReason: '当前无待审核交付' },
+  ];
+
+  const watermark = await repositories.systemActivity?.watermarks
+    .get(OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, channelId) ?? null;
+  return {
+    schemaVersion: 1,
+    taskId,
+    channelId,
+    task: toTaskDto(task),
+    ...(stage ? { stage } : {}),
+    acceptanceContract: {
+      nodeKind: coordination?.nodeKind ?? 'root',
+      reviewPolicy: coordination?.reviewPolicy ?? 'human',
+      humanAcceptanceAuthorityIds: coordination?.humanAcceptanceAuthorityIds ?? [],
+      requiresHumanAcceptance: (coordination?.humanAcceptanceAuthorityIds?.length ?? 0) > 0,
+      acceptanceCriteria: criteria.map((criterion) => criterion.description),
+      taskRevision: coordination?.taskRevision ?? task.revision,
+      attempt: coordination?.attempt ?? 1,
+      maxAttempts: coordination?.maxAttempts ?? 1,
+      requiredReviewCoverage,
+    },
+    responsibilityFocus: focus,
+    delivery: {
+      packages,
+      pendingDeliveries,
+      ...(packageRecords.length > 0 ? { focusPackageId: packageRecords[packageRecords.length - 1]!.packageId } : {}),
+    },
+    availableActions,
+    timeline,
+    asOf: input.now,
+    audienceScope: `${teamId}:${channelId}:${input.userId}`,
+    consistencyToken: {
+      schemaVersion: 1,
+      entries: [{ streamKind: OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, streamId: channelId, revision: watermark?.revision ?? 0 }],
+    },
+  };
+}
+
+async function deriveTaskResponsibilityFocus(
+  repositories: ServerNextRepositories,
+  input: {
+    task: { status: TaskStatus; id: ID };
+    coordination: TaskCoordinationRecord | null;
+    offers: readonly TaskOfferRecord[];
+    claim: TaskClaimLeaseRecord | null;
+  },
+): Promise<TaskResponsibilityFocusV1> {
+  const { task, coordination, offers, claim } = input;
+  if (!coordination) {
+    return { kind: 'none', detail: '尚无协调事实' };
+  }
+  const openOffer = offers.find((offer) => offer.status === 'open' && !offer.response);
+  if (openOffer) {
+    const agent = await repositories.agents.getById(openOffer.agentId);
+    return {
+      kind: 'offer_wait',
+      offerId: openOffer.id,
+      agentId: openOffer.agentId,
+      ...(agent?.name ? { agentName: agent.name } : {}),
+      detail: `等待 Agent「${agent?.name ?? openOffer.agentId}」响应 Offer`,
+    };
+  }
+  if (task.status === 'in_review') {
+    return { kind: 'review_wait', detail: '等待人类验收/审核交付' };
+  }
+  if (claim) {
+    const agent = await repositories.agents.getById(claim.agentId);
+    const name = agent?.name ?? claim.agentId;
+    if (claim.status === 'active') {
+      if (task.status === 'in_progress') {
+        return {
+          kind: 'execution_active',
+          claimLeaseId: claim.id,
+          agentId: claim.agentId,
+          ...(agent?.name ? { agentName: agent.name } : {}),
+          detail: `Agent「${name}」正在执行`,
+        };
+      }
+      return {
+        kind: 'claim_active',
+        claimLeaseId: claim.id,
+        agentId: claim.agentId,
+        ...(agent?.name ? { agentName: agent.name } : {}),
+        detail: `Agent「${name}」已建立执行 claim`,
+      };
+    }
+  }
+  return { kind: 'none', detail: '等待分配' };
 }
 
 function toOutputPackageDto(
@@ -16572,20 +17035,7 @@ async function projectStageDto(
     stableInputFenceCurrent: true,
     eligibleAgentIds: candidateAgentIds,
   });
-  const taskDto: TaskDto = {
-    id: task.id,
-    teamId: task.teamId,
-    title: task.title,
-    ...(task.description === undefined ? {} : { description: task.description }),
-    status: task.status,
-    creatorId: task.creatorId,
-    ...(task.assigneeId === undefined ? {} : { assigneeId: task.assigneeId }),
-    ...(task.channelId === undefined ? {} : { channelId: task.channelId }),
-    tags: task.tags,
-    sortOrder: task.sortOrder,
-    createdAt: task.createdAt,
-    updatedAt: task.updatedAt,
-  };
+  const taskDto = toTaskDto(task);
   return {
     id: record.id,
     teamId: record.teamId,

@@ -682,6 +682,27 @@ for (const variant of variants) {
       expect(collection?.currentVersionId).toBe(saved.revision.versionId);
     });
 
+    test('#1065 AC5:library 版本携带 packageMemberships(交付包归属由 Server 投影)', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s);
+      const library = await s.app.listProjectArtifactCollections({
+        userId: s.userId, teamId: s.teamId, channelId: s.channelId,
+      });
+      if (!library.ok) throw new Error(library.error);
+      const collection = library.library.collections.find((c) => c.id === fixture.collectionId);
+      const delivered = collection?.versions.find((v) => v.id === fixture.versionId);
+      // 交付形成的版本 → 归属该 package(F1)。
+      expect(delivered?.packageMemberships).toEqual([
+        {
+          packageId: fixture.packageId,
+          sequence: 1,
+          shortLabel: 'F1',
+          deliveredAt: delivered!.createdAt,
+          taskId: fixture.taskId,
+        },
+      ]);
+    });
+
     test('原子性:事务中段失败(artifact 主键被占)→ 零部分行', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);

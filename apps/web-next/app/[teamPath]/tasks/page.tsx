@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, projectEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
+import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { WEB_EVENTS, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type TaskDagViewDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
@@ -1109,6 +1110,8 @@ function TaskThreadPanel({
   onDelegateToAgent: () => void;
   delegatePackageId: string | null;
 }) {
+  // #1065 AC9：可发现性动作的导航(「审核交付包」→ 频道 Files 视图)。
+  const router = useRouter();
   return (
     <aside className="flex w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white">
       <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
@@ -1160,12 +1163,29 @@ function TaskThreadPanel({
             ? <TaskDagPanel dag={taskDag} teamPath={teamPath} />
             : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
         {teamId && task.channelId ? (
-          <TaskOutputPackageSummary
-            teamId={teamId}
-            channelId={task.channelId}
-            taskId={task.id}
-            onPackages={onPackages}
-          />
+          <>
+            {/* #1065 AC3/AC4：交付视图(目标/acceptance/焦点/availableActions/时间线) */}
+            <TaskDeliveryOverview
+              teamId={teamId}
+              channelId={task.channelId}
+              taskId={task.id}
+              onAction={(action) => {
+                // #1065 AC9：可发现性动作只是入口;实际 command 提交时 Server 仍完整复验。
+                if (action === 'delegate-to-agent') {
+                  onDelegateToAgent();
+                } else if (action === 'review-package') {
+                  // 审核面在频道 Files 视图(交付包列表/成员审核按钮)。
+                  router.push(`/${teamPath}/channel/${task.channelId}?chatTab=files`);
+                }
+              }}
+            />
+            <TaskOutputPackageSummary
+              teamId={teamId}
+              channelId={task.channelId}
+              taskId={task.id}
+              onPackages={onPackages}
+            />
+          </>
         ) : null}
         {teamId && userId ? (
           <TaskSystemActivitySection

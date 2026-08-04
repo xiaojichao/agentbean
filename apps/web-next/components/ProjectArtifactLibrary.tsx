@@ -226,6 +226,12 @@ function CollectionCard({
             {currentVersion.id === collection.finalVersionId && (
               <span className="rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-medium text-white">最终版</span>
             )}
+            {/* #1065 AC5：本版本属于哪些交付包(Server 投影,区分交付包与逻辑产物身份)。 */}
+            {(currentVersion.packageMemberships?.length ?? 0) > 0 && (
+              <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-800" data-smoke="package-membership">
+                交付包 {currentVersion.packageMemberships!.map((membership) => membership.shortLabel).join('、')}
+              </span>
+            )}
           </div>
           <VersionSource version={currentVersion} />
           {canRevise(currentVersion) && (
@@ -258,6 +264,11 @@ function CollectionCard({
                 <span className="truncate text-neutral-600">{version.artifact.filename}</span>
                 {version.id === collection.currentVersionId && (
                   <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800">当前</span>
+                )}
+                {(version.packageMemberships?.length ?? 0) > 0 && (
+                  <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] text-violet-800" data-smoke="package-membership">
+                    交付包 {version.packageMemberships!.map((membership) => membership.shortLabel).join('、')}
+                  </span>
                 )}
                 {onReferenceSelection && (
                   <button

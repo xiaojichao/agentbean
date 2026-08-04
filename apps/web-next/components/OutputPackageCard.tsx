@@ -38,18 +38,8 @@ const ACTION_LABELS: Record<PackageReviewAction | ArtifactRevisionAction, string
   'revise-version': '基于此修改',
 };
 
-const REVIEW_STATE_LABELS: Record<string, string> = {
-  pending: '待审核',
-  approved: '已通过',
-  changes_requested: '要求修改',
-  rejected: '已拒绝',
-};
-
-const POLICY_LABELS: Record<string, string> = {
-  delivered: '交付版',
-  current: '当前版',
-  final: '最终版',
-};
+// #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射,颜色只作修饰)。
+import { POLICY_LABELS, reviewStateLabel } from '@/lib/delivery-labels';
 
 /** #1062 AC1:「基于此修改」回调——成员被 Server 标记可修订时携带冻结 provenance。 */
 export interface ReviseVersionRequest {
@@ -69,6 +59,8 @@ export function OutputPackageCard({
   channelId,
   onAddReference,
   onReviseVersion,
+  onOpenTask,
+  onContinueWithAgent,
 }: {
   packageMeta: OutputPackageMeta;
   channelId?: string;
@@ -76,6 +68,16 @@ export function OutputPackageCard({
   onAddReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
   /** #1062 AC1:「基于此修改」——成员可修订时打开修订编辑器(Server 动作驱动)。 */
   onReviseVersion?: (request: ReviseVersionRequest) => void;
+  /**
+   * #1065 AC2:「打开审核 Task」——导航到该 Task 的审核面(Task 详情/面板)。
+   * 只导航,不创建业务事实。
+   */
+  onOpenTask?: (taskId: string) => void;
+  /**
+   * #1065 AC2:「继续 @Agent」——在关联 Thread composer 预填交付包引用与说明文本
+   * 并聚焦;未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
+   */
+  onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
   const [frozenTaskRevision, setFrozenTaskRevision] = useState<number | undefined>(undefined);
@@ -353,7 +355,7 @@ export function OutputPackageCard({
                     className="ml-auto shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600"
                     data-smoke="package-review-state"
                   >
-                    {REVIEW_STATE_LABELS[actions.reviewState] ?? actions.reviewState}
+                    {reviewStateLabel(actions.reviewState)}
                     {actions.isFinalVersion ? ' · 最终版' : ''}
                   </span>
                   {actions.actions
@@ -443,6 +445,33 @@ export function OutputPackageCard({
           <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
           交付 Agent：{packageMeta.agentName}
         </p>
+      ) : null}
+      {/* #1065 AC2：入口只导航/预填,不创建业务事实;command 提交时 Server 仍完整复验。 */}
+      {(onOpenTask || onContinueWithAgent) ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-neutral-200 pt-2" data-smoke="output-package-entries">
+          {onOpenTask && packageMeta.taskId ? (
+            <button
+              type="button"
+              onClick={() => onOpenTask(packageMeta.taskId!)}
+              className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50"
+              data-smoke="output-package-open-task"
+            >
+              打开审核 Task
+            </button>
+          ) : null}
+          {onContinueWithAgent ? (
+            <button
+              type="button"
+              disabled={!packageMeta.taskId}
+              onClick={() => onContinueWithAgent(packageMeta.packageId, packageMeta.taskTitle)}
+              title={packageMeta.taskId ? undefined : '未关联 Task,无法交接给 Agent'}
+              className="rounded-md border border-violet-300 bg-white px-2 py-1 text-xs text-violet-700 hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-40"
+              data-smoke="output-package-continue-agent"
+            >
+              继续 @Agent
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

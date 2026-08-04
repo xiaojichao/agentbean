@@ -16,6 +16,8 @@ export const ERROR_CODES = [
   'INVITE_INVALID',
   'INVITE_EXPIRED',
   'INVITE_ALREADY_USED',
+  /** #1065 AC7:投影未追上客户端声明的最低 consistency token。 */
+  'PROJECTION_NOT_READY',
   'INTERNAL_ERROR',
 ] as const;
 
