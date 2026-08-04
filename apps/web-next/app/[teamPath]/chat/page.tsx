@@ -12,6 +12,7 @@ import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRun
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
+import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
@@ -2836,14 +2837,7 @@ function ChannelEditDialog({
     setArchivePreflight(null);
   };
 
-  const workspaceItems = [
-    ...(archivePreflight?.items.filter(i => i.kind === 'task') ?? []).map(i => `任务: ${i.title ?? i.id} (${i.status})`),
-    ...(archivePreflight?.items.filter(i => i.kind === 'offer') ?? []).map(i => `待响应 Offer`),
-    ...(archivePreflight?.items.filter(i => i.kind === 'claim') ?? []).map(i => `活跃 Claim`),
-    ...(archivePreflight?.items.filter(i => i.kind === 'lease') ?? []).map(i => `活跃 Lease`),
-    ...(archivePreflight?.items.filter(i => i.kind === 'invocation') ?? []).map(i => `进行中的调用`),
-    ...(archivePreflight?.items.filter(i => i.kind === 'pending_review') ?? []).map(i => `待审核: ${i.title ?? i.id}`),
-  ];
+  const workspaceItems = (archivePreflight?.items ?? []).map(archivePreflightItemLabel);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" data-smoke="channel-edit-dialog" data-channel-id={channel.id}>

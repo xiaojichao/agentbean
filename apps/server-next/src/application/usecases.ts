@@ -87,7 +87,7 @@ import { parseArtifactRevisionCommandInputV1 } from '../../../../packages/contra
 import { canApplyChannelUpdate, channelHumanMembersForCreate, deriveManagementRunUsage, isDefaultChannel, normalizeAdapterKind, normalizeAgentName, normalizeMentionName, normalizePathForComparison, routeMessage, type RouteResult, canManageFormalMemory, canProposeFormalCorrection, canReadFormalMemory, canManageSystemKnowledge, canManageUserMemory, canReadSystemKnowledge, canReadUserMemory, evaluateTeamAgentMemoryOptIn, evaluateArchivePreflight, evaluateArchiveConfirmation, validateWorkspaceImportFiles, evaluateWorkspacePublish, assembleArchiveExportManifest, evaluateWorkspaceStagingSizeLimits, evaluateWorkspaceStagingUpload, evaluateWorkspaceStagingCommitReadiness, evaluateWorkspaceStagingExpiry, normalizeWorkspacePublishId, isCompatibleWorkspaceStagingBegin, DEFAULT_WORKSPACE_STAGING_FILE_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_PUBLISH_MAX_BYTES, DEFAULT_WORKSPACE_STAGING_RETENTION_MS, deriveActivityAudience, mapLifecycleCommandToActivityFact, mapRemediationCommandToActivityFact } from '../../../../packages/domain/src/index.js';
 import type { AgentExposureActiveProjectionDto, AgentExposureManifestRevisionDto, AgentExposureRestrictionDto, AgentTeamCoverageDto, CreateAgentExposureDraftInput, GetAgentExposureActiveInput, GetAgentTeamCoverageInput, ListAgentExposureRevisionsInput, PublishAgentExposureInput, RevokeAgentExposureInput, UpdateAgentExposureDraftInput, UpsertAgentExposureRestrictionInput } from '../../../../packages/contracts/src/index.js';
 import type { AgentMemoryProjectionDto, CreateAgentMemoryProjectionDraftInput, GetConsumableAgentMemoryProjectionsInput, GetConsumableAgentMemoryProjectionsResult, ListAgentMemoryProjectionRevisionsInput, PublishAgentMemoryProjectionInput, TeamAgentMemoryOptInDto, UpdateAgentMemoryProjectionDraftInput, UpsertTeamAgentMemoryOptInInput, WithdrawAgentMemoryProjectionInput } from '../../../../packages/contracts/src/index.js';
-import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
+import type { AgentConfigUpdate, AgentRecord, ArtifactRecord, ChannelArchiveRecord, ChannelDocumentRecord, ChannelDocumentRevisionRecord, ChannelRecord, DeviceInviteRecord, DeviceRecord, DispatchRecord, JoinLinkRecord, MessageRecord, ServerNextRepositories, TaskRecord, UserRecord, WorkspaceRunRecord, ProjectChannelWorkspaceRecord, ProjectChannelWorkspaceRevisionRecord, WorkspacePublishStagingRecord, WorkspacePublishStagingFileRecord } from './repositories.js';
 import type { WorkspaceStagingContentStore } from './workspace-staging-content-store.js';
 import {
   PROJECT_REFERENCE_SET_CONTRACT_VERSION,
@@ -4998,6 +4998,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           dispatches: repositories.dispatches,
           management: repositories.management,
           coordination: repositories.taskCoordination,
+          outputPackages: repositories.outputPackages,
+          workspacePublishStagings: repositories.workspacePublishStagings,
+          channelProjects: repositories.channelProjects,
         }, archiveInput.teamId, archiveInput.channelId);
         const preflight = evaluateArchivePreflight({
           channel: { id: channel.id, revision: channelRevision, archivedAt: channel.archivedAt ?? null },
@@ -5101,21 +5104,64 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
         }
 
-        // 5. 写 archivedAt
+        // 5. #1066 AC2：归档事务内把频道内未收敛（open/failed）publish staging
+        //    显式收口为 terminal failed——Device 不能自行宣布已收口，状态迁移仅
+        //    Server 事务内执行；不删行（审计事实保留）。
+        const activeStagings = await transaction.workspacePublishStagings.listActiveByChannel({
+          teamId: archiveInput.teamId,
+          channelId: channel.id,
+        });
+        let cancelledStagingCount = 0;
+        for (const staging of activeStagings) {
+          if (staging.status === 'failed') continue;
+          const closed = await transaction.workspacePublishStagings.update({
+            ...staging,
+            status: 'failed',
+            updatedAt: now,
+          });
+          if (!closed) throw new Error(`STAGING_CANCEL_FAILED:${staging.publishId}`);
+          cancelledStagingCount += 1;
+        }
+
+        // 6. 写 archivedAt
         const archived = await transaction.channels.archive({
           channelId: channel.id,
           timestamp: now,
         });
         if (!archived) throw new Error('CHANNEL_ARCHIVE_FAILED');
 
+        // 7. #1066 AC12：归档审计记录（只写不删；confirmation 与后续查询共用同一事实）。
+        const cancelledInvocationIdsDeduped = [...new Set(cancelledInvocationIds)];
+        const archiveRecord: ChannelArchiveRecord = {
+          id: ids.nextId(),
+          teamId: archiveInput.teamId,
+          channelId: channel.id,
+          actorUserId: archiveInput.userId,
+          authorityBasis: 'channel_creator',
+          channelRevision: confirmation.payload.channelRevision,
+          outcome: 'archived',
+          cancelledTaskIds: works.tasks.map((task) => task.id),
+          releasedClaimIds: works.leases.map((lease) => lease.id),
+          invalidatedOfferIds: works.offers.map((offer) => offer.id),
+          cancelledInvocationIds: cancelledInvocationIdsDeduped,
+          pendingReviewTaskIds: works.pendingReviews.map((task) => task.id),
+          pendingReviewDeliveryIds: works.pendingReviewDeliveries.map((delivery) => delivery.id),
+          pendingDeliveryCount: works.pendingDeliveries.length,
+          cancelledStagingCount,
+          archivedAt: now,
+        };
+        await transaction.channelArchives.create(archiveRecord);
+
         return makeSuccess({
           confirmation: {
             channel: archived,
-            cancelledTaskIds: works.tasks.map((task) => task.id),
-            releasedClaimIds: works.leases.map((lease) => lease.id),
-            invalidatedOfferIds: works.offers.map((offer) => offer.id),
-            cancelledInvocationIds: [...new Set(cancelledInvocationIds)],
-            pendingReviewTaskIds: works.pendingReviews.map((task) => task.id),
+            cancelledTaskIds: archiveRecord.cancelledTaskIds,
+            releasedClaimIds: archiveRecord.releasedClaimIds,
+            invalidatedOfferIds: archiveRecord.invalidatedOfferIds,
+            cancelledInvocationIds: archiveRecord.cancelledInvocationIds,
+            pendingReviewTaskIds: archiveRecord.pendingReviewTaskIds,
+            pendingReviewDeliveryIds: archiveRecord.pendingReviewDeliveryIds,
+            cancelledStagingCount: archiveRecord.cancelledStagingCount,
           },
         });
       });
@@ -14472,7 +14518,16 @@ function isPendingDispatchStatus(status: DispatchDto['status']): boolean {
   return status === 'queued' || status === 'sent' || status === 'accepted' || status === 'running';
 }
 
-type ArchiveWorkRepositories = Pick<ServerNextRepositories, 'tasks' | 'dispatches' | 'management'> & {
+type ArchiveWorkRepositories = Pick<
+  ServerNextRepositories,
+  | 'tasks'
+  | 'dispatches'
+  | 'management'
+  // #1066：package 级待审核 delivery 与未收敛 projection 复验（AC1）。
+  | 'outputPackages'
+  | 'workspacePublishStagings'
+  | 'channelProjects'
+> & {
   coordination: TaskCoordinationRepositories;
 };
 
@@ -14510,6 +14565,23 @@ async function collectArchiveWorks(
     }
   }
 
+  // #1066 AC1：package 级待审核 delivery（#1061 reviews 表聚合 reviewState 非 approved 的包）
+  // 与未收敛 projection（committed 有 provenance 但尚未形成 package 的交付）一并列入 gate。
+  // 两者都只读列出——归档不删除交付历史，仅要求有权人知悉（AC3）。
+  const packageRecords = await deps.outputPackages.listPackagesByChannel({
+    teamId,
+    channelId,
+    limit: Number.MAX_SAFE_INTEGER,
+  });
+  const packageSummaries = await summarizeOutputPackages(deps, { teamId, channelId }, packageRecords);
+  // 仅「待审核」= reviewState 'pending' 列入 gate；approved/rejected/changes_requested 均为
+  // 已收敛的终态审核结果，不应让归档清单永久残留（rejected 永不收敛）。
+  const pendingReviewDeliveries = packageSummaries
+    .filter((summary) => summary.reviewState === 'pending')
+    .map((summary) => ({ id: summary.packageId, status: summary.reviewState }));
+
+  const pendingDeliveries = await listPendingOutputDeliveries(deps, { teamId, channelId });
+
   return {
     tasks: activeTasks.map((task) => ({ id: task.id, title: task.title, status: task.status })),
     invocations,
@@ -14517,6 +14589,14 @@ async function collectArchiveWorks(
     leases: activeLeases,
     offers: openOffers.map((offer) => ({ id: offer.id, status: offer.status })),
     pendingReviews: pendingReviews.map((task) => ({ id: task.id, title: task.title, status: task.status })),
+    pendingReviewDeliveries: pendingReviewDeliveries.map((delivery) => ({
+      id: delivery.id,
+      status: delivery.status,
+    })),
+    pendingDeliveries: pendingDeliveries.map((delivery) => ({
+      id: delivery.publishId,
+      status: 'committed',
+    })),
     dispatches: channelDispatches,
   };
 }
@@ -15990,8 +16070,14 @@ function toTaskDto(task: TaskRecord): TaskDto {
   };
 }
 
+/** #1066：package 投影聚合所需仓储（archive gate 与查询共用，避免全量 ServerNextRepositories）。 */
+type OutputPackageProjectionRepositories = Pick<
+  ServerNextRepositories,
+  'outputPackages' | 'workspacePublishStagings' | 'channelProjects'
+>;
+
 async function summarizeOutputPackages(
-  repositories: ServerNextRepositories,
+  repositories: OutputPackageProjectionRepositories,
   input: { teamId: ID; channelId: ID },
   records: readonly OutputPackageRecord[],
 ): Promise<OutputPackageSummaryDto[]> {
@@ -16013,7 +16099,7 @@ async function summarizeOutputPackages(
 }
 
 async function listPendingOutputDeliveries(
-  repositories: ServerNextRepositories,
+  repositories: OutputPackageProjectionRepositories,
   input: { teamId: ID; channelId: ID; taskId?: ID },
 ): Promise<OutputPackagePendingDeliveryDto[]> {
   const committedStagings = await repositories.workspacePublishStagings.listCommittedByChannel({

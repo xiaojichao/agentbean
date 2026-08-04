@@ -517,6 +517,8 @@ export interface WorkspacePublishStagingRepository {
     channelId: ID;
     taskId?: ID;
   }): Promise<WorkspacePublishStagingRecord[]>;
+  /** #1066：归档事务列出频道内 open/failed（未收敛）staging，供 terminal cancellation。 */
+  listActiveByChannel(input: { teamId: ID; channelId: ID }): Promise<WorkspacePublishStagingRecord[]>;
   delete(input: { teamId: ID; publishId: ID }): Promise<void>;
 }
 
@@ -542,6 +544,32 @@ export interface TaskRepository {
 export interface DeviceWorkspaceSnapshotRepository {
   create(snapshot: DeviceWorkspaceSnapshotDto): Promise<DeviceWorkspaceSnapshotDto>;
   getById(input: { teamId: ID; channelId: ID; snapshotId: ID }): Promise<DeviceWorkspaceSnapshotDto | null>;
+}
+
+/** #1066 AC12：Channel 归档审计记录（只写不删，供只读审计查询）。 */
+export interface ChannelArchiveRecord {
+  id: ID;
+  teamId: ID;
+  channelId: ID;
+  actorUserId: ID;
+  /** 归档权威来源：现为 'channel_creator'（canApplyChannelUpdate 判定）。 */
+  authorityBasis: string;
+  channelRevision: number;
+  outcome: 'archived';
+  cancelledTaskIds: ID[];
+  releasedClaimIds: ID[];
+  invalidatedOfferIds: ID[];
+  cancelledInvocationIds: ID[];
+  pendingReviewTaskIds: ID[];
+  pendingReviewDeliveryIds: ID[];
+  pendingDeliveryCount: number;
+  cancelledStagingCount: number;
+  archivedAt: UnixMs;
+}
+
+export interface ChannelArchiveRepository {
+  create(record: ChannelArchiveRecord): Promise<ChannelArchiveRecord>;
+  listByChannel(input: { teamId: ID; channelId: ID }): Promise<ChannelArchiveRecord[]>;
 }
 
 export interface ServerNextRepositories {
@@ -588,6 +616,8 @@ export interface ServerNextRepositories {
   /** #1062 明确版本修订命令的原子写入与幂等 receipt(版本/集合落库单事务)。 */
   artifactRevisions: import('./artifact-revision-repositories.js').ArtifactRevisionRepository;
   deviceWorkspaceSnapshots: DeviceWorkspaceSnapshotRepository;
+  /** #1066 归档审计（AC12）。 */
+  channelArchives: ChannelArchiveRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;
   savedMessages: SavedMessageRepository;

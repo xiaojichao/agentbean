@@ -23,6 +23,8 @@ export interface ArchivePreflightSummary {
   leases: number;
   offers: number;
   pendingReviews: number;
+  /** #1066：尚未收敛为 OutputPackage 的 committed 交付数。 */
+  pendingDeliveries: number;
 }
 
 export interface EvaluateArchivePreflightInput {
@@ -43,6 +45,10 @@ export interface EvaluateArchivePreflightInput {
     leases: readonly { id: string; title?: string; status: string }[];
     offers: readonly { id: string; title?: string; status: string }[];
     pendingReviews: readonly { id: string; title?: string; status: string }[];
+    /** #1066：package 级待审核 delivery（reviews 表 pending 且绑定 package）。 */
+    pendingReviewDeliveries: readonly { id: string; title?: string; status: string }[];
+    /** #1066：publish 已 committed 但尚未形成 OutputPackage 的交付（pendingDeliveries 差集）。 */
+    pendingDeliveries: readonly { id: string; title?: string; status: string }[];
   };
 }
 
@@ -89,6 +95,18 @@ export function evaluateArchivePreflight(
       title: review.title,
       status: review.status,
     })),
+    ...input.works.pendingReviewDeliveries.map((review) => ({
+      kind: 'pending_review_delivery' as const,
+      id: review.id,
+      title: review.title,
+      status: review.status,
+    })),
+    ...input.works.pendingDeliveries.map((delivery) => ({
+      kind: 'pending_delivery' as const,
+      id: delivery.id,
+      title: delivery.title,
+      status: delivery.status,
+    })),
   ];
 
   const expiresAt = input.now + input.tokenExpiresInMs;
@@ -115,6 +133,7 @@ export function evaluateArchivePreflight(
       leases: input.works.leases.length,
       offers: input.works.offers.length,
       pendingReviews: input.works.pendingReviews.length,
+      pendingDeliveries: input.works.pendingDeliveries.length,
     },
     items,
   };
