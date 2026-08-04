@@ -11,6 +11,10 @@ const SOURCE_LABEL: Record<ProjectReferenceSelectionSourceKind, string> = {
   bundle_subset: '包内多选',
   document: '文档',
   artifact_version: '产物版本',
+  package_delivered: '交付版整包',
+  package_current: '当前版整包',
+  package_final: '最终版整包',
+  package_specified: '包内显式选择',
 };
 
 export function ProjectReferenceChips({ referenceSet }: { referenceSet: ProjectReferenceSetDto }) {

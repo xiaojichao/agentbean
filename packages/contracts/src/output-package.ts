@@ -102,6 +102,88 @@ export const OUTPUT_PACKAGE_QUERY_OUTCOMES = [
 export type OutputPackageQueryOutcome = (typeof OUTPUT_PACKAGE_QUERY_OUTCOMES)[number];
 
 // ---------------------------------------------------------------------------
+// #1063 Projection query(delivered/current/final/specified)
+// ---------------------------------------------------------------------------
+
+/**
+ * projection 策略四态(#1059 §3):
+ * - delivered:还原 package 创建时冻结的交付版本;
+ * - current:同一读取快照逐成员解析 collection.currentVersionId;
+ * - final:只取已有 finalVersionId 的成员,必需成员缺失即整体 not_ready,绝不以 current 补齐;
+ * - specified:用户显式选择的具体版本(必须属于 package 成员的 collection)。
+ */
+export const OUTPUT_PACKAGE_PROJECTION_POLICIES = [
+  'delivered', 'current', 'final', 'specified',
+] as const;
+export type OutputPackageProjectionPolicy = (typeof OUTPUT_PACKAGE_PROJECTION_POLICIES)[number];
+
+/** projection 结构化阻断码(#1063 AC3/AC4;Server 返回,UI 不自行判断)。 */
+export const OUTPUT_PACKAGE_PROJECTION_BLOCKER_CODES = [
+  /** 必需成员缺 finalVersionId(final 投影整体 not_ready)。 */
+  'missing_final',
+  /** 成员 current 版本处于 rejected/changes_requested,不作为整包默认正式输入。 */
+  'current_not_formal',
+  /** specified 版本不属于任何 package 成员的 collection。 */
+  'version_not_in_package',
+  /** 成员 collection 或版本事实缺失/不可见。 */
+  'collection_unavailable',
+] as const;
+export type OutputPackageProjectionBlockerCode = (typeof OUTPUT_PACKAGE_PROJECTION_BLOCKER_CODES)[number];
+
+/** projection 请求(specified 策略必填 versions)。 */
+export interface OutputPackageProjectionRequestV1 {
+  readonly policy: OutputPackageProjectionPolicy;
+  readonly versions?: readonly { readonly collectionId: ID; readonly versionId: ID }[];
+}
+
+/** projection 解析出的成员版本(携带解析时 collection revision=发送时的 fence basis)。 */
+export interface OutputPackageProjectionMemberDto {
+  readonly sequence: number;
+  readonly shortLabel: string;
+  readonly collectionId: ID;
+  readonly versionId: ID;
+  readonly versionNumber: number;
+  readonly artifactId: ID;
+  readonly filename: string;
+  readonly reviewState: ProjectArtifactVersionReviewState;
+  readonly isFinalVersion: boolean;
+  readonly collectionRevision: number;
+}
+
+export interface OutputPackageProjectionBlockerDto {
+  readonly code: OutputPackageProjectionBlockerCode;
+  readonly collectionId: ID;
+  /** 成员相关阻断携带;version_not_in_package 时版本不属于任何成员,无短标识。 */
+  readonly shortLabel?: string;
+  readonly filename?: string;
+  /** version_not_in_package 时携带被拒版本身份。 */
+  readonly versionId?: ID;
+}
+
+/** 被明确省略的成员(非必需且无 final;绝不以 current 补齐)。 */
+export interface OutputPackageProjectionOmittedDto {
+  readonly collectionId: ID;
+  readonly shortLabel: string;
+  readonly filename: string;
+  readonly reason: 'final_not_required';
+}
+
+/**
+ * projection 结果块。status=not_ready 时 members 仍携带可解析部分,
+ * blockers 列出全部缺失/阻断项;consistencyToken 记录解析依据的 stream 位置
+ * (package stream revision + 各成员 collection revision),权限/audience/revisions
+ * 变化后旧 token 不得继续授权(#1063 AC6)。
+ */
+export interface OutputPackageProjectionResultV1 {
+  readonly policy: OutputPackageProjectionPolicy;
+  readonly status: 'ready' | 'not_ready';
+  readonly members: readonly OutputPackageProjectionMemberDto[];
+  readonly blockers: readonly OutputPackageProjectionBlockerDto[];
+  readonly omitted: readonly OutputPackageProjectionOmittedDto[];
+  readonly consistencyToken: ConsistencyTokenV1;
+}
+
+// ---------------------------------------------------------------------------
 // OutputPackage DTO(创建后不可变;#1059 §3)
 // ---------------------------------------------------------------------------
 
@@ -336,6 +418,8 @@ export interface OutputPackageQueryInputMapV1 {
     /** 目标频道(调用方声明;Server 复验 package 归属,防跨频道读取)。 */
     readonly channelId: ID;
     readonly packageId: ID;
+    /** #1063:可选 projection 解析请求(delivered/current/final/specified)。 */
+    readonly projection?: OutputPackageProjectionRequestV1;
     readonly minimumConsistency?: ConsistencyTokenV1;
   };
   readonly 'list-channel-output-packages': {
@@ -356,6 +440,11 @@ export interface OutputPackageQueryOutputMapV1 {
      * 客户端只渲染 Server 给出的动作，绝不依据按钮可见性或角色名称推断权限。
      */
     readonly availableActions: readonly PackageMemberAvailableActionsDto[];
+    /** #1063：请求携带 projection 时返回解析结果块(含 consistencyToken)。 */
+    readonly projection?: OutputPackageProjectionResultV1;
+    /** #1063：读取水位与 audience scope(此前合同已冻结但未接线,本票真正下发)。 */
+    readonly asOf: UnixMs;
+    readonly audienceScope: string;
   };
   readonly 'list-channel-output-packages': {
     readonly packages: readonly OutputPackageSummaryDto[];
@@ -565,6 +654,95 @@ function assertRecordInput(value: unknown): void {
   assertId(value.workspaceRevisionId);
 }
 
+function assertProjectionRequest(value: unknown): void {
+  assertExactKeys(value, ['policy', 'versions'], ['policy']);
+  if (!OUTPUT_PACKAGE_PROJECTION_POLICIES.includes(value.policy as OutputPackageProjectionPolicy)) {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
+  if (value.policy === 'specified') {
+    // specified 必须显式给版本清单(空数组也拒绝——显式选择不能空)。
+    if (!Array.isArray(value.versions) || value.versions.length === 0) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+  }
+  if (value.versions !== undefined) {
+    if (!Array.isArray(value.versions)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    for (const entry of value.versions) {
+      assertExactKeys(entry, ['collectionId', 'versionId'], ['collectionId', 'versionId']);
+      assertId(entry.collectionId);
+      assertId(entry.versionId);
+    }
+  }
+}
+
+function assertProjectionMember(value: unknown): void {
+  assertExactKeys(value,
+    ['sequence', 'shortLabel', 'collectionId', 'versionId', 'versionNumber', 'artifactId',
+      'filename', 'reviewState', 'isFinalVersion', 'collectionRevision'],
+    ['sequence', 'shortLabel', 'collectionId', 'versionId', 'versionNumber', 'artifactId',
+      'filename', 'reviewState', 'isFinalVersion', 'collectionRevision']);
+  assertInteger(value.sequence, 1);
+  if (!nonEmpty(value.shortLabel)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  assertId(value.collectionId);
+  assertId(value.versionId);
+  assertInteger(value.versionNumber, 1);
+  assertId(value.artifactId);
+  if (!nonEmpty(value.filename)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  if (value.reviewState !== 'pending' && value.reviewState !== 'approved'
+    && value.reviewState !== 'rejected' && value.reviewState !== 'changes_requested') {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
+  if (typeof value.isFinalVersion !== 'boolean') throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  assertInteger(value.collectionRevision, 1);
+}
+
+function assertProjectionResult(value: unknown): void {
+  assertExactKeys(value,
+    ['policy', 'status', 'members', 'blockers', 'omitted', 'consistencyToken'],
+    ['policy', 'status', 'members', 'blockers', 'omitted', 'consistencyToken']);
+  if (!OUTPUT_PACKAGE_PROJECTION_POLICIES.includes(value.policy as OutputPackageProjectionPolicy)) {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
+  if (value.status !== 'ready' && value.status !== 'not_ready') {
+    throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  }
+  if (!Array.isArray(value.members)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  value.members.forEach(assertProjectionMember);
+  if (!Array.isArray(value.blockers)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  for (const blocker of value.blockers) {
+    assertExactKeys(blocker, ['code', 'collectionId', 'shortLabel', 'filename', 'versionId'],
+      ['code', 'collectionId']);
+    if (!OUTPUT_PACKAGE_PROJECTION_BLOCKER_CODES.includes(
+      (blocker as Record<string, unknown>).code as OutputPackageProjectionBlockerCode,
+    )) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+    assertId((blocker as Record<string, unknown>).collectionId);
+    const blockerRecord = blocker as Record<string, unknown>;
+    if (blockerRecord.shortLabel !== undefined && !nonEmpty(blockerRecord.shortLabel)) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+    if (blockerRecord.filename !== undefined && !nonEmpty(blockerRecord.filename)) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+    if (blockerRecord.versionId !== undefined) assertId(blockerRecord.versionId);
+  }
+  if (!Array.isArray(value.omitted)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+  for (const omitted of value.omitted) {
+    assertExactKeys(omitted, ['collectionId', 'shortLabel', 'filename', 'reason'],
+      ['collectionId', 'shortLabel', 'filename', 'reason']);
+    assertId((omitted as Record<string, unknown>).collectionId);
+    if (!nonEmpty((omitted as Record<string, unknown>).shortLabel)
+      || !nonEmpty((omitted as Record<string, unknown>).filename)) {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+    if ((omitted as Record<string, unknown>).reason !== 'final_not_required') {
+      throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
+    }
+  }
+  assertConsistencyToken(value.consistencyToken);
+}
+
 function assertRevisionRef(value: unknown): void {
   assertExactKeys(value, ['streamKind', 'streamId', 'revision'], ['streamKind', 'streamId', 'revision']);
   if (!nonEmpty(value.streamKind) || !nonEmpty(value.streamId)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
@@ -695,9 +873,11 @@ export function parseOutputPackageQueryInputV1(
   value: unknown,
 ): OutputPackageQueryInputMapV1[OutputPackageQueryName] {
   if (queryName === 'get-output-package') {
-    assertExactKeys(value, ['channelId', 'packageId', 'minimumConsistency'], ['channelId', 'packageId']);
+    assertExactKeys(value, ['channelId', 'packageId', 'projection', 'minimumConsistency'],
+      ['channelId', 'packageId']);
     assertId(value.channelId);
     assertId(value.packageId);
+    if (value.projection !== undefined) assertProjectionRequest(value.projection);
     if (value.minimumConsistency !== undefined) assertConsistencyToken(value.minimumConsistency);
   } else if (queryName === 'list-channel-output-packages') {
     assertExactKeys(value, ['channelId', 'taskId', 'cursor', 'limit', 'minimumConsistency'], ['channelId']);
@@ -733,12 +913,17 @@ export function parseOutputPackageQueryResponseV1(value: unknown): OutputPackage
     }
     const result = value.result as Record<string, unknown>;
     if (value.queryName === 'get-output-package') {
-      assertExactKeys(result, ['queryName', 'package', 'availableActions'], ['queryName', 'package']);
+      assertExactKeys(result,
+        ['queryName', 'package', 'availableActions', 'projection', 'asOf', 'audienceScope'],
+        ['queryName', 'package', 'asOf', 'audienceScope']);
       assertPackageDto(result.package);
       if (result.availableActions !== undefined) {
         if (!Array.isArray(result.availableActions)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
         result.availableActions.forEach(assertMemberAvailableActions);
       }
+      if (result.projection !== undefined) assertProjectionResult(result.projection);
+      assertInteger(result.asOf, 0);
+      if (!nonEmpty(result.audienceScope)) throw new Error(OUTPUT_PACKAGE_PAYLOAD_INVALID);
     } else {
       assertExactKeys(result, ['queryName', 'packages', 'pendingDeliveries', 'nextCursor'],
         ['queryName', 'packages', 'pendingDeliveries']);

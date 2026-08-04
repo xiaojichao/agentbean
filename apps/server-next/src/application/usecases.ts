@@ -94,6 +94,7 @@ import {
   type ResolveProjectReferencesInput,
   type ResolveProjectReferencesResultDto,
   parseOutputPackageQueryInputV1,
+  parseProjectReferenceSelectionRequestsV1,
 } from '../../../../packages/contracts/src/index.js';
 import type {
   ChannelProjectProfileRecord,
@@ -168,8 +169,11 @@ import type {
   OutputPackageDto,
   OutputPackageSummaryDto,
   OutputPackagePendingDeliveryDto,
+  OutputPackageProjectionPolicy,
+  OutputPackageProjectionResultV1,
   PackageMemberAvailableActionsDto,
   PackageReviewAction,
+  ConsistencyTokenV1,
   ProjectStageBlockingReasonDto,
   ProjectStageEdgeDto,
   ProjectStageMissingRequiredInputDto,
@@ -203,10 +207,17 @@ import {
 } from '../../../../packages/domain/src/index.js';
 import {
   evaluateSelectionEligibility,
+  resolveOutputPackageProjection,
+  resolvePackageReferenceOrdinal,
   resolveReferenceOrdinal,
+  type OutputPackageProjectionCollectionFact,
+  type OutputPackageProjectionMemberFact,
+  type OutputPackageProjectionVersionFact,
   type ProjectReferenceArtifactVersionCandidate,
   type ProjectReferenceBundleCandidate,
   type ProjectReferenceDocumentCandidate,
+  type ProjectReferenceOrdinalPackageMember,
+  type ProjectReferencePackageCandidate,
   type ProjectReferenceSelectionCandidate,
 } from '../../../../packages/domain/src/index.js';
 import {
@@ -637,10 +648,21 @@ export interface ServerNextUseCases {
   listOutputPackages(
     input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string } },
   ): Promise<Ack<{ packages: OutputPackageSummaryDto[]; pendingDeliveries: OutputPackagePendingDeliveryDto[]; nextCursor?: { createdAt: number; packageId: string } }>>;
-  /** #1060 获取单个 OutputPackage(含冻结成员)。 */
+  /** #1060 获取单个 OutputPackage(含冻结成员);#1063 支持可选 projection 请求。 */
   getOutputPackage(
-    input: { teamId: string; channelId: string; packageId: string; userId: string },
-  ): Promise<Ack<{ package: OutputPackageDto }>>;
+    input: {
+      teamId: string;
+      channelId: string;
+      packageId: string;
+      userId: string;
+      projection?: { policy: OutputPackageProjectionPolicy; versions?: { collectionId: string; versionId: string }[] };
+    },
+  ): Promise<Ack<{
+    package: OutputPackageDto;
+    projection?: OutputPackageProjectionResultV1;
+    asOf: number;
+    audienceScope: string;
+  }>>;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
@@ -8798,9 +8820,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         channelId: parsed.channelId,
         packageProjection: result,
       });
+      // #1063 projection 块:按请求策略解析 delivered/current/final/specified,
+      // 返回 asOf 水位与 audienceScope(合同已冻结、本票真正接线)。
+      const projection = parsed.projection
+        ? await computeOutputPackageProjection(repositories, {
+          teamId: parsed.teamId,
+          channelId: parsed.channelId,
+          packageProjection: result,
+          policy: parsed.projection.policy,
+          specifiedVersions: parsed.projection.versions,
+        })
+        : undefined;
+      const asOf = clock.now();
       return makeSuccess({
         package: toOutputPackageDto(result.package, result.members),
         availableActions,
+        ...(projection ? { projection } : {}),
+        asOf,
+        audienceScope: `${parsed.teamId}:${parsed.channelId}:${parsed.userId}`,
       });
     },
 
@@ -9060,11 +9097,64 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
         }
       }
-      return makeSuccess(resolveReferenceOrdinal(
+      // #1063 package 焦点:F1/F2/「第 N 个文件」在 package 焦点内解析为显式版本身份。
+      // collections/versions 提升到循环外一次读取(多焦点不 N+1、同快照)。
+      const packageMembers: ProjectReferenceOrdinalPackageMember[] = [];
+      const focusPackageIds = referenceInput.focusPackageIds ?? [];
+      if (focusPackageIds.length > 0) {
+        const collections = await repositories.channelProjects.listArtifactCollections({
+          teamId: referenceInput.teamId,
+          channelId: referenceInput.channelId,
+        });
+        const versions = await repositories.channelProjects.listArtifactVersions({
+          teamId: referenceInput.teamId,
+          channelId: referenceInput.channelId,
+        });
+        for (const packageId of focusPackageIds) {
+          const record = await repositories.outputPackages.getPackageById({
+            teamId: referenceInput.teamId,
+            packageId,
+          });
+          if (!record || record.package.channelId !== referenceInput.channelId) continue;
+          for (const member of record.members) {
+            const collection = collections.find((candidate) => candidate.id === member.collectionId);
+            if (!collection) continue;
+            const version = versions.find((candidate) => candidate.id === collection.currentVersionId);
+            if (!version) continue;
+            packageMembers.push({
+              packageId,
+              collectionId: member.collectionId,
+              versionId: version.id,
+              versionNumber: version.versionNumber,
+              shortLabel: member.shortLabel,
+              position: member.sequence,
+              filename: member.filename,
+            });
+          }
+        }
+      }
+      const bundleResult = resolveReferenceOrdinal(
         referenceInput.ordinal,
         referenceInput.focusBundleIds,
         bundleMembers,
-      ));
+      );
+      if (referenceInput.focusPackageIds && referenceInput.focusPackageIds.length > 0) {
+        const packageResult = resolvePackageReferenceOrdinal(
+          referenceInput.ordinal,
+          referenceInput.focusPackageIds,
+          packageMembers,
+        );
+        if (packageResult.kind !== 'not_found') {
+          // 同一焦点内 bundle 与 package 都命中时,package 优先(整包引用语义更强);
+          // 都不满足才走 not_found。
+          return makeSuccess(packageResult);
+        }
+        if (bundleResult.kind === 'resolved' || bundleResult.kind === 'ambiguous') {
+          return makeSuccess(bundleResult);
+        }
+        return makeSuccess({ kind: 'not_found' });
+      }
+      return makeSuccess(bundleResult);
     },
 
     async getTaskDag(taskInput) {
@@ -14575,6 +14665,7 @@ async function persistFrozenProjectReferences(
           versionNumber: item.versionNumber,
           artifactId: item.artifactId,
           artifactFilename: item.filename,
+          ...(item.collectionRevision === undefined ? {} : { collectionRevision: item.collectionRevision }),
         }),
       createdAt: input.createdAt,
     }));
@@ -14588,6 +14679,13 @@ async function persistFrozenProjectReferences(
           bundleId: preview.bundle.bundleId,
           bundleName: preview.bundle.name,
           bundleMemberCount: preview.bundle.memberCount,
+        }
+        : {}),
+      ...(preview.package
+        ? {
+          packageId: preview.package.packageId,
+          packageProjection: preview.package.policy,
+          packageMemberCount: preview.package.memberCount,
         }
         : {}),
       createdAt: input.createdAt,
@@ -14646,6 +14744,15 @@ function toProjectReferenceSetDto(record: ProjectReferenceSetRecord): ProjectRef
           },
         }
         : {}),
+      ...(selection.packageId && selection.packageProjection && selection.packageMemberCount !== undefined
+        ? {
+          package: {
+            packageId: selection.packageId,
+            policy: selection.packageProjection,
+            memberCount: selection.packageMemberCount,
+          },
+        }
+        : {}),
       items: selection.items.map((item): ProjectReferenceItemDto =>
         item.kind === 'document_revision'
           ? {
@@ -14663,6 +14770,7 @@ function toProjectReferenceSetDto(record: ProjectReferenceSetRecord): ProjectRef
             versionNumber: item.versionNumber as number,
             artifactId: item.artifactId as string,
             filename: item.artifactFilename as string,
+            ...(item.collectionRevision === undefined ? {} : { collectionRevision: item.collectionRevision }),
           }),
       createdAt: selection.createdAt,
     })),
@@ -14681,9 +14789,22 @@ async function resolveAndFreezeSelections(
     selections: readonly ProjectReferenceSelectionRequestDto[];
   },
 ): Promise<Ack<ResolveProjectReferencesResultDto>> {
+  // #1063 运行时 exact-key 校验(#1059 §9):畸形 selection payload(未知 arm/多余字段/
+  // 错误形状)在此结构化拒绝,而不是穿透到 domain 抛 TypeError。message:send 与
+  // resolve-references 都经本函数。
+  let requests: readonly ProjectReferenceSelectionRequestDto[];
+  try {
+    requests = parseProjectReferenceSelectionRequestsV1(input.selections);
+  } catch {
+    return makeFailure(
+      'VALIDATION_ERROR',
+      'One or more project reference selections are malformed',
+      { reason: 'invalid_request' },
+    );
+  }
   const previews = [];
   const rejections: NonNullable<ProjectReferenceFailureDetailsDto['rejections']>[number][] = [];
-  for (const [selectionIndex, request] of input.selections.entries()) {
+  for (const [selectionIndex, request] of requests.entries()) {
     const selection = await loadProjectReferenceSelectionCandidate(repositories, input, request);
     const verdict = evaluateSelectionEligibility(selection, {
       teamId: input.channel.teamId,
@@ -14757,39 +14878,118 @@ async function loadProjectReferenceSelectionCandidate(
     return { request, artifactVersion };
   }
 
-  const record = await repositories.projectDocumentBundles.getById({
-    teamId: input.teamId,
-    channelId: input.channelId,
-    bundleId: request.bundleId,
-  });
-  let bundle: ProjectReferenceBundleCandidate | null = null;
-  if (record) {
-    const members = await repositories.projectDocumentBundles.listMembers({ bundleId: record.id });
-    const resolvedMembers: ProjectReferenceDocumentCandidate[] = [];
-    let visible = true;
-    for (const member of members) {
-      const candidate = await loadProjectReferenceDocumentCandidate(repositories, {
-        ...input,
-        documentId: member.documentId,
-        bundlePosition: member.position + 1,
-      });
-      if (!candidate) {
-        visible = false;
-        continue;
+  if (request.kind === 'bundle_all' || request.kind === 'bundle_subset') {
+    const record = await repositories.projectDocumentBundles.getById({
+      teamId: input.teamId,
+      channelId: input.channelId,
+      bundleId: request.bundleId,
+    });
+    let bundle: ProjectReferenceBundleCandidate | null = null;
+    if (record) {
+      const members = await repositories.projectDocumentBundles.listMembers({ bundleId: record.id });
+      const resolvedMembers: ProjectReferenceDocumentCandidate[] = [];
+      let visible = true;
+      for (const member of members) {
+        const candidate = await loadProjectReferenceDocumentCandidate(repositories, {
+          ...input,
+          documentId: member.documentId,
+          bundlePosition: member.position + 1,
+        });
+        if (!candidate) {
+          visible = false;
+          continue;
+        }
+        if (!candidate.visible) visible = false;
+        resolvedMembers.push(candidate);
       }
-      if (!candidate.visible) visible = false;
-      resolvedMembers.push(candidate);
+      bundle = {
+        bundleId: record.id,
+        teamId: record.teamId,
+        channelId: record.channelId,
+        name: record.name,
+        visible,
+        members: resolvedMembers,
+      };
     }
-    bundle = {
-      bundleId: record.id,
-      teamId: record.teamId,
-      channelId: record.channelId,
-      name: record.name,
-      visible,
-      members: resolvedMembers,
-    };
+    return { request, bundle };
   }
-  return { request, bundle };
+
+  // #1063 package 语境:装载冻结成员 + 同快照 collections/versions/reviews,
+  // 构造 domain 候选(资格/投影解析全部在 domain 纯函数内完成)。
+  const packageCandidate = await loadProjectReferencePackageCandidate(repositories, input, request);
+  if (request.kind === 'package_members') {
+    return { request, packageMembers: packageCandidate };
+  }
+  return { request, packageProjection: packageCandidate };
+}
+
+async function loadProjectReferencePackageCandidate(
+  repositories: ServerNextRepositories,
+  input: { teamId: string; channelId: string },
+  request: Extract<ProjectReferenceSelectionRequestDto, { kind: 'package_projection' | 'package_members' }>,
+): Promise<ProjectReferencePackageCandidate | null> {
+  const record = await repositories.outputPackages.getPackageById({
+    teamId: input.teamId,
+    packageId: request.packageId,
+  });
+  if (!record || record.package.channelId !== input.channelId) return null;
+  const members: OutputPackageProjectionMemberFact[] = record.members.map((member) => ({
+    sequence: member.sequence,
+    shortLabel: member.shortLabel,
+    collectionId: member.collectionId,
+    deliveredVersionId: member.artifactVersionId,
+    requiredForFinal: member.requiredForFinal,
+    filename: member.filename,
+  }));
+  const collectionIds = new Set(members.map((member) => member.collectionId));
+  const collections = (await repositories.channelProjects.listArtifactCollections(input))
+    .filter((collection) => collectionIds.has(collection.id))
+    .map((collection): OutputPackageProjectionCollectionFact => ({
+      id: collection.id,
+      revision: collection.revision,
+      currentVersionId: collection.currentVersionId,
+      ...(collection.finalVersionId === undefined ? {} : { finalVersionId: collection.finalVersionId }),
+    }));
+  const versionIds = new Set(collections.map((collection) => collection.currentVersionId));
+  for (const collection of collections) {
+    if (collection.finalVersionId) versionIds.add(collection.finalVersionId);
+  }
+  for (const member of members) versionIds.add(member.deliveredVersionId);
+  const versions = (await repositories.channelProjects.listArtifactVersions(input))
+    .filter((version) => versionIds.has(version.id))
+    .map(async (version): Promise<OutputPackageProjectionVersionFact> => {
+      const artifact = await repositories.artifacts.getForTeam({
+        teamId: input.teamId,
+        artifactId: version.artifactId,
+      });
+      const visible = Boolean(artifact)
+        && artifact!.channelId === input.channelId
+        && await isPublicChannelFileArtifact(repositories, artifact!);
+      return {
+        id: version.id,
+        collectionId: version.collectionId,
+        versionNumber: version.versionNumber,
+        artifactId: version.artifactId,
+        filename: artifact?.filename ?? version.artifactId,
+        visible,
+      };
+    });
+  const reviewStateByVersionId = new Map<string, ProjectArtifactVersionReviewState>();
+  for (const review of await repositories.channelProjects.listArtifactReviews(input)) {
+    if (versionIds.has(review.versionId)) {
+      reviewStateByVersionId.set(review.versionId, review.decision);
+    }
+  }
+  return {
+    packageId: record.package.packageId,
+    teamId: record.package.teamId,
+    channelId: record.package.channelId,
+    memberCount: record.package.memberCount,
+    members,
+    collections,
+    versions: await Promise.all(versions),
+    reviewStateByVersionId,
+  };
 }
 
 async function loadProjectReferenceDocumentCandidate(
@@ -15516,6 +15716,69 @@ function toOutputPackageDto(
     memberCount: record.memberCount,
     status: 'recorded',
     createdAt: record.createdAt,
+  };
+}
+
+async function computeOutputPackageProjection(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: string;
+    channelId: string;
+    packageProjection: { package: OutputPackageRecord; members: OutputPackageMemberRecord[] };
+    policy: OutputPackageProjectionPolicy;
+    specifiedVersions?: readonly { collectionId: string; versionId: string }[];
+  },
+): Promise<OutputPackageProjectionResultV1> {
+  // 装载 package 候选与 projection policy 无关(只读冻结成员 + 同快照 facts);
+  // specified 也在同一装载路径,只是解析策略不同。
+  const packageCandidate = await loadProjectReferencePackageCandidate(repositories, {
+    teamId: input.teamId,
+    channelId: input.channelId,
+  }, {
+    kind: 'package_projection',
+    packageId: input.packageProjection.package.packageId,
+    policy: input.policy === 'specified' ? 'delivered' : input.policy,
+  });
+  if (!packageCandidate) {
+    // package 已通过上面的 getById 存在校验;此处不可达,防御性返回空 not_ready。
+    return {
+      policy: input.policy,
+      status: 'not_ready',
+      members: [],
+      blockers: [],
+      omitted: [],
+      consistencyToken: {
+        schemaVersion: 1,
+        entries: [{ streamKind: 'output-package', streamId: input.packageProjection.package.packageId, revision: 1 }],
+      },
+    };
+  }
+  const resolution = resolveOutputPackageProjection({
+    members: packageCandidate.members,
+    collections: packageCandidate.collections,
+    versions: packageCandidate.versions,
+    reviewStateByVersionId: packageCandidate.reviewStateByVersionId,
+    policy: input.policy,
+    ...(input.specifiedVersions ? { specifiedVersions: input.specifiedVersions } : {}),
+  });
+  const consistencyToken: ConsistencyTokenV1 = {
+    schemaVersion: 1,
+    entries: [
+      { streamKind: 'output-package', streamId: input.packageProjection.package.packageId, revision: 1 },
+      ...packageCandidate.collections.map((collection) => ({
+        streamKind: 'project-artifact-collection',
+        streamId: collection.id,
+        revision: collection.revision,
+      })),
+    ],
+  };
+  return {
+    policy: input.policy,
+    status: resolution.status,
+    members: resolution.members,
+    blockers: resolution.blockers,
+    omitted: resolution.omitted,
+    consistencyToken,
   };
 }
 

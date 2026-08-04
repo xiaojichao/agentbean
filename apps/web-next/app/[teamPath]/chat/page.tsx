@@ -2079,6 +2079,18 @@ export default function ChatPage() {
                         selected={selectedMessageId === msg.id}
                         saved={savedIds.has(msg.id)}
                         pinned={pinnedIds.has(msg.id)}
+                        onAddPackageReference={(selection) => {
+                          // #1063 包内引用入口:加到 composer,发送时 Server 重新解析并冻结。
+                          const packageId = selection.kind === 'package_projection' || selection.kind === 'package_members'
+                            ? selection.packageId
+                            : undefined;
+                          setProjectReferenceSelections((current) => [
+                            ...current.filter((item) =>
+                              (item.kind !== 'package_projection' && item.kind !== 'package_members')
+                              || item.packageId !== packageId),
+                            selection,
+                          ]);
+                        }}
                         reacted={reactionEmojis.has(msg.id)}
                         reactionEmoji={reactionEmojis.get(msg.id)}
                         humanProfiles={humanProfiles}
@@ -2150,7 +2162,11 @@ export default function ChatPage() {
                             ? `包内 ${selection.documentIds.length} 项`
                             : selection.kind === 'artifact_version'
                               ? `产物版本：${selection.versionId}`
-                              : `文档：${selection.documentId}`;
+                              : selection.kind === 'package_projection'
+                                ? `整包${selection.policy === 'current' ? '当前' : selection.policy === 'final' ? '最终' : '交付'}版：${selection.packageId}`
+                                : selection.kind === 'package_members'
+                                  ? `包内 ${selection.members.length} 项`
+                                  : `文档：${selection.documentId}`;
                         return (
                           <span key={`${selection.kind}-${index}`} className="inline-flex items-center gap-1 border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-sky-800">
                             {label}
@@ -4356,6 +4372,7 @@ function ChatBubble({
   selected = false,
   saved,
   pinned,
+  onAddPackageReference,
   reacted,
   reactionEmoji,
   humanProfiles = [],
@@ -4420,6 +4437,8 @@ function ChatBubble({
   replyCount: number;
   showReplyAction?: boolean;
   showReplyCount?: boolean;
+  /** #1063 包内引用入口(把选择加进 composer)。 */
+  onAddPackageReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
 }) {
   const agents = useAgentBeanStore((s) => s.agents);
   const agent = msg.senderId ? agents[msg.senderId] : undefined;
@@ -4762,7 +4781,11 @@ function ChatBubble({
           />
         )}
         {!isDeleted && !editing && outputPackageFromMeta(msg.meta) && (
-          <OutputPackageCard packageMeta={outputPackageFromMeta(msg.meta)!} channelId={msg.channelId} />
+          <OutputPackageCard
+            packageMeta={outputPackageFromMeta(msg.meta)!}
+            channelId={msg.channelId}
+            onAddReference={onAddPackageReference}
+          />
         )}
         {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">

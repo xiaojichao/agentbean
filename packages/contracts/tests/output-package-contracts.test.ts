@@ -3,6 +3,8 @@ import { WEB_EVENTS } from '../src/socket.js';
 import {
   OUTPUT_PACKAGE_COMMAND_HASH_VERSION,
   OUTPUT_PACKAGE_COMMAND_NAMES,
+  OUTPUT_PACKAGE_PROJECTION_BLOCKER_CODES,
+  OUTPUT_PACKAGE_PROJECTION_POLICIES,
   OUTPUT_PACKAGE_QUERY_NAMES,
   OUTPUT_PACKAGE_REJECTION_REASONS,
   canonicalizeOutputPackageCommand,
@@ -98,6 +100,13 @@ describe('output-package capabilities', () => {
     expect(OUTPUT_PACKAGE_REJECTION_REASONS).toContain('task-attempt-superseded');
     expect(OUTPUT_PACKAGE_REJECTION_REASONS).toContain('duplicate-manifest-entry');
   });
+  test('#1063 freezes the projection policies and blocker codes', () => {
+    expect(OUTPUT_PACKAGE_PROJECTION_POLICIES).toEqual(['delivered', 'current', 'final', 'specified']);
+    expect(OUTPUT_PACKAGE_PROJECTION_BLOCKER_CODES).toEqual([
+      'missing_final', 'current_not_formal', 'version_not_in_package', 'collection_unavailable',
+    ]);
+  });
+
   test('exposes the two project socket query events under WEB_EVENTS.project', () => {
     expect(WEB_EVENTS.project.listOutputPackages).toBe('project:list-output-packages');
     expect(WEB_EVENTS.project.getOutputPackage).toBe('project:get-output-package');
@@ -259,6 +268,80 @@ describe('query parsers', () => {
       rejectedReason: 'output-package-not-found',
     };
     expect(parseOutputPackageQueryResponseV1(response)).toEqual(response);
+  });
+
+  test('#1063 get-output-package input 接受 projection 请求并做 exact-key 校验', () => {
+    const input = {
+      channelId: 'ch-1',
+      packageId: 'pkg-1',
+      projection: { policy: 'current' },
+    };
+    expect(parseOutputPackageQueryInputV1('get-output-package', input)).toEqual(input);
+    // specified 必须显式给非空 versions。
+    expect(() => parseOutputPackageQueryInputV1('get-output-package', {
+      channelId: 'ch-1', packageId: 'pkg-1', projection: { policy: 'specified' },
+    })).toThrow(INVALID);
+    expect(() => parseOutputPackageQueryInputV1('get-output-package', {
+      channelId: 'ch-1', packageId: 'pkg-1',
+      projection: { policy: 'specified', versions: [{ collectionId: 'col-1', versionId: 'ver-1' }] },
+    })).not.toThrow();
+    // 未知 policy / 多余字段拒绝。
+    expect(() => parseOutputPackageQueryInputV1('get-output-package', {
+      channelId: 'ch-1', packageId: 'pkg-1', projection: { policy: 'latest' },
+    })).toThrow(INVALID);
+    expect(() => parseOutputPackageQueryInputV1('get-output-package', {
+      channelId: 'ch-1', packageId: 'pkg-1', projection: { policy: 'final', note: 'x' },
+    })).toThrow(INVALID);
+  });
+
+  test('#1063 get-output-package result 携带 projection 块与 asOf/audienceScope', () => {
+    const response = {
+      schemaVersion: 1,
+      queryName: 'get-output-package',
+      outcome: 'ready',
+      stableCode: 'OK',
+      audienceScope: 'team-1:ch-1:owner-1',
+      asOf: 2000,
+      result: {
+        queryName: 'get-output-package',
+        package: pkg,
+        asOf: 2000,
+        audienceScope: 'team-1:ch-1:owner-1',
+        projection: {
+          policy: 'final',
+          status: 'not_ready',
+          members: [{
+            sequence: 1, shortLabel: 'F1', collectionId: 'col-1', versionId: 'ver-1',
+            versionNumber: 1, artifactId: 'art-1', filename: 'ep1.md',
+            reviewState: 'approved', isFinalVersion: true, collectionRevision: 4,
+          }],
+          blockers: [{
+            code: 'missing_final', collectionId: 'col-2', shortLabel: 'F2', filename: 'ep2.md',
+          }],
+          omitted: [{
+            collectionId: 'col-3', shortLabel: 'F3', filename: 'notes.md', reason: 'final_not_required',
+          }],
+          consistencyToken: {
+            schemaVersion: 1,
+            entries: [
+              { streamKind: 'output-package', streamId: 'pkg-1', revision: 1 },
+              { streamKind: 'project-artifact-collection', streamId: 'col-1', revision: 4 },
+            ],
+          },
+        },
+      },
+    };
+    expect(parseOutputPackageQueryResponseV1(response)).toEqual(response);
+    // 缺 asOf/audienceScope 或 blocker code 非法均拒绝。
+    const missingAsOf = structuredClone(response) as Record<string, unknown>;
+    delete (missingAsOf.result as Record<string, unknown>).asOf;
+    expect(() => parseOutputPackageQueryResponseV1(missingAsOf)).toThrow(INVALID);
+    const badBlocker = structuredClone(response);
+    (badBlocker.result.projection.blockers[0] as { code: string }).code = 'unknown_code';
+    expect(() => parseOutputPackageQueryResponseV1(badBlocker)).toThrow(INVALID);
+    const badOmitted = structuredClone(response);
+    (badOmitted.result.projection.omitted[0] as { reason: string }).reason = 'whatever';
+    expect(() => parseOutputPackageQueryResponseV1(badOmitted)).toThrow(INVALID);
   });
 });
 
