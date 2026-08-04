@@ -94,4 +94,39 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
     render(<OutputPackageCard packageMeta={packageMeta} />);
     expect(document.querySelector('[data-smoke="output-package-entries"]')).toBeNull();
   });
+
+  test('AC8:并发查询时旧响应不覆盖新状态(cancelled 守卫,最新请求胜出)', async () => {
+    let resolveOld!: (value: { ok: boolean; package?: unknown; availableActions?: unknown[] }) => void;
+    const oldResponse = new Promise<{ ok: boolean; package?: unknown; availableActions?: unknown[] }>((resolve) => {
+      resolveOld = resolve;
+    });
+    const newResponse = {
+      ok: true,
+      package: { taskRevision: 1, taskAttempt: 1, deliveryId: 'del-new' },
+      availableActions: [
+        { versionId: 'ver-1', reviewState: 'approved', actions: [] },
+      ],
+    };
+    mocks.getOutputPackage
+      .mockReturnValueOnce(oldResponse) // 旧频道(ch-1)查询:慢
+      .mockResolvedValueOnce(newResponse); // 新频道(ch-2)查询:快
+    const { rerender } = render(
+      <OutputPackageCard packageMeta={packageMeta} channelId="ch-1" onAddReference={vi.fn()} />,
+    );
+    rerender(
+      <OutputPackageCard packageMeta={packageMeta} channelId="ch-2" onAddReference={vi.fn()} />,
+    );
+    // 新响应先到并应用。
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('已通过');
+    });
+    // 旧响应(慢)后到:被 cancelled 忽略,不覆盖新状态。
+    resolveOld({
+      ok: true,
+      package: { taskRevision: 1, taskAttempt: 1, deliveryId: 'del-old' },
+      availableActions: [{ versionId: 'ver-1', reviewState: 'pending', actions: [] }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('已通过');
+  });
 });
