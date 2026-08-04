@@ -142,6 +142,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
   const projectChannelWorkspaceRevisions = new Map<string, ProjectChannelWorkspaceRevisionRecord>();
   const workspacePublishStagings = new Map<string, WorkspacePublishStagingRecord>();
   const deviceWorkspaceSnapshots = new Map<string, DeviceWorkspaceSnapshotDto>();
+  // #1066 归档审计（AC12）：只写不删。
+  const channelArchives = new Map<string, import('../../application/repositories.js').ChannelArchiveRecord>();
   const tasks = new Map<string, TaskRecord>();
   const channelProjectProfiles = new Map<string, ChannelProjectProfileRecord>();
   const projectStages = new Map<string, ProjectStageRecord>();
@@ -442,6 +444,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             promotion,
             lifecycle,
             packageReviews: repositories.packageReviews,
+            // #1066 archive gate：归档事务内复验 package 投影/待审核 delivery 并收口 staging。
+            outputPackages: repositories.outputPackages,
+            workspacePublishStagings: repositories.workspacePublishStagings,
+            channelProjects: repositories.channelProjects,
+            channelArchives: repositories.channelArchives,
           });
         } catch (error) {
           tasks.clear();
@@ -851,7 +858,9 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         if (!channel) {
           return null;
         }
-        const updated = { ...channel, ...input.changes };
+        // 与 sqlite 后端一致（`revision = revision + 1`）：channel 写操作推进 revision，
+        // 使 archive confirmation token 等 revision 绑定检查在 memory seam 同样生效（#1066 AC2）。
+        const updated = { ...channel, ...input.changes, revision: (channel.revision ?? 0) + 1 };
         channels.set(input.channelId, updated);
         return updated;
       },
@@ -1808,6 +1817,13 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async delete(input) {
         workspacePublishStagings.delete(`${input.teamId}:${input.publishId}`);
       },
+      // #1066：归档事务列出频道内未收敛（open/failed）staging，供 terminal cancellation。
+      async listActiveByChannel(input) {
+        return Array.from(workspacePublishStagings.values())
+          .filter((row) => row.teamId === input.teamId && row.channelId === input.channelId && row.status !== 'committed')
+          .sort((a, b) => a.createdAt - b.createdAt || a.publishId.localeCompare(b.publishId))
+          .map(cloneWorkspacePublishStaging);
+      },
     },
     deviceWorkspaceSnapshots: {
       async create(snapshot) {
@@ -1821,6 +1837,20 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const snapshot = deviceWorkspaceSnapshots.get(input.snapshotId);
         if (!snapshot || snapshot.teamId !== input.teamId || snapshot.channelId !== input.channelId) return null;
         return structuredClone(snapshot);
+      },
+    },
+    // #1066 归档审计（AC12）：只写不删。
+    channelArchives: {
+      async create(record) {
+        const stored = structuredClone(record);
+        channelArchives.set(record.id, stored);
+        return structuredClone(stored);
+      },
+      async listByChannel(input) {
+        return Array.from(channelArchives.values())
+          .filter((row) => row.teamId === input.teamId && row.channelId === input.channelId)
+          .sort((a, b) => b.archivedAt - a.archivedAt)
+          .map((row) => structuredClone(row));
       },
     },
     tasks: {

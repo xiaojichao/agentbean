@@ -28,6 +28,7 @@ import type {
   PublishWorkspaceRevisionOutcome,
   WorkspacePublishStagingFileRecord,
   WorkspacePublishStagingRecord,
+  ChannelArchiveRecord,
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import {
@@ -306,6 +307,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   }
   // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
   applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
+  // #1066：Channel 归档审计记录（AC12）。只依赖 channels 表，无条件执行。
+  applyMigration(db, 'team/0081_channel_archives.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -621,6 +624,11 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           promotion,
           lifecycle,
           packageReviews: repositories.packageReviews,
+          // #1066 archive gate：归档事务内复验 package 投影/待审核 delivery 并收口 staging。
+          outputPackages: repositories.outputPackages,
+          workspacePublishStagings: repositories.workspacePublishStagings,
+          channelProjects: repositories.channelProjects,
+          channelArchives: repositories.channelArchives,
         })),
     ),
     memory,
@@ -2451,6 +2459,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         });
         tx();
       },
+      // #1066：归档事务列出频道内未收敛（open/failed）staging，供 terminal cancellation。
+      async listActiveByChannel(input) {
+        const rows = teamDb.prepare(
+          `SELECT * FROM workspace_publish_stagings
+           WHERE team_id = ? AND channel_id = ? AND status != 'committed'
+           ORDER BY created_at ASC, publish_id ASC`,
+        ).all(input.teamId, input.channelId) as Record<string, unknown>[];
+        return rows.map((row) => mapWorkspacePublishStaging(teamDb, row));
+      },
     },
     deviceWorkspaceSnapshots: {
       async create(snapshot: DeviceWorkspaceSnapshotDto) {
@@ -2476,6 +2493,35 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         ) as { snapshot_json?: unknown } | undefined;
         if (!row || typeof row.snapshot_json !== 'string') return null;
         return JSON.parse(row.snapshot_json) as DeviceWorkspaceSnapshotDto;
+      },
+    },
+    // #1066 归档审计（AC12）：只写不删；JSON 列存受影响工作清单。
+    channelArchives: {
+      async create(record) {
+        teamDb.prepare(`INSERT INTO channel_archives (
+          id, team_id, channel_id, actor_user_id, authority_basis, channel_revision, outcome,
+          cancelled_task_ids_json, released_claim_ids_json, invalidated_offer_ids_json,
+          cancelled_invocation_ids_json, pending_review_task_ids_json,
+          pending_review_delivery_ids_json, pending_delivery_count, cancelled_staging_count,
+          archived_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          record.id, record.teamId, record.channelId, record.actorUserId, record.authorityBasis,
+          record.channelRevision, record.outcome,
+          JSON.stringify(record.cancelledTaskIds), JSON.stringify(record.releasedClaimIds),
+          JSON.stringify(record.invalidatedOfferIds), JSON.stringify(record.cancelledInvocationIds),
+          JSON.stringify(record.pendingReviewTaskIds), JSON.stringify(record.pendingReviewDeliveryIds),
+          record.pendingDeliveryCount, record.cancelledStagingCount,
+          record.archivedAt,
+        );
+        return record;
+      },
+      async listByChannel(input) {
+        const rows = teamDb.prepare(
+          `SELECT * FROM channel_archives
+           WHERE team_id = ? AND channel_id = ?
+           ORDER BY archived_at DESC`,
+        ).all(input.teamId, input.channelId) as Record<string, unknown>[];
+        return rows.map(mapChannelArchiveRecord);
       },
     },
     // #1060 OutputPackage:单事务原子成形——collection/version 写入 + package/members/receipt/tombstone
@@ -4586,6 +4632,37 @@ function mapDispatch(row: unknown): DispatchRecord | null {
     acceptedAt: sqliteNullableNumber(row, 'accepted_at'),
     completedAt: sqliteNullableNumber(row, 'completed_at'),
     error: sqliteNullableText(row, 'error_message'),
+  };
+}
+
+function parseJsonIdList(value: unknown): string[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapChannelArchiveRecord(row: Record<string, unknown>): ChannelArchiveRecord {
+  return {
+    id: String(row.id),
+    teamId: String(row.team_id),
+    channelId: String(row.channel_id),
+    actorUserId: String(row.actor_user_id),
+    authorityBasis: String(row.authority_basis),
+    channelRevision: Number(row.channel_revision),
+    outcome: 'archived',
+    cancelledTaskIds: parseJsonIdList(row.cancelled_task_ids_json),
+    releasedClaimIds: parseJsonIdList(row.released_claim_ids_json),
+    invalidatedOfferIds: parseJsonIdList(row.invalidated_offer_ids_json),
+    cancelledInvocationIds: parseJsonIdList(row.cancelled_invocation_ids_json),
+    pendingReviewTaskIds: parseJsonIdList(row.pending_review_task_ids_json),
+    pendingReviewDeliveryIds: parseJsonIdList(row.pending_review_delivery_ids_json),
+    pendingDeliveryCount: Number(row.pending_delivery_count),
+    cancelledStagingCount: Number(row.cancelled_staging_count),
+    archivedAt: Number(row.archived_at),
   };
 }
 

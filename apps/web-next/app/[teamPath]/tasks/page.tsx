@@ -227,9 +227,19 @@ export default function TasksPage() {
 
   const channelOptions = useMemo<FilterOption[]>(() => channels.map((channel) => ({
     id: channel.id,
-    name: `#${channel.name}`,
+    // #1066 AC6：归档频道在筛选器与任务视图明示「已归档」，不把 unavailable 动作当权限证明。
+    name: `#${channel.name}${channel.archivedAt ? '（已归档）' : ''}`,
     icon: <Hash size={13} className="text-neutral-400" />,
   })), [channels]);
+
+  // #1066 AC6：选中频道全部归档时，任务创建等写动作不可用并给文本原因。
+  const allSelectedArchived = useMemo(() => {
+    if (selectedChannels.size === 0) return false;
+    return [...selectedChannels].every((channelId) => {
+      const channel = channels.find((c) => c.id === channelId);
+      return Boolean(channel?.archivedAt);
+    });
+  }, [selectedChannels, channels]);
 
   const creatorOptions = useMemo<FilterOption[]>(() => [
     { id: ME_FILTER, name: '我创建的', icon: <User size={13} className="text-emerald-600" /> },
@@ -515,7 +525,13 @@ export default function TasksPage() {
               <p className="truncate text-xs text-neutral-400">{channelTaskCount} 个频道任务</p>
             </div>
           </div>
-          <button data-smoke="tasks-create-open" onClick={() => setShowCreate((value) => !value)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900">
+          <button
+            data-smoke="tasks-create-open"
+            onClick={() => setShowCreate((value) => !value)}
+            disabled={allSelectedArchived}
+            title={allSelectedArchived ? '所选频道已归档，任务只读' : undefined}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
             <Plus size={13} />
             新建任务
           </button>

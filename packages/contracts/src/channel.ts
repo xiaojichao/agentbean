@@ -97,7 +97,14 @@ export type ChannelArchiveWorkKind =
   | 'claim'
   | 'lease'
   | 'offer'
-  | 'pending_review';
+  | 'pending_review'
+  /**
+   * #1066：package 级（#1061 reviews 表）待审核 delivery——Task 状态
+   * 未必是 in_review，但存在尚未收敛的审核事实。
+   */
+  | 'pending_review_delivery'
+  /** #1066：publish 已 committed 且带 provenance、但尚未形成 OutputPackage 的交付。 */
+  | 'pending_delivery';
 
 export interface ChannelArchivePreflightItemDto {
   kind: ChannelArchiveWorkKind;
@@ -118,6 +125,8 @@ export interface ChannelArchivePreflightDto {
     leases: number;
     offers: number;
     pendingReviews: number;
+    /** #1066：尚未收敛为 OutputPackage 的 committed 交付数（pendingDeliveries）。 */
+    pendingDeliveries: number;
   };
   items: ChannelArchivePreflightItemDto[];
 }
@@ -129,6 +138,10 @@ export interface ChannelArchiveConfirmationDto {
   invalidatedOfferIds: ID[];
   cancelledInvocationIds: ID[];
   pendingReviewTaskIds: ID[];
+  /** #1066：归档时列出的 package 级待审核 delivery（只读历史保留，不删除）。 */
+  pendingReviewDeliveryIds: ID[];
+  /** #1066：归档时显式收口为 failed 的 open/failed publish staging 数。 */
+  cancelledStagingCount: number;
 }
 
 export interface ChannelArchiveCommandDto {

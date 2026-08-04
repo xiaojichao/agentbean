@@ -33,6 +33,8 @@ function makePreflightInput(over: Partial<EvaluateArchivePreflightInput> = {}): 
       leases: [],
       offers: [],
       pendingReviews: [],
+      pendingReviewDeliveries: [],
+      pendingDeliveries: [],
     },
     ...over,
   };
@@ -55,6 +57,7 @@ describe('evaluateArchivePreflight', () => {
       leases: 0,
       offers: 0,
       pendingReviews: 0,
+      pendingDeliveries: 0,
     });
     expect(result.items).toEqual([]);
     expect(result.confirmationToken).toBeTruthy();
@@ -70,6 +73,9 @@ describe('evaluateArchivePreflight', () => {
           leases: [{ id: 'lease-1', status: 'active' }],
           offers: [{ id: 'offer-1', status: 'open' }],
           pendingReviews: [{ id: 'task-2', title: 'Task 2', status: 'in_review' }],
+          // #1066：package 级待审核 delivery 与未收敛 projection 一并列入 gate。
+          pendingReviewDeliveries: [{ id: 'package-1', title: 'package package-1', status: 'pending' }],
+          pendingDeliveries: [{ id: 'publish-1', title: 'publish publish-1', status: 'committed' }],
         },
       }),
     );
@@ -84,13 +90,16 @@ describe('evaluateArchivePreflight', () => {
       leases: 1,
       offers: 1,
       pendingReviews: 1,
+      pendingDeliveries: 1,
     });
     expect(result.items.map((item) => item.kind).sort()).toEqual([
       'claim',
       'invocation',
       'lease',
       'offer',
+      'pending_delivery',
       'pending_review',
+      'pending_review_delivery',
       'task',
     ]);
   });

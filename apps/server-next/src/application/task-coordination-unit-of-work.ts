@@ -11,6 +11,9 @@ import type { TaskCoordinationRepositories } from './task-coordination-repositor
 import type { PromotionGateRepositories } from './promotion-gate-repositories.js';
 import type { TaskLifecycleRepositories } from './task-lifecycle-repositories.js';
 import type { PackageReviewRepository } from './package-review-repositories.js';
+import type { ChannelProjectRepository } from './project-repositories.js';
+import type { OutputPackageRepository } from './output-package-repositories.js';
+import type { WorkspacePublishStagingRepository } from './repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -39,6 +42,15 @@ export interface TaskCoordinationTransactionRepositories {
    * review 记录 + Task transition(AC6)。
    */
   readonly packageReviews: PackageReviewRepository;
+  /**
+   * #1066 archive gate：package 级待审核 delivery / 未收敛 projection / publish
+   * staging 收口在归档事务内复验与迁移，随事务原子提交。
+   */
+  readonly outputPackages: OutputPackageRepository;
+  readonly workspacePublishStagings: WorkspacePublishStagingRepository;
+  readonly channelProjects: ChannelProjectRepository;
+  /** #1066 AC12：归档审计记录随事务原子写入。 */
+  readonly channelArchives: import('./repositories.js').ChannelArchiveRepository;
 }
 
 export interface TaskCoordinationUnitOfWork {

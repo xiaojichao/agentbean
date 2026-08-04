@@ -443,6 +443,8 @@ describe('server-next first-slice use cases', () => {
         'channel-1',
         'channel-archived',
         'message-archived',
+        // #1066：归档审计记录 id。
+        'archive-2',
       ]),
     });
     await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
@@ -890,6 +892,8 @@ describe('server-next first-slice use cases', () => {
         'user-2', 'team-2', 'channel-2',
         'channel-archive', 'channel-delete',
         'message-1', 'dispatch-1',
+        // #1066：归档审计记录 id。
+        'archive-1',
       ]),
       joinCodes: createIds(['code-join']),
     });
