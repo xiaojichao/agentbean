@@ -1,9 +1,10 @@
-import type { ID, UnixMs } from '@agentbean/contracts';
+// server-next 惯例:workspace 包一律用相对路径 import 源码(vitest 无 alias、CI 不构建 dist)。
+import type { ID, UnixMs } from '../../../../packages/contracts/src/index.js';
 import type {
   OutputPackageMemberRole,
   OutputPackageReceiptOutcome,
   OutputPackageTaskBinding,
-} from '@agentbean/contracts';
+} from '../../../../packages/contracts/src/index.js';
 
 /**
  * #1060 OutputPackage 仓储合同(父规格 #1059 §3/§4;ADR-0067)。

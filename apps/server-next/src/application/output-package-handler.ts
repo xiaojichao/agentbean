@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto';
-import type { ID, UnixMs } from '@agentbean/contracts';
+// server-next 惯例:workspace 包一律用相对路径 import 源码(vitest 无 alias、CI 不构建 dist;
+// 包名 import 会解析 node_modules 软链的 dist,CI 下失败——见 usecases.ts 同款写法)。
+import type { ID, UnixMs } from '../../../../packages/contracts/src/index.js';
 import {
   OUTPUT_PACKAGE_COMMAND_NAMES,
   OUTPUT_PACKAGE_COMMAND_SCHEMA_VERSION,
   canonicalizeOutputPackageCommand,
-} from '@agentbean/contracts';
+} from '../../../../packages/contracts/src/index.js';
 import {
   evaluateOutputPackageFormation,
   type OutputPackageFormationDecision,
-} from '@agentbean/domain';
+} from '../../../../packages/domain/src/index.js';
 import type { ChannelRecord, ServerNextRepositories } from './repositories.js';
 import type {
   OutputPackageMemberWrite,
