@@ -697,4 +697,57 @@ describe('workspace publish dispatch (#1044)', () => {
       else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
     }
   });
+
+  test('#1056 publish staging 与 legacy upload 使用 dispatch 目标 teamId 而非 Device primary Team', async () => {
+    const home = tempDir('publish-1056-home-');
+    const agentBeanHome = join(home, '.agentbean');
+    const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
+    process.env.AGENTBEAN_HOME = agentBeanHome;
+    const customCwd = tempDir('publish-1056-cwd-');
+    const staging = { plans: [] as never[], puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
+    const requestedUrls: string[] = [];
+    try {
+      const harness = fakeSocket();
+      const baseFetch = fakeStagingFetch(staging);
+      const urlRecordingFetch = (async (input: unknown, init?: Parameters<typeof fetch>[1]) => {
+        requestedUrls.push(String(input));
+        return baseFetch(input as never, init as never);
+      }) as typeof fetch;
+      const client = createDaemonProtocolClient({
+        socket: harness.socket,
+        // Device primary Team 是 team-a；dispatch 目标是 team-b 的 channel-b。
+        device: { teamId: 'team-a', ownerId: 'owner-1', token: 'tok' },
+        runtimes: [],
+        agents: [],
+        serverUrl: 'http://server.test',
+        fetch: urlRecordingFetch,
+        homeDir: home,
+        executor: async (request) => {
+          writeFileSync(join(request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR ?? '', '交付.md'), '跨 Team 交付');
+          return {
+            body: 'done',
+            workspaceRun: { status: 'succeeded', cwd: customCwd, startedAt: 1000, completedAt: 2000 },
+          };
+        },
+      });
+      await client.start();
+      await harness.deliver(AGENT_EVENTS.dispatch.request, {
+        id: 'disp-1056-1', requestId: 'req-1056-1', teamId: 'team-b', channelId: 'channel-b', messageId: 'msg-1',
+        agentId: 'agent-1', taskId: 'task-1', taskAttempt: 1, workspaceRunId: 'run-1',
+        workspaceRevisionId: 'rev-b1', prompt: '输出文档',
+        customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: customCwd },
+      });
+
+      // staging begin/put/commit 全部命中目标 Team（team-b），不回 Device primary（team-a）。
+      expect(staging.commits).toHaveLength(1);
+      expect(requestedUrls.some((url) => url.includes('/api/teams/team-b/workspace-publish-staging/begin'))).toBe(true);
+      expect(requestedUrls.some((url) => url.includes('/api/teams/team-b/workspace-publish-staging/commit'))).toBe(true);
+      expect(requestedUrls.every((url) => !url.includes('/api/teams/team-a/'))).toBe(true);
+      const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
+      expect((resultEmit!.payload as { artifactIds?: string[] }).artifactIds).toEqual(['art-交付.md']);
+    } finally {
+      if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
+      else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
+    }
+  });
 });

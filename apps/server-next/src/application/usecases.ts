@@ -1165,6 +1165,12 @@ export interface MaterializeProjectChannelWorkspaceInput {
   channelId: string;
   /** Specific revision to materialize; defaults to the workspace's current revision. */
   revisionId?: string;
+  /**
+   * #1056：跨 Team device 调用时必须声明本次执行 Agent——服务端按该 Agent 的
+   * device 绑定 + visibleTeamIds + Channel membership 授权（codex P1：不能只按
+   * 设备上任意 Agent 放行）。同 Team 调用不需要。
+   */
+  agentId?: string;
 }
 
 /** #967 begin：稳定 publish identity + 计划文件清单（size/sha 用于上限与完整性校验）。 */
@@ -1186,6 +1192,12 @@ export interface BeginWorkspacePublishStagingInput {
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
   /** #1044 device 路径内部透传：commit 重验 device↔agent 绑定用；HTTP/socket 合同不暴露。 */
   deviceId?: string;
+  /**
+   * #1056 device 跨 Team publish 内部透传（仅 ForDevice wrapper 设置；HTTP/socket
+   * 客户端无法伪造——访问判定时用 sessionSecret 重新验签）：owner 非目标 Team
+   * 成员时频道访问由 Agent 授权承担，不再要求人类成员身份。
+   */
+  deviceActorToken?: string;
 }
 
 export interface PutWorkspacePublishStagingFileInput {
@@ -1199,6 +1211,8 @@ export interface PutWorkspacePublishStagingFileInput {
   /** 原始字节（测试与 usecase 直调）；HTTP 层可先读入再传入。 */
   content: Buffer | Uint8Array | string;
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
+  /** #1056 同 BeginWorkspacePublishStagingInput.deviceActorToken。 */
+  deviceActorToken?: string;
 }
 
 export interface DeviceBeginWorkspacePublishStagingInput {
@@ -1228,6 +1242,8 @@ export interface GetWorkspacePublishStagingInput {
   teamId: string;
   channelId: string;
   publishId: string;
+  /** #1056 同 BeginWorkspacePublishStagingInput.deviceActorToken。 */
+  deviceActorToken?: string;
 }
 
 export interface DeviceGetWorkspacePublishStagingInput {
@@ -1245,6 +1261,8 @@ export interface CommitWorkspacePublishStagingInput {
   limits?: { maxFileBytes?: number; maxPublishBytes?: number };
   /** #1044 device 路径内部透传：commit 重验 device↔agent 绑定用；HTTP/socket 合同不暴露。 */
   deviceId?: string;
+  /** #1056 同 BeginWorkspacePublishStagingInput.deviceActorToken。 */
+  deviceActorToken?: string;
 }
 
 export interface DeviceCommitWorkspacePublishStagingInput {
@@ -1373,10 +1391,14 @@ export interface UploadArtifactInput {
   sha256?: string;
   role?: ArtifactRole;
   sourceRoot?: ArtifactDto['sourceRoot'];
+  /** #1056 同 BeginWorkspacePublishStagingInput.deviceActorToken。 */
+  deviceActorToken?: string;
 }
 
 export interface DeviceUploadArtifactInput extends Omit<UploadArtifactInput, 'userId'> {
   token: string;
+  /** #1056：跨 Team 上传必须声明本次执行 Agent（逐 Agent 授权）；同 Team 不需要。 */
+  agentId?: string;
 }
 
 export interface DeviceGetArtifactInput {
@@ -1385,6 +1407,8 @@ export interface DeviceGetArtifactInput {
   artifactId: string;
   /** #1043：Device 下载 snapshot 时必须绑定并复验稳定版本身份。 */
   expectedArtifactVersionId?: string;
+  /** #1056：跨 Team 下载必须声明本次执行 Agent（逐 Agent 授权）；同 Team 不需要。 */
+  agentId?: string;
 }
 
 export interface GetWorkspaceRunInput {
@@ -5722,26 +5746,53 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async materializeProjectChannelWorkspace(materializeInput) {
-      // AC#1: device-token gate — only a local device acting for its owner can request a
-      // manifest to apply. Remote Agents hold no device token; background jobs don't call this.
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, materializeInput);
+      const tokenCredentials = verifyDeviceToken(materializeInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === materializeInput.teamId) {
+        // AC#1: device-token gate — only a local device acting for its owner can request a
+        // manifest to apply. Remote Agents hold no device token; background jobs don't call this.
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, materializeInput);
+        if (!actor.ok) return actor;
+        // Authorization is membership-based and source-Device independent (#960: provenance does
+        // not decide read/apply authorization). Any device whose owner can view the channel may
+        // materialize a revision imported by a different device (AC#4).
+        const access = await ensureUserCanViewProjectWorkspace(repositories, {
+          userId: actor.userId,
+          teamId: materializeInput.teamId,
+          channelId: materializeInput.channelId,
+        });
+        if (!access.ok) return access;
+        const sameTeamWorkspace = await repositories.projectChannelWorkspaces.getForTeam({
+          teamId: materializeInput.teamId,
+          channelId: materializeInput.channelId,
+        });
+        if (!sameTeamWorkspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+        // The manifest returned is the immutable file list (paths + artifact refs + size/sha).
+        // The server never receives the local target directory (no absolute-path leakage).
+        return resolveProjectChannelWorkspaceRevision(repositories, sameTeamWorkspace, materializeInput.revisionId);
+      }
+      // #1056 跨 Team：device token 只证明 home Team 身份；目标 Team 的 manifest
+      // 查询（publish baseline）由本次执行 Agent 的 visibleTeamIds + Channel
+      // membership + device 绑定授权（codex P1：逐 Agent 校验，不按设备任意 Agent 放行）。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, materializeInput);
       if (!actor.ok) return actor;
-      // Authorization is membership-based and source-Device independent (#960: provenance does
-      // not decide read/apply authorization). Any device whose owner can view the channel may
-      // materialize a revision imported by a different device (AC#4).
-      const access = await ensureUserCanViewProjectWorkspace(repositories, {
+      const access = await ensureSnapshotChannelAccess(repositories, {
         userId: actor.userId,
         teamId: materializeInput.teamId,
         channelId: materializeInput.channelId,
       });
       if (!access.ok) return access;
+      const authority = await ensureCrossTeamDeviceAgentAuthority(repositories, {
+        agentId: materializeInput.agentId,
+        deviceId: actor.deviceId,
+        teamId: materializeInput.teamId,
+        channel: access.channel,
+      });
+      if (!authority.ok) return authority;
       const workspace = await repositories.projectChannelWorkspaces.getForTeam({
         teamId: materializeInput.teamId,
         channelId: materializeInput.channelId,
       });
       if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
-      // The manifest returned is the immutable file list (paths + artifact refs + size/sha).
-      // The server never receives the local target directory (no absolute-path leakage).
       return resolveProjectChannelWorkspaceRevision(repositories, workspace, materializeInput.revisionId);
     },
 
@@ -5903,7 +5954,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     // #967 Workspace 大文件暂存 / 断网续传 / 可恢复原子发布
     async beginWorkspacePublishStaging(beginInput) {
-      const access = await ensureUserCanViewProjectWorkspace(repositories, beginInput);
+      const access = await ensureWorkspacePublishChannelAccess(repositories, sessionSecret, beginInput);
       if (!access.ok) return access;
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       // hardening：begin 时顺带清理少量过期 open staging（best-effort，不阻塞主路径）。
@@ -6075,10 +6126,33 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async beginWorkspacePublishStagingForDevice(deviceBeginInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceBeginInput);
+      const tokenCredentials = verifyDeviceToken(deviceBeginInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === deviceBeginInput.teamId) {
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceBeginInput);
+        if (!actor.ok) return actor;
+        // #1044：device 路径透传 deviceId，begin/commit 复验 device↔agent 绑定。
+        const deviceId = tokenCredentials.deviceId;
+        return this.beginWorkspacePublishStaging({
+          userId: actor.userId,
+          teamId: deviceBeginInput.teamId,
+          channelId: deviceBeginInput.channelId,
+          publishId: deviceBeginInput.publishId,
+          baselineRevisionId: deviceBeginInput.baselineRevisionId,
+          files: deviceBeginInput.files,
+          ...(deviceBeginInput.provenance ? { provenance: deviceBeginInput.provenance } : {}),
+          ...(deviceBeginInput.limits ? { limits: deviceBeginInput.limits } : {}),
+          ...(deviceId ? { deviceId } : {}),
+        });
+      }
+      // #1056 跨 Team：device token 只证明 home Team 身份；目标 Team 发布必须由
+      // provenance 的 Agent 授权（begin 内 ensureWorkspacePublishProvenanceAuthority
+      // 复验 device↔agent 绑定 + visibleTeamIds + membership）。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, deviceBeginInput);
       if (!actor.ok) return actor;
-      // #1044：device 路径透传 deviceId，begin/commit 复验 device↔agent 绑定。
-      const deviceId = verifyDeviceToken(deviceBeginInput.token, sessionSecret)?.deviceId;
+      if (!actor.deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
+      if (!deviceBeginInput.provenance) {
+        return makeFailure('FORBIDDEN', 'Cross-team device publish requires agent provenance');
+      }
       return this.beginWorkspacePublishStaging({
         userId: actor.userId,
         teamId: deviceBeginInput.teamId,
@@ -6086,15 +6160,39 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         publishId: deviceBeginInput.publishId,
         baselineRevisionId: deviceBeginInput.baselineRevisionId,
         files: deviceBeginInput.files,
-        ...(deviceBeginInput.provenance ? { provenance: deviceBeginInput.provenance } : {}),
+        provenance: deviceBeginInput.provenance,
         ...(deviceBeginInput.limits ? { limits: deviceBeginInput.limits } : {}),
-        ...(deviceId ? { deviceId } : {}),
+        deviceId: actor.deviceId,
+        deviceActorToken: deviceBeginInput.token,
       });
     },
 
     async putWorkspacePublishStagingFileForDevice(devicePutInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, devicePutInput);
+      const tokenCredentials = verifyDeviceToken(devicePutInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === devicePutInput.teamId) {
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, devicePutInput);
+        if (!actor.ok) return actor;
+        return this.putWorkspacePublishStagingFile({
+          userId: actor.userId,
+          teamId: devicePutInput.teamId,
+          channelId: devicePutInput.channelId,
+          publishId: devicePutInput.publishId,
+          path: devicePutInput.path,
+          offset: devicePutInput.offset,
+          content: devicePutInput.content,
+          ...(devicePutInput.limits ? { limits: devicePutInput.limits } : {}),
+        });
+      }
+      // #1056 跨 Team：续传前复验 staging 的 Agent provenance（无 provenance fail closed）。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, devicePutInput);
       if (!actor.ok) return actor;
+      const authority = await ensureCrossTeamStagingAuthority(repositories, {
+        teamId: devicePutInput.teamId,
+        channelId: devicePutInput.channelId,
+        publishId: devicePutInput.publishId,
+        ...(actor.deviceId ? { deviceId: actor.deviceId } : {}),
+      });
+      if (!authority.ok) return authority;
       return this.putWorkspacePublishStagingFile({
         userId: actor.userId,
         teamId: devicePutInput.teamId,
@@ -6104,37 +6202,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         offset: devicePutInput.offset,
         content: devicePutInput.content,
         ...(devicePutInput.limits ? { limits: devicePutInput.limits } : {}),
+        deviceActorToken: devicePutInput.token,
       });
     },
 
     async getWorkspacePublishStagingForDevice(deviceGetInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceGetInput);
+      const tokenCredentials = verifyDeviceToken(deviceGetInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === deviceGetInput.teamId) {
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceGetInput);
+        if (!actor.ok) return actor;
+        return this.getWorkspacePublishStaging({
+          userId: actor.userId,
+          teamId: deviceGetInput.teamId,
+          channelId: deviceGetInput.channelId,
+          publishId: deviceGetInput.publishId,
+        });
+      }
+      // #1056 跨 Team：进度查询同样复验 staging 的 Agent provenance。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, deviceGetInput);
       if (!actor.ok) return actor;
+      const authority = await ensureCrossTeamStagingAuthority(repositories, {
+        teamId: deviceGetInput.teamId,
+        channelId: deviceGetInput.channelId,
+        publishId: deviceGetInput.publishId,
+        ...(actor.deviceId ? { deviceId: actor.deviceId } : {}),
+      });
+      if (!authority.ok) return authority;
       return this.getWorkspacePublishStaging({
         userId: actor.userId,
         teamId: deviceGetInput.teamId,
         channelId: deviceGetInput.channelId,
         publishId: deviceGetInput.publishId,
+        deviceActorToken: deviceGetInput.token,
       });
     },
 
     async commitWorkspacePublishStagingForDevice(deviceCommitInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceCommitInput);
+      const tokenCredentials = verifyDeviceToken(deviceCommitInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === deviceCommitInput.teamId) {
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, deviceCommitInput);
+        if (!actor.ok) return actor;
+        // #1044：device 路径透传 deviceId，commit 复验 device↔agent 绑定。
+        const deviceId = tokenCredentials.deviceId;
+        return this.commitWorkspacePublishStaging({
+          userId: actor.userId,
+          teamId: deviceCommitInput.teamId,
+          channelId: deviceCommitInput.channelId,
+          publishId: deviceCommitInput.publishId,
+          ...(deviceCommitInput.limits ? { limits: deviceCommitInput.limits } : {}),
+          ...(deviceId ? { deviceId } : {}),
+        });
+      }
+      // #1056 跨 Team：commit 为权威关卡，预检 + commit 内权威复验双保险。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, deviceCommitInput);
       if (!actor.ok) return actor;
-      // #1044：device 路径透传 deviceId，commit 复验 device↔agent 绑定。
-      const deviceId = verifyDeviceToken(deviceCommitInput.token, sessionSecret)?.deviceId;
+      if (!actor.deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
+      const authority = await ensureCrossTeamStagingAuthority(repositories, {
+        teamId: deviceCommitInput.teamId,
+        channelId: deviceCommitInput.channelId,
+        publishId: deviceCommitInput.publishId,
+        deviceId: actor.deviceId,
+      });
+      if (!authority.ok) return authority;
       return this.commitWorkspacePublishStaging({
         userId: actor.userId,
         teamId: deviceCommitInput.teamId,
         channelId: deviceCommitInput.channelId,
         publishId: deviceCommitInput.publishId,
         ...(deviceCommitInput.limits ? { limits: deviceCommitInput.limits } : {}),
-        ...(deviceId ? { deviceId } : {}),
+        deviceId: actor.deviceId,
+        deviceActorToken: deviceCommitInput.token,
       });
     },
 
     async putWorkspacePublishStagingFile(putInput) {
-      const access = await ensureUserCanViewProjectWorkspace(repositories, putInput);
+      const access = await ensureWorkspacePublishChannelAccess(repositories, sessionSecret, putInput);
       if (!access.ok) return access;
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const publishId = normalizeWorkspacePublishId(putInput.publishId);
@@ -6293,7 +6435,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getWorkspacePublishStaging(getInput) {
-      const access = await ensureUserCanViewProjectWorkspace(repositories, getInput);
+      const access = await ensureWorkspacePublishChannelAccess(repositories, sessionSecret, getInput);
       if (!access.ok) return access;
       const publishId = normalizeWorkspacePublishId(getInput.publishId);
       if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
@@ -6328,7 +6470,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async commitWorkspacePublishStaging(commitInput) {
-      const access = await ensureUserCanViewProjectWorkspace(repositories, commitInput);
+      const access = await ensureWorkspacePublishChannelAccess(repositories, sessionSecret, commitInput);
       if (!access.ok) return access;
       if (access.channel.archivedAt != null) return makeFailure('FORBIDDEN', 'Archived channels are read-only');
       const publishId = normalizeWorkspacePublishId(commitInput.publishId);
@@ -9234,16 +9376,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async uploadArtifact(artifactInput) {
-      if (!(await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId))) {
+      const ownerIsMember = await repositories.teams.isMember(artifactInput.teamId, artifactInput.userId);
+      // #1056：device 跨 Team 上传的旁路只接受真实 device 身份（token 验签，
+      // HTTP/socket 客户端无法伪造）；Agent 授权已由 uploadArtifactForDevice 复验。
+      const crossTeamActor = !ownerIsMember && artifactInput.deviceActorToken
+        ? await resolveHostedDeviceTokenActor(repositories, sessionSecret, { token: artifactInput.deviceActorToken })
+        : null;
+      if (!ownerIsMember && (!crossTeamActor || !crossTeamActor.ok)) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
       }
-      const channelAccess = await ensureUserCanViewChannel(repositories, {
-        userId: artifactInput.userId,
-        teamId: artifactInput.teamId,
-        channelId: artifactInput.channelId,
-      });
-      if (!channelAccess.ok) {
-        return channelAccess;
+      if (ownerIsMember) {
+        const channelAccess = await ensureUserCanViewChannel(repositories, {
+          userId: artifactInput.userId,
+          teamId: artifactInput.teamId,
+          channelId: artifactInput.channelId,
+        });
+        if (!channelAccess.ok) {
+          return channelAccess;
+        }
+      } else {
+        // 跨 Team：频道存在且归属目标 Team（防御纵深）。
+        const channel = await repositories.channels.getById(artifactInput.channelId);
+        if (!channel || channel.teamId !== artifactInput.teamId) {
+          return makeFailure('NOT_FOUND', 'Channel not found');
+        }
       }
       const artifact = await repositories.artifacts.create({
         id: ids.nextId(),
@@ -9265,13 +9421,35 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async uploadArtifactForDevice(artifactInput) {
-      const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
-      if (!actor.ok) {
-        return actor;
+      const tokenCredentials = verifyDeviceToken(artifactInput.token, sessionSecret);
+      if (tokenCredentials && tokenCredentials.teamId === artifactInput.teamId) {
+        const actor = await resolveDeviceTokenActor(repositories, sessionSecret, artifactInput);
+        if (!actor.ok) {
+          return actor;
+        }
+        return this.uploadArtifact({
+          ...artifactInput,
+          userId: actor.userId,
+        });
       }
+      // #1056 跨 Team：device token 只证明 home Team 身份；目标 Team 上传由本次
+      // 执行 Agent 的 visibleTeamIds + Channel membership + device 绑定授权
+      // （codex P1：逐 Agent 校验——同设备其他 Agent 是成员不代表本次执行 Agent 有权）。
+      const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, artifactInput);
+      if (!actor.ok) return actor;
+      const channel = await repositories.channels.getById(artifactInput.channelId);
+      if (!channel || channel.teamId !== artifactInput.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
+      const authority = await ensureCrossTeamDeviceAgentAuthority(repositories, {
+        agentId: artifactInput.agentId,
+        deviceId: actor.deviceId,
+        teamId: artifactInput.teamId,
+        channel,
+      });
+      if (!authority.ok) return authority;
       return this.uploadArtifact({
         ...artifactInput,
         userId: actor.userId,
+        deviceActorToken: artifactInput.token,
       });
     },
 
@@ -9322,11 +9500,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return result;
       }
       // #1053 跨 Team：device token 只证明 home Team 身份；目标 Team 的 artifact
-      // 下载（snapshot 物化、dispatch 附件）由该 Device 托管 Agent 的
-      // visibleTeamIds + artifact 所在 Channel membership 授权。
+      // 下载（snapshot 物化、dispatch 附件）由本次执行 Agent 的 visibleTeamIds +
+      // artifact 所在 Channel membership + device 绑定授权（#1056 codex P1：与
+      // upload 一致的逐 Agent 校验，不按设备任意 Agent 放行）。
       const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, artifactInput);
       if (!actor.ok) return actor;
-      if (!actor.deviceId) return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
       const artifact = await repositories.artifacts.getForTeam({
         teamId: artifactInput.teamId,
         artifactId: artifactInput.artifactId,
@@ -9334,12 +9512,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!artifact) return makeFailure('NOT_FOUND', 'Artifact not found');
       const channel = await repositories.channels.getById(artifact.channelId);
       if (!channel || channel.teamId !== artifactInput.teamId) return makeFailure('NOT_FOUND', 'Artifact not found');
-      const hostedAgents = await repositories.agents.listByDevice(actor.deviceId);
-      const authorized = hostedAgents.some((agent) =>
-        agent.visibleTeamIds.includes(artifactInput.teamId)
-        && channel.agentMemberIds.includes(agent.id),
-      );
-      if (!authorized) return makeFailure('FORBIDDEN', 'Device is not authorized for this channel');
+      const authority = await ensureCrossTeamDeviceAgentAuthority(repositories, {
+        agentId: artifactInput.agentId,
+        deviceId: actor.deviceId,
+        teamId: artifactInput.teamId,
+        channel,
+      });
+      if (!authority.ok) return authority;
       if (!(await isPublicArtifact(repositories, artifact))) {
         return makeFailure('NOT_FOUND', 'Artifact not found');
       }
@@ -15473,12 +15652,39 @@ async function ensureSnapshotChannelAccess(
 }
 
 /**
+ * #1056：workspace publish staging 的频道访问判定。owner 是目标 Team 成员时维持
+ * 原有人类可见性校验；不是成员时仅接受真实 device 身份——deviceActorToken 用
+ * sessionSecret 重新验签（HTTP/socket 客户端无法伪造该标记绕过成员检查），
+ * 频道访问再由调用链上的 Agent 授权承担（begin：ensureWorkspacePublishProvenanceAuthority
+ * 复验 device↔agent 绑定 + visibleTeamIds + membership；put/get/commit：ForDevice
+ * wrapper 已复验 staging.provenance）。无 token 或验签失败维持原有 FORBIDDEN。
+ */
+async function ensureWorkspacePublishChannelAccess(
+  repositories: ServerNextRepositories,
+  sessionSecret: string,
+  input: { userId: string; teamId: string; channelId: string; deviceActorToken?: string },
+): Promise<Ack<{ channel: ChannelRecord }>> {
+  if (await repositories.teams.isMember(input.teamId, input.userId)) {
+    return ensureUserCanViewProjectWorkspace(repositories, input);
+  }
+  if (!input.deviceActorToken) return makeFailure('FORBIDDEN', 'User is not a team member');
+  const actor = await resolveHostedDeviceTokenActor(repositories, sessionSecret, { token: input.deviceActorToken });
+  if (!actor.ok) return makeFailure('FORBIDDEN', 'User is not a team member');
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
+  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+  return makeSuccess({ channel });
+}
+
+/**
  * #1044 publish provenance 的 Agent/Task authority 复验。
  * begin(fail-fast)与 commit(权威,物化任何 artifact 之前)都要过这一关:
  * 离线期间发生的 Agent 解绑/删除、Device 换绑或 Task 跨频道漂移必须阻止过期提交,
  * 且不得在 Workspace 里留下部分 revision。
  * 无 provenance 的 staging(纯用户手工发布)不做 Agent/Task 校验。
  * taskId 可能是 daemon 合成 fallback(dispatch.id),只在命中真实 Task 记录时校验归属。
+ * #1056：与 snapshot 授权（#1053）同一模型——不再要求 primaryTeamId === 目标 Team，
+ * 跨 Team 可见 Agent 凭 visibleTeamIds + Channel membership + device 绑定发布。
  */
 async function ensureWorkspacePublishProvenanceAuthority(
   repositories: ServerNextRepositories,
@@ -15493,7 +15699,6 @@ async function ensureWorkspacePublishProvenanceAuthority(
   if (!provenance) return makeSuccess({ ok: true });
   const agent = await repositories.agents.getById(provenance.agentId);
   if (!agent
-    || agent.primaryTeamId !== input.teamId
     || !agent.visibleTeamIds.includes(input.teamId)
     || !input.channel.agentMemberIds.includes(agent.id)
     || (input.deviceId !== undefined && agent.deviceId !== input.deviceId)
@@ -15504,6 +15709,63 @@ async function ensureWorkspacePublishProvenanceAuthority(
   if (task && (task.teamId !== input.teamId
     || (task.channelId != null && task.channelId !== input.channel.id))) {
     return makeFailure('FORBIDDEN', 'Publish Task authority does not match this channel', { reason: 'task-authority-mismatch' });
+  }
+  return makeSuccess({ ok: true });
+}
+
+/**
+ * #1056：跨 Team device publish 的 staging provenance 预检。put/get/commit 的
+ * ForDevice wrapper 在委托前调用——staging 无 provenance（纯用户手工发布）时对跨
+ * Team device fail closed；有 provenance 时复验 Agent 授权（device 绑定 +
+ * visibleTeamIds + Channel membership + Task 归属）。
+ */
+async function ensureCrossTeamStagingAuthority(
+  repositories: ServerNextRepositories,
+  input: { teamId: string; channelId: string; publishId: string; deviceId?: string },
+): Promise<Ack<{ ok: true }>> {
+  const publishId = normalizeWorkspacePublishId(input.publishId);
+  if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
+  const staging = await repositories.workspacePublishStagings.getByPublishId({
+    teamId: input.teamId,
+    publishId,
+  });
+  if (!staging || staging.channelId !== input.channelId) {
+    return makeFailure('NOT_FOUND', 'Workspace publish staging not found');
+  }
+  if (!staging.provenance) {
+    return makeFailure('FORBIDDEN', 'Cross-team device publish requires agent provenance');
+  }
+  const channel = await repositories.channels.getById(input.channelId);
+  if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
+  return ensureWorkspacePublishProvenanceAuthority(repositories, {
+    teamId: input.teamId,
+    channel,
+    provenance: staging.provenance,
+    ...(input.deviceId ? { deviceId: input.deviceId } : {}),
+  });
+}
+
+/**
+ * #1056：跨 Team device 调用的逐 Agent 授权（codex P1：同一 Device 托管多 Agent
+ * 时，按设备上任意 Agent 放行会形成跨 Agent 的频道权限旁路——必须验证本次声明
+ * 的执行 Agent 本人的 device 绑定 + visibleTeamIds + Channel membership）。
+ */
+async function ensureCrossTeamDeviceAgentAuthority(
+  repositories: ServerNextRepositories,
+  input: { agentId: string | undefined; deviceId: string | undefined; teamId: string; channel: ChannelRecord },
+): Promise<Ack<{ ok: true }>> {
+  if (!input.agentId) {
+    return makeFailure('FORBIDDEN', 'Cross-team device access requires the executing Agent identity');
+  }
+  if (!input.deviceId) {
+    return makeFailure('UNAUTHENTICATED', 'Device credentials do not identify a device');
+  }
+  const agent = await repositories.agents.getById(input.agentId);
+  if (!agent
+    || agent.deviceId !== input.deviceId
+    || !agent.visibleTeamIds.includes(input.teamId)
+    || !input.channel.agentMemberIds.includes(agent.id)) {
+    return makeFailure('FORBIDDEN', 'Device is not authorized for this Agent');
   }
   return makeSuccess({ ok: true });
 }

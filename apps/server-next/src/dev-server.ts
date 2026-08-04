@@ -926,7 +926,12 @@ async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Prom
         throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId is required' });
       }
       const token = readToken(input.url, input.request, {});
-      const result = await getWorkspaceForToken(input, token, { teamId, channelId, revisionId });
+      const result = await getWorkspaceForToken(input, token, {
+        teamId,
+        channelId,
+        revisionId,
+        ...(input.url.searchParams.get('agentId')?.trim() ? { agentId: input.url.searchParams.get('agentId')!.trim() } : {}),
+      });
       if (!result.ok) {
         writeAckFailure(input.response, result);
         return true;
@@ -1182,7 +1187,7 @@ async function commitWorkspaceStagingForToken(
 async function getWorkspaceForToken(
   input: ArtifactHttpInput,
   token: string | undefined,
-  get: { teamId: string; channelId: string; revisionId?: string },
+  get: { teamId: string; channelId: string; revisionId?: string; agentId?: string },
 ): Promise<{ ok: true; workspace: unknown } | { ok: false; error?: string; message?: string }> {
   if (isDeviceToken(token)) {
     return input.app.materializeProjectChannelWorkspace({
@@ -1190,6 +1195,7 @@ async function getWorkspaceForToken(
       teamId: get.teamId,
       channelId: get.channelId,
       ...(get.revisionId ? { revisionId: get.revisionId } : {}),
+      ...(get.agentId ? { agentId: get.agentId } : {}),
     });
   }
   const session = token ? await input.app.whoami({ token }) : makeFailure('UNAUTHENTICATED', 'Missing session token');
@@ -1225,6 +1231,7 @@ async function handleArtifactHttp(input: ArtifactHttpInput): Promise<boolean> {
         artifactId,
         disposition,
         expectedArtifactVersionId: readOptionalQueryString(input.url, 'artifactVersionId'),
+        agentId: readOptionalQueryString(input.url, 'agentId'),
       });
       return true;
     }
@@ -1276,7 +1283,14 @@ async function handleArtifactUpload(input: ArtifactHttpInput, teamId: string): P
       writeFileSync(absolutePath, upload.content, { flag: 'wx' });
     }
     const result = deviceUpload
-      ? await input.app.uploadArtifactForDevice({ ...uploadInput, token })
+      ? await input.app.uploadArtifactForDevice({
+        ...uploadInput,
+        token,
+        // #1056：跨 Team 上传按声明的执行 Agent 逐 Agent 授权（daemon 总是附带）。
+        ...(typeof upload.fields.agentId === 'string' && upload.fields.agentId.trim()
+          ? { agentId: upload.fields.agentId.trim() }
+          : {}),
+      })
       : await uploadArtifactForSession(input, token, uploadInput);
     if (!result.ok) {
       writeAckFailure(input.response, result);
@@ -1331,6 +1345,7 @@ async function handleArtifactRead(
     artifactId: string;
     disposition: 'inline' | 'attachment';
     expectedArtifactVersionId?: string;
+    agentId?: string;
   },
 ): Promise<void> {
   const token = readToken(input.url, input.request);
@@ -1340,6 +1355,7 @@ async function handleArtifactRead(
         teamId: options.teamId,
         artifactId: options.artifactId,
         ...(options.expectedArtifactVersionId ? { expectedArtifactVersionId: options.expectedArtifactVersionId } : {}),
+        ...(options.agentId ? { agentId: options.agentId } : {}),
       })
     : await getArtifactFileForSession(input, token, options);
   if (!result.ok) {

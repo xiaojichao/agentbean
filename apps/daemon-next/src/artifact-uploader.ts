@@ -28,6 +28,8 @@ export interface UploadArtifactsInput {
   maxBytes?: number;
   maxTotalBytes?: number;
   onSkipped?: (artifact: SkippedArtifactDiagnostic) => void;
+  /** #1056：本次执行 Agent——跨 Team 上传服务端按该 Agent 逐 Agent 授权。 */
+  agentId?: string;
 }
 
 /**
@@ -92,6 +94,7 @@ async function uploadOne(
       form.append('sourceRootId', artifact.sourceRoot.id);
       form.append('sourceRootKind', artifact.sourceRoot.kind);
       form.append('sourceRootLabel', artifact.sourceRoot.label);
+      if (input.agentId) form.append('agentId', input.agentId);
       form.append('file', blob, artifact.filename);
       const response = await fetchFn(url, {
         method: 'POST',

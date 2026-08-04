@@ -175,12 +175,15 @@ export async function fetchProjectChannelWorkspaceCurrent(input: {
   teamId: string;
   channelId: string;
   fetch?: typeof fetch;
+  /** #1056：本次执行 Agent——跨 Team baseline 查询服务端按该 Agent 逐 Agent 授权。 */
+  agentId?: string;
 }): Promise<{ ok: true; currentRevisionId: string } | { ok: false; error: string }> {
   const fetchFn = input.fetch ?? fetch;
   const base = String(input.serverUrl ?? '').replace(/\/$/, '');
   if (!base) return { ok: false, error: 'SERVER_URL_MISSING' };
   const url = new URL(`${base}/api/teams/${encodeURIComponent(input.teamId)}/project-channel-workspace`);
   url.searchParams.set('channelId', input.channelId);
+  if (input.agentId) url.searchParams.set('agentId', input.agentId);
   const response = await fetchFn(url.toString(), {
     method: 'GET',
     headers: { Authorization: `Bearer ${input.token}` },

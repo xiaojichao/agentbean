@@ -140,12 +140,13 @@ describe('#1053 跨 Team 可见 Agent 的 snapshot 授权', () => {
     if (!created.ok) throw new Error(created.error);
     await expect(app.getDeviceWorkspaceSnapshot({ token, teamId: teamB, channelId, snapshotId: created.snapshot.id }))
       .resolves.toMatchObject({ ok: true, snapshot: { id: created.snapshot.id } });
+    // #1056：跨 Team 下载按声明的执行 Agent 逐 Agent 授权。
     await expect(app.getArtifactFileForDevice({
-      token, teamId: teamB, artifactId: 'artifact-b1', expectedArtifactVersionId: promoted.version.id,
+      token, teamId: teamB, artifactId: 'artifact-b1', agentId, expectedArtifactVersionId: promoted.version.id,
     })).resolves.toMatchObject({ ok: true });
     // version 不匹配仍 fail closed。
     await expect(app.getArtifactFileForDevice({
-      token, teamId: teamB, artifactId: 'artifact-b1', expectedArtifactVersionId: 'version-not-in-snapshot',
+      token, teamId: teamB, artifactId: 'artifact-b1', agentId, expectedArtifactVersionId: 'version-not-in-snapshot',
     })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
   });
 
@@ -174,7 +175,7 @@ describe('#1053 跨 Team 可见 Agent 的 snapshot 授权', () => {
     await repositories.agents.softDelete({ agentId: ctx.agentId, timestamp: 200 });
     await expect(app.getDeviceWorkspaceSnapshot({ token, teamId: teamB, channelId, snapshotId: created.snapshot.id }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
-    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1' }))
+    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1', agentId: ctx.agentId }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
 
@@ -187,7 +188,7 @@ describe('#1053 跨 Team 可见 Agent 的 snapshot 授权', () => {
       token, teamId: teamB, channelId, agentId, taskId, taskAttempt: 1, workspaceRunId: 'run-cross-4',
       selections: [{ kind: 'current', collectionId: promoted.collection.id }],
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
-    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1' }))
+    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1', agentId }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
 
@@ -218,7 +219,7 @@ describe('#1053 跨 Team 可见 Agent 的 snapshot 授权', () => {
       token: other.credentials.token, teamId: teamB, channelId, agentId, taskId, taskAttempt: 1, workspaceRunId: 'run-cross-7',
       selections: [{ kind: 'current', collectionId: promoted.collection.id }],
     })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
-    await expect(app.getArtifactFileForDevice({ token: other.credentials.token, teamId: teamB, artifactId: 'artifact-b1' }))
+    await expect(app.getArtifactFileForDevice({ token: other.credentials.token, teamId: teamB, artifactId: 'artifact-b1', agentId: ctx.agentId }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
     // 无效 token。
     await expect(app.createDeviceWorkspaceSnapshot({
@@ -230,7 +231,7 @@ describe('#1053 跨 Team 可见 Agent 的 snapshot 授权', () => {
     // device owner 被移出 home Team 后 token 不再有效（直接打仓储绕过 usecase 的
     // owner 保护，模拟成员关系被管理端移除后的状态）。
     await ctx.repositories.teams.removeMember({ teamId: teamA, userId: ownerA.user.id });
-    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1' }))
+    await expect(app.getArtifactFileForDevice({ token, teamId: teamB, artifactId: 'artifact-b1', agentId: ctx.agentId }))
       .resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
   });
 });
