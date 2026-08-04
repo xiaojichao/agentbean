@@ -86,6 +86,16 @@ import type {
   ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from '../../application/project-repositories.js';
+import type {
+  OutputPackageMemberRecord,
+  OutputPackageMemberWrite,
+  OutputPackageReceiptRecord,
+  OutputPackageRecord,
+  OutputPackageTombstoneRecord,
+  RecordOutputPackageFormationInput,
+  RecordOutputPackageFormationResult,
+  OutputPackageRepository,
+} from '../../application/output-package-repositories.js';
 
 export interface SqliteStatement {
   run(...params: unknown[]): unknown;
@@ -262,6 +272,12 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   // #1005：staging 内容磁盘路径（BLOB 可选，大文件不入 team DB）。
   applyMigration(db, 'team/0074_workspace_staging_storage_path.sql');
   applyMigration(db, 'team/0075_device_workspace_snapshots.sql');
+  // #1060 OutputPackage：交付形成的版本允许无 Stage 来源(重建 versions 表去 NOT NULL);
+  // 沿用 0053 同款历史库门禁(缺 artifacts 链路的库不执行重建,也不建 package 表)。
+  if (sqliteTableExists(db, 'project_artifact_collections')) {
+    applyMigration(db, 'team/0076_project_artifact_versions_nullable_stage.sql', { disableForeignKeys: true });
+    applyMigration(db, 'team/0077_output_packages.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2384,6 +2400,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         ).all(input.olderThan, input.limit) as Record<string, unknown>[];
         return rows.map((row) => mapWorkspacePublishStaging(teamDb, row));
       },
+      async listCommittedByChannel(input) {
+        let sql = `SELECT * FROM workspace_publish_stagings
+          WHERE team_id = ? AND channel_id = ? AND status = 'committed' AND provenance_json IS NOT NULL`;
+        const params: (string | number)[] = [input.teamId, input.channelId];
+        if (input.taskId) {
+          // provenance_json 为 JSON 文本:按 task_id 键过滤。
+          sql += ` AND json_extract(provenance_json, '$.taskId') = ?`;
+          params.push(input.taskId);
+        }
+        sql += ` ORDER BY created_at ASC, publish_id ASC`;
+        const rows = teamDb.prepare(sql).all(...params) as Record<string, unknown>[];
+        return rows.map((row) => mapWorkspacePublishStaging(teamDb, row));
+      },
       async delete(input) {
         const tx = teamDb.transaction(() => {
           teamDb.prepare('DELETE FROM workspace_publish_staging_files WHERE team_id = ? AND publish_id = ?')
@@ -2420,6 +2449,9 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         return JSON.parse(row.snapshot_json) as DeviceWorkspaceSnapshotDto;
       },
     },
+    // #1060 OutputPackage:单事务原子成形——collection/version 写入 + package/members/receipt/tombstone
+    // 任一步失败整体回滚(UNIQUE 约束抛错即回滚)。聚合只 create/读,无 update/delete。
+    outputPackages: createSqliteOutputPackageRepository(teamDb),
     channelDocuments: {
       async create(input) {
         const insert = teamDb.transaction(() => {
@@ -3399,6 +3431,8 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             'SELECT 1 FROM artifacts WHERE id = ? AND team_id = ? AND channel_id = ?',
           ).get(input.version.artifactId, input.teamId, input.channelId);
           if (!artifactRow) return { kind: 'artifact_scope_conflict' as const };
+          // #1060:promote 路径仍要求显式 Stage(人类提交);仅交付形成路径允许 stageId 缺省。
+          if (!input.version.stageId) return { kind: 'stage_scope_conflict' as const };
           const stageRow = teamDb.prepare(
             `SELECT 1 FROM project_stages
              WHERE id = ? AND team_id = ? AND channel_id = ? AND task_id = ?`,
@@ -3477,7 +3511,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             input.version.collectionId,
             input.version.versionNumber,
             input.version.artifactId,
-            input.version.stageId,
+            input.version.stageId ?? null,
             input.version.taskId,
             input.version.taskRevision,
             input.version.sourceMessageId ?? null,
@@ -4883,6 +4917,8 @@ function mapProjectArtifactVersion(row: unknown): ProjectArtifactVersionRecord |
   const sourceMessageId = sqliteNullableText(row, 'source_message_id');
   const sourceWorkspaceRunId = sqliteNullableText(row, 'source_workspace_run_id');
   const sourceInvocationId = sqliteNullableText(row, 'source_invocation_id');
+  // #1060：交付形成的版本允许无 Stage 来源(stage_id 可空)。
+  const stageId = sqliteNullableText(row, 'stage_id');
   return {
     id: sqliteText(row, 'id'),
     teamId: sqliteText(row, 'team_id'),
@@ -4890,7 +4926,7 @@ function mapProjectArtifactVersion(row: unknown): ProjectArtifactVersionRecord |
     collectionId: sqliteText(row, 'collection_id'),
     versionNumber: sqliteNumber(row, 'version_number'),
     artifactId: sqliteText(row, 'artifact_id'),
-    stageId: sqliteText(row, 'stage_id'),
+    ...(stageId === undefined ? {} : { stageId }),
     taskId: sqliteText(row, 'task_id'),
     taskRevision: sqliteNumber(row, 'task_revision'),
     ...(sourceMessageId === undefined ? {} : { sourceMessageId }),
@@ -4914,6 +4950,364 @@ function mapProjectArtifactMutation(row: unknown): ProjectArtifactMutationRecord
     collectionId: sqliteText(row, 'collection_id'),
     versionId: sqliteText(row, 'version_id'),
     createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+// #1060 OutputPackage 行映射。
+function mapOutputPackageRecord(row: unknown): OutputPackageRecord {
+  const taskRevision = sqliteNullableNumber(row, 'task_revision');
+  const invocationId = sqliteNullableText(row, 'invocation_id');
+  const workspaceRunId = sqliteNullableText(row, 'workspace_run_id');
+  const claimLeaseId = sqliteNullableText(row, 'claim_lease_id');
+  const deviceId = sqliteNullableText(row, 'device_id');
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    packageId: sqliteText(row, 'package_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    deliveryId: sqliteText(row, 'delivery_id'),
+    publishId: sqliteText(row, 'publish_id'),
+    workspaceRevisionId: sqliteText(row, 'workspace_revision_id'),
+    agentId: sqliteText(row, 'agent_id'),
+    taskId: sqliteText(row, 'task_id'),
+    taskBinding: sqliteText(row, 'task_binding') as 'managed' | 'unmanaged',
+    ...(taskRevision !== undefined ? { taskRevision } : {}),
+    taskAttempt: sqliteNumber(row, 'task_attempt'),
+    ...(invocationId ? { invocationId } : {}),
+    ...(workspaceRunId ? { workspaceRunId } : {}),
+    ...(claimLeaseId ? { claimLeaseId } : {}),
+    ...(deviceId ? { deviceId } : {}),
+    memberCount: sqliteNumber(row, 'member_count'),
+    status: 'recorded',
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapOutputPackageMemberRecord(row: unknown): OutputPackageMemberRecord {
+  const sha256 = sqliteNullableText(row, 'sha256');
+  return {
+    teamId: sqliteText(row, 'team_id'),
+    packageId: sqliteText(row, 'package_id'),
+    channelId: sqliteText(row, 'channel_id'),
+    sequence: sqliteNumber(row, 'sequence'),
+    shortLabel: sqliteText(row, 'short_label'),
+    collectionId: sqliteText(row, 'collection_id'),
+    artifactVersionId: sqliteText(row, 'artifact_version_id'),
+    role: sqliteText(row, 'role') as 'deliverable',
+    requiredForFinal: sqliteNumber(row, 'required_for_final') === 1,
+    sourcePath: sqliteText(row, 'source_path'),
+    filename: sqliteText(row, 'filename'),
+    ...(sha256 ? { sha256 } : {}),
+    sizeBytes: sqliteNumber(row, 'size_bytes'),
+  };
+}
+
+function mapOutputPackageReceiptRecord(row: unknown): OutputPackageReceiptRecord {
+  const resultJson = sqliteNullableText(row, 'result_json');
+  return {
+    receiptId: sqliteText(row, 'receipt_id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: 'record-agent-output-package',
+    commandSchemaVersion: sqliteNumber(row, 'command_schema_version'),
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    outcome: sqliteText(row, 'outcome') as 'applied' | 'no_op',
+    committedRevisions: JSON.parse(sqliteText(row, 'committed_revisions_json')) as { streamKind: string; streamId: string; revision: number }[],
+    eventRefs: JSON.parse(sqliteText(row, 'event_refs_json')) as { streamKind: string; streamId: string; sequence: number }[],
+    commitTime: sqliteNumber(row, 'commit_time'),
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    ...(resultJson ? { resultJson } : {}),
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+function mapOutputPackageTombstoneRecord(row: unknown): OutputPackageTombstoneRecord {
+  return {
+    id: sqliteText(row, 'id'),
+    teamId: sqliteText(row, 'team_id'),
+    commandName: 'record-agent-output-package',
+    idempotencyKey: sqliteText(row, 'idempotency_key'),
+    commandHash: sqliteText(row, 'command_hash'),
+    receiptId: sqliteText(row, 'receipt_id'),
+    outcome: sqliteText(row, 'outcome') as 'applied' | 'no_op',
+    resultAvailable: sqliteNumber(row, 'result_available') === 1,
+    createdAt: sqliteNumber(row, 'created_at'),
+  };
+}
+
+/**
+ * #1060 单事务成形:复核(自然 publish 幂等 / artifact 自然键 / collection revision fence)
+ * 与写入(collection/version → package/members → receipt/tombstone)都在同一 SQLite 写事务内;
+ * 任一 UNIQUE 约束冲突即事务回滚,由 catch 映射为结构化 conflict,不留部分事实。
+ */
+function createSqliteOutputPackageRepository(teamDb: SqliteDatabase): OutputPackageRepository {
+  const finalizeConflict = (error: unknown): RecordOutputPackageFormationResult => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === 'OUTPUT_PACKAGE_COLLECTION_REVISION_STALE') {
+      return { kind: 'conflict', reason: 'collection-revision-stale' };
+    }
+    if (message === 'OUTPUT_PACKAGE_ARTIFACT_VERSION_EXISTS'
+      || message.includes('project_artifact_collections.team_id, channel_id, name')
+      || message.includes('project_artifact_versions.team_id, channel_id, artifact_id')
+      || message.includes('project_artifact_versions.collection_id, version_number')) {
+      return { kind: 'conflict', reason: 'artifact-version-conflict' };
+    }
+    throw error;
+  };
+  return {
+    async recordPackageFormation(input: RecordOutputPackageFormationInput): Promise<RecordOutputPackageFormationResult> {
+      try {
+        const teamId = input.record.teamId;
+        const channelId = input.record.channelId;
+        const result = teamDb.transaction(() => {
+          // 自然幂等:同 (teamId, publishId) 已有 package → replay。
+          const existingRow = teamDb.prepare(
+            `SELECT * FROM output_packages WHERE team_id = ? AND publish_id = ?`,
+          ).get(teamId, input.record.publishId) as Record<string, unknown> | undefined;
+          if (existingRow) {
+            const existing = mapOutputPackageRecord(existingRow);
+            const memberRows = teamDb.prepare(
+              `SELECT * FROM output_package_members WHERE team_id = ? AND package_id = ? ORDER BY sequence ASC`,
+            ).all(teamId, existing.packageId) as Record<string, unknown>[];
+            return {
+              kind: 'replayed' as const,
+              package: existing,
+              members: memberRows.map(mapOutputPackageMemberRecord),
+            };
+          }
+          // 复核 artifact 自然键 + collection fence,再写 collection/version。
+          const planned = input.members.map((member) => {
+            const existingVersionRow = teamDb.prepare(
+              `SELECT id, collection_id FROM project_artifact_versions
+               WHERE team_id = ? AND channel_id = ? AND artifact_id = ?`,
+            ).get(teamId, channelId, member.version.artifactId) as Record<string, unknown> | undefined;
+            if (existingVersionRow
+              && sqliteText(existingVersionRow, 'id') !== member.version.id) {
+              // 同一 artifact 已有另一版本:仅当本次显式 reuse 该版本时才可收敛,否则冲突。
+              throw new Error('OUTPUT_PACKAGE_ARTIFACT_VERSION_EXISTS');
+            }
+            let collectionId: string;
+            let versionNumber: number;
+            if (member.collection.mode === 'reuse') {
+              // 复用既有 version:校验 artifact 自然键与该 version 归属的 collection 一致。
+              if (!existingVersionRow
+                || sqliteText(existingVersionRow, 'id') !== member.collection.expectedVersionId
+                || sqliteText(existingVersionRow, 'collection_id') !== member.collection.collectionId) {
+                throw new Error('OUTPUT_PACKAGE_ARTIFACT_VERSION_EXISTS');
+              }
+              collectionId = member.collection.collectionId;
+              versionNumber = 0; // 不写 collection/version;成员直接引用既有 version。
+              return { collectionId, versionNumber, reuse: true };
+            }
+            if (member.collection.mode === 'create') {
+              const byName = teamDb.prepare(
+                `SELECT * FROM project_artifact_collections
+                 WHERE team_id = ? AND channel_id = ? AND name = ?`,
+              ).get(teamId, channelId, member.collection.name) as Record<string, unknown> | undefined;
+              if (byName) {
+                collectionId = sqliteText(byName, 'id');
+                versionNumber = sqliteNumber(byName, 'version_count') + 1;
+                teamDb.prepare(
+                  `UPDATE project_artifact_collections
+                   SET revision = ?, current_version_id = ?, version_count = ?, updated_at = ?
+                   WHERE id = ?`,
+                ).run(
+                  sqliteNumber(byName, 'revision') + 1,
+                  member.version.id,
+                  versionNumber,
+                  input.record.createdAt,
+                  collectionId,
+                );
+              } else {
+                collectionId = member.collection.collectionId;
+                versionNumber = 1;
+                teamDb.prepare(
+                  `INSERT INTO project_artifact_collections (
+                    id, team_id, channel_id, name, kind, revision, current_version_id, version_count,
+                    created_by, created_at, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                ).run(
+                  collectionId, teamId, channelId, member.collection.name, member.collection.kind,
+                  1, member.version.id, 1, input.record.agentId, input.record.createdAt, input.record.createdAt,
+                );
+              }
+            } else {
+              const collection = teamDb.prepare(
+                `SELECT * FROM project_artifact_collections
+                 WHERE id = ? AND team_id = ? AND channel_id = ?`,
+              ).get(member.collection.collectionId, teamId, channelId) as Record<string, unknown> | undefined;
+              if (!collection
+                || sqliteNumber(collection, 'revision') !== member.collection.expectedRevision
+                || sqliteNumber(collection, 'version_count') !== member.collection.expectedVersionCount) {
+                throw new Error('OUTPUT_PACKAGE_COLLECTION_REVISION_STALE');
+              }
+              collectionId = sqliteText(collection, 'id');
+              versionNumber = sqliteNumber(collection, 'version_count') + 1;
+              teamDb.prepare(
+                `UPDATE project_artifact_collections
+                 SET revision = ?, current_version_id = ?, version_count = ?, updated_at = ?
+                 WHERE id = ?`,
+              ).run(
+                sqliteNumber(collection, 'revision') + 1,
+                member.version.id,
+                versionNumber,
+                input.record.createdAt,
+                collectionId,
+              );
+            }
+            // reuse 分支在 verify 段已 return 早退;此处必然非 reuse,version 需落库。
+            teamDb.prepare(
+              `INSERT INTO project_artifact_versions (
+                id, team_id, channel_id, collection_id, version_number, artifact_id, stage_id,
+                task_id, task_revision, source_message_id, source_workspace_run_id,
+                source_invocation_id, lineage_json, promoted_by, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ).run(
+              member.version.id, teamId, channelId, collectionId, versionNumber, member.version.artifactId,
+              member.version.stageId ?? null, member.version.taskId, member.version.taskRevision,
+              null, member.version.sourceWorkspaceRunId ?? null, member.version.sourceInvocationId ?? null,
+              '[]', input.record.agentId, input.record.createdAt,
+            );
+            return { collectionId };
+          });
+          // 写 package + 冻结成员。
+          teamDb.prepare(
+            `INSERT INTO output_packages (
+              team_id, package_id, channel_id, delivery_id, publish_id, workspace_revision_id,
+              agent_id, task_id, task_binding, task_revision, task_attempt, invocation_id,
+              workspace_run_id, claim_lease_id, device_id, member_count, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            teamId, input.record.packageId, channelId, input.record.deliveryId, input.record.publishId,
+            input.record.workspaceRevisionId, input.record.agentId, input.record.taskId,
+            input.record.taskBinding, input.record.taskRevision ?? null, input.record.taskAttempt,
+            input.record.invocationId ?? null, input.record.workspaceRunId ?? null,
+            input.record.claimLeaseId ?? null, input.record.deviceId ?? null, input.record.memberCount,
+            'recorded', input.record.createdAt,
+          );
+          const insertMember = teamDb.prepare(
+            `INSERT INTO output_package_members (
+              team_id, package_id, channel_id, sequence, short_label, collection_id,
+              artifact_version_id, role, required_for_final, source_path, filename, sha256, size_bytes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          );
+          const memberRecords: OutputPackageMemberRecord[] = input.members.map((member, index) => {
+            // planned 与 input.members 严格 1:1(同一 .map 构建),非空安全。
+            const collectionId = planned[index]!.collectionId;
+            insertMember.run(
+              teamId, input.record.packageId, channelId, member.sequence, member.shortLabel,
+              collectionId, member.version.id, member.role, member.requiredForFinal ? 1 : 0,
+              member.sourcePath, member.filename, member.sha256 ?? null, member.sizeBytes,
+            );
+            return {
+              teamId,
+              packageId: input.record.packageId,
+              channelId,
+              sequence: member.sequence,
+              shortLabel: member.shortLabel,
+              collectionId,
+              artifactVersionId: member.version.id,
+              role: member.role,
+              requiredForFinal: member.requiredForFinal,
+              sourcePath: member.sourcePath,
+              filename: member.filename,
+              ...(member.sha256 ? { sha256: member.sha256 } : {}),
+              sizeBytes: member.sizeBytes,
+            };
+          });
+          // receipt + tombstone。
+          teamDb.prepare(
+            `INSERT INTO output_package_command_receipts (
+              receipt_id, team_id, command_name, command_schema_version, idempotency_key, command_hash,
+              outcome, committed_revisions_json, event_refs_json, result_available, result_json,
+              commit_time, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.receipt.receiptId, teamId, 'record-agent-output-package',
+            input.receipt.commandSchemaVersion, input.receipt.idempotencyKey, input.receipt.commandHash,
+            input.receipt.outcome, JSON.stringify(input.receipt.committedRevisions),
+            JSON.stringify(input.receipt.eventRefs), input.receipt.resultAvailable ? 1 : 0,
+            input.receipt.resultJson ?? null, input.receipt.commitTime, input.receipt.createdAt,
+          );
+          teamDb.prepare(
+            `INSERT INTO output_package_idempotency_tombstones (
+              id, team_id, command_name, idempotency_key, command_hash, receipt_id,
+              outcome, result_available, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            input.tombstone.id, teamId, 'record-agent-output-package', input.tombstone.idempotencyKey,
+            input.tombstone.commandHash, input.tombstone.receiptId, input.tombstone.outcome,
+            input.tombstone.resultAvailable ? 1 : 0, input.tombstone.createdAt,
+          );
+          return { kind: 'created' as const, package: input.record, members: memberRecords };
+        })();
+        return result;
+      } catch (error) {
+        return finalizeConflict(error);
+      }
+    },
+    async getPackageById(input) {
+      const row = teamDb.prepare(
+        `SELECT * FROM output_packages WHERE team_id = ? AND package_id = ?`,
+      ).get(input.teamId, input.packageId) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const memberRows = teamDb.prepare(
+        `SELECT * FROM output_package_members WHERE team_id = ? AND package_id = ? ORDER BY sequence ASC`,
+      ).all(input.teamId, input.packageId) as Record<string, unknown>[];
+      return { package: mapOutputPackageRecord(row), members: memberRows.map(mapOutputPackageMemberRecord) };
+    },
+    async getPackageByPublishId(input) {
+      const row = teamDb.prepare(
+        `SELECT * FROM output_packages WHERE team_id = ? AND publish_id = ?`,
+      ).get(input.teamId, input.publishId) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const packageId = sqliteText(row, 'package_id');
+      const memberRows = teamDb.prepare(
+        `SELECT * FROM output_package_members WHERE team_id = ? AND package_id = ? ORDER BY sequence ASC`,
+      ).all(input.teamId, packageId) as Record<string, unknown>[];
+      return { package: mapOutputPackageRecord(row), members: memberRows.map(mapOutputPackageMemberRecord) };
+    },
+    async listPackagesByChannel(input) {
+      let sql = `SELECT * FROM output_packages WHERE team_id = ? AND channel_id = ?`;
+      const params: (string | number)[] = [input.teamId, input.channelId];
+      if (input.taskId) {
+        sql += ` AND task_id = ?`;
+        params.push(input.taskId);
+      }
+      if (input.cursor) {
+        sql += ` AND (created_at < ? OR (created_at = ? AND package_id < ?))`;
+        params.push(input.cursor.createdAt, input.cursor.createdAt, input.cursor.packageId);
+      }
+      sql += ` ORDER BY created_at DESC, package_id DESC LIMIT ?`;
+      params.push(input.limit);
+      const rows = teamDb.prepare(sql).all(...params) as Record<string, unknown>[];
+      return rows.map(mapOutputPackageRecord);
+    },
+    async listPackagePublishIdsByChannel(input) {
+      let sql = `SELECT publish_id FROM output_packages WHERE team_id = ? AND channel_id = ?`;
+      const params: (string | number)[] = [input.teamId, input.channelId];
+      if (input.taskId) {
+        sql += ` AND task_id = ?`;
+        params.push(input.taskId);
+      }
+      const rows = teamDb.prepare(sql).all(...params) as Record<string, unknown>[];
+      return rows.map((row) => sqliteText(row, 'publish_id'));
+    },
+    receipts: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM output_package_command_receipts WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey) as Record<string, unknown> | undefined;
+        return row ? mapOutputPackageReceiptRecord(row) : null;
+      },
+    },
+    tombstones: {
+      async getByIdempotencyKey(input) {
+        const row = teamDb.prepare(
+          `SELECT * FROM output_package_idempotency_tombstones WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.teamId, input.idempotencyKey) as Record<string, unknown> | undefined;
+        return row ? mapOutputPackageTombstoneRecord(row) : null;
+      },
+    },
   };
 }
 

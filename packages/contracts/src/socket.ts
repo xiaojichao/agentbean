@@ -239,6 +239,10 @@ export const WEB_EVENTS = {
     getWorkspacePublishStaging: 'project:get-workspace-publish-staging',
     /** #967 原子提交暂存 → 新 revision（重复调用不重复创建 revision）。 */
     commitWorkspacePublishStaging: 'project:commit-workspace-publish-staging',
+    /** #1060 列出频道 OutputPackage(含 pendingDeliveries「交付处理中」投影)。 */
+    listOutputPackages: 'project:list-output-packages',
+    /** #1060 获取单个 OutputPackage(含冻结成员)。 */
+    getOutputPackage: 'project:get-output-package',
   },
   dm: {
     start: 'dm:start',

@@ -230,6 +230,8 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.beginWorkspacePublishStaging,
       WEB_EVENTS.project.getWorkspacePublishStaging,
       WEB_EVENTS.project.commitWorkspacePublishStaging,
+      WEB_EVENTS.project.listOutputPackages,
+      WEB_EVENTS.project.getOutputPackage,
       WEB_EVENTS.project.importWorkspace,
       WEB_EVENTS.project.materializeWorkspace,
       WEB_EVENTS.channel.join,

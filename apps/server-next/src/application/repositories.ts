@@ -507,6 +507,16 @@ export interface WorkspacePublishStagingRepository {
    * committed 结果不在此列（永久可查询）。
    */
   listExpiredOpen(input: { olderThan: UnixMs; limit: number }): Promise<WorkspacePublishStagingRecord[]>;
+  /**
+   * #1060：列出频道内已 committed 且带 Agent publish provenance 的会话——
+   * OutputPackage「交付处理中」投影与 reconciliation 的数据源。taskId 可选过滤
+   * (Task 摘要页只显示本任务的事实)。
+   */
+  listCommittedByChannel(input: {
+    teamId: ID;
+    channelId: ID;
+    taskId?: ID;
+  }): Promise<WorkspacePublishStagingRecord[]>;
   delete(input: { teamId: ID; publishId: ID }): Promise<void>;
 }
 
@@ -571,6 +581,8 @@ export interface ServerNextRepositories {
   projectChannelWorkspaces: ProjectChannelWorkspaceRepository;
   /** #967 Workspace 大文件暂存（publish identity 续传 / 幂等提交）。 */
   workspacePublishStagings: WorkspacePublishStagingRepository;
+  /** #1060 一次成功 Agent 交付的可审核 OutputPackage(创建后不可变)。 */
+  outputPackages: import('./output-package-repositories.js').OutputPackageRepository;
   deviceWorkspaceSnapshots: DeviceWorkspaceSnapshotRepository;
   tasks: TaskRepository;
   reactions: ReactionRepository;

@@ -118,7 +118,8 @@ export interface ProjectArtifactVersionRecord {
   collectionId: ID;
   versionNumber: number;
   artifactId: ID;
-  stageId: ID;
+  /** #1060：Agent 交付形成的版本允许无 Stage 来源(NULL);人工 promote 路径仍强制。 */
+  stageId?: ID;
   taskId: ID;
   taskRevision: number;
   sourceMessageId?: ID;

@@ -11,6 +11,8 @@ import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
 } from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
+import { OutputPackageCard } from '@/components/OutputPackageCard';
+import { outputPackageFromMeta } from '@/lib/output-package';
 import { MemoryAttributionSources } from '@/components/MemoryAttributionSources';
 
 const KIND_LABEL: Record<ChatMessage['senderKind'], string> = {
@@ -171,6 +173,9 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
           result={projectDocumentInputSetResultFromMeta(meta)!}
           teamId={msg.teamId}
         />
+      )}
+      {outputPackageFromMeta(meta) && (
+        <OutputPackageCard packageMeta={outputPackageFromMeta(meta)!} />
       )}
       {msg.artifacts && msg.artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">

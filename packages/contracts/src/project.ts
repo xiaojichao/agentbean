@@ -259,9 +259,10 @@ export interface ProjectArtifactLineageRefDto {
  * #823 产物版本来源。Stage/Task 来自显式指定的 Stage 绑定；
  * message/workspaceRun 由 Server 从 Artifact 自身的持久化事实读取，不接受客户端提交；
  * invocation 为可选显式引用，由 Server 复验作用域。
+ * #1060：Agent 交付形成的版本允许无 Stage 来源（Task 未绑定 Stage 或合成 taskId 时缺省）。
  */
 export interface ProjectArtifactVersionSourceDto {
-  stageId: ID;
+  stageId?: ID;
   taskId: ID;
   taskRevision: number;
   messageId?: ID;

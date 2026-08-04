@@ -93,6 +93,7 @@ import {
   type ResolveProjectReferenceOrdinalResultDto,
   type ResolveProjectReferencesInput,
   type ResolveProjectReferencesResultDto,
+  parseOutputPackageQueryInputV1,
 } from '../../../../packages/contracts/src/index.js';
 import type {
   ChannelProjectProfileRecord,
@@ -112,6 +113,10 @@ import type {
   ProjectStageEdgeRecord,
   ProjectStageRecord,
 } from './project-repositories.js';
+import type {
+  OutputPackageMemberRecord,
+  OutputPackageRecord,
+} from './output-package-repositories.js';
 import type { TaskClaimLeaseRecord, TaskOfferRecord, TaskCoordinationRepositories } from './task-coordination-repositories.js';
 import { buildDeviceInviteCommand, DEVICE_SERVICE_OPERATION_COMMANDS } from './device-invite-command.js';
 import { buildDaemonVersionInfo } from '../daemon-version.js';
@@ -157,6 +162,9 @@ import type {
   ProjectDocumentBundleMemberViewDto,
   ProjectDocumentBundleResultDto,
   ProjectDocumentBundleSourceDto,
+  OutputPackageDto,
+  OutputPackageSummaryDto,
+  OutputPackagePendingDeliveryDto,
   ProjectStageBlockingReasonDto,
   ProjectStageEdgeDto,
   ProjectStageMissingRequiredInputDto,
@@ -236,6 +244,7 @@ import {
   type ProjectCollaborationRolloutConfig,
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
+import { attemptOutputPackageFormation } from './output-package-handler.js';
 import type {
   CancelPiProviderTestResult,
   ActivePiModelDto,
@@ -578,6 +587,14 @@ export interface ServerNextUseCases {
   resolveProjectReferenceOrdinal(
     input: ResolveProjectReferenceOrdinalInput & { userId: string },
   ): Promise<Ack<ResolveProjectReferenceOrdinalResultDto>>;
+  /** #1060 列出频道 OutputPackage(三处投影共用同一 Server 事实)。 */
+  listOutputPackages(
+    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string } },
+  ): Promise<Ack<{ packages: OutputPackageSummaryDto[]; pendingDeliveries: OutputPackagePendingDeliveryDto[]; nextCursor?: { createdAt: number; packageId: string } }>>;
+  /** #1060 获取单个 OutputPackage(含冻结成员)。 */
+  getOutputPackage(
+    input: { teamId: string; channelId: string; packageId: string; userId: string },
+  ): Promise<Ack<{ package: OutputPackageDto }>>;
   listChannelDocuments(input: ListChannelDocumentsInput): Promise<Ack<{ documents: ChannelDocumentDto[] }>>;
   getChannelDocument(input: GetChannelDocumentInput): Promise<Ack<ChannelDocumentResultDto>>;
   listChannelDocumentRevisions(input: ListChannelDocumentRevisionsInput): Promise<Ack<ChannelDocumentRevisionsResultDto>>;
@@ -6484,6 +6501,23 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       // 幂等：已提交 → 返回同一最终结果，不重复创建 revision。
       if (staging.status === 'committed' && staging.committedRevisionId) {
+        // #1060 reconciliation:committed 但 package 可能尚未形成(上次 formation 失败/中断)。
+        // 用同一确定性幂等键重试,收敛同一 package;已形成则原样 replay,无副作用。
+        if (staging.provenance) {
+          try {
+            await attemptOutputPackageFormation(
+              { repositories, clock, ids },
+              {
+                teamId: commitInput.teamId,
+                channelId: commitInput.channelId,
+                publishId,
+                workspaceRevisionId: staging.committedRevisionId,
+              },
+            );
+          } catch {
+            // best-effort:不阻塞幂等返回。
+          }
+        }
         const workspace = await repositories.projectChannelWorkspaces.getForTeam({
           teamId: commitInput.teamId,
           channelId: commitInput.channelId,
@@ -6801,6 +6835,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: staging.teamId,
         publishId: staging.publishId,
       });
+      // #1060：commit 成功后 best-effort 形成 OutputPackage。失败(撤权/attempt 漂移等)只返回
+      // rejected,不影响已成功的 commit 结果;committed Workspace revision 保持可恢复事实,
+      // 由 commit 幂等重入路径或重复 Device 回调用同一幂等键收敛。
+      if (committed.provenance && committed.committedRevisionId) {
+        try {
+          await attemptOutputPackageFormation(
+            { repositories, clock, ids },
+            {
+              teamId: committed.teamId,
+              channelId: committed.channelId,
+              publishId: committed.publishId,
+              workspaceRevisionId: committed.committedRevisionId,
+            },
+          );
+        } catch {
+          // formation 抛错不阻塞 commit;可由幂等重入重试收敛。
+        }
+      }
       return makeSuccess({
         staging: toWorkspacePublishStagingDto(committed),
         workspace: outcome.workspace,
@@ -8186,7 +8238,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         channelId: projectInput.channelId,
         collectionId: version.collectionId,
         versionId: version.id,
-        stageId: version.stageId,
+        // stage 已在上方按 version.stageId 找到(stage-less 交付版本在 L8111 处 fail-closed)。
+        stageId: stage.id,
         decision: projectInput.decision,
         comment,
         basis,
@@ -8539,6 +8592,84 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         bundle: await toProjectDocumentBundleDetailDto(repositories, record),
         archived: access.channel.archivedAt != null,
       });
+    },
+
+    // #1060 OutputPackage 查询:三处投影(讨论串/Task/Files)共用同一 Server 事实。
+    async listOutputPackages(packageInput) {
+      // AC10:运行时 exact-key 校验,拒绝未知字段;不以 TypeScript interface 代替运行时合同。
+      // userId/teamId 是 Server 从 session 注入的权威字段,不属于 wire payload,校验前剥离。
+      const { userId, teamId, ...wireInput } = packageInput;
+      const parsed = parseOutputPackageQueryInputV1('list-channel-output-packages', wireInput) as typeof packageInput;
+      parsed.userId = userId;
+      parsed.teamId = teamId;
+      if (!(await repositories.teams.isMember(parsed.teamId, parsed.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, parsed);
+      if (!access.ok) return access;
+      const limit = parsed.limit ?? 50;
+      const records = await repositories.outputPackages.listPackagesByChannel({
+        teamId: parsed.teamId,
+        channelId: parsed.channelId,
+        ...(parsed.taskId ? { taskId: parsed.taskId } : {}),
+        limit: limit + 1,
+        ...(parsed.cursor ? { cursor: parsed.cursor } : {}),
+      });
+      const hasMore = records.length > limit;
+      const page = hasMore ? records.slice(0, limit) : records;
+      const summaries = page.map(toOutputPackageSummaryDto);
+      // pendingDeliveries:committed 且有 provenance 但尚未形成 package 的交付(UI「交付处理中」)。
+      // 差集必须基于**全频道**已形成 publishId(分页会漏判后页已成形 package);taskId 过滤与 packages 一致。
+      const committedStagings = await repositories.workspacePublishStagings.listCommittedByChannel({
+        teamId: parsed.teamId,
+        channelId: parsed.channelId,
+        ...(parsed.taskId ? { taskId: parsed.taskId } : {}),
+      });
+      const formedPublishIds = new Set(
+        await repositories.outputPackages.listPackagePublishIdsByChannel({
+          teamId: parsed.teamId,
+          channelId: parsed.channelId,
+          ...(parsed.taskId ? { taskId: parsed.taskId } : {}),
+        }),
+      );
+      const pendingDeliveries: OutputPackagePendingDeliveryDto[] = committedStagings
+        .filter((staging) => staging.provenance && !formedPublishIds.has(staging.publishId))
+        .map((staging) => ({
+          publishId: staging.publishId,
+          workspaceRevisionId: staging.committedRevisionId ?? '',
+          agentId: staging.provenance!.agentId,
+          taskId: staging.provenance!.taskId,
+          taskAttempt: staging.provenance!.taskAttempt,
+          committedAt: staging.updatedAt,
+        }));
+      return makeSuccess({
+        packages: summaries,
+        pendingDeliveries,
+        ...(hasMore && page.length > 0
+          ? { nextCursor: { createdAt: page[page.length - 1]!.createdAt, packageId: page[page.length - 1]!.packageId } }
+          : {}),
+      });
+    },
+
+    async getOutputPackage(packageInput) {
+      // AC10:运行时 exact-key 校验(剥离注入字段后)。
+      const { userId, teamId, ...wireInput } = packageInput;
+      const parsed = parseOutputPackageQueryInputV1('get-output-package', wireInput) as typeof packageInput;
+      parsed.userId = userId;
+      parsed.teamId = teamId;
+      if (!(await repositories.teams.isMember(parsed.teamId, parsed.userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, parsed);
+      if (!access.ok) return access;
+      const result = await repositories.outputPackages.getPackageById({
+        teamId: parsed.teamId,
+        packageId: parsed.packageId,
+      });
+      if (!result || result.package.channelId !== packageInput.channelId) {
+        return makeFailure('NOT_FOUND', 'Output package not found');
+      }
+      return makeSuccess({ package: toOutputPackageDto(result.package, result.members) });
     },
 
     async createProjectDocumentBundle(bundleInput) {
@@ -15132,7 +15263,7 @@ function projectArtifactVersionDto(
     versionNumber: version.versionNumber,
     artifact: toArtifactDto(artifact),
     source: {
-      stageId: version.stageId,
+      ...(version.stageId === undefined ? {} : { stageId: version.stageId }),
       taskId: version.taskId,
       taskRevision: version.taskRevision,
       ...(version.sourceMessageId === undefined ? {} : { messageId: version.sourceMessageId }),
@@ -15159,6 +15290,69 @@ function projectArtifactReviewDto(record: ProjectArtifactReviewRecord): ProjectA
     comment: record.comment,
     basis: record.basis,
     reviewedBy: record.reviewedBy,
+    createdAt: record.createdAt,
+  };
+}
+
+// #1060 OutputPackage DTO 映射:record → 冻结的不可变投影(创建后成员/版本永不改写)。
+function toOutputPackageSummaryDto(record: OutputPackageRecord): OutputPackageSummaryDto {
+  return {
+    schemaVersion: 1,
+    packageId: record.packageId,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    revision: 1,
+    deliveryId: record.deliveryId,
+    publishId: record.publishId,
+    workspaceRevisionId: record.workspaceRevisionId,
+    agentId: record.agentId,
+    taskId: record.taskId,
+    taskBinding: record.taskBinding,
+    ...(record.taskRevision !== undefined ? { taskRevision: record.taskRevision } : {}),
+    taskAttempt: record.taskAttempt,
+    memberCount: record.memberCount,
+    status: 'recorded',
+    createdAt: record.createdAt,
+  };
+}
+
+function toOutputPackageDto(
+  record: OutputPackageRecord,
+  members: readonly OutputPackageMemberRecord[],
+): OutputPackageDto {
+  return {
+    schemaVersion: 1,
+    packageId: record.packageId,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    revision: 1,
+    deliveryId: record.deliveryId,
+    publishId: record.publishId,
+    workspaceRevisionId: record.workspaceRevisionId,
+    agentId: record.agentId,
+    taskId: record.taskId,
+    taskBinding: record.taskBinding,
+    ...(record.taskRevision !== undefined ? { taskRevision: record.taskRevision } : {}),
+    taskAttempt: record.taskAttempt,
+    ...(record.invocationId ? { invocationId: record.invocationId } : {}),
+    ...(record.workspaceRunId ? { workspaceRunId: record.workspaceRunId } : {}),
+    ...(record.claimLeaseId ? { claimLeaseId: record.claimLeaseId } : {}),
+    ...(record.deviceId ? { deviceId: record.deviceId } : {}),
+    members: members.map((member) => ({
+      packageId: record.packageId,
+      sequence: member.sequence,
+      shortLabel: member.shortLabel,
+      collectionId: member.collectionId,
+      artifactVersionId: member.artifactVersionId,
+      role: member.role,
+      requiredForFinal: member.requiredForFinal,
+      sourcePath: member.sourcePath,
+      filename: member.filename,
+      ...(member.sha256 ? { sha256: member.sha256 } : {}),
+      sizeBytes: member.sizeBytes,
+    })),
+    memberCount: record.memberCount,
+    status: 'recorded',
     createdAt: record.createdAt,
   };
 }

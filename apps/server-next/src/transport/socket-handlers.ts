@@ -576,6 +576,15 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  // #1060 OutputPackage 查询:讨论串/Task/Files 三处投影共用同一 Server 事实。
+  bind(socket, WEB_EVENTS.project.listOutputPackages, app, 'listOutputPackages', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
+  bind(socket, WEB_EVENTS.project.getOutputPackage, app, 'getOutputPackage', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   socket.on(WEB_EVENTS.project.importWorkspace, async (payload, ack) => {
     try {
       const result = await app.importProjectChannelWorkspace(payload as ImportProjectChannelWorkspaceInput);

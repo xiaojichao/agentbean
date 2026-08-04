@@ -359,11 +359,21 @@ for (const variant of variants) {
         teamId: seedValue.teamId, artifactId: revisionFile!.artifactId,
       });
       expect(artifact).toMatchObject({ pathKind: 'workspace', role: 'deliverable' });
-      // staging commit 不创建 ProjectArtifactVersion/OutputPackage,更不可能携带 review/current/final。
+      // #1060:committed 交付形成 ProjectArtifactVersion/OutputPackage(AC1),但目录名/pathKind
+      // 仍只是定位信息——版本不自动携带 review/final 语义(final 指针未设、无审核记录)。
       const version = await seedValue.repositories.channelProjects.getArtifactVersionByArtifact({
         teamId: seedValue.teamId, channelId: seedValue.channelId, artifactId: revisionFile!.artifactId,
       });
-      expect(version).toBeNull();
+      expect(version).not.toBeNull();
+      if (!version) return;
+      const collection = await seedValue.repositories.channelProjects.getArtifactCollection({
+        teamId: seedValue.teamId, channelId: seedValue.channelId, collectionId: version.collectionId,
+      });
+      expect(collection?.finalVersionId).toBeUndefined();
+      const reviews = await seedValue.repositories.channelProjects.listArtifactReviews({
+        teamId: seedValue.teamId, channelId: seedValue.channelId,
+      });
+      expect(reviews.some((review) => review.versionId === version.id)).toBe(false);
     });
   });
 }
