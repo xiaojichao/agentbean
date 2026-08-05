@@ -182,8 +182,10 @@ const DEFAULT_PRODUCTION_WEB_ORIGINS = ['https://agentbean.dev', 'https://www.ag
 const DEFAULT_LOCAL_WEB_ORIGINS = ['http://localhost:3100', 'http://localhost:4101'];
 
 export interface DispatchTimeoutSchedulerConfig {
-  /** 心跳失联阈值：dispatch 超过该时长无 dispatch:progress 心跳即判定 daemon 失联。 */
+  /** 心跳失联阈值：dispatch 超过该时长无 dispatch:progress 心跳即判定 daemon 失联（新 daemon）。 */
   heartbeatTimeoutMs: number;
+  /** 旧 daemon 兼容回退：从不发心跳的 dispatch（last_heartbeat_at 恒 null）按此绝对时长判定。 */
+  legacyTimeoutMs: number;
   intervalMs: number;
 }
 
@@ -380,7 +382,7 @@ export async function startServerNextDevServer(
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
-    input.dispatchTimeout ?? { heartbeatTimeoutMs: 90 * 1000, intervalMs: 5000 },
+    input.dispatchTimeout ?? { heartbeatTimeoutMs: 90 * 1000, legacyTimeoutMs: 10 * 60 * 1000, intervalMs: 5000 },
   );
   const coordinationScheduler = startCoordinationScheduler(
     app,
@@ -566,11 +568,14 @@ function startDispatchTimeoutScheduler(
   realtime: ServerNextRealtime,
   config: DispatchTimeoutSchedulerConfig,
 ): ReturnType<typeof setInterval> | null {
-  if (config.intervalMs <= 0 || config.heartbeatTimeoutMs <= 0) {
+  if (config.intervalMs <= 0 || config.heartbeatTimeoutMs <= 0 || config.legacyTimeoutMs <= 0) {
     return null;
   }
   return setInterval(async () => {
-    const result = await app.failTimedOutDispatches({ olderThan: Date.now() - config.heartbeatTimeoutMs });
+    const result = await app.failTimedOutDispatches({
+      heartbeatCutoff: Date.now() - config.heartbeatTimeoutMs,
+      legacyCutoff: Date.now() - config.legacyTimeoutMs,
+    });
     if (!result.ok) {
       return;
     }

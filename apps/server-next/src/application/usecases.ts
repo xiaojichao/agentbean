@@ -769,7 +769,7 @@ export interface ServerNextUseCases {
   getWorkspaceRunLogFile(input: GetWorkspaceRunInput): Promise<Ack<{ artifact: ArtifactDto; storagePath?: string }>>;
   listTeamWorkspaceRuns(input: ListTeamWorkspaceRunsInput): Promise<Ack<{ runs: TeamWorkspaceRunListItemDto[]; nextCursor?: string }>>;
   listAgentWorkspaceRuns(input: ListAgentWorkspaceRunsInput): Promise<Ack<{ runs: AgentWorkspaceRunListItemDto[] }>>;
-  failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
+  failTimedOutDispatches(input: { heartbeatCutoff: number; legacyCutoff: number }): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
   receiveDispatchProgress(input: ReceiveDispatchProgressInput): Promise<Ack<ReceiveDispatchProgressResult>>;
@@ -10414,7 +10414,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     async failTimedOutDispatches(timeoutInput) {
       const now = clock.now();
-      const pending = await repositories.dispatches.listPendingOlderThan(timeoutInput.olderThan);
+      const pending = await repositories.dispatches.listPendingOlderThan({
+        heartbeatCutoff: timeoutInput.heartbeatCutoff,
+        legacyCutoff: timeoutInput.legacyCutoff,
+      });
       const dispatches: DispatchDto[] = [];
       const tasks: TaskDto[] = [];
       for (const dispatch of pending) {

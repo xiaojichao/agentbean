@@ -375,7 +375,7 @@ export interface DispatchRepository {
   markFailed(input: { dispatchId: ID; error: string; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   markCancelled(input: { dispatchId: ID; completedAt: UnixMs }): Promise<DispatchMutationResult | null>;
   touchHeartbeat(input: { dispatchId: ID; at: UnixMs }): Promise<DispatchMutationResult | null>;
-  listPendingOlderThan(timestamp: UnixMs): Promise<DispatchRecord[]>;
+  listPendingOlderThan(input: { heartbeatCutoff: UnixMs; legacyCutoff: UnixMs }): Promise<DispatchRecord[]>;
   listByMessage(messageId: ID): Promise<DispatchRecord[]>;
   listByTeam(teamId: ID): Promise<DispatchRecord[]>;
 }

@@ -2141,15 +2141,18 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
         return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
       },
-      async listPendingOlderThan(timestamp) {
+      async listPendingOlderThan(input) {
         return teamDb
           .prepare(
             `SELECT * FROM dispatches
              WHERE status IN ('queued', 'sent', 'accepted', 'running')
-             AND COALESCE(last_heartbeat_at, updated_at) < ?
+             AND (
+               (last_heartbeat_at IS NOT NULL AND last_heartbeat_at < ?)
+               OR (last_heartbeat_at IS NULL AND updated_at < ?)
+             )
              ORDER BY updated_at`,
           )
-          .all(timestamp)
+          .all(input.heartbeatCutoff, input.legacyCutoff)
           .map((row) => {
             const dispatch = mapDispatch(row);
             if (!dispatch) {

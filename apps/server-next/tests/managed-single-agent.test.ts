@@ -131,7 +131,7 @@ describe('Phase 1 managed single-Agent vertical slice', () => {
     const invocationPromise = harness.execute(invokeRequest(harness, 'invoke-timeout'));
     await waitForDispatch(harness);
 
-    await expect(harness.app.failTimedOutDispatches({ olderThan: Number.MAX_SAFE_INTEGER }))
+    await expect(harness.app.failTimedOutDispatches({ heartbeatCutoff: Number.MAX_SAFE_INTEGER, legacyCutoff: Number.MAX_SAFE_INTEGER }))
       .resolves.toMatchObject({ ok: true, dispatches: [{ status: 'timed_out' }] });
     await expect(invocationPromise).resolves.toMatchObject({ ok: true, output: { status: 'timed_out' } });
     await expect(harness.repositories.management.runs.getById(harness.runId)).resolves.toMatchObject({ status: 'failed' });
