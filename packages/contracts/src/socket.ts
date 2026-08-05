@@ -386,6 +386,7 @@ export const AGENT_EVENTS = {
     accepted: 'dispatch:accepted',
     result: 'dispatch:result',
     error: 'dispatch:error',
+    progress: 'dispatch:progress',
   },
   managementWorker: {
     register: 'management-worker:register',

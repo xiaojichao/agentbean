@@ -53,6 +53,7 @@ export interface SocketIoClientLike {
   connect(): void;
   disconnect(): void;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
+  emit(event: string, payload: unknown): void;
   on(event: string, handler: (...args: unknown[]) => void): void;
   off?(event: string, handler: (...args: unknown[]) => void): void;
 }
@@ -241,6 +242,9 @@ export function createSocketIoDaemonSocket(socket: SocketIoClientLike): DaemonPr
     get connected() { return socket.connected; },
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
+    },
+    emit(event, payload) {
+      socket.emit(event, payload);
     },
     on(event, handler) {
       const runtimeHandler = (payload: unknown, ackLike?: unknown) => {

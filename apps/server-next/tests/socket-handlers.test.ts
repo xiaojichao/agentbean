@@ -1506,6 +1506,7 @@ describe('server-next socket handlers', () => {
       AGENT_EVENTS.dispatch.accepted,
       AGENT_EVENTS.dispatch.result,
       AGENT_EVENTS.dispatch.error,
+      AGENT_EVENTS.dispatch.progress,
     ]);
     // #823 Agent/Daemon 通道不暴露项目产物写入端点：产物事实只能由已认证人类会话写入。
     expect(socket.eventNames()).not.toContain(WEB_EVENTS.project.promoteArtifact);

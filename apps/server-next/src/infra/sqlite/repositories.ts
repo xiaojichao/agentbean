@@ -309,6 +309,9 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
   // #1066：Channel 归档审计记录（AC12）。只依赖 channels 表，无条件执行。
   applyMigration(db, 'team/0081_channel_archives.sql');
+  if (sqliteTableExists(db, 'dispatches')) {
+    applyMigration(db, 'team/0082_dispatch_heartbeat.sql');
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -2126,12 +2129,24 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
         return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
       },
+      async touchHeartbeat(input) {
+        const result = teamDb
+          .prepare(
+            `UPDATE dispatches
+             SET last_heartbeat_at = ?, updated_at = ?
+             WHERE id = ?
+             AND status IN ('accepted', 'running')`,
+          )
+          .run(input.at, input.at, input.dispatchId);
+        const dispatch = mapDispatch(teamDb.prepare('SELECT * FROM dispatches WHERE id = ?').get(input.dispatchId));
+        return dispatch ? { dispatch, changed: sqliteChanges(result) > 0 } : null;
+      },
       async listPendingOlderThan(timestamp) {
         return teamDb
           .prepare(
             `SELECT * FROM dispatches
              WHERE status IN ('queued', 'sent', 'accepted', 'running')
-             AND updated_at < ?
+             AND COALESCE(last_heartbeat_at, updated_at) < ?
              ORDER BY updated_at`,
           )
           .all(timestamp)
@@ -4632,6 +4647,7 @@ function mapDispatch(row: unknown): DispatchRecord | null {
     acceptedAt: sqliteNullableNumber(row, 'accepted_at'),
     completedAt: sqliteNullableNumber(row, 'completed_at'),
     error: sqliteNullableText(row, 'error_message'),
+    lastHeartbeatAt: sqliteNullableNumber(row, 'last_heartbeat_at'),
   };
 }
 

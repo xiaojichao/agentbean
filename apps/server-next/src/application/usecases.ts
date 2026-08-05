@@ -772,6 +772,7 @@ export interface ServerNextUseCases {
   failTimedOutDispatches(input: { olderThan: number }): Promise<Ack<{ dispatches: DispatchDto[]; tasks?: TaskDto[] }>>;
   receiveDispatchResult(input: ReceiveDispatchResultInput): Promise<Ack<ReceiveDispatchResultResult>>;
   receiveDispatchError(input: ReceiveDispatchErrorInput): Promise<Ack<ReceiveDispatchErrorResult>>;
+  receiveDispatchProgress(input: ReceiveDispatchProgressInput): Promise<Ack<ReceiveDispatchProgressResult>>;
   reactMessage(input: ReactMessageInput): Promise<Ack<{ messageId: string }>>;
   saveMessage(input: SaveMessageInput): Promise<Ack<{ messageId: string }>>;
   listSavedMessages(input: ListSavedMessagesInput): Promise<Ack<{ messages: MessageDto[] }>>;
@@ -1741,6 +1742,14 @@ export interface ReceiveDispatchErrorResult {
   dispatch: DispatchDto;
   task?: TaskDto;
 }
+
+export interface ReceiveDispatchProgressInput {
+  dispatchId: string;
+  agentId: string;
+  /** daemon 发送心跳的时间；server 以到达时刻为准（touchHeartbeat 用 clock.now()）。 */
+  sentAt?: number;
+}
+export type ReceiveDispatchProgressResult = { dispatchId: string };
 
 export interface ReactMessageInput {
   userId: string;
@@ -10413,9 +10422,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           continue;
         }
         const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(dispatch.id);
+        // 失联诊断：设备 online 却无心跳 → 进程卡（UNRESPONSIVE）；offline → 网络/关机（OFFLINE）。
+        const heartbeatAgent = await repositories.agents.getById(dispatch.agentId);
+        const device = heartbeatAgent?.deviceId ? await repositories.devices.getById(heartbeatAgent.deviceId) : null;
+        const disconnectError = device && device.status === 'online' ? 'DAEMON_UNRESPONSIVE' : 'DAEMON_OFFLINE';
         const timedOut = managedAttempt
-          ? await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'timed_out', error: 'DISPATCH_TIMEOUT' })
-          : await repositories.dispatches.markTimedOut({ dispatchId: dispatch.id, error: 'DISPATCH_TIMEOUT', completedAt: now });
+          ? await invocationGateway.completeAttempt({ dispatchId: dispatch.id, status: 'timed_out', error: disconnectError })
+          : await repositories.dispatches.markTimedOut({ dispatchId: dispatch.id, error: disconnectError, completedAt: now });
         if (timedOut?.changed) {
           const agent = await repositories.agents.getById(dispatch.agentId);
           if (agent && agent.status === 'busy') {
@@ -10431,7 +10444,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
               dispatchId: timedOut.dispatch.id,
               status: 'timed_out',
-              errorCode: 'DISPATCH_TIMEOUT',
+              errorCode: disconnectError,
             });
           }
           if (task) {
@@ -10444,6 +10457,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         dispatches,
         ...(tasks.length > 0 ? { tasks } : {}),
       });
+    },
+
+    async receiveDispatchProgress(input) {
+      const dispatch = await repositories.dispatches.getById(input.dispatchId);
+      if (!dispatch) {
+        return makeFailure('NOT_FOUND', 'Dispatch not found');
+      }
+      if (dispatch.agentId !== input.agentId) {
+        return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
+      }
+      if (!isPendingDispatchStatus(dispatch.status)) {
+        return makeSuccess({ dispatchId: input.dispatchId });
+      }
+      const now = clock.now();
+      await repositories.dispatches.touchHeartbeat({ dispatchId: input.dispatchId, at: now });
+      return makeSuccess({ dispatchId: input.dispatchId });
     },
 
     async receiveDispatchResult(resultInput) {
@@ -12865,6 +12894,7 @@ function toDispatchDto(dispatch: DispatchDto): DispatchDto {
     acceptedAt: dispatch.acceptedAt,
     completedAt: dispatch.completedAt,
     error: dispatch.error,
+    lastHeartbeatAt: dispatch.lastHeartbeatAt,
   };
 }
 

@@ -1079,6 +1079,7 @@ export function registerAgentSocketHandlers(
   });
   bind(socket, AGENT_EVENTS.dispatch.result, app, 'receiveDispatchResult', afterDispatchCompletion);
   bind(socket, AGENT_EVENTS.dispatch.error, app, 'receiveDispatchError', afterDispatchCompletion);
+  bind(socket, AGENT_EVENTS.dispatch.progress, app, 'receiveDispatchProgress');
   if (options.managementWorker) {
     bindManagementWorkerRegister(socket, AGENT_EVENTS.managementWorker.register, options.managementWorker.register);
     bindManagementWorkerPayload(socket, AGENT_EVENTS.managementWorker.leaseAcquire, 'lease-acquire', options.managementWorker.leaseAcquire);

@@ -182,7 +182,8 @@ const DEFAULT_PRODUCTION_WEB_ORIGINS = ['https://agentbean.dev', 'https://www.ag
 const DEFAULT_LOCAL_WEB_ORIGINS = ['http://localhost:3100', 'http://localhost:4101'];
 
 export interface DispatchTimeoutSchedulerConfig {
-  timeoutMs: number;
+  /** 心跳失联阈值：dispatch 超过该时长无 dispatch:progress 心跳即判定 daemon 失联。 */
+  heartbeatTimeoutMs: number;
   intervalMs: number;
 }
 
@@ -379,7 +380,7 @@ export async function startServerNextDevServer(
   const dispatchTimeoutInterval = startDispatchTimeoutScheduler(
     app,
     realtime,
-    input.dispatchTimeout ?? { timeoutMs: 5 * 60 * 1000, intervalMs: 5000 },
+    input.dispatchTimeout ?? { heartbeatTimeoutMs: 90 * 1000, intervalMs: 5000 },
   );
   const coordinationScheduler = startCoordinationScheduler(
     app,
@@ -565,11 +566,11 @@ function startDispatchTimeoutScheduler(
   realtime: ServerNextRealtime,
   config: DispatchTimeoutSchedulerConfig,
 ): ReturnType<typeof setInterval> | null {
-  if (config.intervalMs <= 0 || config.timeoutMs <= 0) {
+  if (config.intervalMs <= 0 || config.heartbeatTimeoutMs <= 0) {
     return null;
   }
   return setInterval(async () => {
-    const result = await app.failTimedOutDispatches({ olderThan: Date.now() - config.timeoutMs });
+    const result = await app.failTimedOutDispatches({ olderThan: Date.now() - config.heartbeatTimeoutMs });
     if (!result.ok) {
       return;
     }

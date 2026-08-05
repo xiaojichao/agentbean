@@ -1577,7 +1577,8 @@ describe('server-next SQLite repositories', () => {
 
       await expect(app.failTimedOutDispatches({ olderThan: 1001 })).resolves.toMatchObject({
         ok: true,
-        dispatches: [{ id: 'dispatch-1', status: 'timed_out', error: 'DISPATCH_TIMEOUT' }],
+        // agent 无 deviceId → 无法定位 device → 判 DAEMON_OFFLINE（心跳失联模型替代旧 DISPATCH_TIMEOUT）。
+        dispatches: [{ id: 'dispatch-1', status: 'timed_out', error: 'DAEMON_OFFLINE' }],
       });
       expect(teamDb.prepare('SELECT body FROM messages WHERE id = ?').get('message-1')).toEqual({ body: '@Codex hello' });
     } finally {

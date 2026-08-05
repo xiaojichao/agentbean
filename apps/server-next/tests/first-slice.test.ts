@@ -4578,6 +4578,44 @@ describe('server-next first-slice use cases', () => {
     });
   });
 
+  test('receiveDispatchProgress heartbeat keeps a long-running dispatch alive past absolute timeout', async () => {
+    let now = 1000;
+    const app = createInMemoryServerNext({
+      now: () => now,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1000,
+    });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+
+    // 任务远超任何「绝对时长」，但 daemon 持续心跳 → 看门狗（COALESCE(last_heartbeat_at, updated_at)）不判失联
+    now = 5000;
+    await app.receiveDispatchProgress({ dispatchId: 'dispatch-1', agentId: 'agent-1', sentAt: 5000 });
+    await expect(app.failTimedOutDispatches({ olderThan: 4000 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [],
+    });
+
+    // 停止心跳，推进过心跳阈值 → 判失联
+    now = 10000;
+    await expect(app.failTimedOutDispatches({ olderThan: 9000 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
+    });
+  });
+
   test('receiveDispatchResult accepts a late result after dispatch timeout and completes its task', async () => {
     let now = 1000;
     const app = createInMemoryServerNext({
