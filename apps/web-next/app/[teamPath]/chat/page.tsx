@@ -10,7 +10,7 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
-import { shouldHideTaskSystemMessage } from '@/lib/task-system-messages';
+import { shouldHideSystemMessage } from '@/lib/system-messages';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -1616,7 +1616,7 @@ export default function ChatPage() {
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
-  const visibleMessages = messages.filter((msg) => !shouldHideTaskSystemMessage(msg));
+  const visibleMessages = messages.filter((msg) => !shouldHideSystemMessage(msg));
   const messagesById = new Map<string, ChatMessage>();
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
@@ -2306,7 +2306,7 @@ export default function ChatPage() {
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                        replyCount={messages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
+                        replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
                       />
                     );
                   })}
