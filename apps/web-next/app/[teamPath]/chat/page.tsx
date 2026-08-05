@@ -15,7 +15,7 @@ import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
-import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
@@ -473,9 +473,9 @@ export default function ChatPage() {
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
     };
-    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string }) => {
+    const onDispatchStatus = (dispatch: { messageId: string; channelId: string; status: DispatchStatus; id?: string; error?: string }) => {
       if (dispatch.channelId === activeChannel) {
-        applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id);
+        applyDispatchStatus(activeChannel, dispatch.messageId, dispatch.status, dispatch.id, dispatch.error);
       }
     };
     const onPinnedUpdated = (payload: { teamId?: string; channelId?: string }) => {
@@ -4889,12 +4889,13 @@ function ChatBubble({
         }
         return undefined;
       })();
-      const hint = formatChannelDispatchFailureHint({
-        status: 'failed',
-        errorCode: msg.dispatchError
-          ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
-        detail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
-      });
+      const hint = formatChannelDispatchFailureHint(
+        buildFailedDispatchHintInput({
+          dispatchError: msg.dispatchError
+            ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
+          metaDispatchErrorDetail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
+        }),
+      );
       return (
         <div className="mt-2 flex items-start gap-1 text-xs text-red-500">
           <AlertCircle size={12} className="mt-0.5 shrink-0" />

@@ -6,7 +6,7 @@ import { useAgentBeanStore } from '@/lib/store';
 import { getResolvedServerUrl, getStoredAuthToken, getWebSocket, emitWithTimeout } from '@/lib/socket';
 import { WEB_EVENTS } from '@agentbean/contracts';
 import { messageSpeakerName } from '@/lib/display-names';
-import { formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
+import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
@@ -133,12 +133,13 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     }
     if (dispatch === 'cancelled') return <div className="mt-2 text-xs text-neutral-400">已取消</div>;
     if (dispatch === 'failed') {
-      const hint = formatChannelDispatchFailureHint({
-        status: 'failed',
-        errorCode: msg.dispatchError
-          ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
-        detail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
-      });
+      const hint = formatChannelDispatchFailureHint(
+        buildFailedDispatchHintInput({
+          dispatchError: msg.dispatchError
+            ?? (typeof meta?.dispatchError === 'string' ? meta.dispatchError : undefined),
+          metaDispatchErrorDetail: typeof meta?.dispatchErrorDetail === 'string' ? meta.dispatchErrorDetail : undefined,
+        }),
+      );
       return (
         <div className="mt-2 flex items-start gap-1 text-xs text-red-500">
           <AlertCircle size={12} className="mt-0.5 shrink-0" />
