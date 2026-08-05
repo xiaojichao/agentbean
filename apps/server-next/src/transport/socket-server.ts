@@ -22,6 +22,7 @@ import {
   type ManagementWorkerPayloadKind,
   type ManagementWorkerPayloadMapV1,
   type TaskClaimExpiredV1,
+  type WorkspaceRevisionCommittedPayload,
 } from '../../../../packages/contracts/src/index.js';
 import { normalizeAdapterKind } from '../../../../packages/domain/src/index.js';
 import {
@@ -46,6 +47,11 @@ export interface ServerNextRealtime {
   emitDispatchStatus(dispatch: unknown): void;
   /** #921 outbox 投递：通知能看到该 channel 的订阅者「有新消息，去 fetch」（轻量通知，无正文）。 */
   emitMessageDelivered(input: { teamId: string; channelId: string; messageId: string }): Promise<void>;
+  /**
+   * #1084 workspace revision commit fan-out：对频道在线 Agent 设备 fire-and-forget 通知。
+   * 用 .emit 不用 .emitWithAck——revision commit 已成功，无需 device ack，避免单台慢设备拖住 fan-out。
+   */
+  emitWorkspaceRevisionCommitted(payload: WorkspaceRevisionCommittedPayload): Promise<void>;
   dispatchRequest(dispatchId: string): Promise<void>;
   refreshAgents(teamId: string): Promise<void>;
   scheduleManagementRun(input: ScheduleManagementRunInput): Promise<ScheduleManagementRunResult>;
@@ -959,6 +965,21 @@ export function attachServerNextNamespaces(
     },
     async emitMessageDelivered(delivery) {
       await emitDeliveredToSubscribers(webSubscribers, app, delivery);
+    },
+    async emitWorkspaceRevisionCommitted(payload) {
+      // #1084 fan-out：解析频道 Agent 成员 deviceId → 与在线 socket 取交集 → fire-and-forget。
+      // 失败/无在线设备不抛错（at-least-once 由 daemon 重连 reconcile 兜底）。
+      try {
+        const deviceIds = await app.resolveChannelAgentDeviceIds({
+          teamId: payload.teamId,
+          channelId: payload.channelId,
+        });
+        for (const deviceId of deviceIds) {
+          agentSocketsByDeviceId.get(deviceId)?.emit?.(AGENT_EVENTS.workspace.revisionCommitted, payload);
+        }
+      } catch {
+        // best-effort：fan-out 失败不阻塞 commit 结果。
+      }
     },
     async dispatchRequest(dispatchId) {
       const result = await app.getDispatchRequest({ dispatchId });
