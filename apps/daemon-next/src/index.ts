@@ -34,6 +34,7 @@ import {
 import { uploadArtifacts } from './artifact-uploader.js';
 import { selectNativeDirectory } from './directory-picker.js';
 import { listDirectory, productionListDirectoryDeps, createListDirectoryRateLimiter } from './directory-lister.js';
+import { readFile, productionReadFileDeps, createReadFileRateLimiter } from './file-reader.js';
 import { scanCustomAgentSkills } from './skill-scanner.js';
 import { scanAgentDescriptor } from './descriptor-scanner.js';
 import { createTaskClaimProtocol, type ManagementWorkerProtocolSocket } from './management-worker-protocol.js';
@@ -809,6 +810,36 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           ack?.(result);
         } catch (err) {
           ack?.({ ok: false, error: err instanceof Error ? err.message : 'directory list failed' });
+        }
+      });
+
+      // #1084 切片3 fs:read：web→server 转发来的本机 snapshots 单文件读请求。
+      // 安全闸在 file-reader 内（readpath 白名单 = snapshots 子树 + realpath 防符号链接 + 大小上限）；
+      // 此处再加单连接限速（类比 listDirectory，防批量拉取）。读字节比列名敏感，readpath 用白名单而非 denylist。
+      const readFileRateLimiter = createReadFileRateLimiter({
+        max: 20,
+        windowMs: 1000,
+        now: () => Date.now(),
+      });
+      socket.on(AGENT_EVENTS.device.readFileRequested, async (payload: unknown, ack?: (result: unknown) => void) => {
+        try {
+          if (!readFileRateLimiter.allow()) {
+            ack?.({ ok: false, error: 'RATE_LIMITED' });
+            return;
+          }
+          const p = (payload as { teamId?: unknown; channelId?: unknown; revisionId?: unknown; path?: unknown } | null) ?? {};
+          const teamId = typeof p.teamId === 'string' ? p.teamId : '';
+          const channelId = typeof p.channelId === 'string' ? p.channelId : '';
+          const revisionId = typeof p.revisionId === 'string' ? p.revisionId : '';
+          const path = typeof p.path === 'string' ? p.path : '';
+          if (!teamId || !channelId || !revisionId || !path) {
+            ack?.({ ok: false, error: 'OUTSIDE_SNAPSHOTS' });
+            return;
+          }
+          const result = await readFile({ teamId, channelId, revisionId, path }, productionReadFileDeps());
+          ack?.(result);
+        } catch (err) {
+          ack?.({ ok: false, error: err instanceof Error ? err.message : 'file read failed' });
         }
       });
 

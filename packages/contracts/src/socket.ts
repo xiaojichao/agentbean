@@ -143,6 +143,11 @@ export const WEB_EVENTS = {
     delete: 'device:delete',
     selectDirectory: 'device:select-directory',
     listDirectory: 'device:list-directory',
+    /**
+     * #1084 切片3：web→server 请求读本机 .agentbean snapshots 副本（频道文件预览/下载优先本机）。
+     * server 转发为 device:read-file-requested 到 daemon，daemon 读 snapshots/<revisionId>/<path> 字节。
+     */
+    readFile: 'device:read-file',
     // web→server：请求 daemon 扫描指定目录的 AGENTS.md/CLAUDE.md descriptor（表单 cwd 选定后）。
     scanDescriptor: 'device:scan-descriptor',
   },
@@ -369,6 +374,11 @@ export const AGENT_EVENTS = {
     scanRequested: 'device:scan-requested',
     selectDirectoryRequested: 'device:select-directory-requested',
     listDirectoryRequested: 'device:list-directory-requested',
+    /**
+     * #1084 切片3：server→daemon 请求读 snapshots/<revisionId>/<path> 字节（web 频道文件预览/下载本机优先）。
+     * daemon 在 file-reader 内 readpath 白名单限定 snapshots 子树，越界 → OUTSIDE_SNAPSHOTS。
+     */
+    readFileRequested: 'device:read-file-requested',
     // 服务端→daemon：扫描指定目录的 AGENTS.md/CLAUDE.md descriptor（web 表单 cwd 选定后触发）。
     scanDescriptorRequested: 'device:scan-descriptor-requested',
     // 服务端→daemon 单向通知：该设备已被删除，daemon 应回收重连并退出进程。
@@ -467,6 +477,28 @@ export interface ScanDescriptorRequest {
   cwd: string;
   adapterKind: string;
 }
+
+/**
+ * #1084 切片3：web→server→daemon 请求读本机 snapshots 副本单文件字节。
+ * - teamId/channelId/revisionId 定位 snapshots root（channelProjectionRoot/snapshots/<revisionId>/）。
+ * - path 是相对该 root 的 POSIX 相对路径（daemon 内 readpath 白名单会再校验，越界 → OUTSIDE_SNAPSHOTS）。
+ */
+export interface ReadFileRequestDto {
+  deviceId: string;
+  teamId: string;
+  channelId: string;
+  revisionId: string;
+  path: string;
+}
+
+/**
+ * #1084 切片3 readFile 回包。
+ * - ok 时附 contentBase64 + sizeBytes；sha256 可选（daemon 计算回传，web 与 server artifact.sha256 比对判本机是否最新）。
+ * - 失败码：OUTSIDE_SNAPSHOTS（readpath 白名单越界，专用）/ PATH_NOT_FOUND / PERMISSION_DENIED / RATE_LIMITED。
+ */
+export type ReadFileResultDto =
+  | { ok: true; contentBase64: string; sizeBytes: number; sha256?: string }
+  | { ok: false; error: 'PATH_NOT_FOUND' | 'PERMISSION_DENIED' | 'RATE_LIMITED' | 'OUTSIDE_SNAPSHOTS' };
 
 /** daemon→server：descriptor 扫描结果上报。 */
 export interface ReportDescriptorPayload {

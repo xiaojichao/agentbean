@@ -114,6 +114,16 @@ export interface ListDirectoryForwardResult {
   error?: string;
 }
 
+// #1084 切片3 server 转发 fs:read 到 daemon 后回传的结果形状（与 daemon file-reader 返回对齐）。
+// 同样走 assertCanManageDevice 门控（读字节比列名敏感，不放宽）。
+export interface ReadFileForwardResult {
+  ok: boolean;
+  contentBase64?: string;
+  sizeBytes?: number;
+  sha256?: string;
+  error?: string;
+}
+
 // server 转发 device:scan-descriptor 到 daemon 后回传的结果形状（daemon descriptor-scanner 返回对齐）。
 export interface ScanDescriptorForwardResult {
   ok: boolean;
@@ -135,6 +145,7 @@ export interface WebSocketHandlerOptions {
   deviceScan?(request: DeviceScanEmitRequest): void;
   deviceSelectDirectory?(request: { deviceId: string }): Promise<{ ok: boolean; path?: string; error?: string }>;
   deviceListDirectory?(request: { deviceId: string; path: string }): Promise<ListDirectoryForwardResult>;
+  deviceReadFile?(request: { deviceId: string; teamId: string; channelId: string; revisionId: string; path: string }): Promise<ReadFileForwardResult>;
   deviceScanDescriptor?(request: { deviceId: string; cwd: string; adapterKind: string }): Promise<ScanDescriptorForwardResult>;
   afterMessageSend?(payload: unknown, result: unknown): Promise<void> | void;
   afterMessagePin?(payload: unknown, result: unknown): Promise<void> | void;
@@ -412,6 +423,43 @@ export function registerWebSocketHandlers(
       ack?.(result);
     } catch (error) {
       ack?.(socketErrorAck(error, WEB_EVENTS.device.listDirectory));
+    }
+  });
+  socket.on(WEB_EVENTS.device.readFile, async (payload, ack) => {
+    try {
+      const input = await withAuthenticatedUserId(payload, { authenticatedUser: options.authenticatedUser });
+      const deviceId = (input as { deviceId?: string } | null)?.deviceId;
+      if (!deviceId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'deviceId is required'));
+        return;
+      }
+      const userId = (input as { userId?: string } | null)?.userId;
+      if (!userId) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'userId is required'));
+        return;
+      }
+      const teamId = (input as { teamId?: string } | null)?.teamId;
+      const channelId = (input as { channelId?: string } | null)?.channelId;
+      const revisionId = (input as { revisionId?: string } | null)?.revisionId;
+      const path = (input as { path?: string } | null)?.path;
+      if (!teamId || !channelId || !revisionId || !path) {
+        ack?.(makeFailure('VALIDATION_ERROR', 'teamId, channelId, revisionId and path are required'));
+        return;
+      }
+      // 与 fs:list 同门控：读字节比列名敏感，仅设备拥有者/系统管理员（不放宽）。
+      const deviceAccess = await app.assertCanManageDevice({ userId, deviceId });
+      if (!isSuccessResult(deviceAccess)) {
+        ack?.(deviceAccess);
+        return;
+      }
+      if (!options.deviceReadFile) {
+        ack?.(makeFailure('INTERNAL_ERROR', 'deviceReadFile not configured'));
+        return;
+      }
+      const result = await options.deviceReadFile({ deviceId, teamId, channelId, revisionId, path });
+      ack?.(result);
+    } catch (error) {
+      ack?.(socketErrorAck(error, WEB_EVENTS.device.readFile));
     }
   });
   socket.on(WEB_EVENTS.device.scanDescriptor, async (payload, ack) => {
