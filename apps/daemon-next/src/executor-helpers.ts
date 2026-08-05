@@ -6,6 +6,7 @@
 // downloadable log artifacts. Every spawn path — pipe or PTY — must go through buildChildEnv.
 
 import { spawnSync } from 'node:child_process';
+import { executableSearchDirs } from './executable-paths.js';
 
 export const SAFE_ENV_KEYS = new Set([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LANGUAGE', 'TZ', 'TMPDIR', 'SHELL',
@@ -126,32 +127,10 @@ function candidateNodeBinDirs(home: string | undefined, commandPath: string | un
       push(commandPath.slice(0, lastSlash));
     }
   }
-  if (home) {
-    push(`${home}/Library/pnpm`);
-    push(`${home}/.local/share/pnpm`);
-    push(`${home}/.local/bin`);
-    push(`${home}/.nvm/current/bin`);
-    // nvm versions: pick newest-ish by scanning shallowly without throwing
-    try {
-      const nvmVersions = `${home}/.nvm/versions/node`;
-      // Lazy require-free fs via spawnSync ls — keep this module free of fs import churn.
-      const listed = spawnSync('/bin/ls', ['-1', nvmVersions], { encoding: 'utf8', timeout: 2_000 });
-      if (listed.status === 0 && listed.stdout) {
-        const versions = listed.stdout.split('\n').map((s) => s.trim()).filter(Boolean).sort().reverse();
-        for (const v of versions.slice(0, 5)) {
-          push(`${nvmVersions}/${v}/bin`);
-        }
-      }
-    } catch {
-      // ignore
-    }
-    push(`${home}/.fnm/current/bin`);
-    push(`${home}/.volta/bin`);
-    push(`${home}/.asdf/shims`);
-    push(`${home}/.local/share/mise/shims`);
+  // 版本管理器与常见工具链 bin 目录与 scanner 共用 executableSearchDirs，避免分叉。
+  for (const dir of executableSearchDirs(home)) {
+    push(dir);
   }
-  push('/opt/homebrew/bin');
-  push('/usr/local/bin');
   return dirs;
 }
 
