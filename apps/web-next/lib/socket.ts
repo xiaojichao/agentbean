@@ -818,6 +818,17 @@ export interface DeviceEvents {
   scan(deviceId: string): Promise<{ ok: boolean; error?: string }>;
   selectDirectory(deviceId: string): Promise<{ ok: boolean; path?: string; error?: string }>;
   listDirectory(deviceId: string, path: string): Promise<{ ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string; truncated?: boolean }>;
+  /**
+   * #1084 切片3：读本机 .agentbean snapshots 副本字节（频道文件预览/下载本机优先）。
+   * 失败/离线/越界由调用方静默回退 server artifact download URL。
+   */
+  readFile(deviceId: string, teamId: string, channelId: string, revisionId: string, path: string): Promise<{
+    ok: boolean;
+    contentBase64?: string;
+    sizeBytes?: number;
+    sha256?: string;
+    error?: string;
+  }>;
   scanDescriptor(deviceId: string, cwd: string, adapterKind: string): Promise<{
     ok: boolean;
     descriptor?: {
@@ -858,6 +869,9 @@ export function deviceEvents(socket: Socket = getWebSocket()): DeviceEvents {
     },
     listDirectory(deviceId, path) {
       return emitWithTimeout(socket, WEB_EVENTS.device.listDirectory, { deviceId, path }, 15000);
+    },
+    readFile(deviceId, teamId, channelId, revisionId, path) {
+      return emitWithTimeout(socket, WEB_EVENTS.device.readFile, { deviceId, teamId, channelId, revisionId, path }, 20000);
     },
     scanDescriptor(deviceId, cwd, adapterKind) {
       return emitWithTimeout(socket, WEB_EVENTS.device.scanDescriptor, { deviceId, cwd, adapterKind }, 20000);

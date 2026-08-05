@@ -86,6 +86,8 @@ const INTERNAL_SOCKET_ERROR_MESSAGE = 'Internal server error';
 const DEVICE_SELECT_DIRECTORY_TIMEOUT_MS = 125_000;
 // fs:list 是单次 readdir，比 selectDirectory 的 GUI 弹窗（等用户操作）短得多。
 const DEVICE_LIST_DIRECTORY_TIMEOUT_MS = 10_000;
+// #1084 切片3 fs:read 单文件字节读（最大 10MB），给稍宽于 readdir 的窗口。
+const DEVICE_READ_FILE_TIMEOUT_MS = 15_000;
 const DEVICE_MEMORY_SUMMARY_TIMEOUT_MS = 10_000;
 
 interface WebSocketSubscription {
@@ -459,6 +461,27 @@ export function attachServerNextNamespaces(
           return result as { ok: boolean; entries?: Array<{ name: string; isDir: boolean }>; homePath?: string; error?: string };
         } catch {
           return { ok: false, error: 'DIRECTORY_LIST_TIMEOUT' };
+        }
+      },
+      async deviceReadFile(request) {
+        const socket = agentSocketsByDeviceId.get(request.deviceId);
+        if (!socket?.emitWithAck) {
+          return { ok: false, error: 'DEVICE_OFFLINE' };
+        }
+        try {
+          const ackSocket = socket.timeout?.(DEVICE_READ_FILE_TIMEOUT_MS) ?? socket;
+          if (!ackSocket.emitWithAck) {
+            return { ok: false, error: 'DEVICE_OFFLINE' };
+          }
+          const result = await ackSocket.emitWithAck(AGENT_EVENTS.device.readFileRequested, {
+            teamId: request.teamId,
+            channelId: request.channelId,
+            revisionId: request.revisionId,
+            path: request.path,
+          });
+          return result as { ok: boolean; contentBase64?: string; sizeBytes?: number; sha256?: string; error?: string };
+        } catch {
+          return { ok: false, error: 'READ_FILE_TIMEOUT' };
         }
       },
       async deviceScanDescriptor(request) {

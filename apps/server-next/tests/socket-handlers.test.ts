@@ -188,6 +188,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.device.delete,
       WEB_EVENTS.device.selectDirectory,
       WEB_EVENTS.device.listDirectory,
+      WEB_EVENTS.device.readFile,
       WEB_EVENTS.device.scanDescriptor,
       WEB_EVENTS.channel.create,
       WEB_EVENTS.channel.update,
@@ -1479,6 +1480,83 @@ describe('server-next socket handlers', () => {
     });
 
     expect(deviceListDirectory).toHaveBeenCalledWith({ deviceId: 'device-1', path: '/Users/shaw' });
+  });
+
+  test('device read-file checks device manage permission before forwarding to daemon', async () => {
+    // #1084 切片3 fs:read 读字节比列名敏感，同 fs:list 门控（拥有者/系统管理员），不放宽。
+    const socket = new FakeSocket();
+    const deviceReadFile = vi.fn(async () => makeSuccess({ contentBase64: 'AAA=', sizeBytes: 1, sha256: 'abc' }));
+    const app = {
+      assertCanManageDevice: vi.fn(async () => makeFailure('FORBIDDEN', 'User cannot manage device')),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceReadFile });
+
+    await expect(socket.trigger(WEB_EVENTS.device.readFile, {
+      userId: 'user-1',
+      deviceId: 'device-2',
+      teamId: 'team-1',
+      channelId: 'chan-1',
+      revisionId: 'rev-1',
+      path: 'report.md',
+    })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+
+    expect(app.assertCanManageDevice).toHaveBeenCalledWith({ userId: 'user-1', deviceId: 'device-2' });
+    expect(deviceReadFile).not.toHaveBeenCalled();
+  });
+
+  test('device read-file forwards team/channel/revision/path to daemon after permission succeeds', async () => {
+    const socket = new FakeSocket();
+    const deviceReadFile = vi.fn(async () => makeSuccess({
+      contentBase64: 'aGVsbG8=',
+      sizeBytes: 5,
+      sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    }));
+    const app = {
+      assertCanManageDevice: vi.fn(async () => makeSuccess({ deviceId: 'device-1' })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceReadFile });
+
+    await expect(socket.trigger(WEB_EVENTS.device.readFile, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      channelId: 'chan-1',
+      revisionId: 'rev-1',
+      path: 'report.md',
+    })).resolves.toMatchObject({
+      ok: true,
+      contentBase64: 'aGVsbG8=',
+      sizeBytes: 5,
+    });
+
+    expect(deviceReadFile).toHaveBeenCalledWith({
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      channelId: 'chan-1',
+      revisionId: 'rev-1',
+      path: 'report.md',
+    });
+  });
+
+  test('device read-file rejects when required fields missing', async () => {
+    const socket = new FakeSocket();
+    const deviceReadFile = vi.fn(async () => makeSuccess({ contentBase64: 'AAA=', sizeBytes: 1 }));
+    const app = {
+      assertCanManageDevice: vi.fn(async () => makeSuccess({ deviceId: 'device-1' })),
+    } as unknown as ServerNextUseCases;
+
+    registerWebSocketHandlers(socket, app, { deviceReadFile });
+
+    await expect(socket.trigger(WEB_EVENTS.device.readFile, {
+      userId: 'user-1',
+      deviceId: 'device-1',
+      teamId: 'team-1',
+      // channelId / revisionId / path 缺失
+    })).resolves.toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+
+    expect(deviceReadFile).not.toHaveBeenCalled();
   });
 
   test('registers first-slice agent events and forwards payloads to use cases', async () => {

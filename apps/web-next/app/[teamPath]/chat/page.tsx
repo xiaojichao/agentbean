@@ -8,6 +8,7 @@ import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDoc
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
+import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { shouldHideSystemMessage } from '@/lib/system-messages';
@@ -3650,6 +3651,7 @@ function ConversationFiles({
                 <ChatArtifactPreview
                   artifact={file.artifact}
                   teamId={file.artifact.teamId}
+                  channelId={file.artifact.channelId}
                   editable={file.senderKind === 'agent'}
                   onEdit={() => onEditArtifact(file.artifact, file.documentId)}
                 />
@@ -5080,6 +5082,7 @@ function ChatBubble({
                 key={artifact.id}
                 artifact={artifact}
                 teamId={msg.teamId}
+                channelId={msg.channelId}
                 editable={msg.senderKind === 'agent'}
                 onEdit={() => onEditArtifact(artifact)}
               />
@@ -5905,16 +5908,20 @@ function sortModeLabel(mode: SidebarSortMode): string {
 function ChatArtifactPreview({
   artifact,
   teamId,
+  channelId,
   onEdit,
   editable,
 }: {
   artifact: Artifact;
   teamId?: string;
+  channelId?: string;
   onEdit?: () => void;
   editable?: boolean;
 }) {
-  const previewUrl = messageArtifactUrl(artifact, 'preview', teamId);
-  const downloadUrl = messageArtifactUrl(artifact, 'download', teamId);
+  // #1084 切片3：预览/下载字节优先读本机 .agentbean snapshots 副本，失败/离线/版本不匹配回退 server。
+  const serverPreviewUrl = messageArtifactUrl(artifact, 'preview', teamId);
+  const serverDownloadUrl = messageArtifactUrl(artifact, 'download', teamId);
+  const { previewUrl, downloadUrl } = useLocalFirstArtifactUrls(artifact, serverPreviewUrl, serverDownloadUrl, channelId);
   return <div className="space-y-1">
     <ArtifactCard
       artifact={artifact}
