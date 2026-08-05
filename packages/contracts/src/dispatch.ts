@@ -142,6 +142,8 @@ export interface DispatchDto {
   acceptedAt?: UnixMs;
   completedAt?: UnixMs;
   error?: string;
+  /** 最后一次 dispatch:progress 心跳时间；用于失联判定（null 表示尚无心跳，回退 updatedAt）。 */
+  lastHeartbeatAt?: UnixMs;
 }
 
 export interface DispatchHistoryItemDto extends DispatchDto {

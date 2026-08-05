@@ -10,6 +10,11 @@ describe('formatChannelDispatchFailureHint', () => {
     expect(formatChannelDispatchFailureHint({ status: 'timed_out' })).toContain('超时');
   });
 
+  test('timed_out + DAEMON_OFFLINE/UNRESPONSIVE 显示设备失联（而非模糊超时）', () => {
+    expect(formatChannelDispatchFailureHint({ status: 'timed_out', errorCode: 'DAEMON_OFFLINE' })).toContain('离线');
+    expect(formatChannelDispatchFailureHint({ status: 'timed_out', errorCode: 'DAEMON_UNRESPONSIVE' })).toContain('无响应');
+  });
+
   test('classifies usage limit from codex JSONL detail', () => {
     const classified = classifyChannelDispatchFailure({
       status: 'failed',

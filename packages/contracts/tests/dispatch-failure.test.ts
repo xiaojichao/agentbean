@@ -45,4 +45,14 @@ describe('classifyDispatchFailure', () => {
     expect(classifyDispatchFailure({ errorCode: 'WORKSPACE_RUN_FAILED' }).summary).toContain('执行失败');
     expect(classifyDispatchFailure({ errorCode: 'WORKSPACE_RUN_CANCELLED' }).category).toBe('workspace_run_cancelled');
   });
+
+  test('classifies daemon disconnection by error code (offline vs unresponsive)', () => {
+    expect(classifyDispatchFailure({ errorCode: 'DAEMON_OFFLINE' })).toMatchObject({
+      category: 'daemon_disconnected',
+      summary: expect.stringContaining('离线'),
+    });
+    expect(classifyDispatchFailure({ errorCode: 'DAEMON_UNRESPONSIVE' }).summary).toContain('无响应');
+    expect(classifyDispatchFailure({ errorCode: 'DAEMON_UNRESPONSIVE' }).category).toBe('daemon_disconnected');
+    expect(classifyDispatchFailure({ errorCode: 'DAEMON_DISCONNECTED' }).category).toBe('daemon_disconnected');
+  });
 });

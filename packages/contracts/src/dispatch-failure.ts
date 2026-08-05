@@ -19,6 +19,7 @@ export type DispatchFailureCategory =
   | 'pty_unavailable'
   | 'workspace_run_failed'
   | 'workspace_run_cancelled'
+  | 'daemon_disconnected'
   | 'unknown';
 
 export interface ClassifiedDispatchFailure {
@@ -144,6 +145,27 @@ export function classifyDispatchFailure(
   const detail = input.detail?.trim() ?? '';
   const status = input.status;
 
+  if (errorCode === 'DAEMON_OFFLINE') {
+    return {
+      category: 'daemon_disconnected',
+      summary: '设备离线，Agent 已停止等待',
+      guidance: '设备网络中断或已关机。请确认设备在线（agentbean device status）后重试。',
+    };
+  }
+  if (errorCode === 'DAEMON_UNRESPONSIVE') {
+    return {
+      category: 'daemon_disconnected',
+      summary: '设备在线但 Agent 无响应',
+      guidance: 'Agent 进程可能卡住。请重启 Device Service 或执行 agentbean device restart 后重试。',
+    };
+  }
+  if (errorCode === 'DAEMON_DISCONNECTED') {
+    return {
+      category: 'daemon_disconnected',
+      summary: '设备失联，Agent 已停止等待',
+      guidance: '请检查设备在线状态（agentbean device status）后重试。',
+    };
+  }
   if (status === 'timed_out' || errorCode === 'DISPATCH_TIMEOUT') {
     return {
       category: 'dispatch_timeout',

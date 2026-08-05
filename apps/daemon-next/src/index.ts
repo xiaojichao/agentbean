@@ -226,6 +226,28 @@ export interface DaemonProtocolSocket {
   off?(event: string, handler: (payload: unknown, ack?: (result: unknown) => void) => Promise<void>): void;
   onReconnect?(handler: () => Promise<void>): void;
   onDisconnect?(handler: () => Promise<void>): void;
+  /** fire-and-forget 上行（用于心跳等可丢消息；断线期间不缓冲）。 */
+  emit(event: string, payload: unknown): void;
+}
+
+/** dispatch 执行期心跳间隔：向 server 证明 agent 仍在处理任务，避免被误判失联超时。 */
+const DISPATCH_HEARTBEAT_INTERVAL_MS = 20 * 1000;
+
+/** 在 run() 执行期间周期发 dispatch:progress 心跳；无论成功/失败都清 interval。 */
+async function runExecutorWithHeartbeat<T>(
+  socket: DaemonProtocolSocket,
+  dispatchId: string,
+  agentId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const heartbeat = setInterval(() => {
+    socket.emit(AGENT_EVENTS.dispatch.progress, { dispatchId, agentId, sentAt: Date.now() });
+  }, DISPATCH_HEARTBEAT_INTERVAL_MS);
+  try {
+    return await run();
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 export interface DaemonWorkspaceRunResult {
@@ -890,7 +912,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             request,
             profileId: device.profileId,
           });
-          const result = normalizeDispatchResult(await executor(request));
+          const result = normalizeDispatchResult(await runExecutorWithHeartbeat(socket, request.id, request.agentId, () => executor(request)));
           if (cancelledDispatchIds.delete(request.id)) {
             return;
           }

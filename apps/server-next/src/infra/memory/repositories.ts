@@ -1496,6 +1496,22 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         dispatches.set(input.dispatchId, updated);
         return { dispatch: updated, changed: true };
       },
+      async touchHeartbeat(input) {
+        const dispatch = dispatches.get(input.dispatchId);
+        if (!dispatch) {
+          return null;
+        }
+        if (dispatch.status !== 'accepted' && dispatch.status !== 'running') {
+          return { dispatch, changed: false };
+        }
+        const updated = {
+          ...dispatch,
+          lastHeartbeatAt: input.at,
+          updatedAt: input.at,
+        };
+        dispatches.set(input.dispatchId, updated);
+        return { dispatch: updated, changed: true };
+      },
       async listPendingOlderThan(timestamp) {
         return Array.from(dispatches.values()).filter(
           (dispatch) =>
@@ -1503,7 +1519,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
               dispatch.status === 'sent' ||
               dispatch.status === 'accepted' ||
               dispatch.status === 'running') &&
-            dispatch.updatedAt < timestamp,
+            (dispatch.lastHeartbeatAt ?? dispatch.updatedAt) < timestamp,
         );
       },
       async listByMessage(messageId) {

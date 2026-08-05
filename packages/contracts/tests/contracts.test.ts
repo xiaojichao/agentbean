@@ -465,6 +465,7 @@ describe('first-slice contract result shape', () => {
     expect(AGENT_EVENTS.deviceInvite.wait).toBe('device-invite:wait');
     expect(AGENT_EVENTS.deviceInvite.credentials).toBe('device-invite:credentials');
     expect(AGENT_EVENTS.dispatch.request).toBe('dispatch:request');
+    expect(AGENT_EVENTS.dispatch.progress).toBe('dispatch:progress');
   });
 
   test('exposes only Team terminology for collaboration-space events', () => {

@@ -49,6 +49,7 @@ export interface PreviewSocketLike {
   connect(): void;
   disconnect(): void;
   emitWithAck(event: string, payload: unknown): Promise<unknown>;
+  emit(event: string, payload: unknown): void;
   on(event: string, handler: (...args: unknown[]) => void): void;
 }
 
@@ -213,6 +214,9 @@ function createDaemonSocket(socket: PreviewSocketLike): DaemonProtocolSocket {
     },
     emitWithAck(event, payload) {
       return socket.emitWithAck(event, payload);
+    },
+    emit(event, payload) {
+      socket.emit(event, payload);
     },
     on(event, handler) {
       socket.on(event, (payload, ack) => {
