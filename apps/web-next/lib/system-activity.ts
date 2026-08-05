@@ -120,20 +120,6 @@ export function buildAckChangeFeedCursorPayload(recipientId: string, cursor: str
   };
 }
 
-/**
- * PI / legacy coordination 呈现守卫：禁止聊天气泡与成员伪装。
- */
-export function shouldRenderAsSystemActivity(input: {
-  actorKind?: string;
-  senderKind?: string;
-  isCoordinationMessage?: boolean;
-}): boolean {
-  if (input.isCoordinationMessage) return false;
-  if (input.senderKind === 'pi' || input.senderKind === 'pi_manager') return false;
-  if (input.actorKind && input.actorKind !== 'system') return false;
-  return true;
-}
-
 export function activityLevelLabel(level: SystemActivityLevel): string {
   switch (level) {
     case 'info':

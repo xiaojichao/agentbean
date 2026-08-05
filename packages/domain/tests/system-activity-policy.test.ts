@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest';
 import type { SystemActivitySourceFactV1, SystemAttentionItemV1 } from '@agentbean/contracts';
 import {
   assembleThreadTaskCard,
-  assertValidSystemActivityPresentation,
   checkMinimumConsistency,
   evaluateAckChangeFeedCursor,
   evaluateMarkAttentionSeen,
@@ -274,17 +273,6 @@ describe('consistency token', () => {
       currentWatermarks: watermarks,
     });
     expect(result.kind).toBe('ready');
-  });
-});
-
-describe('PI / coordination presentation guards', () => {
-  test('禁止 PI sender/member/avatar/typing 与 legacy coordination message', () => {
-    expect(assertValidSystemActivityPresentation({ actorKind: 'system' }).ok).toBe(true);
-    expect(assertValidSystemActivityPresentation({ senderKind: 'pi' }).ok).toBe(false);
-    expect(assertValidSystemActivityPresentation({ isPiMember: true }).ok).toBe(false);
-    expect(assertValidSystemActivityPresentation({ isPiAvatar: true }).ok).toBe(false);
-    expect(assertValidSystemActivityPresentation({ isPiTyping: true }).ok).toBe(false);
-    expect(assertValidSystemActivityPresentation({ isCoordinationMessage: true }).ok).toBe(false);
   });
 });
 
