@@ -282,12 +282,12 @@ import {
   type ProjectCollaborationRolloutConfig,
 } from './project-collaboration-rollout.js';
 import { createActiveMemoryContextResolver } from './active-memory-context-resolver.js';
-import { attemptOutputPackageFormation } from './output-package-handler.js';
 import {
   bumpOutputPackageWatermark,
   ensureOutputPackageConsistency,
   OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
 } from './output-package-consistency.js';
+import { createOutputPackageService, type OutputPackageService } from './output-package-service.js';
 import type {
   TaskAcceptanceContractV1,
   TaskDeliveryOverviewV1,
@@ -295,11 +295,7 @@ import type {
   TaskResponsibilityFocusV1,
   TaskTimelineEventV1,
 } from '../../../../packages/contracts/src/task-delivery-overview.js';
-import {
-  submitPackageReviewCommand,
-  type SubmitPackageReviewCommandInput,
-  type SubmitPackageReviewResult,
-} from './package-review-handler.js';
+import { type SubmitPackageReviewResult } from './package-review-handler.js';
 
 /** #1061 三个 package review 命令的 socket 输入(teamId 由 socket 会话解析,userId 由 Server 注入)。 */
 export interface PackageReviewCommandSocketInput {
@@ -1880,6 +1876,11 @@ export interface CreateServerNextUseCasesInput {
    * dev-server 注入；缺省（未接线测试环境）用简单可见性兜底（fail closed 语义由复验链兜底）。
    */
   resolveTaskLinkedEligibleAgentIds?: (taskId: string) => Promise<readonly string[]>;
+  /**
+   * #1059 候选 01/02 深化：OutputPackage 交付流水线深模块。缺省由 {repositories,
+   * clock, ids} 内部构造；dev-server 可显式注入，以便切片 2 把 transport 改绑到该模块。
+   */
+  outputPackageService?: OutputPackageService;
   managementRouter?: ReturnType<typeof createManagementRouter>;
   managementKernel?: ReturnType<typeof createManagementKernel>;
   taskCoordinationKernel?: ReturnType<typeof createTaskCoordinationKernel>;
@@ -1902,6 +1903,9 @@ export interface CreateServerNextUseCasesInput {
 
 export function createServerNextUseCases(input: CreateServerNextUseCasesInput): ServerNextUseCases {
   const { repositories, clock, ids } = input;
+  // #1059 候选 01/02 深化：OutputPackage 交付流水线深模块（formation + review 核心写）。
+  // 缺省内部构造；dev-server 可经 input.outputPackageService 显式注入（切片 2 transport 改绑用）。
+  const outputPackageService = input.outputPackageService ?? createOutputPackageService({ repositories, clock, ids });
   // #1064：Task-linked @Agent 请求的 eligibility 解析。dev-server 注入 broker
   // resolveCandidates；缺省用简单可见性兜底（未接线测试环境；fail closed 由复验链保证）。
   const resolveTaskLinkedEligibleAgentIds = input.resolveTaskLinkedEligibleAgentIds
@@ -6788,15 +6792,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         // 用同一确定性幂等键重试,收敛同一 package;已形成则原样 replay,无副作用。
         if (staging.provenance) {
           try {
-            await attemptOutputPackageFormation(
-              { repositories, clock, ids },
-              {
-                teamId: commitInput.teamId,
-                channelId: commitInput.channelId,
-                publishId,
-                workspaceRevisionId: staging.committedRevisionId,
-              },
-            );
+            await outputPackageService.formPackage({
+              teamId: commitInput.teamId,
+              channelId: commitInput.channelId,
+              publishId,
+              workspaceRevisionId: staging.committedRevisionId,
+            });
           } catch {
             // best-effort:不阻塞幂等返回。
           }
@@ -7123,15 +7124,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // 由 commit 幂等重入路径或重复 Device 回调用同一幂等键收敛。
       if (committed.provenance && committed.committedRevisionId) {
         try {
-          await attemptOutputPackageFormation(
-            { repositories, clock, ids },
-            {
-              teamId: committed.teamId,
-              channelId: committed.channelId,
-              publishId: committed.publishId,
-              workspaceRevisionId: committed.committedRevisionId,
-            },
-          );
+          await outputPackageService.formPackage({
+            teamId: committed.teamId,
+            channelId: committed.channelId,
+            publishId: committed.publishId,
+            workspaceRevisionId: committed.committedRevisionId,
+          });
         } catch {
           // formation 抛错不阻塞 commit;可由幂等重入重试收敛。
         }
@@ -8868,74 +8866,54 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    // #1059 候选 01/02 深化：review 核心（handler 调用 + 水位推进）下沉到 OutputPackageService；
+    // wrapper 只留 transport 面向的 ack 整形（project-artifact 投影，属另一边界，切片 2 决议）。
     async submitPackageArtifactReview(reviewInput) {
-      const result = await submitPackageReviewCommand(
-        { repositories, clock, ids },
-        {
-          teamId: reviewInput.teamId,
-          userId: reviewInput.userId,
-          commandName: 'submit-package-artifact-review',
-          channelId: reviewInput.channelId,
-          packageId: reviewInput.packageId,
-          collectionId: reviewInput.collectionId,
-          versionId: reviewInput.versionId,
-          decision: reviewInput.decision,
-          comment: reviewInput.comment,
-          idempotencyKey: reviewInput.idempotencyKey,
-        },
-      );
-      // #1065 AC7：应用成功后推进该频道 output-package 水位,旧 consistency token 查询随之 not_ready。
-      if (result.kind === 'applied') {
-        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
-      }
+      const result = await outputPackageService.submitReview({
+        teamId: reviewInput.teamId,
+        userId: reviewInput.userId,
+        channelId: reviewInput.channelId,
+        packageId: reviewInput.packageId,
+        collectionId: reviewInput.collectionId,
+        versionId: reviewInput.versionId,
+        decision: reviewInput.decision,
+        comment: reviewInput.comment,
+        idempotencyKey: reviewInput.idempotencyKey,
+      });
       return packageReviewCommandAck(repositories, result, 'review');
     },
 
     async submitPackageReviewAndFinalize(reviewInput) {
-      const result = await submitPackageReviewCommand(
-        { repositories, clock, ids },
-        {
-          teamId: reviewInput.teamId,
-          userId: reviewInput.userId,
-          commandName: 'submit-package-review-and-finalize',
-          channelId: reviewInput.channelId,
-          packageId: reviewInput.packageId,
-          collectionId: reviewInput.collectionId,
-          versionId: reviewInput.versionId,
-          decision: reviewInput.decision,
-          comment: reviewInput.comment,
-          idempotencyKey: reviewInput.idempotencyKey,
-          expectedCollectionRevision: reviewInput.expectedCollectionRevision,
-        },
-      );
-      if (result.kind === 'applied') {
-        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
-      }
+      const result = await outputPackageService.finalize({
+        teamId: reviewInput.teamId,
+        userId: reviewInput.userId,
+        channelId: reviewInput.channelId,
+        packageId: reviewInput.packageId,
+        collectionId: reviewInput.collectionId,
+        versionId: reviewInput.versionId,
+        decision: reviewInput.decision,
+        comment: reviewInput.comment,
+        idempotencyKey: reviewInput.idempotencyKey,
+        expectedCollectionRevision: reviewInput.expectedCollectionRevision,
+      });
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
 
     async submitPackageReviewAndRejectDelivery(reviewInput) {
-      const result = await submitPackageReviewCommand(
-        { repositories, clock, ids },
-        {
-          teamId: reviewInput.teamId,
-          userId: reviewInput.userId,
-          commandName: 'submit-package-review-and-reject-delivery',
-          channelId: reviewInput.channelId,
-          packageId: reviewInput.packageId,
-          collectionId: reviewInput.collectionId,
-          versionId: reviewInput.versionId,
-          decision: reviewInput.decision,
-          comment: reviewInput.comment,
-          idempotencyKey: reviewInput.idempotencyKey,
-          expectedTaskRevision: reviewInput.expectedTaskRevision,
-          expectedTaskAttempt: reviewInput.expectedTaskAttempt,
-          rejectReason: reviewInput.rejectReason,
-        },
-      );
-      if (result.kind === 'applied') {
-        await bumpOutputPackageWatermark(repositories, reviewInput.channelId, clock.now());
-      }
+      const result = await outputPackageService.rejectDelivery({
+        teamId: reviewInput.teamId,
+        userId: reviewInput.userId,
+        channelId: reviewInput.channelId,
+        packageId: reviewInput.packageId,
+        collectionId: reviewInput.collectionId,
+        versionId: reviewInput.versionId,
+        decision: reviewInput.decision,
+        comment: reviewInput.comment,
+        idempotencyKey: reviewInput.idempotencyKey,
+        expectedTaskRevision: reviewInput.expectedTaskRevision,
+        expectedTaskAttempt: reviewInput.expectedTaskAttempt,
+        rejectReason: reviewInput.rejectReason,
+      });
       return packageReviewCommandAck(repositories, result, 'reject-delivery');
     },
 
