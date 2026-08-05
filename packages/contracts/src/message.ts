@@ -87,3 +87,24 @@ export interface MessageSearchInputDto {
 export interface MessageSearchResultDto {
   messages: MessageDto[];
 }
+
+/**
+ * 判断一条系统消息是否应从用户对话视图（频道主时间线、Thread、回复计数）中隐藏，
+ * 且不应由服务端投递给前端。服务端在序列化边界、前端在渲染/计数处各自应用同一规则。
+ *
+ * ADR-0066：PI Manager 是内部编排运行时，不以成员/头像/聊天气泡/typing 出现。
+ * 隐藏：task-created（已由 Task 卡片代表）、management-status（PI 运行时噪音）、
+ * PI 协调输出（meta.coordination，由 channel-coordination-coordinator 落库）。
+ * 保留可见：management-question（PI 向用户提问，需回应）、management-delivery（交付物，需验收）。
+ */
+export function isHiddenSystemMessage(input: {
+  senderKind?: string;
+  meta?: Record<string, unknown> | null;
+}): boolean {
+  if (input.senderKind !== 'system') return false;
+  const meta = input.meta ?? {};
+  const kind = meta.kind;
+  if (kind === 'task-created' || kind === 'management-status') return true;
+  if (meta.coordination !== undefined) return true;
+  return false;
+}
