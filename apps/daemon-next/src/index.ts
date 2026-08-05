@@ -1,6 +1,7 @@
+import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -17,6 +18,7 @@ import {
   markWorkspaceRunUnreportable,
   persistDeviceProjectionManifest,
   prepareChannelWorkspaceRun,
+  prepareChannelWorkspaceRevisionSnapshot,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
@@ -42,6 +44,7 @@ import {
 import {
   createHttpWorkspaceStagingClient,
   fetchProjectChannelWorkspaceCurrent,
+  fetchProjectChannelWorkspaceRevision,
 } from './workspace-publish-http-client.js';
 import {
   createFilesystemWorkspacePublishRecoveryStore,
@@ -58,6 +61,7 @@ import {
   materializeDeviceWorkspaceSnapshot,
   materializeSnapshotInputs,
 } from './workspace-snapshot.js';
+import { materializeProjectChannelWorkspaceRevision } from './workspace-apply.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -71,6 +75,7 @@ export {
   materializeDeviceWorkspaceSnapshot,
   materializeSnapshotInputs,
 } from './workspace-snapshot.js';
+export { materializeProjectChannelWorkspaceRevision } from './workspace-apply.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
 export {
   discoverRecoverableWorkspaceRuns,
@@ -79,6 +84,7 @@ export {
   markWorkspaceRunReported,
   markWorkspaceRunUnreportable,
   prepareChannelWorkspaceOutput,
+  prepareChannelWorkspaceRevisionSnapshot,
   prepareWorkspaceRun,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
@@ -106,6 +112,7 @@ export {
   createHttpWorkspaceStagingClient,
   createHttpWorkspaceStagingPutClient,
   fetchProjectChannelWorkspaceCurrent,
+  fetchProjectChannelWorkspaceRevision,
 } from './workspace-publish-http-client.js';
 export {
   createFilesystemWorkspacePublishRecoveryStore,
@@ -505,6 +512,117 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       }
     }
   };
+  // #1084 fan-out 落地：拉取 revision 文件清单 → materialize 到本机 snapshots/<revisionId>/。
+  // fire-and-forget 调用，失败 warn 不 throw（非阻塞，at-least-once 由重连 reconcile 兜底）。
+  const applyIncomingWorkspaceRevision = async (payload: WorkspaceRevisionCommittedPayload) => {
+    if (!device.token || !serverUrl) {
+      console.warn('daemon workspace-revision fan-out skipped: missing token or serverUrl (non-blocking)');
+      return;
+    }
+    const targetDir = prepareChannelWorkspaceRevisionSnapshot({
+      agentBeanHome,
+      teamId: payload.teamId,
+      channelId: payload.channelId,
+      revisionId: payload.revisionId,
+    });
+    const fetched = await fetchProjectChannelWorkspaceRevision({
+      serverUrl,
+      token: device.token,
+      teamId: payload.teamId,
+      channelId: payload.channelId,
+      revisionId: payload.revisionId,
+      fetch: fetchFn,
+    });
+    if (!fetched.ok) {
+      console.warn(
+        `daemon workspace-revision fan-out fetch ${payload.revisionId} failed (non-blocking): ${fetched.error}`,
+      );
+      return;
+    }
+    const result = await materializeProjectChannelWorkspaceRevision({
+      revision: {
+        // server ProjectChannelWorkspaceFileDto 是 WorkspaceApplyFileEntryDto 超集，pick 字段。
+        files: fetched.files.map((file) => ({
+          path: file.path,
+          artifactId: file.artifactId,
+          filename: file.filename,
+          sizeBytes: file.sizeBytes,
+          ...(file.sha256 ? { sha256: file.sha256 } : {}),
+        })),
+      },
+      targetDir,
+      serverUrl,
+      token: device.token,
+      teamId: payload.teamId,
+      fetch: fetchFn,
+    });
+    if (!result.ok) {
+      const detail = result.error === 'CONFLICT' && result.conflicts?.length
+        ? `: ${result.conflicts.map((c) => c.path).join(',')}`
+        : '';
+      console.warn(
+        `daemon workspace-revision fan-out materialize ${payload.revisionId} failed (non-blocking): ${result.error}${detail}`,
+      );
+    }
+  };
+  // #1084 离线 reconcile：扫描本地已知 channel snapshots 目录，对每个拉 current revision，
+  // 落后则 apply。幂等：revisionId 比对 + materialize 冲突预检兜底。
+  const reconcileChannelWorkspaceRevisions = async () => {
+    if (!device.token || !serverUrl) return;
+    const workspacesRoot = join(agentBeanHome, 'workspaces');
+    let teamIds: string[];
+    try {
+      teamIds = readdirSync(workspacesRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      return; // 目录不存在 = 无需 reconcile。
+    }
+    for (const teamId of teamIds) {
+      const channelsRoot = join(workspacesRoot, teamId, 'channels');
+      let channelIds: string[];
+      try {
+        channelIds = readdirSync(channelsRoot, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => entry.name);
+      } catch {
+        continue;
+      }
+      for (const channelId of channelIds) {
+        try {
+          const current = await fetchProjectChannelWorkspaceRevision({
+            serverUrl,
+            token: device.token,
+            teamId,
+            channelId,
+            fetch: fetchFn,
+          });
+          if (!current.ok) continue;
+          // 本地最新 snapshot revisionId 已是 current → 无需 apply。
+          const snapshotsDir = join(channelsRoot, channelId, 'snapshots');
+          let localRevisionIds: string[] = [];
+          try {
+            localRevisionIds = readdirSync(snapshotsDir, { withFileTypes: true })
+              .filter((entry) => entry.isDirectory())
+              .map((entry) => entry.name);
+          } catch {
+            // 无本地 snapshot 目录 = 首次，仍尝试 apply。
+          }
+          if (localRevisionIds.includes(current.revisionId)) continue;
+          await applyIncomingWorkspaceRevision({
+            teamId,
+            channelId,
+            workspaceId: '', // reconcile 路径不依赖 workspaceId
+            revisionId: current.revisionId,
+          });
+        } catch (error) {
+          console.warn(
+            `daemon workspace-revision reconcile ${teamId}/${channelId} threw (non-blocking): ${readErrorMessage(error)}`,
+          );
+        }
+      }
+    }
+  };
   const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
   const localMemoryObservationTails = new Map<string, Promise<void>>();
   const outcomeObserver = input.outcomeObserver ?? observeDispatchOutcome;
@@ -597,6 +715,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       rememberRecoveryCwds([...latestSnapshot.agents.map((agent) => agent.cwd), attachmentWorkspaceRoot]);
       // #1003：启动时恢复未完成的 Workspace publish（不以本地 pending 证明已发布）。
       void resumePendingWorkspacePublishes();
+      // #1084：启动时 reconcile 本地 channel workspace snapshots（补齐离线期间 commit 的 revision）。
+      void reconcileChannelWorkspaceRevisions();
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -607,6 +727,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         }
         scheduleRecoverPersistedWorkspaceRuns(latestSnapshot.agents.map((agent) => agent.cwd));
         void resumePendingWorkspacePublishes();
+        // #1084：重连后 reconcile 离线期间 commit 的 revision。
+        void reconcileChannelWorkspaceRevisions();
         await outbox.flush();
       });
 
@@ -712,6 +834,28 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       // 服务端通知设备已被删除：上抛 onDeviceRemoved，由 cli 层关闭重连并退出进程。
       socket.on(AGENT_EVENTS.device.removed, async () => {
         await input.onDeviceRemoved?.();
+      });
+
+      // #1084 workspace revision commit fan-out：服务端通知频道有新 revision，materialize 到本机。
+      // fire-and-forget（void），不阻塞 socket 派发；失败 warn 不 throw。
+      socket.on(AGENT_EVENTS.workspace.revisionCommitted, async (rawPayload) => {
+        const payload = rawPayload as WorkspaceRevisionCommittedPayload | undefined;
+        try {
+          if (!payload || typeof payload !== 'object') return;
+          // deviceId 存在时据此早退过滤（非本机则忽略）；跨 Team 场景暂 skip（follow-up 接 per-agent 授权）。
+          if (payload.deviceId && payload.deviceId !== currentDeviceId) return;
+          if (payload.teamId !== device.teamId) {
+            console.warn(
+              `daemon workspace-revision fan-out skipped cross-team ${payload.teamId} (non-blocking): device.teamId=${device.teamId}`,
+            );
+            return;
+          }
+          void applyIncomingWorkspaceRevision(payload);
+        } catch (error) {
+          console.warn(
+            `daemon workspace-revision fan-out ${payload?.revisionId ?? ''} handler threw (non-blocking): ${readErrorMessage(error)}`,
+          );
+        }
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {

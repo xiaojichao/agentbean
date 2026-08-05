@@ -226,6 +226,24 @@ export function channelProjectionRoot(options: Pick<ChannelProjectionOptions, 'a
   return join(home, 'workspaces', options.teamId, 'channels', options.channelId);
 }
 
+/**
+ * #1084 计算某 channel revision 的 materialize 目标目录：channelProjectionRoot/snapshots/<revisionId>/。
+ * 注意：绝不复用 outputs/<publishId>/——那是 outgoing publish 待发布批次扫描根
+ * （resumePendingWorkspacePublishes 会扫到，复用会污染/回环）。snapshots 是只读镜像侧。
+ */
+export function prepareChannelWorkspaceRevisionSnapshot(options: {
+  agentBeanHome: string;
+  teamId: string;
+  channelId: string;
+  revisionId: string;
+}): string {
+  const root = channelProjectionRoot(options);
+  assertSafeSegment(options.revisionId, 'revisionId');
+  const snapshotDir = join(root, 'snapshots', options.revisionId);
+  ensureDirectoryNoSymlink(snapshotDir, resolve(options.agentBeanHome));
+  return snapshotDir;
+}
+
 export function persistDeviceProjectionManifest(
   agentBeanHome: string,
   manifest: DeviceProjectionManifest,

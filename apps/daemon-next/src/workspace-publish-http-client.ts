@@ -202,3 +202,59 @@ export async function fetchProjectChannelWorkspaceCurrent(input: {
   if (!id) return { ok: false, error: 'WORKSPACE_REVISION_MISSING' };
   return { ok: true, currentRevisionId: id };
 }
+
+/**
+ * #1084 拉取频道 Workspace 指定 revision（或默认 current）的完整文件清单。
+ * 与 fetchProjectChannelWorkspaceCurrent 的区别：返回 files，供 daemon materialize 到本机。
+ * GET /api/teams/:id/project-channel-workspace?channelId[&revisionId]。
+ */
+export async function fetchProjectChannelWorkspaceRevision(input: {
+  serverUrl: string;
+  token: string;
+  teamId: string;
+  channelId: string;
+  /** 指定 revision id；缺省取 current。 */
+  revisionId?: string;
+  fetch?: typeof fetch;
+  /** #1056 跨 Team 查询按该 Agent 逐 Agent 授权（follow-up：切片2 暂不传，聚焦同 Team）。 */
+  agentId?: string;
+}): Promise<
+  | {
+    ok: true;
+    revisionId: string;
+    files: Array<{ path: string; artifactId: string; filename: string; sizeBytes: number; sha256?: string }>;
+  }
+  | { ok: false; error: string }
+> {
+  const fetchFn = input.fetch ?? fetch;
+  const base = String(input.serverUrl ?? '').replace(/\/$/, '');
+  if (!base) return { ok: false, error: 'SERVER_URL_MISSING' };
+  const url = new URL(`${base}/api/teams/${encodeURIComponent(input.teamId)}/project-channel-workspace`);
+  url.searchParams.set('channelId', input.channelId);
+  if (input.revisionId) url.searchParams.set('revisionId', input.revisionId);
+  if (input.agentId) url.searchParams.set('agentId', input.agentId);
+  const response = await fetchFn(url.toString(), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${input.token}` },
+  });
+  let body: Record<string, unknown> = {};
+  try {
+    body = (await response.json()) as Record<string, unknown>;
+  } catch {
+    body = {};
+  }
+  if (!response.ok || body.ok !== true || !body.workspace) {
+    return { ok: false, error: String(body.error ?? body.message ?? `HTTP_${response.status}`) };
+  }
+  const workspace = body.workspace as {
+    currentRevisionId?: string;
+    currentRevision?: {
+      id?: string;
+      files?: Array<{ path: string; artifactId: string; filename: string; sizeBytes: number; sha256?: string }>;
+    };
+  };
+  const revision = workspace.currentRevision;
+  const id = workspace.currentRevisionId ?? revision?.id;
+  if (!id || !revision?.files) return { ok: false, error: 'WORKSPACE_REVISION_MISSING' };
+  return { ok: true, revisionId: id, files: revision.files };
+}

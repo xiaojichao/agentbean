@@ -467,6 +467,13 @@ export interface ServerNextUseCases {
   addChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   removeChannelAgentMember(input: ChannelAgentMemberInput): Promise<Ack<{ channel: ChannelDto }>>;
   listChannelMembers(input: ListChannelMembersInput): Promise<Ack<ChannelMembersDto>>;
+  /**
+   * #1084 系统侧（无 userId 授权）解析频道 Agent 成员的本机 deviceId 集合。
+   * fan-out workspace revision committed 通知时，server 用它定位频道在线设备。
+   * 直读 channels.agentMemberIds → agents.getById filter visibleTeamIds.includes(teamId) → 取 deviceId。
+   * 无授权语义：调用方是 server 内部 fan-out（非用户请求）。
+   */
+  resolveChannelAgentDeviceIds(input: { teamId: string; channelId: string }): Promise<readonly string[]>;
   archiveChannel(input: ArchiveChannelInput): Promise<Ack<{ channel: ChannelDto } | { preflight: ChannelArchivePreflightDto } | { confirmation: ChannelArchiveConfirmationDto }>>;
   deleteChannel(input: DeleteChannelInput): Promise<Ack<{ channel: ChannelDto }>>;
   startDirectMessage(input: StartDirectMessageInput): Promise<Ack<{ dm: DmChannelDto }>>;
@@ -1894,6 +1901,8 @@ export interface CreateServerNextUseCasesInput {
   messageTracerEnabled?: boolean;
   /** #921 outbox 投递回调：send-message 提交后排空 pending outbox，逐条调用以推送至订阅者。 */
   onMessageTracerDelivered?: (delivery: MessageTracerDelivery) => Promise<void> | void;
+  /** #1084 workspace revision commit fan-out：真正新建 revision 后通知频道在线设备 materialize 到本机 .agentbean。 */
+  onWorkspaceRevisionCommitted?: (payload: { teamId: string; channelId: string; workspaceId: string; revisionId: string }) => Promise<void> | void;
   channelFileRollout?: ChannelFileRolloutConfig;
   channelFileMetrics?: ReturnType<typeof createChannelFileMetrics>;
   projectCollaborationRollout?: ProjectCollaborationRolloutConfig;
@@ -4983,6 +4992,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       });
     },
 
+    async resolveChannelAgentDeviceIds(resolveInput) {
+      // #1084 系统侧方法：无 userId 授权。fan-out 用，只解析频道 Agent 成员的 deviceId。
+      const channel = await repositories.channels.getById(resolveInput.channelId);
+      if (!channel || channel.teamId !== resolveInput.teamId) return [];
+      const deviceIds: string[] = [];
+      for (const agentId of channel.agentMemberIds) {
+        const agent = await repositories.agents.getById(agentId);
+        // 仅保留对该 Team 可见且已绑定本机 device 的 Agent（与 listChannelMembers 一致）。
+        if (agent && agent.visibleTeamIds.includes(resolveInput.teamId) && agent.deviceId) {
+          deviceIds.push(agent.deviceId);
+        }
+      }
+      return deviceIds;
+    },
+
     async archiveChannel(archiveInput) {
       if (!(await repositories.teams.isMember(archiveInput.teamId, archiveInput.userId))) {
         return makeFailure('FORBIDDEN', 'User is not a team member');
@@ -7135,6 +7159,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         } catch {
           // formation 抛错不阻塞 commit;可由幂等重入重试收敛。
         }
+      }
+      // #1084 fan-out：真正 commit 后通知频道在线设备 materialize 到本机 .agentbean。
+      // 幂等 replay 路径（staging.status==='committed' @6786）不走到此，天然不重复触发。
+      // fan-out 失败不阻塞 commit：离线设备由 daemon 重连 reconcile 兜底（at-least-once）。
+      try {
+        if (committed.committedRevisionId) {
+          await input.onWorkspaceRevisionCommitted?.({
+            teamId: committed.teamId,
+            channelId: committed.channelId,
+            workspaceId: outcome.workspace.id,
+            revisionId: committed.committedRevisionId,
+          });
+        }
+      } catch {
+        // best-effort：不阻塞 commit 结果。
       }
       return makeSuccess({
         staging: toWorkspacePublishStagingDto(committed),

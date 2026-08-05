@@ -427,6 +427,11 @@ export const AGENT_EVENTS = {
   memory: {
     governanceSummaryRequested: 'memory:governance-summary-requested',
   },
+  workspace: {
+    // 服务端→daemon 单向通知：频道工作区 revision 已 commit（某设备发布了交付物）。
+    // daemon 收到后把该 revision materialize 到本机 ~/.agentbean/.../channels/<id>/snapshots/<revisionId>/。
+    revisionCommitted: 'workspace:revision-committed',
+  },
 } as const;
 
 export interface ScanRequestCustomAgent {
@@ -439,6 +444,21 @@ export interface ScanRequest {
   requestId: string;
   deviceId: string;
   customAgents?: ScanRequestCustomAgent[];
+}
+
+/**
+ * server→daemon：频道工作区 revision 已 commit 的单向通知（fire-and-forget）。
+ * daemon 收到后用 device token + teamId/channelId/revisionId 拉 revision 文件清单并 materialize
+ * 到本机 ~/.agentbean/workspaces/<teamId>/channels/<channelId>/snapshots/<revisionId>/。
+ * - teamId：revision 所属 Team（跨 Team 场景下可能与 device 归属 Team 不同；daemon 用此值查 server）。
+ * - deviceId：可选；存在时 daemon 据此早退过滤（非本机则忽略）。
+ */
+export interface WorkspaceRevisionCommittedPayload {
+  teamId: string;
+  channelId: string;
+  workspaceId: string;
+  revisionId: string;
+  deviceId?: string;
 }
 
 /** server→daemon：请求扫描指定目录的 descriptor（AGENTS.md/CLAUDE.md + skills）。 */

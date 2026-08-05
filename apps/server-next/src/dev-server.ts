@@ -62,7 +62,7 @@ import {
 } from './application/project-collaboration-rollout.js';
 import { attachServerNextNamespaces, type ServerNextRealtime, type SocketServerLike } from './transport/socket-server.js';
 import { startDaemonVersionRefresh } from './daemon-version.js';
-import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { DEFAULT_ARTIFACT_MAX_BYTES, isSafeArtifactInlinePreviewMimeType, makeFailure, type ArtifactDto, type ArtifactRole, type ArtifactSourceRootDto, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { ServerNextUseCases } from './application/usecases.js';
 
 type SocketIoServerConstructor = new (server: HttpServer, options?: Record<string, unknown>) => SocketServerLike & {
@@ -276,13 +276,18 @@ export async function startServerNextDevServer(
         await realtimeRef?.emitMessageDelivered(delivery);
       }
     : undefined;
+  // #1084 workspace revision commit fan-out：真正新建 revision 后通知频道在线设备 materialize。
+  // late-bind 同 #921——realtime 在 attachServerNextNamespaces 后才创建。
+  const onWorkspaceRevisionCommitted = async (payload: WorkspaceRevisionCommittedPayload) => {
+    await realtimeRef?.emitWorkspaceRevisionCommitted(payload);
+  };
   const appWithCleanup = input.app
     ? { app: input.app, managementWorkerScheduler: input.managementWorkerScheduler,
       serverWorkerScheduler: input.serverWorkerScheduler,
       taskClaimBroker: input.taskClaimBroker, serverWorkerPool: input.serverWorkerPool,
       serverWorkerAuthToken: input.serverWorkerAuthToken, reconcileDisconnectedDevicesOnStart: false,
       close: async () => undefined }
-    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled, onMessageTracerDelivered);
+    : createDefaultApp(config, input.Database, messageIngestionMode, messageTracerEnabled, onMessageTracerDelivered, onWorkspaceRevisionCommitted);
   const app = appWithCleanup.app;
   if (appWithCleanup.reconcileDisconnectedDevicesOnStart) {
     await app.reconcileDisconnectedDevices({ timestamp: Date.now() });
@@ -2126,6 +2131,7 @@ function createDefaultApp(
   messageIngestionMode: MessageIngestionMode = 'durable-job',
   messageTracerEnabled: boolean = false,
   onMessageTracerDelivered?: (delivery: { teamId: string; channelId: string; messageId: string }) => Promise<void> | void,
+  onWorkspaceRevisionCommitted?: (payload: WorkspaceRevisionCommittedPayload) => Promise<void> | void,
 ): AppWithCleanup {
   const artifactContentStore = createFileArtifactContentStore(config.dataDir);
   // #1005：生产/dev host 始终用 dataDir 磁盘 staging，避免大文件塞 team SQLite BLOB。
@@ -2203,6 +2209,7 @@ function createDefaultApp(
       messageIngestionMode,
       messageTracerEnabled,
       onMessageTracerDelivered,
+      onWorkspaceRevisionCommitted,
     });
     appForPiHealth = app;
     return {
@@ -2307,6 +2314,7 @@ function createDefaultApp(
     messageIngestionMode,
     messageTracerEnabled,
     onMessageTracerDelivered,
+    onWorkspaceRevisionCommitted,
   });
   appForPiHealth = app;
   return {
