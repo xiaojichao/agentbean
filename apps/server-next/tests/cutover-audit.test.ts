@@ -21,11 +21,11 @@ describe('AgentBean Next cutover audit', () => {
         npmVersions: {
           '@agentbean/contracts@0.2.5': '0.2.5',
           '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-          '@agentbean/daemon-next@0.3.32': '0.3.32',
-          '@agentbean/daemon@0.3.32': '0.3.32',
+          '@agentbean/daemon-next@0.3.33': '0.3.33',
+          '@agentbean/daemon@0.3.33': '0.3.33',
         },
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.32', legacy: '0.1.35' },
+          '@agentbean/daemon': { latest: '0.3.33', legacy: '0.1.35' },
         },
       }),
     });
@@ -43,7 +43,7 @@ describe('AgentBean Next cutover audit', () => {
         variables: [],
         secrets: [{ name: 'RAILWAY_TOKEN' }, { name: 'NPM_TOKEN' }],
         npmVersions: {
-          '@agentbean/daemon-next@0.3.32': '0.3.32',
+          '@agentbean/daemon-next@0.3.33': '0.3.33',
         },
         distTags: {
           '@agentbean/daemon': { latest: '0.1.35' },
@@ -107,13 +107,13 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.32', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.33', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.5': '0.2.5',
             '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-            '@agentbean/daemon-next@0.3.32': '0.3.32',
-            '@agentbean/daemon@0.3.32': '0.3.32',
+            '@agentbean/daemon-next@0.3.33': '0.3.33',
+            '@agentbean/daemon@0.3.33': '0.3.33',
           };
           const version = versions[args[1]];
           if (!version) {
@@ -148,13 +148,13 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.32', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: '0.3.33', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
             '@agentbean/contracts@0.2.5': '0.2.5',
             '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-            '@agentbean/daemon-next@0.3.32': '0.3.32',
-            '@agentbean/daemon@0.3.32': '0.3.32',
+            '@agentbean/daemon-next@0.3.33': '0.3.33',
+            '@agentbean/daemon@0.3.33': '0.3.33',
           };
           const version = versions[args[1]];
           if (!version) {
