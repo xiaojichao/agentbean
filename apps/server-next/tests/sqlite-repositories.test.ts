@@ -1575,7 +1575,7 @@ describe('server-next SQLite repositories', () => {
       });
       await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
 
-      await expect(app.failTimedOutDispatches({ olderThan: 1001 })).resolves.toMatchObject({
+      await expect(app.failTimedOutDispatches({ heartbeatCutoff: 1001, legacyCutoff: 1001 })).resolves.toMatchObject({
         ok: true,
         // agent 无 deviceId → 无法定位 device → 判 DAEMON_OFFLINE（心跳失联模型替代旧 DISPATCH_TIMEOUT）。
         dispatches: [{ id: 'dispatch-1', status: 'timed_out', error: 'DAEMON_OFFLINE' }],
@@ -2064,7 +2064,7 @@ describe('server-next SQLite repositories', () => {
       });
 
       now = 1301;
-      await app.failTimedOutDispatches({ olderThan: 1300 });
+      await app.failTimedOutDispatches({ heartbeatCutoff: 1300, legacyCutoff: 1300 });
 
       now = 1500;
       await expect(app.receiveDispatchResult({

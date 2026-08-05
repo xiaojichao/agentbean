@@ -4208,7 +4208,7 @@ describe('server-next first-slice use cases', () => {
       ok: false,
       error: 'CONFLICT',
     });
-    await expect(app.failTimedOutDispatches({ olderThan: 999 })).resolves.toMatchObject({
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 999, legacyCutoff: 999 })).resolves.toMatchObject({
       ok: true,
       dispatches: [],
     });
@@ -4449,7 +4449,7 @@ describe('server-next first-slice use cases', () => {
       if (terminal === 'cancel') {
         await app.cancelDispatch({ userId: 'user-1', dispatchId: 'dispatch-1' });
       } else if (terminal === 'timeout') {
-        await app.failTimedOutDispatches({ olderThan: 150 });
+        await app.failTimedOutDispatches({ heartbeatCutoff: 150, legacyCutoff: 150 });
       } else {
         await app.receiveDispatchError({
           dispatchId: 'dispatch-1',
@@ -4569,7 +4569,7 @@ describe('server-next first-slice use cases', () => {
       body: '@Codex hello',
     });
 
-    const ack = await app.failTimedOutDispatches({ olderThan: 1001 });
+    const ack = await app.failTimedOutDispatches({ heartbeatCutoff: 1001, legacyCutoff: 1001 });
 
     expect(ack).toMatchObject({ ok: true, dispatches: [{ id: 'dispatch-1', status: 'timed_out' }] });
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
@@ -4603,14 +4603,48 @@ describe('server-next first-slice use cases', () => {
     // 任务远超任何「绝对时长」，但 daemon 持续心跳 → 看门狗（COALESCE(last_heartbeat_at, updated_at)）不判失联
     now = 5000;
     await app.receiveDispatchProgress({ dispatchId: 'dispatch-1', agentId: 'agent-1', sentAt: 5000 });
-    await expect(app.failTimedOutDispatches({ olderThan: 4000 })).resolves.toMatchObject({
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 4000, legacyCutoff: 4000 })).resolves.toMatchObject({
       ok: true,
       dispatches: [],
     });
 
     // 停止心跳，推进过心跳阈值 → 判失联
     now = 10000;
-    await expect(app.failTimedOutDispatches({ olderThan: 9000 })).resolves.toMatchObject({
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 9000, legacyCutoff: 9000 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
+    });
+  });
+
+  test('旧 daemon（无心跳）走 legacyTimeout 回退，heartbeatCutoff 再宽也不误判', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds(['user-1', 'team-1', 'channel-1', 'message-1', 'dispatch-1', 'request-1']),
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      name: 'Codex',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: 1000,
+    });
+    await app.sendMessage({ userId: 'user-1', teamId: 'team-1', channelId: 'channel-1', body: '@Codex hello' });
+    await app.acceptDispatch({ dispatchId: 'dispatch-1', agentId: 'agent-1', quietWindowMs: 0 });
+    // dispatch 无心跳（旧 daemon，last_heartbeat_at 恒 null）
+
+    // heartbeatCutoff 极宽也不误判：无心跳不走 heartbeat 分支，只看 legacyCutoff
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 999_999, legacyCutoff: 500 })).resolves.toMatchObject({
+      ok: true,
+      dispatches: [], // updatedAt=1000 ≮ legacyCutoff=500 → 不取
+    });
+    // legacyCutoff 放宽到 updatedAt 之后 → 判（仍与 heartbeatCutoff 无关）
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 999_999, legacyCutoff: 1500 })).resolves.toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
     });
@@ -4655,7 +4689,7 @@ describe('server-next first-slice use cases', () => {
     });
 
     now = 1301;
-    await expect(app.failTimedOutDispatches({ olderThan: 1300 })).resolves.toMatchObject({
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 1300, legacyCutoff: 1300 })).resolves.toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
     });
@@ -4741,7 +4775,7 @@ describe('server-next first-slice use cases', () => {
     });
 
     now = 2301;
-    await expect(app.failTimedOutDispatches({ olderThan: 2300 })).resolves.toMatchObject({
+    await expect(app.failTimedOutDispatches({ heartbeatCutoff: 2300, legacyCutoff: 2300 })).resolves.toMatchObject({
       ok: true,
       dispatches: [{ id: 'dispatch-1', status: 'timed_out' }],
     });
@@ -4814,7 +4848,7 @@ describe('server-next first-slice use cases', () => {
     });
 
     now = 3301;
-    await app.failTimedOutDispatches({ olderThan: 3300 });
+    await app.failTimedOutDispatches({ heartbeatCutoff: 3300, legacyCutoff: 3300 });
     await app.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',
@@ -4874,7 +4908,7 @@ describe('server-next first-slice use cases', () => {
       prompt: 'hello',
     });
 
-    await app.failTimedOutDispatches({ olderThan: 1000 });
+    await app.failTimedOutDispatches({ heartbeatCutoff: 1000, legacyCutoff: 1000 });
 
     await expect(app.listVisibleAgents({ teamId: 'team-1' })).resolves.toMatchObject({
       ok: true,

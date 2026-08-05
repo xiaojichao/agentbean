@@ -642,7 +642,7 @@ describe('managed Dispatch lifecycle bridge', () => {
 
   test.each([
     ['cancelled', async (h: Awaited<ReturnType<typeof createHarness>>, dispatchId: string) => h.usecases.cancelDispatch({ dispatchId, userId: 'user-1' })],
-    ['timed_out', async (h: Awaited<ReturnType<typeof createHarness>>) => h.usecases.failTimedOutDispatches({ olderThan: 21 })],
+    ['timed_out', async (h: Awaited<ReturnType<typeof createHarness>>) => h.usecases.failTimedOutDispatches({ heartbeatCutoff: 21, legacyCutoff: 21 })],
     ['failed', async (h: Awaited<ReturnType<typeof createHarness>>, dispatchId: string) => h.usecases.receiveDispatchError({ dispatchId, agentId: 'agent-1', error: '失败' })],
   ] as const)('bridges %s into one terminal event', async (status, finish) => {
     const harness = await createHarness(true);

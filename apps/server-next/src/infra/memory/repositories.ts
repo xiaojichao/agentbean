@@ -1512,15 +1512,22 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         dispatches.set(input.dispatchId, updated);
         return { dispatch: updated, changed: true };
       },
-      async listPendingOlderThan(timestamp) {
-        return Array.from(dispatches.values()).filter(
-          (dispatch) =>
-            (dispatch.status === 'queued' ||
-              dispatch.status === 'sent' ||
-              dispatch.status === 'accepted' ||
-              dispatch.status === 'running') &&
-            (dispatch.lastHeartbeatAt ?? dispatch.updatedAt) < timestamp,
-        );
+      async listPendingOlderThan(input) {
+        return Array.from(dispatches.values()).filter((dispatch) => {
+          if (
+            dispatch.status !== 'queued' &&
+            dispatch.status !== 'sent' &&
+            dispatch.status !== 'accepted' &&
+            dispatch.status !== 'running'
+          ) {
+            return false;
+          }
+          // 新 daemon 发过心跳 → 心跳超时；旧 daemon（last_heartbeat_at 恒 null）→ 宽松绝对回退
+          if (dispatch.lastHeartbeatAt != null) {
+            return dispatch.lastHeartbeatAt < input.heartbeatCutoff;
+          }
+          return dispatch.updatedAt < input.legacyCutoff;
+        });
       },
       async listByMessage(messageId) {
         return Array.from(dispatches.values()).filter((dispatch) => dispatch.messageId === messageId);
