@@ -48,6 +48,7 @@ import {
   type TaskStatus,
 } from '@/lib/task-status';
 import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
+import { shouldHideSystemMessage } from '@/lib/system-messages';
 import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
 
 type TaskViewMode = 'board' | 'list';
@@ -289,7 +290,9 @@ export default function TasksPage() {
     return map;
   }, [tasks]);
 
-  const threadMessages = threadChannelId ? (messagesByChannel[threadChannelId] ?? []) : [];
+  const threadMessages = threadChannelId
+    ? (messagesByChannel[threadChannelId] ?? []).filter((msg) => !shouldHideSystemMessage(msg))
+    : [];
   const selectedTask = useMemo(() => {
     if (!threadTarget) return null;
     const direct = tasks.find((task) => task.channelId === threadTarget.channelId && task.id === threadTarget.itemId);
