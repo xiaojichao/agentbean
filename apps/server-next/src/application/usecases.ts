@@ -288,6 +288,7 @@ import {
   OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
 } from './output-package-consistency.js';
 import { createOutputPackageService, type OutputPackageService } from './output-package-service.js';
+import { ensureUserCanViewChannel } from './channel-access.js';
 import type {
   TaskAcceptanceContractV1,
   TaskDeliveryOverviewV1,
@@ -17327,20 +17328,6 @@ async function channelForCreatorManagement(
   }
   if (!canApplyChannelUpdate(channel, input.userId, { humanMemberIds: channel.humanMemberIds })) {
     return makeFailure('FORBIDDEN', 'User cannot manage channel');
-  }
-  return makeSuccess({ channel });
-}
-
-async function ensureUserCanViewChannel(
-  repositories: ServerNextRepositories,
-  input: { userId: string; teamId: string; channelId: string },
-): Promise<Ack<{ channel: ChannelDto & { humanMemberIds: string[]; agentMemberIds: string[] } }>> {
-  const channel = await repositories.channels.getById(input.channelId);
-  if (!channel || channel.teamId !== input.teamId) {
-    return makeFailure('NOT_FOUND', 'Channel not found');
-  }
-  if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) {
-    return makeFailure('FORBIDDEN', 'User cannot view channel');
   }
   return makeSuccess({ channel });
 }
