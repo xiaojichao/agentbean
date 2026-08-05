@@ -502,46 +502,6 @@ export function streamKey(streamKind: string, streamId: string): string {
   return `${streamKind}|${streamId}`;
 }
 
-// ---------------------------------------------------------------------------
-// PI / Message 边界守卫
-// ---------------------------------------------------------------------------
-
-export interface ActivityPresentationGuardInput {
-  readonly actorKind?: string;
-  readonly senderKind?: string;
-  readonly isCoordinationMessage?: boolean;
-  readonly isPiMember?: boolean;
-  readonly isPiAvatar?: boolean;
-  readonly isPiTyping?: boolean;
-}
-
-/**
- * 拒绝 PI 聊天气泡 / member / avatar / typing / legacy Coordination message 新写入。
- */
-export function assertValidSystemActivityPresentation(
-  input: ActivityPresentationGuardInput,
-): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
-  if (input.actorKind && input.actorKind !== 'system') {
-    return { ok: false, reason: 'actor_must_be_system' };
-  }
-  if (input.senderKind === 'pi' || input.senderKind === 'pi_manager') {
-    return { ok: false, reason: 'pi_must_not_be_sender' };
-  }
-  if (input.isCoordinationMessage) {
-    return { ok: false, reason: 'legacy_coordination_message_forbidden' };
-  }
-  if (input.isPiMember) {
-    return { ok: false, reason: 'pi_must_not_be_member' };
-  }
-  if (input.isPiAvatar) {
-    return { ok: false, reason: 'pi_must_not_have_avatar' };
-  }
-  if (input.isPiTyping) {
-    return { ok: false, reason: 'pi_must_not_show_typing' };
-  }
-  return { ok: true };
-}
-
 /**
  * review accept/cancel 必须走具名 command；投影 UI 只暴露绑定 revision 的 command 名。
  */

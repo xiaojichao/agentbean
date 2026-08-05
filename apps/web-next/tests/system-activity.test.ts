@@ -9,7 +9,6 @@ import {
   isNamedActivityAction,
   isProjectionNotReady,
   mapReviewCommandToTaskSocketEvent,
-  shouldRenderAsSystemActivity,
   sortAttentionInbox,
   sortTaskTimeline,
   unreadAttentionCount,
@@ -106,12 +105,6 @@ describe('system-activity helpers', () => {
       'task:accept-root-delivery',
       expect.objectContaining({ taskId: 'task-1', expectedTaskRevision: 3 }),
     );
-  });
-
-  test('PI / coordination 不得作为 system activity 渲染', () => {
-    expect(shouldRenderAsSystemActivity({ actorKind: 'system' })).toBe(true);
-    expect(shouldRenderAsSystemActivity({ senderKind: 'pi' })).toBe(false);
-    expect(shouldRenderAsSystemActivity({ isCoordinationMessage: true })).toBe(false);
   });
 
   test('timeline / inbox 排序与 unread count', () => {
