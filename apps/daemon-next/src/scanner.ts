@@ -101,9 +101,9 @@ async function findExecutableOnPath(
   return null;
 }
 
-function pathEntries(options: Pick<BuiltinScannerOptions, 'envPath' | 'homeDir'>): string[] {
+export function pathEntries(options: Pick<BuiltinScannerOptions, 'envPath' | 'homeDir'>): string[] {
   const home = options.homeDir ?? homedir();
-  return [
+  const dirs: string[] = [
     ...(options.envPath ?? process.env.PATH ?? '').split(':').filter(Boolean),
     '/usr/local/bin',
     '/opt/homebrew/bin',
@@ -112,7 +112,28 @@ function pathEntries(options: Pick<BuiltinScannerOptions, 'envPath' | 'homeDir'>
     join(home, '.npm-global/bin'),
     join(home, '.asdf/shims'),
     join(home, '.local/share/mise/shims'),
+    // 版本管理器 shim/bin：daemon 作为 launchd 服务时 PATH 极简（/usr/bin:/bin:/usr/sbin:/sbin），
+    // nvm/fnm 只在交互 shell 里动态注入 PATH，后台服务须显式纳入这些位置才能发现运行时。
+    join(home, '.volta/bin'),
+    join(home, '.fnm/current/bin'),
   ];
+  // nvm/fnm 把可执行文件放在版本化目录（~/.nvm/versions/node/<ver>/bin），版本号可变，需扫描。
+  pushVersionBinDirs(dirs, join(home, '.nvm/versions/node'), 'bin');
+  pushVersionBinDirs(dirs, join(home, '.fnm/node-versions'), 'installation/bin');
+  pushVersionBinDirs(dirs, join(home, '.local/share/fnm/node-versions'), 'installation/bin');
+  return [...new Set(dirs)];
+}
+
+function pushVersionBinDirs(dirs: string[], versionsDir: string, suffix: string): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(versionsDir);
+  } catch {
+    return;
+  }
+  for (const version of entries) {
+    dirs.push(join(versionsDir, version, suffix));
+  }
 }
 
 function claudeCandidates(home: string): string[] {

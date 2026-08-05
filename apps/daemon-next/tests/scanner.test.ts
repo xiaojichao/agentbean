@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, test } from 'vitest';
 import { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from '../src/index';
+import { pathEntries } from '../src/scanner';
 
 describe('daemon-next builtin scanner', () => {
   const tempDirs: string[] = [];
@@ -167,5 +168,26 @@ describe('daemon-next builtin scanner', () => {
         },
       ],
     });
+  });
+
+  test('pathEntries includes nvm/volta/fnm version bin dirs so a launchd-detached daemon can resolve runtimes', async () => {
+    // 回归：daemon 作为 launchd 后台服务时 process.env.PATH=/usr/bin:/bin:/usr/sbin:/sbin，
+    // scanner 必须显式纳入版本管理器的 bin 目录，否则装在 nvm/volta/fnm 下的运行时会查无此人。
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-scanner-dirs-'));
+    tempDirs.push(home);
+    await mkdir(join(home, '.nvm/versions/node/v24.15.0/bin'), { recursive: true });
+    await mkdir(join(home, '.nvm/versions/node/v22.0.0/bin'), { recursive: true });
+    await mkdir(join(home, '.volta/bin'), { recursive: true });
+    await mkdir(join(home, '.fnm/node-versions/v20.10.0/installation/bin'), { recursive: true });
+
+    const dirs = pathEntries({ envPath: '/usr/bin:/bin:/usr/sbin:/sbin', homeDir: home });
+
+    // nvm：版本号可变，每个版本目录的 bin 都要入列（写死任一版本都会漏）。
+    expect(dirs).toContain(join(home, '.nvm/versions/node/v24.15.0/bin'));
+    expect(dirs).toContain(join(home, '.nvm/versions/node/v22.0.0/bin'));
+    // volta：静态 shim 目录。
+    expect(dirs).toContain(join(home, '.volta/bin'));
+    // fnm：版本化安装目录。
+    expect(dirs).toContain(join(home, '.fnm/node-versions/v20.10.0/installation/bin'));
   });
 });
