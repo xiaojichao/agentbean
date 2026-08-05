@@ -19,7 +19,7 @@ describe('AgentBean Next cutover audit', () => {
           { name: 'AGENTBEAN_PI_SECRET_KEY' },
         ],
         npmVersions: {
-          '@agentbean/contracts@0.2.5': '0.2.5',
+          '@agentbean/contracts@0.2.6': '0.2.6',
           '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
           '@agentbean/daemon-next@0.3.33': '0.3.33',
           '@agentbean/daemon@0.3.33': '0.3.33',
@@ -110,7 +110,7 @@ describe('AgentBean Next cutover audit', () => {
             return `${JSON.stringify({ latest: '0.3.33', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
-            '@agentbean/contracts@0.2.5': '0.2.5',
+            '@agentbean/contracts@0.2.6': '0.2.6',
             '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
             '@agentbean/daemon-next@0.3.33': '0.3.33',
             '@agentbean/daemon@0.3.33': '0.3.33',
@@ -151,7 +151,7 @@ describe('AgentBean Next cutover audit', () => {
             return `${JSON.stringify({ latest: '0.3.33', legacy: '0.1.35' })}\n`;
           }
           const versions: Record<string, string> = {
-            '@agentbean/contracts@0.2.5': '0.2.5',
+            '@agentbean/contracts@0.2.6': '0.2.6',
             '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
             '@agentbean/daemon-next@0.3.33': '0.3.33',
             '@agentbean/daemon@0.3.33': '0.3.33',
