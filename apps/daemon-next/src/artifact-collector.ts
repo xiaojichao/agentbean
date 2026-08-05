@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, readdirSync, realpathSync, statSync } from 'node:fs';
-import { basename, join, relative, resolve } from 'node:path';
+import { createReadStream, type Dirent, readdirSync, realpathSync, statSync } from 'node:fs';
+import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_ARTIFACT_MAX_BYTES,
   type ArtifactRole,
@@ -40,6 +40,21 @@ const WINDOWS_REPORTED_PATH_RE = new RegExp(
   `(?<![A-Za-z0-9_./\\\\:])([A-Za-z]:[\\\\/][^\\s"'<>|\`]+?\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])`,
   'gi',
 );
+/**
+ * Agent 回复中报告的交付目录绝对路径（尾斜杠）。Agent 常把一批交付物写入一个目录
+ * （如 ~/Desktop/项目/）并在回复里报告该目录路径；目录路径几乎必然是交付位置
+ * （引用/来源语境指向的几乎总是具体文件，不会是目录），故提取门槛较文件路径放宽：
+ * 不要求白名单扩展名，语境门降为「非明确引用语境」。负向前瞻 (?![A-Za-z0-9])
+ * 确保不会把文件路径（如 /a/b/c.md）的前缀目录误当目录提取。
+ */
+const UNIX_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|]+\/)(?=\s|["'“”‘’<>|，。；;！!？?,)]|$)/gi;
+const WINDOWS_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./\\:])([A-Za-z]:[\\/][^\s"'<>|]+?[\\/])(?=\s|["'“”‘’<>|，。；;！!？?,)]|$)/gi;
+const QUOTED_REPORTED_DIR_RE = /["'“”‘’]((?:\/[^"'“”‘’\n]*?\/|[A-Za-z]:[\\/][^"'“”‘’\n]*?[\\/]))(?![A-Za-z0-9])["'“”‘’]/gi;
+
+/** reported 路径是否为目录候选（尾斜杠结尾，Unix 或 Windows 分隔符）。 */
+function isReportedDirectoryPath(raw: string): boolean {
+  return /[\\/]$/.test(raw);
+}
 /**
  * 交付语境关键词：路径所在分句必须含交付动词/交付名词，或处于交付标题小节、
  * 交付声明冒号的下一行。引用/来源语境优先排除（codex P1：整行级判断会把
@@ -236,7 +251,13 @@ export function extractReportedOutputPaths(body: string | undefined): string[] {
     }
     const candidate = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
     if (!isPlausibleReportedPath(candidate)) return;
-    if (!isDeliveryContextAt(lines, lineIndex, colStart, colStart + raw.length)) return;
+    const colEnd = colStart + raw.length;
+    if (isReportedDirectoryPath(candidate)) {
+      // 目录候选：仅引用语境才拒绝（目录几乎必为交付位置，不要求交付词）。
+      if (isInReferenceContextAt(lines, lineIndex, colStart, colEnd)) return;
+    } else if (!isDeliveryContextAt(lines, lineIndex, colStart, colEnd)) {
+      return;
+    }
     if (!seen.has(candidate)) {
       seen.add(candidate);
       paths.push(candidate);
@@ -245,6 +266,9 @@ export function extractReportedOutputPaths(body: string | undefined): string[] {
   for (const match of body.matchAll(QUOTED_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
   for (const match of body.matchAll(UNIX_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
   for (const match of body.matchAll(WINDOWS_REPORTED_PATH_RE)) accept(match[1], match[0], match.index);
+  for (const match of body.matchAll(QUOTED_REPORTED_DIR_RE)) accept(match[1], match[0], match.index);
+  for (const match of body.matchAll(UNIX_REPORTED_DIR_RE)) accept(match[1], match[0], match.index);
+  for (const match of body.matchAll(WINDOWS_REPORTED_DIR_RE)) accept(match[1], match[0], match.index);
   return paths;
 }
 
@@ -256,6 +280,8 @@ function isPlausibleReportedPath(raw: string): boolean {
   const segments = raw.split(isWindows ? /[\\/]/ : '/');
   // 隐藏路径段（.ssh/.gnupg/.agentbean 等）永不进入候选。
   if (segments.some((segment) => segment.startsWith('.'))) return false;
+  // 目录路径（尾斜杠）跳过扩展名要求；文件路径仍要求白名单扩展名。
+  if (/[\\/]$/.test(raw)) return true;
   return ADAPTER_OUTPUT_FILE_EXT_RE.test(raw);
 }
 
@@ -293,6 +319,38 @@ function isDeliveryContextAt(lines: readonly string[], index: number, colStart: 
     if (heading) {
       const title = heading[1] ?? '';
       return DELIVERY_CONTEXT_RE.test(title) && !REFERENCE_CONTEXT_RE.test(title);
+    }
+  }
+  return false;
+}
+
+/**
+ * 引用语境判定（目录路径专用，较 isDeliveryContextAt 放宽）：目录路径几乎必然是
+ * 交付位置（引用/来源语境指向的几乎总是具体文件），故只拒绝明确处于引用/来源
+ * 语境的目录。检查路径所在分句、上方最近非空行、最近标题是否含引用词。
+ */
+function isInReferenceContextAt(lines: readonly string[], index: number, colStart: number, colEnd: number): boolean {
+  const line = lines[index] ?? '';
+  let clauseStart = 0;
+  for (let i = colStart - 1; i >= 0; i -= 1) {
+    if (CLAUSE_BOUNDARY_RE.test(line[i]!)) { clauseStart = i + 1; break; }
+  }
+  let clauseEnd = line.length;
+  for (let i = colEnd; i < line.length; i += 1) {
+    if (CLAUSE_BOUNDARY_RE.test(line[i]!)) { clauseEnd = i; break; }
+  }
+  if (REFERENCE_CONTEXT_RE.test(line.slice(clauseStart, colStart))) return true;
+  if (REFERENCE_CONTEXT_RE.test(line.slice(colEnd, clauseEnd))) return true;
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const previous = lines[i]!.trim();
+    if (!previous) continue;
+    if (REFERENCE_CONTEXT_RE.test(previous)) return true;
+    break;
+  }
+  for (let i = index; i >= 0; i -= 1) {
+    const heading = /^\s{0,3}#{1,6}\s+(.*)$/.exec(lines[i]!);
+    if (heading) {
+      return REFERENCE_CONTEXT_RE.test(heading[1] ?? '');
     }
   }
   return false;
@@ -495,9 +553,13 @@ function reportedPathBasename(path: string): string {
 }
 
 /** realpath 后仍须通过全部安全校验，symlink 逃逸目标因此无法借别名混入。 */
-function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly string[]): boolean {
+/**
+ * reported 路径基础安全校验（文件与目录通用）：隐藏路径段、敏感文件名、排除前缀。
+ * 不含扩展名检查——目录本身与目录递归收集的子文件都走这条；扩展名仅对单文件
+ * reported 路径生效（见 isCollectableReportedPath）。
+ */
+function isCollectableReportedBase(realPath: string, excludedPrefixes: readonly string[]): boolean {
   const base = reportedPathBasename(realPath);
-  if (!ADAPTER_OUTPUT_FILE_EXT_RE.test(base)) return false;
   // 隐藏路径段（.ssh/.gnupg/.config 等）与 .agentbean 内部永不发布。
   // Windows 路径段以反斜杠分隔，统一按两种分隔符切分保证防线不失效。
   const segments = realPath.split(/[\\/]/);
@@ -509,6 +571,12 @@ function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly 
     if (normalizedPath === normalizedPrefix || normalizedPath.startsWith(`${normalizedPrefix}/`)) return false;
   }
   return true;
+}
+
+/** realpath 后仍须通过全部安全校验，symlink 逃逸目标因此无法借别名混入。 */
+function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly string[]): boolean {
+  if (!isCollectableReportedBase(realPath, excludedPrefixes)) return false;
+  return ADAPTER_OUTPUT_FILE_EXT_RE.test(reportedPathBasename(realPath));
 }
 
 async function hashFileWithLimit(abs: string, maxBytes: number): Promise<{ sha256: string; sizeBytes: number } | null> {
@@ -599,7 +667,7 @@ async function collectReportedOutputs(
       }
       continue;
     }
-    if (!isCollectableReportedPath(realPath, excludedPrefixes)) {
+    if (!isCollectableReportedBase(realPath, excludedPrefixes)) {
       reject(basename(reportedPath));
       continue;
     }
@@ -609,7 +677,15 @@ async function collectReportedOutputs(
     } catch {
       continue;
     }
+    if (stat.isDirectory()) {
+      await collectReportedDirectory(input, realPath, byRootPath, runOutputRelativePaths, excludedPrefixes, maxBytes);
+      continue;
+    }
     if (!stat.isFile()) continue;
+    if (!ADAPTER_OUTPUT_FILE_EXT_RE.test(reportedPathBasename(realPath))) {
+      reject(basename(reportedPath));
+      continue;
+    }
     if (!shouldCollectWindowedFile({
       mtimeMs: stat.mtimeMs,
       birthtimeMs: stat.birthtimeMs,
@@ -662,6 +738,120 @@ async function collectReportedOutputs(
       sourceRoot: REPORTED_OUTPUT_SOURCE_ROOT,
       role: 'run_output',
     });
+  }
+}
+
+/**
+ * 递归收集 reported 目录下的交付文件。复用 reported 通道的安全校验链
+ * （隐藏段/敏感名/excludedPrefixes/symlink realpath/时间窗口/大小），但放宽
+ * 扩展名白名单——agent 交付目录里的文件类型多样（.md/.py/.html/.xlsx…），
+ * 靠 isCollectableReportedBase + IGNORED_OUTPUT_DIRS + 文件数上限兜底。
+ * relativePath 保留相对目录结构（如 大纲/总纲.md），便于 stage 时区分。
+ */
+async function collectReportedDirectory(
+  input: CollectArtifactsInput,
+  realDir: string,
+  byRootPath: Map<string, CollectedArtifact>,
+  runOutputRelativePaths: Set<string>,
+  excludedPrefixes: readonly string[],
+  maxBytes: number,
+): Promise<void> {
+  let visited = 0;
+  const stack: string[] = [realDir];
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (visited > MAX_OUTPUT_FILES_PER_ROOT) {
+        input.onDiagnostic?.({
+          code: 'ARTIFACT_FILE_LIMIT_REACHED',
+          sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+          sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+        });
+        return;
+      }
+      const abs = join(current, entry.name);
+      if (entry.isDirectory()) {
+        // 跳过隐藏目录与 IGNORED_OUTPUT_DIRS（node_modules/.git 等）。
+        if (entry.name.startsWith('.') || IGNORED_OUTPUT_DIRS.has(entry.name)) continue;
+        stack.push(abs);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      let realAbs: string;
+      try {
+        realAbs = realpathSync(abs);
+      } catch {
+        continue;
+      }
+      // reported 安全校验：symlink 经 realpath 解析后落入排除前缀/隐藏段即拒。
+      if (!isCollectableReportedBase(realAbs, excludedPrefixes)) continue;
+      let stat;
+      try {
+        stat = statSync(realAbs);
+      } catch {
+        continue;
+      }
+      if (!shouldCollectWindowedFile({
+        mtimeMs: stat.mtimeMs,
+        birthtimeMs: stat.birthtimeMs,
+        startedAt: input.startedAt,
+        createdInWindow: true,
+      })) {
+        continue;
+      }
+      const relPath = relative(realDir, realAbs).split(sep).join('/');
+      const filename = basename(realAbs);
+      if (stat.size > maxBytes) {
+        input.onSkipped?.({ filename, relativePath: relPath, sizeBytes: stat.size, reason: 'FILE_TOO_LARGE' }, REPORTED_OUTPUT_SOURCE_ROOT);
+        input.onDiagnostic?.({
+          code: 'ARTIFACT_FILE_TOO_LARGE',
+          sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+          sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+          relativePath: relPath,
+        });
+        continue;
+      }
+      const hashed = await hashFileWithLimit(realAbs, maxBytes);
+      if (!hashed || hashed.sizeBytes !== stat.size) {
+        input.onDiagnostic?.({
+          code: 'ARTIFACT_FILE_UNREADABLE',
+          sourceRootId: REPORTED_OUTPUT_SOURCE_ROOT.id,
+          sourceRootLabel: REPORTED_OUTPUT_SOURCE_ROOT.label,
+          relativePath: relPath,
+        });
+        continue;
+      }
+      visited += 1;
+      // sha256 去重：受管通道已有同内容则不重复收录。
+      let managedDuplicate = false;
+      for (const [, artifact] of byRootPath) {
+        if (artifact.sha256 === hashed.sha256 && artifact.sourceRoot.kind === 'run_output') {
+          managedDuplicate = true;
+          break;
+        }
+      }
+      if (managedDuplicate) continue;
+      // relativePath 冲突隔离（同目录下同名或与受管 run output 撞名）。
+      let relativePath = relPath;
+      if (runOutputRelativePaths.has(relativePath)) relativePath = `reported/${relPath}`;
+      if (runOutputRelativePaths.has(relativePath)) relativePath = `reported/${hashed.sha256.slice(0, 8)}-${relPath}`;
+      runOutputRelativePaths.add(relativePath);
+      byRootPath.set(`reported:${realAbs}`, {
+        absolutePath: realAbs,
+        relativePath,
+        sha256: hashed.sha256,
+        sizeBytes: hashed.sizeBytes,
+        filename,
+        sourceRoot: REPORTED_OUTPUT_SOURCE_ROOT,
+        role: 'run_output',
+      });
+    }
   }
 }
 

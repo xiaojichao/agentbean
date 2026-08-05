@@ -88,6 +88,22 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('已生成 "C:\\Users\\a\\.ssh\\config.md"')).toEqual([]);
       expect(extractReportedOutputPaths('已生成 "C:\\Users\\a\\..\\x.md"')).toEqual([]);
     });
+
+    test('提取回复报告的目录路径（尾斜杠，交付语境换行）', () => {
+      // 真实 bug 形态：远程 agent 把交付物写到一个目录并在回复里报告该目录路径。
+      // 目录（尤其尾斜杠）几乎必然是交付位置，语境门槛较文件路径放宽。
+      expect(extractReportedOutputPaths('文件位置\n\n/Users/luyun/Desktop/ScriptCreate/剧本创作/')).toEqual([
+        '/Users/luyun/Desktop/ScriptCreate/剧本创作/',
+      ]);
+      expect(extractReportedOutputPaths('已生成到 /tmp/outputs/')).toEqual(['/tmp/outputs/']);
+      expect(extractReportedOutputPaths('产物位于 /Users/a/build/。')).toEqual(['/Users/a/build/']);
+      // 引用/来源语境的目录仍拒绝（目录虽放宽语境，但不放过明确引用）。
+      expect(extractReportedOutputPaths('参考 /tmp/data/')).toEqual([]);
+      expect(extractReportedOutputPaths('数据来自 /Users/a/source/')).toEqual([]);
+      // 隐藏段目录与穿越目录仍拒绝（结构校验先于语境）。
+      expect(extractReportedOutputPaths('已生成 /Users/x/.ssh/')).toEqual([]);
+      expect(extractReportedOutputPaths('已生成 /Users/x/../etc/')).toEqual([]);
+    });
   });
 
   describe('collectArtifacts reported outputs (#1045)', () => {
@@ -273,6 +289,62 @@ describe('artifact-collector', () => {
 
       expect(collected).toEqual([]);
       expect(skipped).toEqual([{ filename: 'big.md', reason: 'FILE_TOO_LARGE' }]);
+    });
+
+    test('报告目录路径时递归收集目录下的交付文件', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-dir-')));
+      const agentBeanHome = join(cwd, '.agentbean');
+      mkdirSync(agentBeanHome, { recursive: true });
+      // 真实 bug 形态：远程 agent 把交付物写到 /Users/luyun/Desktop/ScriptCreate/剧本创作/
+      const scriptDir = join(cwd, 'Desktop', 'ScriptCreate', '剧本创作');
+      mkdirSync(scriptDir, { recursive: true });
+      writeFileSync(join(scriptDir, '第1集-清晨的问候.md'), '第1集内容');
+      writeFileSync(join(scriptDir, '第2集-她的名字.md'), '第2集内容');
+      // 嵌套子目录验证递归
+      mkdirSync(join(scriptDir, '大纲'));
+      writeFileSync(join(scriptDir, '大纲', '总纲.md'), '大纲内容');
+      // 隐藏文件跳过
+      writeFileSync(join(scriptDir, '.hidden.md'), '隐藏内容');
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [scriptDir],
+        reportedOutputExcludedPathPrefixes: [agentBeanHome],
+        startedAt: Date.now() - 60_000,
+      });
+
+      const names = collected.map((a) => a.filename).sort();
+      expect(names).toEqual(['总纲.md', '第1集-清晨的问候.md', '第2集-她的名字.md']);
+      // 嵌套文件保留相对目录结构作为 relativePath
+      expect(collected.find((a) => a.filename === '总纲.md')!.relativePath).toBe('大纲/总纲.md');
+      // 每个文件标记为受管 reported 通道
+      for (const artifact of collected) {
+        expect(artifact.sourceRoot.kind).toBe('run_output');
+        expect(artifact.role).toBe('run_output');
+      }
+    });
+
+    test('目录递归跳过 IGNORED_OUTPUT_DIRS 与排除前缀内的逃逸', async () => {
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'col-reported-dir-skip-')));
+      const agentBeanHome = join(cwd, '.agentbean');
+      mkdirSync(agentBeanHome, { recursive: true });
+      const deliverDir = join(cwd, '交付');
+      mkdirSync(deliverDir, { recursive: true });
+      writeFileSync(join(deliverDir, 'main.md'), 'ok');
+      // node_modules 应被跳过
+      mkdirSync(join(deliverDir, 'node_modules'));
+      writeFileSync(join(deliverDir, 'node_modules', 'dep.md'), 'dep');
+      // 排除前缀内的 symlink 逃逸应被拒
+      const internal = join(agentBeanHome, 'secret.md');
+      writeFileSync(internal, 'secret');
+      symlinkSync(internal, join(deliverDir, 'escape.md'));
+
+      const collected = await collectArtifacts({
+        reportedOutputPaths: [deliverDir],
+        reportedOutputExcludedPathPrefixes: [agentBeanHome],
+        startedAt: Date.now() - 60_000,
+      });
+
+      expect(collected.map((a) => a.filename).sort()).toEqual(['main.md']);
     });
   });
 
