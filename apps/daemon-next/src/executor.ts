@@ -36,9 +36,31 @@ export interface CommandExecutorOptions {
 // because the child's stdout/stderr (and PTY output) are captured and uploaded as downloadable log
 // artifacts.
 
+/**
+ * Default ceiling for non-codex agents (Hermes, claude-code, gemini, kimi-cli, …) that run on the
+ * pipe spine. Raised from 5min to 15min for codex PTY parity: real coding-agent tasks run 4-5+
+ * minutes, and the old 5min ceiling clipped slow-but-working agents (manifesting as a spurious
+ * "Codex 未在时限内完成" because the generic timeout text matches CODEX_TIMEOUT_RE). codex keeps
+ * its own 15min in PTY_ADAPTERS; this brings the pipe spine to the same headroom.
+ *
+ * Overridable at runtime via AGENTBEAN_EXEC_TIMEOUT_MS (mirrors the codex PTY path's
+ * AGENTBEAN_CODEX_TIMEOUT_MS), so operators can tune without a daemon release.
+ */
+const DEFAULT_EXEC_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * Resolve the pipe-spine executor timeout with precedence: env > option > 15min default.
+ * Pure (env injected for tests). Mirrors executor-pty.ts AGENTBEAN_CODEX_TIMEOUT_MS resolution.
+ */
+export function resolveExecTimeoutMs(options: { timeoutMs?: number; env?: string } = {}): number {
+  const envTimeout = Number.parseInt((options.env ?? process.env.AGENTBEAN_EXEC_TIMEOUT_MS) ?? '', 10);
+  if (Number.isFinite(envTimeout) && envTimeout > 0) return envTimeout;
+  return options.timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
+}
+
 export function createCommandExecutor(options: CommandExecutorOptions = {}): StubExecutor {
   const fallbackPrefix = options.fallbackPrefix ?? 'daemon-next:';
-  const timeoutMs = options.timeoutMs ?? 5 * 60 * 1000;
+  const timeoutMs = resolveExecTimeoutMs({ timeoutMs: options.timeoutMs });
   const killGraceMs = options.killGraceMs ?? 5000;
   const maxAccumulatedBytes = options.maxAccumulatedBytes ?? 8 * 1024 * 1024;
   const clock = options.clock ?? { now: () => Date.now() };
