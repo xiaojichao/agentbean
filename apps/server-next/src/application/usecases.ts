@@ -691,7 +691,7 @@ export interface ServerNextUseCases {
   ): Promise<Ack<ResolveProjectReferenceOrdinalResultDto>>;
   /** #1060 列出频道 OutputPackage(三处投影共用同一 Server 事实)。 */
   listOutputPackages(
-    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string }; minimumConsistency?: ConsistencyTokenV1 },
+    input: { teamId: string; channelId: string; taskId?: string; userId: string; limit?: number; cursor?: { createdAt: number; packageId: string }; minimumConsistency?: ConsistencyTokenV1; currentDeviceId?: string | null },
   ): Promise<Ack<{ packages: OutputPackageSummaryDto[]; pendingDeliveries: OutputPackagePendingDeliveryDto[]; nextCursor?: { createdAt: number; packageId: string } }>>;
   /** #1060 获取单个 OutputPackage(含冻结成员);#1063 支持可选 projection 请求。 */
   getOutputPackage(
@@ -702,6 +702,7 @@ export interface ServerNextUseCases {
       userId: string;
       projection?: { policy: OutputPackageProjectionPolicy; versions?: { collectionId: string; versionId: string }[] };
       minimumConsistency?: ConsistencyTokenV1;
+      currentDeviceId?: string | null;
     },
   ): Promise<Ack<{
     package: OutputPackageDto;
@@ -9003,8 +9004,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     // #1060 OutputPackage 查询:三处投影(讨论串/Task/Files)共用同一 Server 事实。
     async listOutputPackages(packageInput) {
       // AC10:运行时 exact-key 校验,拒绝未知字段;不以 TypeScript interface 代替运行时合同。
-      // userId/teamId 是 Server 从 session 注入的权威字段,不属于 wire payload,校验前剥离。
-      const { userId, teamId, ...wireInput } = packageInput;
+      // userId/teamId/currentDeviceId 是 Server 从 session 注入的权威字段,不属于 wire payload,校验前剥离。
+      // currentDeviceId 由 socket bind 层的 withAuthenticatedUserId 无条件注入(设备态需要),
+      // 必须与 userId/teamId 一同剥离,否则 assertExactKeys 拒绝未知字段 → OUTPUT_PACKAGE_PAYLOAD_INVALID。
+      const { userId, teamId, currentDeviceId, ...wireInput } = packageInput;
       const parsed = parseOutputPackageQueryInputV1('list-channel-output-packages', wireInput) as typeof packageInput;
       parsed.userId = userId;
       parsed.teamId = teamId;
@@ -9051,8 +9054,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async getOutputPackage(packageInput) {
-      // AC10:运行时 exact-key 校验(剥离注入字段后)。
-      const { userId, teamId, ...wireInput } = packageInput;
+      // AC10:运行时 exact-key 校验(剥离注入字段后;含 currentDeviceId,同 listOutputPackages)。
+      const { userId, teamId, currentDeviceId, ...wireInput } = packageInput;
       const parsed = parseOutputPackageQueryInputV1('get-output-package', wireInput) as typeof packageInput;
       parsed.userId = userId;
       parsed.teamId = teamId;
