@@ -435,7 +435,10 @@ export interface ProjectChannelWorkspaceRepository {
   publishRevision(input: {
     teamId: ID;
     channelId: ID;
-    baselineRevisionId: ID;
+    /** 基线 revisionId；首次发布（频道尚无 workspace）时省略，触发事务内 bootstrap 初始 workspace。 */
+    baselineRevisionId?: ID;
+    /** 仅首次发布（无 workspace）使用：新建 workspace 的 id。有 workspace 时忽略。 */
+    newWorkspaceId?: ID;
     newRevision: {
       id: ID;
       files: ProjectChannelWorkspaceRevisionRecord['files'];

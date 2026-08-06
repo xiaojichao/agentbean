@@ -2316,7 +2316,44 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
         const tx = teamDb.transaction(() => {
           const ws = teamDb.prepare(`SELECT id, current_revision_id FROM project_channel_workspaces WHERE team_id = ? AND channel_id = ?`)
             .get(input.teamId, input.channelId) as Record<string, unknown> | undefined;
-          if (!ws) throw new Error('Project Channel Workspace not found');
+          if (!ws) {
+            // 首次发布 bootstrap：频道尚无 workspace。仅当无 baselineRevisionId（首次发布）时建初始
+            // workspace+revision；此时 commit 上游已物化 artifact（usecases），无鸡生蛋问题。
+            // 有 baselineRevisionId 却无 workspace 是非法态（基线指向不存在的 workspace）→ 保留原抛错。
+            if (input.baselineRevisionId !== undefined) throw new Error('Project Channel Workspace not found');
+            const newWsId = input.newWorkspaceId ?? input.newRevision.id;
+            try {
+              teamDb.prepare(`INSERT INTO project_channel_workspace_revisions (id, team_id, channel_id, revision, files_json, provenance_json, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(input.newRevision.id, input.teamId, input.channelId, 1, JSON.stringify(input.newRevision.files), input.newRevision.provenance ? JSON.stringify(input.newRevision.provenance) : null, input.newRevision.createdBy, input.newRevision.createdAt);
+              teamDb.prepare(`INSERT INTO project_channel_workspaces (id, team_id, channel_id, current_revision_id, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)`).run(newWsId, input.teamId, input.channelId, input.newRevision.id, input.newRevision.createdBy, input.newRevision.createdAt);
+            } catch (error) {
+              // 并发首次发布：另一请求已 bootstrap 该频道 workspace → 读其当前态返回 conflict，
+              // 调用方按既有 conflict 路径收敛/重试（幂等 publishId 兜底）。
+              if (error instanceof Error && error.message.includes('UNIQUE constraint failed: project_channel_workspaces.channel_id')) {
+                const raced = teamDb.prepare(`SELECT r.revision, r.files_json, r.provenance_json, r.created_by AS revision_created_by, r.created_at AS revision_created_at
+                  FROM project_channel_workspaces w JOIN project_channel_workspace_revisions r ON r.id = w.current_revision_id
+                  WHERE w.team_id = ? AND w.channel_id = ?`).get(input.teamId, input.channelId) as Record<string, unknown>;
+                outcome = {
+                  kind: 'conflict',
+                  current: {
+                    id: newWsId, teamId: input.teamId, channelId: input.channelId, currentRevisionId: input.newRevision.id,
+                    currentRevision: { id: input.newRevision.id, teamId: input.teamId, channelId: input.channelId, revision: Number(raced.revision), files: JSON.parse(String(raced.files_json)) as ProjectChannelWorkspaceRevisionRecord['files'], createdBy: String(raced.revision_created_by), createdAt: Number(raced.revision_created_at), ...(raced.provenance_json ? { provenance: JSON.parse(String(raced.provenance_json)) as ProjectChannelWorkspaceRevisionRecord['provenance'] } : {}) },
+                  },
+                };
+                return;
+              }
+              throw error;
+            }
+            outcome = {
+              kind: 'published',
+              workspace: {
+                id: newWsId, teamId: input.teamId, channelId: input.channelId, currentRevisionId: input.newRevision.id,
+                currentRevision: { id: input.newRevision.id, teamId: input.teamId, channelId: input.channelId, revision: 1, files: input.newRevision.files, createdBy: input.newRevision.createdBy, createdAt: input.newRevision.createdAt, ...(input.newRevision.provenance ? { provenance: input.newRevision.provenance } : {}) },
+              },
+            };
+            return;
+          }
           const currentRevisionId = String(ws.current_revision_id);
           if (currentRevisionId !== input.baselineRevisionId) {
             // 基线落后 → 冲突，re-read 当前 workspace 供反馈（不写）。
