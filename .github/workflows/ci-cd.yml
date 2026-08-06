@@ -561,6 +561,10 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Smoke-test daemon-next dist against published npm contracts
+        if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
+        run: node scripts/smoke-daemon-next-published-contracts.mjs
+
       - name: Publish AgentBean Next daemon package
         if: env.NPM_TOKEN != '' && steps.agentbean-next-packages.outputs.should_publish_daemon_next == 'true'
         working-directory: apps/daemon-next

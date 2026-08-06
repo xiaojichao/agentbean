@@ -46,6 +46,7 @@ describe('AgentBean Next readiness checker', () => {
       'pi-management-runtime-package-publishable',
       'daemon-next-package-publishable',
       'daemon-next-runtime-dependencies',
+      'workspace-contracts-exact-locks-aligned',
       'daemon-runtime-does-not-probe-retired-source',
       'server-runtime-dependencies-owned-by-server-next',
       'daemon-next-version-replaces-old-daemon',
