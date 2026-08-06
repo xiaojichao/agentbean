@@ -639,7 +639,7 @@ describe('workspace publish dispatch (#1044)', () => {
     }
   });
 
-  test('#1053 无 baseline revision 时 reported 路径不回退 legacy upload（BASELINE_UNAVAILABLE）', async () => {
+  test('#1053 无 baseline revision 时 reported 路径经 staging bootstrap 发布（不回退 legacy upload）', async () => {
     const home = tempDir('publish-1053-nobase-home-');
     const agentBeanHome = join(home, '.agentbean');
     const previousAgentBeanHome = process.env.AGENTBEAN_HOME;
@@ -647,30 +647,17 @@ describe('workspace publish dispatch (#1044)', () => {
     const customCwd = tempDir('publish-1053-nobase-cwd-');
     const external = tempDir('publish-1053-nobase-external-');
     const reportedPath = join(external, 'reported-交付.md');
-    const legacyUploads: string[] = [];
+    // Slice 3 后：无 baseline(workspace current 404) 不再丢弃 reported 路径，而是经 staging 发布。
+    const staging = { plans: [] as Array<{ publishId: string; baselineRevisionId: string; files: Array<{ path: string }> }>, puts: [] as never[], commits: [] as string[], legacyUploads: [] as string[] };
     try {
       const harness = fakeSocket();
-      // 无 workspaceRevisionId 且 workspace current 查询 404：baseline 缺失，staging 不可用。
-      const fetchNoBaseline = (async (input: unknown, init?: { body?: unknown }) => {
-        const url = String(input);
-        const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
-          status, headers: { 'content-type': 'application/json' },
-        });
-        if (url.includes('/artifacts/upload')) {
-          const form = init?.body as FormData;
-          const file = form.get('file') as File | null;
-          legacyUploads.push(file?.name ?? 'unknown');
-          return json({ ok: true, artifact: { id: `legacy-${file?.name ?? 'unknown'}` } });
-        }
-        return new Response('not found', { status: 404 });
-      }) as typeof fetch;
       const client = createDaemonProtocolClient({
         socket: harness.socket,
         device: { teamId: 'team-1', ownerId: 'owner-1', token: 'tok' },
         runtimes: [],
         agents: [],
         serverUrl: 'http://server.test',
-        fetch: fetchNoBaseline,
+        fetch: fakeStagingFetch(staging), // begin/put/commit 成功；workspace current 默认 404 → 无 baseline → bootstrap
         homeDir: home,
         executor: async () => {
           writeFileSync(reportedPath, '外部报告交付');
@@ -688,10 +675,14 @@ describe('workspace publish dispatch (#1044)', () => {
         customAgent: { adapterKind: 'hermes', command: 'hermes', cwd: customCwd },
       });
 
-      expect(legacyUploads).toEqual([]);
+      // 新行为：reported 路径经 staging 发布（commit 发生），以空 baseline bootstrap；不再 BASELINE_UNAVAILABLE 丢弃。
+      expect(staging.commits).toHaveLength(1);
+      expect(staging.plans[0]).toMatchObject({ baselineRevisionId: '' });
+      // #1053 不变式保留：reported 路径不回退 legacy upload。
+      expect(staging.legacyUploads).toEqual([]);
       const resultEmit = harness.emits.find((e) => e.event === AGENT_EVENTS.dispatch.result);
       const payload = resultEmit!.payload as { body?: string };
-      expect(payload.body).toContain('[workspace-publish:REPORTED_OUTPUTS_NOT_PUBLISHED] count=1 reason=BASELINE_UNAVAILABLE');
+      expect(payload.body).not.toContain('BASELINE_UNAVAILABLE');
     } finally {
       if (previousAgentBeanHome === undefined) delete process.env.AGENTBEAN_HOME;
       else process.env.AGENTBEAN_HOME = previousAgentBeanHome;
