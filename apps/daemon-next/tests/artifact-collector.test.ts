@@ -69,6 +69,18 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('交付 “/Users/a/季度 总结.md”')).toEqual(['/Users/a/季度 总结.md']);
     });
 
+    test('支持反引号（Markdown 代码 span）包裹的交付路径', () => {
+      // Agent 用 Markdown 反引号报路径是最常见写法；修复前目录正则的边界集不含反引号，
+      // 导致反引号包裹的交付目录被静默丢弃（剧本 Agent 实测：文件留在设备、永不发布 → 无 OutputPackage）。
+      expect(extractReportedOutputPaths('10集剧本已全部创建在 `/Users/luyun/Desktop/ScriptCreate/剧本创作/` 目录下。')).toEqual([
+        '/Users/luyun/Desktop/ScriptCreate/剧本创作/',
+      ]);
+      // 文件路径在反引号里（文件正则本就排除反引号作 body，能提取）。
+      expect(extractReportedOutputPaths('已生成 `/Users/a/report.md`')).toEqual(['/Users/a/report.md']);
+      // 反引号里的非绝对路径内容不误收。
+      expect(extractReportedOutputPaths('运行 `npm run build` 后完成')).toEqual([]);
+    });
+
     test('支持 Windows 绝对交付路径（#1053）', () => {
       expect(extractReportedOutputPaths('已生成 C:\\Users\\a\\Desktop\\report.md')).toEqual([
         'C:\\Users\\a\\Desktop\\report.md',

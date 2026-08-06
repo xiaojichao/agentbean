@@ -47,8 +47,8 @@ const WINDOWS_REPORTED_PATH_RE = new RegExp(
  * 不要求白名单扩展名，语境门降为「非明确引用语境」。负向前瞻 (?![A-Za-z0-9])
  * 确保不会把文件路径（如 /a/b/c.md）的前缀目录误当目录提取。
  */
-const UNIX_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|]+\/)(?=\s|["'“”‘’<>|，。；;！!？?,)]|$)/gi;
-const WINDOWS_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./\\:])([A-Za-z]:[\\/][^\s"'<>|]+?[\\/])(?=\s|["'“”‘’<>|，。；;！!？?,)]|$)/gi;
+const UNIX_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|`]+\/)(?=\s|["'“”‘’<>|，。；;！!？?,)]|`|$)/gi;
+const WINDOWS_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./\\:])([A-Za-z]:[\\/][^\s"'<>|`]+?[\\/])(?=\s|["'“”‘’<>|，。；;！!？?,)]|`|$)/gi;
 const QUOTED_REPORTED_DIR_RE = /["'“”‘’]((?:\/[^"'“”‘’\n]*?\/|[A-Za-z]:[\\/][^"'“”‘’\n]*?[\\/]))(?![A-Za-z0-9])["'“”‘’]/gi;
 
 /** reported 路径是否为目录候选（尾斜杠结尾，Unix 或 Windows 分隔符）。 */
