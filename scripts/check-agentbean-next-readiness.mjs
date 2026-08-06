@@ -17,6 +17,7 @@ export function collectAgentBeanNextReadinessChecks({
   const contractsPackageJson = readJson(join(root, 'packages/contracts/package.json'));
   const piManagementRuntimePackageJson = readJson(join(root, 'packages/pi-management-runtime/package.json'));
   const daemonNextPackageJson = readJson(join(root, 'apps/daemon-next/package.json'));
+  const contractsExactLockMisalignments = collectExactLockedContractsMisalignments(root, contractsPackageJson.version);
   const railwayJson = readJson(join(root, 'railway.json'));
   const workflow = readFileSync(join(root, '.github/workflows/ci-cd.yml'), 'utf8');
   const seaWorkflow = readFileSync(join(root, '.github/workflows/pi-sea-compatibility.yml'), 'utf8');
@@ -359,6 +360,13 @@ export function collectAgentBeanNextReadinessChecks({
         Boolean(daemonNextPackageJson.dependencies?.['js-yaml']) &&
         Boolean(daemonNextPackageJson.dependencies?.['socket.io-client']),
       '@agentbean/daemon-next must depend on exact published contracts and PI runtime plus its transport dependencies',
+    ),
+    check(
+      'workspace-contracts-exact-locks-aligned',
+      contractsExactLockMisalignments.length === 0,
+      contractsExactLockMisalignments.length === 0
+        ? '所有精确版本锁 @agentbean/contracts 的包须对齐 workspace version（防嵌套 node_modules shadow / 幽灵导出）'
+        : `精确版本锁 @agentbean/contracts 的包须对齐 workspace version（防嵌套 shadow/幽灵导出）；misaligned: ${contractsExactLockMisalignments.map((v) => `${v.pkg}@${v.observed} (expected ${v.expected})`).join(', ')}`,
     ),
     check(
       'daemon-runtime-does-not-probe-retired-source',
@@ -1142,6 +1150,31 @@ export function summarizeReadiness(checks) {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+/**
+ * 收集所有「精确版本锁 @agentbean/contracts 且未对齐 workspace version」的包。
+ * 精确版本锁（非 file: 协议）的包会被 npm 嵌套安装其声明的旧版 dist，NodeNext/vite
+ * 解析嵌套优先，shadow 掉 workspace 新版 → 编译/运行用旧 API（TS2367 / 幽灵导出）。
+ * file: 协议包直连 workspace 源码，免疫。见 contracts-release-publish-loop 教训。
+ */
+function collectExactLockedContractsMisalignments(root, expectedVersion) {
+  const misalignments = [];
+  for (const workspaceDir of ['packages', 'apps']) {
+    const dirPath = join(root, workspaceDir);
+    if (!existsSync(dirPath)) continue;
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const pkgJsonPath = join(dirPath, entry.name, 'package.json');
+      if (!existsSync(pkgJsonPath)) continue;
+      const declared = readJson(pkgJsonPath).dependencies?.['@agentbean/contracts'];
+      if (!declared || declared.startsWith('file:')) continue;
+      if (declared !== expectedVersion) {
+        misalignments.push({ pkg: `${workspaceDir}/${entry.name}`, observed: declared, expected: expectedVersion });
+      }
+    }
+  }
+  return misalignments;
 }
 
 function readTreeText(root) {
