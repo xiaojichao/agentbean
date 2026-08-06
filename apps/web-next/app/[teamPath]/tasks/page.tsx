@@ -49,7 +49,7 @@ import {
 } from '@/lib/task-status';
 import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
 import { shouldHideSystemMessage } from '@/lib/system-messages';
-import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
+import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 
 type TaskViewMode = 'board' | 'list';
 
@@ -1239,7 +1239,7 @@ function TaskThreadPanel({
             value={input}
             onChange={(event) => onInput(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
+              if (shouldSubmitComposerKey(event)) {
                 event.preventDefault();
                 onSend();
               }
