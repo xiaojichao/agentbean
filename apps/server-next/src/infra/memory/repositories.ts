@@ -1761,7 +1761,21 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       async publishRevision(input): Promise<PublishWorkspaceRevisionOutcome> {
         const key = `${input.teamId}:${input.channelId}`;
         const workspace = projectChannelWorkspaces.get(key);
-        if (!workspace) throw new Error('Project Channel Workspace not found');
+        if (!workspace) {
+          // 首次发布 bootstrap：频道尚无 workspace（同 sqlite 实现）。非空 baseline 却无 workspace 是非法态 → 抛错。
+          if (input.baselineRevisionId) throw new Error('Project Channel Workspace not found');
+          const newWsId = input.newWorkspaceId ?? input.newRevision.id;
+          const bootRevision: ProjectChannelWorkspaceRevisionRecord = {
+            id: input.newRevision.id, teamId: input.teamId, channelId: input.channelId,
+            revision: 1, files: structuredClone(input.newRevision.files),
+            createdBy: input.newRevision.createdBy, createdAt: input.newRevision.createdAt,
+            ...(input.newRevision.provenance ? { provenance: structuredClone(input.newRevision.provenance) } : {}),
+          };
+          projectChannelWorkspaceRevisions.set(bootRevision.id, bootRevision);
+          const bootWorkspace: ProjectChannelWorkspaceRecord = { id: newWsId, teamId: input.teamId, channelId: input.channelId, currentRevisionId: bootRevision.id, currentRevision: bootRevision };
+          projectChannelWorkspaces.set(key, bootWorkspace);
+          return { kind: 'published', workspace: structuredClone(bootWorkspace) };
+        }
         if (workspace.currentRevisionId !== input.baselineRevisionId) {
           return { kind: 'conflict', current: structuredClone(workspace) };
         }

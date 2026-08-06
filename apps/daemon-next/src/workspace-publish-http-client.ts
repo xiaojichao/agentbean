@@ -48,7 +48,7 @@ export function createHttpWorkspaceStagingClient(
           body: JSON.stringify({
             channelId: begin.channelId,
             publishId: begin.publishId,
-            baselineRevisionId: begin.baselineRevisionId,
+            baselineRevisionId: begin.baselineRevisionId ?? '',
             files: begin.files,
             ...(begin.provenance ? { provenance: begin.provenance } : {}),
           }),

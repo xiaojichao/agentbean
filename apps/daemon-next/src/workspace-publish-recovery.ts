@@ -28,7 +28,7 @@ export interface LocalWorkspacePublishRecord {
   readonly publishId: string;
   readonly teamId: string;
   readonly channelId: string;
-  readonly baselineRevisionId: string;
+  readonly baselineRevisionId?: string;
   readonly files: readonly LocalWorkspacePublishFile[];
   readonly status: LocalWorkspacePublishStatus;
   readonly createdAt: number;
@@ -129,7 +129,7 @@ export interface StagingRemoteClient {
     publishId: string;
     teamId: string;
     channelId: string;
-    baselineRevisionId: string;
+    baselineRevisionId?: string;
     files: Array<{
       path: string;
       filename: string;
