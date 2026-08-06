@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { createCommandExecutor } from '../src/executor';
+import { createCommandExecutor, resolveExecTimeoutMs } from '../src/executor';
 import {
   buildChildEnv,
   ensureNodeOnPath,
@@ -421,6 +421,49 @@ describe('daemon-next command executor', () => {
     // SIGTERM is ignored, so SIGKILL must fire at timeoutMs + killGraceMs.
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(isProcessAlive(pid)).toBe(false);
+  });
+
+  test('AGENTBEAN_EXEC_TIMEOUT_MS env overrides the pipe-executor timeout without an explicit timeoutMs', async () => {
+    // Hermes / claude-code / gemini run on the pipe spine; their ceiling must be tunable via env
+    // (mirrors the codex PTY path's AGENTBEAN_CODEX_TIMEOUT_MS). Without this knob the 5→15min
+    // default can't be raised at runtime, and slow-but-working agents get clipped.
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const pidFile = join(cwd, 'child.pid');
+    const scriptPath = join(cwd, 'stubborn.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        `process.on('SIGTERM', () => {});`,
+        `setInterval(() => {}, 1000);`,
+      ].join('\n'),
+    );
+
+    process.env.AGENTBEAN_EXEC_TIMEOUT_MS = '400';
+    try {
+      // No timeoutMs option is passed — the env value alone must drive the kill timing.
+      const executor = createCommandExecutor({ killGraceMs: 30, clock: createClock([5000, 5530]) });
+      const running = executor({
+        id: 'dispatch-env-timeout',
+        teamId: 'team-1',
+        channelId: 'channel-1',
+        messageId: 'message-1',
+        agentId: 'agent-1',
+        requestId: 'request-1',
+        prompt: 'hello',
+        customAgent: {
+          adapterKind: 'gemini',
+          command: process.execPath,
+          args: [scriptPath],
+          cwd,
+        },
+      });
+      await waitForFile(pidFile);
+      await expect(running).rejects.toThrow('timed out after 400ms');
+    } finally {
+      delete process.env.AGENTBEAN_EXEC_TIMEOUT_MS;
+    }
   });
 
   test('terminates a custom agent command whose output exceeds the accumulated byte cap', async () => {
@@ -1108,6 +1151,25 @@ describe('daemon-next command executor', () => {
     expect(output.body).not.toBe('custom agent command exited with code 1');
     expect(output.workspaceRun?.status).toBe('failed');
     expect(output.workspaceRun?.exitCode).toBe(1);
+  });
+
+  test('resolveExecTimeoutMs honours env > options > 15min default for the pipe spine', () => {
+    // Non-codex agents (Hermes, claude-code, gemini, …) run on the pipe spine. Their timeout must
+    // (a) default to 15min — codex parity, since real coding tasks run 4-5+min and the old 5min
+    //     ceiling clipped slow-but-working agents, and
+    // (b) be overridable via AGENTBEAN_EXEC_TIMEOUT_MS (operator tuning without a release),
+    // mirroring the codex PTY path's AGENTBEAN_CODEX_TIMEOUT_MS contract.
+    const FIFTEEN_MIN = 15 * 60 * 1000;
+    // No env, no option → 15min default (was 5min).
+    expect(resolveExecTimeoutMs({ env: '' })).toBe(FIFTEEN_MIN);
+    // Invalid / non-positive env is ignored → default still applies.
+    expect(resolveExecTimeoutMs({ env: 'garbage' })).toBe(FIFTEEN_MIN);
+    expect(resolveExecTimeoutMs({ env: '0' })).toBe(FIFTEEN_MIN);
+    expect(resolveExecTimeoutMs({ env: '-100' })).toBe(FIFTEEN_MIN);
+    // Explicit option is respected when env is absent.
+    expect(resolveExecTimeoutMs({ env: '', timeoutMs: 7000 })).toBe(7000);
+    // Env wins over the option.
+    expect(resolveExecTimeoutMs({ env: '30000', timeoutMs: 7000 })).toBe(30000);
   });
 });
 
