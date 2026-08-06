@@ -30,7 +30,7 @@ export interface DeliverWorkspaceOutputsViaStagingInput {
   readonly client: StagingRemoteClient;
   readonly teamId: string;
   readonly channelId: string;
-  readonly baselineRevisionId: string;
+  readonly baselineRevisionId?: string;
   readonly collected: readonly CollectedArtifact[];
   readonly publishId?: string;
   readonly now: number;
@@ -43,10 +43,11 @@ export interface DeliverWorkspaceOutputsViaStagingInput {
 export function buildDispatchWorkspacePublishId(input: {
   dispatchId: string;
   channelId: string;
-  baselineRevisionId: string;
+  /** 首次发布（频道尚无 workspace）时省略；用空串占位保证 publishId 仍确定性派生。 */
+  baselineRevisionId?: string;
 }): string {
   const digest = createHash('sha256')
-    .update(`${input.dispatchId}\0${input.channelId}\0${input.baselineRevisionId}`)
+    .update(`${input.dispatchId}\0${input.channelId}\0${input.baselineRevisionId ?? ''}`)
     .digest('hex')
     .slice(0, 24);
   return `dispatch-${digest}`;

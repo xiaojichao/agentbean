@@ -6291,9 +6291,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       void this.cleanupExpiredWorkspacePublishStaging({ limit: 20 }).catch(() => undefined);
       const publishId = normalizeWorkspacePublishId(beginInput.publishId);
       if (!publishId) return makeFailure('VALIDATION_ERROR', 'Invalid publish identity');
-      if (!beginInput.baselineRevisionId?.trim()) {
-        return makeFailure('VALIDATION_ERROR', 'baselineRevisionId is required');
-      }
+      // baselineRevisionId 可选：首次发布（频道尚无 workspace）时省略/空，commit 端 publishRevision 会 bootstrap。
       if (!Array.isArray(beginInput.files) || beginInput.files.length === 0) {
         return makeFailure('VALIDATION_ERROR', 'Workspace staging must declare files');
       }
@@ -6910,19 +6908,26 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: commitInput.teamId,
         channelId: commitInput.channelId,
       });
-      if (!workspace) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      if (!workspace) {
+        // 首次发布 bootstrap：频道尚无 workspace。空 baseline = 首次发布，允许（publishRevision 会建）；
+        // 非空 baseline 却无 workspace = 非法态（基线指向不存在的 workspace）→ 拒。
+        if (staging.baselineRevisionId) return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+      }
 
       // 半态恢复：publishRevision 已成功但 staging 未标 committed（崩溃窗口）时，
       // 当前 head 的 path/size/sha 与本 plan 一致 → 补标 committed 并返回，不重复创建 revision。
-      const recovered = await recoverCommittedWorkspaceStagingIfPublished({
-        repositories,
-        staging,
-        workspace,
-        now: clock.now(),
-      });
-      if (recovered) {
-        await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
-        return recovered;
+      // 首次发布(无 workspace)无半态可恢复，跳过。
+      if (workspace) {
+        const recovered = await recoverCommittedWorkspaceStagingIfPublished({
+          repositories,
+          staging,
+          workspace,
+          now: clock.now(),
+        });
+        if (recovered) {
+          await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+          return recovered;
+        }
       }
 
       // #1044：半态恢复之后、物化任何 artifact 之前，权威复验 provenance 的 Agent/Task/Device
@@ -6943,45 +6948,49 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }));
       const toEntries = (list: Array<{ path: string; artifactId: string }>) =>
         list.map((f) => ({ path: f.path, artifactId: f.artifactId }));
-      const preDecision = evaluateWorkspacePublish({
-        current: {
-          revisionId: workspace.currentRevision.id,
-          revision: workspace.currentRevision.revision,
-          files: toEntries(workspace.currentRevision.files),
-        },
-        baselineRevisionId: staging.baselineRevisionId,
-        files: provisionalEntries,
-      });
-      if (preDecision.kind === 'rejected') {
-        return makeFailure(
-          'VALIDATION_ERROR',
-          preDecision.reason === 'revision-overflow' ? 'Workspace revision overflow' : 'Workspace publish must contain files',
-        );
-      }
-      if (preDecision.kind === 'conflict') {
-        // 再试一次半态恢复（并发 peer 可能刚完成 publish+标 committed，或仅完成 publish）。
-        const workspaceNow = await repositories.projectChannelWorkspaces.getForTeam({
-          teamId: commitInput.teamId,
-          channelId: commitInput.channelId,
+      // pre-publish 冲突预判仅在 workspace 存在时进行：首次发布(无 workspace)无 currentRevision 可比，
+      // 跳过——由 publishRevision 事务内 CAS/bootstrap 兜底。
+      if (workspace) {
+        const preDecision = evaluateWorkspacePublish({
+          current: {
+            revisionId: workspace.currentRevision.id,
+            revision: workspace.currentRevision.revision,
+            files: toEntries(workspace.currentRevision.files),
+          },
+          baselineRevisionId: staging.baselineRevisionId,
+          files: provisionalEntries,
         });
-        if (workspaceNow) {
-          const recoveredOnConflict = await recoverCommittedWorkspaceStagingIfPublished({
-            repositories,
-            staging,
-            workspace: workspaceNow,
-            now: clock.now(),
-          });
-          if (recoveredOnConflict) {
-            await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
-            return recoveredOnConflict;
-          }
+        if (preDecision.kind === 'rejected') {
+          return makeFailure(
+            'VALIDATION_ERROR',
+            preDecision.reason === 'revision-overflow' ? 'Workspace revision overflow' : 'Workspace publish must contain files',
+          );
         }
-        // 真冲突：基线落后 / 同路径竞争，不自动合并、不写 revision、不创建 artifact。
-        return makeFailure('CONFLICT', 'Workspace baseline changed', {
-          currentRevisionId: preDecision.currentRevisionId,
-          currentRevision: preDecision.currentRevision,
-          conflictingPaths: preDecision.conflictingPaths,
-        });
+        if (preDecision.kind === 'conflict') {
+          // 再试一次半态恢复（并发 peer 可能刚完成 publish+标 committed，或仅完成 publish）。
+          const workspaceNow = await repositories.projectChannelWorkspaces.getForTeam({
+            teamId: commitInput.teamId,
+            channelId: commitInput.channelId,
+          });
+          if (workspaceNow) {
+            const recoveredOnConflict = await recoverCommittedWorkspaceStagingIfPublished({
+              repositories,
+              staging,
+              workspace: workspaceNow,
+              now: clock.now(),
+            });
+            if (recoveredOnConflict) {
+              await stagingContentStore?.deletePublish({ teamId: staging.teamId, publishId: staging.publishId });
+              return recoveredOnConflict;
+            }
+          }
+          // 真冲突：基线落后 / 同路径竞争，不自动合并、不写 revision、不创建 artifact。
+          return makeFailure('CONFLICT', 'Workspace baseline changed', {
+            currentRevisionId: preDecision.currentRevisionId,
+            currentRevision: preDecision.currentRevision,
+            conflictingPaths: preDecision.conflictingPaths,
+          });
+        }
       }
 
       // 通过预判后再物化 artifacts（commit 前它们不在 revision；无 message/run 时频道索引也不收录）。

@@ -2317,10 +2317,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           const ws = teamDb.prepare(`SELECT id, current_revision_id FROM project_channel_workspaces WHERE team_id = ? AND channel_id = ?`)
             .get(input.teamId, input.channelId) as Record<string, unknown> | undefined;
           if (!ws) {
-            // 首次发布 bootstrap：频道尚无 workspace。仅当无 baselineRevisionId（首次发布）时建初始
-            // workspace+revision；此时 commit 上游已物化 artifact（usecases），无鸡生蛋问题。
-            // 有 baselineRevisionId 却无 workspace 是非法态（基线指向不存在的 workspace）→ 保留原抛错。
-            if (input.baselineRevisionId !== undefined) throw new Error('Project Channel Workspace not found');
+            // 首次发布 bootstrap：频道尚无 workspace。无 baselineRevisionId（首次发布，可能为 undefined 或
+            // 空 sentinel）时建初始 workspace+revision；此时 commit 上游已物化 artifact，无鸡生蛋问题。
+            // 给了非空 baseline 却无 workspace 是非法态（基线指向不存在的 workspace）→ 保留原抛错。
+            if (input.baselineRevisionId) throw new Error('Project Channel Workspace not found');
             const newWsId = input.newWorkspaceId ?? input.newRevision.id;
             try {
               teamDb.prepare(`INSERT INTO project_channel_workspace_revisions (id, team_id, channel_id, revision, files_json, provenance_json, created_by, created_at)

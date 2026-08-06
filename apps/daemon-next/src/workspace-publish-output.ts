@@ -47,7 +47,7 @@ export interface WorkspacePublishOutputManifest {
   readonly taskId?: string;
   readonly taskAttempt?: number;
   readonly workspaceRunId?: string;
-  readonly baselineRevisionId: string;
+  readonly baselineRevisionId?: string;
   readonly status: WorkspacePublishOutputStatus;
   readonly files: readonly WorkspacePublishOutputFileEntry[];
   /** Server commit 成功后写入：同一 publish identity 幂等查询的最终 revision。 */
@@ -164,7 +164,7 @@ export function stageRunOutputsToPublishOutput(input: {
   readonly teamId: string;
   readonly channelId: string;
   readonly publishIdentity: string;
-  readonly baselineRevisionId: string;
+  readonly baselineRevisionId?: string;
   readonly now: number;
   readonly agentId?: string;
   readonly taskId?: string;

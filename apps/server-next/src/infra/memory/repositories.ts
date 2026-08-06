@@ -1762,8 +1762,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const key = `${input.teamId}:${input.channelId}`;
         const workspace = projectChannelWorkspaces.get(key);
         if (!workspace) {
-          // 首次发布 bootstrap：频道尚无 workspace（同 sqlite 实现）。有 baselineRevisionId 却无 workspace 是非法态 → 抛错。
-          if (input.baselineRevisionId !== undefined) throw new Error('Project Channel Workspace not found');
+          // 首次发布 bootstrap：频道尚无 workspace（同 sqlite 实现）。非空 baseline 却无 workspace 是非法态 → 抛错。
+          if (input.baselineRevisionId) throw new Error('Project Channel Workspace not found');
           const newWsId = input.newWorkspaceId ?? input.newRevision.id;
           const bootRevision: ProjectChannelWorkspaceRevisionRecord = {
             id: input.newRevision.id, teamId: input.teamId, channelId: input.channelId,

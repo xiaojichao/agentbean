@@ -1168,7 +1168,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 });
                 if (current.ok) baselineRevisionId = current.currentRevisionId;
               }
-              if (serverUrl && baselineRevisionId) {
+              // Slice 3：无 baselineRevisionId（频道尚无 workspace，首次发布）也继续——
+              // server 端 publishRevision 会 bootstrap 初始 workspace。不再因缺 baseline 丢弃 reported 路径。
+              if (serverUrl) {
                 const client = createHttpWorkspaceStagingClient({
                   serverUrl,
                   token: device.token,
