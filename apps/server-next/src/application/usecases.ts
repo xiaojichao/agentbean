@@ -7043,8 +7043,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: commitInput.teamId,
         channelId: commitInput.channelId,
         baselineRevisionId: staging.baselineRevisionId,
-        // 首次发布(无 workspace)时 publishRevision 用它 bootstrap 初始 workspace；有 workspace 时忽略。
-        newWorkspaceId: ids.nextId(),
+        // 首次发布(无 workspace)时 publishRevision 内部用 newRevision.id 作 workspace id bootstrap（fallback）。
         newRevision: {
           id: ids.nextId(),
           files: publishedFiles,
