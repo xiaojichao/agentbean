@@ -22,7 +22,10 @@ import {
 describe('Device Service migration', () => {
   test('reports an idle in-place plan through the stable JSON CLI', async () => {
     const output: string[] = [];
+    // Isolate from the developer machine's ~/.agentbean migration journal.
+    const baseDir = await mkdtemp(join(tmpdir(), 'agentbean-migrate-plan-'));
     const status = await inspectDeviceMigration({
+      baseDir,
       readOwner: async () => 'legacy-daemon',
       listLegacy: async () => [],
     });
@@ -301,11 +304,48 @@ describe('Legacy runtime registration', () => {
       '  707 node /Users/shaw/.npm/_npx/hash/node_modules/.bin/daemon --invite-code code --server-url https://api.agentbean.dev',
       '  808 node /opt/lib/node_modules/@agentbean/daemon/dist/bin.js --profile-id main --server-url https://api.agentbean.dev',
       '  909 /opt/homebrew/bin/agentbean-daemon --profile-id main --server-url https://api.agentbean.dev',
+      // Self-update parent must not fence Device Service during `agentbean update`.
+      ' 1010 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean update',
+      ' 1011 /Users/xiao/.nvm/versions/node/v24.15.0/bin/agentbean update',
+      ' 1012 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean device install --deadline-ms 90000',
     ].join('\n');
     await expect(discoverUnregisteredLegacyRuntimePids(new Set([202]), {
       pid: 999,
       runPs: async () => output,
     })).resolves.toEqual([101, 606, 707, 808, 909]);
+  });
+
+  test('does not treat agentbean update as a legacy daemon (self-update fence deadlock)', async () => {
+    // Minimal repro for UPDATE_RECOVERY_REQUIRED / LEGACY_RUNTIME_FENCE_ACTIVE during
+    // `agentbean update`: the still-running update parent is visible in `ps` while
+    // Device Service starts after package swap and must not fence itself.
+    const output = [
+      '  1001 /Users/xiao/.nvm/versions/node/v24.15.0/bin/node /Users/xiao/.nvm/versions/node/v24.15.0/bin/agentbean update',
+      '  1002 /Users/xiao/.nvm/versions/node/v24.15.0/bin/node /Users/xiao/.agentbean/service/payload/agentbean-service.mjs service run',
+    ].join('\n');
+    await expect(discoverUnregisteredLegacyRuntimePids(new Set(), {
+      pid: 1002,
+      runPs: async () => output,
+    })).resolves.toEqual([]);
+  });
+
+  test('excludes a live update.lock holder even when the process command looks like a legacy daemon', async () => {
+    // Defense in depth: command-line heuristics can miss truncated `ps` lines;
+    // update.lock PID must still be excluded while agentbean update holds the lock.
+    const output = [
+      '  4242 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean --all-profiles',
+      '  1002 /opt/homebrew/bin/node /payload/agentbean-service.mjs service run',
+    ].join('\n');
+    await expect(discoverUnregisteredLegacyRuntimePids(new Set(), {
+      pid: 1002,
+      runPs: async () => output,
+      readUpdateLockPid: async () => 4242,
+    })).resolves.toEqual([]);
+    await expect(discoverUnregisteredLegacyRuntimePids(new Set(), {
+      pid: 1002,
+      runPs: async () => output,
+      readUpdateLockPid: async () => undefined,
+    })).resolves.toEqual([4242]);
   });
 
   test('rejects only global npm executables that do not honor the owner fence', async () => {

@@ -10,6 +10,7 @@ import {
 import type { PlatformCommandResult, PlatformServiceStatus } from './device-platform-service.js';
 import { deviceServicePaths } from './device-service-paths.js';
 import { createDeviceServiceStateStore } from './device-service-state.js';
+import { createUpdateProgress, type UpdateProgress } from './update-progress.js';
 
 const CANONICAL_PACKAGE = '@agentbean/daemon';
 const CANONICAL_REGISTRY = 'https://registry.npmjs.org/';
@@ -82,6 +83,8 @@ export interface UpdateCliDeps {
   readonly discardPackageSnapshot?: (backupRoot: string) => Promise<void>;
   /** 运行级健康确认：Device Service 必须报告新版本且处于 running/degraded。 */
   readonly confirmServiceReady?: (expectedVersion: string) => Promise<boolean>;
+  /** Progress bar + task text; tests inject a recorder. Default is TTY-aware terminal UI. */
+  readonly createProgress?: () => UpdateProgress;
   readonly stdout?: (message: string) => void;
   readonly stderr?: (message: string) => void;
 }
@@ -189,10 +192,24 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     ?? deps.quiesceDeviceService
     ?? (() => fenceDeviceServiceForPackageSwap(servicePathsInput));
   const wasServiceInstalled = serviceStatus.installed || serviceStatus.loaded;
+  const progress = (deps.createProgress ?? (() => createUpdateProgress({
+    stdout,
+    stderr,
+    // Live bar only on an interactive terminal with default console streams.
+    // Custom stdout/stderr (tests, pipes) get plain sequential task lines.
+    isTTY: deps.stdout === undefined && deps.stderr === undefined && Boolean(process.stderr.isTTY),
+  })))();
+  // With service: fence → snapshot → install → start/confirm service → cleanup
+  // Without service: snapshot → install → cleanup
+  const totalSteps = wasServiceInstalled ? 5 : 3;
+  progress.begin(totalSteps, `AgentBean 更新 ${current.version} → ${latest}`);
+
   if (wasServiceInstalled) {
+    progress.step('停止 Device Service');
+    progress.detail('正在安全停止并卸载 LaunchAgent，避免换包时半写依赖被加载…');
     const fenced = await safeBoolean(fence);
     if (!fenced) {
-      stderr('Device Service 无法在更新前安全停止（UPDATE_SERVICE_STOP_FAILED）。');
+      progress.fail('Device Service 无法在更新前安全停止（UPDATE_SERVICE_STOP_FAILED）。');
       return UPDATE_CLI_EXIT.rejected;
     }
   }
@@ -211,19 +228,27 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
 
   // 换包前把当前全局安装整体移出 node_modules：回滚只做 mv/rm，
   // 不依赖 npm/网络，也不会在 crash-loop 的 Device Service 上重跑 npm reify。
+  progress.step('备份当前安装');
+  progress.detail(`快照 → ${backupRoot}`);
   const snapshotted = await safeBoolean(() => snapshot({ packageRoot, backupRoot }));
   if (!snapshotted) {
-    stderr('无法备份当前 AgentBean 安装（UPDATE_SNAPSHOT_FAILED）；未执行更新。');
+    progress.fail('无法备份当前 AgentBean 安装（UPDATE_SNAPSHOT_FAILED）；未执行更新。');
     return UPDATE_CLI_EXIT.rejected;
   }
 
+  progress.step(`安装 @agentbean/daemon@${latest}`);
+  progress.detail('npm install + 模块导入验证（可能需要一到两分钟）…');
   const installed = await installExactVersion(runNpm, latest, globalPrefix, verify);
   if (!installed.ok) {
+    progress.detail('安装验证失败，正在从快照回滚…');
     // 安装验证失败：直接从快照恢复旧版本。
-    if (wasServiceInstalled) await safeBoolean(fence);
+    if (wasServiceInstalled) {
+      progress.detail('再次停止 Device Service…');
+      await safeBoolean(fence);
+    }
     const snapshotRestored = await safeBoolean(() => restoreSnapshot({ packageRoot, backupRoot }));
     if (!snapshotRestored) {
-      stderr(
+      progress.fail(
         'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。'
         + formatDetail(installed.detail)
         + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
@@ -231,18 +256,19 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
       return UPDATE_CLI_EXIT.rejected;
     }
     if (!wasServiceInstalled) {
-      stderr(
+      progress.fail(
         `AgentBean 更新安装验证失败，已恢复 ${current.version}（UPDATE_INSTALL_FAILED）。`
         + formatDetail(installed.detail),
       );
       return UPDATE_CLI_EXIT.rejected;
     }
+    progress.detail(`恢复 Device Service（${current.version}）…`);
     const serviceRestored = await prepareDeviceServiceWithRetry(
       runAgentBean, agentBeanExecutable,
       ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-      confirmServiceReady, current.version,
+      confirmServiceReady, current.version, progress,
     );
-    stderr(serviceRestored.confirmed
+    progress.fail(serviceRestored.confirmed
       ? `AgentBean 更新安装验证失败，已恢复 ${current.version} 并恢复 Device Service（UPDATE_INSTALL_FAILED）。`
         + formatDetail(installed.detail)
       : 'AgentBean 更新安装验证失败且自动回滚失败（UPDATE_RECOVERY_REQUIRED）。'
@@ -251,28 +277,32 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     return UPDATE_CLI_EXIT.rejected;
   }
   if (!wasServiceInstalled) {
+    progress.step('清理备份');
     await safeBoolean(async () => {
       await discardSnapshot(backupRoot);
       return true;
     });
-    stdout(`AgentBean 已更新到 ${latest}；Device Service 尚未安装，无需重启。`);
+    progress.done(`AgentBean 已更新到 ${latest}；Device Service 尚未安装，无需重启。`);
     return UPDATE_CLI_EXIT.success;
   }
 
   // 运行级健康确认：service run 报告就绪还不够，还要确认运行中的版本与目标一致。
   // 启动期服务端连接闪断（required announce 抛错）会让首次 install 未就绪；
   // 先重试 device restart（等价手动 install && restart 的恢复路径），而不是立刻回滚。
+  progress.step('启动 Device Service');
+  progress.detail(`安装并确认版本 ${latest}…`);
   const prepared = await prepareDeviceServiceWithRetry(
     runAgentBean, agentBeanExecutable,
     ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-    confirmServiceReady, latest,
+    confirmServiceReady, latest, progress,
   );
   if (prepared.confirmed) {
+    progress.step('清理备份');
     await safeBoolean(async () => {
       await discardSnapshot(backupRoot);
       return true;
     });
-    stdout(`AgentBean 已更新到 ${latest}，Device Service 已安全${serviceStatus.loaded ? '重启' : '启动'}。`);
+    progress.done(`AgentBean 已更新到 ${latest}，Device Service 已安全${serviceStatus.loaded ? '重启' : '启动'}。`);
     return UPDATE_CLI_EXIT.success;
   }
 
@@ -293,29 +323,33 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
 
   // 回滚：再次 fence 是尽力而为；即使失败也直接做快照恢复（mv/rm），
   // 绝不在 crash-loop 的服务运行期间重跑 npm install（原实现会把树越搅越烂）。
+  progress.detail('新版本未就绪，开始回滚…');
+  progress.detail('停止 Device Service…');
   const fencedForRollback = await safeBoolean(fence);
+  progress.detail('从快照恢复上一版本…');
   const snapshotRestored = await safeBoolean(() => restoreSnapshot({ packageRoot, backupRoot }));
   if (!snapshotRestored) {
-    stderr(
+    progress.fail(
       `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
       + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : '')
       + `\n可手动恢复：${formatManualRecovery(backupRoot, current.version)}`,
     );
     return UPDATE_CLI_EXIT.rejected;
   }
+  progress.detail(`恢复 Device Service（${current.version}）…`);
   const serviceRestored = await prepareDeviceServiceWithRetry(
     runAgentBean, agentBeanExecutable,
     ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-    confirmServiceReady, current.version,
+    confirmServiceReady, current.version, progress,
   );
   if (serviceRestored.confirmed) {
-    stderr(
+    progress.fail(
       `新版本 ${latest} 未能就绪，已回滚到 ${current.version} 并恢复 Device Service。`
       + (reasonSummary ? `\n原因摘要：\n${reasonSummary}` : ''),
     );
     return UPDATE_CLI_EXIT.rejected;
   }
-  stderr(
+  progress.fail(
     (fencedForRollback
       ? `新版本 ${latest} 未能就绪，自动回滚失败（UPDATE_RECOVERY_REQUIRED）。`
       : `新版本 ${latest} 未能就绪，Device Service 无法安全停止且自动恢复失败（UPDATE_RECOVERY_REQUIRED）。`)
@@ -336,17 +370,21 @@ async function prepareDeviceServiceWithRetry(
   firstArgv: readonly string[],
   confirmServiceReady: (expectedVersion: string) => Promise<boolean>,
   expectedVersion: string,
+  progress?: UpdateProgress,
 ): Promise<{ confirmed: boolean; firstAttempt: PlatformCommandResult }> {
+  progress?.detail(`运行 agentbean ${firstArgv.join(' ')}…`);
   const firstAttempt = await safeRunAgentBean(runAgentBean, executable, firstArgv);
   let confirmed = firstAttempt.exitCode === 0
     && await safeBoolean(() => confirmServiceReady(expectedVersion));
   for (let attempt = 0; attempt < SERVICE_START_RETRY_ATTEMPTS && !confirmed; attempt += 1) {
+    progress?.detail(`服务未就绪，重试 device restart（${attempt + 1}/${SERVICE_START_RETRY_ATTEMPTS}）…`);
     const restarted = await safeRunAgentBean(runAgentBean, executable, [
       'device', 'restart', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
     ]);
     confirmed = restarted.exitCode === 0
       && await safeBoolean(() => confirmServiceReady(expectedVersion));
   }
+  if (confirmed) progress?.detail(`Device Service 已确认版本 ${expectedVersion}`);
   return { confirmed, firstAttempt };
 }
 

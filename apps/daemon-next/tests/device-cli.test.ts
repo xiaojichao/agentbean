@@ -569,7 +569,7 @@ describe('agentbean device CLI', () => {
     expect(adapter.start).toHaveBeenCalledTimes(1);
   });
 
-  test('restart fails closed when the old launchd process misses the deadline', async () => {
+  test('restart force-kills a hung launchd process after the stop deadline', async () => {
     const adapter = fakeAdapter();
     const controlClient: DeviceControlClient = {
       request: vi.fn(async (request) => ({
@@ -583,7 +583,50 @@ describe('agentbean device CLI', () => {
     await expect(runDeviceCli(['restart', '--deadline-ms', '1'], {
       platform: 'darwin', createAdapter: () => adapter, controlClient,
     })).resolves.toBe(DEVICE_CLI_EXIT.drain);
+    // Must attempt force-kill so update/restart cannot leave the device permanently offline.
+    expect(adapter.kill).toHaveBeenCalled();
     expect(adapter.start).not.toHaveBeenCalled();
+  });
+
+  test('restart starts a new instance after force-killing a hung process', async () => {
+    let statusCalls = 0;
+    const adapter = fakeAdapter({
+      status: vi.fn(async () => {
+        statusCalls += 1;
+        // First wait loop: always running → timeout → kill.
+        // After kill (statusCalls high enough), report stopped so start can proceed.
+        // kill is invoked after the first wait deadline; subsequent polls should be stopped.
+        const afterKill = (adapter.kill as ReturnType<typeof vi.fn>).mock.calls.length > 0;
+        return {
+          installed: true,
+          loaded: true,
+          running: !afterKill,
+          queryFailed: false,
+        };
+      }),
+    });
+    const controlClient: DeviceControlClient = {
+      request: vi.fn(async (request) => ({
+        schemaVersion: 1,
+        requestId: request.requestId,
+        ok: true,
+        state: runningState(request.command === 'shutdown' ? 'stopped' : 'draining'),
+      })),
+    };
+    const stdout: string[] = [];
+
+    await expect(runDeviceCli(['restart', '--deadline-ms', '30'], {
+      platform: 'darwin',
+      createAdapter: () => adapter,
+      controlClient,
+      waitForReady: vi.fn(async () => runningState()),
+      stdout: (line) => stdout.push(line),
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(adapter.kill).toHaveBeenCalled();
+    expect(adapter.start).toHaveBeenCalledTimes(1);
+    expect(stdout.some((line) => line.includes('已强制停止'))).toBe(true);
+    expect(statusCalls).toBeGreaterThan(0);
   });
 
   test('restart fails closed when launchctl cannot confirm the old process state', async () => {

@@ -1,8 +1,29 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
   collectAgentBeanNextCutoverAudit,
   summarizeCutoverAudit,
 } from '../../../scripts/audit-agentbean-next-cutover.mjs';
+
+const rootDir = join(import.meta.dirname, '../../..');
+const contractsVersion = readPackageVersion(join(rootDir, 'packages/contracts/package.json'));
+const piRuntimeVersion = readPackageVersion(join(rootDir, 'packages/pi-management-runtime/package.json'));
+const daemonNextVersion = readPackageVersion(join(rootDir, 'apps/daemon-next/package.json'));
+
+function readPackageVersion(path: string): string {
+  return JSON.parse(readFileSync(path, 'utf8')).version as string;
+}
+
+/** Published registry snapshot matching current workspace package.json versions. */
+function publishedRegistryVersions(): Record<string, string> {
+  return {
+    [`@agentbean/contracts@${contractsVersion}`]: contractsVersion,
+    [`@agentbean/pi-management-runtime@${piRuntimeVersion}`]: piRuntimeVersion,
+    [`@agentbean/daemon-next@${daemonNextVersion}`]: daemonNextVersion,
+    [`@agentbean/daemon@${daemonNextVersion}`]: daemonNextVersion,
+  };
+}
 
 describe('AgentBean Next cutover audit', () => {
   test('passes when GitHub configuration and npm registry versions are ready', () => {
@@ -18,14 +39,9 @@ describe('AgentBean Next cutover audit', () => {
           { name: 'AGENTBEAN_NEXT_SESSION_SECRET' },
           { name: 'AGENTBEAN_PI_SECRET_KEY' },
         ],
-        npmVersions: {
-          '@agentbean/contracts@0.2.6': '0.2.6',
-          '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-          '@agentbean/daemon-next@0.3.37': '0.3.37',
-          '@agentbean/daemon@0.3.37': '0.3.37',
-        },
+        npmVersions: publishedRegistryVersions(),
         distTags: {
-          '@agentbean/daemon': { latest: '0.3.37', legacy: '0.1.35' },
+          '@agentbean/daemon': { latest: daemonNextVersion, legacy: '0.1.35' },
         },
       }),
     });
@@ -42,8 +58,9 @@ describe('AgentBean Next cutover audit', () => {
       runCommand: createFakeRunCommand({
         variables: [],
         secrets: [{ name: 'RAILWAY_TOKEN' }, { name: 'NPM_TOKEN' }],
+        // Only an unrelated older daemon-next pin is present; workspace version is unpublished.
         npmVersions: {
-          '@agentbean/daemon-next@0.3.37': '0.3.37',
+          '@agentbean/daemon-next@0.0.0-not-current': '0.0.0-not-current',
         },
         distTags: {
           '@agentbean/daemon': { latest: '0.1.35' },
@@ -60,6 +77,7 @@ describe('AgentBean Next cutover audit', () => {
       'github-secret-pi-secret-key',
       'npm-contracts-next-version',
       'npm-pi-management-runtime-version',
+      'npm-daemon-next-version',
       'npm-canonical-daemon-next-version',
       'npm-canonical-daemon-latest-dist-tag',
       'npm-canonical-daemon-legacy-dist-tag',
@@ -107,14 +125,9 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.37', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: daemonNextVersion, legacy: '0.1.35' })}\n`;
           }
-          const versions: Record<string, string> = {
-            '@agentbean/contracts@0.2.6': '0.2.6',
-            '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-            '@agentbean/daemon-next@0.3.37': '0.3.37',
-            '@agentbean/daemon@0.3.37': '0.3.37',
-          };
+          const versions = publishedRegistryVersions();
           const version = versions[args[1]];
           if (!version) {
             throw new Error(`missing npm version for ${args[1]}`);
@@ -148,14 +161,9 @@ describe('AgentBean Next cutover audit', () => {
         }
         if (args[0] === 'view') {
           if (args[2] === 'dist-tags') {
-            return `${JSON.stringify({ latest: '0.3.37', legacy: '0.1.35' })}\n`;
+            return `${JSON.stringify({ latest: daemonNextVersion, legacy: '0.1.35' })}\n`;
           }
-          const versions: Record<string, string> = {
-            '@agentbean/contracts@0.2.6': '0.2.6',
-            '@agentbean/pi-management-runtime@0.1.3': '0.1.3',
-            '@agentbean/daemon-next@0.3.37': '0.3.37',
-            '@agentbean/daemon@0.3.37': '0.3.37',
-          };
+          const versions = publishedRegistryVersions();
           const version = versions[args[1]];
           if (!version) {
             throw new Error(`missing npm version for ${args[1]}`);
