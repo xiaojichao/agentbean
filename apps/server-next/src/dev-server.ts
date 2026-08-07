@@ -975,7 +975,10 @@ async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Prom
         teamId,
         channelId: readRequiredString(body, 'channelId'),
         publishId: readRequiredString(body, 'publishId'),
-        baselineRevisionId: readRequiredString(body, 'baselineRevisionId'),
+        // baselineRevisionId 可选:无 workspace 频道(DM / 新建)首次发布时为空,
+        // 由 usecase 层(#1099)commit 端 bootstrap 建 workspace。修前 route 用
+        // readRequiredString 在调 usecase 前就抛 BAD_REQUEST,使 #1099 放宽失效。
+        baselineRevisionId: typeof body.baselineRevisionId === 'string' ? body.baselineRevisionId.trim() : '',
         files: Array.isArray(body.files) ? body.files as BeginWorkspacePublishStagingInput['files'] : [],
         provenance: body.provenance as BeginWorkspacePublishStagingInput['provenance'] | undefined,
       });
