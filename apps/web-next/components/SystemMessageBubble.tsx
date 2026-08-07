@@ -49,8 +49,8 @@ export function SystemMessageBubble({
       : 'border-neutral-200 bg-white'
   }`;
 
-  // 1. 任务状态更新药丸
-  const taskStatusEvent = taskStatusEventSummary(meta);
+  // 1. 任务状态更新药丸(taskStatusEventSummary 不接受 null/undefined meta,需 guard)
+  const taskStatusEvent = meta ? taskStatusEventSummary(meta) : null;
   if (taskStatusEvent) {
     const canOpenTask = Boolean(taskStatusEvent.taskId && onOpenTaskDetailById);
     const content = (
