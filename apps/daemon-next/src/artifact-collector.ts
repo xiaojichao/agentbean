@@ -65,8 +65,13 @@ const DELIVERY_CONTEXT_RE = new RegExp(
     '已生成', '已保存', '已写入', '已交付', '已创建', '已整理',
     '保存到', '保存在', '保存于', '写入到', '写出到', '生成到', '生成于',
     '交付', '输出',
+    // 「文件路径：/…」是 AgentOS oneshot（Hermes 等）惯用的交付声明标签：
+    // 路径与标签同行内联出现，交付动词在上一句（以句号结尾，够不到
+    // 「交付声明冒号换行」规则）。引用语境仍由 REFERENCE_CONTEXT_RE 优先排除。
+    '文件路径',
     '\\bgenerated\\b', '\\bsaved\\b', '\\bwritten\\b', '\\bwrote\\b', '\\bcreated\\b',
     '\\bdelivered\\b', '\\bexported\\b', '\\bproduced\\b', '\\bdeliverables?\\b', '\\boutputs?\\b',
+    '\\bfile path\\b',
   ].join('|'),
   'i',
 );
