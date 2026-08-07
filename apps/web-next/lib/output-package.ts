@@ -65,3 +65,16 @@ export function outputPackageFromMeta(meta: Record<string, unknown> | null | und
     ...(typeof meta.createdAt === 'number' ? { createdAt: meta.createdAt } : {}),
   };
 }
+
+/**
+ * #1111 内嵌形态:agent 回复消息的 meta.outputPackageCard(server 在 receiveDispatchResult
+ * 挂入,daemon ≥0.3.43 回报 publishId 时)。卡片随回复气泡内嵌渲染,不再以独立
+ * system 消息占位——返回 null 表示该消息不内嵌卡片。
+ */
+export function inlineOutputPackageFromMeta(
+  meta: Record<string, unknown> | null | undefined,
+): OutputPackageMeta | null {
+  const nested = meta?.outputPackageCard;
+  if (!nested || typeof nested !== 'object') return null;
+  return outputPackageFromMeta(nested as Record<string, unknown>);
+}

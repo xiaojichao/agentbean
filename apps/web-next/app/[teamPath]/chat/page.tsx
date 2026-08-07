@@ -11,7 +11,8 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
-import { shouldHideSystemMessage } from '@/lib/system-messages';
+import { mergedStandalonePackageCardIds, shouldHideSystemMessage } from '@/lib/system-messages';
+import { inlineOutputPackageFromMeta } from '@/lib/output-package';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -1618,7 +1619,10 @@ export default function ChatPage() {
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
-  const visibleMessages = messages.filter((msg) => !shouldHideSystemMessage(msg));
+  // #1111 内嵌形态:被 agent 回复内嵌吸收的独立卡片从视图隐藏(含实时窗口:
+  // 回复一到,独立卡片即消失,卡片内容随回复气泡渲染)。
+  const mergedCardIds = mergedStandalonePackageCardIds(messages);
+  const visibleMessages = messages.filter((msg) => !shouldHideSystemMessage(msg) && !mergedCardIds.has(msg.id));
   const messagesById = new Map<string, ChatMessage>();
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
@@ -5020,9 +5024,9 @@ function ChatBubble({
             teamId={msg.teamId}
           />
         )}
-        {!isDeleted && !editing && outputPackageFromMeta(msg.meta) && (
+        {!isDeleted && !editing && (outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta)) && (
           <OutputPackageCard
-            packageMeta={outputPackageFromMeta(msg.meta)!}
+            packageMeta={(outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta))!}
             channelId={msg.channelId}
             onAddReference={onAddPackageReference}
             onReviseVersion={(request) => onReviseVersion?.({ ...request, channelId: msg.channelId })}
