@@ -416,7 +416,20 @@ describe('daemon-next command executor', () => {
       },
     });
     await waitForFile(pidFile);
-    await expect(running).rejects.toThrow('timed out after 500ms');
+    // Timeout must resolve a failed DaemonDispatchResult (not reject): reject → dispatch.error
+    // marks Agent offline and skips product artifact collection after Hermes/claude-code kills.
+    const result = await running;
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
+    expect(result.body).toContain('Agent 处理超时');
+    expect(result.body).not.toContain('Codex');
+    expect(result.workspaceRun).toMatchObject({
+      status: 'failed',
+      exitCode: 124,
+      startedAt: 5000,
+      completedAt: 5530,
+    });
+    expect(result.artifacts?.[0]?.filename).toBe('workspace-run.log');
     const pid = Number(readFileSync(pidFile, 'utf8'));
     // SIGTERM is ignored, so SIGKILL must fire at timeoutMs + killGraceMs.
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -443,6 +456,7 @@ describe('daemon-next command executor', () => {
     process.env.AGENTBEAN_EXEC_TIMEOUT_MS = '400';
     try {
       // No timeoutMs option is passed — the env value alone must drive the kill timing.
+      // Timeout resolves a failed result (not reject) so product artifact collection still runs.
       const executor = createCommandExecutor({ killGraceMs: 30, clock: createClock([5000, 5530]) });
       const running = executor({
         id: 'dispatch-env-timeout',
@@ -460,10 +474,50 @@ describe('daemon-next command executor', () => {
         },
       });
       await waitForFile(pidFile);
-      await expect(running).rejects.toThrow('timed out after 400ms');
+      const result = await running;
+      expect(typeof result).toBe('object');
+      if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
+      expect(result.body).toContain('400ms');
+      expect(result.workspaceRun?.status).toBe('failed');
     } finally {
       delete process.env.AGENTBEAN_EXEC_TIMEOUT_MS;
     }
+  });
+
+  test('Hermes timeout body is adapter-agnostic (never says Codex) and keeps startedAt for artifact scan', async () => {
+    // Feedback loop for production bug: Hermes-Agent timed out → UI said "Codex 未在时限内完成"
+    // and agent went offline because reject → dispatch.error. Result path must keep startedAt so
+    // collectArtifacts can still pick up files written before the kill.
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const scriptPath = join(cwd, 'hang.mjs');
+    writeFileSync(scriptPath, 'setInterval(() => {}, 1000);\n');
+
+    const executor = createCommandExecutor({
+      timeoutMs: 80,
+      killGraceMs: 20,
+      clock: createClock([1_000, 1_080]),
+    });
+    const result = await executor({
+      id: 'dispatch-hermes-timeout',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-hermes',
+      requestId: 'request-1',
+      prompt: '写一个文件',
+      customAgent: {
+        adapterKind: 'hermes',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
+    expect(result.body).toMatch(/Agent 处理超时|未在时限内完成/);
+    expect(result.body).not.toMatch(/Codex/i);
+    expect(result.workspaceRun?.startedAt).toBe(1_000);
+    expect(result.workspaceRun?.status).toBe('failed');
   });
 
   test('terminates a custom agent command whose output exceeds the accumulated byte cap', async () => {

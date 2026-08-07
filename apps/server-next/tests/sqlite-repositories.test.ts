@@ -2885,8 +2885,10 @@ describe('server-next SQLite repositories', () => {
         completedAt: 950,
       });
       expect(teamDb.prepare("SELECT COUNT(*) AS count FROM messages WHERE sender_kind = 'agent'").get()).toEqual({ count: 0 });
+      // Daemon reported the error while still connected → Agent stays online (not offline).
+      // Offline is reserved for device disconnect / scan removal.
       expect(globalDb.prepare('SELECT status, last_error AS lastError FROM agents WHERE id = ?').get('agent-1')).toEqual({
-        status: 'offline',
+        status: 'online',
         lastError: 'executor failed',
       });
     } finally {

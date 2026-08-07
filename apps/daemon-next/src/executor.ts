@@ -168,10 +168,42 @@ async function runCustomAgentCommand(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let killTimer: NodeJS.Timeout | undefined;
+    let finished = false;
+    let timedOut = false;
+
+    const redactedArgs = argvMode && adapter.redactCommandArgs
+      ? adapter.redactCommandArgs(finalArgs)
+      : finalArgs;
+    const command = formatCommand(customAgent.command as string, redactedArgs);
+
+    const logArtifact = () => ({
+      id: `workspace-log-${request.id}`,
+      filename: 'workspace-run.log',
+      mimeType: 'text/plain' as const,
+      relativePath: 'logs/workspace-run.log',
+      pathKind: 'workspace' as const,
+      contentBase64: Buffer.from(buildLogArtifactContent(stdout, stderr), 'utf8').toString('base64'),
+    });
+
+    // Resolve a failed run instead of reject on timeout: reject → dispatch.error marks the Agent
+    // offline and skips product artifact collection. A failed result keeps the agent online and
+    // still scans cwd / reported paths for files the agent already wrote before the kill.
+    //
+    // `preserveKillTimer`: timeout path schedules SIGKILL after SIGTERM; must not clear that
+    // escalation when resolving early (stubborn children that ignore SIGTERM).
+    const finishResult = (result: DaemonDispatchResult, opts?: { preserveKillTimer?: boolean }) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (!opts?.preserveKillTimer && killTimer) clearTimeout(killTimer);
+      resolve(result);
+    };
 
     // SIGTERM first, then escalate to SIGKILL after a grace period so a child that traps/ignores
     // SIGTERM cannot run forever (which would also let stdout/stderr grow unbounded in memory).
     const timer = setTimeout(() => {
+      if (finished) return;
+      timedOut = true;
       try {
         child.kill('SIGTERM');
       } catch {
@@ -187,7 +219,29 @@ async function runCustomAgentCommand(
       if (typeof killTimer.unref === 'function') {
         killTimer.unref();
       }
-      reject(new Error(`custom agent command timed out after ${options.timeoutMs}ms`));
+      // Prefer partial adapter reply when the agent already printed something; otherwise a clear,
+      // adapter-agnostic Chinese timeout (must NOT say "Codex" — Hermes/openclaw/claude-code share
+      // this path). Technical breadcrumb stays in workspace-run log for support.
+      const partialReply = argvMode && adapter.extractReply
+        ? adapter.extractReply(stdout, null, stderr)
+        : stdout.trim();
+      const timeoutBody = partialReply
+        ? `${partialReply}\n\nAgent 处理超时，未在时限内完成（${options.timeoutMs}ms）`
+        : `Agent 处理超时，未在时限内完成（${options.timeoutMs}ms）`;
+      finishResult({
+        body: timeoutBody,
+        artifacts: [logArtifact()],
+        workspaceRun: {
+          status: 'failed',
+          cwd: customAgent.cwd,
+          command,
+          // 124 is the conventional "timeout" exit code (GNU timeout / systemd conventions).
+          exitCode: 124,
+          startedAt,
+          completedAt: options.clock.now(),
+          logExcerpt: buildLogExcerpt(stdout, stderr),
+        },
+      }, { preserveKillTimer: true });
     }, options.timeoutMs);
     if (typeof timer.unref === 'function') {
       timer.unref();
@@ -223,6 +277,8 @@ async function runCustomAgentCommand(
     });
 
     child.on('error', (error) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       if (killTimer) {
         clearTimeout(killTimer);
@@ -230,32 +286,17 @@ async function runCustomAgentCommand(
       reject(error);
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      if (killTimer) {
-        clearTimeout(killTimer);
-      }
+      // Timeout already resolved a failed result; ignore the late close so we don't overwrite it
+      // and so product artifact collection keeps the timeout startedAt window.
+      if (finished || timedOut) return;
       const completedAt = options.clock.now();
       const exitCode = code ?? 1;
-      const command = formatCommand(
-        customAgent.command as string,
-        argvMode && adapter.redactCommandArgs ? adapter.redactCommandArgs(finalArgs) : finalArgs,
-      );
-      const logContent = buildLogArtifactContent(stdout, stderr);
       const body = argvMode && adapter.extractReply
         ? adapter.extractReply(stdout, code ?? null, stderr)
         : code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`;
-      resolve({
+      finishResult({
         body,
-        artifacts: [
-          {
-            id: `workspace-log-${request.id}`,
-            filename: 'workspace-run.log',
-            mimeType: 'text/plain',
-            relativePath: 'logs/workspace-run.log',
-            pathKind: 'workspace',
-            contentBase64: Buffer.from(logContent, 'utf8').toString('base64'),
-          },
-        ],
+        artifacts: [logArtifact()],
         workspaceRun: {
           status: code === 0 ? 'succeeded' : 'failed',
           cwd: customAgent.cwd,

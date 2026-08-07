@@ -37,8 +37,9 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
 }
 
 function agentFailureDisplayBody(body: string): string {
-  // Older daemons may still post raw `codex exit ...` JSONL. Prefer Chinese summary.
-  if (!/codex exit|Missing environment variable|usage limit|env:\s*node|PTY 启动失败|需要 PTY/i.test(body)) {
+  // Older daemons may still post raw `codex exit ...` JSONL or English pipe timeouts.
+  // Prefer Chinese summary (must not mislabel Hermes timeouts as Codex — classifier fixed).
+  if (!/codex exit|Missing environment variable|usage limit|env:\s*node|PTY 启动失败|需要 PTY|timed out after|codex 超时/i.test(body)) {
     return body;
   }
   return formatChannelDispatchFailureHint({ status: 'failed', detail: body });

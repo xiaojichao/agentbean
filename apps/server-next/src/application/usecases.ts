@@ -11110,12 +11110,34 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!failed.changed) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
-      await markAgentOfflineIfIdle(repositories, {
+      // Daemon was alive enough to report the error — keep the Agent online/busy (same as
+      // receiveDispatchResult / server-side timeout). Old markAgentOfflineIfIdle made Hermes
+      // pipe timeouts look like "device/agent 离线" even though the socket never dropped.
+      // True offline still comes from device disconnect / snapshot removal.
+      //
+      // Race: a successor dispatch may be created between the pending check and updateStatus.
+      // Mirror markAgentOnlineIfIdle — write online, then restoreAgentBusyIfDispatchArrived.
+      const agentStatusInput = {
         agentId: errorInput.agentId,
         teamId: failed.dispatch.teamId,
         lastSeenAt: now,
-        lastError: errorInput.error,
-      });
+      };
+      if (await hasPendingDispatchForAgent(repositories, agentStatusInput)) {
+        await repositories.agents.updateStatus({
+          agentId: agentStatusInput.agentId,
+          status: 'busy',
+          lastSeenAt: now,
+          lastError: errorInput.error,
+        });
+      } else {
+        await repositories.agents.updateStatus({
+          agentId: agentStatusInput.agentId,
+          status: 'online',
+          lastSeenAt: now,
+          lastError: errorInput.error,
+        });
+        await restoreAgentBusyIfDispatchArrived(repositories, agentStatusInput);
+      }
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
@@ -14692,22 +14714,6 @@ async function markAgentOnlineIfIdle(
     agentId: input.agentId,
     status: 'online',
     lastSeenAt: input.lastSeenAt,
-  });
-  await restoreAgentBusyIfDispatchArrived(repositories, input);
-}
-
-async function markAgentOfflineIfIdle(
-  repositories: ServerNextRepositories,
-  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs; lastError: string },
-): Promise<void> {
-  if (await hasPendingDispatchForAgent(repositories, input)) {
-    return;
-  }
-  await repositories.agents.updateStatus({
-    agentId: input.agentId,
-    status: 'offline',
-    lastSeenAt: input.lastSeenAt,
-    lastError: input.lastError,
   });
   await restoreAgentBusyIfDispatchArrived(repositories, input);
 }
