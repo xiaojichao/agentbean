@@ -233,17 +233,28 @@ function readProcessOutput(error: unknown, key: 'stdout' | 'stderr'): string {
  * Device Service starts under launchd while `agentbean update` is still visible
  * in `ps`; a false positive yields LEGACY_RUNTIME_FENCE_ACTIVE and
  * UPDATE_RECOVERY_REQUIRED.
+ *
+ * Important: never scan the full command string for `@agentbean/daemon`.
+ * That false-matches `npm install -g @agentbean/daemon@x.y.z` and any shell
+ * whose argv happens to include the package path (SSH wrappers, agent tooling).
  */
 export function isLegacyDaemonCommand(command: string): boolean {
   if (isModernAgentBeanCliCommand(command)) return false;
-  const launchTokens = command.trim().split(/\s+/).slice(0, 2);
+  const tokens = command.trim().split(/\s+/);
+  const first = tokens[0] ?? '';
+  // Shells are never AgentBean daemons (even if their -c script mentions the package).
+  if (/(?:^|\/)(?:bash|zsh|sh|fish|dash)$/.test(first)) return false;
+  // Package managers: only legacy when they clearly boot a daemon profile.
+  if (/(?:^|\/)(?:npm|npx|yarn|pnpm|bun)$/.test(first)) {
+    return hasLegacyDaemonProfileArgs(command);
+  }
+  const launchTokens = tokens.slice(0, 2);
   const launchPath = launchTokens.join(' ');
+  // Only the process launch path (first 1–2 tokens) may identify a daemon entrypoint.
   return launchTokens.some((token) => /(?:^|\/)(?:agentbean|agentbean-daemon|agentbean-next-daemon)$/.test(token))
     || /(?:@agentbean\/daemon-next|apps\/daemon-next).*\/bin\.js(?:\s|$)/.test(launchPath)
-    || /@agentbean\/daemon(?:@|\/|\s)/.test(command)
-    || (launchTokens.some((token) => /(?:^|\/)daemon$/.test(token))
-      && /\s--server-url\s/.test(command)
-      && /\s--(?:profile-id|invite-code|all-profiles)(?:\s|$)/.test(command));
+    || /(?:^|\/)node_modules\/@agentbean\/daemon(?:\/|@)/.test(launchPath)
+    || (launchTokens.some((token) => /(?:^|\/)daemon$/.test(token)) && hasLegacyDaemonProfileArgs(command));
 }
 
 /** One-shot / service CLI entries that are not Legacy Daemon runtimes. */
@@ -251,6 +262,11 @@ export function isModernAgentBeanCliCommand(command: string): boolean {
   return /\s(?:device)(?:\s|$)/.test(command)
     || /\sservice\s+run(?:\s|$)/.test(command)
     || /\supdate(?:\s|$)/.test(command);
+}
+
+function hasLegacyDaemonProfileArgs(command: string): boolean {
+  return /\s--server-url\s/.test(command)
+    && /\s--(?:profile-id|invite-code|all-profiles)(?:\s|$)/.test(command);
 }
 
 function processIsAlive(pid: number): boolean {

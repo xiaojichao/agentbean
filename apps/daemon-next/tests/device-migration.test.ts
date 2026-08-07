@@ -329,6 +329,22 @@ describe('Legacy runtime registration', () => {
     })).resolves.toEqual([]);
   });
 
+  test('does not treat npm install or shells that mention the package path as legacy daemons', async () => {
+    // Full-command substring match for `@agentbean/daemon` false-positived these
+    // during `agentbean update` package swap and KeepAlive restart loops.
+    const output = [
+      '  2001 /usr/local/bin/npm install --global --registry=https://registry.npmjs.org/ @agentbean/daemon@0.3.39',
+      '  2002 /bin/zsh -c npm install -g @agentbean/daemon@0.3.39',
+      '  2003 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean update',
+      '  2004 /opt/homebrew/bin/node /payload/agentbean-service.mjs service run',
+      '  2005 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean-next-daemon --all-profiles',
+    ].join('\n');
+    await expect(discoverUnregisteredLegacyRuntimePids(new Set(), {
+      pid: 2004,
+      runPs: async () => output,
+    })).resolves.toEqual([2005]);
+  });
+
   test('excludes a live update.lock holder even when the process command looks like a legacy daemon', async () => {
     // Defense in depth: command-line heuristics can miss truncated `ps` lines;
     // update.lock PID must still be excluded while agentbean update holds the lock.
