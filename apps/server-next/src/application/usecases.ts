@@ -17365,7 +17365,7 @@ async function ensureUserCanViewProjectWorkspace(
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) return makeFailure('FORBIDDEN', 'User is not a team member');
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   if (channel.visibility === 'private' && !channel.humanMemberIds.includes(input.userId)) return makeFailure('FORBIDDEN', 'User cannot view channel');
   return makeSuccess({ channel });
 }
@@ -17386,7 +17386,7 @@ async function ensureSnapshotChannelAccess(
   }
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   return makeSuccess({ channel });
 }
 
@@ -17411,7 +17411,7 @@ async function ensureWorkspacePublishChannelAccess(
   if (!actor.ok) return makeFailure('FORBIDDEN', 'User is not a team member');
   const channel = await repositories.channels.getById(input.channelId);
   if (!channel || channel.teamId !== input.teamId) return makeFailure('NOT_FOUND', 'Channel not found');
-  if (channel.kind === 'direct' || channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
+  if (channel.name === 'all') return makeFailure('NOT_FOUND', 'Project Channel Workspace not found');
   return makeSuccess({ channel });
 }
 

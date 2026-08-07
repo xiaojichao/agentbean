@@ -194,7 +194,7 @@ describe('Project Channel Workspace', () => {
     expect(reread).toMatchObject({ ok: true, workspace: { currentRevision: { revision: 2 } } });
   });
 
-  test('#all、DM、私有频道成员移除均拒绝且不暴露 Workspace 文件', async () => {
+  test('#all、私有频道成员移除拒绝;DM 无 workspace 时 NOT_FOUND(DM 现支持文件包,首次 publish 后可访问,见 dm-workspace-publish)', async () => {
     const repositories = createInMemoryRepositories();
     const app = createServerNextUseCases({ repositories, clock: { now: () => 100 }, ids: { nextId: createIds(['user-1', 'team-1', 'channel-1', 'channel-2', 'channel-3']) } });
     await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });

@@ -69,6 +69,14 @@ export function ChannelMessage({ msg }: { msg: ChatMessage }) {
     const coordination = meta?.coordination as Record<string, unknown> | undefined;
     const followupCandidates = coordination?.followupCandidateTaskIds as readonly string[] | undefined;
     // #965 AC#4：展示本次 PI 协调使用的 Active Memory 来源说明（仅来源标签，无正文）。
+    const pkg = outputPackageFromMeta(meta);
+    if (pkg) {
+      return (
+        <div className="mx-auto my-2 w-full max-w-2xl" id={`message-${msg.id}`} data-smoke="chat-message">
+          <OutputPackageCard packageMeta={pkg} channelId={msg.channelId} />
+        </div>
+      );
+    }
     return (
       <div className={`mx-auto my-1 max-w-prose rounded border px-2 py-1 text-center text-xs ${tone}`}>
         {msg.body}
