@@ -481,7 +481,9 @@ async function appendArtifactRevisionSystemMessage(
       id: messageId,
       teamId: input.teamId,
       channelId: input.channelId,
-      // system 消息 threadId 存根为自身(与 output-package 系统卡同款:讨论串主线上可见)。
+      // system 消息 threadId 存根为自身(主线 root 自存根,主线上可见且可开讨论串)。
+      // 注:output-package 系统卡不同——#1111 起它归属触发消息的讨论串
+      // (resolveOriginThreadId,output-package-handler.ts),不做自存根。
       threadId: messageId,
       senderKind: 'system',
       senderId: 'system',
