@@ -1887,6 +1887,19 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           .run(input.meta ? JSON.stringify(input.meta) : null, input.messageId);
         return { ...existing, meta: input.meta };
       },
+      async bumpCreatedAt(input) {
+        const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
+        if (!existing) {
+          return null;
+        }
+        if (existing.createdAt >= input.createdAt) {
+          return existing;
+        }
+        teamDb
+          .prepare('UPDATE messages SET created_at = ? WHERE id = ?')
+          .run(input.createdAt, input.messageId);
+        return { ...existing, createdAt: input.createdAt };
+      },
       async edit(input) {
         const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
         if (!existing) {

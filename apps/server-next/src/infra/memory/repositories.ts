@@ -1301,6 +1301,18 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         messages.set(input.messageId, updated);
         return updated;
       },
+      async bumpCreatedAt(input) {
+        const message = messages.get(input.messageId);
+        if (!message) {
+          return null;
+        }
+        if (message.createdAt >= input.createdAt) {
+          return message;
+        }
+        const updated = { ...message, createdAt: input.createdAt };
+        messages.set(input.messageId, updated);
+        return updated;
+      },
       async edit(input) {
         const message = messages.get(input.messageId);
         if (!message) {
