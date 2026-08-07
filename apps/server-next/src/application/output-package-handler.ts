@@ -120,10 +120,11 @@ export async function attemptOutputPackageFormation(
         teamId,
         publishId: input.publishId,
       });
-      const replayRun = replayStaging?.provenance?.workspaceRunId
-        ? await repositories.workspaceRuns.getForTeam({ teamId, runId: replayStaging.provenance.workspaceRunId })
-        : null;
-      const replayThreadId = await resolveOriginThreadId(repositories, teamId, replayRun);
+      const replayThreadId = await resolveOriginThreadId(
+        repositories,
+        teamId,
+        replayStaging?.provenance?.workspaceRunId,
+      );
       await appendOutputPackageSystemMessage(repositories, ids, {
         teamId,
         channelId: input.channelId,
@@ -422,7 +423,11 @@ export async function attemptOutputPackageFormation(
   // 讨论串投影:package 成形后追加 system 消息,meta 快照与冻结成员一一对应。
   // best-effort:消息追加失败不改写已提交的 package 事实,可由重入路径补齐。
   // #1111:卡片归属触发消息的讨论串;解析失败回退主线(现状)。
-  const originThreadId = await resolveOriginThreadId(repositories, teamId, workspaceRun);
+  const originThreadId = await resolveOriginThreadId(
+    repositories,
+    teamId,
+    staging?.provenance?.workspaceRunId,
+  );
   await appendOutputPackageSystemMessage(repositories, ids, {
     teamId,
     channelId: input.channelId,
@@ -450,19 +455,31 @@ export async function attemptOutputPackageFormation(
 /**
  * #1111:解析触发 dispatch 的用户消息所属讨论串 root,让 output-package 卡片落讨论串
  * 而非主线(设计 §7.4/§8.1:主线是话题入口,文件包展示在讨论串)。
- * 链:workspaceRun.dispatchId → dispatch.messageId → message;
+ * 链:provenance.workspaceRunId → dispatch → message;
  * rootThreadId = message.threadId ?? message.id(主线 root 自存根 threadId===id;
  * null 遗留消息按自身为 root)。任一环节缺失返回 undefined——卡片回退主线
  * (现状行为),不丢卡片。纯 Server 侧闭环,不需要 daemon/contracts 透传。
+ *
+ * 生产实证(2026-08-07):daemon 上报的 provenance.workspaceRunId 等于 dispatchId/taskId,
+ * 与 server 侧 workspace_runs.id 不同源——必须两路都试:先按 workspace_runs.id 查
+ * (规范形态),查不到再直接按 dispatchId 查(daemon 实况)。
  */
 async function resolveOriginThreadId(
   repositories: ServerNextRepositories,
   teamId: ID,
-  workspaceRun: { dispatchId?: ID } | null,
+  workspaceRunId: ID | undefined,
 ): Promise<ID | undefined> {
-  if (!workspaceRun?.dispatchId) return undefined;
+  if (!workspaceRunId) return undefined;
   try {
-    const dispatch = await repositories.dispatches.getById(workspaceRun.dispatchId);
+    const run = await repositories.workspaceRuns.getForTeam({ teamId, runId: workspaceRunId });
+    let dispatchId = run?.dispatchId;
+    if (!dispatchId) {
+      // daemon 实况:workspaceRunId 即 dispatchId(= taskId)。
+      const direct = await repositories.dispatches.getById(workspaceRunId);
+      if (direct) dispatchId = direct.id;
+    }
+    if (!dispatchId) return undefined;
+    const dispatch = await repositories.dispatches.getById(dispatchId);
     if (!dispatch?.messageId) return undefined;
     const message = await repositories.messages.getById(dispatch.messageId);
     if (!message) return undefined;
