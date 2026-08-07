@@ -349,6 +349,9 @@ export interface MessageRepository {
     clientMessageId: string;
   }): Promise<MessageRecord | null>;
   updateMeta(input: { messageId: ID; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
+  /** #1111:仅当新值更晚时抬升 createdAt——output-package 卡片创建于 staging commit,
+   * 时序上先于 agent 回复;按设计卡片应位于回复之后,结果回报时把卡片抬到回复后。 */
+  bumpCreatedAt(input: { messageId: ID; createdAt: UnixMs }): Promise<MessageRecord | null>;
   edit(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   setTaskIdIfAbsent(input: { messageId: ID; taskId: ID }): Promise<{ message: MessageRecord; taskId: ID; inserted: boolean } | null>;

@@ -1715,6 +1715,9 @@ export interface ReceiveDispatchWorkspaceRunInput {
   exitCode?: number;
   startedAt?: number;
   completedAt?: number;
+  /** #1111:daemon 回报的本次 committed publishId(daemon ≥0.3.43),用于把
+   * output-package 卡片抬到 agent 回复之后(卡片创建于 commit,时序先于回复)。 */
+  publishId?: string;
 }
 
 export interface ReceiveDispatchResultInput {
@@ -10902,6 +10905,32 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(workspaceRunId ? { workspaceRunId } : {}),
         },
       }) : null;
+      // #1111:output-package 卡片创建于 staging commit(时序先于本回复),按设计应位于
+      // agent 输出之后。daemon ≥0.3.43 在结果回报里带 publishId 时,把卡片 createdAt
+      // 抬到回复之后;不带(旧 daemon)则保持 commit 时序,优雅降级。
+      if (message && resultInput.workspaceRun?.publishId) {
+        try {
+          const pkg = await repositories.outputPackages.getPackageByPublishId({
+            teamId: completed.dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          });
+          const card = pkg
+            ? await repositories.messages.getByClientMessageId({
+                teamId: completed.dispatch.teamId,
+                channelId: completed.dispatch.channelId,
+                clientMessageId: `output-package:${pkg.package.packageId}`,
+              })
+            : null;
+          if (card && card.createdAt <= message.createdAt) {
+            await repositories.messages.bumpCreatedAt({
+              messageId: card.id,
+              createdAt: message.createdAt + 1,
+            });
+          }
+        } catch {
+          // best-effort:排序修正不影响结果接收主路径。
+        }
+      }
       const workspaceRun = resultInput.workspaceRun
         ? await repositories.workspaceRuns.create({
             id: workspaceRunId!,

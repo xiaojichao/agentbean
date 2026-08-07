@@ -39,6 +39,41 @@ describe('workspace-publish-http-client (#1003 full HTTP)', () => {
     expect(calls[0]!.headers?.Authorization).toBe('Bearer tok');
   });
 
+  test('putChunk 中文路径:header 百分号编码(query 仍是权威传输)', async () => {
+    // 生产实证(2026-08-07):中文文件名「OpenSNS-能力与技能清单.md」直塞
+    // x-workspace-path header,undici 以 ByteString 错误拒绝(header 只许 Latin-1),
+    // 整个 publish 失败、dispatch 被标记 failed。
+    const calls: Array<{ url: string; headers?: Record<string, string> }> = [];
+    const fetchMock: typeof fetch = async (input, init) => {
+      calls.push({
+        url: typeof input === 'string' ? input : input.toString(),
+        headers: init?.headers as Record<string, string>,
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        staging: { files: [{ path: 'OpenSNS-能力与技能清单.md', receivedBytes: 4, complete: true }] },
+      }), { status: 200 });
+    };
+    const client = createHttpWorkspaceStagingPutClient({
+      serverUrl: 'http://localhost:9',
+      token: 'tok',
+      fetch: fetchMock,
+    });
+    const result = await client.putChunk({
+      teamId: 'team-1',
+      channelId: 'ch-1',
+      publishId: 'pub-1',
+      path: 'OpenSNS-能力与技能清单.md',
+      offset: 0,
+      content: Buffer.from('data'),
+    });
+    expect(result.ok).toBe(true);
+    // header 必须是 Latin-1 安全的编码形态;query 保持可读(由 server 以 query 为准)。
+    expect(calls[0]!.headers?.['x-workspace-path']).toBe(encodeURIComponent('OpenSNS-能力与技能清单.md'));
+    expect(decodeURIComponent(calls[0]!.headers!['x-workspace-path']!)).toBe('OpenSNS-能力与技能清单.md');
+    expect(calls[0]!.url).toContain(`path=${encodeURIComponent('OpenSNS-能力与技能清单.md')}`);
+  });
+
   test('begin/get/commit 走 JSON HTTP', async () => {
     const paths: string[] = [];
     const fetchMock: typeof fetch = async (input, init) => {

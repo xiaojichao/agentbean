@@ -1437,6 +1437,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 ...(result.workspaceRun.logExcerpt
                   ? { logExcerpt: sanitizeWorkspaceText(result.workspaceRun.logExcerpt, [workspace?.runDir, explicitWorkspaceCwd]) }
                   : {}),
+                // #1111:把本次 committed 的 publishId 带回 Server,用于把 output-package
+                // 卡片挪到 agent 回复之后(卡片在 commit 时创建,时序上先于回复)。
+                ...(committedPublishIdentity ? { publishId: committedPublishIdentity } : {}),
               }
             : undefined;
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {

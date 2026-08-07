@@ -1045,7 +1045,7 @@ async function handleWorkspacePublishStagingHttp(input: ArtifactHttpInput): Prom
         publishId = input.url.searchParams.get('publishId')?.trim()
           || (typeof input.request.headers['x-publish-id'] === 'string' ? input.request.headers['x-publish-id'].trim() : '');
         path = input.url.searchParams.get('path')?.trim()
-          || (typeof input.request.headers['x-workspace-path'] === 'string' ? input.request.headers['x-workspace-path'].trim() : '');
+          || (typeof input.request.headers['x-workspace-path'] === 'string' ? safeDecodePathHeader(input.request.headers['x-workspace-path'].trim()) : '');
         offset = Number(input.url.searchParams.get('offset') ?? input.request.headers['x-upload-offset'] ?? '0');
         if (!channelId || !publishId || !path) {
           throw new ArtifactHttpError(400, { ok: false, error: 'BAD_REQUEST', message: 'channelId, publishId and path are required' });
@@ -1822,6 +1822,19 @@ function trimTrailingLineBreak(value: Buffer): Buffer {
     return value.subarray(0, -1);
   }
   return value;
+}
+
+/**
+ * x-workspace-path header 的安全解码:daemon 对 path 做 encodeURIComponent(header 只许
+ * Latin-1,中文路径直塞会被 undici 拒)。query 参数是权威传输,此 header 仅为兜底;
+ * 解码失败(如含裸 % 的合法 ASCII 路径)回退原文。
+ */
+function safeDecodePathHeader(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function readToken(url: URL, request: ArtifactHttpInput['request'], body: Record<string, unknown> = {}): string | undefined {

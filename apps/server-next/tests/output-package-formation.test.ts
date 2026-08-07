@@ -717,6 +717,42 @@ for (const variant of variants) {
       expect(card!.threadId).toBe('msg-root-2');
     });
 
+    test('#1111 排序:结果回报带 publishId 时,卡片 createdAt 抬到 agent 回复之后', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, userId, agentId } = seedValue;
+      await repositories.messages.append({
+        id: 'msg-bump', teamId, channelId, threadId: 'msg-bump',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 交付', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: 'disp-bump', teamId, channelId, messageId: 'msg-bump', agentId,
+        status: 'accepted', requestId: 'req-bump', createdAt: 7, updatedAt: 7, prompt: '交付',
+      });
+      // commit 先发生:卡片在 commit 时创建(时序先于回复)。
+      await commitDelivery(seedValue, 'pub-bump', [{ path: 'docs/t5.md', body: Buffer.from('t5') }], {
+        agentId, taskId: 'disp-bump', taskAttempt: 1, workspaceRunId: 'disp-bump',
+      });
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-bump' });
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card).not.toBeNull();
+      const cardCreatedAt = card!.createdAt;
+      // daemon ≥0.3.43:结果回报 workspaceRun 带 publishId。
+      const result = await app.receiveDispatchResult({
+        dispatchId: 'disp-bump',
+        agentId,
+        body: '搞定！文件已生成。',
+        workspaceRun: { status: 'succeeded', publishId: 'pub-bump' },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.message).toBeDefined();
+      const bumped = await repositories.messages.getById(card!.id);
+      expect(bumped!.createdAt).toBeGreaterThan(cardCreatedAt);
+      expect(bumped!.createdAt).toBe(result.message!.createdAt + 1);
+    });
+
     test('#1111 生产形态:provenance.workspaceRunId=dispatchId(≠ workspace_runs.id),经 dispatch 兜底解析', async () => {
       seedValue = await seed(variant);
       const { repositories, teamId, channelId, userId, agentId } = seedValue;

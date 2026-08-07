@@ -82,7 +82,10 @@ export function createHttpWorkspaceStagingClient(
           'content-type': 'application/octet-stream',
           'x-channel-id': put.channelId,
           'x-publish-id': put.publishId,
-          'x-workspace-path': put.path,
+          // header 只允许 Latin-1:中文文件名(如「OpenSNS-能力与技能清单.md」)
+          // 直塞会被 undici 以 ByteString 错误拒掉(整个 publish 失败)。query 里的
+          // path(searchParams 自动编码)是权威传输,header 只是冗余兜底,故百分号编码。
+          'x-workspace-path': encodeURIComponent(put.path),
           'x-upload-offset': String(put.offset),
         },
         body: new Uint8Array(put.content),
