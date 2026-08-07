@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { shouldHideSystemMessage } from '../lib/system-messages';
+import { mergedStandalonePackageCardIds, shouldHideSystemMessage } from '../lib/system-messages';
 import type { ChatMessage } from '../lib/schema';
 
 function message(overrides: Partial<ChatMessage>): ChatMessage {
@@ -130,5 +130,46 @@ describe('PI Manager 系统消息可见性（ADR-0066）', () => {
 
     // coordination 与 management-status 被隐藏；management-question 保留为可见回复。
     expect(replies.map((m) => m.id)).toEqual(['mq-a']);
+  });
+});
+
+describe('mergedStandalonePackageCardIds — #1111 内嵌吸收', () => {
+  const cardMeta = {
+    kind: 'output-package',
+    packageId: 'pkg-1',
+    memberCount: 1,
+    members: [{ shortLabel: 'F1', filename: 'a.md', artifactVersionId: 'v1', collectionId: 'c1' }],
+    workspaceRevisionId: 'rev-1',
+    publishId: 'pub-1',
+  };
+
+  test('回复内嵌同 packageId 时,独立卡片隐藏(无论先后顺序)', () => {
+    const card = message({ id: 'card-1', meta: cardMeta });
+    const reply = message({
+      id: 'reply-1',
+      senderKind: 'agent',
+      meta: { dispatchId: 'd-1', outputPackageCard: cardMeta },
+    });
+    // 实时窗口:卡片先到(commit),回复后到(result)——两种顺序都隐藏。
+    expect(mergedStandalonePackageCardIds([card, reply]).has('card-1')).toBe(true);
+    expect(mergedStandalonePackageCardIds([reply, card]).has('card-1')).toBe(true);
+    // 回复本身不隐藏。
+    expect(mergedStandalonePackageCardIds([card, reply]).has('reply-1')).toBe(false);
+  });
+
+  test('无内嵌回复时独立卡片保留(旧 daemon / 结果未达兜底)', () => {
+    const card = message({ id: 'card-1', meta: cardMeta });
+    expect(mergedStandalonePackageCardIds([card]).size).toBe(0);
+  });
+
+  test('metaJson 形态(未解析)同样生效', () => {
+    const card = message({ id: 'card-1', metaJson: JSON.stringify(cardMeta), meta: undefined });
+    const reply = message({
+      id: 'reply-1',
+      senderKind: 'agent',
+      metaJson: JSON.stringify({ dispatchId: 'd-1', outputPackageCard: cardMeta }),
+      meta: undefined,
+    });
+    expect(mergedStandalonePackageCardIds([card, reply]).has('card-1')).toBe(true);
   });
 });

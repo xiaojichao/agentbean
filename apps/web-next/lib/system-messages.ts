@@ -1,4 +1,5 @@
 import { isHiddenSystemMessage } from '@agentbean/contracts';
+import { inlineOutputPackageFromMeta, outputPackageFromMeta } from './output-package';
 import type { ChatMessage } from './schema';
 
 /**
@@ -24,4 +25,25 @@ function parseMessageMeta(msg: ChatMessage): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/**
+ * #1111 内嵌形态:被 agent 回复内嵌吸收的独立 output-package 卡片 id 集合。
+ * 某条消息的 meta.outputPackageCard.packageId 与独立卡片相同的,独立卡片隐藏——
+ * 覆盖「卡片先到(commit)、回复后到(result)」的实时窗口:回复一到达,
+ * 独立卡片即从视图消失,卡片内容随回复气泡内嵌渲染。
+ */
+export function mergedStandalonePackageCardIds(messages: readonly ChatMessage[]): Set<string> {
+  const inlinedPackageIds = new Set<string>();
+  for (const message of messages) {
+    const inline = inlineOutputPackageFromMeta(parseMessageMeta(message));
+    if (inline) inlinedPackageIds.add(inline.packageId);
+  }
+  const hidden = new Set<string>();
+  if (inlinedPackageIds.size === 0) return hidden;
+  for (const message of messages) {
+    const standalone = outputPackageFromMeta(parseMessageMeta(message));
+    if (standalone && inlinedPackageIds.has(standalone.packageId)) hidden.add(message.id);
+  }
+  return hidden;
 }

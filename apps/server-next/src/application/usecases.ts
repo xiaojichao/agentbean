@@ -288,6 +288,7 @@ import {
   OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
 } from './output-package-consistency.js';
 import { createOutputPackageService, type OutputPackageService } from './output-package-service.js';
+import { readOutputPackageCardMeta } from './output-package-handler.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
 import type {
   TaskAcceptanceContractV1,
@@ -1716,7 +1717,7 @@ export interface ReceiveDispatchWorkspaceRunInput {
   startedAt?: number;
   completedAt?: number;
   /** #1111:daemon 回报的本次 committed publishId(daemon ≥0.3.43),用于把
-   * output-package 卡片抬到 agent 回复之后(卡片创建于 commit,时序先于回复)。 */
+   * output-package 卡片 meta 内嵌进 agent 回复消息(meta.outputPackageCard)。 */
   publishId?: string;
 }
 
@@ -10884,6 +10885,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ? resultInput.workspaceRun.id ?? ids.nextId()
         : undefined;
       const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+      // #1111 内嵌形态:daemon ≥0.3.43 结果回报带 publishId 时,把 output-package 卡片
+      // meta 挂进回复消息——卡片随回复气泡内嵌渲染(原型:卡片在 agent 消息 div 内),
+      // web 端据此隐藏同 packageId 的独立卡片。读取失败/旧 daemon → 独立卡片兜底。
+      const inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
+        ? await readOutputPackageCardMeta(repositories, {
+            teamId: completed.dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          })
+        : null;
       const message = publishResult ? await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
@@ -10903,34 +10913,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             : {}),
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
+          ...(inlinePackageCard ? { outputPackageCard: inlinePackageCard } : {}),
         },
       }) : null;
-      // #1111:output-package 卡片创建于 staging commit(时序先于本回复),按设计应位于
-      // agent 输出之后。daemon ≥0.3.43 在结果回报里带 publishId 时,把卡片 createdAt
-      // 抬到回复之后;不带(旧 daemon)则保持 commit 时序,优雅降级。
-      if (message && resultInput.workspaceRun?.publishId) {
-        try {
-          const pkg = await repositories.outputPackages.getPackageByPublishId({
-            teamId: completed.dispatch.teamId,
-            publishId: resultInput.workspaceRun.publishId,
-          });
-          const card = pkg
-            ? await repositories.messages.getByClientMessageId({
-                teamId: completed.dispatch.teamId,
-                channelId: completed.dispatch.channelId,
-                clientMessageId: `output-package:${pkg.package.packageId}`,
-              })
-            : null;
-          if (card && card.createdAt <= message.createdAt) {
-            await repositories.messages.bumpCreatedAt({
-              messageId: card.id,
-              createdAt: message.createdAt + 1,
-            });
-          }
-        } catch {
-          // best-effort:排序修正不影响结果接收主路径。
-        }
-      }
       const workspaceRun = resultInput.workspaceRun
         ? await repositories.workspaceRuns.create({
             id: workspaceRunId!,

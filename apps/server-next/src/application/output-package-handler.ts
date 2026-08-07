@@ -550,6 +550,47 @@ async function appendOutputPackageSystemMessage(
 }
 
 /**
+ * 读取已成形 package 的卡片 meta 快照(与 appendOutputPackageSystemMessage 同款形状)。
+ * #1111 内嵌形态:receiveDispatchResult 把它挂到 agent 回复消息的 meta.outputPackageCard,
+ * 卡片随回复气泡内嵌渲染(原型:package-card 在 thread-message 内部),不再以独立
+ * system 消息出现在讨论串。读取失败返回 null——回复照常,独立卡片兜底显示。
+ */
+export async function readOutputPackageCardMeta(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; publishId: ID },
+): Promise<Record<string, unknown> | null> {
+  try {
+    const byPublish = await repositories.outputPackages.getPackageByPublishId({
+      teamId: input.teamId,
+      publishId: input.publishId,
+    });
+    if (!byPublish) return null;
+    const [agent, task] = await Promise.all([
+      repositories.agents.getById(byPublish.package.agentId).catch(() => null),
+      repositories.tasks.getById(byPublish.package.taskId).catch(() => null),
+    ]);
+    return {
+      kind: 'output-package',
+      packageId: byPublish.package.packageId,
+      ...(task ? { taskId: task.id, taskTitle: task.title } : { taskId: byPublish.package.taskId }),
+      ...(agent ? { agentId: agent.id, agentName: agent.name } : { agentId: byPublish.package.agentId }),
+      memberCount: byPublish.members.length,
+      members: byPublish.members.map((member) => ({
+        shortLabel: member.shortLabel,
+        filename: member.filename,
+        artifactVersionId: member.artifactVersionId,
+        collectionId: member.collectionId,
+      })),
+      workspaceRevisionId: byPublish.package.workspaceRevisionId,
+      publishId: input.publishId,
+      createdAt: byPublish.package.createdAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 投影读取:Files/Task 用。无业务副作用;package 与冻结成员来自同一 Server 事实。
  */
 export async function readOutputPackage(
