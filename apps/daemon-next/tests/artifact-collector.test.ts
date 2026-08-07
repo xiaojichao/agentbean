@@ -66,6 +66,25 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('参考文件路径：/Users/a/notes.md')).toEqual([]);
     });
 
+    test('冒号声明行 + 裸路径行：交付措辞变体不设词表门槛（生产实证「已经生成在：」）', () => {
+      // 2026-08-07 生产实证：Hermes 回复「搞定！文件已经生成在：\n/Users/shaw/.hermes/skills-summary.md」，
+      // 「已经生成在」不含任何词表交付词（「已生成」≠「已经生成」），冒号换行规则因词表门槛漏判。
+      expect(
+        extractReportedOutputPaths(
+          '搞定！文件已经生成在：\n/Users/shaw/.hermes/skills-summary.md\n总共 112 个 skills。',
+        ),
+      ).toEqual(['/Users/shaw/.hermes/skills-summary.md']);
+      // 空行分隔的裸路径同样成立（logExcerpt 实证形态）。
+      expect(extractReportedOutputPaths('结果写到了：\n\n/tmp/out/report.md\n')).toEqual(['/tmp/out/report.md']);
+      // 裸路径行允许收尾标点。
+      expect(extractReportedOutputPaths('输出位置：\n/Users/a/report.md。')).toEqual(['/Users/a/report.md']);
+      // 引用/来源语境的冒号声明仍拒（裸路径不救引用）。
+      expect(extractReportedOutputPaths('参考：\n/Users/a/notes.md')).toEqual([]);
+      expect(extractReportedOutputPaths('数据来自：\n/tmp/source.md')).toEqual([]);
+      // 路径行内嵌其他文字（非裸写）且无交付词，仍拒。
+      expect(extractReportedOutputPaths('说明：\n见 /Users/a/notes.md 即可')).toEqual([]);
+    });
+
     test('忽略非交付扩展名、相对路径、缺失正文并处理尾部标点', () => {
       expect(extractReportedOutputPaths('已生成 /Users/a/state.json，输出 /Users/a/tmp.log')).toEqual([]);
       expect(extractReportedOutputPaths('使用 docs/a.md 作为模板')).toEqual([]);
