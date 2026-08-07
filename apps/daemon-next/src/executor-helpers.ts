@@ -295,7 +295,10 @@ const EXEC_NODE_NOT_FOUND_RE = /exec:\s*node:\s*not found/i;
 const USAGE_LIMIT_RE = /hit your usage limit|usage limit|rate limit|配额|额度/i;
 const AUTH_EXPIRED_RE = /refresh token|401 Unauthorized|not logged in|authentication|auth\.json|login required/i;
 const PTY_UNAVAILABLE_RE = /需要 PTY 运行时|node-pty|PTY 启动失败/i;
-const CODEX_TIMEOUT_RE = /codex 超时|timed? ?out after|AGENTBEAN_CODEX_TIMEOUT/i;
+// Codex-only. Generic `timed out after` is used by Hermes/openclaw pipe timeouts too —
+// do not label those as Codex failures.
+const CODEX_TIMEOUT_RE = /codex 超时|AGENTBEAN_CODEX_TIMEOUT/i;
+const AGENT_TIMEOUT_RE = /custom agent command timed out after|agent 处理超时|未在时限内完成|timed? ?out after\s*\d/i;
 
 function extractCodexJsonlMessages(detail: string): string[] {
   const messages: string[] = [];
@@ -372,6 +375,12 @@ function classifyCodexFailureText(text: string): { summary: string; guidance: st
   if (CODEX_TIMEOUT_RE.test(text)) {
     return {
       summary: 'Agent 处理超时，Codex 未在时限内完成',
+      guidance: '可缩短任务、检查模型/网络，或稍后重试；复杂任务建议拆成更小步骤。',
+    };
+  }
+  if (AGENT_TIMEOUT_RE.test(text)) {
+    return {
+      summary: 'Agent 处理超时，未在时限内完成',
       guidance: '可缩短任务、检查模型/网络，或稍后重试；复杂任务建议拆成更小步骤。',
     };
   }

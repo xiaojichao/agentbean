@@ -11110,9 +11110,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!failed.changed) {
         return makeFailure('CONFLICT', 'Dispatch is already completed');
       }
-      await markAgentOfflineIfIdle(repositories, {
+      // Daemon was alive enough to report the error — keep the Agent online/busy (same as
+      // receiveDispatchResult / server-side timeout). Old markAgentOfflineIfIdle made Hermes
+      // pipe timeouts look like "device/agent 离线" even though the socket never dropped.
+      // True offline still comes from device disconnect / snapshot removal.
+      await repositories.agents.updateStatus({
         agentId: errorInput.agentId,
-        teamId: failed.dispatch.teamId,
+        status: (await hasPendingDispatchForAgent(repositories, {
+          agentId: errorInput.agentId,
+          teamId: failed.dispatch.teamId,
+        })) ? 'busy' : 'online',
         lastSeenAt: now,
         lastError: errorInput.error,
       });
@@ -14692,22 +14699,6 @@ async function markAgentOnlineIfIdle(
     agentId: input.agentId,
     status: 'online',
     lastSeenAt: input.lastSeenAt,
-  });
-  await restoreAgentBusyIfDispatchArrived(repositories, input);
-}
-
-async function markAgentOfflineIfIdle(
-  repositories: ServerNextRepositories,
-  input: { agentId: ID; teamId: ID; lastSeenAt: UnixMs; lastError: string },
-): Promise<void> {
-  if (await hasPendingDispatchForAgent(repositories, input)) {
-    return;
-  }
-  await repositories.agents.updateStatus({
-    agentId: input.agentId,
-    status: 'offline',
-    lastSeenAt: input.lastSeenAt,
-    lastError: input.lastError,
   });
   await restoreAgentBusyIfDispatchArrived(repositories, input);
 }

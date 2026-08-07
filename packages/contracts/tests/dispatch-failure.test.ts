@@ -14,6 +14,34 @@ describe('classifyDispatchFailure', () => {
     expect(formatDispatchFailureSummary({ errorCode: 'DISPATCH_TIMEOUT' })).toContain('超时');
   });
 
+  test('does not mislabel Hermes/pipe-spine timeouts as Codex', () => {
+    // Production bug: Hermes (and other non-codex agents) time out via
+    // `custom agent command timed out after Nms`. The old CODEX_TIMEOUT_RE also matched
+    // `timed out after`, so channel UI showed "Codex 未在时限内完成" for Hermes.
+    const hermesTimeout = classifyDispatchFailure({
+      status: 'failed',
+      detail: 'custom agent command timed out after 300000ms',
+    });
+    expect(hermesTimeout.category).toBe('dispatch_timeout');
+    expect(hermesTimeout.summary).toContain('超时');
+    expect(hermesTimeout.summary).not.toContain('Codex');
+
+    const chineseTimeout = classifyDispatchFailure({
+      status: 'failed',
+      detail: 'Agent 处理超时，未在时限内完成（900000ms）',
+    });
+    expect(chineseTimeout.summary).not.toContain('Codex');
+
+    // Real codex PTY timeout still keeps the Codex-specific copy.
+    expect(classifyDispatchFailure({
+      status: 'failed',
+      detail: 'codex 超时（900000ms）',
+    })).toMatchObject({
+      category: 'codex_timeout',
+      summary: expect.stringContaining('Codex'),
+    });
+  });
+
   test('prefers the last codex JSONL error over earlier noise', () => {
     const detail = [
       '{"type":"thread.started","thread_id":"t1"}',
