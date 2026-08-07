@@ -296,6 +296,9 @@ function isPlausibleReportedPath(raw: string): boolean {
  * 1) 路径所在分句（标点切分）含交付词；动词可前置（"已生成 /a.md"）或
  *    后置（"/a.md 已生成"）；同分句出现 参考/来源/引用 等引用词时优先排除；
  * 2) 上方最近非空行以冒号收尾且含交付词（"报告已生成："换行/空行后给路径）；
+ *    或路径整行裸写（除路径与收尾标点外无其他文字）——agent 措辞变体
+ *    （"已经生成在："/"写到了："）不可枚举，冒号声明行 + 裸路径行本身就是
+ *    结构化交付声明；引用语境（"参考："/"来自："）仍优先排除；
  * 3) 最近的 markdown 标题含交付词（交付小节内的列表项）。
  */
 function isDeliveryContextAt(lines: readonly string[], index: number, colStart: number, colEnd: number): boolean {
@@ -314,10 +317,16 @@ function isDeliveryContextAt(lines: readonly string[], index: number, colStart: 
     && (DELIVERY_CONTEXT_RE.test(clauseBefore) || DELIVERY_CONTEXT_RE.test(clauseAfter))) {
     return true;
   }
+  // 裸路径行：整行 trim 后去掉收尾标点即路径本身（允许引号包裹）。
+  const bareLine = line.trim().replace(/[。.;；,，]+$/, '');
+  const matched = line.slice(colStart, colEnd);
+  const isBarePathLine = bareLine === matched
+    || bareLine === matched.replace(/^["'“”‘’]|["'“”‘’]$/g, '');
   for (let i = index - 1; i >= 0; i -= 1) {
     const previous = lines[i]!.trim();
     if (!previous) continue;
-    if (/[:：]$/.test(previous) && DELIVERY_CONTEXT_RE.test(previous) && !REFERENCE_CONTEXT_RE.test(previous)) return true;
+    if (/[:：]$/.test(previous) && !REFERENCE_CONTEXT_RE.test(previous)
+      && (DELIVERY_CONTEXT_RE.test(previous) || isBarePathLine)) return true;
     break;
   }
   for (let i = index; i >= 0; i -= 1) {
