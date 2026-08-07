@@ -717,6 +717,34 @@ for (const variant of variants) {
       expect(card!.threadId).toBe('msg-root-2');
     });
 
+    test('#1111 生产形态:provenance.workspaceRunId=dispatchId(≠ workspace_runs.id),经 dispatch 兜底解析', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      // 生产实证(2026-08-07):daemon 上报 provenance.workspaceRunId === dispatchId === taskId,
+      // 而 server 侧 workspace_runs 行有独立 id —— 只按 runId 查会 miss,必须 dispatch 兜底。
+      await repositories.messages.append({
+        id: 'msg-prod', teamId, channelId, threadId: 'msg-prod',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 交付', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: 'disp-prod', teamId, channelId, messageId: 'msg-prod', agentId,
+        status: 'succeeded', requestId: 'req-prod', createdAt: 7, updatedAt: 7, prompt: '交付',
+      });
+      await repositories.workspaceRuns.create({
+        id: 'run-server-side-id', teamId, channelId, dispatchId: 'disp-prod', agentId,
+        status: 'succeeded', createdAt: 8, updatedAt: 8, artifactIds: [],
+      });
+      await commitDelivery(seedValue, 'pub-prod', [{ path: 'docs/t4.md', body: Buffer.from('t4') }], {
+        agentId, taskId: 'task-synthetic-prod', taskAttempt: 1, workspaceRunId: 'disp-prod',
+      });
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-prod' });
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card).not.toBeNull();
+      expect(card!.threadId).toBe('msg-prod');
+    });
+
     test('#1111 AC4:解析链断裂(无 workspaceRunId)时卡片回退主线(无 threadId),不丢卡片', async () => {
       seedValue = await seed(variant);
       const { repositories, teamId, channelId, agentId } = seedValue;
