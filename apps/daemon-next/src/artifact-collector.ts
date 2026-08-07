@@ -278,9 +278,9 @@ function isPlausibleReportedPath(raw: string): boolean {
   const isWindows = /^[A-Za-z]:[\\/]/.test(raw);
   if (!isWindows && !raw.startsWith('/')) return false;
   const segments = raw.split(isWindows ? /[\\/]/ : '/');
-  // reported 通道第一关：只拒真敏感段（密钥/内部态），信任 agent 声明的生成物
-  // （.hermes/.openclaw 等 agent 数据目录放行，与 scan 通道的 hidden 守卫分离）。
-  if (segments.some((segment) => segment.startsWith('.') && SENSITIVE_HIDDEN_SEGMENTS.has(segment))) return false;
+  // reported 通道第一关：只放行已知 agent 数据目录段（.hermes/.openclaw），其余 hidden 段
+  // （.ssh/.gnupg/.secret/dotfile）拒——信任 agent 声明的生成物位置，防泄漏未知隐藏目录。
+  if (segments.some((segment) => segment.startsWith('.') && !AGENT_DATA_DIRS.has(segment))) return false;
   // 目录路径（尾斜杠）跳过扩展名要求；文件路径仍要求白名单扩展名。
   if (/[\\/]$/.test(raw)) return true;
   return ADAPTER_OUTPUT_FILE_EXT_RE.test(raw);
@@ -559,19 +559,19 @@ function reportedPathBasename(path: string): string {
  * 不含扩展名检查——目录本身与目录递归收集的子文件都走这条；扩展名仅对单文件
  * reported 路径生效（见 isCollectableReportedPath）。
  */
-// 真敏感隐藏段（密钥/内部态/版本控制）：reported 通道也拒（防 agent 被骗 reported 敏感）。
-// 其余 hidden 段（.hermes/.openclaw 等 agent 数据目录）在 reported 通道放行——agent CLI 声明的
-// 生成物该信任（见 isPlausibleReportedPath / isCollectableReportedPath）。
-const SENSITIVE_HIDDEN_SEGMENTS = new Set(['.ssh', '.gnupg', '.aws', '.config', '.agentbean', '.git', '.npm', '.cache']);
+// AgentOS agent 数据目录段：reported 通道放行（agent CLI 声明的生成物落在自己的数据根，
+// 如 Hermes ~/.hermes、OpenClaw ~/.openclaw）。其余 hidden 段（.ssh/.gnupg/.config/.secret/
+// dotfile 文件名等）在 reported 通道仍拒——只信任已知 agent 数据目录，防泄漏未知隐藏目录。
+const AGENT_DATA_DIRS = new Set(['.hermes', '.openclaw']);
 
 function isCollectableReportedBase(realPath: string, excludedPrefixes: readonly string[], trustReported = false): boolean {
   const base = reportedPathBasename(realPath);
-  // scan 通道（trustReported=false）：所有 hidden 段拒——防 daemon 主动扫数据目录（~/.hermes 等）
-  //   泄漏 sessions/checkpoints/内部态。
-  // reported 通道（trustReported=true）：只拒真敏感段，信任 agent 声明的生成物（.hermes 等放行）。
+  // scan 通道（trustReported=false）：所有 hidden 段拒——防 daemon 主动扫数据目录泄漏 sessions。
+  // reported 通道（trustReported=true）：只放行已知 agent 数据目录段（.hermes/.openclaw），
+  //   其余 hidden 段（.ssh/.gnupg/.secret/dotfile）仍拒。
   // Windows 路径段以反斜杠分隔，统一按两种分隔符切分保证防线不失效。
   const segments = realPath.split(/[\\/]/);
-  if (segments.some((segment) => segment.startsWith('.') && (!trustReported || SENSITIVE_HIDDEN_SEGMENTS.has(segment)))) return false;
+  if (segments.some((segment) => segment.startsWith('.') && (!trustReported || !AGENT_DATA_DIRS.has(segment)))) return false;
   if (SENSITIVE_REPORTED_BASENAME_RE.test(base)) return false;
   const normalizedPath = realPath.replaceAll('\\', '/');
   for (const prefix of excludedPrefixes) {
