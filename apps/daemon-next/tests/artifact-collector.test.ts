@@ -492,7 +492,7 @@ describe('artifact-collector', () => {
       expect(diagnostics).toContain('REPORTED_PATH_REJECTED');
     });
 
-    test('隐藏数据根（.hermes/output）撞车：升级不穿透隐藏段边界，adapter 条目保留走 legacy', async () => {
+    test('reported .hermes 收(信任 agent 声明);managed run_output 优先于 adapter scan', async () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), 'col-upgrade-hidden-')));
       const outputRoot = join(root, '.hermes', 'output');
       mkdirSync(join(outputRoot, '20260803'), { recursive: true });
@@ -501,9 +501,9 @@ describe('artifact-collector', () => {
       const diagnostics: string[] = [];
 
       const collected = await collectArtifacts({
-        // adapter 默认根覆盖数据根 output/（recursive）；但 reported 通道的隐藏
-        // 路径段防线（#1045 提取期+收集期双重）对 .hermes 内路径永远拒绝——
-        // 通道升级不得在隐藏目录上开口子。
+        // reported 通道信任 agent 声明:.hermes 等 agent 数据目录放行(只拒真敏感段)。
+        // scan(adapterOutputRoots)走 skipHidden 不经段守卫;reported 收的 managed run_output
+        // 与 adapter_generated 同文件时,managed 优先(dedup 删 adapter 副本)。
         adapterOutputRoots: [{ dir: outputRoot, recursive: true }],
         reportedOutputPaths: [target],
         reportedOutputExcludedPathPrefixes: [join(root, '.agentbean')],
@@ -512,9 +512,8 @@ describe('artifact-collector', () => {
       });
 
       expect(collected).toHaveLength(1);
-      expect(collected[0]!.sourceRoot.kind).toBe('adapter_generated');
-      expect(collected[0]!.relativePath).toBe(join('20260803', 'report.md'));
-      expect(diagnostics).toContain('REPORTED_PATH_REJECTED');
+      expect(collected[0]!.sourceRoot.kind).toBe('run_output');
+      expect(diagnostics).not.toContain('REPORTED_PATH_REJECTED');
     });
   });
 

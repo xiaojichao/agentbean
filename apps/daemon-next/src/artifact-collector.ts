@@ -278,8 +278,9 @@ function isPlausibleReportedPath(raw: string): boolean {
   const isWindows = /^[A-Za-z]:[\\/]/.test(raw);
   if (!isWindows && !raw.startsWith('/')) return false;
   const segments = raw.split(isWindows ? /[\\/]/ : '/');
-  // 隐藏路径段（.ssh/.gnupg/.agentbean 等）永不进入候选。
-  if (segments.some((segment) => segment.startsWith('.'))) return false;
+  // reported 通道第一关：只放行已知 agent 数据目录段（.hermes/.openclaw），其余 hidden 段
+  // （.ssh/.gnupg/.secret/dotfile）拒——信任 agent 声明的生成物位置，防泄漏未知隐藏目录。
+  if (segments.some((segment) => segment.startsWith('.') && !AGENT_DATA_DIRS.has(segment))) return false;
   // 目录路径（尾斜杠）跳过扩展名要求；文件路径仍要求白名单扩展名。
   if (/[\\/]$/.test(raw)) return true;
   return ADAPTER_OUTPUT_FILE_EXT_RE.test(raw);
@@ -558,12 +559,19 @@ function reportedPathBasename(path: string): string {
  * 不含扩展名检查——目录本身与目录递归收集的子文件都走这条；扩展名仅对单文件
  * reported 路径生效（见 isCollectableReportedPath）。
  */
-function isCollectableReportedBase(realPath: string, excludedPrefixes: readonly string[]): boolean {
+// AgentOS agent 数据目录段：reported 通道放行（agent CLI 声明的生成物落在自己的数据根，
+// 如 Hermes ~/.hermes、OpenClaw ~/.openclaw）。其余 hidden 段（.ssh/.gnupg/.config/.secret/
+// dotfile 文件名等）在 reported 通道仍拒——只信任已知 agent 数据目录，防泄漏未知隐藏目录。
+const AGENT_DATA_DIRS = new Set(['.hermes', '.openclaw']);
+
+function isCollectableReportedBase(realPath: string, excludedPrefixes: readonly string[], trustReported = false): boolean {
   const base = reportedPathBasename(realPath);
-  // 隐藏路径段（.ssh/.gnupg/.config 等）与 .agentbean 内部永不发布。
+  // scan 通道（trustReported=false）：所有 hidden 段拒——防 daemon 主动扫数据目录泄漏 sessions。
+  // reported 通道（trustReported=true）：只放行已知 agent 数据目录段（.hermes/.openclaw），
+  //   其余 hidden 段（.ssh/.gnupg/.secret/dotfile）仍拒。
   // Windows 路径段以反斜杠分隔，统一按两种分隔符切分保证防线不失效。
   const segments = realPath.split(/[\\/]/);
-  if (segments.some((segment) => segment.startsWith('.'))) return false;
+  if (segments.some((segment) => segment.startsWith('.') && (!trustReported || !AGENT_DATA_DIRS.has(segment)))) return false;
   if (SENSITIVE_REPORTED_BASENAME_RE.test(base)) return false;
   const normalizedPath = realPath.replaceAll('\\', '/');
   for (const prefix of excludedPrefixes) {
@@ -575,7 +583,7 @@ function isCollectableReportedBase(realPath: string, excludedPrefixes: readonly 
 
 /** realpath 后仍须通过全部安全校验，symlink 逃逸目标因此无法借别名混入。 */
 function isCollectableReportedPath(realPath: string, excludedPrefixes: readonly string[]): boolean {
-  if (!isCollectableReportedBase(realPath, excludedPrefixes)) return false;
+  if (!isCollectableReportedBase(realPath, excludedPrefixes, true)) return false;
   return ADAPTER_OUTPUT_FILE_EXT_RE.test(reportedPathBasename(realPath));
 }
 
@@ -667,7 +675,7 @@ async function collectReportedOutputs(
       }
       continue;
     }
-    if (!isCollectableReportedBase(realPath, excludedPrefixes)) {
+    if (!isCollectableReportedBase(realPath, excludedPrefixes, true)) {
       reject(basename(reportedPath));
       continue;
     }
@@ -790,7 +798,7 @@ async function collectReportedDirectory(
         continue;
       }
       // reported 安全校验：symlink 经 realpath 解析后落入排除前缀/隐藏段即拒。
-      if (!isCollectableReportedBase(realAbs, excludedPrefixes)) continue;
+      if (!isCollectableReportedBase(realAbs, excludedPrefixes, true)) continue;
       let stat;
       try {
         stat = statSync(realAbs);
