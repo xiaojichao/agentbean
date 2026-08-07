@@ -4512,7 +4512,9 @@ describe('server-next first-slice use cases', () => {
     const updateStatus = repositories.agents.updateStatus.bind(repositories.agents);
     let injectedSuccessor = false;
     repositories.agents.updateStatus = async (input) => {
-      if (input.status === 'offline' && !injectedSuccessor) {
+      // Terminal write after dispatch.error is now online (not offline). Concurrent successor
+      // must still win via restoreAgentBusyIfDispatchArrived after the online write.
+      if (input.status === 'online' && !injectedSuccessor) {
         injectedSuccessor = true;
         await repositories.dispatches.create({
           id: 'dispatch-2',

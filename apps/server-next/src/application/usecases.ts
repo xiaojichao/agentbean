@@ -11114,15 +11114,30 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // receiveDispatchResult / server-side timeout). Old markAgentOfflineIfIdle made Hermes
       // pipe timeouts look like "device/agent 离线" even though the socket never dropped.
       // True offline still comes from device disconnect / snapshot removal.
-      await repositories.agents.updateStatus({
+      //
+      // Race: a successor dispatch may be created between the pending check and updateStatus.
+      // Mirror markAgentOnlineIfIdle — write online, then restoreAgentBusyIfDispatchArrived.
+      const agentStatusInput = {
         agentId: errorInput.agentId,
-        status: (await hasPendingDispatchForAgent(repositories, {
-          agentId: errorInput.agentId,
-          teamId: failed.dispatch.teamId,
-        })) ? 'busy' : 'online',
+        teamId: failed.dispatch.teamId,
         lastSeenAt: now,
-        lastError: errorInput.error,
-      });
+      };
+      if (await hasPendingDispatchForAgent(repositories, agentStatusInput)) {
+        await repositories.agents.updateStatus({
+          agentId: agentStatusInput.agentId,
+          status: 'busy',
+          lastSeenAt: now,
+          lastError: errorInput.error,
+        });
+      } else {
+        await repositories.agents.updateStatus({
+          agentId: agentStatusInput.agentId,
+          status: 'online',
+          lastSeenAt: now,
+          lastError: errorInput.error,
+        });
+        await restoreAgentBusyIfDispatchArrived(repositories, agentStatusInput);
+      }
       const originMessage = await repositories.messages.getById(failed.dispatch.messageId);
       const task = managedAttempt ? null : await markLinkedTaskTodoIfInProgress(repositories, originMessage, now);
       if (managedAttempt) {
