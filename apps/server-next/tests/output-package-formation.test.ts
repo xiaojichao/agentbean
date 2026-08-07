@@ -657,6 +657,80 @@ for (const variant of variants) {
       expect(revisionId).toBe(formed.package.workspaceRevisionId);
     });
 
+    test('#1111 AC1:讨论串内触发的交付,卡片 threadId 归属该讨论串 root', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      // 主线 root(自存根)+ 讨论串内触发消息。
+      await repositories.messages.append({
+        id: 'root-1', teamId, channelId, threadId: 'root-1',
+        senderKind: 'user', senderId: userId, body: '话题:周报告', createdAt: 5,
+      });
+      await repositories.messages.append({
+        id: 'msg-in-thread', teamId, channelId, threadId: 'root-1',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 交付一下', createdAt: 6,
+      });
+      await repositories.dispatches.create({
+        id: 'disp-thread', teamId, channelId, messageId: 'msg-in-thread', agentId,
+        status: 'succeeded', requestId: 'req-thread', createdAt: 7, updatedAt: 7, prompt: '交付',
+      });
+      await repositories.workspaceRuns.create({
+        id: 'run-thread', teamId, channelId, dispatchId: 'disp-thread', agentId,
+        status: 'succeeded', createdAt: 8, updatedAt: 8, artifactIds: [],
+      });
+      await commitDelivery(seedValue, 'pub-thread', [{ path: 'docs/t1.md', body: Buffer.from('t1') }], {
+        agentId, taskId: 'task-synthetic-thread', taskAttempt: 1, workspaceRunId: 'run-thread',
+      });
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-thread' });
+      expect(byPublish).not.toBeNull();
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card).not.toBeNull();
+      expect(card!.threadId).toBe('root-1');
+      // 讨论串读取可见;且卡片不作为主线 root。
+      const thread = await repositories.messages.listByThread({ channelId, threadId: 'root-1', limit: 50 });
+      expect(thread.some((message) => message.id === card!.id)).toBe(true);
+    });
+
+    test('#1111 AC2:主线 root 直接触发的交付,卡片 threadId=该消息 id(进其话题讨论串)', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      await repositories.messages.append({
+        id: 'msg-root-2', teamId, channelId, threadId: 'msg-root-2',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 新话题交付', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: 'disp-root', teamId, channelId, messageId: 'msg-root-2', agentId,
+        status: 'succeeded', requestId: 'req-root', createdAt: 7, updatedAt: 7, prompt: '交付',
+      });
+      await repositories.workspaceRuns.create({
+        id: 'run-root', teamId, channelId, dispatchId: 'disp-root', agentId,
+        status: 'succeeded', createdAt: 8, updatedAt: 8, artifactIds: [],
+      });
+      await commitDelivery(seedValue, 'pub-root', [{ path: 'docs/t2.md', body: Buffer.from('t2') }], {
+        agentId, taskId: 'task-synthetic-root', taskAttempt: 1, workspaceRunId: 'run-root',
+      });
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-root' });
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card!.threadId).toBe('msg-root-2');
+    });
+
+    test('#1111 AC4:解析链断裂(无 workspaceRunId)时卡片回退主线(无 threadId),不丢卡片', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, agentId } = seedValue;
+      await commitDelivery(seedValue, 'pub-nochain', [{ path: 'docs/t3.md', body: Buffer.from('t3') }], {
+        agentId, taskId: 'task-synthetic-nochain', taskAttempt: 1,
+      });
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-nochain' });
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card).not.toBeNull();
+      expect(card!.threadId ?? null).toBeNull();
+    });
+
     test('AC8:Task 摘要按 taskId 过滤 pendingDeliveries(不显示其他任务的事实)', async () => {
       seedValue = await seed(variant);
       // 任务 A:committed 但 formation 被 attempt fence 拒绝 → 该任务的 pending。
