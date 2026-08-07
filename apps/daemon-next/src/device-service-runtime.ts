@@ -79,6 +79,11 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
       ? async () => []
       : () => discoverUnregisteredLegacyRuntimePids(new Set(), {
         ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+        // #1114:fence 误判/真残留都要有现场——匹配到的 pid+command 进 service 日志,
+        // 否则只剩 LEGACY_RUNTIME_FENCE_ACTIVE 枚举值,无法归因(update 自锁实证)。
+        onMatch: (match) => {
+          console.warn(`legacy runtime fence matched: pid=${match.pid} command=${match.command}`);
+        },
       }));
   if ((await discoverLegacyRuntimePids()).length > 0) throw new Error('LEGACY_RUNTIME_FENCE_ACTIVE');
   const profiles = (input.listProfiles ?? (() => listAuthProfiles({
