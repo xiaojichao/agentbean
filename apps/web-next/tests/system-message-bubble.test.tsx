@@ -13,7 +13,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const mocks = vi.hoisted(() => ({
-  getOutputPackage: vi.fn(),
+  // OutputPackageCard 的 useEffect 调 getOutputPackage(...).then(...);mock 必须返回 Promise,
+  // 否则 undefined.then 抛错(传 channelId 时触发查询)。返回 {ok:false} → 卡片纯静态展示。
+  getOutputPackage: vi.fn().mockResolvedValue({ ok: false }),
 }));
 
 vi.mock('@/lib/socket', () => ({
