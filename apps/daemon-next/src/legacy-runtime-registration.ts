@@ -121,6 +121,11 @@ export async function discoverUnregisteredLegacyRuntimePids(
      */
     baseDir?: string;
     readUpdateLockPid?: () => Promise<number | undefined>;
+    /**
+     * #1114:fence 触发时回传匹配现场(pid+command)。fence 只抛枚举值、不留线索时,
+     * 误判/真实残留无法区分(2026-08-07 update 自锁,静态分析与 ps 监视均未定位)。
+     */
+    onMatch?: (match: { pid: number; command: string }) => void;
   } = {},
 ): Promise<number[]> {
   const currentPid = options.pid ?? process.pid;
@@ -148,7 +153,10 @@ export async function discoverUnregisteredLegacyRuntimePids(
     const command = match[2] ?? '';
     if (!Number.isSafeInteger(pid) || pid <= 0 || pid === currentPid || registeredPids.has(pid)) continue;
     if (excludePids.has(pid)) continue;
-    if (isLegacyDaemonCommand(command)) pids.push(pid);
+    if (isLegacyDaemonCommand(command)) {
+      pids.push(pid);
+      options.onMatch?.({ pid, command });
+    }
   }
   return pids.sort((left, right) => left - right);
 }

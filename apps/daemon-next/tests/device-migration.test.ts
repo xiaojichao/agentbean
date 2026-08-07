@@ -315,6 +315,22 @@ describe('Legacy runtime registration', () => {
     })).resolves.toEqual([101, 606, 707, 808, 909]);
   });
 
+  test('onMatch 回传匹配现场(pid+command),供 fence 日志归因(#1114)', async () => {
+    const legacyCmd = 'node /opt/lib/node_modules/@agentbean/daemon/dist/bin.js --profile-id main --server-url https://api.agentbean.dev';
+    const output = [
+      `  707 ${legacyCmd}`,
+      ' 1010 /opt/homebrew/bin/node /opt/homebrew/bin/agentbean update',
+    ].join('\n');
+    const matches: Array<{ pid: number; command: string }> = [];
+    const pids = await discoverUnregisteredLegacyRuntimePids(new Set(), {
+      pid: 999,
+      runPs: async () => output,
+      onMatch: (match) => matches.push(match),
+    });
+    expect(pids).toEqual([707]);
+    expect(matches).toEqual([{ pid: 707, command: legacyCmd }]);
+  });
+
   test('does not treat agentbean update as a legacy daemon (self-update fence deadlock)', async () => {
     // Minimal repro for UPDATE_RECOVERY_REQUIRED / LEGACY_RUNTIME_FENCE_ACTIVE during
     // `agentbean update`: the still-running update parent is visible in `ps` while
