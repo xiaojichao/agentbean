@@ -51,6 +51,21 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('文件已生成：\n/Users/a/report.md')).toEqual(['/Users/a/report.md']);
     });
 
+    test('「文件路径：」行内标签算交付声明（Hermes 惯用措辞，生产实证 #1108 后续）', () => {
+      // 2026-08-07 生产实证：Hermes 回复「搞定！…输出了一个完整的 markdown 文件。\n文件路径：/…」，
+      // 交付动词在上一句（句号结尾），「交付声明冒号换行」规则够不到，行内标签必须自认领。
+      expect(
+        extractReportedOutputPaths(
+          '搞定了！已经把全部 112 个 skills 整理好，输出了一个完整的 markdown 文件。\n' +
+            '文件路径：/Users/shaw/.hermes/profiles/opensns/Hermes-Skills-Summary.md\n' +
+            '整体情况一览：',
+        ),
+      ).toEqual(['/Users/shaw/.hermes/profiles/opensns/Hermes-Skills-Summary.md']);
+      expect(extractReportedOutputPaths('File path: /Users/a/report.md')).toEqual(['/Users/a/report.md']);
+      // 引用语境仍优先：参考性质的「文件路径」不得提取。
+      expect(extractReportedOutputPaths('参考文件路径：/Users/a/notes.md')).toEqual([]);
+    });
+
     test('忽略非交付扩展名、相对路径、缺失正文并处理尾部标点', () => {
       expect(extractReportedOutputPaths('已生成 /Users/a/state.json，输出 /Users/a/tmp.log')).toEqual([]);
       expect(extractReportedOutputPaths('使用 docs/a.md 作为模板')).toEqual([]);
