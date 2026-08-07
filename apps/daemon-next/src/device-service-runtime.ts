@@ -33,11 +33,29 @@ export interface RunDeviceServiceInput {
   readonly discoverLegacyRuntimePids?: () => Promise<number[]>;
   readonly legacyFenceIntervalMs?: number;
   readonly exitCodeTarget?: Pick<NodeJS.Process, 'exitCode'>;
+  /**
+   * Force-exit after graceful stop so leaked handles (socket.io, timers) cannot
+   * keep the launchd job "running" and break `device restart` / update recovery.
+   * Tests inject a no-op.
+   */
+  readonly exitProcess?: (code: number) => void;
+  /** Delay before forced exit so control-plane shutdown responses can flush. */
+  readonly exitAfterStopDelayMs?: number;
 }
 
 export async function runDeviceService(input: RunDeviceServiceInput = {}): Promise<void> {
   const assertRuntimeOwner = input.assertRuntimeOwner
     ?? ((owner: DeviceRuntimeOwner) => assertDeviceRuntimeOwner(owner, input.baseDir));
+  const exitProcess = input.exitProcess
+    ?? ((code: number) => {
+      process.exit(code);
+    });
+  const exitAfterStopDelayMs = input.exitAfterStopDelayMs ?? 100;
+  const scheduleExitAfterStop = (result: { ok: boolean }): void => {
+    const code = result.ok ? 0 : 1;
+    (input.exitCodeTarget ?? process).exitCode = code;
+    setTimeout(() => exitProcess(code), exitAfterStopDelayMs).unref?.();
+  };
   const [owner, migration] = await Promise.all([
     (input.readRuntimeOwner ?? (() => readDeviceRuntimeOwner(input.baseDir)))(),
     (input.readMigrationJournal ?? (() => readDeviceMigrationJournal(input.baseDir)))(),
@@ -50,13 +68,18 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
       runners: [],
       version: (input.readVersion ?? readDaemonVersion)(),
       ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+      onAfterStop: scheduleExitAfterStop,
     });
-    (input.bindSignals ?? bindDeviceServiceSignals)(host);
+    (input.bindSignals ?? bindDeviceServiceSignals)(host, process, 30_000, input.exitCodeTarget ?? process);
     await host.start();
     return;
   }
   const discoverLegacyRuntimePids = input.discoverLegacyRuntimePids
-    ?? (input.assertRuntimeOwner ? async () => [] : () => discoverUnregisteredLegacyRuntimePids(new Set()));
+    ?? (input.assertRuntimeOwner
+      ? async () => []
+      : () => discoverUnregisteredLegacyRuntimePids(new Set(), {
+        ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+      }));
   if ((await discoverLegacyRuntimePids()).length > 0) throw new Error('LEGACY_RUNTIME_FENCE_ACTIVE');
   const profiles = (input.listProfiles ?? (() => listAuthProfiles({
     ...(input.baseDir ? { baseDir: input.baseDir } : {}),
@@ -112,8 +135,9 @@ export async function runDeviceService(input: RunDeviceServiceInput = {}): Promi
     runners,
     version: (input.readVersion ?? readDaemonVersion)(),
     ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+    onAfterStop: scheduleExitAfterStop,
   });
-  (input.bindSignals ?? bindDeviceServiceSignals)(host);
+  (input.bindSignals ?? bindDeviceServiceSignals)(host, process, 30_000, input.exitCodeTarget ?? process);
   await host.start();
   bindLegacyRuntimeFence(host, discoverLegacyRuntimePids, {
     intervalMs: input.legacyFenceIntervalMs,

@@ -218,14 +218,34 @@ async function restartService(
 ): Promise<number> {
   const stopped = await stopService(adapter, client, deadlineMs, stdout, stderr);
   if (stopped !== DEVICE_CLI_EXIT.success && stopped !== DEVICE_CLI_EXIT.unavailable) return stopped;
-  const platformStopped = await waitForPlatformStopped(adapter, deadlineMs);
+  let platformStopped = await waitForPlatformStopped(adapter, deadlineMs);
   if (platformStopped === 'error') {
     stderr('无法确认旧 Device Service 已退出。');
     return DEVICE_CLI_EXIT.platform;
   }
   if (platformStopped === 'timeout') {
-    stderr('旧 Device Service 未在截止时间内退出，未启动第二个实例。');
-    return DEVICE_CLI_EXIT.drain;
+    // Control plane may report stopped while launchd still holds a live PID
+    // (leaked handles). Force-kill once, then start — never leave the device offline.
+    try {
+      const killed = await adapter.kill();
+      if (killed.exitCode !== 0) {
+        stderr('旧 Device Service 未在截止时间内退出，强制停止也失败，未启动第二个实例。');
+        return DEVICE_CLI_EXIT.drain;
+      }
+    } catch {
+      stderr('旧 Device Service 未在截止时间内退出，强制停止也失败，未启动第二个实例。');
+      return DEVICE_CLI_EXIT.drain;
+    }
+    platformStopped = await waitForPlatformStopped(adapter, Math.min(deadlineMs, 10_000));
+    if (platformStopped === 'error') {
+      stderr('无法确认旧 Device Service 已退出。');
+      return DEVICE_CLI_EXIT.platform;
+    }
+    if (platformStopped === 'timeout') {
+      stderr('旧 Device Service 未在截止时间内退出，未启动第二个实例。');
+      return DEVICE_CLI_EXIT.drain;
+    }
+    stdout('已强制停止未退出的 Device Service。');
   }
   return startService(adapter, client, deadlineMs, deps, stdout, stderr);
 }

@@ -13,7 +13,9 @@ import {
   UPDATE_CLI_EXIT,
   verifyInstalledPackage,
 } from '../src/update-cli';
+import { createUpdateProgress } from '../src/update-progress';
 import type { PlatformCommandResult } from '../src/device-platform-service';
+import type { UpdateProgress } from '../src/update-progress';
 
 const success = (stdout = ''): PlatformCommandResult => ({ exitCode: 0, stdout, stderr: '' });
 const serviceStatus = (installed: boolean, loaded = installed) => ({
@@ -126,6 +128,14 @@ describe('agentbean update', () => {
     });
     const stdout = vi.fn();
     const fakes = updateFakes();
+    const steps: string[] = [];
+    const progress: UpdateProgress = {
+      begin: vi.fn(),
+      step: vi.fn((label: string) => { steps.push(label); }),
+      detail: vi.fn(),
+      done: vi.fn((message: string) => { stdout(message); }),
+      fail: vi.fn(),
+    };
 
     await expect(runUpdateCli([], {
       platform: 'darwin', currentPackage: { name: '@agentbean/daemon', version: '0.3.12' },
@@ -135,6 +145,7 @@ describe('agentbean update', () => {
         return true;
       },
       verifyInstalledPackage: passVerify,
+      createProgress: () => progress,
       stdout, ...fakes,
     })).resolves.toBe(UPDATE_CLI_EXIT.success);
 
@@ -142,6 +153,35 @@ describe('agentbean update', () => {
     expect(fakes.confirmServiceReady).toHaveBeenCalledWith('0.3.13');
     expect(fakes.discardPackageSnapshot).toHaveBeenCalledWith(backupRoot);
     expect(stdout).toHaveBeenCalledWith('AgentBean 已更新到 0.3.13，Device Service 已安全重启。');
+    expect(steps).toEqual(expect.arrayContaining([
+      '停止 Device Service',
+      '备份当前安装',
+      expect.stringContaining('安装 @agentbean/daemon@'),
+      '启动 Device Service',
+      '清理备份',
+    ]));
+    expect(progress.done).toHaveBeenCalled();
+  });
+
+  test('createUpdateProgress emits sequential task lines when not a TTY', () => {
+    const lines: string[] = [];
+    const progress = createUpdateProgress({
+      isTTY: false,
+      stdout: (message) => lines.push(message),
+      stderr: (message) => lines.push(`ERR:${message}`),
+    });
+    progress.begin(3, 'AgentBean 更新 0.3.12 → 0.3.13');
+    progress.step('停止 Device Service');
+    progress.detail('bootout LaunchAgent…');
+    progress.step('备份当前安装');
+    progress.done('AgentBean 已更新到 0.3.13');
+    expect(lines).toEqual([
+      'AgentBean 更新 0.3.12 → 0.3.13',
+      '[1/3] 停止 Device Service',
+      '  → bootout LaunchAgent…',
+      '[2/3] 备份当前安装',
+      'AgentBean 已更新到 0.3.13',
+    ]);
   });
 
   test('leaves the current package untouched when the Device Service cannot stop before update', async () => {

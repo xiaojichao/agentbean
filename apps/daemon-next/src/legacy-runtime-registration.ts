@@ -110,9 +110,24 @@ export async function listRegisteredLegacyRuntimes(
 
 export async function discoverUnregisteredLegacyRuntimePids(
   registeredPids: ReadonlySet<number>,
-  options: { pid?: number; runPs?: () => Promise<string> } = {},
+  options: {
+    pid?: number;
+    runPs?: () => Promise<string>;
+    /** Extra PIDs that must never be treated as legacy (e.g. agentbean update). */
+    excludePids?: ReadonlySet<number>;
+    /**
+     * When set (or defaulted via baseDir), a live `update.lock` holder is
+     * excluded so Device Service can start while `agentbean update` is still in ps.
+     */
+    baseDir?: string;
+    readUpdateLockPid?: () => Promise<number | undefined>;
+  } = {},
 ): Promise<number[]> {
   const currentPid = options.pid ?? process.pid;
+  const excludePids = new Set(options.excludePids ?? []);
+  const updateLockPid = await (options.readUpdateLockPid
+    ?? (() => readAliveUpdateLockPid(options.baseDir)))();
+  if (updateLockPid !== undefined) excludePids.add(updateLockPid);
   let output: string;
   try {
     output = await (options.runPs ?? (async () => {
@@ -132,9 +147,23 @@ export async function discoverUnregisteredLegacyRuntimePids(
     const pid = Number(match[1]);
     const command = match[2] ?? '';
     if (!Number.isSafeInteger(pid) || pid <= 0 || pid === currentPid || registeredPids.has(pid)) continue;
+    if (excludePids.has(pid)) continue;
     if (isLegacyDaemonCommand(command)) pids.push(pid);
   }
   return pids.sort((left, right) => left - right);
+}
+
+/** Read a still-alive `agentbean update` lock holder PID, if any. */
+export async function readAliveUpdateLockPid(baseDir?: string): Promise<number | undefined> {
+  const lockPath = join(deviceServicePaths(baseDir).root, 'update.lock');
+  try {
+    const parsed = JSON.parse(await readFile(lockPath, 'utf8')) as { pid?: unknown };
+    if (!Number.isSafeInteger(parsed.pid) || (parsed.pid as number) <= 0) return undefined;
+    const pid = parsed.pid as number;
+    return processIsAlive(pid) ? pid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function discoverInstalledLegacyExecutables(
@@ -198,8 +227,15 @@ function readProcessOutput(error: unknown, key: 'stdout' | 'stderr'): string {
   return typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString('utf8') : '';
 }
 
-function isLegacyDaemonCommand(command: string): boolean {
-  if (/\s(?:device)(?:\s|$)/.test(command) || /\sservice\s+run(?:\s|$)/.test(command)) return false;
+/**
+ * True only for historical long-running npm Daemon processes.
+ * Modern CLI subcommands (device / service run / update) must never match —
+ * Device Service starts under launchd while `agentbean update` is still visible
+ * in `ps`; a false positive yields LEGACY_RUNTIME_FENCE_ACTIVE and
+ * UPDATE_RECOVERY_REQUIRED.
+ */
+export function isLegacyDaemonCommand(command: string): boolean {
+  if (isModernAgentBeanCliCommand(command)) return false;
   const launchTokens = command.trim().split(/\s+/).slice(0, 2);
   const launchPath = launchTokens.join(' ');
   return launchTokens.some((token) => /(?:^|\/)(?:agentbean|agentbean-daemon|agentbean-next-daemon)$/.test(token))
@@ -208,6 +244,13 @@ function isLegacyDaemonCommand(command: string): boolean {
     || (launchTokens.some((token) => /(?:^|\/)daemon$/.test(token))
       && /\s--server-url\s/.test(command)
       && /\s--(?:profile-id|invite-code|all-profiles)(?:\s|$)/.test(command));
+}
+
+/** One-shot / service CLI entries that are not Legacy Daemon runtimes. */
+export function isModernAgentBeanCliCommand(command: string): boolean {
+  return /\s(?:device)(?:\s|$)/.test(command)
+    || /\sservice\s+run(?:\s|$)/.test(command)
+    || /\supdate(?:\s|$)/.test(command);
 }
 
 function processIsAlive(pid: number): boolean {

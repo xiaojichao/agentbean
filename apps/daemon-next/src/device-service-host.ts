@@ -58,6 +58,11 @@ export interface CreateDeviceServiceHostInput {
   readonly acquireLock?: () => Promise<DeviceServiceLock>;
   readonly stateStore?: DeviceServiceStateStore;
   readonly controlServer?: DeviceControlServer;
+  /**
+   * Invoked after stop completes (control plane or signals). Used to force
+   * process exit so leaked handles cannot leave launchd reporting a live PID.
+   */
+  readonly onAfterStop?: (result: DeviceServiceDrainResult) => void;
 }
 
 export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): DeviceServiceHost {
@@ -154,9 +159,15 @@ export function createDeviceServiceHost(input: CreateDeviceServiceHostInput): De
           drainResult = await drainWithinDeadline(deadlineAt);
         }
         const stopReason = await stopRunners(drainResult.reasonCode, deadlineAt);
-        return stopReason === 'SERVICE_READY'
+        const result: DeviceServiceDrainResult = stopReason === 'SERVICE_READY'
           ? drainResult
           : { ok: false, reasonCode: stopReason };
+        try {
+          input.onAfterStop?.(result);
+        } catch {
+          // Exit scheduling must not reverse a completed stop.
+        }
+        return result;
       })();
       return stopPromise;
     },
