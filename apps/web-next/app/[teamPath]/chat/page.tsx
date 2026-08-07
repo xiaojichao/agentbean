@@ -22,7 +22,7 @@ import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, m
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
-import { createClientMessageId, messageSendFailureText } from '@/lib/message-send';
+import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
@@ -1487,7 +1487,7 @@ export default function ChatPage() {
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (shouldSubmitComposerKey(e)) {
       e.preventDefault();
       sendMessage();
     }
@@ -4255,7 +4255,7 @@ function ThreadPanel({
         return;
       }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (shouldSubmitComposerKey(e)) {
       e.preventDefault();
       onSend();
     }
