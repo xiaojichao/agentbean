@@ -40,6 +40,7 @@ import {
   projectDocumentInputSetResultFromMeta,
 } from '@/components/channel-documents/ProjectDocumentInputSetResultSummary';
 import { OutputPackageCard, type ReviseVersionRequest } from '@/components/OutputPackageCard';
+import { SystemMessageBubble } from '@/components/SystemMessageBubble';
 import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
 import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
@@ -4747,57 +4748,16 @@ function ChatBubble({
   }, [contextMenu]);
 
   if (msg.senderKind === 'system') {
-    const systemMessageAnchorProps = {
-      id: `message-${msg.id}`,
-      'data-smoke': 'chat-message',
-      'data-message-selected': selected ? 'true' : 'false',
-    };
-    const statusEventClassName = `mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs text-neutral-600 shadow-sm ${
-      selected
-        ? 'border-amber-400 bg-amber-50/80 shadow-[inset_3px_0_0_#f59e0b]'
-        : 'border-neutral-200 bg-white'
-    }`;
-    const taskStatusEvent = taskStatusEventSummary(meta);
-    if (taskStatusEvent) {
-      const canOpenTask = Boolean(taskStatusEvent.taskId && onOpenTaskDetailById);
-      const content = (
-        <>
-          <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(taskStatusEvent.status)}`} />
-          <span>任务 {taskStatusEvent.label} 状态更新为 {taskStatusText(taskStatusEvent.status)}</span>
-          {canOpenTask && <ExternalLink size={12} className="text-neutral-400" />}
-        </>
-      );
-      const taskId = taskStatusEvent.taskId;
-      if (canOpenTask && taskId) {
-        return (
-          <button
-            {...systemMessageAnchorProps}
-            type="button"
-            onClick={() => onOpenTaskDetailById?.(taskId)}
-            className={`${statusEventClassName} hover:border-amber-300 hover:bg-amber-50`}
-            title="查看任务详情"
-          >
-            {content}
-          </button>
-        );
-      }
-      return (
-        <div {...systemMessageAnchorProps} className={statusEventClassName}>
-          {content}
-        </div>
-      );
-    }
     return (
-      <div
-        {...systemMessageAnchorProps}
-        className={`mx-auto my-1 max-w-prose rounded border px-3 py-1.5 text-center text-xs text-amber-700 ${
-          selected
-            ? 'border-amber-400 bg-amber-50 shadow-[inset_3px_0_0_#f59e0b]'
-            : 'border-amber-200 bg-amber-50'
-        }`}
-      >
-        {msg.body}
-      </div>
+      <SystemMessageBubble
+        msg={msg}
+        meta={meta}
+        selected={selected}
+        onOpenTaskDetailById={onOpenTaskDetailById}
+        onAddPackageReference={onAddPackageReference}
+        onReviseVersion={onReviseVersion}
+        onContinueWithAgent={onContinueWithAgent}
+      />
     );
   }
 
