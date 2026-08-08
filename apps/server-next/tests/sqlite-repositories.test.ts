@@ -2007,16 +2007,21 @@ describe('server-next SQLite repositories', () => {
         status: 'succeeded',
         completedAt: 900,
       });
-      expect(
-        teamDb
-          .prepare('SELECT sender_kind AS senderKind, sender_id AS senderId, body, meta_json AS metaJson FROM messages WHERE id = ?')
-          .get('reply-1'),
-      ).toEqual({
+      const storedMessage = teamDb
+        .prepare('SELECT sender_kind AS senderKind, sender_id AS senderId, body, meta_json AS metaJson FROM messages WHERE id = ?')
+        .get('reply-1') as { senderKind: string; senderId: string; body: string; metaJson: string };
+      expect(storedMessage).toMatchObject({
         senderKind: 'agent',
         senderId: 'agent-1',
         body: 'done',
-        metaJson: JSON.stringify({ dispatchId: 'dispatch-1', replyScope: 'channel', artifactIds: ['artifact-1'] }),
       });
+      const storedMeta = JSON.parse(storedMessage.metaJson) as Record<string, unknown>;
+      expect(storedMeta).toMatchObject({
+        dispatchId: 'dispatch-1',
+        replyScope: 'channel',
+        artifactIds: ['artifact-1'],
+      });
+      expect(storedMeta.dispatchResultFingerprint).toMatch(/^[a-f0-9]{64}$/);
     } finally {
       close();
     }
