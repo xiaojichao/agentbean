@@ -4,8 +4,13 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Package, FileText, ShieldCheck, CheckSquare, Square, X } from 'lucide-react';
 import type { OutputPackageMeta } from '@/lib/output-package';
 import { projectEvents } from '@/lib/socket';
+import {
+  buildPackageMembersSelection,
+  buildPackageProjectionSelection,
+  loadPackageProjection,
+  type PackageProjectionBlocker,
+} from '@/lib/output-package-reference';
 import type {
-  OutputPackageProjectionMemberDto,
   PackageMemberAvailableActionsDto,
   PackageReviewAction,
   ProjectReferenceSelectionRequestDto,
@@ -58,7 +63,8 @@ export interface ReviseVersionRequest {
   baseVersionId: string;
   sourceVersionId: string;
   basisReviewId?: string;
-  packageId: string;
+  /** 包成员修订必填;集合行(无包)缺省——Server 仍以 sourceVersionId 冻结 basis。 */
+  packageId?: string;
   deliveryId?: string;
   collectionRevision: number;
 }
@@ -105,7 +111,7 @@ export function OutputPackageCard({
   const [referencing, setReferencing] = useState(false);
   const [selectingMembers, setSelectingMembers] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
-  const [blockers, setBlockers] = useState<{ shortLabel: string; filename: string; code: string }[]>([]);
+  const [blockers, setBlockers] = useState<PackageProjectionBlocker[]>([]);
   // 原型对齐:成员行 file-sub 需要 collection 名/current server 版本号/来源与修改时间。
   // 这些数据在 ProjectArtifactLibrary(collections)里,卡片按 channelId 自拉一次。
   const [collectionsById, setCollectionsById] = useState<Map<string, {
@@ -252,38 +258,18 @@ export function OutputPackageCard({
     }
   }, [channelId, packageMeta.packageId, packageMeta.members, frozenDeliveryId, frozenTaskRevision, frozenTaskAttempt, refresh, onReviseVersion]);
 
-  // #1063:整包投影选择。预览 ready → 产生选择;not_ready → 展示阻断清单。
+  // #1063:整包投影选择(构建逻辑在 lib/output-package-reference,与文件库工具栏共用)。
+  // 预览 ready → 产生选择;not_ready → 展示阻断清单。
   const addProjectionReference = useCallback(async (policy: 'delivered' | 'current' | 'final') => {
     if (!channelId || !onAddReference) return;
     setReferencing(true);
     setBlockers([]);
     try {
-      const result = await projectEvents().getOutputPackage({
-        channelId,
-        packageId: packageMeta.packageId,
-        projection: { policy },
-      });
-      if (!result.ok || !result.projection) return;
-      if (result.projection.status !== 'ready') {
-        setBlockers(result.projection.blockers.map((blocker) => ({
-          shortLabel: blocker.shortLabel ?? '',
-          filename: blocker.filename ?? '',
-          code: blocker.code,
-        })));
-        return;
-      }
-      const expectedMemberRevisions = policy === 'delivered'
-        ? undefined
-        : result.projection.members.map((member) => ({
-          collectionId: member.collectionId,
-          revision: member.collectionRevision,
-        }));
-      onAddReference({
-        kind: 'package_projection',
-        packageId: packageMeta.packageId,
-        policy,
-        ...(expectedMemberRevisions ? { expectedMemberRevisions } : {}),
-      });
+      const projection = await loadPackageProjection(channelId, packageMeta.packageId, policy);
+      if (!projection) return;
+      const built = buildPackageProjectionSelection(packageMeta.packageId, policy, projection);
+      if (built.selection) onAddReference(built.selection);
+      else setBlockers(built.blockers);
     } finally {
       setReferencing(false);
     }
@@ -292,11 +278,9 @@ export function OutputPackageCard({
   // #1063:成员单选/多选/基于此修改 → package_members 显式选择。
   const addMembersReference = useCallback((members: { collectionId: string; versionId: string }[]) => {
     if (!onAddReference || members.length === 0) return;
-    onAddReference({
-      kind: 'package_members',
-      packageId: packageMeta.packageId,
-      members,
-    });
+    const selection = buildPackageMembersSelection(packageMeta.packageId, members);
+    if (!selection) return;
+    onAddReference(selection);
     setSelectingMembers(false);
     setSelectedMemberIds(new Set());
   }, [packageMeta.packageId, onAddReference]);

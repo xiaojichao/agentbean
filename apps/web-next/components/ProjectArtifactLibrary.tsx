@@ -343,7 +343,11 @@ function ReviewStateBadge({ state }: { state: ProjectArtifactVersionDto['reviewS
   return <span className={`rounded px-1.5 py-0.5 text-[10px] ${color}`}>{label}</span>;
 }
 
-function VersionDecisionPanel({
+/**
+ * 版本审核/最终化面板:审核历史 + 追加审核表单 + 设为最终版。
+ * 从 CollectionCard 抽出导出,供文件库新布局(ProjectFilesBoard 行展开区)复用。
+ */
+export function VersionDecisionPanel({
   version,
   collection,
   canDecide,
@@ -480,7 +484,8 @@ function VersionDecisionPanel({
   );
 }
 
-function FinalizationHistory({ collection }: { collection: ProjectArtifactCollectionDto }) {
+/** 最终版切换审计(append-only);导出供文件库新布局复用。 */
+export function FinalizationHistory({ collection }: { collection: ProjectArtifactCollectionDto }) {
   if (collection.finalizations.length === 0) return null;
   return (
     <details className="mt-2 border-t border-neutral-100 pt-2 text-[11px] text-neutral-600">
@@ -546,16 +551,17 @@ function VersionSource({ version }: { version: ProjectArtifactVersionDto }) {
   );
 }
 
-function PromoteArtifactForm({
+/** 提升为逻辑产物版本表单(project-lead 限定入口);导出供文件库新布局复用。 */
+export function PromoteArtifactForm({
   stages,
   promotableArtifacts,
   collections,
   onCancel,
   onPromote,
 }: {
-  stages: ProjectArtifactStageOption[];
-  promotableArtifacts: PromotableArtifactOption[];
-  collections: ProjectArtifactCollectionDto[];
+  stages: readonly ProjectArtifactStageOption[];
+  promotableArtifacts: readonly PromotableArtifactOption[];
+  collections: readonly ProjectArtifactCollectionDto[];
   onCancel: () => void;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
 }) {

@@ -63,4 +63,9 @@ describe('chat files surface', () => {
     );
     expect(filesSurface).toContain('artifactUrl(preview)');
   });
+
+  test('逻辑产物只读预览使用带鉴权的 preview/download URL', () => {
+    expect(source).toContain("messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'preview', readOnlyArtifact.teamId)");
+    expect(source).toContain("messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'download', readOnlyArtifact.teamId)");
+  });
 });
