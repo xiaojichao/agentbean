@@ -10552,10 +10552,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(resultInput.artifactIds ?? []),
             ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
           ]);
-          let replayDeliveryMessage = (await repositories.messages.listByChannel(
-            dispatch.channelId,
-            10_000,
-          )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+          let replayDeliveryMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
           const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
           const replayNormalizedProposals = normalizeAgentCollaborationProposals(resultInput.collaborationProposals);
           const replayHandoffFingerprint = replayHandoff?.result?.resultFingerprint;
@@ -10598,6 +10595,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           let replayWorkspaceRun = replayWorkspaceRunById
             ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
             ?? null;
+          if (replayWorkspaceRun) {
+            replayWorkspaceRunCreateId = replayWorkspaceRun.id;
+          }
           if (!replayStoredFingerprint && replayDeliveryMessage
             && replayDeliveryMessage.body !== resultInput.body) {
             return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
@@ -10653,10 +10653,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               if (!replayAgent || replayAgent.deletedAt !== undefined) {
                 return makeFailure('NOT_FOUND', 'Agent not found');
               }
-              const replayMessageForRun = (await repositories.messages.listByChannel(
-                dispatch.channelId,
-                10_000,
-              )).find((message) => message.meta?.dispatchId === dispatch.id);
+              const replayMessageForRun = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
               try {
                 replayWorkspaceRun = await repositories.workspaceRuns.create({
                   id: replayWorkspaceRunCreateId ?? ids.nextId(),
@@ -10705,10 +10702,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 publishId: resultInput.workspaceRun.publishId,
               });
               if (replayCard) {
-                const replayMessage = (await repositories.messages.listByChannel(
-                  dispatch.channelId,
-                  10_000,
-                )).find((message) => message.meta?.dispatchId === dispatch.id);
+                const replayMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
                 if (replayMessage && !replayMessage.meta?.outputPackageCard) {
                   await repositories.messages.updateMeta({
                     messageId: replayMessage.id,
