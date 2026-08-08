@@ -707,11 +707,18 @@ function assertProjectDocumentInputSetResult(value: unknown): void {
       || !['unchanged', 'committed', 'conflict', 'failed'].includes(String(item.status))) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
+    const statusKeys = {
+      unchanged: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status'] },
+      committed: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'revisionId'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'revisionId'] },
+      conflict: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'] },
+      failed: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'error'] },
+    } as const;
+    const shape = statusKeys[item.status as keyof typeof statusKeys];
+    assertExactKeys(item, shape.allowed, shape.required);
     assertInteger(item.createdAt, 0);
     if ((item.status === 'committed' && (!nonEmpty(item.artifactId) || !nonEmpty(item.revisionId))
       || item.status === 'conflict' && (!nonEmpty(item.artifactId) || !nonEmpty(item.error))
-      || item.status === 'failed' && item.artifactId !== undefined && !nonEmpty(item.artifactId)
-      || item.status === 'failed' && !nonEmpty(item.error))) {
+      || item.status === 'failed' && (item.artifactId !== undefined && !nonEmpty(item.artifactId) || !nonEmpty(item.error)))) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
   });

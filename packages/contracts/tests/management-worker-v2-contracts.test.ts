@@ -24,6 +24,39 @@ describe('Phase 2 management worker contracts', () => {
       .toThrow('AGENT_COLLABORATION_PROPOSAL_INVALID');
   });
 
+  test('enforces mutually exclusive InputSet result fields by status', () => {
+    const envelope = {
+      schemaVersion: 2, managementPhase: 2, commandId: 'command-1', managementRunId: 'run-1',
+      workerId: 'worker-1', toolCallId: 'call-1', toolName: 'handoffs.await_result', ok: true,
+    } as const;
+    const base = { documentId: 'document-1', baseRevisionId: 'revision-1', createdAt: 1 };
+    const result = {
+      schemaVersion: 1, invocationId: 'invocation-1', agentId: 'agent-1', status: 'succeeded',
+      artifactIds: [], memoryCandidateIds: [], startedAt: 1, completedAt: 2,
+      projectDocumentInputSetResult: {
+        contractVersion: 1, inputSetId: 'input-set-1', invocationId: 'invocation-1',
+        source: { agentId: 'agent-1' }, items: [{ ...base, status: 'unchanged' }],
+      },
+    };
+    expect(parsePhase2TaskToolResultV2({ ...envelope, output: {
+      handoffId: 'handoff-1', invocationId: 'invocation-1', status: 'returned', result,
+    } })).toMatchObject({ output: { status: 'returned' } });
+
+    for (const item of [
+      { ...base, status: 'unchanged', artifactId: 'artifact-1' },
+      { ...base, status: 'committed', artifactId: 'artifact-1', revisionId: 'revision-2', error: 'forbidden' },
+      { ...base, status: 'conflict', artifactId: 'artifact-1', error: 'conflict', revisionId: 'revision-2' },
+      { ...base, status: 'failed' },
+    ]) {
+      expect(() => parsePhase2TaskToolResultV2({ ...envelope, output: {
+        handoffId: 'handoff-1', invocationId: 'invocation-1', status: 'returned',
+        result: { ...result, projectDocumentInputSetResult: {
+          ...result.projectDocumentInputSetResult, items: [item],
+        } },
+      } })).toThrow(/MANAGEMENT_WORKER_V2_PAYLOAD_INVALID/);
+    }
+  });
+
   test('freezes Phase 1 plus Task and serial handoff tools without Memory tools', () => {
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toHaveLength(24);
     expect(PHASE_2_MANAGEMENT_WORKER_TOOL_NAMES).toContain('tasks.create_subtasks');
