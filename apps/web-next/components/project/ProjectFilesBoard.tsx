@@ -139,8 +139,8 @@ interface FileTableRow {
   canRevise: boolean;
   /** 基于此修改的审核依据(latestReviewId:包行来自 availableActions,集合行来自最新审核记录)。 */
   basisReviewId?: string;
-  /** 包行:交付 identity(修订 provenance 冻结)。 */
-  deliveryId?: string;
+  /** 包行:仅当该行版本就是冻结成员时携带交付 provenance。 */
+  revisionPackageBasis?: { packageId: string; deliveryId?: string };
   /** 集合行:只读预览用。 */
   artifact?: ArtifactDto;
 }
@@ -190,14 +190,19 @@ export function ProjectFilesBoard({
       void projectEvents()
         .getOutputPackage({ channelId, packageId: pkg.packageId, projection: { policy: 'current' } })
         .then((result) => {
-          if (cancelled || !result.ok) return;
+          if (cancelled) return;
           setPackageDetailCache((current) => {
             const next = new Map(current);
-            next.set(pkg.packageId, {
-              package: result.package,
-              availableActions: result.availableActions ?? [],
-              projection: result.projection ?? null,
-            });
+            // 失败也写缓存(空条目):让 packageLoading 收敛,避免投影失败时右栏永远转圈。
+            if (result.ok) {
+              next.set(pkg.packageId, {
+                package: result.package,
+                availableActions: result.availableActions ?? [],
+                projection: result.projection ?? null,
+              });
+            } else {
+              next.set(pkg.packageId, { availableActions: [], projection: null });
+            }
             return next;
           });
         });
@@ -258,7 +263,7 @@ export function ProjectFilesBoard({
     if (!selectedCard) return [];
     if (selectedCard.kind === 'package' && selectedCard.payload.kind === 'package') {
       const detail = packageDetailCache.get(selectedCard.payload.package.packageId);
-      if (!detail?.projection || detail.projection.status !== 'ready') return [];
+      if (!detail?.projection) return [];
       return packageProjectionRows(detail, library, stageNameById, agentNames);
     }
     if (selectedCard.kind === 'collection' && selectedCard.payload.kind === 'collection') {
@@ -496,12 +501,16 @@ export function ProjectFilesBoard({
             </div>
           ) : packageLoading ? (
             <p className="text-sm text-neutral-400">加载包成员…</p>
-          ) : packageProjectionBlocked ? (
-            <p className="text-sm text-neutral-500">包成员投影不可用,请刷新后重试。</p>
           ) : currentRows.length === 0 ? (
             <p className="text-sm text-neutral-400">暂无文件行</p>
           ) : (
-            <table className="w-full min-w-[880px] text-xs">
+            <>
+              {packageProjectionBlocked ? (
+                <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-smoke="files-package-projection-blocked">
+                  当前包不能作为整包正式输入；仍可查看成员，并显式引用或修订具体版本。
+                </p>
+              ) : null}
+              <table className="w-full min-w-[880px] text-xs">
               <thead>
                 <tr className="h-9 border-b border-neutral-200 text-left text-neutral-500">
                   {multiSelect ? <th className="w-8" aria-label="选择" /> : null}
@@ -595,13 +604,16 @@ export function ProjectFilesBoard({
                           >
                             引用
                           </button>
-                          {selectedPackageId && onOpenPackagePreview ? (
+                          {!archived && selectedPackageId && onOpenPackagePreview ? (
                             <button
                               type="button"
                               onClick={() => {
                                 const pkg = packageDetailCache.get(selectedPackageId)?.package;
                                 if (!pkg) return;
-                                onOpenPackagePreview(packageMetaFromDetail(pkg), row.versionId);
+                                const frozenMemberVersionId = pkg.members.find(
+                                  (member) => member.collectionId === row.collectionId,
+                                )?.artifactVersionId;
+                                onOpenPackagePreview(packageMetaFromDetail(pkg), frozenMemberVersionId);
                               }}
                               className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-[11px] text-neutral-600 hover:bg-neutral-100"
                               data-smoke="files-row-preview-edit"
@@ -612,7 +624,7 @@ export function ProjectFilesBoard({
                           ) : null}
                           {selectedCard?.kind === 'collection' && selectedCard.payload.kind === 'collection' ? (
                             <>
-                              {row.isMarkdown && onOpenRevisionEditor ? (
+                              {!archived && row.isMarkdown && onOpenRevisionEditor ? (
                                 <button
                                   type="button"
                                   onClick={() => onOpenRevisionEditor({
@@ -629,7 +641,7 @@ export function ProjectFilesBoard({
                                 >
                                   预览/编辑
                                 </button>
-                              ) : !row.isMarkdown && onOpenReadOnlyArtifact && row.artifact ? (
+                              ) : onOpenReadOnlyArtifact && row.artifact ? (
                                 <button
                                   type="button"
                                   onClick={() => onOpenReadOnlyArtifact(row.artifact!)}
@@ -640,7 +652,7 @@ export function ProjectFilesBoard({
                                   查看
                                 </button>
                               ) : null}
-                              {row.canRevise && onOpenRevisionEditor ? (
+                              {!archived && row.canRevise && onOpenRevisionEditor ? (
                                 <button
                                   type="button"
                                   onClick={() => onOpenRevisionEditor({
@@ -674,7 +686,7 @@ export function ProjectFilesBoard({
                               ) : null}
                             </>
                           ) : null}
-                          {selectedPackageId && row.canRevise && onOpenRevisionEditor ? (
+                          {!archived && selectedPackageId && row.canRevise && onOpenRevisionEditor ? (
                             <button
                               type="button"
                               onClick={() => onOpenRevisionEditor({
@@ -684,8 +696,7 @@ export function ProjectFilesBoard({
                                 baseVersionId: row.versionId,
                                 sourceVersionId: row.versionId,
                                 ...(row.basisReviewId ? { basisReviewId: row.basisReviewId } : {}),
-                                packageId: selectedPackageId,
-                                ...(row.deliveryId ? { deliveryId: row.deliveryId } : {}),
+                                ...(row.revisionPackageBasis ?? {}),
                                 collectionRevision: row.collectionRevision,
                               })}
                               className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800 hover:bg-amber-100"
@@ -701,7 +712,8 @@ export function ProjectFilesBoard({
                   );
                 })}
               </tbody>
-            </table>
+              </table>
+            </>
           )}
           {/* 集合版本行展开区:审核历史/追加审核/设为最终版(复用 VersionDecisionPanel)。 */}
           {selectedCard?.kind === 'collection' && selectedCard.payload.kind === 'collection' && expandedVersionId ? (
@@ -831,7 +843,7 @@ function packageProjectionRows(
   agentNames: ReadonlyMap<string, string>,
 ): FileTableRow[] {
   const projection = detail.projection;
-  if (!projection || projection.status !== 'ready') return [];
+  if (!projection) return [];
   const pkg = detail.package;
   const agentName = pkg?.agentId ? agentNames.get(pkg.agentId) : undefined;
   const sourcePathById = new Map((pkg?.members ?? []).map((member) => [member.artifactVersionId, member.sourcePath]));
@@ -841,6 +853,8 @@ function packageProjectionRows(
     const collection = collectionById.get(member.collectionId);
     const version = collection?.versions.find((v) => v.id === member.versionId);
     const stageId = version?.source.stageId;
+    const frozenMember = pkg?.members.find((candidate) => candidate.collectionId === member.collectionId);
+    const isFrozenMemberVersion = frozenMember?.artifactVersionId === member.versionId;
     // #1062:可修订性由 Server 的 availableActions 给出;basis 冻结 latestReviewId,不从历史猜。
     const actions = actionByVersionId.get(member.versionId);
     const canRevise = actions?.actions.includes('revise-version') ?? false;
@@ -865,7 +879,14 @@ function packageProjectionRows(
       isMarkdown: isMarkdownFilename(member.filename),
       canRevise,
       ...(actions?.latestReviewId ? { basisReviewId: actions.latestReviewId } : {}),
-      ...(pkg?.deliveryId ? { deliveryId: pkg.deliveryId } : {}),
+      ...(pkg && isFrozenMemberVersion
+        ? {
+            revisionPackageBasis: {
+              packageId: pkg.packageId,
+              ...(pkg.deliveryId ? { deliveryId: pkg.deliveryId } : {}),
+            },
+          }
+        : {}),
     };
   });
 }
@@ -913,7 +934,7 @@ function collectionVersionRows(
         isCurrent: version.id === collection.currentVersionId,
         collectionRevision: collection.revision,
         isMarkdown: isMarkdownFilename(version.artifact.filename),
-        canRevise: Boolean(blockedReview),
+        canRevise: Boolean(blockedReview) && isMarkdownFilename(version.artifact.filename),
         ...(blockedReview && latestReview ? { basisReviewId: latestReview.id } : {}),
         artifact: version.artifact,
       };
