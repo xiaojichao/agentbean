@@ -592,8 +592,9 @@ describe('fenceDeviceServiceForPackageSwap (#1114 僵尸防护)', () => {
     });
     const fenced = await fenceDeviceServiceForPackageSwap({ home, baseDir: join(home, '.agentbean'), run });
     expect(fenced).toBe(true);
+    // uid 不写死:CI runner 的 getuid 非 501(2026-08-08 main 红实证)。
     expect(calls.some((argv) => argv[0] === 'bootout' && argv.length === 2
-      && argv[1] === 'gui/501/com.agentbean.device-service')).toBe(true);
+      && argv[1] === `gui/${process.getuid()}/com.agentbean.device-service`)).toBe(true);
   });
 
   test('bootout 退出码 0 但 job 仍注册时,kill 后再 bootout 直至 print 失败', async () => {
