@@ -150,6 +150,16 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths('已生成 /Users/x/.ssh/')).toEqual([]);
       expect(extractReportedOutputPaths('已生成 /Users/x/../etc/')).toEqual([]);
     });
+
+    test('展开生产回复中的 home 相对交付目录，避免误截成根目录路径', () => {
+      const body = [
+        '所有文件已输出到桌面文件夹：',
+        '~/Desktop/AI新闻周报_20260808/',
+      ].join('\n');
+      expect(extractReportedOutputPaths(body, { homeDir: '/Users/shaw' })).toEqual([
+        '/Users/shaw/Desktop/AI新闻周报_20260808/',
+      ]);
+    });
   });
 
   describe('collectArtifacts reported outputs (#1045)', () => {

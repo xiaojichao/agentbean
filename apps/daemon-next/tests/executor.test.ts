@@ -61,7 +61,7 @@ describe('daemon-next command executor', () => {
         command: process.execPath,
         args: [scriptPath, '--model', 'gpt-5.4'],
         cwd,
-        env: { SECRET_TOKEN: 'secret-value' },
+        env: { SECRET_TOKEN: 'secret-value', AGENTBEAN_OUTPUT_DIR: join(cwd, 'outputs') },
       },
     });
 
@@ -70,7 +70,7 @@ describe('daemon-next command executor', () => {
       throw new Error('expected structured command result');
     }
     expect(JSON.parse(output.body)).toEqual({
-      input: expect.stringMatching(/Server 协作记忆[\s\S]*Use the verified runtime\.[\s\S]*\[Device-local Memory redacted\][\s\S]*当前用户输入[\s\S]*hello custom agent/),
+      input: expect.stringMatching(/Server 协作记忆[\s\S]*Use the verified runtime\.[\s\S]*\[Device-local Memory redacted\][\s\S]*当前用户输入[\s\S]*hello custom agent[\s\S]*AgentBean 受管交付目录[\s\S]*AGENTBEAN_OUTPUT_DIR/),
       args: ['--model', 'gpt-5.4'],
       cwd,
       tokenPresent: true,

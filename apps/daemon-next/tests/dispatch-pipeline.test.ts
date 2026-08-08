@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { AGENT_EVENTS } from '../../../packages/contracts/src/index.js';
-import { appendProjectReferenceContext, createDaemonProtocolClient } from '../src/index';
+import { appendManagedOutputContext, appendProjectReferenceContext, createDaemonProtocolClient } from '../src/index';
 import type { DaemonProtocolSocket } from '../src/index';
 import { createLocalMemoryStore } from '../src/memory/local-memory-store';
 import { persistWorkspaceRunManifest, persistWorkspaceRunResponse, prepareWorkspaceRun } from '../src/workspace-run';
@@ -1242,5 +1242,13 @@ describe('dispatch pipeline (attachments + product artifacts)', () => {
     expect(prompt).toContain('## 项目引用（发送时冻结）');
     expect(prompt).toContain('documentId=document-1 revisionId=revision-3 revision=3');
     expect(prompt).toContain('不得替换为当前版或最终版');
+  });
+
+  test('将受管交付目录注入 Agent prompt，要求生成文件进入 OutputPackage 链路', () => {
+    const prompt = appendManagedOutputContext('生成本周周报', '/tmp/.agentbean/run/outputs');
+    expect(prompt).toContain('生成本周周报');
+    expect(prompt).toContain('AGENTBEAN_OUTPUT_DIR');
+    expect(prompt).toContain('/tmp/.agentbean/run/outputs');
+    expect(prompt).toContain('最终交付文件');
   });
 });

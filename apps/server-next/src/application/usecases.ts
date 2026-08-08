@@ -10566,7 +10566,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ? resultFingerprint
             : dispatchResultFingerprint({ ...resultInput, collaborationProposals: replayNormalizedProposals });
           if (typeof replayFingerprint === 'string' && replayFingerprint !== replayCandidateFingerprint) {
-            return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+            // 历史结果可能先成功收敛，之后 Device 才从本机交付目录补建并提交
+            // publish。只允许 publishId 这一字段增量出现；正文、artifact、run 其余
+            // 字段仍必须与首次终态回报逐字一致。后续 staging provenance 闸继续
+            // 绑定 team/channel/agent/workspaceRun，不能借此给其他 dispatch 串包。
+            const replayCandidateWithoutPublishId = dispatchResultFingerprint(resultInput, {
+              omitWorkspacePublishId: true,
+            });
+            if (replayFingerprint !== replayCandidateWithoutPublishId) {
+              return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+            }
           }
           const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
           if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
@@ -19499,18 +19508,24 @@ function normalizeAgentCollaborationProposals(
   });
 }
 
-function dispatchResultFingerprint(input: ReceiveDispatchResultInput): string {
+function dispatchResultFingerprint(
+  input: ReceiveDispatchResultInput,
+  options: { omitWorkspacePublishId?: boolean } = {},
+): string {
   const artifacts = (input.artifacts ?? []).map((artifact) => ({
     ...artifact,
     ...(artifact.contentBase64
       ? { contentBase64: createHash('sha256').update(artifact.contentBase64).digest('hex') }
       : {}),
   }));
+  const workspaceRun = input.workspaceRun && options.omitWorkspacePublishId
+    ? Object.fromEntries(Object.entries(input.workspaceRun).filter(([key]) => key !== 'publishId'))
+    : input.workspaceRun;
   return createHash('sha256').update(JSON.stringify({
     body: input.body,
     artifactIds: uniqueIds([...(input.artifactIds ?? []), ...artifacts.map((artifact) => artifact.id)]),
     artifacts,
-    workspaceRun: input.workspaceRun ?? null,
+    workspaceRun: workspaceRun ?? null,
     collaborationProposals: input.collaborationProposals ?? [],
     projectDocumentInputSetResult: input.projectDocumentInputSetResult ?? null,
   })).digest('hex');

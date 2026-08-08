@@ -11,6 +11,7 @@ import {
 import { PTY_ADAPTERS, defaultPtySpawnLoader, runPtyAgentCommand } from './executor-pty.js';
 import type { PtySpawnFn } from './executor-pty.js';
 import { buildRuntimePrompt, redactDeviceLocalMemory } from './memory/runtime-memory-context.js';
+import { appendManagedOutputContext } from './managed-output-context.js';
 
 export { buildChildEnv };
 
@@ -67,7 +68,14 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
   const ptySpawnLoader = options.ptySpawnLoader ?? defaultPtySpawnLoader;
 
   return async (request) => {
-    const runtimeRequest = { ...request, prompt: buildRuntimePrompt(request) };
+    const runtimePrompt = buildRuntimePrompt(request);
+    const managedOutputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR;
+    const runtimeRequest = {
+      ...request,
+      prompt: managedOutputDir
+        ? appendManagedOutputContext(runtimePrompt, managedOutputDir)
+        : runtimePrompt,
+    };
     if (!runtimeRequest.customAgent?.command) {
       return redactDeviceLocalMemory(`${fallbackPrefix}${runtimeRequest.prompt}`, request.memoryContext);
     }
