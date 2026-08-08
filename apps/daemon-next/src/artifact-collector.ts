@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, type Dirent, readdirSync, realpathSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { basename, join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_ARTIFACT_MAX_BYTES,
@@ -27,12 +28,12 @@ const ADAPTER_OUTPUT_FILE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|pdf|txt|md|mp4|mov
 const REPORTED_PATH_EXT = '(?:md|txt|pdf|png|jpe?g|gif|webp|svg|mp4|mov|zip)';
 /** 引号（含中文弯引号）包裹的绝对路径：允许空格，不允许跨行。 */
 const QUOTED_REPORTED_PATH_RE = new RegExp(
-  `["'“”‘’]((?:\\/[^"'“”‘’\\n]*?|[A-Za-z]:[\\\\/][^"'“”‘’\\n]*?)\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])["'“”‘’]`,
+  `["'“”‘’]((?:(?:~\\/|\\/)[^"'“”‘’\\n]*?|[A-Za-z]:[\\\\/][^"'“”‘’\\n]*?)\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])["'“”‘’]`,
   'gi',
 );
 /** 未加引号的 Unix 绝对路径（不含空格）。 */
 const UNIX_REPORTED_PATH_RE = new RegExp(
-  `(?<![A-Za-z0-9_./])(\\/[^\\s"'<>|\`]+?\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])`,
+  `(?<![A-Za-z0-9_./~])((?:~\\/|\\/)[^\\s"'<>|\`]+?\\.${REPORTED_PATH_EXT})(?![A-Za-z0-9])`,
   'gi',
 );
 /** 未加引号的 Windows 绝对路径（盘符 + 分隔符，不含空格；含空格须加引号）。 */
@@ -47,9 +48,9 @@ const WINDOWS_REPORTED_PATH_RE = new RegExp(
  * 不要求白名单扩展名，语境门降为「非明确引用语境」。负向前瞻 (?![A-Za-z0-9])
  * 确保不会把文件路径（如 /a/b/c.md）的前缀目录误当目录提取。
  */
-const UNIX_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./])(\/[^\s"'<>|`]+\/)(?=\s|["'“”‘’<>|，。；;！!？?,)]|`|$)/gi;
+const UNIX_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./~])((?:~\/|\/)[^\s"'<>|`]+\/)(?=\s|["'“”‘’<>|，。；;！!？?,)]|`|$)/gi;
 const WINDOWS_REPORTED_DIR_RE = /(?<![A-Za-z0-9_./\\:])([A-Za-z]:[\\/][^\s"'<>|`]+?[\\/])(?=\s|["'“”‘’<>|，。；;！!？?,)]|`|$)/gi;
-const QUOTED_REPORTED_DIR_RE = /["'“”‘’]((?:\/[^"'“”‘’\n]*?\/|[A-Za-z]:[\\/][^"'“”‘’\n]*?[\\/]))(?![A-Za-z0-9])["'“”‘’]/gi;
+const QUOTED_REPORTED_DIR_RE = /["'“”‘’]((?:(?:~\/|\/)[^"'“”‘’\n]*?\/|[A-Za-z]:[\\/][^"'“”‘’\n]*?[\\/]))(?![A-Za-z0-9])["'“”‘’]/gi;
 
 /** reported 路径是否为目录候选（尾斜杠结尾，Unix 或 Windows 分隔符）。 */
 function isReportedDirectoryPath(raw: string): boolean {
@@ -219,7 +220,10 @@ export interface ArtifactCollectionDiagnostic {
  * 其余安全校验（realpath/时间窗口/大小/敏感文件名/排除前缀/symlink）在收集
  * 阶段对 realpath 进行（见 collectArtifacts 的 reportedOutputPaths 处理）。
  */
-export function extractReportedOutputPaths(body: string | undefined): string[] {
+export function extractReportedOutputPaths(
+  body: string | undefined,
+  options: { homeDir?: string } = {},
+): string[] {
   if (!body) return [];
   const lines = body.split('\n');
   const lineStarts: number[] = [];
@@ -254,10 +258,18 @@ export function extractReportedOutputPaths(body: string | undefined): string[] {
       && (pathStart === 2 || !/[A-Za-z0-9_./\\]/.test(body[pathStart - 3] ?? ''))) {
       return;
     }
-    const candidate = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    const trimmed = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    if (trimmed.startsWith('~/') && /(^|[\\/])\.\.([\\/]|$)/.test(trimmed)) return;
+    const reportedDirectory = isReportedDirectoryPath(trimmed);
+    const expanded = trimmed.startsWith('~/')
+      ? resolve(options.homeDir ?? homedir(), trimmed.slice(2))
+      : trimmed;
+    const candidate = reportedDirectory && !isReportedDirectoryPath(expanded)
+      ? `${expanded}${sep}`
+      : expanded;
     if (!isPlausibleReportedPath(candidate)) return;
     const colEnd = colStart + raw.length;
-    if (isReportedDirectoryPath(candidate)) {
+    if (reportedDirectory) {
       // 目录候选：仅引用语境才拒绝（目录几乎必为交付位置，不要求交付词）。
       if (isInReferenceContextAt(lines, lineIndex, colStart, colEnd)) return;
     } else if (!isDeliveryContextAt(lines, lineIndex, colStart, colEnd)) {

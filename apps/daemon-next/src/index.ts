@@ -78,6 +78,7 @@ export {
 } from './workspace-snapshot.js';
 export { materializeProjectChannelWorkspaceRevision } from './workspace-apply.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
+export { appendManagedOutputContext } from './managed-output-context.js';
 export {
   discoverRecoverableWorkspaceRuns,
   discoverRecoverableChannelWorkspaceRuns,
@@ -1102,7 +1103,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // #1045：AgentOS oneshot（Hermes/OpenClaw）把交付文件写到任意位置，但在回复里
           // 明确报告路径；解析回复比继续扩大猜测目录更可靠。报告路径只成为本次
           // WorkspaceRun 的受管 run output 候选，经 outputs/<publishIdentity> 原子发布。
-          const reportedOutputPaths = extractReportedOutputPaths(result.body);
+          const reportedOutputPaths = extractReportedOutputPaths(result.body, { homeDir: home });
           const isCodexCustomAgent = isCodexAdapterKind(request.customAgent?.adapterKind);
           const codexExtraOutputDirs = isCodexCustomAgent ? [codexGeneratedImagesDir] : [];
           const adapterOutputRoots = resolveAdapterOutputRoots(request.customAgent?.adapterKind, {

@@ -68,6 +68,7 @@ TypeScript 的 `readonly` 只在编译期成立，运行期对象可被改写。
 - **卡片 threadId 解析**:`output-package-handler.ts` `resolveOriginThreadId`——`staging.provenance.workspaceRunId → dispatch → message`,`message.threadId ?? message.id`。链断回退主线(不传 threadId)。
 - **生产形态坑**:daemon 上报的 `provenance.workspaceRunId` **等于 dispatchId/taskId**,与 server 侧 `workspace_runs.id` 不同源(2026-08-07 实证:#1116 只按 runId 查静默回退主线,#1117 补 dispatch 兜底)。**测试构造数据形态必须对齐生产实证**,单测里让两个 id 一致=镜像错误假设。
 - **内嵌形态**:daemon ≥0.3.43 结果回报 `workspaceRun.publishId`;`receiveDispatchResult` 在 append 回复前经 `readOutputPackageCardMeta` 读 package 快照挂进回复 `meta.outputPackageCard`。独立卡片仍在 commit 时创建(结果未达/resume 兜底),web 端隐藏被内嵌吸收者。
+- **历史 publish 补偿**:旧终态结果可能没有 `workspaceRun.publishId`;补偿重放只允许新增这一字段,正文/artifact/workspaceRun 其余字段必须仍匹配首次结果 fingerprint。该增量路径要求 committed staging 显式携带 `provenance.workspaceRunId`,并确认该 run 归属当前 dispatch；不得用“同频道同 Agent”或当前 dispatch 的任意 run 作为缺失 lineage 的替代，否则会把其他任务的 publish 串到原回复。
 - `x-workspace-path` header 只许 Latin-1:daemon 侧必须 `encodeURIComponent`(中文文件名实证 ByteString 拒),query 参数是权威传输。
 
 ## 反模式
