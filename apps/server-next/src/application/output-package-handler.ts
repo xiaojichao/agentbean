@@ -252,14 +252,7 @@ export async function attemptOutputPackageFormation(
         ...(workspaceRunById ? {} : { provenanceWorkspaceRunId: workspaceRunId! }),
         ...(invocationId ? { managementInvocationId: invocationId } : {}),
       }
-      : dispatchAttempt
-        ? {
-          // commit 早于 Server workspace_runs 落库时只能先保留 provenance alias；
-          // 该成形结果会在结果回报阶段以真实 run 再次收敛。
-          id: workspaceRunId!,
-          ...(invocationId ? { managementInvocationId: invocationId } : {}),
-        }
-        : null,
+      : null,
     invocation: invocation
       ? {
         id: invocation.id,

@@ -10602,6 +10602,143 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 }
               }
             }
+            // package 已形成不等于整条 result 已收敛。重放载荷可能还带有
+            // artifacts/协作提案；先补齐这些副作用，再确认 delivered，避免
+            // daemon 因早期成功 ack 丢掉 invocation 终态。
+            const replayDeliveryMessage = (await repositories.messages.listByChannel(
+              dispatch.channelId,
+              10_000,
+            )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+            const replayReportedArtifactIds = uniqueIds([
+              ...(resultInput.artifactIds ?? []),
+              ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+            ]);
+            const replayCommittedArtifacts: ArtifactRecord[] = [];
+            try {
+              for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
+                const uploadedArtifact = await repositories.artifacts.getForTeam({
+                  teamId: dispatch.teamId,
+                  artifactId,
+                });
+                if (!uploadedArtifact) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                if (uploadedArtifact.channelId !== dispatch.channelId) {
+                  return makeFailure('FORBIDDEN', 'Artifact cannot be attached to this dispatch');
+                }
+                replayCommittedArtifacts.push(await repositories.artifacts.create({
+                  ...uploadedArtifact,
+                  ...(replayDeliveryMessage ? { messageId: replayDeliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                  pathKind: 'generated',
+                }));
+              }
+              for (const artifactInput of resultInput.artifacts ?? []) {
+                const existing = await repositories.artifacts.getForTeam({
+                  teamId: dispatch.teamId,
+                  artifactId: artifactInput.id,
+                });
+                if (existing) {
+                  replayCommittedArtifacts.push(existing);
+                  continue;
+                }
+                if (artifactInput.sourceRoot && !isValidArtifactSourceRoot(artifactInput.sourceRoot)) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const contentResult = await resolveDispatchArtifactContent(artifactContentStore, {
+                  teamId: dispatch.teamId,
+                  artifact: artifactInput,
+                });
+                if (!contentResult.ok) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const persisted = await repositories.artifacts.create({
+                  id: artifactInput.id,
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(replayDeliveryMessage ? { messageId: replayDeliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                  uploaderId: resultInput.agentId,
+                  filename: artifactInput.filename,
+                  mimeType: artifactInput.mimeType ?? 'application/octet-stream',
+                  sizeBytes: contentResult.content?.sizeBytes ?? artifactInput.sizeBytes ?? 0,
+                  storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
+                  relativePath: artifactInput.relativePath,
+                  pathKind: artifactInput.pathKind ?? (replayWorkspaceRun ? 'workspace' : 'generated'),
+                  role: artifactInput.role ?? (replayWorkspaceRun ? 'run_output' : 'deliverable'),
+                  sourceRoot: artifactInput.sourceRoot,
+                  sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
+                  createdAt: clock.now(),
+                });
+                await onArtifactCommitted?.(persisted).catch(() => undefined);
+                replayCommittedArtifacts.push(persisted);
+              }
+              if (channelFileRollout.markdownEditing) {
+                await createInitialChannelDocuments(
+                  repositories,
+                  replayCommittedArtifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact)),
+                  resultInput.agentId,
+                  clock.now(),
+                );
+              }
+              const replayCollaborationProposals = (resultInput.collaborationProposals ?? []).flatMap((proposal) => {
+                try {
+                  return [parseAgentCollaborationProposalV1(proposal)];
+                } catch {
+                  return [];
+                }
+              });
+              if (replayCollaborationProposals.length > 0) {
+                await collaborationService.recordProposals({
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  proposals: replayCollaborationProposals,
+                });
+              }
+              if (replayAttempt) {
+                const replayInvocation = await repositories.management.invocations.getById(replayAttempt.invocationId);
+                if (!replayInvocation) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const replayStatus = dispatch.status === 'failed' || dispatch.status === 'cancelled'
+                  ? dispatch.status
+                  : 'succeeded';
+                await recordManagedDispatchTerminal(
+                  repositories,
+                  clock,
+                  ids,
+                  managementKernel,
+                  taskCoordinationKernel,
+                  collaborationService,
+                  {
+                    dispatchId: dispatch.id,
+                    status: replayStatus,
+                    artifactIds: replayReportedArtifactIds,
+                    ...(replayDeliveryMessage ? { deliveryMessageId: replayDeliveryMessage.id } : {}),
+                    actorId: resultInput.agentId,
+                    result: {
+                      schemaVersion: 1,
+                      invocationId: replayAttempt.invocationId,
+                      ...(replayInvocation.intent.taskContext?.taskId
+                        ? { taskId: replayInvocation.intent.taskContext.taskId }
+                        : {}),
+                      agentId: resultInput.agentId,
+                      status: replayStatus,
+                      body: resultInput.body,
+                      artifactIds: replayReportedArtifactIds,
+                      ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                      memoryCandidateIds: [],
+                      startedAt: replayAttempt.startedAt,
+                      completedAt: dispatch.completedAt ?? clock.now(),
+                    },
+                  },
+                );
+              }
+            } catch {
+              return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+            }
             // 同一回报还可能携带 Project Document InputSet 结果；只有纯文件包
             // 重放才能在这里结束，否则必须继续进入下方 InputSet 恢复事务。
             if (!resultInput.projectDocumentInputSetResult) {

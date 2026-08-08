@@ -778,7 +778,7 @@ for (const variant of variants) {
 
     test('managed 生产形态:commit 早于 workspace run 落库时仍形成讨论串卡片', async () => {
       seedValue = await seed(variant);
-      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      const { repositories, app, teamId, channelId, userId, agentId } = seedValue;
       const taskId = 'task-managed-alias';
       const managementRunId = 'run-managed-alias';
       const dispatchId = 'dispatch-managed-alias';
@@ -819,6 +819,17 @@ for (const variant of variants) {
       await commitDelivery(seedValue, 'pub-managed-alias', [{ path: 'docs/managed.md', body: Buffer.from('managed') }], {
         agentId, taskId, taskAttempt: 1, workspaceRunId: dispatchId,
       });
+      // 真实 run 尚未落库时不冻结 dispatch alias，等待结果回报阶段补齐 lineage。
+      expect(await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-alias' })).toBeNull();
+      await repositories.workspaceRuns.create({
+        id: 'run-managed-alias-server', teamId, channelId, dispatchId, agentId,
+        status: 'succeeded', createdAt: 7, updatedAt: 7, artifactIds: [],
+      });
+      const replay = await app.receiveDispatchResult({
+        dispatchId, agentId, body: '已交付',
+        workspaceRun: { id: 'run-managed-alias-server', status: 'succeeded', publishId: 'pub-managed-alias' },
+      });
+      expect(replay.ok).toBe(true);
       const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-alias' });
       expect(byPublish).not.toBeNull();
       const card = await repositories.messages.getByClientMessageId({
