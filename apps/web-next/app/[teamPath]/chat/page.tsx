@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff } from 'lucide-react';
+import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
 import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
@@ -360,7 +360,8 @@ export default function ChatPage() {
   const [openArtifactRevision, setOpenArtifactRevision] = useState<OpenArtifactRevision | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
-  const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('files');
+  // 原型收敛:文件库默认按逻辑产物(输出包/产物集合)组织;无项目数据时回落到文件浏览。
+  const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('artifacts');
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
@@ -2263,6 +2264,24 @@ export default function ChatPage() {
                   {rootMessages.map((msg, index) => {
                     const taskId = metaTaskId(msg);
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
+                    const replyCount = visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length;
+                    // 原型收敛:频道主聊天=话题入口列表,卡片点击打开右侧讨论串;
+                    // DM 与 system 消息保持原有气泡流。
+                    if (!isDm && msg.senderKind !== 'system') {
+                      return (
+                        <TopicCard
+                          key={msg.id}
+                          msg={msg}
+                          task={task}
+                          taskNumber={task ? taskNumbers.get(task.id) : undefined}
+                          replyCount={replyCount}
+                          active={threadRootId === msg.id}
+                          humanProfiles={humanProfiles}
+                          channelMembers={channelMembers}
+                          onOpen={() => openThread(msg.id)}
+                        />
+                      );
+                    }
                     return (
                       <ChatBubble
                         key={msg.id}
@@ -2312,7 +2331,7 @@ export default function ChatPage() {
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                        replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
+                        replyCount={replyCount}
                       />
                     );
                   })}
@@ -2329,6 +2348,11 @@ export default function ChatPage() {
 
             {activeChannel && (
               <div className="border-t border-neutral-200 p-3">
+                {!isDm && (
+                  <div className="mb-1.5 px-1 text-[11px] text-neutral-400">
+                    发送后会创建新话题；回复、文件包与 @智能体 协作都在该话题的讨论串里完成。
+                  </div>
+                )}
                 <div className="relative rounded-lg border border-neutral-300 bg-white">
                   {showMention && filteredMentionMembers.length > 0 && (
                     <div className="absolute bottom-full left-0 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg z-10">
@@ -4636,6 +4660,102 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: ComposerAttac
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * 原型收敛(2026-07-28 原型):主聊天区是话题入口列表,不承载连续跟帖。
+ * 频道的根消息渲染为话题卡片;回复、文件包、引用与审核动作都在右侧讨论串
+ * (ThreadPanel)完成。DM 与 system 消息仍走 ChatBubble 流式渲染。
+ * data-smoke="chat-message" + data-message-body 与 ChatBubble 保持一致,冒烟脚本兼容。
+ */
+function TopicCard({
+  msg,
+  task,
+  taskNumber,
+  replyCount,
+  active,
+  humanProfiles = [],
+  channelMembers = [],
+  onOpen,
+}: {
+  msg: ChatMessage;
+  task?: TaskItem | null;
+  taskNumber?: number;
+  replyCount: number;
+  active: boolean;
+  humanProfiles?: HumanProfile[];
+  channelMembers?: ChannelMemberEntry[];
+  onOpen: () => void;
+}) {
+  const agents = useAgentBeanStore((s) => s.agents);
+  const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const isHuman = msg.senderKind === 'human';
+  const isOwner = isHuman && currentUser?.id === msg.senderId;
+  const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
+  const deleted = isDeletedMessage(msg);
+  const packageMeta = outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta);
+  const body = displayMessageBody(msg);
+  const firstLine = body.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+  const title = deleted ? '消息已删除' : firstLine.length > 90 ? `${firstLine.slice(0, 90)}…` : firstLine;
+  const previewSource = body.replace(/\s+/g, ' ').trim();
+  const preview = deleted || previewSource === firstLine
+    ? ''
+    : previewSource.length > 140 ? `${previewSource.slice(0, 140)}…` : previewSource;
+
+  return (
+    <div
+      id={`message-${msg.id}`}
+      data-smoke="chat-message"
+      data-message-body={msg.body}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); } }}
+      className={`mt-3 flex cursor-pointer gap-2.5 rounded-md border px-3 py-2.5 transition-colors first:mt-0 ${
+        active
+          ? 'border-amber-400 bg-amber-50/60 shadow-[inset_3px_0_0_#f59e0b]'
+          : 'border-neutral-200 bg-white shadow-sm hover:border-neutral-900'
+      }`}
+    >
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+        isHuman ? 'bg-emerald-100 text-emerald-700' : 'bg-purple-100 text-purple-700'
+      }`}>
+        {(speaker[0] ?? '?').toUpperCase()}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-neutral-900">{speaker}</span>
+          {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
+          <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
+        </div>
+        <div className={`mt-0.5 truncate text-sm ${deleted ? 'italic text-neutral-400' : 'font-medium text-neutral-800'}`}>
+          {title || '(空消息)'}
+        </div>
+        {preview && <div className="mt-0.5 truncate text-xs text-neutral-500">{preview}</div>}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          {task && (
+            <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+              <ListTodo size={10} />
+              {taskNumber ? `#${taskNumber} ` : ''}{taskStatusText(task.status)}
+            </span>
+          )}
+          {packageMeta && (
+            <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
+              <Package size={10} />
+              文件包 · {packageMeta.memberCount} 个文件
+            </span>
+          )}
+          {replyCount > 0 && (
+            <span className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-600">
+              <MessageSquare size={10} />
+              {replyCount} 条回复
+            </span>
+          )}
+        </div>
+      </div>
+      <ChevronRight size={14} className="mt-1 shrink-0 text-neutral-300" />
     </div>
   );
 }
