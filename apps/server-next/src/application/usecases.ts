@@ -10553,11 +10553,44 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             const replayWorkspaceRunById = replayWorkspaceRunId
               ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
               : null;
-            const replayWorkspaceRun = replayWorkspaceRunId
+            let replayWorkspaceRun = replayWorkspaceRunId
               ? replayWorkspaceRunById
                 ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
                 ?? null
               : null;
+            if (!replayWorkspaceRun && resultInput.workspaceRun) {
+              const replayAgent = await repositories.agents.getById(resultInput.agentId);
+              if (!replayAgent || replayAgent.deletedAt !== undefined) {
+                return makeFailure('NOT_FOUND', 'Agent not found');
+              }
+              const replayMessageForRun = (await repositories.messages.listByChannel(
+                dispatch.channelId,
+                10_000,
+              )).find((message) => message.meta?.dispatchId === dispatch.id);
+              try {
+                replayWorkspaceRun = await repositories.workspaceRuns.create({
+                  id: resultInput.workspaceRun.id ?? ids.nextId(),
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(replayMessageForRun ? { messageId: replayMessageForRun.id } : {}),
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  deviceId: replayAgent.deviceId,
+                  status: resultInput.workspaceRun.status ?? 'succeeded',
+                  cwd: resultInput.workspaceRun.cwd,
+                  command: resultInput.workspaceRun.command,
+                  logExcerpt: normalizeWorkspaceRunLogExcerpt(resultInput.workspaceRun.logExcerpt),
+                  exitCode: resultInput.workspaceRun.exitCode,
+                  startedAt: resultInput.workspaceRun.startedAt,
+                  completedAt: resultInput.workspaceRun.completedAt ?? clock.now(),
+                  createdAt: clock.now(),
+                  updatedAt: clock.now(),
+                  artifactIds: [],
+                });
+              } catch {
+                return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+              }
+            }
             if (replayPublishesToRoot) {
             if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
               // publishId 只应在 commit 已落库后回报；否则不能发 delivered ack，
@@ -10709,7 +10742,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   proposals: replayCollaborationProposals,
                 });
               }
-              if (replayAttempt) {
+              if (replayAttempt && !resultInput.projectDocumentInputSetResult) {
                 const replayInvocation = await repositories.management.invocations.getById(replayAttempt.invocationId);
                 if (!replayInvocation) {
                   return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
