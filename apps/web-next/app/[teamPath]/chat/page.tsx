@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
@@ -625,7 +625,10 @@ export default function ChatPage() {
   }, [agentNameSignature]);
 
   useEffect(() => {
+    // 话题列表按活跃倒序,新话题在顶部,不自动滚底;DM 连续流保持滚底。
+    if (!isDm) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messagesByChannel]);
 
   useEffect(() => {
@@ -1637,6 +1640,19 @@ export default function ChatPage() {
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
   const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg, messagesById));
+  // 原型 §7.4:话题入口列表按最近活跃排序(最新回复/活动的话题排最前);
+  // DM 保持时间正序的连续流。
+  const topicOrderedMessages = useMemo(() => {
+    if (isDm) return rootMessages;
+    const lastActivity = new Map<string, number>();
+    for (const msg of visibleMessages) {
+      const parent = parentMessageId(msg, messagesById);
+      if (!parent) continue;
+      lastActivity.set(parent, Math.max(lastActivity.get(parent) ?? 0, msg.createdAt));
+    }
+    return [...rootMessages].sort((a, b) =>
+      (lastActivity.get(b.id) ?? b.createdAt) - (lastActivity.get(a.id) ?? a.createdAt));
+  }, [isDm, rootMessages, visibleMessages, messagesById]);
   const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg, messagesById) === threadRootId) : [];
   const taskDetailMessage = taskDetailMessageId
     ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
@@ -2282,11 +2298,11 @@ export default function ChatPage() {
                     <div className="text-neutral-300">发送第一条消息开始对话</div>
                   </div>
                 )}
-                {activeChannel && rootMessages.length > 0 && (
+                {activeChannel && rootMessages.length > 0 && isDm && (
                   <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
                 )}
                 <div>
-                  {rootMessages.map((msg, index) => {
+                  {topicOrderedMessages.map((msg, index) => {
                     const taskId = metaTaskId(msg);
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
                     const replyCount = visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length;
@@ -2311,7 +2327,7 @@ export default function ChatPage() {
                       <ChatBubble
                         key={msg.id}
                         msg={msg}
-                        groupedWithPrevious={isMessageGroupContinuation(rootMessages[index - 1], msg)}
+                        groupedWithPrevious={isMessageGroupContinuation(topicOrderedMessages[index - 1], msg)}
                         task={task}
                         taskNumber={task ? taskNumbers.get(task.id) : undefined}
                         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
