@@ -10533,6 +10533,54 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
       if (!isCompletableDispatchStatus(dispatch.status)) {
+        // OutputPackage 补偿必须独立于 Dispatch terminal 状态收敛：daemon 可能在
+        // commit 成功后先收到结果确认，而首次成形又因瞬时存储/lineage 时序失败。
+        // 不能把该重放当成普通 duplicate 直接拒绝，否则 publish 会永久停留 pending。
+        if (resultInput.workspaceRun?.publishId) {
+          const replayAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
+            resultInput.dispatchId,
+          );
+          const replayHandoff = replayAttempt
+            ? await repositories.management.handoffs.getByInvocationId(replayAttempt.invocationId)
+            : null;
+          const replayPublishesToRoot = !replayHandoff || replayHandoff.intent.returnMode === 'deliver_to_root';
+          if (replayPublishesToRoot) {
+            const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
+              teamId: dispatch.teamId,
+              publishId: resultInput.workspaceRun.publishId,
+            });
+            if (replayStaging?.committedRevisionId) {
+              try {
+                await outputPackageService.formPackage({
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  publishId: resultInput.workspaceRun.publishId,
+                  workspaceRevisionId: replayStaging.committedRevisionId,
+                });
+              } catch {
+                // INTERNAL_ERROR 不会被 daemon 当作 delivered ack，保留重试机会。
+                return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+              }
+              const replayCard = await readOutputPackageCardMeta(repositories, {
+                teamId: dispatch.teamId,
+                publishId: resultInput.workspaceRun.publishId,
+              });
+              if (replayCard) {
+                const replayMessage = (await repositories.messages.listByChannel(
+                  dispatch.channelId,
+                  10_000,
+                )).find((message) => message.meta?.dispatchId === dispatch.id);
+                if (replayMessage && !replayMessage.meta?.outputPackageCard) {
+                  await repositories.messages.updateMeta({
+                    messageId: replayMessage.id,
+                    meta: { ...(replayMessage.meta ?? {}), outputPackageCard: replayCard },
+                  });
+                }
+              }
+            }
+            return makeSuccess({ dispatch: toDispatchDto(dispatch) });
+          }
+        }
         if (resultInput.projectDocumentInputSetResult) {
           const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
             resultInput.dispatchId,
@@ -10894,13 +10942,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // #1111 内嵌形态:daemon ≥0.3.43 结果回报带 publishId 时,把 output-package 卡片
       // meta 挂进回复消息——卡片随回复气泡内嵌渲染(原型:卡片在 agent 消息 div 内),
       // web 端据此隐藏同 packageId 的独立卡片。读取失败/旧 daemon → 独立卡片兜底。
-      const inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
+      let inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
         ? await readOutputPackageCardMeta(repositories, {
             teamId: completed.dispatch.teamId,
             publishId: resultInput.workspaceRun.publishId,
           })
         : null;
-      const message = publishResult ? await repositories.messages.append({
+      let message = publishResult ? await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
         channelId: completed.dispatch.channelId,
@@ -10941,8 +10989,41 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             createdAt: now,
             updatedAt: now,
             artifactIds: reportedArtifactIds,
-          })
+        })
         : null;
+      // commit 发生在 daemon 回报之前时，首次成形可能因 managed workspace run
+      // 尚未落库而被拒绝。此处 workspace run 已落库，使用同一 publish identity
+      // 幂等重试，随后把卡片快照补回已追加的 Agent 回复。
+      if (publishResult && resultInput.workspaceRun?.publishId) {
+        const staging = await repositories.workspacePublishStagings.getByPublishId({
+          teamId: completed.dispatch.teamId,
+          publishId: resultInput.workspaceRun.publishId,
+        });
+        if (staging?.committedRevisionId) {
+          try {
+            await outputPackageService.formPackage({
+              teamId: completed.dispatch.teamId,
+              channelId: completed.dispatch.channelId,
+              publishId: resultInput.workspaceRun.publishId,
+              workspaceRevisionId: staging.committedRevisionId,
+            });
+          } catch {
+            // best-effort:回复链路不因 package reconciliation 失败而中断。
+          }
+        }
+        if (!inlinePackageCard) {
+          inlinePackageCard = await readOutputPackageCardMeta(repositories, {
+            teamId: completed.dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          });
+          if (inlinePackageCard && message) {
+            message = await repositories.messages.updateMeta({
+              messageId: message.id,
+              meta: { ...message.meta, outputPackageCard: inlinePackageCard },
+            }) ?? message;
+          }
+        }
+      }
       const artifacts: ArtifactDto[] = [];
       const committedArtifacts: ArtifactRecord[] = [];
       for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {

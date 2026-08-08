@@ -179,10 +179,23 @@ export async function attemptOutputPackageFormation(
     ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
     : null;
   const workspaceRunId = staging?.provenance?.workspaceRunId;
-  const workspaceRun = workspaceRunId
+  const workspaceRunById = workspaceRunId
     ? await repositories.workspaceRuns.getForTeam({ teamId, runId: workspaceRunId })
     : null;
-  const invocationId = workspaceRun?.managementInvocationId;
+  // Device 在 commit 时可能还没有 Server workspace_runs 行，并且生产 daemon
+  // 上报的 workspaceRunId 是 dispatchId。沿 dispatch → invocation 解析 managed
+  // lineage，让 commit 后的首次/重试成形都能通过同一 authority fence。
+  const workspaceDispatch = !workspaceRunById && workspaceRunId
+    ? await repositories.dispatches.getById(workspaceRunId)
+    : null;
+  const workspaceRunByDispatch = workspaceDispatch?.teamId === teamId
+    ? (await repositories.workspaceRuns.listByDispatch(workspaceDispatch.id)).at(-1) ?? null
+    : null;
+  const workspaceRun = workspaceRunById ?? workspaceRunByDispatch;
+  const dispatchAttempt = workspaceDispatch
+    ? await repositories.management.dispatchAttempts.getByDispatchId(workspaceDispatch.id)
+    : null;
+  const invocationId = workspaceRun?.managementInvocationId ?? dispatchAttempt?.invocationId;
   const invocation = invocationId
     ? await repositories.management.invocations.getById(invocationId)
     : null;
@@ -231,7 +244,16 @@ export async function attemptOutputPackageFormation(
     agentAuthorityOk: authority.ok,
     task: task ? { id: task.id, teamId: task.teamId, channelId: task.channelId ?? undefined, revision: task.revision } : null,
     coordination: coordination ? { attempt: coordination.attempt } : null,
-    workspaceRun: workspaceRun ? { id: workspaceRun.id, ...(workspaceRun.managementInvocationId ? { managementInvocationId: workspaceRun.managementInvocationId } : {}) } : null,
+    workspaceRun: workspaceRun
+      ? {
+        // Domain 判定比较的是 provenance.workspaceRunId；当该值是 dispatchId
+        // 时保留 alias，同时使用 Server workspace run 上的 invocation 事实。
+        id: workspaceRunById ? workspaceRun.id : workspaceRunId!,
+        ...(invocationId ? { managementInvocationId: invocationId } : {}),
+      }
+      : dispatchAttempt
+        ? { id: workspaceRunId!, ...(invocationId ? { managementInvocationId: invocationId } : {}) }
+        : null,
     invocation: invocation
       ? {
         id: invocation.id,
