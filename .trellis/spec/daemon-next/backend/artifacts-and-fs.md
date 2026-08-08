@@ -21,6 +21,17 @@
 
 `src/artifact-collector.ts:642` 注释明文：「只暴露 basename：诊断行会随 run 回报上 Server，不得泄露本机目录结构」。所有 reject / 诊断路径都走 `basename(...)`（`:671`、`:697`、`:809`）。**不要在诊断里回绝对路径或父目录**——这些会进 server，泄露用户机器目录结构。
 
+## reported 提取两关（extractReportedOutputPaths）
+
+reported 路径在进入收集前先过两道提取关，**任一关拒都静默返回空**（无诊断），排查「agent 报了路径但没卡片」先怀疑这里：
+
+1. **交付语境**（`isDeliveryContextAt`）：路径所在分句含交付词（`DELIVERY_CONTEXT_RE`，含「文件路径」行内标签）；或冒号收尾声明行 + 换行后**裸路径行**（整行仅路径+收尾标点，免词表——agent 措辞变体如「已经生成在：」不可枚举）；或交付标题小节。引用词（参考/来源/引用）同行或上一行时优先拒。
+2. **结构校验**（`isPlausibleReportedPath`）：绝对路径、无 `..`、隐藏段白名单 `AGENT_DATA_DIRS`（只放行 `.hermes`/`.openclaw`，其余 dotfile 段拒）、扩展名白名单（目录路径免扩展名）。
+
+**reported vs scan 守卫分离**：reported 信任 agent 声明（白名单放行已知 agent 数据目录）；scan（adapter 根/output-dir）走 `skipHidden` 一刀切，防 daemon 主动扫数据目录泄漏 sessions。`isCollectableReportedBase(realPath, excluded, trustReported)` 的 `trustReported` 参数区分两通道（reported=true）。
+
+**kind 决定去向**：reported 产物 kind=`run_output` → 进 staging（卡片链路的唯一入口之一）；adapter 根扫描产物 kind=`adapter_generated` → 只走 legacy upload，**永远不出卡片**（`index.ts` `projectionRunOutputs` 只 filter `run_output`）。
+
 ## fs:read：白名单（非黑名单）
 
 `src/file-reader.ts` 实现 #1084 切片3 的「本机 snapshots 副本单文件字节读取」（频道文件预览/下载本机优先）。它是**白名单语义**，与 `directory-lister.ts` 的 denylist 语义**结构性不同**，不可合并。头注释（`src/file-reader.ts:14-17`）专门强调这点。
