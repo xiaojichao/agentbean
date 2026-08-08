@@ -78,7 +78,7 @@ describe('workspace-run', () => {
       status: 'succeeded',
       cwd: '.',
       command: 'agent --run',
-      logExcerpt: 'done',
+      logExcerpt: '',
       exitCode: 0,
       startedAt: 100,
       completedAt: 200,
@@ -97,5 +97,6 @@ describe('workspace-run', () => {
       'logExcerpt',
       'publishId',
     ]);
+    expect(recovered!.workspaceRun.logExcerpt).toBe('');
   });
 });

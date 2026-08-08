@@ -157,7 +157,7 @@ describe('Channel-first Device Workspace Projection', () => {
       status: 'succeeded',
       cwd: '.',
       command: 'agent --run',
-      logExcerpt: 'done',
+      logExcerpt: '',
       exitCode: 0,
       startedAt: 100,
       completedAt: 200,
@@ -180,6 +180,7 @@ describe('Channel-first Device Workspace Projection', () => {
       'logExcerpt',
       'publishId',
     ]);
+    expect(recovered!.workspaceRun.logExcerpt).toBe('');
   });
 
   test('dispatch executes with managed env and reports relative provenance', async () => {
