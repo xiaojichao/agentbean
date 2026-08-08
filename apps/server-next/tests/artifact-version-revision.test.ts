@@ -672,6 +672,69 @@ for (const variant of variants) {
       expect(rejected.availableActions[0]?.latestReviewId).toBe(reviewId);
     });
 
+    test('current projection 前移后为当前被拒版本下发修订动作，但 package authority 仍基于冻结成员', async () => {
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s);
+      const deliveredReviewId = await seedNegativeReview(s.repositories, s, fixture);
+      const saved = await s.app.saveArtifactVersionRevision(saveInput(s, fixture, deliveredReviewId));
+      if (!saved.ok) throw new Error(saved.error);
+
+      const currentVersionId = saved.revision.versionId;
+      const currentReviewId = `review-${currentVersionId}`;
+      const appended = await s.repositories.channelProjects.appendArtifactReview({
+        review: {
+          id: currentReviewId,
+          teamId: s.teamId,
+          channelId: s.channelId,
+          collectionId: fixture.collectionId,
+          versionId: currentVersionId,
+          authorityBasis: 'team-owner',
+          decision: 'changes_requested',
+          comment: '当前修订仍需修改',
+          basis: [],
+          reviewedBy: s.userId,
+          createdAt: 700,
+        },
+        mutation: {
+          teamId: s.teamId,
+          channelId: s.channelId,
+          idempotencyKey: `seed-review:${currentReviewId}`,
+          requestFingerprint: `fp-${currentReviewId}`,
+          kind: 'review',
+          collectionId: fixture.collectionId,
+          versionId: currentVersionId,
+          reviewId: currentReviewId,
+          createdAt: 700,
+        },
+      });
+      expect(appended.kind).toBe('created');
+
+      const detail = await s.app.getOutputPackage({
+        userId: s.userId,
+        teamId: s.teamId,
+        channelId: s.channelId,
+        packageId: fixture.packageId,
+        projection: { policy: 'current' },
+      });
+      if (!detail.ok) throw new Error(detail.error);
+      expect(detail.projection).toMatchObject({
+        status: 'not_ready',
+        members: [expect.objectContaining({ versionId: currentVersionId, reviewState: 'changes_requested' })],
+      });
+      expect(detail.availableActions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ versionId: fixture.versionId }),
+        expect.objectContaining({
+          collectionId: fixture.collectionId,
+          versionId: currentVersionId,
+          latestReviewId: currentReviewId,
+          actions: expect.arrayContaining(['revise-version']),
+        }),
+      ]));
+      const currentActions = detail.availableActions.find((entry) => entry.versionId === currentVersionId)?.actions ?? [];
+      expect(currentActions).not.toContain('review-approved');
+      expect(currentActions).not.toContain('set-final');
+    });
+
     test('AC3:library 投影携带 revisionBasis(lineage 可见性)', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);

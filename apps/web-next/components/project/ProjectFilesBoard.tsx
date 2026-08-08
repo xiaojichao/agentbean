@@ -139,8 +139,8 @@ interface FileTableRow {
   canRevise: boolean;
   /** 基于此修改的审核依据(latestReviewId:包行来自 availableActions,集合行来自最新审核记录)。 */
   basisReviewId?: string;
-  /** 包行:交付 identity(修订 provenance 冻结)。 */
-  deliveryId?: string;
+  /** 包行:仅当该行版本就是冻结成员时携带交付 provenance。 */
+  revisionPackageBasis?: { packageId: string; deliveryId?: string };
   /** 集合行:只读预览用。 */
   artifact?: ArtifactDto;
 }
@@ -696,8 +696,7 @@ export function ProjectFilesBoard({
                                 baseVersionId: row.versionId,
                                 sourceVersionId: row.versionId,
                                 ...(row.basisReviewId ? { basisReviewId: row.basisReviewId } : {}),
-                                packageId: selectedPackageId,
-                                ...(row.deliveryId ? { deliveryId: row.deliveryId } : {}),
+                                ...(row.revisionPackageBasis ?? {}),
                                 collectionRevision: row.collectionRevision,
                               })}
                               className="rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800 hover:bg-amber-100"
@@ -854,6 +853,8 @@ function packageProjectionRows(
     const collection = collectionById.get(member.collectionId);
     const version = collection?.versions.find((v) => v.id === member.versionId);
     const stageId = version?.source.stageId;
+    const frozenMember = pkg?.members.find((candidate) => candidate.collectionId === member.collectionId);
+    const isFrozenMemberVersion = frozenMember?.artifactVersionId === member.versionId;
     // #1062:可修订性由 Server 的 availableActions 给出;basis 冻结 latestReviewId,不从历史猜。
     const actions = actionByVersionId.get(member.versionId);
     const canRevise = actions?.actions.includes('revise-version') ?? false;
@@ -878,7 +879,14 @@ function packageProjectionRows(
       isMarkdown: isMarkdownFilename(member.filename),
       canRevise,
       ...(actions?.latestReviewId ? { basisReviewId: actions.latestReviewId } : {}),
-      ...(pkg?.deliveryId ? { deliveryId: pkg.deliveryId } : {}),
+      ...(pkg && isFrozenMemberVersion
+        ? {
+            revisionPackageBasis: {
+              packageId: pkg.packageId,
+              ...(pkg.deliveryId ? { deliveryId: pkg.deliveryId } : {}),
+            },
+          }
+        : {}),
     };
   });
 }

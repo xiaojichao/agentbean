@@ -9094,13 +9094,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!result || result.package.channelId !== packageInput.channelId) {
         return makeFailure('NOT_FOUND', 'Output package not found');
       }
-      // #1061 AC11：Server 按当前用户计算可执行动作,web 只渲染 Server 给的动作。
-      const availableActions = await computePackageMemberAvailableActions(repositories, {
-        teamId: parsed.teamId,
-        userId: parsed.userId,
-        channelId: parsed.channelId,
-        packageProjection: result,
-      });
       // #1063 projection 块:按请求策略解析 delivered/current/final/specified,
       // 返回 asOf 水位与 audienceScope(合同已冻结、本票真正接线)。
       const projection = parsed.projection
@@ -9112,6 +9105,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           specifiedVersions: parsed.projection.versions,
         })
         : undefined;
+      // #1061 AC11：Server 按当前用户计算可执行动作,web 只渲染 Server 给的动作。
+      // current/final/specified 可能解析到非冻结成员版本；这些版本只按自身身份获得
+      // 修订动作，package 审核/最终化 authority 仍严格基于冻结成员事实。
+      const availableActions = await computePackageMemberAvailableActions(repositories, {
+        teamId: parsed.teamId,
+        userId: parsed.userId,
+        channelId: parsed.channelId,
+        packageProjection: result,
+        projectionMembers: projection?.members,
+      });
       const asOf = clock.now();
       return makeSuccess({
         package: toOutputPackageDto(result.package, result.members),
@@ -16702,6 +16705,7 @@ async function computePackageMemberAvailableActions(
     userId: string;
     channelId: string;
     packageProjection: { package: OutputPackageRecord; members: OutputPackageMemberRecord[] };
+    projectionMembers?: readonly { collectionId: string; versionId: string }[];
   },
 ): Promise<PackageMemberAvailableActionsDto[]> {
   const { teamId, userId, channelId } = input;
@@ -16716,24 +16720,39 @@ async function computePackageMemberAvailableActions(
     ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
     : null;
 
-  // #1062:预读可修订成员对应 Artifact(Markdown 判定),避免在 map 回调里 await。
-  const memberArtifacts = new Map<string, Awaited<ReturnType<ServerNextRepositories['artifacts']['getForTeam']>>>();
+  const targetKeys = new Set<string>();
+  const actionTargets: Array<{ collectionId: string; versionId: string }> = [];
+  const addTarget = (target: { collectionId: string; versionId: string }) => {
+    const key = `${target.collectionId}:${target.versionId}`;
+    if (targetKeys.has(key)) return;
+    targetKeys.add(key);
+    actionTargets.push(target);
+  };
   for (const member of input.packageProjection.members) {
-    const version = versions.find((candidate) => candidate.id === member.artifactVersionId);
+    addTarget({ collectionId: member.collectionId, versionId: member.artifactVersionId });
+  }
+  for (const member of input.projectionMembers ?? []) {
+    addTarget({ collectionId: member.collectionId, versionId: member.versionId });
+  }
+
+  // #1062:预读可修订版本对应 Artifact(Markdown 判定),避免在 map 回调里 await。
+  const memberArtifacts = new Map<string, Awaited<ReturnType<ServerNextRepositories['artifacts']['getForTeam']>>>();
+  for (const member of actionTargets) {
+    const version = versions.find((candidate) => candidate.id === member.versionId);
     if (!version) continue;
     memberArtifacts.set(
-      member.artifactVersionId,
+      member.versionId,
       await repositories.artifacts.getForTeam({ teamId, artifactId: version.artifactId }),
     );
   }
 
-  return input.packageProjection.members.map((member) => {
+  return actionTargets.map((member) => {
     const collection = collections.find((candidate) => candidate.id === member.collectionId);
-    const version = versions.find((candidate) => candidate.id === member.artifactVersionId);
+    const version = versions.find((candidate) => candidate.id === member.versionId);
     const stage = version?.stageId
       ? stages.find((candidate) => candidate.id === version.stageId) ?? null
       : null;
-    const memberReviews = reviews.filter((candidate) => candidate.versionId === member.artifactVersionId);
+    const memberReviews = reviews.filter((candidate) => candidate.versionId === member.versionId);
     const reviewState = deriveProjectArtifactVersionReviewState(
       memberReviews.map((record) => ({
         id: record.id,
@@ -16742,7 +16761,7 @@ async function computePackageMemberAvailableActions(
         createdAt: record.createdAt,
       })),
     );
-    const isFinalVersion = collection?.finalVersionId === member.artifactVersionId;
+    const isFinalVersion = collection?.finalVersionId === member.versionId;
 
     const authority = evaluatePackageArtifactReviewAuthority({
       actorKind: 'human',
@@ -16766,7 +16785,7 @@ async function computePackageMemberAvailableActions(
         },
         versionScope: {
           collectionId: member.collectionId,
-          versionId: member.artifactVersionId,
+          versionId: member.versionId,
           versionCollectionId: version?.collectionId,
         },
       },
@@ -16800,14 +16819,14 @@ async function computePackageMemberAvailableActions(
     if (collection && version && !isFinalVersion
       && (reviewState === 'rejected' || reviewState === 'changes_requested')
       && latestReview) {
-      const memberArtifact = memberArtifacts.get(member.artifactVersionId);
+      const memberArtifact = memberArtifacts.get(member.versionId);
       if (memberArtifact && isMarkdownArtifact(memberArtifact)) {
         actions.push('revise-version');
       }
     }
     return {
       collectionId: member.collectionId,
-      versionId: member.artifactVersionId,
+      versionId: member.versionId,
       reviewState,
       isFinalVersion,
       collectionRevision: collection?.revision ?? 0,

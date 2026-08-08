@@ -354,6 +354,13 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
       ...packageDetail,
+      package: {
+        ...packageDetail.package,
+        members: [
+          { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
+          packageDetail.package.members[1],
+        ],
+      },
       projection: blockedCurrentProjection,
       asOf: 2000,
       audienceScope: 'team-1:channel-1:u-1',
@@ -365,6 +372,16 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     });
     expect(document.querySelector('[data-smoke="files-package-projection-blocked"]')).not.toBeNull();
     expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).not.toBeNull();
+    fireEvent.click(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')!);
+    expect(revisionRequests).toEqual([{
+      collectionId: 'col-1',
+      collectionName: 'script.ep01',
+      filename: '第1集剧本.md',
+      baseVersionId: 'ver-c1',
+      sourceVersionId: 'ver-c1',
+      basisReviewId: 'rev-latest',
+      collectionRevision: 5,
+    }]);
   });
 
   test('选中文件集合 → 版本行(当前版/最终版/审核/来源)同步渲染', async () => {
