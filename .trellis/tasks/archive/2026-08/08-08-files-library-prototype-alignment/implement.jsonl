@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/web-next/frontend/components-and-state.md", "reason": "新组件 ProjectFilesBoard 的组件/state 惯例(Tailwind、Props、Zustand 边界)"}
+{"file": ".trellis/spec/web-next/frontend/testing.md", "reason": "RTL/jsdom 测试惯例、首帧 renderToString 断言、data-smoke 点"}
+{"file": ".trellis/spec/web-next/frontend/realtime.md", "reason": "socket 事件通道与订阅失效模式(onArtifactsUpdated)"}
+{"file": "docs/superpowers/specs/2026-07-17-project-task-file-management-design.md", "reason": "产品契约:§7.3 文件库布局、§8.7 七列字段、§5.5 引用规则(验收参照)"}
+{"file": "docs/superpowers/prototypes/2026-07-28-chat-task-file-package-flow-prototype.html", "reason": "原型 screen-files 段(line 1558-1674)是布局与交互的验收参照"}

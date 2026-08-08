@@ -76,6 +76,22 @@ describe('evaluateOutputPackageFormation', () => {
     expect(decision.plan.claimLeaseId).toBe('lease-1');
   });
 
+  test('managed run accepts provenance alias but freezes the real workspace run id', () => {
+    const decision = evaluateOutputPackageFormation({
+      ...baseInput,
+      staging: staging({ provenance: { ...staging().provenance!, workspaceRunId: 'dispatch-1' } }),
+      ...managedFacts,
+      workspaceRun: {
+        id: 'run-server-side',
+        provenanceWorkspaceRunId: 'dispatch-1',
+        managementInvocationId: 'inv-1',
+      },
+    });
+    expect(decision.kind).toBe('create');
+    if (decision.kind !== 'create') return;
+    expect(decision.plan.workspaceRunId).toBe('run-server-side');
+  });
+
   test.each([
     ['open staging', { ...baseInput, staging: staging({ status: 'open', committedRevisionId: undefined }) }],
     ['failed staging', { ...baseInput, staging: staging({ status: 'failed', committedRevisionId: undefined }) }],

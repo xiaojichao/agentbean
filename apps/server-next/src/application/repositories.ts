@@ -348,6 +348,7 @@ export interface MessageRepository {
     channelId: ID;
     clientMessageId: string;
   }): Promise<MessageRecord | null>;
+  listByDispatch(dispatchId: ID): Promise<MessageRecord[]>;
   updateMeta(input: { messageId: ID; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   edit(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;

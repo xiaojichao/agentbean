@@ -1292,6 +1292,11 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           && message.channelId === input.channelId
           && message.meta?.clientMessageId === input.clientMessageId) ?? null;
       },
+      async listByDispatch(dispatchId) {
+        return Array.from(messages.values())
+          .filter((message) => message.meta?.dispatchId === dispatchId)
+          .sort((left, right) => left.createdAt - right.createdAt);
+      },
       async updateMeta(input) {
         const message = messages.get(input.messageId);
         if (!message) {

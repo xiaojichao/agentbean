@@ -1395,6 +1395,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
                 startedAt: result.workspaceRun.startedAt,
                 completedAt: result.workspaceRun.completedAt,
                 exitCode: result.workspaceRun.exitCode,
+                ...(committedPublishIdentity ? { publishId: committedPublishIdentity } : {}),
                 artifactIds,
                 artifacts,
                 ...(result.collaborationProposals?.length

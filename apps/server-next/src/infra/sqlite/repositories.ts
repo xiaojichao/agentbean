@@ -1877,6 +1877,22 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
            ORDER BY created_at ASC LIMIT 1`,
         ).get(input.teamId, input.channelId, input.clientMessageId));
       },
+      async listByDispatch(dispatchId) {
+        return teamDb
+          .prepare(`
+            SELECT * FROM messages
+            WHERE json_extract(meta_json, '$.dispatchId') = ?
+            ORDER BY created_at ASC, rowid ASC
+          `)
+          .all(dispatchId)
+          .map((row) => {
+            const message = mapMessage(row);
+            if (!message) {
+              throw new Error('SQLite message row could not be mapped');
+            }
+            return message;
+          });
+      },
       async updateMeta(input) {
         const existing = mapMessage(teamDb.prepare('SELECT * FROM messages WHERE id = ?').get(input.messageId));
         if (!existing) {

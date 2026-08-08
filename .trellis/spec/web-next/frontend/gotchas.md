@@ -90,6 +90,12 @@ cd apps/web-next && npx tsc --noEmit -p tsconfig.json   # 审归因 PR 必跑
 cd apps/web-next && npx vitest run tests/chat-scope.test.ts tests/chat-message-text.test.ts
 ```
 
+## 坑 6:内嵌卡片 vs 独立卡片的视图收敛(#1111)
+
+output-package 卡片有两种载体:独立 system 消息(commit 时创建,兜底)与 agent 回复的 `meta.outputPackageCard`(结果回报时内嵌)。两者会**同时存在**于消息集合(实时窗口:卡片先到、回复后到)。`visibleMessages` 必须用 `mergedStandalonePackageCardIds`(lib/system-messages.ts)隐藏被内嵌吸收的独立卡片,否则双卡并存。判定跨消息(同 packageId),不能只靠单消息 `shouldHideSystemMessage`。
+
+ChatBubble 内嵌渲染:`outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta)`——顶层 meta 与嵌套 `outputPackageCard` 都要认。
+
 ## 佐证文件一览
 
 | 坑 | 主佐证 |

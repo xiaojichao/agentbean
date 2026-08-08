@@ -63,6 +63,13 @@ TypeScript 的 `readonly` 只在编译期成立，运行期对象可被改写。
 - `/Users/shaw/AgentBean/apps/server-next/src/application/usecases.ts`（:13100-13105 isWorkspaceRunLogArtifact、:8274/:10222/:10998/:13151/:13457/:16649 调用点）
 - `/Users/shaw/AgentBean/apps/server-next/src/application/management/management-router.ts`（:24-30 readonly 陷阱注释、:595 detachPolicy、:148/:214 调用）
 
+## output-package 卡片的 thread 归属与内嵌(#1111)
+
+- **卡片 threadId 解析**:`output-package-handler.ts` `resolveOriginThreadId`——`staging.provenance.workspaceRunId → dispatch → message`,`message.threadId ?? message.id`。链断回退主线(不传 threadId)。
+- **生产形态坑**:daemon 上报的 `provenance.workspaceRunId` **等于 dispatchId/taskId**,与 server 侧 `workspace_runs.id` 不同源(2026-08-07 实证:#1116 只按 runId 查静默回退主线,#1117 补 dispatch 兜底)。**测试构造数据形态必须对齐生产实证**,单测里让两个 id 一致=镜像错误假设。
+- **内嵌形态**:daemon ≥0.3.43 结果回报 `workspaceRun.publishId`;`receiveDispatchResult` 在 append 回复前经 `readOutputPackageCardMeta` 读 package 快照挂进回复 `meta.outputPackageCard`。独立卡片仍在 commit 时创建(结果未达/resume 兜底),web 端隐藏被内嵌吸收者。
+- `x-workspace-path` header 只许 Latin-1:daemon 侧必须 `encodeURIComponent`(中文文件名实证 ByteString 拒),query 参数是权威传输。
+
 ## 反模式
 
 - **新模块用 `@agentbean/contracts` 包名 import**：CI 解析 stale dist，失败。

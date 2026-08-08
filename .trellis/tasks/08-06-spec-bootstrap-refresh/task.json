@@ -3,7 +3,7 @@
   "name": "spec-bootstrap-refresh",
   "title": "Refresh .trellis/spec from real codebase",
   "description": "Rewrite .trellis/spec from the real 6-package codebase; delete phantom legacy/bogus layer dirs; fix config.yaml packages; preserve guides/.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

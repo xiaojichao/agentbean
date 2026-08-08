@@ -661,7 +661,7 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
 
 function assertInvocationResult(value: unknown): asserts value is AgentInvocationResultDto {
   assertExactKeys(value, ['schemaVersion', 'invocationId', 'taskId', 'agentId', 'status', 'body',
-    'artifactIds', 'workspaceRunId', 'memoryCandidateIds', 'collaborationProposals', 'startedAt',
+    'artifactIds', 'workspaceRunId', 'memoryCandidateIds', 'collaborationProposals', 'projectDocumentInputSetResult', 'resultFingerprint', 'startedAt',
     'completedAt', 'error'], ['schemaVersion', 'invocationId', 'agentId', 'status', 'artifactIds',
     'memoryCandidateIds', 'startedAt', 'completedAt']);
   if (value.schemaVersion !== 1 || !nonEmpty(value.invocationId) || !nonEmpty(value.agentId)
@@ -678,6 +678,50 @@ function assertInvocationResult(value: unknown): asserts value is AgentInvocatio
     if (!Array.isArray(value.collaborationProposals)) throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     value.collaborationProposals.forEach(parseAgentCollaborationProposalV1);
   }
+  if (value.projectDocumentInputSetResult !== undefined) {
+    assertProjectDocumentInputSetResult(value.projectDocumentInputSetResult);
+  }
+  if (value.resultFingerprint !== undefined
+    && (typeof value.resultFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(value.resultFingerprint))) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+}
+
+function assertProjectDocumentInputSetResult(value: unknown): void {
+  assertExactKeys(value, ['contractVersion', 'inputSetId', 'invocationId', 'source', 'items'],
+    ['contractVersion', 'inputSetId', 'invocationId', 'source', 'items']);
+  if (value.contractVersion !== 1 || !nonEmpty(value.inputSetId) || !nonEmpty(value.invocationId)
+    || !Array.isArray(value.items)) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  const source = value.source;
+  assertExactKeys(source, ['agentId', 'workspaceRunId'], ['agentId']);
+  if (!nonEmpty(source.agentId)
+    || (source.workspaceRunId !== undefined && !nonEmpty(source.workspaceRunId))) {
+    throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+  }
+  value.items.forEach((item) => {
+    assertExactKeys(item, ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'revisionId', 'error'],
+      ['documentId', 'baseRevisionId', 'createdAt', 'status']);
+    if (!nonEmpty(item.documentId) || !nonEmpty(item.baseRevisionId)
+      || !['unchanged', 'committed', 'conflict', 'failed'].includes(String(item.status))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+    const statusKeys = {
+      unchanged: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status'] },
+      committed: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'revisionId'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'revisionId'] },
+      conflict: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'] },
+      failed: { allowed: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'artifactId', 'error'], required: ['documentId', 'baseRevisionId', 'createdAt', 'status', 'error'] },
+    } as const;
+    const shape = statusKeys[item.status as keyof typeof statusKeys];
+    assertExactKeys(item, shape.allowed, shape.required);
+    assertInteger(item.createdAt, 0);
+    if ((item.status === 'committed' && (!nonEmpty(item.artifactId) || !nonEmpty(item.revisionId))
+      || item.status === 'conflict' && (!nonEmpty(item.artifactId) || !nonEmpty(item.error))
+      || item.status === 'failed' && (item.artifactId !== undefined && !nonEmpty(item.artifactId) || !nonEmpty(item.error)))) {
+      throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
+    }
+  });
 }
 
 export function parsePhase2TaskToolInputV1<K extends keyof Phase2ManagementWorkerToolInputMapV1>(

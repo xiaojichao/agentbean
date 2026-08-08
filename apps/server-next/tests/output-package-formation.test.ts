@@ -776,6 +776,159 @@ for (const variant of variants) {
       expect(card!.threadId).toBe('msg-prod');
     });
 
+    test('managed 生产形态:commit 早于 workspace run 落库时仍形成讨论串卡片', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, userId, agentId } = seedValue;
+      const taskId = 'task-managed-alias';
+      const managementRunId = 'run-managed-alias';
+      const dispatchId = 'dispatch-managed-alias';
+      const invocationId = 'invocation-managed-alias';
+      const claimLeaseId = 'claim-managed-alias';
+      await seedManagedTask(seedValue, taskId, 1, managementRunId);
+      await repositories.messages.append({
+        id: 'msg-managed-alias', teamId, channelId, threadId: 'msg-managed-alias',
+        senderKind: 'user', senderId: userId, body: '请在讨论串交付', createdAt: 5,
+      });
+      await repositories.taskCoordination.claimLeases.create({
+        id: claimLeaseId, teamId, taskId, taskRevision: 1, taskAttempt: 1, agentId,
+        leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint', fencingToken: 1,
+        status: 'active', acquiredAt: 5, heartbeatAt: 5, expiresAt: 10_000,
+      });
+      await repositories.management.invocations.create({
+        schemaVersion: 1,
+        id: invocationId,
+        managementRunId,
+        intent: {
+          schemaVersion: 1, teamId, channelId, targetAgentId: agentId, targetKind: 'custom',
+          objective: '请在讨论串交付',
+          taskContext: { taskId, rootTaskId: taskId, taskRevision: 1, taskAttempt: 1, claimLeaseId },
+          acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+        },
+        intentHash: 'intent-hash', idempotencyKey: 'invocation-key', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-managed-alias', agentId,
+        status: 'succeeded', requestId: `management:${invocationId}:1`, prompt: '请在讨论串交付',
+        createdAt: 5, updatedAt: 6, completedAt: 6,
+      });
+      await repositories.management.dispatchAttempts.create({
+        id: 'attempt-managed-alias', invocationId, dispatchId, attemptNumber: 1,
+        status: 'succeeded', startedAt: 5, completedAt: 6,
+      });
+
+      await commitDelivery(seedValue, 'pub-managed-alias', [{ path: 'docs/managed.md', body: Buffer.from('managed') }], {
+        agentId, taskId, taskAttempt: 1, workspaceRunId: dispatchId,
+      });
+      // 真实 run 尚未落库时不冻结 dispatch alias，等待结果回报阶段补齐 lineage。
+      expect(await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-alias' })).toBeNull();
+      await repositories.workspaceRuns.create({
+        id: 'run-managed-alias-server', teamId, channelId, dispatchId, agentId,
+        status: 'succeeded', createdAt: 7, updatedAt: 7, artifactIds: [],
+      });
+      const replay = await app.receiveDispatchResult({
+        dispatchId, agentId, body: '已交付',
+        workspaceRun: { id: 'run-managed-alias-server', status: 'succeeded', publishId: 'pub-managed-alias' },
+      });
+      expect(replay.ok).toBe(true);
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-alias' });
+      expect(byPublish).not.toBeNull();
+      const card = await repositories.messages.getByClientMessageId({
+        teamId, channelId, clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card?.threadId).toBe('msg-managed-alias');
+    });
+
+    test('managed 生产形态:首次成形被 lineage 时序拒绝时,结果回报会重试并内嵌卡片', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, userId, agentId } = seedValue;
+      const taskId = 'task-managed-retry';
+      const managementRunId = 'run-managed-retry';
+      const dispatchId = 'dispatch-managed-retry';
+      const invocationId = 'invocation-managed-retry';
+      const claimLeaseId = 'claim-managed-retry';
+      await seedManagedTask(seedValue, taskId, 1, managementRunId);
+      await repositories.messages.append({
+        id: 'msg-managed-retry', teamId, channelId, threadId: 'msg-managed-retry',
+        senderKind: 'user', senderId: userId, body: '请补齐讨论串交付', createdAt: 5,
+      });
+
+      // commit 时尚未有 dispatch/invocation 事实,模拟真实的 commit → result 时序。
+      await commitDelivery(seedValue, 'pub-managed-retry', [{ path: 'docs/retry.md', body: Buffer.from('retry') }], {
+        agentId, taskId, taskAttempt: 1, workspaceRunId: dispatchId,
+      });
+      expect(await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-retry' })).toBeNull();
+
+      await repositories.taskCoordination.claimLeases.create({
+        id: claimLeaseId, teamId, taskId, taskRevision: 1, taskAttempt: 1, agentId,
+        leaseTokenHash: 'hash', leaseFingerprint: 'fingerprint', fencingToken: 1,
+        status: 'active', acquiredAt: 5, heartbeatAt: 5, expiresAt: 10_000,
+      });
+      await repositories.management.invocations.create({
+        schemaVersion: 1,
+        id: invocationId,
+        managementRunId,
+        intent: {
+          schemaVersion: 1, teamId, channelId, targetAgentId: agentId, targetKind: 'custom',
+          objective: '请补齐讨论串交付',
+          taskContext: { taskId, rootTaskId: taskId, taskRevision: 1, taskAttempt: 1, claimLeaseId },
+          acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+        },
+        intentHash: 'intent-hash', idempotencyKey: 'invocation-key', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-managed-retry', agentId,
+        status: 'accepted', requestId: `management:${invocationId}:1`, prompt: '请补齐讨论串交付',
+        createdAt: 5, updatedAt: 6,
+      });
+      await repositories.management.dispatchAttempts.create({
+        id: 'attempt-managed-retry', invocationId, dispatchId, attemptNumber: 1,
+        status: 'accepted', startedAt: 5,
+      });
+
+      const result = await app.receiveDispatchResult({
+        dispatchId, agentId, body: '已补齐文件包。',
+        workspaceRun: { status: 'succeeded', publishId: 'pub-managed-retry' },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.message?.meta?.outputPackageCard).toMatchObject({
+        kind: 'output-package', publishId: 'pub-managed-retry', memberCount: 1,
+      });
+      expect(await repositories.outputPackages.getPackageByPublishId({ teamId, publishId: 'pub-managed-retry' })).not.toBeNull();
+
+      // Dispatch 已完成后的重复回报仍会进入 reconciliation，而不是直接 CONFLICT。
+      const replay = await app.receiveDispatchResult({
+        dispatchId, agentId, body: '已补齐文件包。',
+        workspaceRun: { status: 'succeeded', publishId: 'pub-managed-retry' },
+      });
+      expect(replay.ok).toBe(true);
+    });
+
+    test('终态重复回报:publish staging 未提交时不确认 delivered,保留重试机会', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, agentId, userId } = seedValue;
+      const dispatchId = 'dispatch-replay-pending';
+      await repositories.messages.append({
+        id: 'msg-replay-pending', teamId, channelId, threadId: 'msg-replay-pending',
+        senderKind: 'user', senderId: userId, body: '等待文件包', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-replay-pending', agentId,
+        status: 'succeeded', requestId: 'request-replay-pending', prompt: '等待文件包',
+        createdAt: 5, updatedAt: 6, completedAt: 6,
+      });
+
+      const result = await app.receiveDispatchResult({
+        dispatchId,
+        agentId,
+        body: '已完成',
+        workspaceRun: { status: 'succeeded', publishId: 'publish-not-committed' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe('INTERNAL_ERROR');
+    });
+
     test('#1111 AC4:解析链断裂(无 workspaceRunId)时卡片回退主线(无 threadId),不丢卡片', async () => {
       seedValue = await seed(variant);
       const { repositories, teamId, channelId, agentId } = seedValue;

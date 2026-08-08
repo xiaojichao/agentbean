@@ -2699,7 +2699,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (existing) {
         const sameRequest = existing.senderId === messageInput.userId
           && existing.body === messageInput.body
-          && existing.meta?.projectReferenceRequestFingerprint === referenceFingerprint;
+          && projectReferenceRequestFingerprintMatches(existing.meta?.projectReferenceRequestFingerprint, messageInput);
         if (!sameRequest) {
           return makeFailure('CONFLICT', 'Client message id was already used for a different message');
         }
@@ -2853,7 +2853,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           channelId: messageInput.channelId,
           clientMessageId: messageInput.clientMessageId,
         });
-        if (replay?.meta?.projectReferenceRequestFingerprint === referenceFingerprint) {
+        if (replay && projectReferenceRequestFingerprintMatches(replay.meta?.projectReferenceRequestFingerprint, messageInput)) {
           const [projected] = await enrichMessagesWithArtifacts(repositories, [replay]);
           return makeSuccess({
             message: projected ?? replay,
@@ -5425,7 +5425,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               && existingMessage.channelId === messageInput.channelId
               && existingMessage.senderId === messageInput.userId
               && existingMessage.body === messageInput.body
-              && existingMessage.meta?.projectReferenceRequestFingerprint === referenceFingerprint
+              && projectReferenceRequestFingerprintMatches(existingMessage.meta?.projectReferenceRequestFingerprint, messageInput)
               && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
             if (!sameRequest) return { kind: 'conflict' as const };
             const replayArtifacts = await transaction.artifacts.listByMessage(existingMessage.id);
@@ -10535,7 +10535,336 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatch.agentId !== resultInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
+      const resultFingerprint = dispatchResultFingerprint(resultInput);
       if (!isCompletableDispatchStatus(dispatch.status)) {
+        if (dispatch.status === 'cancelled') {
+          return makeFailure('CONFLICT', 'Dispatch is already cancelled');
+        }
+        // OutputPackage 补偿必须独立于 Dispatch terminal 状态收敛：daemon 可能在
+        // commit 成功后先收到结果确认，而首次成形又因瞬时存储/lineage 时序失败。
+        // 不能把该重放当成普通 duplicate 直接拒绝，否则 publish 会永久停留 pending。
+        if (resultInput.workspaceRun?.publishId) {
+          const replayAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
+            resultInput.dispatchId,
+          );
+          const replayHandoff = replayAttempt
+            ? await repositories.management.handoffs.getByInvocationId(replayAttempt.invocationId)
+            : null;
+          const replayPublishesToRoot = !replayHandoff || replayHandoff.intent.returnMode === 'deliver_to_root';
+          const replayReportedArtifactIds = uniqueIds([
+            ...(resultInput.artifactIds ?? []),
+            ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+          ]);
+          let replayDeliveryMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+          const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
+          const replayNormalizedProposals = normalizeAgentCollaborationProposals(resultInput.collaborationProposals);
+          const replayHandoffFingerprint = replayHandoff?.result?.resultFingerprint;
+          const replayFingerprint = typeof replayStoredFingerprint === 'string'
+            ? replayStoredFingerprint
+            : replayHandoffFingerprint;
+          const replayCandidateFingerprint = typeof replayStoredFingerprint === 'string'
+            ? resultFingerprint
+            : dispatchResultFingerprint({ ...resultInput, collaborationProposals: replayNormalizedProposals });
+          if (typeof replayFingerprint === 'string' && replayFingerprint !== replayCandidateFingerprint) {
+            return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+          }
+          const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
+          if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
+            !== JSON.stringify(replayNormalizedProposals)) {
+            return makeFailure('CONFLICT', 'Dispatch collaboration proposals do not match the first terminal report');
+          }
+          let replayWorkspaceRunCreateId = typeof replayDeliveryMessage?.meta?.workspaceRunId === 'string'
+            ? replayDeliveryMessage.meta.workspaceRunId
+            : resultInput.workspaceRun.id;
+          const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
+            teamId: dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          });
+          if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
+            // 在写入补建消息/运行前确认 publish 已提交，避免无效重放留下幽灵事实。
+            return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+          }
+          if (replayStaging.channelId !== dispatch.channelId
+            || replayStaging.provenance?.agentId !== dispatch.agentId) {
+            return makeFailure('CONFLICT', 'OutputPackage publish does not belong to dispatch');
+          }
+          const replayWorkspaceRunId = replayStaging.provenance?.workspaceRunId;
+          const replayWorkspaceRunById = replayWorkspaceRunId
+            ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
+            : null;
+          if (replayWorkspaceRunById && replayWorkspaceRunById.dispatchId !== dispatch.id) {
+            return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
+          }
+          let replayWorkspaceRun = replayWorkspaceRunById
+            ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
+            ?? null;
+          if (replayWorkspaceRun) {
+            replayWorkspaceRunCreateId = replayWorkspaceRun.id;
+          }
+          if (!replayStoredFingerprint && replayDeliveryMessage
+            && replayDeliveryMessage.body !== resultInput.body) {
+            return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+          }
+          const replayStoredArtifactIds = Array.isArray(replayDeliveryMessage?.meta?.artifactIds)
+            ? replayDeliveryMessage.meta.artifactIds.filter((value): value is string => typeof value === 'string')
+            : replayWorkspaceRun?.artifactIds;
+          if (!replayStoredFingerprint && replayStoredArtifactIds
+            && !sameIdSet(replayStoredArtifactIds, replayReportedArtifactIds)) {
+            return makeFailure('CONFLICT', 'Dispatch artifacts do not match the first terminal report');
+          }
+          if (replayWorkspaceRunId
+            && replayWorkspaceRunId !== dispatch.id
+            && !replayWorkspaceRun) {
+            return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+          }
+          if (!replayWorkspaceRunCreateId && !replayDeliveryMessage && replayPublishesToRoot) {
+            replayWorkspaceRunCreateId = ids.nextId();
+          }
+          if (!replayDeliveryMessage && replayPublishesToRoot) {
+            const originMessage = await repositories.messages.getById(dispatch.messageId);
+            const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+            try {
+              replayDeliveryMessage = await repositories.messages.append({
+                id: ids.nextId(),
+                teamId: dispatch.teamId,
+                channelId: dispatch.channelId,
+                threadId: originMessage?.threadId ?? originMessage?.id,
+                senderKind: 'agent',
+                senderId: resultInput.agentId,
+                body: resultInput.body,
+                createdAt: clock.now(),
+                meta: {
+                  dispatchId: dispatch.id,
+                  replyScope: nestReplyInThread ? 'thread' : 'channel',
+                  ...(nestReplyInThread && originMessage?.threadId
+                    ? { parentMessageId: originMessage.threadId }
+                    : {}),
+                  ...(replayReportedArtifactIds.length > 0
+                    ? { artifactIds: replayReportedArtifactIds }
+                    : {}),
+                  dispatchResultFingerprint: resultFingerprint,
+                  ...(replayWorkspaceRunCreateId ? { workspaceRunId: replayWorkspaceRunCreateId } : {}),
+                },
+              });
+            } catch {
+              return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+            }
+          }
+          if (replayPublishesToRoot || resultInput.workspaceRun.publishId) {
+            if (!replayWorkspaceRun && resultInput.workspaceRun) {
+              const replayAgent = await repositories.agents.getById(resultInput.agentId);
+              if (!replayAgent || replayAgent.deletedAt !== undefined) {
+                return makeFailure('NOT_FOUND', 'Agent not found');
+              }
+              const replayMessageForRun = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+              try {
+                replayWorkspaceRun = await repositories.workspaceRuns.create({
+                  id: replayWorkspaceRunCreateId ?? ids.nextId(),
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(replayMessageForRun ? { messageId: replayMessageForRun.id } : {}),
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  deviceId: replayAgent.deviceId,
+                  status: resultInput.workspaceRun.status ?? 'succeeded',
+                  cwd: resultInput.workspaceRun.cwd,
+                  command: resultInput.workspaceRun.command,
+                  logExcerpt: normalizeWorkspaceRunLogExcerpt(resultInput.workspaceRun.logExcerpt),
+                  exitCode: resultInput.workspaceRun.exitCode,
+                  startedAt: resultInput.workspaceRun.startedAt,
+                  completedAt: resultInput.workspaceRun.completedAt ?? clock.now(),
+                  createdAt: clock.now(),
+                  updatedAt: clock.now(),
+                  artifactIds: replayReportedArtifactIds,
+                });
+              } catch {
+                return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+              }
+            }
+            if (replayPublishesToRoot) {
+            let replayResult;
+            try {
+              replayResult = await outputPackageService.formPackage({
+                teamId: dispatch.teamId,
+                channelId: dispatch.channelId,
+                publishId: resultInput.workspaceRun.publishId,
+                workspaceRevisionId: replayStaging.committedRevisionId,
+              });
+            } catch {
+              // INTERNAL_ERROR 不会被 daemon 当作 delivered ack，保留重试机会。
+              return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+            }
+            if (replayResult.kind === 'rejected' || replayResult.kind === 'conflict') {
+              return makeFailure('INTERNAL_ERROR', `OutputPackage reconciliation ${replayResult.kind}`);
+            }
+            // 只有 staging 的 workspaceRun 能回溯到当前 dispatch 时，才把卡片
+            // 内嵌到当前 Agent 回复；旧 daemon 没有该 provenance 时仍由独立卡片兜底。
+            if (replayWorkspaceRunId) {
+              const replayCard = await readOutputPackageCardMeta(repositories, {
+                teamId: dispatch.teamId,
+                publishId: resultInput.workspaceRun.publishId,
+              });
+              if (replayCard) {
+                const replayMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+                if (replayMessage && !replayMessage.meta?.outputPackageCard) {
+                  await repositories.messages.updateMeta({
+                    messageId: replayMessage.id,
+                    meta: { ...(replayMessage.meta ?? {}), outputPackageCard: replayCard },
+                  });
+                }
+              }
+            }
+            }
+            // package 已形成不等于整条 result 已收敛。重放载荷可能还带有
+            // artifacts/协作提案；先补齐这些副作用，再确认 delivered，避免
+            // daemon 因早期成功 ack 丢掉 invocation 终态。
+            const replayCommittedArtifacts: ArtifactRecord[] = [];
+            try {
+              for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
+                const uploadedArtifact = await repositories.artifacts.getForTeam({
+                  teamId: dispatch.teamId,
+                  artifactId,
+                });
+                if (!uploadedArtifact) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                if (uploadedArtifact.channelId !== dispatch.channelId) {
+                  return makeFailure('FORBIDDEN', 'Artifact cannot be attached to this dispatch');
+                }
+                replayCommittedArtifacts.push(await repositories.artifacts.create({
+                  ...uploadedArtifact,
+                  ...(replayDeliveryMessage ? { messageId: replayDeliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                  pathKind: 'generated',
+                }));
+              }
+              for (const artifactInput of resultInput.artifacts ?? []) {
+                const existing = await repositories.artifacts.getForTeam({
+                  teamId: dispatch.teamId,
+                  artifactId: artifactInput.id,
+                });
+                if (existing) {
+                  replayCommittedArtifacts.push(existing);
+                  continue;
+                }
+                if (artifactInput.sourceRoot && !isValidArtifactSourceRoot(artifactInput.sourceRoot)) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const contentResult = await resolveDispatchArtifactContent(artifactContentStore, {
+                  teamId: dispatch.teamId,
+                  artifact: artifactInput,
+                });
+                if (!contentResult.ok) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const persisted = await repositories.artifacts.create({
+                  id: artifactInput.id,
+                  teamId: dispatch.teamId,
+                  channelId: dispatch.channelId,
+                  ...(replayDeliveryMessage ? { messageId: replayDeliveryMessage.id } : {}),
+                  dispatchId: dispatch.id,
+                  ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                  uploaderId: resultInput.agentId,
+                  filename: artifactInput.filename,
+                  mimeType: artifactInput.mimeType ?? 'application/octet-stream',
+                  sizeBytes: contentResult.content?.sizeBytes ?? artifactInput.sizeBytes ?? 0,
+                  storagePath: contentResult.content?.storagePath ?? artifactInput.storagePath,
+                  relativePath: artifactInput.relativePath,
+                  pathKind: artifactInput.pathKind ?? (replayWorkspaceRun ? 'workspace' : 'generated'),
+                  role: artifactInput.role ?? (replayWorkspaceRun ? 'run_output' : 'deliverable'),
+                  sourceRoot: artifactInput.sourceRoot,
+                  sha256: contentResult.content?.sha256 ?? artifactInput.sha256,
+                  createdAt: clock.now(),
+                });
+                await onArtifactCommitted?.(persisted).catch(() => undefined);
+                replayCommittedArtifacts.push(persisted);
+              }
+              if (channelFileRollout.markdownEditing) {
+                const replayInputSetArtifactIds = new Set(
+                  resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
+                    'artifactId' in item ? [item.artifactId] : []) ?? [],
+                );
+                await createInitialChannelDocuments(
+                  repositories,
+                  replayCommittedArtifacts.filter((artifact) =>
+                    !isWorkspaceRunLogArtifact(artifact) && !replayInputSetArtifactIds.has(artifact.id)),
+                  resultInput.agentId,
+                  clock.now(),
+                );
+              }
+              const replayCollaborationProposals = normalizeAgentCollaborationProposals(
+                resultInput.collaborationProposals,
+              );
+              if (replayCollaborationProposals.length > 0) {
+                await collaborationService.recordProposals({
+                  dispatchId: dispatch.id,
+                  agentId: resultInput.agentId,
+                  proposals: replayCollaborationProposals,
+                });
+              }
+              if (replayAttempt && !resultInput.projectDocumentInputSetResult) {
+                const replayInvocation = await repositories.management.invocations.getById(replayAttempt.invocationId);
+                if (!replayInvocation) {
+                  return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+                }
+                const replayStatus = dispatch.status === 'failed'
+                  ? dispatch.status
+                  : 'succeeded';
+                await recordManagedDispatchTerminal(
+                  repositories,
+                  clock,
+                  ids,
+                  managementKernel,
+                  taskCoordinationKernel,
+                  collaborationService,
+                  {
+                    dispatchId: dispatch.id,
+                    status: replayStatus,
+                    artifactIds: replayReportedArtifactIds,
+                    ...(replayDeliveryMessage ? { deliveryMessageId: replayDeliveryMessage.id } : {}),
+                    actorId: resultInput.agentId,
+                    result: {
+                      schemaVersion: 1,
+                      invocationId: replayAttempt.invocationId,
+                      ...(replayInvocation.intent.taskContext?.taskId
+                        ? { taskId: replayInvocation.intent.taskContext.taskId }
+                        : {}),
+                      agentId: resultInput.agentId,
+                      status: replayStatus,
+                      body: resultInput.body,
+                      artifactIds: replayReportedArtifactIds,
+                      ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
+                      memoryCandidateIds: [],
+                      ...(replayCollaborationProposals.length > 0
+                        ? { collaborationProposals: replayCollaborationProposals }
+                        : {}),
+                      resultFingerprint: dispatchResultFingerprint({
+                        ...resultInput,
+                        collaborationProposals: replayCollaborationProposals,
+                      }),
+                      startedAt: replayAttempt.startedAt,
+                      completedAt: dispatch.completedAt ?? clock.now(),
+                      ...(replayStatus === 'failed'
+                        ? { error: workspaceRunFailureError(resultInput.workspaceRun) }
+                        : {}),
+                    },
+                    ...(replayStatus === 'failed'
+                      ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) }
+                      : {}),
+                  },
+                );
+              }
+            } catch {
+              return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+            }
+            // 同一回报还可能携带 Project Document InputSet 结果；只有纯文件包
+            // 重放才能在这里结束，否则必须继续进入下方 InputSet 恢复事务。
+            if (!resultInput.projectDocumentInputSetResult) {
+              return makeSuccess({ dispatch: toDispatchDto(dispatch) });
+            }
+          }
+        }
         if (resultInput.projectDocumentInputSetResult) {
           const managedAttempt = await repositories.management.dispatchAttempts.getByDispatchId(
             resultInput.dispatchId,
@@ -10757,7 +11086,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               }
               const terminalStatus = dispatch.status === 'succeeded'
                 || dispatch.status === 'failed'
-                || dispatch.status === 'cancelled'
                 || dispatch.status === 'timed_out'
                 ? dispatch.status
                 : null;
@@ -10897,13 +11225,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // #1111 内嵌形态:daemon ≥0.3.43 结果回报带 publishId 时,把 output-package 卡片
       // meta 挂进回复消息——卡片随回复气泡内嵌渲染(原型:卡片在 agent 消息 div 内),
       // web 端据此隐藏同 packageId 的独立卡片。读取失败/旧 daemon → 独立卡片兜底。
-      const inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
+      let outputPackageReconciliationPending = false;
+      let inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
         ? await readOutputPackageCardMeta(repositories, {
             teamId: completed.dispatch.teamId,
             publishId: resultInput.workspaceRun.publishId,
           })
         : null;
-      const message = publishResult ? await repositories.messages.append({
+      let message = publishResult ? await repositories.messages.append({
         id: ids.nextId(),
         teamId: completed.dispatch.teamId,
         channelId: completed.dispatch.channelId,
@@ -10923,6 +11252,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
           ...(inlinePackageCard ? { outputPackageCard: inlinePackageCard } : {}),
+          dispatchResultFingerprint: resultFingerprint,
         },
       }) : null;
       const workspaceRun = resultInput.workspaceRun
@@ -10944,8 +11274,50 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             createdAt: now,
             updatedAt: now,
             artifactIds: reportedArtifactIds,
-          })
+        })
         : null;
+      // commit 发生在 daemon 回报之前时，首次成形可能因 managed workspace run
+      // 尚未落库而被拒绝。此处 workspace run 已落库，使用同一 publish identity
+      // 幂等重试，随后把卡片快照补回已追加的 Agent 回复。
+      if (publishResult && resultInput.workspaceRun?.publishId) {
+        const staging = await repositories.workspacePublishStagings.getByPublishId({
+          teamId: completed.dispatch.teamId,
+          publishId: resultInput.workspaceRun.publishId,
+        });
+        if (!staging || staging.status !== 'committed' || !staging.committedRevisionId) {
+          outputPackageReconciliationPending = true;
+        } else {
+          try {
+            const formationResult = await outputPackageService.formPackage({
+              teamId: completed.dispatch.teamId,
+              channelId: completed.dispatch.channelId,
+              publishId: resultInput.workspaceRun.publishId,
+              workspaceRevisionId: staging.committedRevisionId,
+            });
+            if (formationResult.kind === 'rejected' || formationResult.kind === 'conflict') {
+              // 形成结果未收敛时不能向 daemon 发 delivered ack；重试沿用同一
+              // publish identity，待 lineage/存储事实可见后再收敛。
+              outputPackageReconciliationPending = true;
+            }
+          } catch {
+            // dispatch 已持久化为 terminal，但不能在 formation 异常时发成功 ack；
+            // daemon 的重试会走上面的 replay reconciliation 分支。
+            outputPackageReconciliationPending = true;
+          }
+        }
+        if (!inlinePackageCard) {
+          inlinePackageCard = await readOutputPackageCardMeta(repositories, {
+            teamId: completed.dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          });
+          if (inlinePackageCard && message) {
+            message = await repositories.messages.updateMeta({
+              messageId: message.id,
+              meta: { ...message.meta, outputPackageCard: inlinePackageCard },
+            }) ?? message;
+          }
+        }
+      }
       const artifacts: ArtifactDto[] = [];
       const committedArtifacts: ArtifactRecord[] = [];
       for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
@@ -11070,6 +11442,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
           ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+          resultFingerprint: dispatchResultFingerprint({ ...resultInput, collaborationProposals }),
           ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
@@ -11088,6 +11461,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: completed.dispatch.teamId,
         lastSeenAt: now,
       });
+
+      if (outputPackageReconciliationPending) {
+        return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+      }
 
       return makeSuccess({
         dispatch: toDispatchDto(completed.dispatch),
@@ -15029,6 +15406,27 @@ function projectReferenceRequestFingerprint(
     | 'asTask' | 'artifactIds' | 'meta' | 'selections'
   >,
 ): string {
+  return createHash('sha256').update(stableSerialize({
+    userId: input.userId,
+    teamId: input.teamId,
+    channelId: input.channelId,
+    messageId: input.messageId ?? null,
+    threadId: input.threadId ?? null,
+    body: input.body,
+    asTask: input.asTask === true,
+    artifactIds: input.artifactIds ?? [],
+    meta: input.meta ?? null,
+    selections: input.selections ?? [],
+  })).digest('hex');
+}
+
+function legacyProjectReferenceRequestFingerprint(
+  input: Pick<
+    SendMessageInput,
+    'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
+    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+  >,
+): string {
   return createHash('sha256').update(JSON.stringify({
     userId: input.userId,
     teamId: input.teamId,
@@ -15041,6 +15439,29 @@ function projectReferenceRequestFingerprint(
     meta: input.meta ?? null,
     selections: input.selections ?? [],
   })).digest('hex');
+}
+
+function projectReferenceRequestFingerprintMatches(
+  storedFingerprint: unknown,
+  input: Pick<
+    SendMessageInput,
+    'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
+    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+  >,
+): boolean {
+  return storedFingerprint === projectReferenceRequestFingerprint(input)
+    || storedFingerprint === legacyProjectReferenceRequestFingerprint(input);
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`);
+  return `{${entries.join(',')}}`;
 }
 
 class ProjectReferenceCommitConflictError extends Error {
@@ -19057,6 +19478,42 @@ async function agentForConfigUpdate(
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
+  const normalizedLeft = uniqueIds([...left]).sort();
+  const normalizedRight = uniqueIds([...right]).sort();
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function normalizeAgentCollaborationProposals(
+  proposals: readonly AgentCollaborationProposalV1[] | undefined,
+): AgentCollaborationProposalV1[] {
+  return (proposals ?? []).flatMap((proposal) => {
+    try {
+      return [parseAgentCollaborationProposalV1(proposal)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function dispatchResultFingerprint(input: ReceiveDispatchResultInput): string {
+  const artifacts = (input.artifacts ?? []).map((artifact) => ({
+    ...artifact,
+    ...(artifact.contentBase64
+      ? { contentBase64: createHash('sha256').update(artifact.contentBase64).digest('hex') }
+      : {}),
+  }));
+  return createHash('sha256').update(JSON.stringify({
+    body: input.body,
+    artifactIds: uniqueIds([...(input.artifactIds ?? []), ...artifacts.map((artifact) => artifact.id)]),
+    artifacts,
+    workspaceRun: input.workspaceRun ?? null,
+    collaborationProposals: input.collaborationProposals ?? [],
+    projectDocumentInputSetResult: input.projectDocumentInputSetResult ?? null,
+  })).digest('hex');
 }
 
 function hasOwn(value: object, key: PropertyKey): boolean {
