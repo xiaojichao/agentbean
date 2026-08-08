@@ -942,6 +942,12 @@ for (const variant of variants) {
         status: 'accepted', requestId: 'request-historical-package', prompt: '生成周报',
         createdAt: 5, updatedAt: 6,
       });
+      await repositories.messages.append({
+        id: 'msg-historical-package-claim', teamId, channelId,
+        threadId: 'msg-historical-package', senderKind: 'agent', senderId: agentId,
+        body: '已完成', createdAt: 7,
+        meta: { kind: 'task-claim-confirmed', dispatchId, replyScope: 'thread' },
+      });
       const originalWorkspaceRun = {
         id: dispatchId,
         status: 'succeeded' as const,
@@ -958,6 +964,8 @@ for (const variant of variants) {
       expect(original.ok).toBe(true);
       if (!original.ok) return;
       expect(original.message?.meta?.outputPackageCard).toBeUndefined();
+      const { dispatchResultFingerprint: _legacyFingerprint, ...legacyMeta } = original.message?.meta ?? {};
+      await repositories.messages.updateMeta({ messageId: original.message!.id, meta: legacyMeta });
 
       await commitDelivery(seedValue, 'publish-historical-package', [
         { path: '周报.md', body: Buffer.from('weekly') },
@@ -971,7 +979,10 @@ for (const variant of variants) {
         workspaceRun: { ...originalWorkspaceRun, publishId: 'publish-historical-package' },
       });
       expect(replay.ok).toBe(true);
-      const deliveryMessage = (await repositories.messages.listByDispatch(dispatchId))[0];
+      const dispatchMessages = await repositories.messages.listByDispatch(dispatchId);
+      const claimMessage = dispatchMessages.find((message) => message.id === 'msg-historical-package-claim');
+      const deliveryMessage = dispatchMessages.find((message) => message.id === original.message?.id);
+      expect(claimMessage?.meta?.outputPackageCard).toBeUndefined();
       expect(deliveryMessage?.id).toBe(original.message?.id);
       expect(deliveryMessage?.meta?.outputPackageCard).toMatchObject({
         kind: 'output-package', publishId: 'publish-historical-package', memberCount: 1,
