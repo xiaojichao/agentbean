@@ -570,7 +570,7 @@ export default function ChatPage() {
     setChannelProjectOverview(null);
     setProjectDocumentBundles([]);
     setProjectDocumentBundlesArchived(false);
-    if (tab !== 'files' || !activeChannel || conn !== 'open') return () => { active = false; };
+    if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') return () => { active = false; };
     void projectEvents().artifactCollections(activeChannel).then((result) => {
       if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
     });
@@ -591,7 +591,7 @@ export default function ChatPage() {
       setOutputPackagePendings(result.ok ? result.pendingDeliveries ?? [] : []);
     });
     return () => { active = false; };
-  }, [activeChannel, conn, tab]);
+  }, [activeChannel, conn, tab, threadRootId]);
 
   useEffect(() => {
     setProjectReferenceSelections([]);
@@ -2742,6 +2742,8 @@ export default function ChatPage() {
             onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
             onContinueWithAgent={continueWithAgentFromCard}
             onOpenPackagePreview={openPackagePreviewModal}
+            outputPackages={outputPackages}
+            artifactLibrary={projectArtifactLibrary}
           />
         </>
       )}
@@ -4279,6 +4281,8 @@ function ThreadPanel({
   onReviseVersion,
   onContinueWithAgent,
   onOpenPackagePreview,
+  outputPackages,
+  artifactLibrary,
 }: {
   width: number;
   root: ChatMessage;
@@ -4339,6 +4343,10 @@ function ThreadPanel({
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
   /** 原型对齐:线程内文件包「预览/编辑」浮窗入口。 */
   onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
+  /** 原型 @选择器扩展:文件包候选(@文件包 → current projection 引用)。 */
+  outputPackages: OutputPackageSummaryDto[];
+  /** 原型 @选择器扩展:文件候选(@文件 → artifact_version 引用)。 */
+  artifactLibrary: ProjectArtifactLibraryDto | null;
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
@@ -4346,10 +4354,34 @@ function ThreadPanel({
   const [showThreadMention, setShowThreadMention] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
   const [threadMentionIndex, setThreadMentionIndex] = useState(0);
-  const threadMentionMembers = (threadMentionQuery
-    ? mentionCandidates.filter((member) => member.name.toLowerCase().includes(threadMentionQuery))
-    : mentionCandidates
-  );
+  // 原型 @选择器:成员/智能体 + 文件包 + 文件 三类候选。
+  type ThreadMentionItem =
+    | { kind: 'member'; member: MentionProfileMember }
+    | { kind: 'package'; packageId: string; memberCount: number; taskTitle?: string }
+    | { kind: 'file'; collectionId: string; versionId: string; filename: string; collectionName: string };
+  const q = threadMentionQuery;
+  const threadMentionItems: ThreadMentionItem[] = [
+    ...(q ? mentionCandidates.filter((m) => m.name.toLowerCase().includes(q)) : mentionCandidates)
+      .map((member) => ({ kind: 'member' as const, member })),
+    ...outputPackages
+      .map((pkg) => ({ pkg, taskTitle: tasks.find((t) => t.id === pkg.taskId)?.title }))
+      .filter(({ pkg, taskTitle }) => !q || pkg.packageId.toLowerCase().includes(q) || (taskTitle ?? '').toLowerCase().includes(q))
+      .slice(0, 5)
+      .map(({ pkg, taskTitle }) => ({ kind: 'package' as const, packageId: pkg.packageId, memberCount: pkg.memberCount, ...(taskTitle ? { taskTitle } : {}) })),
+    ...(artifactLibrary?.collections ?? [])
+      .flatMap((collection) => {
+        const current = collection.versions.find((v) => v.id === collection.currentVersionId);
+        return current ? [{
+          kind: 'file' as const,
+          collectionId: collection.id,
+          versionId: current.id,
+          filename: current.artifact.filename,
+          collectionName: collection.name,
+        }] : [];
+      })
+      .filter((f) => !q || f.filename.toLowerCase().includes(q) || f.collectionName.toLowerCase().includes(q))
+      .slice(0, 8),
+  ];
   const subtitle = rootTask
     ? `#${taskNumbers.get(rootTask.id) ?? '任务'} ${rootTask.title}`
     : resolveMessageSpeaker(root, agents, { currentUser, humanProfiles, channelMembers });
@@ -4377,6 +4409,25 @@ function ThreadPanel({
     setThreadMentionIndex(0);
   };
 
+  const selectThreadMentionItem = (item: (typeof threadMentionItems)[number]) => {
+    if (item.kind === 'member') {
+      selectThreadMention(item.member);
+      return;
+    }
+    // 文件/文件包:删除 @token,改为插入稳定引用 chip(随发送冻结为 ProjectReferenceSet)。
+    const caret = threadTextareaRef.current?.selectionStart ?? input.length;
+    const draft = activeMentionDraft(input, caret);
+    if (draft) onInput(input.slice(0, draft.start) + input.slice(draft.end));
+    if (item.kind === 'package') {
+      // 原型:@文件包 默认引用 current projection。
+      onAddSelection({ kind: 'package_projection', packageId: item.packageId, policy: 'current' });
+    } else {
+      onAddSelection({ kind: 'artifact_version', collectionId: item.collectionId, versionId: item.versionId });
+    }
+    setShowThreadMention(false);
+    setTimeout(() => threadTextareaRef.current?.focus(), 0);
+  };
+
   const selectThreadMention = (member: MentionProfileMember) => {
     const caret = threadTextareaRef.current?.selectionStart ?? input.length;
     const replacement = replaceActiveMention(input, caret, member.name);
@@ -4390,21 +4441,21 @@ function ThreadPanel({
   };
 
   const handleThreadInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showThreadMention && threadMentionMembers.length > 0) {
+    if (showThreadMention && threadMentionItems.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setThreadMentionIndex((index) => (index + 1) % threadMentionMembers.length);
+        setThreadMentionIndex((index) => (index + 1) % threadMentionItems.length);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setThreadMentionIndex((index) => (index - 1 + threadMentionMembers.length) % threadMentionMembers.length);
+        setThreadMentionIndex((index) => (index - 1 + threadMentionItems.length) % threadMentionItems.length);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        const member = threadMentionMembers[threadMentionIndex];
-        if (member) selectThreadMention(member);
+        const item = threadMentionItems[threadMentionIndex];
+        if (item) selectThreadMentionItem(item);
         return;
       }
       if (e.key === 'Escape') {
@@ -4494,24 +4545,60 @@ function ThreadPanel({
       </div>
       <div className="border-t border-neutral-200 p-3">
         <div className="relative rounded-lg border border-neutral-300 bg-white">
-          {showThreadMention && threadMentionMembers.length > 0 && (
-            <div className="absolute bottom-full left-0 z-10 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
-              {threadMentionMembers.map((member, index) => (
-                <button
-                  key={`${member.kind}:${member.id}`}
-                  type="button"
-                  onClick={() => selectThreadMention(member)}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${index === threadMentionIndex ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
-                  data-smoke="thread-mention-candidate"
-                  data-member-kind={member.kind}
-                  data-member-id={member.id}
-                  data-member-name={member.name}
-                >
-                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : 'H'}</span>
-                  <span className="truncate">{member.name}</span>
-                  <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? 'Agent' : '人类'}</span>
-                </button>
-              ))}
+          {showThreadMention && threadMentionItems.length > 0 && (
+            <div className="absolute bottom-full left-0 z-10 mb-1 max-h-56 w-72 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
+              {threadMentionItems.map((item, index) => {
+                const active = index === threadMentionIndex;
+                if (item.kind === 'member') {
+                  const member = item.member;
+                  return (
+                    <button
+                      key={`member:${member.kind}:${member.id}`}
+                      type="button"
+                      onClick={() => selectThreadMentionItem(item)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                      data-smoke="thread-mention-candidate"
+                      data-member-kind={member.kind}
+                      data-member-id={member.id}
+                      data-member-name={member.name}
+                    >
+                      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : 'H'}</span>
+                      <span className="truncate">{member.name}</span>
+                      <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? 'Agent' : '人类'}</span>
+                    </button>
+                  );
+                }
+                if (item.kind === 'package') {
+                  return (
+                    <button
+                      key={`package:${item.packageId}`}
+                      type="button"
+                      onClick={() => selectThreadMentionItem(item)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                      data-smoke="thread-mention-package"
+                      data-package-id={item.packageId}
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[9px] font-semibold text-violet-700">包</span>
+                      <span className="truncate">{shortPackageLabel(item.packageId)}{item.taskTitle ? ` · ${item.taskTitle}` : ''}</span>
+                      <span className="ml-auto text-[10px] text-neutral-400">文件包 · {item.memberCount} 文件</span>
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    key={`file:${item.versionId}`}
+                    type="button"
+                    onClick={() => selectThreadMentionItem(item)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                    data-smoke="thread-mention-file"
+                    data-version-id={item.versionId}
+                  >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[9px] font-semibold text-sky-700">文</span>
+                    <span className="truncate">{item.filename}</span>
+                    <span className="ml-auto truncate text-[10px] text-neutral-400">{item.collectionName}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
           <textarea
@@ -4520,7 +4607,7 @@ function ThreadPanel({
             onChange={handleThreadInputChange}
             onKeyDown={handleThreadInputKeyDown}
             rows={2}
-            placeholder="回复讨论串（输入 @ 提及本频道成员）"
+            placeholder="回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）"
             data-smoke="thread-message-input"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
