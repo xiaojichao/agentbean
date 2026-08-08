@@ -10602,7 +10602,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 }
               }
             }
-            return makeSuccess({ dispatch: toDispatchDto(dispatch) });
+            // 同一回报还可能携带 Project Document InputSet 结果；只有纯文件包
+            // 重放才能在这里结束，否则必须继续进入下方 InputSet 恢复事务。
+            if (!resultInput.projectDocumentInputSetResult) {
+              return makeSuccess({ dispatch: toDispatchDto(dispatch) });
+            }
           }
         }
         if (resultInput.projectDocumentInputSetResult) {
@@ -11028,12 +11032,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           outputPackageReconciliationPending = true;
         } else {
           try {
-            await outputPackageService.formPackage({
+            const formationResult = await outputPackageService.formPackage({
               teamId: completed.dispatch.teamId,
               channelId: completed.dispatch.channelId,
               publishId: resultInput.workspaceRun.publishId,
               workspaceRevisionId: staging.committedRevisionId,
             });
+            if (formationResult.kind === 'rejected' || formationResult.kind === 'conflict') {
+              // 形成结果未收敛时不能向 daemon 发 delivered ack；重试沿用同一
+              // publish identity，待 lineage/存储事实可见后再收敛。
+              outputPackageReconciliationPending = true;
+            }
           } catch {
             // dispatch 已持久化为 terminal，但不能在 formation 异常时发成功 ack；
             // daemon 的重试会走上面的 replay reconciliation 分支。
