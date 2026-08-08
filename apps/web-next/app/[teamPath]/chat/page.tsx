@@ -375,6 +375,8 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
+  /** 原型收敛:无关联消息的任务(看板直接创建)的详情——task-only 模式,值为 taskId。 */
+  const [taskDetailOnlyTaskId, setTaskDetailOnlyTaskId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
   // #1064：线程 composer 的项目引用选择（Task 页预填导航写入；与主 composer 的
@@ -1313,6 +1315,7 @@ export default function ChatPage() {
   const openThread = useCallback((messageId: string) => {
     setThreadRootId(messageId);
     setTaskDetailMessageId(null);
+    setTaskDetailOnlyTaskId(null);
     setChatTaskMenuTarget(null);
     setThreadUrl(messageId);
   }, [setThreadUrl]);
@@ -1413,6 +1416,8 @@ export default function ChatPage() {
     if (!activeChannel) return;
     const nextTaskMessageId = parseScopedMessageId(taskParam, activeChannel);
     setTaskDetailMessageId(nextTaskMessageId);
+    // task:<taskId> 前缀 = task-only 详情深链(bare id 会被 parseScopedMessageId 当 messageId)
+    setTaskDetailOnlyTaskId(!nextTaskMessageId && taskParam?.startsWith('task:') ? taskParam.slice(5) : null);
     if (nextTaskMessageId) {
       setTab('chat');
       setThreadRootId(null);
@@ -1425,7 +1430,10 @@ export default function ChatPage() {
     setTaskCreatorFilter('all');
     setTaskAssigneeFilter('all');
     setShowCreateTask(false);
-    if (!taskParam) setTaskDetailMessageId(null);
+    if (!taskParam) {
+      setTaskDetailMessageId(null);
+      setTaskDetailOnlyTaskId(null);
+    }
   }, [activeChannel, taskParam]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1634,7 +1642,8 @@ export default function ChatPage() {
     ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
     : null;
   const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : null;
-  const taskDetailTask = taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null;
+  const taskDetailTask = (taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null)
+    ?? (taskDetailOnlyTaskId ? tasks.find((task) => task.id === taskDetailOnlyTaskId) ?? null : null);
   const taskDetailMessages = taskDetailMessage
     ? visibleMessages
         .filter((msg) =>
@@ -1818,6 +1827,7 @@ export default function ChatPage() {
   const openTaskDetail = useCallback((msg: ChatMessage) => {
     if (!metaTaskId(msg)) return;
     setTaskDetailMessageId(msg.id);
+    setTaskDetailOnlyTaskId(null);
     setThreadRootId(null);
     setThreadInput('');
     setThreadSelections([]);
@@ -1832,8 +1842,21 @@ export default function ChatPage() {
 
   const openTaskDetailById = useCallback((taskId: string) => {
     const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
-    if (taskMessage) openTaskDetail(taskMessage);
-  }, [openTaskDetail, visibleMessages]);
+    if (taskMessage) {
+      openTaskDetail(taskMessage);
+      return;
+    }
+    // 原型收敛:看板直接创建的任务没有关联消息——task-only 详情(URL 记 task:<taskId>)。
+    setTaskDetailOnlyTaskId(taskId);
+    setTaskDetailMessageId(null);
+    setChatTaskMenuTarget(null);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('task', `task:${taskId}`);
+    params.delete('thread');
+    params.delete('message');
+    params.delete('profile');
+    router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+  }, [openTaskDetail, visibleMessages, router, searchParams]);
 
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
   // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
@@ -1848,6 +1871,7 @@ export default function ChatPage() {
 
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
+    setTaskDetailOnlyTaskId(null);
     setChatTaskMenuTarget(null);
     setTaskDetailUrl(null);
   }, [setTaskDetailUrl]);
@@ -2456,6 +2480,7 @@ export default function ChatPage() {
                 return next;
               })}
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
+              onOpenTaskDetail={openTaskDetailById}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
@@ -2583,7 +2608,7 @@ export default function ChatPage() {
         />
       )}
 
-      {!profileTarget && taskDetailMessage && activeChannel && (
+      {!profileTarget && (taskDetailMessage || (taskDetailOnlyTaskId && taskDetailTask)) && activeChannel && (
         <TaskDetailPanel
           message={taskDetailMessage}
           relatedMessages={taskDetailMessages}
@@ -2596,19 +2621,27 @@ export default function ChatPage() {
           currentTeamId={currentTeamId}
           routeTeamPath={routeTeamPath}
           onClose={closeTaskDetail}
-          onViewInChannel={() => jumpToMessage(taskDetailMessage.id)}
+          onViewInChannel={() => { if (taskDetailMessage) jumpToMessage(taskDetailMessage.id); }}
           onOpenThread={() => {
+            if (!taskDetailMessage) return;
             openThread(taskDetailMessage.id);
             setThreadInput('要求后续变更：');
           }}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
           onDeliveryAction={(action) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
-            // 审核面在频道 Files 逻辑产物视图(交付包列表+成员审核按钮)。
+            // task-only(无关联消息)回落到主 composer;审核面在 Files 逻辑产物视图。
             if (action === 'delegate-to-agent') {
-              openThread(taskDetailMessage.id);
-              setThreadInput('@');
-              setTimeout(() => threadTextareaRef.current?.focus(), 0);
+              if (taskDetailMessage) {
+                openThread(taskDetailMessage.id);
+                setThreadInput('@');
+                setTimeout(() => threadTextareaRef.current?.focus(), 0);
+              } else {
+                closeTaskDetail();
+                switchTab('chat');
+                setInput('@');
+                setTimeout(() => textareaRef.current?.focus(), 0);
+              }
             } else if (action === 'review-package') {
               closeTaskDetail();
               switchTab('files');
@@ -3186,6 +3219,7 @@ function ConversationTasks({
   onDragEnd,
   onToggleColumn,
   onTaskUpdate,
+  onOpenTaskDetail,
 }: {
   tasks: TaskItem[];
   taskNumbers: Map<string, number>;
@@ -3216,6 +3250,8 @@ function ConversationTasks({
   onDragEnd: () => void;
   onToggleColumn: (status: TaskStatus) => void;
   onTaskUpdate: (task: TaskItem) => void;
+  /** 原型收敛:看板/列表点击任务标题打开详情(含无关联消息的 task-only)。 */
+  onOpenTaskDetail: (taskId: string) => void;
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -3483,6 +3519,7 @@ function ConversationTasks({
                         onMove={(status) => moveTask(task, status)}
                         onDragStart={() => onDragStart(task.id)}
                         onDragEnd={onDragEnd}
+                        onOpenDetail={() => onOpenTaskDetail(task.id)}
                       />
                     ))}
                     {colTasks.length === 0 && (
@@ -3525,9 +3562,14 @@ function ConversationTasks({
                   <td className="py-2 pr-4 text-xs text-neutral-600">{participantName(task.creatorId, participants, currentUserId)}</td>
                   <td className="py-2 pr-4 text-xs text-neutral-600">{task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}</td>
                   <td className="py-2">
-                    <button onClick={() => deleteTask(task.id)} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-500" title="删除任务">
-                      <Trash2 size={14} />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => onOpenTaskDetail(task.id)} className="flex h-7 items-center rounded border border-neutral-200 px-2 text-xs text-neutral-600 hover:border-neutral-900 hover:text-neutral-900" title="打开任务详情">
+                        详情
+                      </button>
+                      <button onClick={() => deleteTask(task.id)} className="flex h-7 w-7 items-center justify-center rounded text-neutral-400 hover:bg-red-50 hover:text-red-500" title="删除任务">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -3563,6 +3605,7 @@ function TaskCard({
   onMove,
   onDragStart,
   onDragEnd,
+  onOpenDetail,
 }: {
   task: TaskItem;
   participants: { id: string; name: string; kind: 'human' | 'agent' }[];
@@ -3571,13 +3614,22 @@ function TaskCard({
   onMove: (status: TaskStatus) => void;
   onDragStart: () => void;
   onDragEnd: () => void;
+  onOpenDetail: () => void;
 }) {
   return (
     <article draggable onDragStart={onDragStart} onDragEnd={onDragEnd} className="group cursor-grab border-2 border-neutral-900 bg-white p-3 shadow-sm active:cursor-grabbing">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-[11px] text-neutral-400">任务</div>
-          <div className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-5 text-neutral-900">{task.title}</div>
+          <button
+            type="button"
+            onClick={onOpenDetail}
+            data-smoke="task-card-open-detail"
+            className="mt-1 whitespace-pre-wrap text-left text-sm font-semibold leading-5 text-neutral-900 hover:text-amber-700 hover:underline"
+            title="打开任务详情"
+          >
+            {task.title}
+          </button>
         </div>
         <button onClick={onDelete} className="flex h-6 w-6 shrink-0 items-center justify-center text-neutral-300 opacity-0 hover:bg-red-50 hover:text-red-500 group-hover:opacity-100" title="删除任务">
           <Trash2 size={13} />
@@ -3789,7 +3841,8 @@ function TaskDetailPanel({
   onTaskStatus,
   onDeliveryAction,
 }: {
-  message: ChatMessage;
+  /** task-only 模式(看板直接创建的任务无关联消息)时为 null。 */
+  message: ChatMessage | null;
   relatedMessages: ChatMessage[];
   task: TaskItem | null;
   taskNumber?: number;
@@ -3806,15 +3859,16 @@ function TaskDetailPanel({
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAction) => void;
 }) {
+  // 原型收敛:看板直接创建的任务没有关联消息,message 可为 null(task-only 模式)。
   const sortedMessages = relatedMessages.length > 0
     ? relatedMessages
-    : [message];
-  const agentResults = sortedMessages.filter((item) => item.id !== message.id && item.senderKind === 'agent');
+    : (message ? [message] : []);
+  const agentResults = sortedMessages.filter((item) => item.id !== message?.id && item.senderKind === 'agent');
   const latestAgentResult = agentResults.length > 0 ? agentResults[agentResults.length - 1]! : null;
   const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
   const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
   const latestWorkspaceRun = workspaceRuns.length > 0 ? workspaceRuns[workspaceRuns.length - 1]! : null;
-  const detailTaskId = task?.id ?? metaTaskId(message);
+  const detailTaskId = task?.id ?? (message ? metaTaskId(message) : null);
   const taskStatusEvents = detailTaskId
     ? sortedMessages
         .map((item) => ({ message: item, event: taskStatusEventForTask(parseMeta(item), detailTaskId) }))
@@ -3830,9 +3884,10 @@ function TaskDetailPanel({
     : '未分配';
   const creatorName = task?.creatorId
     ? participantName(task.creatorId, channelMembers, undefined)
-    : resolveMessageSpeaker(message, agents, { humanProfiles, channelMembers, mentionMembers });
+    : (message ? resolveMessageSpeaker(message, agents, { humanProfiles, channelMembers, mentionMembers }) : '未知');
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
-  const workspaceTeamId = currentTeamId ?? message.teamId ?? null;
+  const workspaceTeamId = currentTeamId ?? message?.teamId ?? null;
+  const detailChannelId = message?.channelId ?? task?.channelId ?? null;
 
   useEffect(() => {
     if (!latestWorkspaceRun || !workspaceTeamId) {
@@ -3878,9 +3933,9 @@ function TaskDetailPanel({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(taskStatus)}`} />
-            <div className="truncate text-sm font-semibold text-neutral-900">{task?.title ?? displayMessageBody(message)}</div>
+            <div className="truncate text-sm font-semibold text-neutral-900">{task?.title ?? (message ? displayMessageBody(message) : '任务详情')}</div>
           </div>
-          <div className="truncate text-xs text-neutral-400">{taskLabel} · {taskStatusText(taskStatus)} · {formatTime(message.createdAt)}</div>
+          <div className="truncate text-xs text-neutral-400">{taskLabel} · {taskStatusText(taskStatus)} · {formatTime(message?.createdAt ?? task?.createdAt ?? Date.now())}</div>
         </div>
         <button onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭任务详情">
           <X size={16} />
@@ -3914,6 +3969,7 @@ function TaskDetailPanel({
           )}
         </section>
 
+        {message && (
         <section className="border-b border-neutral-100 py-4">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">任务消息</h3>
@@ -3926,12 +3982,13 @@ function TaskDetailPanel({
             <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} mentions={message.meta?.mentions as MessageMentionDto[] | undefined} />
           </div>
         </section>
+        )}
 
-        {detailTaskId && workspaceTeamId && message.channelId && (
+        {detailTaskId && workspaceTeamId && detailChannelId && (
           <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
             <TaskDeliveryOverview
               teamId={workspaceTeamId}
-              channelId={message.channelId}
+              channelId={detailChannelId}
               taskId={detailTaskId}
               onAction={onDeliveryAction}
             />
@@ -4073,11 +4130,11 @@ function TaskDetailPanel({
                     <div className="text-xs text-neutral-400">{artifact.pathKind ?? 'artifact'} · {formatFileSize(artifact.sizeBytes)}</div>
                   </div>
                   <div className="mt-2 flex gap-2 text-xs">
-                    {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) && (
-                      <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
+                    {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message?.teamId) && (
+                      <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message?.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
                     )}
-                    {messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) && (
-                      <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message.teamId) ?? '#'}>下载</a>
+                    {messageArtifactUrl(artifact, 'download', currentTeamId ?? message?.teamId) && (
+                      <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message?.teamId) ?? '#'}>下载</a>
                     )}
                   </div>
                 </div>
@@ -4104,6 +4161,7 @@ function TaskDetailPanel({
         </section>
       </div>
 
+      {message && (
       <div className="border-t border-neutral-200 p-3">
         <button
           onClick={onOpenThread}
@@ -4113,6 +4171,7 @@ function TaskDetailPanel({
           要求后续变更
         </button>
       </div>
+      )}
     </aside>
   );
 }
