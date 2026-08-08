@@ -90,6 +90,8 @@ export interface WorkspaceRunManifest {
   startedAt?: number;
   completedAt?: number;
   exitCode?: number;
+  /** 最近一次已提交的 workspace publish identity，供重启后继续补偿回报。 */
+  publishId?: string;
   artifactIds?: string[];
   artifacts?: WorkspaceRunManifestArtifact[];
   collaborationProposals?: readonly AgentCollaborationProposalV1[];
@@ -368,6 +370,7 @@ export function discoverRecoverableWorkspaceRuns(cwds: string[]): RecoverableWor
           ...(typeof manifest.exitCode === 'number' ? { exitCode: manifest.exitCode } : {}),
           ...(typeof manifest.startedAt === 'number' ? { startedAt: manifest.startedAt } : {}),
           ...(typeof manifest.completedAt === 'number' ? { completedAt: manifest.completedAt } : {}),
+          ...(typeof manifest.publishId === 'string' ? { publishId: manifest.publishId } : {}),
         },
         ...(artifactIds.length > 0 ? { artifactIds } : {}),
         ...(artifacts.length > 0 ? { artifacts } : {}),
@@ -570,6 +573,7 @@ function walkChannelRuns(
         ...(typeof manifest.exitCode === 'number' ? { exitCode: manifest.exitCode } : {}),
         ...(typeof manifest.startedAt === 'number' ? { startedAt: manifest.startedAt } : {}),
         ...(typeof manifest.completedAt === 'number' ? { completedAt: manifest.completedAt } : {}),
+        ...(typeof manifest.publishId === 'string' ? { publishId: manifest.publishId } : {}),
       },
       ...(Array.isArray(manifest.artifactIds) && manifest.artifactIds.length > 0 ? { artifactIds: manifest.artifactIds } : {}),
       ...(Array.isArray(manifest.artifacts) && manifest.artifacts.length > 0 ? { artifacts: manifest.artifacts.filter(isWorkspaceRunManifestArtifact) } : {}),
