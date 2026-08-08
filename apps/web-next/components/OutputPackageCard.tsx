@@ -41,6 +41,15 @@ const ACTION_LABELS: Record<PackageReviewAction | ArtifactRevisionAction, string
 // #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射,颜色只作修饰)。
 import { POLICY_LABELS, reviewStateLabel } from '@/lib/delivery-labels';
 
+/** 成员行 file-sub 的时间:当天 HH:MM,跨天 M/D HH:MM(原型「手动修改于 19:41」)。 */
+function formatPackageMemberClock(ts?: number): string {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  return d.toDateString() === now.toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+}
+
 /** #1062 AC1:「基于此修改」回调——成员被 Server 标记可修订时携带冻结 provenance。 */
 export interface ReviseVersionRequest {
   collectionId: string;
@@ -61,6 +70,7 @@ export function OutputPackageCard({
   onReviseVersion,
   onOpenTask,
   onContinueWithAgent,
+  onOpenPreview,
 }: {
   packageMeta: OutputPackageMeta;
   channelId?: string;
@@ -78,6 +88,12 @@ export function OutputPackageCard({
    * 并聚焦;未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
    */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /**
+   * 原型对齐:「预览/编辑」——打开包内预览/编辑浮窗;versionId 指定聚焦成员
+   * (成员行「预览」),省略时聚焦首个成员(包级按钮)。未提供时不渲染入口
+   * (纯展示场景,如 channel-message)。
+   */
+  onOpenPreview?: (versionId?: string) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
   const [frozenTaskRevision, setFrozenTaskRevision] = useState<number | undefined>(undefined);
@@ -90,6 +106,44 @@ export function OutputPackageCard({
   const [selectingMembers, setSelectingMembers] = useState(false);
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [blockers, setBlockers] = useState<{ shortLabel: string; filename: string; code: string }[]>([]);
+  // 原型对齐:成员行 file-sub 需要 collection 名/current server 版本号/来源与修改时间。
+  // 这些数据在 ProjectArtifactLibrary(collections)里,卡片按 channelId 自拉一次。
+  const [collectionsById, setCollectionsById] = useState<Map<string, {
+    name: string;
+    currentVersionNumber?: number;
+    currentCreatedAt?: number;
+    manualRevision: boolean;
+  }> | null>(null);
+
+  useEffect(() => {
+    if (!channelId) return;
+    let cancelled = false;
+    const api = projectEvents();
+    // 纯展示场景/测试 mock 可能没有该方法——降级为不显示 file-sub,不抛错。
+    if (typeof api.artifactCollections !== 'function') return;
+    Promise.resolve(api.artifactCollections(channelId))
+      .then((result) => {
+        if (cancelled || !result.ok || !result.library) return;
+        const map = new Map<string, {
+          name: string;
+          currentVersionNumber?: number;
+          currentCreatedAt?: number;
+          manualRevision: boolean;
+        }>();
+        for (const collection of result.library.collections) {
+          const current = collection.versions.find((v) => v.id === collection.currentVersionId);
+          map.set(collection.id, {
+            name: collection.name,
+            ...(current ? { currentVersionNumber: current.versionNumber, currentCreatedAt: current.createdAt } : {}),
+            // revisionBasis 存在 = 经「基于此修改」/手动编辑产生;否则为 Agent 交付/提升。
+            manualRevision: Boolean(current?.revisionBasis),
+          });
+        }
+        setCollectionsById(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [channelId]);
 
   const refresh = useCallback(async () => {
     if (!channelId) return;
@@ -276,10 +330,20 @@ export function OutputPackageCard({
           {packageMeta.memberCount} 个文件
         </span>
       </div>
-      {/* #1063 整包引用入口 */}
-      {onAddReference ? (
+      {/* #1063 整包引用入口 + 原型对齐的「预览/编辑」 */}
+      {onAddReference || onOpenPreview ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5" data-smoke="output-package-projection-refs">
-          {(['current', 'final', 'delivered'] as const).map((policy) => (
+          {onOpenPreview ? (
+            <button
+              type="button"
+              onClick={() => onOpenPreview()}
+              className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
+              data-smoke="output-package-open-preview"
+            >
+              预览/编辑
+            </button>
+          ) : null}
+          {onAddReference ? (['current', 'final', 'delivered'] as const).map((policy) => (
             <button
               key={policy}
               type="button"
@@ -291,7 +355,8 @@ export function OutputPackageCard({
             >
               引用{POLICY_LABELS[policy]}
             </button>
-          ))}
+          )) : null}
+          {onAddReference ? (
           <button
             type="button"
             disabled={referencing}
@@ -304,6 +369,7 @@ export function OutputPackageCard({
           >
             {selectingMembers ? '取消选择' : '选择成员'}
           </button>
+          ) : null}
         </div>
       ) : null}
       {/* #1063 整包投影阻断清单 */}
@@ -348,7 +414,23 @@ export function OutputPackageCard({
               ) : null}
               <FileText className="h-3.5 w-3.5 shrink-0 text-neutral-400" aria-hidden="true" />
               <span className="w-8 shrink-0 text-xs font-medium text-neutral-500">{member.shortLabel}</span>
-              <span className="truncate">{member.filename}</span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate">{member.filename}</span>
+                {/* 原型 file-sub:collection 名 · current server 版本 · 来源与修改时间 */}
+                {(() => {
+                  const info = collectionsById?.get(member.collectionId);
+                  if (!info) return null;
+                  const parts = [`collection: ${info.name}`];
+                  if (info.currentVersionNumber) parts.push(`current server v${info.currentVersionNumber}`);
+                  const clock = formatPackageMemberClock(info.currentCreatedAt);
+                  parts.push(info.manualRevision ? `手动修改${clock ? `于 ${clock}` : ''}` : `Agent 交付${clock ? ` · ${clock}` : ''}`);
+                  return (
+                    <span className="block truncate text-[11px] text-neutral-400" data-smoke="package-member-sub">
+                      {parts.join(' · ')}
+                    </span>
+                  );
+                })()}
+              </div>
               {actions ? (
                 <>
                   <span
@@ -376,6 +458,18 @@ export function OutputPackageCard({
                       </button>
                     ))}
                 </>
+              ) : null}
+              {/* 原型对齐:成员行「预览」→ 包内预览/编辑浮窗(聚焦该成员) */}
+              {onOpenPreview && !selectingMembers ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenPreview(member.artifactVersionId)}
+                  className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
+                  data-smoke="output-package-member-preview"
+                  data-version-id={member.artifactVersionId}
+                >
+                  预览
+                </button>
               ) : null}
               {/* #1063 单文件引用与“基于此修改” */}
               {onAddReference && !selectingMembers ? (

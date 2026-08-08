@@ -12,8 +12,11 @@ describe('chat thread mentions', () => {
     const panel = source.slice(start, end);
     expect(panel).toContain('activeMentionDraft');
     expect(panel).toContain('replaceActiveMention');
-    expect(panel).toContain('threadMentionMembers');
+    // 原型 @选择器扩展:成员/智能体 + 文件包 + 文件 三类候选(原 threadMentionMembers 已扩展为 threadMentionItems)。
+    expect(panel).toContain('threadMentionItems');
     expect(panel).toContain('data-smoke="thread-mention-candidate"');
+    expect(panel).toContain('data-smoke="thread-mention-package"');
+    expect(panel).toContain('data-smoke="thread-mention-file"');
     expect(panel).toContain("if (e.key === 'ArrowDown')");
     expect(panel).toContain("if (e.key === 'Enter' || e.key === 'Tab')");
   });

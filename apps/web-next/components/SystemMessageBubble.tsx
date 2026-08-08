@@ -27,6 +27,8 @@ export interface SystemMessageBubbleProps {
   /** 已含 channelId 的修订回调(与 ChatBubble.onReviseVersion 同签名)。 */
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /** 原型对齐:文件包「预览/编辑」浮窗入口;未提供时卡片不渲染该按钮。 */
+  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
 }
 
 export function SystemMessageBubble({
@@ -37,6 +39,7 @@ export function SystemMessageBubble({
   onAddPackageReference,
   onReviseVersion,
   onContinueWithAgent,
+  onOpenPackagePreview,
 }: SystemMessageBubbleProps) {
   const anchorProps = {
     id: `message-${msg.id}`,
@@ -93,6 +96,7 @@ export function SystemMessageBubble({
           }
           onOpenTask={onOpenTaskDetailById}
           onContinueWithAgent={onContinueWithAgent}
+          onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview(pkg, versionId) : undefined}
         />
       </div>
     );

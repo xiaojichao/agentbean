@@ -12,7 +12,6 @@ import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { mergedStandalonePackageCardIds, shouldHideSystemMessage } from '@/lib/system-messages';
-import { inlineOutputPackageFromMeta } from '@/lib/output-package';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -46,7 +45,8 @@ import { SystemMessageBubble } from '@/components/SystemMessageBubble';
 import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
 import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
-import { outputPackageFromMeta } from '@/lib/output-package';
+import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
+import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
@@ -359,6 +359,12 @@ export default function ChatPage() {
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   // #1062 「基于此修改」修订编辑器(复用 MarkdownDocumentEditor,独立于 Channel document)。
   const [openArtifactRevision, setOpenArtifactRevision] = useState<OpenArtifactRevision | null>(null);
+  // 原型对齐:文件包「预览/编辑」浮窗(OutputPackagePreviewModal)。
+  const [openPackagePreview, setOpenPackagePreview] = useState<{
+    packageMeta: OutputPackageMeta;
+    channelId: string;
+    initialVersionId?: string;
+  } | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
   // 原型收敛:文件库默认按逻辑产物(输出包/产物集合)组织;无项目数据时回落到文件浏览。
@@ -564,7 +570,7 @@ export default function ChatPage() {
     setChannelProjectOverview(null);
     setProjectDocumentBundles([]);
     setProjectDocumentBundlesArchived(false);
-    if (tab !== 'files' || !activeChannel || conn !== 'open') return () => { active = false; };
+    if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') return () => { active = false; };
     void projectEvents().artifactCollections(activeChannel).then((result) => {
       if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
     });
@@ -585,7 +591,7 @@ export default function ChatPage() {
       setOutputPackagePendings(result.ok ? result.pendingDeliveries ?? [] : []);
     });
     return () => { active = false; };
-  }, [activeChannel, conn, tab]);
+  }, [activeChannel, conn, tab, threadRootId]);
 
   useEffect(() => {
     setProjectReferenceSelections([]);
@@ -1869,6 +1875,16 @@ export default function ChatPage() {
     textareaRef.current?.focus();
   }, [setProjectReferenceSelections]);
 
+  // 原型对齐:打开文件包预览/编辑浮窗。
+  const openPackagePreviewModal = useCallback((packageMeta: OutputPackageMeta, versionId?: string) => {
+    if (!activeChannel) return;
+    setOpenPackagePreview({
+      packageMeta,
+      channelId: activeChannel,
+      ...(versionId ? { initialVersionId: versionId } : {}),
+    });
+  }, [activeChannel]);
+
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
     setTaskDetailOnlyTaskId(null);
@@ -2333,6 +2349,7 @@ export default function ChatPage() {
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
                         onContinueWithAgent={continueWithAgentFromCard}
+                        onOpenPackagePreview={openPackagePreviewModal}
                         onOpenTaskDetailById={openTaskDetailById}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -2719,8 +2736,22 @@ export default function ChatPage() {
             onClose={closeThread}
             onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
             onContinueWithAgent={continueWithAgentFromCard}
+            onOpenPackagePreview={openPackagePreviewModal}
+            outputPackages={outputPackages}
+            artifactLibrary={projectArtifactLibrary}
           />
         </>
+      )}
+
+      {openPackagePreview && (
+        <OutputPackagePreviewModal
+          packageMeta={openPackagePreview.packageMeta}
+          channelId={openPackagePreview.channelId}
+          {...(openPackagePreview.initialVersionId ? { initialVersionId: openPackagePreview.initialVersionId } : {})}
+          renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
+          onClose={() => setOpenPackagePreview(null)}
+          onSaved={() => refreshProjectArtifactLibrary()}
+        />
       )}
 
       {openChannelDocument && (
@@ -4165,7 +4196,12 @@ function TaskRunMeta({ label, value }: { label: string; value: string }) {
 /**
  * #1064：项目引用选择 chip 的展示名（主 composer 与线程 composer 共用）。
  * bundle 名称查找是可选增强——找不到时回退稳定 id，不阻塞展示。
+ * 原型对齐:包引用显示 PKG 短号(uuid 前 8 位,稳定)+ projection 策略,不再是整段 uuid。
  */
+function shortPackageLabel(packageId: string): string {
+  return `PKG-${packageId.slice(0, 8)}`;
+}
+
 function projectReferenceSelectionLabel(
   selection: ProjectReferenceSelectionRequestDto,
   bundles?: ProjectDocumentBundleDto[],
@@ -4176,11 +4212,11 @@ function projectReferenceSelectionLabel(
     case 'bundle_subset':
       return `包内 ${selection.documentIds.length} 项`;
     case 'artifact_version':
-      return `产物版本：${selection.versionId}`;
+      return `产物版本：${selection.versionId.slice(0, 8)}`;
     case 'package_projection':
-      return `整包${selection.policy === 'current' ? '当前' : selection.policy === 'final' ? '最终' : '交付'}版：${selection.packageId}`;
+      return `${shortPackageLabel(selection.packageId)} ${selection.policy === 'current' ? 'current' : selection.policy === 'final' ? 'final' : '交付版'}`;
     case 'package_members':
-      return `包内 ${selection.members.length} 项`;
+      return `${shortPackageLabel(selection.packageId)} · ${selection.members.length} 项`;
     default:
       return `文档：${selection.documentId}`;
   }
@@ -4239,6 +4275,9 @@ function ThreadPanel({
   onClose,
   onReviseVersion,
   onContinueWithAgent,
+  onOpenPackagePreview,
+  outputPackages,
+  artifactLibrary,
 }: {
   width: number;
   root: ChatMessage;
@@ -4297,6 +4336,12 @@ function ThreadPanel({
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /** 原型对齐:线程内文件包「预览/编辑」浮窗入口。 */
+  onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
+  /** 原型 @选择器扩展:文件包候选(@文件包 → current projection 引用)。 */
+  outputPackages: OutputPackageSummaryDto[];
+  /** 原型 @选择器扩展:文件候选(@文件 → artifact_version 引用)。 */
+  artifactLibrary: ProjectArtifactLibraryDto | null;
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
@@ -4304,10 +4349,34 @@ function ThreadPanel({
   const [showThreadMention, setShowThreadMention] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
   const [threadMentionIndex, setThreadMentionIndex] = useState(0);
-  const threadMentionMembers = (threadMentionQuery
-    ? mentionCandidates.filter((member) => member.name.toLowerCase().includes(threadMentionQuery))
-    : mentionCandidates
-  );
+  // 原型 @选择器:成员/智能体 + 文件包 + 文件 三类候选。
+  type ThreadMentionItem =
+    | { kind: 'member'; member: MentionProfileMember }
+    | { kind: 'package'; packageId: string; memberCount: number; taskTitle?: string }
+    | { kind: 'file'; collectionId: string; versionId: string; filename: string; collectionName: string };
+  const q = threadMentionQuery;
+  const threadMentionItems: ThreadMentionItem[] = [
+    ...(q ? mentionCandidates.filter((m) => m.name.toLowerCase().includes(q)) : mentionCandidates)
+      .map((member) => ({ kind: 'member' as const, member })),
+    ...outputPackages
+      .map((pkg) => ({ pkg, taskTitle: tasks.find((t) => t.id === pkg.taskId)?.title }))
+      .filter(({ pkg, taskTitle }) => !q || pkg.packageId.toLowerCase().includes(q) || (taskTitle ?? '').toLowerCase().includes(q))
+      .slice(0, 5)
+      .map(({ pkg, taskTitle }) => ({ kind: 'package' as const, packageId: pkg.packageId, memberCount: pkg.memberCount, ...(taskTitle ? { taskTitle } : {}) })),
+    ...(artifactLibrary?.collections ?? [])
+      .flatMap((collection) => {
+        const current = collection.versions.find((v) => v.id === collection.currentVersionId);
+        return current ? [{
+          kind: 'file' as const,
+          collectionId: collection.id,
+          versionId: current.id,
+          filename: current.artifact.filename,
+          collectionName: collection.name,
+        }] : [];
+      })
+      .filter((f) => !q || f.filename.toLowerCase().includes(q) || f.collectionName.toLowerCase().includes(q))
+      .slice(0, 8),
+  ];
   const subtitle = rootTask
     ? `#${taskNumbers.get(rootTask.id) ?? '任务'} ${rootTask.title}`
     : resolveMessageSpeaker(root, agents, { currentUser, humanProfiles, channelMembers });
@@ -4335,6 +4404,25 @@ function ThreadPanel({
     setThreadMentionIndex(0);
   };
 
+  const selectThreadMentionItem = (item: (typeof threadMentionItems)[number]) => {
+    if (item.kind === 'member') {
+      selectThreadMention(item.member);
+      return;
+    }
+    // 文件/文件包:删除 @token,改为插入稳定引用 chip(随发送冻结为 ProjectReferenceSet)。
+    const caret = threadTextareaRef.current?.selectionStart ?? input.length;
+    const draft = activeMentionDraft(input, caret);
+    if (draft) onInput(input.slice(0, draft.start) + input.slice(draft.end));
+    if (item.kind === 'package') {
+      // 原型:@文件包 默认引用 current projection。
+      onAddSelection({ kind: 'package_projection', packageId: item.packageId, policy: 'current' });
+    } else {
+      onAddSelection({ kind: 'artifact_version', collectionId: item.collectionId, versionId: item.versionId });
+    }
+    setShowThreadMention(false);
+    setTimeout(() => threadTextareaRef.current?.focus(), 0);
+  };
+
   const selectThreadMention = (member: MentionProfileMember) => {
     const caret = threadTextareaRef.current?.selectionStart ?? input.length;
     const replacement = replaceActiveMention(input, caret, member.name);
@@ -4348,21 +4436,21 @@ function ThreadPanel({
   };
 
   const handleThreadInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showThreadMention && threadMentionMembers.length > 0) {
+    if (showThreadMention && threadMentionItems.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setThreadMentionIndex((index) => (index + 1) % threadMentionMembers.length);
+        setThreadMentionIndex((index) => (index + 1) % threadMentionItems.length);
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setThreadMentionIndex((index) => (index - 1 + threadMentionMembers.length) % threadMentionMembers.length);
+        setThreadMentionIndex((index) => (index - 1 + threadMentionItems.length) % threadMentionItems.length);
         return;
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        const member = threadMentionMembers[threadMentionIndex];
-        if (member) selectThreadMention(member);
+        const item = threadMentionItems[threadMentionIndex];
+        if (item) selectThreadMentionItem(item);
         return;
       }
       if (e.key === 'Escape') {
@@ -4418,6 +4506,7 @@ function ThreadPanel({
         onReviseVersion={onReviseVersion}
         onContinueWithAgent={onContinueWithAgent}
         onAddPackageReference={onAddSelection}
+        onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
         showReplyAction={false}
         showReplyCount={false}
@@ -4451,24 +4540,60 @@ function ThreadPanel({
       </div>
       <div className="border-t border-neutral-200 p-3">
         <div className="relative rounded-lg border border-neutral-300 bg-white">
-          {showThreadMention && threadMentionMembers.length > 0 && (
-            <div className="absolute bottom-full left-0 z-10 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
-              {threadMentionMembers.map((member, index) => (
-                <button
-                  key={`${member.kind}:${member.id}`}
-                  type="button"
-                  onClick={() => selectThreadMention(member)}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${index === threadMentionIndex ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
-                  data-smoke="thread-mention-candidate"
-                  data-member-kind={member.kind}
-                  data-member-id={member.id}
-                  data-member-name={member.name}
-                >
-                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : 'H'}</span>
-                  <span className="truncate">{member.name}</span>
-                  <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? 'Agent' : '人类'}</span>
-                </button>
-              ))}
+          {showThreadMention && threadMentionItems.length > 0 && (
+            <div className="absolute bottom-full left-0 z-10 mb-1 max-h-56 w-72 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg">
+              {threadMentionItems.map((item, index) => {
+                const active = index === threadMentionIndex;
+                if (item.kind === 'member') {
+                  const member = item.member;
+                  return (
+                    <button
+                      key={`member:${member.kind}:${member.id}`}
+                      type="button"
+                      onClick={() => selectThreadMentionItem(item)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                      data-smoke="thread-mention-candidate"
+                      data-member-kind={member.kind}
+                      data-member-id={member.id}
+                      data-member-name={member.name}
+                    >
+                      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${member.kind === 'agent' ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700'}`}>{member.kind === 'agent' ? 'A' : 'H'}</span>
+                      <span className="truncate">{member.name}</span>
+                      <span className="ml-auto text-[10px] text-neutral-400">{member.kind === 'agent' ? 'Agent' : '人类'}</span>
+                    </button>
+                  );
+                }
+                if (item.kind === 'package') {
+                  return (
+                    <button
+                      key={`package:${item.packageId}`}
+                      type="button"
+                      onClick={() => selectThreadMentionItem(item)}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                      data-smoke="thread-mention-package"
+                      data-package-id={item.packageId}
+                    >
+                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[9px] font-semibold text-violet-700">包</span>
+                      <span className="truncate">{shortPackageLabel(item.packageId)}{item.taskTitle ? ` · ${item.taskTitle}` : ''}</span>
+                      <span className="ml-auto text-[10px] text-neutral-400">文件包 · {item.memberCount} 文件</span>
+                    </button>
+                  );
+                }
+                return (
+                  <button
+                    key={`file:${item.versionId}`}
+                    type="button"
+                    onClick={() => selectThreadMentionItem(item)}
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${active ? 'bg-blue-50 text-blue-700' : 'hover:bg-neutral-50'}`}
+                    data-smoke="thread-mention-file"
+                    data-version-id={item.versionId}
+                  >
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[9px] font-semibold text-sky-700">文</span>
+                    <span className="truncate">{item.filename}</span>
+                    <span className="ml-auto truncate text-[10px] text-neutral-400">{item.collectionName}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
           <textarea
@@ -4477,7 +4602,7 @@ function ThreadPanel({
             onChange={handleThreadInputChange}
             onKeyDown={handleThreadInputKeyDown}
             rows={2}
-            placeholder="回复讨论串（输入 @ 提及本频道成员）"
+            placeholder="回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）"
             data-smoke="thread-message-input"
             className="w-full resize-none px-3 pt-2.5 pb-1 text-sm outline-none placeholder:text-neutral-400"
           />
@@ -4789,6 +4914,7 @@ function ChatBubble({
   onTaskStatus,
   onReviseVersion,
   onContinueWithAgent,
+  onOpenPackagePreview,
   replyCount,
   showReplyAction = true,
   showReplyCount = true,
@@ -4830,6 +4956,8 @@ function ChatBubble({
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /** 原型对齐:文件包「预览/编辑」浮窗入口(standalone + 内嵌卡片共用)。 */
+  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
   replyCount: number;
   showReplyAction?: boolean;
   showReplyCount?: boolean;
@@ -4873,6 +5001,7 @@ function ChatBubble({
         onAddPackageReference={onAddPackageReference}
         onReviseVersion={onReviseVersion}
         onContinueWithAgent={onContinueWithAgent}
+        onOpenPackagePreview={onOpenPackagePreview}
       />
     );
   }
@@ -5146,6 +5275,7 @@ function ChatBubble({
             // composer(delivered 整包引用 + 说明文本 + 焦点),未发送不创建任何事实。
             onOpenTask={onOpenTaskDetailById}
             onContinueWithAgent={onContinueWithAgent}
+            onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview((outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta))!, versionId) : undefined}
           />
         )}
         {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (
