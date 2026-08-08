@@ -10544,11 +10544,21 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ? await repositories.management.handoffs.getByInvocationId(replayAttempt.invocationId)
             : null;
           const replayPublishesToRoot = !replayHandoff || replayHandoff.intent.returnMode === 'deliver_to_root';
-          if (replayPublishesToRoot) {
+          if (replayPublishesToRoot || resultInput.workspaceRun.publishId) {
             const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
               teamId: dispatch.teamId,
               publishId: resultInput.workspaceRun.publishId,
             });
+            const replayWorkspaceRunId = replayStaging?.provenance?.workspaceRunId;
+            const replayWorkspaceRunById = replayWorkspaceRunId
+              ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
+              : null;
+            const replayWorkspaceRun = replayWorkspaceRunId
+              ? replayWorkspaceRunById
+                ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
+                ?? null
+              : null;
+            if (replayPublishesToRoot) {
             if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
               // publishId 只应在 commit 已落库后回报；否则不能发 delivered ack，
               // 让 daemon 按原 publish identity 重试，避免 pending 永久丢失。
@@ -10558,10 +10568,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               || replayStaging.provenance?.agentId !== dispatch.agentId) {
               return makeFailure('CONFLICT', 'OutputPackage publish does not belong to dispatch');
             }
-            const replayWorkspaceRunId = replayStaging.provenance?.workspaceRunId;
-            const replayWorkspaceRun = replayWorkspaceRunId
-              ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
-              : null;
             if (replayWorkspaceRunId
               && replayWorkspaceRunId !== dispatch.id
               && replayWorkspaceRun?.dispatchId !== dispatch.id) {
@@ -10601,6 +10607,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   });
                 }
               }
+            }
             }
             // package 已形成不等于整条 result 已收敛。重放载荷可能还带有
             // artifacts/协作提案；先补齐这些副作用，再确认 delivered，避免
@@ -10676,9 +10683,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 replayCommittedArtifacts.push(persisted);
               }
               if (channelFileRollout.markdownEditing) {
+                const replayInputSetArtifactIds = new Set(
+                  resultInput.projectDocumentInputSetResult?.items.flatMap((item) =>
+                    'artifactId' in item ? [item.artifactId] : []) ?? [],
+                );
                 await createInitialChannelDocuments(
                   repositories,
-                  replayCommittedArtifacts.filter((artifact) => !isWorkspaceRunLogArtifact(artifact)),
+                  replayCommittedArtifacts.filter((artifact) =>
+                    !isWorkspaceRunLogArtifact(artifact) && !replayInputSetArtifactIds.has(artifact.id)),
                   resultInput.agentId,
                   clock.now(),
                 );
