@@ -190,14 +190,19 @@ export function ProjectFilesBoard({
       void projectEvents()
         .getOutputPackage({ channelId, packageId: pkg.packageId, projection: { policy: 'current' } })
         .then((result) => {
-          if (cancelled || !result.ok) return;
+          if (cancelled) return;
           setPackageDetailCache((current) => {
             const next = new Map(current);
-            next.set(pkg.packageId, {
-              package: result.package,
-              availableActions: result.availableActions ?? [],
-              projection: result.projection ?? null,
-            });
+            // 失败也写缓存(空条目):让 packageLoading 收敛,避免投影失败时右栏永远转圈。
+            if (result.ok) {
+              next.set(pkg.packageId, {
+                package: result.package,
+                availableActions: result.availableActions ?? [],
+                projection: result.projection ?? null,
+              });
+            } else {
+              next.set(pkg.packageId, { availableActions: [], projection: null });
+            }
             return next;
           });
         });

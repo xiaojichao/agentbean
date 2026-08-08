@@ -687,3 +687,28 @@ describe('ProjectFilesBoard 提升入口(步骤 7)', () => {
     expect(document.body.textContent).not.toContain('先在文件视图中打开目标文件所在目录');
   });
 });
+
+describe('ProjectFilesBoard 无项目画像回退(#1134 gate 放宽)', () => {
+  test('无 library/stages(未创建阶段)仅输出包 → 输出包卡渲染、无等待上游/集合卡、右栏占位不崩', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    render(<ProjectFilesBoard
+      channelId="channel-1"
+      packages={[pkg1]}
+      pendingDeliveries={[]}
+      library={null}
+      stages={[]}
+      agentNames={agentNames}
+      dataRevision={0}
+      onAddReference={() => {}}
+    />);
+    expect(document.querySelectorAll('[data-smoke="output-package-item"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-smoke="output-package-pending"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-smoke="project-artifact-collection"]').length).toBe(0);
+    expect(document.querySelectorAll('[data-smoke="file-group-waiting"]').length).toBe(0);
+    // 默认选中首卡(pkg-1):投影失败也落态(失败写缓存)→ 右栏占位,不崩、不永远转圈。
+    await waitFor(() => {
+      expect(screen.getByText('暂无文件行')).toBeTruthy();
+    });
+    expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(0);
+  });
+});

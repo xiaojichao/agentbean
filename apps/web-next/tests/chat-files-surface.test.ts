@@ -68,4 +68,15 @@ describe('chat files surface', () => {
     expect(source).toContain("messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'preview', readOnlyArtifact.teamId)");
     expect(source).toContain("messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'download', readOnlyArtifact.teamId)");
   });
+
+  test('逻辑产物视图 gate 放宽:无 overview 但有输出包/产物集合也进入 ProjectFilesBoard(#1134)', () => {
+    expect(source).toContain("projectFilesAvailable && channelFilesView === 'artifacts'");
+    expect(source).toContain('outputPackages.length > 0');
+    expect(source).toContain('outputPackagePendings.length > 0');
+    expect(source).toContain('(projectArtifactLibrary?.collections.length ?? 0) > 0');
+    // stages 容空:overview 缺失时传空数组,等待上游卡自然不出现。
+    expect(source).toMatch(/stages=\{channelProjectOverview\?\.stages\.map\(/);
+    // 提升入口在无 overview 时关闭(canPromote=false),不误开。
+    expect(source).toContain('(channelProjectOverview?.profile.projectLeadId ?? null) === (currentUser?.id ?? null)');
+  });
 });
