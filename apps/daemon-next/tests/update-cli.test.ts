@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import {
   acquireUpdateLockFile,
+  fenceDeviceServiceForPackageSwap,
   readInstalledAgentBeanPackage,
   restorePackageSnapshot,
   runUpdateCli,
@@ -340,6 +341,7 @@ describe('agentbean update', () => {
       fenceDeviceService,
       verifyInstalledPackage: passVerify,
       readServiceErrorSummary: async () => '',
+      readServiceLiveDetail: async () => '',
       stderr, ...fakes,
     })).resolves.toBe(UPDATE_CLI_EXIT.rejected);
     // 即使再次 fence 失败，也走快照恢复而不是 npm 回滚
@@ -557,5 +559,72 @@ describe('agentbean update', () => {
     await expect(verifyInstalledPackage({ globalPrefix: root, version: '0.3.20' })).resolves.toMatchObject({
       ok: false,
     });
+  });
+});
+
+describe('fenceDeviceServiceForPackageSwap (#1114 僵尸防护)', () => {
+  const plistPath = (home: string) => join(home, 'Library', 'LaunchAgents', 'com.agentbean.device-service.plist');
+
+  async function makeHome() {
+    const home = await mkdtemp(join(tmpdir(), 'update-fence-'));
+    await mkdir(join(home, 'Library', 'LaunchAgents'), { recursive: true });
+    await writeFile(plistPath(home), '<plist/>');
+    return home;
+  }
+
+  test('bootout 按路径失败时按 label 兜底(僵尸可杀)', async () => {
+    const home = await makeHome();
+    const calls: Array<readonly string[]> = [];
+    let printCount = 0;
+    const run = vi.fn(async (_executable: string, argv: readonly string[]) => {
+      calls.push(argv);
+      if (argv[0] === 'bootout' && argv.length === 3) {
+        // 按路径(domain + plistFile)失败——模拟 plist 状态与注册表不一致。
+        return { exitCode: 5, stdout: '', stderr: 'Boot-out failed' };
+      }
+      if (argv[0] === 'bootout' && argv.length === 2) return success(); // 按 label 成功
+      if (argv[0] === 'print') {
+        printCount += 1;
+        // 兜底 bootout 前:job 仍注册;之后:注销。
+        return printCount <= 1 ? success('state = running\n pid = 123') : { exitCode: 1, stdout: '', stderr: 'not found' };
+      }
+      return success();
+    });
+    const fenced = await fenceDeviceServiceForPackageSwap({ home, baseDir: join(home, '.agentbean'), run });
+    expect(fenced).toBe(true);
+    expect(calls.some((argv) => argv[0] === 'bootout' && argv.length === 2
+      && argv[1] === 'gui/501/com.agentbean.device-service')).toBe(true);
+  });
+
+  test('bootout 退出码 0 但 job 仍注册时,kill 后再 bootout 直至 print 失败', async () => {
+    const home = await makeHome();
+    let printCount = 0;
+    let killCount = 0;
+    const run = vi.fn(async (_executable: string, argv: readonly string[]) => {
+      if (argv[0] === 'bootout') return success();
+      if (argv[0] === 'kill') { killCount += 1; return success(); }
+      if (argv[0] === 'print') {
+        printCount += 1;
+        // 前两次:仍注册(退出码 0 假象);kill 后:注销。
+        return printCount <= 2 ? success('state = running\n pid = 123') : { exitCode: 1, stdout: '', stderr: 'not found' };
+      }
+      return success();
+    });
+    const fenced = await fenceDeviceServiceForPackageSwap({ home, baseDir: join(home, '.agentbean'), run });
+    expect(fenced).toBe(true);
+    expect(killCount).toBeGreaterThan(0);
+  });
+
+  test('print 一开始就不可用(queryFailed)也照样尝试卸载', async () => {
+    const home = await makeHome();
+    let bootoutCount = 0;
+    const run = vi.fn(async (_executable: string, argv: readonly string[]) => {
+      if (argv[0] === 'bootout') { bootoutCount += 1; return success(); }
+      if (argv[0] === 'print') return { exitCode: 1, stdout: '', stderr: 'not found' };
+      return success();
+    });
+    const fenced = await fenceDeviceServiceForPackageSwap({ home, baseDir: join(home, '.agentbean'), run });
+    expect(fenced).toBe(true);
+    expect(bootoutCount).toBeGreaterThan(0);
   });
 });

@@ -69,7 +69,14 @@ export function createMacOSLaunchAgentAdapter(
     bootstrap: () => run('/bin/launchctl', ['bootstrap', domain, paths.plistFile]),
     start: () => run('/bin/launchctl', ['kickstart', '-k', target]),
     kill: () => run('/bin/launchctl', ['kill', 'SIGTERM', target]),
-    bootout: () => run('/bin/launchctl', ['bootout', domain, paths.plistFile]),
+    bootout: async () => {
+      const byPath = await run('/bin/launchctl', ['bootout', domain, paths.plistFile]);
+      if (byPath.exitCode === 0) return byPath;
+      // #1114:plist 被删/过期后按路径 bootout 永远失败,但 in-memory job 可能仍注册
+      // (KeepAlive 复活成僵尸,后续 install/restart/update 全部对它失效,实证 2026-08-08)。
+      // 按 label 兜底:不依赖 plist 文件,直接按服务目标注销。
+      return run('/bin/launchctl', ['bootout', target]);
+    },
     async status() {
       const installed = await fileExists(paths.plistFile);
       const result = await run('/bin/launchctl', ['print', target]);

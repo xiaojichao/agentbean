@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   createMacOSLaunchAgentAdapter,
+  type LaunchctlRunner,
   macOSLaunchAgentPaths,
   removeMacOSLaunchAgentInstallation,
 } from './macos-launch-agent.js';
@@ -65,6 +66,8 @@ export interface UpdateCliDeps {
     version: string;
   }) => Promise<PackageInstallResult>;
   readonly readServiceErrorSummary?: () => Promise<string>;
+  /** 失败摘要的当下降实况(launchd 注册状态 + state.json 版本);测试注入以避免读本机状态。 */
+  readonly readServiceLiveDetail?: () => Promise<string>;
   /** 更新锁文件路径；默认 <AgentBean home>/service/update.lock。 */
   readonly lockFilePath?: string;
   readonly acquireUpdateLock?: (lockFilePath: string) => Promise<boolean>;
@@ -313,7 +316,12 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
   const errorLog = await (deps.readServiceErrorSummary
     ? deps.readServiceErrorSummary()
     : readServiceErrorSummary(servicePathsInput));
+  // #1114:error.log 无时间戳,陈旧行会被当成本次失败原因(LEGACY_RUNTIME_FENCE_ACTIVE
+  // 历史行误诊实证)。附上当下降实况:launchd 注册的 pid + state.json 报告版本。
+  const liveDetail = await (deps.readServiceLiveDetail
+    ?? (() => readServiceLiveDetail(servicePathsInput)))();
   const reasonSummary = [
+    liveDetail,
     prepared.firstAttempt.exitCode === 0 && !prepared.confirmed
       ? 'Device Service 已安装但版本/健康确认失败。'
       : '',
@@ -705,15 +713,27 @@ async function safeBoolean(run: () => Promise<boolean>): Promise<boolean> {
 export async function fenceDeviceServiceForPackageSwap(input: {
   home?: string;
   baseDir?: string;
+  /** 测试注入:自定义 launchctl 执行器。 */
+  run?: LaunchctlRunner;
 }): Promise<boolean> {
   const adapter = createMacOSLaunchAgentAdapter(input);
+  const killFallback = () => adapter.kill().catch(() => ({ exitCode: 1, stdout: '', stderr: '' }));
   const initial = await adapter.status();
-  if (initial.loaded) {
-    let removed = await adapter.bootout();
-    if (removed.exitCode !== 0) {
-      await adapter.kill().catch(() => ({ exitCode: 1, stdout: '', stderr: '' }));
-      removed = await adapter.bootout();
-      if (removed.exitCode !== 0) return false;
+  // #1114:queryFailed(print 瞬态失败)不代表 job 未注册——保守起见照样尝试卸载;
+  // bootout 带 by-label 兜底,对已卸载 job 重放无害。
+  if (initial.loaded || initial.queryFailed) {
+    // bootout 退出码 0 ≠ job 已注销(实测存在进程已杀但 job 仍注册、KeepAlive
+    // 10s 节流窗后复活成僵尸的窗口)——卸载后必须看到 print 失败才算数。
+    for (let round = 0; round < 3; round += 1) {
+      const removed = await adapter.bootout();
+      if (removed.exitCode !== 0) {
+        await killFallback();
+        continue;
+      }
+      const after = await adapter.status();
+      // loaded=false 即 print 失败(queryFailed)——job 已注销,正是目标状态。
+      if (!after.loaded && !after.running) break;
+      await killFallback();
     }
   }
   const deadlineAt = Date.now() + SERVICE_QUIESCE_DEADLINE_MS;
@@ -728,6 +748,22 @@ export async function fenceDeviceServiceForPackageSwap(input: {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
+}
+
+/** #1114:失败摘要的当下降实况——error.log 无时间戳会混进陈旧行,实况提供当次判据。 */
+export async function readServiceLiveDetail(input: {
+  home?: string;
+  baseDir?: string;
+} = {}): Promise<string> {
+  const liveStatus = await createMacOSLaunchAgentAdapter(input).status()
+    .catch(() => undefined);
+  const liveState = await readFile(
+    join(deviceServicePaths(input.baseDir).root, 'state.json'), 'utf8',
+  ).then((text) => {
+    const parsed = JSON.parse(text) as { version?: unknown; phase?: unknown; pid?: unknown };
+    return `state.json version=${String(parsed.version)} phase=${String(parsed.phase)} pid=${String(parsed.pid)}`;
+  }).catch(() => 'state.json 不可读');
+  return `实况: launchd loaded=${String(liveStatus?.loaded)} running=${String(liveStatus?.running)}; ${liveState}`;
 }
 
 export async function readServiceErrorSummary(input: {
