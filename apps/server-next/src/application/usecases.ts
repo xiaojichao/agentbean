@@ -10561,7 +10561,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           let replayDeliveryMessage = replayDispatchMessages.find((message) =>
             typeof message.meta?.dispatchResultFingerprint === 'string')
             ?? replayDispatchMessages.find((message) =>
-              message.senderKind === 'agent' && message.body === resultInput.body)
+              message.senderKind === 'agent'
+              && message.meta?.kind !== 'task-claim-confirmed'
+              && message.body === resultInput.body)
             ?? null;
           const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
           const replayNormalizedProposals = normalizeAgentCollaborationProposals(resultInput.collaborationProposals);

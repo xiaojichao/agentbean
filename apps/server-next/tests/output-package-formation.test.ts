@@ -945,7 +945,7 @@ for (const variant of variants) {
       await repositories.messages.append({
         id: 'msg-historical-package-claim', teamId, channelId,
         threadId: 'msg-historical-package', senderKind: 'agent', senderId: agentId,
-        body: '我来处理，会先看请求和附件，再把结果发在线程里。', createdAt: 7,
+        body: '已完成', createdAt: 7,
         meta: { kind: 'task-claim-confirmed', dispatchId, replyScope: 'thread' },
       });
       const originalWorkspaceRun = {
@@ -964,6 +964,8 @@ for (const variant of variants) {
       expect(original.ok).toBe(true);
       if (!original.ok) return;
       expect(original.message?.meta?.outputPackageCard).toBeUndefined();
+      const { dispatchResultFingerprint: _legacyFingerprint, ...legacyMeta } = original.message?.meta ?? {};
+      await repositories.messages.updateMeta({ messageId: original.message!.id, meta: legacyMeta });
 
       await commitDelivery(seedValue, 'publish-historical-package', [
         { path: '周报.md', body: Buffer.from('weekly') },
