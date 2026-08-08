@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEven
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskLevelAction } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -28,6 +28,7 @@ import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
+import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
   ProjectArtifactLibrary,
@@ -2601,6 +2602,21 @@ export default function ChatPage() {
             setThreadInput('要求后续变更：');
           }}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
+          onDeliveryAction={(action) => {
+            // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
+            // 审核面在频道 Files 逻辑产物视图(交付包列表+成员审核按钮)。
+            if (action === 'delegate-to-agent') {
+              openThread(taskDetailMessage.id);
+              setThreadInput('@');
+              setTimeout(() => threadTextareaRef.current?.focus(), 0);
+            } else if (action === 'review-package') {
+              closeTaskDetail();
+              switchTab('files');
+            } else if (action === 'open-task') {
+              closeTaskDetail();
+              switchTab('tasks');
+            }
+          }}
         />
       )}
 
@@ -3771,6 +3787,7 @@ function TaskDetailPanel({
   onViewInChannel,
   onOpenThread,
   onTaskStatus,
+  onDeliveryAction,
 }: {
   message: ChatMessage;
   relatedMessages: ChatMessage[];
@@ -3786,6 +3803,8 @@ function TaskDetailPanel({
   onViewInChannel: () => void;
   onOpenThread: () => void;
   onTaskStatus: (status: TaskStatus) => void;
+  /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
+  onDeliveryAction?: (action: TaskLevelAction) => void;
 }) {
   const sortedMessages = relatedMessages.length > 0
     ? relatedMessages
@@ -3907,6 +3926,17 @@ function TaskDetailPanel({
             <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} mentions={message.meta?.mentions as MessageMentionDto[] | undefined} />
           </div>
         </section>
+
+        {detailTaskId && workspaceTeamId && message.channelId && (
+          <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
+            <TaskDeliveryOverview
+              teamId={workspaceTeamId}
+              channelId={message.channelId}
+              taskId={detailTaskId}
+              onAction={onDeliveryAction}
+            />
+          </section>
+        )}
 
         <section className="border-b border-neutral-100 py-4">
           <div className="mb-2 flex items-center justify-between">
