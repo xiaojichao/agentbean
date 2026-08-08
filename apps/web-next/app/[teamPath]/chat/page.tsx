@@ -2630,6 +2630,24 @@ export default function ChatPage() {
             attachments={threadAttachments}
             selections={threadSelections}
             onRemoveSelection={(index) => setThreadSelections((current) => current.filter((_, i) => i !== index))}
+            onAddSelection={(selection) => {
+              // 与主 composer 同一去重语义:整包/成员选择按 packageId 互斥,
+              // 单版本选择按 versionId 互斥;加入后聚焦线程输入框。
+              setThreadSelections((current) => [
+                ...current.filter((item) => {
+                  if (selection.kind === 'package_projection' || selection.kind === 'package_members') {
+                    return (item.kind !== 'package_projection' && item.kind !== 'package_members')
+                      || item.packageId !== selection.packageId;
+                  }
+                  if (selection.kind === 'artifact_version') {
+                    return item.kind !== 'artifact_version' || item.versionId !== selection.versionId;
+                  }
+                  return true;
+                }),
+                selection,
+              ]);
+              threadTextareaRef.current?.focus();
+            }}
             uploading={uploading}
             imageInputRef={threadImageInputRef}
             fileInputRef={threadFileInputRef}
@@ -4113,6 +4131,7 @@ function ThreadPanel({
   attachments,
   selections,
   onRemoveSelection,
+  onAddSelection,
   uploading,
   imageInputRef,
   fileInputRef,
@@ -4166,6 +4185,8 @@ function ThreadPanel({
   /** #1064：线程 composer 的项目引用选择（Task 页预填 / 后续扩展选择入口）。 */
   selections: ProjectReferenceSelectionRequestDto[];
   onRemoveSelection: (index: number) => void;
+  /** 原型收敛:讨论串内文件包卡片的引用入口(整包/单选/多选)加入线程 composer。 */
+  onAddSelection: (selection: ProjectReferenceSelectionRequestDto) => void;
   uploading: boolean;
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
@@ -4330,6 +4351,7 @@ function ThreadPanel({
         onTaskStatus={(status) => { if (task) onTaskStatus(task, status); }}
         onReviseVersion={onReviseVersion}
         onContinueWithAgent={onContinueWithAgent}
+        onAddPackageReference={onAddSelection}
         replyCount={replyCount}
         showReplyAction={false}
         showReplyCount={false}
