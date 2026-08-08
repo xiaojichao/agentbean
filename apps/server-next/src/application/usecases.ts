@@ -10555,7 +10555,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(resultInput.artifactIds ?? []),
             ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
           ]);
-          let replayDeliveryMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+          const replayDispatchMessages = await repositories.messages.listByDispatch(dispatch.id);
+          // 同一 dispatch 可能先写入 task-claim-confirmed 等协调消息。历史补偿必须
+          // 锁定首次终态结果对应的 Agent 交付消息，不能把最早协调消息当作正文事实。
+          let replayDeliveryMessage = replayDispatchMessages.find((message) =>
+            typeof message.meta?.dispatchResultFingerprint === 'string')
+            ?? replayDispatchMessages.find((message) =>
+              message.senderKind === 'agent' && message.body === resultInput.body)
+            ?? null;
           const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
           const replayNormalizedProposals = normalizeAgentCollaborationProposals(resultInput.collaborationProposals);
           const replayHandoffFingerprint = replayHandoff?.result?.resultFingerprint;
@@ -10670,7 +10677,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               if (!replayAgent || replayAgent.deletedAt !== undefined) {
                 return makeFailure('NOT_FOUND', 'Agent not found');
               }
-              const replayMessageForRun = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+              const replayMessageForRun = replayDeliveryMessage;
               try {
                 replayWorkspaceRun = await repositories.workspaceRuns.create({
                   id: replayWorkspaceRunCreateId ?? ids.nextId(),
@@ -10719,7 +10726,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 publishId: resultInput.workspaceRun.publishId,
               });
               if (replayCard) {
-                const replayMessage = (await repositories.messages.listByDispatch(dispatch.id))[0] ?? null;
+                const replayMessage = replayDeliveryMessage;
                 if (replayMessage && !replayMessage.meta?.outputPackageCard) {
                   await repositories.messages.updateMeta({
                     messageId: replayMessage.id,

@@ -942,6 +942,12 @@ for (const variant of variants) {
         status: 'accepted', requestId: 'request-historical-package', prompt: '生成周报',
         createdAt: 5, updatedAt: 6,
       });
+      await repositories.messages.append({
+        id: 'msg-historical-package-claim', teamId, channelId,
+        threadId: 'msg-historical-package', senderKind: 'agent', senderId: agentId,
+        body: '我来处理，会先看请求和附件，再把结果发在线程里。', createdAt: 7,
+        meta: { kind: 'task-claim-confirmed', dispatchId, replyScope: 'thread' },
+      });
       const originalWorkspaceRun = {
         id: dispatchId,
         status: 'succeeded' as const,
@@ -971,7 +977,10 @@ for (const variant of variants) {
         workspaceRun: { ...originalWorkspaceRun, publishId: 'publish-historical-package' },
       });
       expect(replay.ok).toBe(true);
-      const deliveryMessage = (await repositories.messages.listByDispatch(dispatchId))[0];
+      const dispatchMessages = await repositories.messages.listByDispatch(dispatchId);
+      const claimMessage = dispatchMessages.find((message) => message.id === 'msg-historical-package-claim');
+      const deliveryMessage = dispatchMessages.find((message) => message.id === original.message?.id);
+      expect(claimMessage?.meta?.outputPackageCard).toBeUndefined();
       expect(deliveryMessage?.id).toBe(original.message?.id);
       expect(deliveryMessage?.meta?.outputPackageCard).toMatchObject({
         kind: 'output-package', publishId: 'publish-historical-package', memberCount: 1,
