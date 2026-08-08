@@ -174,6 +174,7 @@ export function ProjectFilesBoard({
   const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
   const [showPromote, setShowPromote] = useState(false);
   const [packageDetailCache, setPackageDetailCache] = useState<ReadonlyMap<string, PackageDetailCache>>(new Map());
+  const [packageFinalReadyCache, setPackageFinalReadyCache] = useState<ReadonlyMap<string, boolean>>(new Map());
   const archived = library?.archived ?? false;
 
   const stageNameById = useMemo(() => new Map(stages.map((stage) => [stage.id, stage.name])), [stages]);
@@ -184,6 +185,7 @@ export function ProjectFilesBoard({
     if (!channelId) return;
     let cancelled = false;
     setPackageDetailCache(new Map());
+    setPackageFinalReadyCache(new Map());
     for (const pkg of packages) {
       void projectEvents()
         .getOutputPackage({ channelId, packageId: pkg.packageId, projection: { policy: 'current' } })
@@ -203,22 +205,33 @@ export function ProjectFilesBoard({
     return () => { cancelled = true; };
   }, [channelId, packages, dataRevision]);
 
-  // 卡片模型:聚合 → Agent 名入搜索池 → 「有 final」(current projection 全员 final)→
+  // 「有 final」必须按 final projection 是否 ready 判断。current 成员即使不等于 final，
+  // 或 current 因审核态不可作为正式输入，已经冻结的 final projection 仍可能完整可用。
+  useEffect(() => {
+    if (!channelId || filter !== 'has_final') return;
+    let cancelled = false;
+    setPackageFinalReadyCache(new Map());
+    for (const pkg of packages) {
+      void projectEvents()
+        .getOutputPackage({ channelId, packageId: pkg.packageId, projection: { policy: 'final' } })
+        .then((result) => {
+          if (cancelled || !result.ok || !result.projection) return;
+          setPackageFinalReadyCache((current) => {
+            const next = new Map(current);
+            next.set(pkg.packageId, result.projection!.status === 'ready');
+            return next;
+          });
+        });
+    }
+    return () => { cancelled = true; };
+  }, [channelId, packages, dataRevision, filter]);
+
+  // 卡片模型:聚合 → Agent 名入搜索池 → 「有 final」(final projection ready)→
   // 短编号版本摘要(来自缓存投影)→ 筛选/搜索。
   const displayCards = useMemo(() => {
-    const finalReadyByPackageId = new Map<string, boolean>();
-    for (const pkg of packages) {
-      const detail = packageDetailCache.get(pkg.packageId);
-      if (detail?.projection?.status === 'ready') {
-        finalReadyByPackageId.set(
-          pkg.packageId,
-          detail.projection.members.every((member) => member.isFinalVersion),
-        );
-      }
-    }
     let cards = buildFileGroupCards({ packages, pendingDeliveries, library, stages });
     cards = withAgentNames(cards, agentNames);
-    cards = withPackageFinalStates(cards, finalReadyByPackageId);
+    cards = withPackageFinalStates(cards, packageFinalReadyCache);
     return cards.map((card) => {
       if (card.kind === 'package' && card.payload.kind === 'package') {
         const detail = packageDetailCache.get(card.payload.package.packageId);
@@ -228,7 +241,7 @@ export function ProjectFilesBoard({
       }
       return card;
     });
-  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache]);
+  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache, packageFinalReadyCache]);
 
   const filteredCards = useMemo(
     () => filterFileGroupCards(displayCards, filter, search),
@@ -695,9 +708,9 @@ export function ProjectFilesBoard({
             <CollectionVersionDetail
               collection={selectedCard.payload.collection}
               expandedVersionId={expandedVersionId}
-              canDecideVersion={canDecideVersion}
-              onReview={onReview}
-              onFinalize={onFinalize}
+              canDecideVersion={archived ? undefined : canDecideVersion}
+              onReview={archived ? undefined : onReview}
+              onFinalize={archived ? undefined : onFinalize}
             />
           ) : null}
         </div>
@@ -830,7 +843,7 @@ function packageProjectionRows(
     const stageId = version?.source.stageId;
     // #1062:可修订性由 Server 的 availableActions 给出;basis 冻结 latestReviewId,不从历史猜。
     const actions = actionByVersionId.get(member.versionId);
-    const blockedReview = actions?.reviewState === 'rejected' || actions?.reviewState === 'changes_requested';
+    const canRevise = actions?.actions.includes('revise-version') ?? false;
     return {
       rowId: member.versionId,
       versionId: member.versionId,
@@ -850,7 +863,7 @@ function packageProjectionRows(
       isCurrent: true,
       collectionRevision: member.collectionRevision,
       isMarkdown: isMarkdownFilename(member.filename),
-      canRevise: Boolean(blockedReview),
+      canRevise,
       ...(actions?.latestReviewId ? { basisReviewId: actions.latestReviewId } : {}),
       ...(pkg?.deliveryId ? { deliveryId: pkg.deliveryId } : {}),
     };

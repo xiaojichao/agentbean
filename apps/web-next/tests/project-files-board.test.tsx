@@ -199,6 +199,12 @@ const notReadyFinalProjection = {
   consistencyToken: { schemaVersion: 1, entries: [] },
 };
 
+const readyFinalProjection = {
+  ...readyProjection,
+  policy: 'final' as const,
+  members: readyProjection.members.map((member) => ({ ...member, isFinalVersion: true })),
+};
+
 const packageDetail = {
   package: {
     schemaVersion: 1,
@@ -240,6 +246,7 @@ interface BoardCallbacks {
   onPromote?: ProjectFilesBoardProps['onPromote'];
   canPromote?: boolean;
   promotableArtifacts?: ProjectFilesBoardProps['promotableArtifacts'];
+  libraryOverride?: ProjectFilesBoardProps['library'];
 }
 
 function renderBoard(callbacks: BoardCallbacks = {}) {
@@ -248,7 +255,7 @@ function renderBoard(callbacks: BoardCallbacks = {}) {
     channelId="channel-1"
     packages={[pkg1, pkg2]}
     pendingDeliveries={[pendingDelivery]}
-    library={library}
+    library={callbacks.libraryOverride === undefined ? library : callbacks.libraryOverride}
     stages={stages}
     agentNames={agentNames}
     dataRevision={0}
@@ -385,6 +392,24 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     await waitFor(() => {
       expect(document.querySelectorAll('[data-smoke="output-package-item"]').length).toBe(1);
       expect(document.querySelector('[data-smoke="output-package-item"]')!.getAttribute('data-package-id')).toBe('pkg-2');
+    });
+  });
+
+  test('有 final 按 final projection ready 判断，不要求 current 恰好等于 final', async () => {
+    mocks.getOutputPackage.mockImplementation(async ({ packageId, projection }: {
+      packageId: string;
+      projection?: { policy: string };
+    }) => {
+      if (projection?.policy !== 'final') return { ok: false };
+      return packageId === 'pkg-2'
+        ? { ok: true, projection: readyFinalProjection }
+        : { ok: true, projection: notReadyFinalProjection };
+    });
+    renderBoard();
+    fireEvent.click(document.querySelector('[data-smoke="files-filter-chip"][data-filter="has_final"]')!);
+    await waitFor(() => {
+      const packageCards = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
+      expect(packageCards.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-2']);
     });
   });
 });
@@ -596,6 +621,39 @@ describe('ProjectFilesBoard 行动作(步骤 6)', () => {
       deliveryId: 'del-2',
       collectionRevision: 5,
     }]);
+  });
+
+  test('包成员修订入口严格服从 Server revise-version action', async () => {
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      ...packageDetail,
+      availableActions: packageDetail.availableActions.map((entry) => ({ ...entry, actions: [] })),
+      asOf: 2000,
+      audienceScope: 'team-1:channel-1:u-1',
+    });
+    renderBoard();
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(2);
+    });
+    expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).toBeNull();
+  });
+
+  test('归档频道的详情只读，不暴露追加审核或设为最终版入口', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard({
+      libraryOverride: { ...library, archived: true },
+      canDecideVersion: () => true,
+      onReview: vi.fn().mockResolvedValue(null),
+      onFinalize: vi.fn().mockResolvedValue(null),
+    });
+    await selectCollection1();
+    fireEvent.click(document.querySelector('[data-smoke="files-row-detail"][data-version-id="ver-1"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="files-version-detail"]')).not.toBeNull();
+    });
+    expect(screen.queryByText('追加审核')).toBeNull();
+    expect(screen.queryByText('设为最终版')).toBeNull();
   });
 });
 

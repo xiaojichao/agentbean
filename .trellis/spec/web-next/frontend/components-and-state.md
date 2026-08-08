@@ -105,7 +105,7 @@
   最终版 / 审核 / 动作），选中输出包列成员行（`getOutputPackage` + projection current
   懒加载，`Map<packageId, {detail, projection}>` 缓存），选中集合列版本行，
   选中等待上游卡显示阶段占位说明；
-- 工具栏：搜索 + 筛选 chip（全部/待审核/有 final/Agent 输出，纯客户端过滤）+ 
+- 工具栏：搜索 + 筛选 chip（全部/待审核/有 final/Agent 输出，纯客户端过滤）+
   引用当前包 / 引用最终版包 / 多选引用（走共享抽取层，见第 10 条）；
 - 审核 / 设最终版 / 提升为逻辑产物版本复用 `ProjectArtifactLibrary` 导出的
   `VersionDecisionPanel` / `FinalizationHistory` / `PromoteArtifactForm`，

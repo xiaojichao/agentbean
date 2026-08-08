@@ -2786,8 +2786,8 @@ export default function ChatPage() {
       {readOnlyArtifact && (
         <ArtifactViewer
           artifact={readOnlyArtifact as unknown as Artifact}
-          previewUrl={readOnlyArtifact.previewUrl ?? null}
-          downloadUrl={readOnlyArtifact.downloadUrl}
+          previewUrl={messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'preview', readOnlyArtifact.teamId)}
+          downloadUrl={messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'download', readOnlyArtifact.teamId) ?? undefined}
           onClose={() => setReadOnlyArtifact(null)}
           renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
             ? <MarkdownMessage body={content} safeDocumentResources collapsible={false} />
