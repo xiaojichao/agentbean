@@ -10555,6 +10555,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             dispatch.channelId,
             10_000,
           )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+          let replayWorkspaceRunCreateId = typeof replayDeliveryMessage?.meta?.workspaceRunId === 'string'
+            ? replayDeliveryMessage.meta.workspaceRunId
+            : resultInput.workspaceRun.id;
+          if (!replayWorkspaceRunCreateId && !replayDeliveryMessage && replayPublishesToRoot) {
+            replayWorkspaceRunCreateId = ids.nextId();
+          }
           if (!replayDeliveryMessage && replayPublishesToRoot) {
             const originMessage = await repositories.messages.getById(dispatch.messageId);
             const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
@@ -10577,7 +10583,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   ...(replayReportedArtifactIds.length > 0
                     ? { artifactIds: replayReportedArtifactIds }
                     : {}),
-                  ...(resultInput.workspaceRun.id ? { workspaceRunId: resultInput.workspaceRun.id } : {}),
+                  ...(replayWorkspaceRunCreateId ? { workspaceRunId: replayWorkspaceRunCreateId } : {}),
                 },
               });
             } catch {
@@ -10609,7 +10615,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               )).find((message) => message.meta?.dispatchId === dispatch.id);
               try {
                 replayWorkspaceRun = await repositories.workspaceRuns.create({
-                  id: resultInput.workspaceRun.id ?? ids.nextId(),
+                  id: replayWorkspaceRunCreateId ?? ids.nextId(),
                   teamId: dispatch.teamId,
                   channelId: dispatch.channelId,
                   ...(replayMessageForRun ? { messageId: replayMessageForRun.id } : {}),
