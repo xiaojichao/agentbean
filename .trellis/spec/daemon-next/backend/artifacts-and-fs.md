@@ -32,9 +32,9 @@ reported 路径在进入收集前先过两道提取关，**任一关拒都静默
 
 **kind 决定去向**：reported 产物 kind=`run_output` → 进 staging（卡片链路的唯一入口之一）；adapter 根扫描产物 kind=`adapter_generated` → 只走 legacy upload，**永远不出卡片**（`index.ts` `projectionRunOutputs` 只 filter `run_output`）。
 
-**home 相对路径先展开**：Agent 常报告 `~/Desktop/...`；`extractReportedOutputPaths` 必须用 daemon 本轮解析出的 `homeDir` 展开为绝对路径后再过结构/realpath 闸，不能把其中的 `/Desktop/...` 截成根目录路径。
+**home 相对路径先验再展开**：Agent 常报告 `~/Desktop/...`；`extractReportedOutputPaths` 必须先在原始 `~/...` 文本上拒绝 `..` 路径段，再用 daemon 本轮解析出的 `homeDir` 展开为绝对路径并过结构/realpath 闸。不能先 `resolve` 再判断，否则 `~/../../...` 会丢失穿越痕迹；也不能把其中的 `/Desktop/...` 截成根目录路径。
 
-**交付目录提示只在真实 executor 边界注入**：`AGENTBEAN_OUTPUT_DIR` 的说明与绝对路径由 command executor 追加到运行时 prompt，不改 socket dispatch 的原始 prompt，也不污染 echo stub、结果指纹或 Server 消息正文。
+**交付目录提示只在真实 executor 边界注入**：仅当 `customAgent.command` 存在、即将启动真实 agent 子进程时，command executor 才把 `AGENTBEAN_OUTPUT_DIR` 的说明与绝对路径追加到运行时 prompt。不改 socket dispatch 的原始 prompt，也不污染结果指纹或 Server 消息正文；无命令的 deterministic fallback 只回显原始 runtime prompt，不得把设备本地路径或内部交付说明带回聊天消息。
 
 ## fs:read：白名单（非黑名单）
 

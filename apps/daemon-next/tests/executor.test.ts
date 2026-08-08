@@ -203,8 +203,7 @@ describe('daemon-next command executor', () => {
   test('falls back to a deterministic stub reply when no custom command is present', async () => {
     const executor = createCommandExecutor({ fallbackPrefix: 'daemon-next:' });
 
-    await expect(
-      executor({
+    const result = await executor({
         id: 'dispatch-1',
         teamId: 'team-1',
         channelId: 'channel-1',
@@ -217,8 +216,14 @@ describe('daemon-next command executor', () => {
           content: 'Device-private fallback context.', selectionReason: 'current-device-profile',
           provenance: { origin: 'local', sourceKind: 'manual' },
         }],
-      }),
-    ).resolves.toMatch(/daemon-next:[\s\S]*\[Device-local Memory redacted\][\s\S]*hello/);
+        customAgent: {
+          adapterKind: 'gemini',
+          env: { AGENTBEAN_OUTPUT_DIR: '/Users/private/.agentbean/run/outputs' },
+        },
+      });
+    expect(result).toMatch(/daemon-next:[\s\S]*\[Device-local Memory redacted\][\s\S]*hello/);
+    expect(result).not.toContain('AgentBean 受管交付目录');
+    expect(result).not.toContain('/Users/private');
   });
 
   test('forwards only safe host env keys plus custom agent env to the child process by default', () => {

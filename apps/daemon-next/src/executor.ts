@@ -69,6 +69,9 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
 
   return async (request) => {
     const runtimePrompt = buildRuntimePrompt(request);
+    if (!request.customAgent?.command) {
+      return redactDeviceLocalMemory(`${fallbackPrefix}${runtimePrompt}`, request.memoryContext);
+    }
     const managedOutputDir = request.customAgent?.env?.AGENTBEAN_OUTPUT_DIR;
     const runtimeRequest = {
       ...request,
@@ -76,9 +79,6 @@ export function createCommandExecutor(options: CommandExecutorOptions = {}): Stu
         ? appendManagedOutputContext(runtimePrompt, managedOutputDir)
         : runtimePrompt,
     };
-    if (!runtimeRequest.customAgent?.command) {
-      return redactDeviceLocalMemory(`${fallbackPrefix}${runtimeRequest.prompt}`, request.memoryContext);
-    }
     const result = await runCustomAgentCommand(
       runtimeRequest,
       { timeoutMs, killGraceMs, maxAccumulatedBytes, clock, ptySpawnLoader },

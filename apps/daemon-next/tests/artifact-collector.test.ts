@@ -159,6 +159,9 @@ describe('artifact-collector', () => {
       expect(extractReportedOutputPaths(body, { homeDir: '/Users/shaw' })).toEqual([
         '/Users/shaw/Desktop/AI新闻周报_20260808/',
       ]);
+      expect(extractReportedOutputPaths('已输出到 ~/../../tmp/recent.md', {
+        homeDir: '/Users/shaw',
+      })).toEqual([]);
     });
   });
 

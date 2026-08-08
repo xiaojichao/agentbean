@@ -259,6 +259,7 @@ export function extractReportedOutputPaths(
       return;
     }
     const trimmed = raw.trim().replace(/[。，,;；:：)）\]」』》]+$/u, '');
+    if (trimmed.startsWith('~/') && /(^|[\\/])\.\.([\\/]|$)/.test(trimmed)) return;
     const reportedDirectory = isReportedDirectoryPath(trimmed);
     const expanded = trimmed.startsWith('~/')
       ? resolve(options.homeDir ?? homedir(), trimmed.slice(2))

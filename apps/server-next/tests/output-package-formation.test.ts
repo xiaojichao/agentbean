@@ -978,6 +978,51 @@ for (const variant of variants) {
       });
     });
 
+    test('历史补偿:不得把同频道同 Agent 的其他 dispatch publish 串到原回复', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, agentId, userId } = seedValue;
+      const dispatchA = 'dispatch-historical-a';
+      const dispatchB = 'dispatch-historical-b';
+      await repositories.messages.append({
+        id: 'msg-historical-a', teamId, channelId, threadId: 'msg-historical-a',
+        senderKind: 'user', senderId: userId, body: '生成 A', createdAt: 5,
+      });
+      await repositories.messages.append({
+        id: 'msg-historical-b', teamId, channelId, threadId: 'msg-historical-b',
+        senderKind: 'user', senderId: userId, body: '生成 B', createdAt: 6,
+      });
+      await repositories.dispatches.create({
+        id: dispatchA, teamId, channelId, messageId: 'msg-historical-a', agentId,
+        status: 'accepted', requestId: 'request-historical-a', prompt: '生成 A', createdAt: 7, updatedAt: 7,
+      });
+      await repositories.dispatches.create({
+        id: dispatchB, teamId, channelId, messageId: 'msg-historical-b', agentId,
+        status: 'succeeded', requestId: 'request-historical-b', prompt: '生成 B', createdAt: 8, updatedAt: 8,
+      });
+      const originalWorkspaceRun = {
+        id: dispatchA, status: 'succeeded' as const, cwd: '.', startedAt: 10, completedAt: 20,
+      };
+      const original = await app.receiveDispatchResult({
+        dispatchId: dispatchA, agentId, body: 'A 已完成', workspaceRun: originalWorkspaceRun,
+      });
+      expect(original.ok).toBe(true);
+      await commitDelivery(seedValue, 'publish-historical-b', [
+        { path: 'B.md', body: Buffer.from('b') },
+      ], {
+        agentId, taskId: dispatchB, taskAttempt: 1, workspaceRunId: dispatchB,
+      });
+
+      const replay = await app.receiveDispatchResult({
+        dispatchId: dispatchA,
+        agentId,
+        body: 'A 已完成',
+        workspaceRun: { ...originalWorkspaceRun, publishId: 'publish-historical-b' },
+      });
+      expect(replay.ok).toBe(false);
+      const deliveryMessage = (await repositories.messages.listByDispatch(dispatchA))[0];
+      expect(deliveryMessage?.meta?.outputPackageCard).toBeUndefined();
+    });
+
     test('#1111 AC4:解析链断裂(无 workspaceRunId)时卡片回退主线(无 threadId),不丢卡片', async () => {
       seedValue = await seed(variant);
       const { repositories, teamId, channelId, agentId } = seedValue;

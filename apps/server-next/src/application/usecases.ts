@@ -10565,6 +10565,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const replayCandidateFingerprint = typeof replayStoredFingerprint === 'string'
             ? resultFingerprint
             : dispatchResultFingerprint({ ...resultInput, collaborationProposals: replayNormalizedProposals });
+          let replayUsesPublishIdEnrichment = false;
           if (typeof replayFingerprint === 'string' && replayFingerprint !== replayCandidateFingerprint) {
             // 历史结果可能先成功收敛，之后 Device 才从本机交付目录补建并提交
             // publish。只允许 publishId 这一字段增量出现；正文、artifact、run 其余
@@ -10576,6 +10577,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             if (replayFingerprint !== replayCandidateWithoutPublishId) {
               return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
             }
+            replayUsesPublishIdEnrichment = true;
           }
           const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
           if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
@@ -10601,6 +10603,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const replayWorkspaceRunById = replayWorkspaceRunId
             ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
             : null;
+          if (replayUsesPublishIdEnrichment && !replayWorkspaceRunId) {
+            return makeFailure('CONFLICT', 'OutputPackage publish is missing dispatch lineage');
+          }
           if (replayWorkspaceRunById && replayWorkspaceRunById.dispatchId !== dispatch.id) {
             return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
           }
@@ -10623,7 +10628,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           }
           if (replayWorkspaceRunId
             && replayWorkspaceRunId !== dispatch.id
-            && !replayWorkspaceRun) {
+            && !replayWorkspaceRunById) {
             return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
           }
           if (!replayWorkspaceRunCreateId && !replayDeliveryMessage && replayPublishesToRoot) {
