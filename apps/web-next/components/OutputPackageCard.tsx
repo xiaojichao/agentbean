@@ -70,6 +70,7 @@ export function OutputPackageCard({
   onReviseVersion,
   onOpenTask,
   onContinueWithAgent,
+  onOpenPreview,
 }: {
   packageMeta: OutputPackageMeta;
   channelId?: string;
@@ -87,6 +88,12 @@ export function OutputPackageCard({
    * 并聚焦;未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
    */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /**
+   * 原型对齐:「预览/编辑」——打开包内预览/编辑浮窗;versionId 指定聚焦成员
+   * (成员行「预览」),省略时聚焦首个成员(包级按钮)。未提供时不渲染入口
+   * (纯展示场景,如 channel-message)。
+   */
+  onOpenPreview?: (versionId?: string) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
   const [frozenTaskRevision, setFrozenTaskRevision] = useState<number | undefined>(undefined);
@@ -323,10 +330,20 @@ export function OutputPackageCard({
           {packageMeta.memberCount} 个文件
         </span>
       </div>
-      {/* #1063 整包引用入口 */}
-      {onAddReference ? (
+      {/* #1063 整包引用入口 + 原型对齐的「预览/编辑」 */}
+      {onAddReference || onOpenPreview ? (
         <div className="mt-2 flex flex-wrap items-center gap-1.5" data-smoke="output-package-projection-refs">
-          {(['current', 'final', 'delivered'] as const).map((policy) => (
+          {onOpenPreview ? (
+            <button
+              type="button"
+              onClick={() => onOpenPreview()}
+              className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
+              data-smoke="output-package-open-preview"
+            >
+              预览/编辑
+            </button>
+          ) : null}
+          {onAddReference ? (['current', 'final', 'delivered'] as const).map((policy) => (
             <button
               key={policy}
               type="button"
@@ -338,7 +355,8 @@ export function OutputPackageCard({
             >
               引用{POLICY_LABELS[policy]}
             </button>
-          ))}
+          )) : null}
+          {onAddReference ? (
           <button
             type="button"
             disabled={referencing}
@@ -351,6 +369,7 @@ export function OutputPackageCard({
           >
             {selectingMembers ? '取消选择' : '选择成员'}
           </button>
+          ) : null}
         </div>
       ) : null}
       {/* #1063 整包投影阻断清单 */}
@@ -439,6 +458,18 @@ export function OutputPackageCard({
                       </button>
                     ))}
                 </>
+              ) : null}
+              {/* 原型对齐:成员行「预览」→ 包内预览/编辑浮窗(聚焦该成员) */}
+              {onOpenPreview && !selectingMembers ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenPreview(member.artifactVersionId)}
+                  className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100"
+                  data-smoke="output-package-member-preview"
+                  data-version-id={member.artifactVersionId}
+                >
+                  预览
+                </button>
               ) : null}
               {/* #1063 单文件引用与“基于此修改” */}
               {onAddReference && !selectingMembers ? (

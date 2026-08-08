@@ -12,7 +12,6 @@ import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
 import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
 import { mergedStandalonePackageCardIds, shouldHideSystemMessage } from '@/lib/system-messages';
-import { inlineOutputPackageFromMeta } from '@/lib/output-package';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -46,7 +45,8 @@ import { SystemMessageBubble } from '@/components/SystemMessageBubble';
 import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
 import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
-import { outputPackageFromMeta } from '@/lib/output-package';
+import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
+import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
@@ -359,6 +359,12 @@ export default function ChatPage() {
   const [openChannelDocument, setOpenChannelDocument] = useState<OpenChannelDocument | null>(null);
   // #1062 「基于此修改」修订编辑器(复用 MarkdownDocumentEditor,独立于 Channel document)。
   const [openArtifactRevision, setOpenArtifactRevision] = useState<OpenArtifactRevision | null>(null);
+  // 原型对齐:文件包「预览/编辑」浮窗(OutputPackagePreviewModal)。
+  const [openPackagePreview, setOpenPackagePreview] = useState<{
+    packageMeta: OutputPackageMeta;
+    channelId: string;
+    initialVersionId?: string;
+  } | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
   // 原型收敛:文件库默认按逻辑产物(输出包/产物集合)组织;无项目数据时回落到文件浏览。
@@ -1869,6 +1875,16 @@ export default function ChatPage() {
     textareaRef.current?.focus();
   }, [setProjectReferenceSelections]);
 
+  // 原型对齐:打开文件包预览/编辑浮窗。
+  const openPackagePreviewModal = useCallback((packageMeta: OutputPackageMeta, versionId?: string) => {
+    if (!activeChannel) return;
+    setOpenPackagePreview({
+      packageMeta,
+      channelId: activeChannel,
+      ...(versionId ? { initialVersionId: versionId } : {}),
+    });
+  }, [activeChannel]);
+
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
     setTaskDetailOnlyTaskId(null);
@@ -2333,6 +2349,7 @@ export default function ChatPage() {
                         onDeleteMessage={() => deleteMessage(msg)}
                         onOpenTaskDetail={() => openTaskDetail(msg)}
                         onContinueWithAgent={continueWithAgentFromCard}
+                        onOpenPackagePreview={openPackagePreviewModal}
                         onOpenTaskDetailById={openTaskDetailById}
                         onConvertToTask={() => convertMessageToTask(msg)}
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
@@ -2724,8 +2741,20 @@ export default function ChatPage() {
             onClose={closeThread}
             onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
             onContinueWithAgent={continueWithAgentFromCard}
+            onOpenPackagePreview={openPackagePreviewModal}
           />
         </>
+      )}
+
+      {openPackagePreview && (
+        <OutputPackagePreviewModal
+          packageMeta={openPackagePreview.packageMeta}
+          channelId={openPackagePreview.channelId}
+          {...(openPackagePreview.initialVersionId ? { initialVersionId: openPackagePreview.initialVersionId } : {})}
+          renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
+          onClose={() => setOpenPackagePreview(null)}
+          onSaved={() => refreshProjectArtifactLibrary()}
+        />
       )}
 
       {openChannelDocument && (
@@ -4249,6 +4278,7 @@ function ThreadPanel({
   onClose,
   onReviseVersion,
   onContinueWithAgent,
+  onOpenPackagePreview,
 }: {
   width: number;
   root: ChatMessage;
@@ -4307,6 +4337,8 @@ function ThreadPanel({
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /** 原型对齐:线程内文件包「预览/编辑」浮窗入口。 */
+  onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
 }) {
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
@@ -4428,6 +4460,7 @@ function ThreadPanel({
         onReviseVersion={onReviseVersion}
         onContinueWithAgent={onContinueWithAgent}
         onAddPackageReference={onAddSelection}
+        onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
         showReplyAction={false}
         showReplyCount={false}
@@ -4799,6 +4832,7 @@ function ChatBubble({
   onTaskStatus,
   onReviseVersion,
   onContinueWithAgent,
+  onOpenPackagePreview,
   replyCount,
   showReplyAction = true,
   showReplyCount = true,
@@ -4840,6 +4874,8 @@ function ChatBubble({
   onReviseVersion?: (request: ReviseVersionRequest & { channelId: string }) => void;
   /** #1065 AC2：线程内卡片「继续 @Agent」——composer 预填(delivered 引用 + 文本 + 焦点)。 */
   onContinueWithAgent?: (packageId: string, taskTitle?: string) => void;
+  /** 原型对齐:文件包「预览/编辑」浮窗入口(standalone + 内嵌卡片共用)。 */
+  onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
   replyCount: number;
   showReplyAction?: boolean;
   showReplyCount?: boolean;
@@ -4883,6 +4919,7 @@ function ChatBubble({
         onAddPackageReference={onAddPackageReference}
         onReviseVersion={onReviseVersion}
         onContinueWithAgent={onContinueWithAgent}
+        onOpenPackagePreview={onOpenPackagePreview}
       />
     );
   }
@@ -5156,6 +5193,7 @@ function ChatBubble({
             // composer(delivered 整包引用 + 说明文本 + 焦点),未发送不创建任何事实。
             onOpenTask={onOpenTaskDetailById}
             onContinueWithAgent={onContinueWithAgent}
+            onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview((outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta))!, versionId) : undefined}
           />
         )}
         {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (
