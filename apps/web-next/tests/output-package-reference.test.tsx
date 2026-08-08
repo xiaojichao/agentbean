@@ -9,12 +9,14 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getOutputPackage: vi.fn(),
   submitPackageArtifactReview: vi.fn(),
+  artifactCollections: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
   projectEvents: () => ({
     getOutputPackage: mocks.getOutputPackage,
     submitPackageArtifactReview: mocks.submitPackageArtifactReview,
+    artifactCollections: mocks.artifactCollections,
   }),
 }));
 
@@ -22,6 +24,9 @@ import { OutputPackageCard } from '../components/OutputPackageCard';
 import type { ProjectReferenceSelectionRequestDto } from '@agentbean/contracts';
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+// 默认:无产物库信息(file-sub 不渲染),getOutputPackage 由各用例自设。
+mocks.artifactCollections.mockResolvedValue({ ok: false });
 
 const packageMeta = {
   kind: 'output-package' as const,
@@ -195,5 +200,59 @@ describe('OutputPackageCard package reference (#1063)', () => {
       kind: 'package_members', packageId: 'pkg-1',
       members: [{ collectionId: 'col-1', versionId: 'ver-1' }],
     });
+  });
+});
+
+
+/** 原型对齐:成员行 file-sub(collection 名 · current server 版本 · 来源/修改时间)。 */
+describe('OutputPackageCard 成员行 file-sub', () => {
+  test('显示 collection 名、current server 版本与手动修改来源', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, availableActions: [], package: undefined });
+    mocks.artifactCollections.mockResolvedValue({
+      ok: true,
+      library: {
+        archived: false,
+        collections: [
+          {
+            id: 'col-1',
+            name: 'script.ep01',
+            currentVersionId: 'ver-cur-1',
+            versions: [
+              { id: 'ver-cur-1', versionNumber: 4, createdAt: Date.now(), revisionBasis: { sourceVersionId: 'ver-1' } },
+            ],
+          },
+          {
+            id: 'col-2',
+            name: 'character.sheet',
+            currentVersionId: 'ver-cur-2',
+            versions: [
+              { id: 'ver-cur-2', versionNumber: 3, createdAt: Date.now() },
+            ],
+          },
+        ],
+      },
+    });
+    render(<OutputPackageCard packageMeta={packageMeta} channelId="channel-1" />);
+    await waitFor(() => {
+      const subs = Array.from(document.querySelectorAll('[data-smoke="package-member-sub"]'));
+      expect(subs.length).toBe(2);
+    });
+    const subs = Array.from(document.querySelectorAll('[data-smoke="package-member-sub"]')).map((el) => el.textContent);
+    expect(subs[0]).toContain('collection: script.ep01');
+    expect(subs[0]).toContain('current server v4');
+    expect(subs[0]).toContain('手动修改');
+    expect(subs[1]).toContain('collection: character.sheet');
+    expect(subs[1]).toContain('current server v3');
+    expect(subs[1]).toContain('Agent 交付');
+  });
+
+  test('artifactCollections 失败时降级不显示 file-sub,不抛错', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, availableActions: [], package: undefined });
+    mocks.artifactCollections.mockRejectedValue(new Error('boom'));
+    render(<OutputPackageCard packageMeta={packageMeta} channelId="channel-1" />);
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="output-package-card"]')).not.toBeNull();
+    });
+    expect(document.querySelector('[data-smoke="package-member-sub"]')).toBeNull();
   });
 });

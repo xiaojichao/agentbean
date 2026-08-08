@@ -4170,7 +4170,12 @@ function TaskRunMeta({ label, value }: { label: string; value: string }) {
 /**
  * #1064：项目引用选择 chip 的展示名（主 composer 与线程 composer 共用）。
  * bundle 名称查找是可选增强——找不到时回退稳定 id，不阻塞展示。
+ * 原型对齐:包引用显示 PKG 短号(uuid 前 8 位,稳定)+ projection 策略,不再是整段 uuid。
  */
+function shortPackageLabel(packageId: string): string {
+  return `PKG-${packageId.slice(0, 8)}`;
+}
+
 function projectReferenceSelectionLabel(
   selection: ProjectReferenceSelectionRequestDto,
   bundles?: ProjectDocumentBundleDto[],
@@ -4181,11 +4186,11 @@ function projectReferenceSelectionLabel(
     case 'bundle_subset':
       return `包内 ${selection.documentIds.length} 项`;
     case 'artifact_version':
-      return `产物版本：${selection.versionId}`;
+      return `产物版本：${selection.versionId.slice(0, 8)}`;
     case 'package_projection':
-      return `整包${selection.policy === 'current' ? '当前' : selection.policy === 'final' ? '最终' : '交付'}版：${selection.packageId}`;
+      return `${shortPackageLabel(selection.packageId)} ${selection.policy === 'current' ? 'current' : selection.policy === 'final' ? 'final' : '交付版'}`;
     case 'package_members':
-      return `包内 ${selection.members.length} 项`;
+      return `${shortPackageLabel(selection.packageId)} · ${selection.members.length} 项`;
     default:
       return `文档：${selection.documentId}`;
   }
