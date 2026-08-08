@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
@@ -625,10 +625,7 @@ export default function ChatPage() {
   }, [agentNameSignature]);
 
   useEffect(() => {
-    // 话题列表按活跃倒序,新话题在顶部,不自动滚底;DM 连续流保持滚底。
-    if (!isDm) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messagesByChannel]);
 
   useEffect(() => {
@@ -1640,19 +1637,6 @@ export default function ChatPage() {
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
   const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg, messagesById));
-  // 原型 §7.4:话题入口列表按最近活跃排序(最新回复/活动的话题排最前);
-  // DM 保持时间正序的连续流。
-  const topicOrderedMessages = useMemo(() => {
-    if (isDm) return rootMessages;
-    const lastActivity = new Map<string, number>();
-    for (const msg of visibleMessages) {
-      const parent = parentMessageId(msg, messagesById);
-      if (!parent) continue;
-      lastActivity.set(parent, Math.max(lastActivity.get(parent) ?? 0, msg.createdAt));
-    }
-    return [...rootMessages].sort((a, b) =>
-      (lastActivity.get(b.id) ?? b.createdAt) - (lastActivity.get(a.id) ?? a.createdAt));
-  }, [isDm, rootMessages, visibleMessages, messagesById]);
   const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg, messagesById) === threadRootId) : [];
   const taskDetailMessage = taskDetailMessageId
     ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
@@ -2298,37 +2282,18 @@ export default function ChatPage() {
                     <div className="text-neutral-300">发送第一条消息开始对话</div>
                   </div>
                 )}
-                {activeChannel && rootMessages.length > 0 && isDm && (
+                {activeChannel && rootMessages.length > 0 && (
                   <div className="mb-4 text-center text-xs text-neutral-300">消息的开头</div>
                 )}
                 <div>
-                  {topicOrderedMessages.map((msg, index) => {
+                  {rootMessages.map((msg, index) => {
                     const taskId = metaTaskId(msg);
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
-                    const replyCount = visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length;
-                    // 原型收敛:频道主聊天=话题入口列表,卡片点击打开右侧讨论串;
-                    // DM 与 system 消息保持原有气泡流。
-                    if (!isDm && msg.senderKind !== 'system') {
-                      return (
-                        <TopicCard
-                          key={msg.id}
-                          msg={msg}
-                          task={task}
-                          taskNumber={task ? taskNumbers.get(task.id) : undefined}
-                          replyCount={replyCount}
-                          active={threadRootId === msg.id}
-                          selected={selectedMessageId === msg.id}
-                          humanProfiles={humanProfiles}
-                          channelMembers={channelMembers}
-                          onOpen={() => openThread(msg.id)}
-                        />
-                      );
-                    }
                     return (
                       <ChatBubble
                         key={msg.id}
                         msg={msg}
-                        groupedWithPrevious={isMessageGroupContinuation(topicOrderedMessages[index - 1], msg)}
+                        groupedWithPrevious={isMessageGroupContinuation(rootMessages[index - 1], msg)}
                         task={task}
                         taskNumber={task ? taskNumbers.get(task.id) : undefined}
                         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
@@ -2373,7 +2338,7 @@ export default function ChatPage() {
                         onUnfollowThread={() => unfollowThreadLocally(msg)}
                         onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                         onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                        replyCount={replyCount}
+                        replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
                       />
                     );
                   })}
@@ -4788,106 +4753,6 @@ function AttachmentStrip({ attachments, onRemove }: { attachments: ComposerAttac
           </div>
         );
       })}
-    </div>
-  );
-}
-
-/**
- * 原型收敛(2026-07-28 原型):主聊天区是话题入口列表,不承载连续跟帖。
- * 频道的根消息渲染为话题卡片;回复、文件包、引用与审核动作都在右侧讨论串
- * (ThreadPanel)完成。DM 与 system 消息仍走 ChatBubble 流式渲染。
- * data-smoke="chat-message" + data-message-body 与 ChatBubble 保持一致,冒烟脚本兼容。
- */
-function TopicCard({
-  msg,
-  task,
-  taskNumber,
-  replyCount,
-  active,
-  selected = false,
-  humanProfiles = [],
-  channelMembers = [],
-  onOpen,
-}: {
-  msg: ChatMessage;
-  task?: TaskItem | null;
-  taskNumber?: number;
-  replyCount: number;
-  active: boolean;
-  /** 消息选中态(?message= 深链/点击选中);与 active(讨论串打开)独立,驱动 data-message-selected。 */
-  selected?: boolean;
-  humanProfiles?: HumanProfile[];
-  channelMembers?: ChannelMemberEntry[];
-  onOpen: () => void;
-}) {
-  const agents = useAgentBeanStore((s) => s.agents);
-  const currentUser = useAgentBeanStore((s) => s.currentUser);
-  const isHuman = msg.senderKind === 'human';
-  const isOwner = isHuman && currentUser?.id === msg.senderId;
-  const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
-  const deleted = isDeletedMessage(msg);
-  const packageMeta = outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta);
-  const body = displayMessageBody(msg);
-  const firstLine = body.split('\n').map((line) => line.trim()).find(Boolean) ?? '';
-  const title = deleted ? '消息已删除' : firstLine.length > 90 ? `${firstLine.slice(0, 90)}…` : firstLine;
-  const previewSource = body.replace(/\s+/g, ' ').trim();
-  const preview = deleted || previewSource === firstLine
-    ? ''
-    : previewSource.length > 140 ? `${previewSource.slice(0, 140)}…` : previewSource;
-
-  return (
-    <div
-      id={`message-${msg.id}`}
-      data-smoke="chat-message"
-      data-message-body={msg.body}
-      data-message-selected={selected ? 'true' : 'false'}
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); } }}
-      className={`mt-3 flex cursor-pointer gap-2.5 rounded-md border px-3 py-2.5 transition-colors first:mt-0 ${
-        active || selected
-          ? 'border-amber-400 bg-amber-50/60 shadow-[inset_3px_0_0_#f59e0b]'
-          : 'border-neutral-200 bg-white shadow-sm hover:border-neutral-900'
-      }`}
-    >
-      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-        isHuman ? 'bg-emerald-100 text-emerald-700' : 'bg-purple-100 text-purple-700'
-      }`}>
-        {(speaker[0] ?? '?').toUpperCase()}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-neutral-900">{speaker}</span>
-          {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
-          <span className="text-[10px] text-neutral-400">{formatTime(msg.createdAt)}</span>
-        </div>
-        <div className={`mt-0.5 truncate text-sm ${deleted ? 'italic text-neutral-400' : 'font-medium text-neutral-800'}`}>
-          {title || '(空消息)'}
-        </div>
-        {preview && <div className="mt-0.5 truncate text-xs text-neutral-500">{preview}</div>}
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-          {task && (
-            <span className="inline-flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-              <ListTodo size={10} />
-              {taskNumber ? `#${taskNumber} ` : ''}{taskStatusText(task.status)}
-            </span>
-          )}
-          {packageMeta && (
-            <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
-              <Package size={10} />
-              文件包 · {packageMeta.memberCount} 个文件
-            </span>
-          )}
-          {replyCount > 0 && (
-            <span className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-600">
-              <MessageSquare size={10} />
-              {replyCount} 条回复
-            </span>
-          )}
-        </div>
-      </div>
-      <ChevronRight size={14} className="mt-1 shrink-0 text-neutral-300" />
     </div>
   );
 }
