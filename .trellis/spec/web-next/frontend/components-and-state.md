@@ -75,6 +75,49 @@
 3. 用 `set((s) => ({ ... }))` 在 store 工厂里实现；
 4. 消费侧用单字段选择器订阅。
 
+### 10. 跨 surface 共享的业务构建逻辑抽到 `lib/` 纯函数，页面/卡片只做接线
+
+讨论串文件包卡片与文件库工具栏共用同一套「整包投影预览 → 引用选择构建」逻辑，
+抽到 `apps/web-next/lib/output-package-reference.ts`（#1060-#1063 文件库对齐）：
+
+- `loadPackageProjection(channelId, packageId, policy)`：`getOutputPackage` 带
+  projection（delivered/current/final），`!ok` 或缺 projection 返回 `null`；
+- `buildPackageProjectionSelection(packageId, policy, projection)`：ready → 带
+  `expectedMemberRevisions` fence 的 `ProjectReferenceSelectionRequestDto`；
+  not_ready → blockers 清单（`shortLabel ?? ''` 回落，供 UI 展示缺失项）；
+- `buildPackageMembersSelection(packageId, members)`：多选 → `package_members` 选择，
+  空列表返回 `null`。
+
+规矩：**抽取只允许移动，禁止顺手改语义**——以原调用方（OutputPackageCard）测试
+原样通过为门槛。同理，文件库的聚合/排序/筛选/搜索谓词在
+`lib/file-group-model.ts` 纯函数（`buildFileGroupCards` / `filterFileGroupCards`），
+组件内不写业务逻辑。
+
+### 11. 文件库「逻辑产物」视图 = `ProjectFilesBoard`：左文件组卡 + 右七列文件表 + 工具栏引用
+
+`apps/web-next/components/project/ProjectFilesBoard.tsx` 是频道文件库的逻辑产物视图
+（替换旧的 OutputPackageList + ProjectArtifactLibrary 上下堆叠；「文件/逻辑产物」
+子切换与 ConversationFiles 普通文件浏览保留）：
+
+- 左栏 `FileGroupRail`：输出包 / 文件集合 / **等待上游**（有阶段无产物，纯前端差集）
+  三类卡片混排，按 `lastActivityAt` 倒序；kind 用不同 chip 色；
+- 右栏 `FileVersionTable`：七列（名称+collection id / 类型·阶段 / 来源 / 当前版 /
+  最终版 / 审核 / 动作），选中输出包列成员行（`getOutputPackage` + projection current
+  懒加载，`Map<packageId, {detail, projection}>` 缓存），选中集合列版本行，
+  选中等待上游卡显示阶段占位说明；
+- 工具栏：搜索 + 筛选 chip（全部/待审核/有 final/Agent 输出，纯客户端过滤）+ 
+  引用当前包 / 引用最终版包 / 多选引用（走共享抽取层，见第 10 条）；
+- 审核 / 设最终版 / 提升为逻辑产物版本复用 `ProjectArtifactLibrary` 导出的
+  `VersionDecisionPanel` / `FinalizationHistory` / `PromoteArtifactForm`，
+  不复制第二套。
+
+**缓存失效双通道**：`dataRevision`（`onArtifactsUpdated` 时 +1）+ `packages` 数组引用
+变化（新包/新 delivery），任一变化重置包投影缓存。
+
+> **Warning**: 删除/替换旧组件前先 `grep -rn "<组件名>" apps/web-next` 查复用方。
+> `OutputPackageList` 被 `app/[teamPath]/tasks/page.tsx` 复用，`ProjectArtifactLibrary`
+> 被文件库复用其子导出——「不再被文件库使用」不等于「无引用」，贸然删除会断其他页面。
+
 ## 佐证文件
 
 - `apps/web-next/app/[teamPath]/members/page.tsx:1,61-80`（`'use client'`、路由派生状态注释与实现）。
@@ -83,6 +126,9 @@
 - `apps/web-next/components/socket-provider.tsx:1-45`（SocketProvider effect+cleanup）。
 - `apps/web-next/lib/store.ts:171-215`（State 接口）、`:202`（`applyChannelHistory` 签名）、`:338-343`（实现调 `mergeChannelHistory`）。
 - `apps/web-next/components/ProjectArtifactLibrary.tsx:26,71,560`（`PromoteArtifactDraft` export 复用）。
+- `apps/web-next/lib/output-package-reference.ts`（跨 surface 共享的引用构建抽取层）。
+- `apps/web-next/lib/file-group-model.ts`（文件组聚合/筛选/搜索纯函数）。
+- `apps/web-next/components/project/ProjectFilesBoard.tsx`（文件库逻辑产物视图：左卡右表 + 工具栏引用三入口）。
 
 ## 反模式
 

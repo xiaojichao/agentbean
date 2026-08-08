@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskLevelAction } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskLevelAction } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -30,7 +30,6 @@ import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
-  ProjectArtifactLibrary,
   type PromoteArtifactDraft,
   type SetArtifactFinalVersionDraft,
   type SubmitArtifactReviewDraft,
@@ -44,13 +43,13 @@ import { OutputPackageCard, type ReviseVersionRequest } from '@/components/Outpu
 import { SystemMessageBubble } from '@/components/SystemMessageBubble';
 import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
 import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
-import { OutputPackageList } from '@/components/project/OutputPackageList';
+import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
-import { isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
+import { ArtifactViewer, isMarkdownArtifact } from '@/components/artifact/ArtifactViewer';
 import { MarkdownDocumentEditor } from '@/components/channel-documents/MarkdownDocumentEditor';
 import {
   SafeMarkdownResource,
@@ -376,6 +375,10 @@ export default function ChatPage() {
   const [outputPackages, setOutputPackages] = useState<OutputPackageSummaryDto[]>([]);
   const [outputPackagePendings, setOutputPackagePendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
   const [projectReferenceSelections, setProjectReferenceSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
+  // 原型收敛:逻辑产物视图的包详情缓存失效令牌(onArtifactsUpdated/packages 刷新时 +1)。
+  const [projectDataRevision, setProjectDataRevision] = useState(0);
+  // 原型收敛:逻辑产物视图集合行「查看」→ ArtifactViewer 只读。
+  const [readOnlyArtifact, setReadOnlyArtifact] = useState<ArtifactDto | null>(null);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [channelProjectOverview, setChannelProjectOverview] = useState<ChannelProjectOverviewDto | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -599,7 +602,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!activeChannel) return;
-    return projectEvents().onArtifactsUpdated(activeChannel, setProjectArtifactLibrary);
+    return projectEvents().onArtifactsUpdated(activeChannel, (library) => {
+      setProjectArtifactLibrary(library);
+      // 产物事实变化(审核/设 final/人工修订/提升)→ 逻辑产物视图的包投影缓存失效。
+      setProjectDataRevision((revision) => revision + 1);
+    });
   }, [activeChannel]);
 
   // #1062 修订保存后刷新 Files 投影(新 current revision 立即可见)。
@@ -857,6 +864,33 @@ export default function ChatPage() {
     setProjectArtifactLibrary(result.library);
     return null;
   }, [activeChannel]);
+
+  // 原型收敛:逻辑产物视图(ProjectFilesBoard)的 Agent 名映射(来源列/搜索;DTO 只有 agentId)。
+  const filesBoardAgentNames = useMemo(
+    () => new Map(Object.entries(agents).map(([id, agent]) => [id, agent.name])),
+    [agents],
+  );
+
+  // 原型收敛:文件库引用落主 composer;包引用替换同包旧选择,集合版本引用替换同版本旧选择。
+  const addFilesBoardReference = useCallback((selection: ProjectReferenceSelectionRequestDto) => {
+    setProjectReferenceSelections((current) => {
+      if (selection.kind === 'package_projection' || selection.kind === 'package_members') {
+        return [
+          ...current.filter((item) =>
+            (item.kind !== 'package_projection' && item.kind !== 'package_members')
+            || item.packageId !== selection.packageId),
+          selection,
+        ];
+      }
+      if (selection.kind === 'artifact_version') {
+        return [
+          ...current.filter((item) => item.kind !== 'artifact_version' || item.versionId !== selection.versionId),
+          selection,
+        ];
+      }
+      return [...current, selection];
+    });
+  }, []);
 
   const openMarkdownDocumentEditor = useCallback(async (artifact: Artifact, documentId?: string) => {
     if (!activeChannel || !isMarkdownArtifact(artifact)) return;
@@ -2499,40 +2533,34 @@ export default function ChatPage() {
               </div>
             )}
             {channelProjectOverview && channelFilesView === 'artifacts' ? (
-              <div className="min-h-0 flex-1 overflow-y-auto bg-white p-4">
-                <OutputPackageList
-                  packages={outputPackages}
-                  pendingDeliveries={outputPackagePendings}
-                />
-                <div className="mt-4 border-t border-neutral-100 pt-4">
-                  <ProjectArtifactLibrary
+              <ProjectFilesBoard
+                channelId={activeChannel ?? ''}
+                packages={outputPackages}
+                pendingDeliveries={outputPackagePendings}
                 library={projectArtifactLibrary}
-                stages={channelProjectOverview.stages.map((stage) => ({ id: stage.id, name: stage.name }))}
+                stages={channelProjectOverview.stages.map((stage) => ({
+                  id: stage.id,
+                  name: stage.name,
+                  goal: stage.goal,
+                  taskId: stage.task.id,
+                }))}
+                agentNames={filesBoardAgentNames}
+                dataRevision={projectDataRevision}
+                onAddReference={addFilesBoardReference}
+                onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
+                onOpenPackagePreview={openPackagePreviewModal}
+                onOpenReadOnlyArtifact={(artifact) => setReadOnlyArtifact(artifact)}
+                canDecideVersion={canDecideProjectArtifactVersion}
+                onReview={reviewChannelArtifact}
+                onFinalize={finalizeChannelArtifact}
+                canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
                 promotableArtifacts={channelFiles.map((file) => ({
                   id: file.artifact.id,
                   filename: file.artifact.filename,
                   ...(file.logicalPath ? { logicalPath: file.logicalPath } : {}),
                 }))}
-                canPromote={channelProjectOverview.profile.projectLeadId === currentUser?.id}
-                canDecideVersion={canDecideProjectArtifactVersion}
                 onPromote={promoteChannelArtifact}
-                referenceSelections={projectReferenceSelections}
-                onReferenceSelection={(selection, versionId) => {
-                  setProjectReferenceSelections((current) => [
-                    ...current.filter((item) =>
-                      item.kind !== 'artifact_version' || item.versionId !== versionId),
-                    ...(selection ? [selection] : []),
-                  ]);
-                }}
-                onReview={reviewChannelArtifact}
-                onFinalize={finalizeChannelArtifact}
-                onReviseVersion={(request) => {
-                  if (!activeChannel) return;
-                  void openArtifactRevisionEditor({ ...request, channelId: activeChannel });
-                }}
-                  />
-                </div>
-              </div>
+              />
             ) : (
               <ConversationFiles
                 files={channelFiles}
@@ -2751,6 +2779,19 @@ export default function ChatPage() {
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
           onSaved={() => refreshProjectArtifactLibrary()}
+        />
+      )}
+
+      {/* 原型收敛:逻辑产物视图集合行「查看」→ ArtifactViewer 只读(非 Markdown)。 */}
+      {readOnlyArtifact && (
+        <ArtifactViewer
+          artifact={readOnlyArtifact as unknown as Artifact}
+          previewUrl={readOnlyArtifact.previewUrl ?? null}
+          downloadUrl={readOnlyArtifact.downloadUrl}
+          onClose={() => setReadOnlyArtifact(null)}
+          renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
+            ? <MarkdownMessage body={content} safeDocumentResources collapsible={false} />
+            : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
         />
       )}
 
