@@ -246,13 +246,19 @@ export async function attemptOutputPackageFormation(
     coordination: coordination ? { attempt: coordination.attempt } : null,
     workspaceRun: workspaceRun
       ? {
-        // Domain 判定比较的是 provenance.workspaceRunId；当该值是 dispatchId
-        // 时保留 alias，同时使用 Server workspace run 上的 invocation 事实。
-        id: workspaceRunById ? workspaceRun.id : workspaceRunId!,
+        // lineage 匹配可使用 production daemon 的 dispatchId alias，但最终
+        // 冻结到 OutputPackage/version 的 workspaceRunId 必须是真实 Server run id。
+        id: workspaceRun.id,
+        ...(workspaceRunById ? {} : { provenanceWorkspaceRunId: workspaceRunId! }),
         ...(invocationId ? { managementInvocationId: invocationId } : {}),
       }
       : dispatchAttempt
-        ? { id: workspaceRunId!, ...(invocationId ? { managementInvocationId: invocationId } : {}) }
+        ? {
+          // commit 早于 Server workspace_runs 落库时只能先保留 provenance alias；
+          // 该成形结果会在结果回报阶段以真实 run 再次收敛。
+          id: workspaceRunId!,
+          ...(invocationId ? { managementInvocationId: invocationId } : {}),
+        }
         : null,
     invocation: invocation
       ? {

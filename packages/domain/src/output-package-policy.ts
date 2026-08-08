@@ -52,6 +52,8 @@ export interface OutputPackageCoordinationSnapshot {
 
 export interface OutputPackageWorkspaceRunSnapshot {
   readonly id: string;
+  /** provenance.workspaceRunId 的 Server 侧别名(例如生产 daemon 上报的 dispatchId)。 */
+  readonly provenanceWorkspaceRunId?: string;
   readonly managementInvocationId?: string;
 }
 
@@ -190,7 +192,9 @@ export function evaluateOutputPackageFormation(input: {
       }
       if (provenance.workspaceRunId) {
         const run = input.workspaceRun;
-        if (!run || run.id !== provenance.workspaceRunId) {
+        if (!run
+          || (run.id !== provenance.workspaceRunId
+            && run.provenanceWorkspaceRunId !== provenance.workspaceRunId)) {
           return { kind: 'rejected', reasonCode: 'invocation-mismatch' };
         }
         if (run.managementInvocationId) {
