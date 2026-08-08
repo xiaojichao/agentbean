@@ -126,6 +126,63 @@ describe('Channel-first Device Workspace Projection', () => {
     expect(JSON.parse(readFileSync(join(home, 'device.json'), 'utf8')).deviceId).toBe('device-current');
   });
 
+  test('recovered workspaceRun preserves the live result field order for fingerprint replay', () => {
+    // #1146：Server fingerprint 目前按 JSON 字节计算。恢复载荷必须复现实时回报的
+    // 稳定字段顺序，否则字段和值完全相同也会被误判为 CONFLICT。
+    const home = tempDir('channel-first-fingerprint-recovery-');
+    persistDeviceProjectionManifest(home, {
+      schemaVersion: 1,
+      deviceId: 'device-current',
+      teamId: 'team-1',
+      updatedAt: 1,
+    });
+    const ws = prepareChannelWorkspaceRun({
+      agentBeanHome: home,
+      deviceId: 'device-current',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      taskAttempt: 1,
+      workspaceRunId: 'run-1',
+    });
+    writeFileSync(ws.responsePath, 'recovered reply');
+    writeFileSync(ws.manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      runId: 'run-1',
+      deviceId: 'device-current',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      agentId: 'agent-1',
+      status: 'succeeded',
+      cwd: '.',
+      command: 'agent --run',
+      logExcerpt: '',
+      exitCode: 0,
+      startedAt: 100,
+      completedAt: 200,
+      publishId: 'publish-1',
+      files: [],
+    }));
+
+    const [recovered] = discoverRecoverableChannelWorkspaceRuns({
+      agentBeanHome: home,
+      deviceId: 'device-current',
+    });
+
+    expect(Object.keys(recovered!.workspaceRun)).toEqual([
+      'status',
+      'cwd',
+      'command',
+      'exitCode',
+      'startedAt',
+      'completedAt',
+      'logExcerpt',
+      'publishId',
+    ]);
+    expect(recovered!.workspaceRun.logExcerpt).toBe('');
+  });
+
   test('dispatch executes with managed env and reports relative provenance', async () => {
     const home = tempDir('channel-first-dispatch-home-');
     const customCwd = tempDir('channel-first-custom-cwd-');
