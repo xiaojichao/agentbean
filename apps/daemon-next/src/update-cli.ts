@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { access, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -68,6 +69,8 @@ export interface UpdateCliDeps {
   readonly readServiceErrorSummary?: () => Promise<string>;
   /** 失败摘要的当下降实况(launchd 注册状态 + state.json 版本);测试注入以避免读本机状态。 */
   readonly readServiceLiveDetail?: () => Promise<string>;
+  /** #1114:[4/5] 启动前等待 bin 入口可解析(npm reify 窗口);测试注入 no-op。 */
+  readonly waitForExecutableReady?: (executable: string) => Promise<string | undefined>;
   /** 更新锁文件路径；默认 <AgentBean home>/service/update.lock。 */
   readonly lockFilePath?: string;
   readonly acquireUpdateLock?: (lockFilePath: string) => Promise<boolean>;
@@ -269,7 +272,7 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     const serviceRestored = await prepareDeviceServiceWithRetry(
       runAgentBean, agentBeanExecutable,
       ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-      confirmServiceReady, current.version, progress,
+      confirmServiceReady, current.version, progress, deps.waitForExecutableReady,
     );
     progress.fail(serviceRestored.confirmed
       ? `AgentBean 更新安装验证失败，已恢复 ${current.version} 并恢复 Device Service（UPDATE_INSTALL_FAILED）。`
@@ -297,7 +300,7 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
   const prepared = await prepareDeviceServiceWithRetry(
     runAgentBean, agentBeanExecutable,
     ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-    confirmServiceReady, latest, progress,
+    confirmServiceReady, latest, progress, deps.waitForExecutableReady,
   );
   if (prepared.confirmed) {
     progress.step('清理备份');
@@ -313,6 +316,9 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     .map((part) => part.trim())
     .filter(Boolean)
     .join('\n');
+  const retryDetail = prepared.lastAttempt && prepared.lastAttempt !== prepared.firstAttempt
+    ? [prepared.lastAttempt.stderr, prepared.lastAttempt.stdout].map((part) => part.trim()).filter(Boolean).join('\n')
+    : '';
   const errorLog = await (deps.readServiceErrorSummary
     ? deps.readServiceErrorSummary()
     : readServiceErrorSummary(servicePathsInput));
@@ -322,6 +328,7 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
     ?? (() => readServiceLiveDetail(servicePathsInput)))();
   const reasonSummary = [
     liveDetail,
+    retryDetail ? `重试结果:\n${retryDetail}` : '',
     prepared.firstAttempt.exitCode === 0 && !prepared.confirmed
       ? 'Device Service 已安装但版本/健康确认失败。'
       : '',
@@ -348,7 +355,7 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
   const serviceRestored = await prepareDeviceServiceWithRetry(
     runAgentBean, agentBeanExecutable,
     ['device', 'install', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS)],
-    confirmServiceReady, current.version, progress,
+    confirmServiceReady, current.version, progress, deps.waitForExecutableReady,
   );
   if (serviceRestored.confirmed) {
     progress.fail(
@@ -372,6 +379,24 @@ async function executeUpdate(input: ExecuteUpdateInput): Promise<number> {
  * 启动期服务端连接闪断会让首次 install 超时；手动 `device install && device restart`
  * 能恢复的根源就在这里，update 不应把瞬时连接抖动当成版本问题直接回滚。
  */
+/**
+ * #1114:npm reify 收尾阶段 bin 软链可能短暂 dangling(重排/重建链接窗口)。
+ * 此时 spawn agentbean 会 ENOENT——update 的 [4/5] 启动必须等入口真正可解析。
+ */
+export async function waitForExecutableReady(executable: string, deadlineMs = 30_000): Promise<string | undefined> {
+  const deadlineAt = Date.now() + deadlineMs;
+  while (Date.now() < deadlineAt) {
+    try {
+      const resolved = realpathSync(executable);
+      await access(resolved);
+      return undefined;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  return `可执行入口 ${executable} 在 ${Math.round(deadlineMs / 1000)}s 内未就绪(可能仍在换包)`;
+}
+
 async function prepareDeviceServiceWithRetry(
   runAgentBean: (executable: string, argv: readonly string[]) => Promise<PlatformCommandResult>,
   executable: string,
@@ -379,21 +404,25 @@ async function prepareDeviceServiceWithRetry(
   confirmServiceReady: (expectedVersion: string) => Promise<boolean>,
   expectedVersion: string,
   progress?: UpdateProgress,
-): Promise<{ confirmed: boolean; firstAttempt: PlatformCommandResult }> {
+  waitForExecutable?: (executable: string) => Promise<string | undefined>,
+): Promise<{ confirmed: boolean; firstAttempt: PlatformCommandResult; lastAttempt?: PlatformCommandResult }> {
   progress?.detail(`运行 agentbean ${firstArgv.join(' ')}…`);
+  const notReady = await (waitForExecutable ?? waitForExecutableReady)(executable);
+  if (notReady) progress?.detail(notReady);
   const firstAttempt = await safeRunAgentBean(runAgentBean, executable, firstArgv);
+  let lastAttempt: PlatformCommandResult = firstAttempt;
   let confirmed = firstAttempt.exitCode === 0
     && await safeBoolean(() => confirmServiceReady(expectedVersion));
   for (let attempt = 0; attempt < SERVICE_START_RETRY_ATTEMPTS && !confirmed; attempt += 1) {
     progress?.detail(`服务未就绪，重试 device restart（${attempt + 1}/${SERVICE_START_RETRY_ATTEMPTS}）…`);
-    const restarted = await safeRunAgentBean(runAgentBean, executable, [
+    lastAttempt = await safeRunAgentBean(runAgentBean, executable, [
       'device', 'restart', '--deadline-ms', String(SERVICE_INSTALL_DEADLINE_MS),
     ]);
-    confirmed = restarted.exitCode === 0
+    confirmed = lastAttempt.exitCode === 0
       && await safeBoolean(() => confirmServiceReady(expectedVersion));
   }
   if (confirmed) progress?.detail(`Device Service 已确认版本 ${expectedVersion}`);
-  return { confirmed, firstAttempt };
+  return { confirmed, firstAttempt, lastAttempt };
 }
 
 /**
@@ -633,11 +662,24 @@ async function runNpmCommand(argv: readonly string[]): Promise<PlatformCommandRe
   return runCommand('npm', argv);
 }
 
+/**
+ * #1114:经 node 显式执行,不直接 spawn bin 软链。实证:npm reify 收尾阶段 bin 目标
+ * 可能短暂(或持续)缺 +x → 直接 spawn EACCES 秒退且无任何输出,update [4/5] 永远
+ * 失败。node 执行只需可读,绕开可执行位与 shebang 依赖。
+ */
+export function buildAgentBeanSpawn(
+  executable: string,
+  argv: readonly string[],
+): { file: string; args: readonly string[] } {
+  return { file: process.execPath, args: [executable, ...argv] };
+}
+
 async function runAgentBeanCommand(
   executable: string,
   argv: readonly string[],
 ): Promise<PlatformCommandResult> {
-  return runCommand(executable, argv);
+  const spawn = buildAgentBeanSpawn(executable, argv);
+  return runCommand(spawn.file, spawn.args);
 }
 
 async function runCommand(
@@ -662,7 +704,12 @@ async function runCommand(
             : error
               ? 1
               : 0;
-        resolve({ exitCode, stdout, stderr });
+        // #1114:spawn 级失败(ENOENT/EACCES/ETXTBSY,如换包窗口 bin 软链 dangling)
+        // 时 stdout/stderr 皆空,失败完全无迹可寻——把 error.message 兜底进 stderr。
+        const stderrText = (typeof stderr === 'string' && stderr.trim())
+          ? stderr
+          : (error ? `spawn ${executable} 失败:${error.message}` : stderr);
+        resolve({ exitCode, stdout, stderr: stderrText });
       },
     );
     // Ensure the promise settles if execFile callback is delayed after kill.

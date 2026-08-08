@@ -22,7 +22,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/apps/daemon-next/src/bin.js",
     "test": "vitest run",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "postinstall": "node -e \"try{require('node:fs').chmodSync(require('node:path').join(__dirname,'dist','apps','daemon-next','src','bin.js'),0o755)}catch{}\""
   },
   "dependencies": {
     "@agentbean/contracts": "0.2.6",
