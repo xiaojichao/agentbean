@@ -100,6 +100,7 @@ export interface AgentInvocationResultDto {
   readonly memoryCandidateIds: readonly ID[];
   readonly collaborationProposals?: readonly AgentCollaborationProposalV1[];
   readonly projectDocumentInputSetResult?: ProjectDocumentInputSetResultDto;
+  readonly resultFingerprint?: string;
   readonly startedAt: UnixMs;
   readonly completedAt: UnixMs;
   readonly error?: string;

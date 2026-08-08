@@ -661,7 +661,7 @@ function assertTaskToolOutput(toolName: string, value: unknown): void {
 
 function assertInvocationResult(value: unknown): asserts value is AgentInvocationResultDto {
   assertExactKeys(value, ['schemaVersion', 'invocationId', 'taskId', 'agentId', 'status', 'body',
-    'artifactIds', 'workspaceRunId', 'memoryCandidateIds', 'collaborationProposals', 'startedAt',
+    'artifactIds', 'workspaceRunId', 'memoryCandidateIds', 'collaborationProposals', 'projectDocumentInputSetResult', 'resultFingerprint', 'startedAt',
     'completedAt', 'error'], ['schemaVersion', 'invocationId', 'agentId', 'status', 'artifactIds',
     'memoryCandidateIds', 'startedAt', 'completedAt']);
   if (value.schemaVersion !== 1 || !nonEmpty(value.invocationId) || !nonEmpty(value.agentId)

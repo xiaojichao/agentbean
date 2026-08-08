@@ -10557,12 +10557,20 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             10_000,
           )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
           const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
-          if (typeof replayStoredFingerprint === 'string' && replayStoredFingerprint !== resultFingerprint) {
+          const replayNormalizedProposals = normalizeAgentCollaborationProposals(resultInput.collaborationProposals);
+          const replayHandoffFingerprint = replayHandoff?.result?.resultFingerprint;
+          const replayFingerprint = typeof replayStoredFingerprint === 'string'
+            ? replayStoredFingerprint
+            : replayHandoffFingerprint;
+          const replayCandidateFingerprint = typeof replayStoredFingerprint === 'string'
+            ? resultFingerprint
+            : dispatchResultFingerprint({ ...resultInput, collaborationProposals: replayNormalizedProposals });
+          if (typeof replayFingerprint === 'string' && replayFingerprint !== replayCandidateFingerprint) {
             return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
           }
           const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
-          if (replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
-            !== JSON.stringify(resultInput.collaborationProposals ?? [])) {
+          if (!replayFingerprint && replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
+            !== JSON.stringify(replayNormalizedProposals)) {
             return makeFailure('CONFLICT', 'Dispatch collaboration proposals do not match the first terminal report');
           }
           let replayWorkspaceRunCreateId = typeof replayDeliveryMessage?.meta?.workspaceRunId === 'string'
@@ -10587,11 +10595,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           if (replayWorkspaceRunById && replayWorkspaceRunById.dispatchId !== dispatch.id) {
             return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
           }
-          let replayWorkspaceRun = replayWorkspaceRunId
-            ? replayWorkspaceRunById
-              ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
-              ?? null
-            : null;
+          let replayWorkspaceRun = replayWorkspaceRunById
+            ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
+            ?? null;
           if (!replayStoredFingerprint && replayDeliveryMessage
             && replayDeliveryMessage.body !== resultInput.body) {
             return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
@@ -10790,13 +10796,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   clock.now(),
                 );
               }
-              const replayCollaborationProposals = (resultInput.collaborationProposals ?? []).flatMap((proposal) => {
-                try {
-                  return [parseAgentCollaborationProposalV1(proposal)];
-                } catch {
-                  return [];
-                }
-              });
+              const replayCollaborationProposals = normalizeAgentCollaborationProposals(
+                resultInput.collaborationProposals,
+              );
               if (replayCollaborationProposals.length > 0) {
                 await collaborationService.recordProposals({
                   dispatchId: dispatch.id,
@@ -10837,6 +10839,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                       artifactIds: replayReportedArtifactIds,
                       ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
                       memoryCandidateIds: [],
+                      resultFingerprint: dispatchResultFingerprint({
+                        ...resultInput,
+                        collaborationProposals: replayCollaborationProposals,
+                      }),
                       startedAt: replayAttempt.startedAt,
                       completedAt: dispatch.completedAt ?? clock.now(),
                     },
@@ -11430,6 +11436,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
           ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
+          resultFingerprint: dispatchResultFingerprint({ ...resultInput, collaborationProposals }),
           ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
           ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
@@ -19412,6 +19419,18 @@ function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
   const normalizedRight = uniqueIds([...right]).sort();
   return normalizedLeft.length === normalizedRight.length
     && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function normalizeAgentCollaborationProposals(
+  proposals: readonly AgentCollaborationProposalV1[] | undefined,
+): AgentCollaborationProposalV1[] {
+  return (proposals ?? []).flatMap((proposal) => {
+    try {
+      return [parseAgentCollaborationProposalV1(proposal)];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function dispatchResultFingerprint(input: ReceiveDispatchResultInput): string {
