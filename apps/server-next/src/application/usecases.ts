@@ -16816,7 +16816,7 @@ async function computePackageMemberAvailableActions(
       .slice()
       .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
       .at(-1);
-    if (collection && version && !isFinalVersion
+    if (collection && version && collection.currentVersionId === member.versionId && !isFinalVersion
       && (reviewState === 'rejected' || reviewState === 'changes_requested')
       && latestReview) {
       const memberArtifact = memberArtifacts.get(member.versionId);

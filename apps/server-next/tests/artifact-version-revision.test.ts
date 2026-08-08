@@ -733,6 +733,9 @@ for (const variant of variants) {
       const currentActions = detail.availableActions.find((entry) => entry.versionId === currentVersionId)?.actions ?? [];
       expect(currentActions).not.toContain('review-approved');
       expect(currentActions).not.toContain('set-final');
+      const historicalActions = detail.availableActions
+        .find((entry) => entry.versionId === fixture.versionId)?.actions ?? [];
+      expect(historicalActions).not.toContain('revise-version');
     });
 
     test('AC3:library 投影携带 revisionBasis(lineage 可见性)', async () => {
