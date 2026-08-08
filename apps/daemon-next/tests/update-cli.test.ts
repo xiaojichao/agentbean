@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import {
   acquireUpdateLockFile,
+  buildAgentBeanSpawn,
   fenceDeviceServiceForPackageSwap,
   waitForExecutableReady,
   readInstalledAgentBeanPackage,
@@ -640,5 +641,13 @@ describe('waitForExecutableReady (#1114 换包窗口)', () => {
     await expect(waitForExecutableReady(bin, 1_000)).resolves.toBeUndefined();
     const missing = await waitForExecutableReady(join(dir, 'nope'), 600);
     expect(missing).toContain('未就绪');
+  });
+});
+
+describe('buildAgentBeanSpawn (#1114 EACCES 防护)', () => {
+  test('经 node 执行 bin 软链目标,不依赖 +x/shebang', () => {
+    const spawn = buildAgentBeanSpawn('/opt/agentbean/bin/agentbean', ['device', 'install']);
+    expect(spawn.file).toBe(process.execPath);
+    expect(spawn.args).toEqual(['/opt/agentbean/bin/agentbean', 'device', 'install']);
   });
 });

@@ -662,11 +662,24 @@ async function runNpmCommand(argv: readonly string[]): Promise<PlatformCommandRe
   return runCommand('npm', argv);
 }
 
+/**
+ * #1114:经 node 显式执行,不直接 spawn bin 软链。实证:npm reify 收尾阶段 bin 目标
+ * 可能短暂(或持续)缺 +x → 直接 spawn EACCES 秒退且无任何输出,update [4/5] 永远
+ * 失败。node 执行只需可读,绕开可执行位与 shebang 依赖。
+ */
+export function buildAgentBeanSpawn(
+  executable: string,
+  argv: readonly string[],
+): { file: string; args: readonly string[] } {
+  return { file: process.execPath, args: [executable, ...argv] };
+}
+
 async function runAgentBeanCommand(
   executable: string,
   argv: readonly string[],
 ): Promise<PlatformCommandResult> {
-  return runCommand(executable, argv);
+  const spawn = buildAgentBeanSpawn(executable, argv);
+  return runCommand(spawn.file, spawn.args);
 }
 
 async function runCommand(
