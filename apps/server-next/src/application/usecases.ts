@@ -10533,6 +10533,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
       if (!isCompletableDispatchStatus(dispatch.status)) {
+        if (dispatch.status === 'cancelled') {
+          return makeFailure('CONFLICT', 'Dispatch is already cancelled');
+        }
         // OutputPackage 补偿必须独立于 Dispatch terminal 状态收敛：daemon 可能在
         // commit 成功后先收到结果确认，而首次成形又因瞬时存储/lineage 时序失败。
         // 不能把该重放当成普通 duplicate 直接拒绝，否则 publish 会永久停留 pending。
@@ -10544,6 +10547,43 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ? await repositories.management.handoffs.getByInvocationId(replayAttempt.invocationId)
             : null;
           const replayPublishesToRoot = !replayHandoff || replayHandoff.intent.returnMode === 'deliver_to_root';
+          const replayReportedArtifactIds = uniqueIds([
+            ...(resultInput.artifactIds ?? []),
+            ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
+          ]);
+          let replayDeliveryMessage = (await repositories.messages.listByChannel(
+            dispatch.channelId,
+            10_000,
+          )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+          if (!replayDeliveryMessage && replayPublishesToRoot) {
+            const originMessage = await repositories.messages.getById(dispatch.messageId);
+            const nestReplyInThread = shouldNestDispatchReplyInThread(originMessage);
+            try {
+              replayDeliveryMessage = await repositories.messages.append({
+                id: ids.nextId(),
+                teamId: dispatch.teamId,
+                channelId: dispatch.channelId,
+                threadId: originMessage?.threadId ?? originMessage?.id,
+                senderKind: 'agent',
+                senderId: resultInput.agentId,
+                body: resultInput.body,
+                createdAt: clock.now(),
+                meta: {
+                  dispatchId: dispatch.id,
+                  replyScope: nestReplyInThread ? 'thread' : 'channel',
+                  ...(nestReplyInThread && originMessage?.threadId
+                    ? { parentMessageId: originMessage.threadId }
+                    : {}),
+                  ...(replayReportedArtifactIds.length > 0
+                    ? { artifactIds: replayReportedArtifactIds }
+                    : {}),
+                  ...(resultInput.workspaceRun.id ? { workspaceRunId: resultInput.workspaceRun.id } : {}),
+                },
+              });
+            } catch {
+              return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
+            }
+          }
           if (replayPublishesToRoot || resultInput.workspaceRun.publishId) {
             const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
               teamId: dispatch.teamId,
@@ -10585,7 +10625,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   completedAt: resultInput.workspaceRun.completedAt ?? clock.now(),
                   createdAt: clock.now(),
                   updatedAt: clock.now(),
-                  artifactIds: [],
+                  artifactIds: replayReportedArtifactIds,
                 });
               } catch {
                 return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
@@ -10645,14 +10685,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             // package 已形成不等于整条 result 已收敛。重放载荷可能还带有
             // artifacts/协作提案；先补齐这些副作用，再确认 delivered，避免
             // daemon 因早期成功 ack 丢掉 invocation 终态。
-            const replayDeliveryMessage = (await repositories.messages.listByChannel(
-              dispatch.channelId,
-              10_000,
-            )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
-            const replayReportedArtifactIds = uniqueIds([
-              ...(resultInput.artifactIds ?? []),
-              ...(resultInput.artifacts ?? []).map((artifact) => artifact.id),
-            ]);
             const replayCommittedArtifacts: ArtifactRecord[] = [];
             try {
               for (const artifactId of uniqueIds(resultInput.artifactIds ?? [])) {
@@ -10747,7 +10779,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                 if (!replayInvocation) {
                   return makeFailure('INTERNAL_ERROR', 'Dispatch result reconciliation pending');
                 }
-                const replayStatus = dispatch.status === 'failed' || dispatch.status === 'cancelled'
+                const replayStatus = dispatch.status === 'failed'
                   ? dispatch.status
                   : 'succeeded';
                 await recordManagedDispatchTerminal(
@@ -11012,7 +11044,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               }
               const terminalStatus = dispatch.status === 'succeeded'
                 || dispatch.status === 'failed'
-                || dispatch.status === 'cancelled'
                 || dispatch.status === 'timed_out'
                 ? dispatch.status
                 : null;
