@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/web-next/frontend/testing.md", "reason": "check 阶段验证:全量 vitest + 首帧断言惯例 + smoke 选择器同步"}
+{"file": ".trellis/spec/web-next/frontend/gotchas.md", "reason": "check 阶段避坑:tsc vs vitest 幽灵导出、消息覆盖、重挂载"}
+{"file": "docs/superpowers/specs/2026-07-17-project-task-file-management-design.md", "reason": "check 对照 §7.3/§8.7/§5.5 验收:布局、七列字段、引用 blockers 语义"}
