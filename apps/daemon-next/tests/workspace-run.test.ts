@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
   prepareWorkspaceRun,
+  discoverRecoverableWorkspaceRuns,
   workspaceRunEnv,
   persistWorkspaceRunManifest,
   persistWorkspaceRunResponse,
@@ -63,5 +64,38 @@ describe('workspace-run', () => {
     const b = prepareWorkspaceRun(cwd, 'run-b');
     expect(a.outputDir).not.toBe(b.outputDir);
     expect(readdirSync(join(cwd, '.agentbean', 'runs')).sort()).toEqual(['run-a', 'run-b']);
+  });
+
+  test('legacy recovery preserves the live workspaceRun field order', () => {
+    // #1146：legacy cwd 恢复与 channel-first 恢复共享同一 fingerprint 顺序不变量。
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'ws-fingerprint-')));
+    const ws = prepareWorkspaceRun(cwd, 'run-1');
+    persistWorkspaceRunResponse(ws, 'recovered reply');
+    persistWorkspaceRunManifest(ws, {
+      runId: 'run-1',
+      agentId: 'agent-1',
+      channelId: 'channel-1',
+      status: 'succeeded',
+      cwd: '.',
+      command: 'agent --run',
+      logExcerpt: 'done',
+      exitCode: 0,
+      startedAt: 100,
+      completedAt: 200,
+      publishId: 'publish-1',
+    });
+
+    const [recovered] = discoverRecoverableWorkspaceRuns([cwd]);
+
+    expect(Object.keys(recovered!.workspaceRun)).toEqual([
+      'status',
+      'cwd',
+      'command',
+      'exitCode',
+      'startedAt',
+      'completedAt',
+      'logExcerpt',
+      'publishId',
+    ]);
   });
 });
