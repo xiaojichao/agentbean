@@ -296,6 +296,19 @@ for (const variant of variants) {
       return s;
     }
 
+    test('回归:socket bind 注入的 currentDeviceId 不导致 ARTIFACT_REVISION_PAYLOAD_INVALID', async () => {
+      // bind 层 withAuthenticatedUserId 无条件注入 currentDeviceId;usecase 必须剥离后再过
+      // exact-key 校验,否则该事件全链路永远 INTERNAL_ERROR(既有用例直调 usecase 未覆盖)。
+      const s = await makeSeed();
+      const fixture = await seedPackage(s.repositories, s);
+      const reviewId = await seedNegativeReview(s.repositories, s, fixture);
+      const result = await s.app.saveArtifactVersionRevision({
+        ...saveInput(s, fixture, reviewId),
+        currentDeviceId: 'device-socket-injected',
+      });
+      expect(result).toMatchObject({ ok: true, replayed: false });
+    });
+
     test('AC1/AC2/AC3/AC4/AC9:基于此修改成功保存——原子产生新版本、移动 current、不继承不移动、活动投影', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);
