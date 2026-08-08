@@ -10839,13 +10839,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                       artifactIds: replayReportedArtifactIds,
                       ...(replayWorkspaceRun ? { workspaceRunId: replayWorkspaceRun.id } : {}),
                       memoryCandidateIds: [],
+                      ...(replayCollaborationProposals.length > 0
+                        ? { collaborationProposals: replayCollaborationProposals }
+                        : {}),
                       resultFingerprint: dispatchResultFingerprint({
                         ...resultInput,
                         collaborationProposals: replayCollaborationProposals,
                       }),
                       startedAt: replayAttempt.startedAt,
                       completedAt: dispatch.completedAt ?? clock.now(),
+                      ...(replayStatus === 'failed'
+                        ? { error: workspaceRunFailureError(resultInput.workspaceRun) }
+                        : {}),
                     },
+                    ...(replayStatus === 'failed'
+                      ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) }
+                      : {}),
                   },
                 );
               }
