@@ -2355,11 +2355,6 @@ export default function ChatPage() {
 
             {activeChannel && (
               <div className="border-t border-neutral-200 p-3">
-                {!isDm && (
-                  <div className="mb-1.5 px-1 text-[11px] text-neutral-400">
-                    发送后会创建新话题；回复、文件包与 @智能体 协作都在该话题的讨论串里完成。
-                  </div>
-                )}
                 <div className="relative rounded-lg border border-neutral-300 bg-white">
                   {showMention && filteredMentionMembers.length > 0 && (
                     <div className="absolute bottom-full left-0 mb-1 max-h-48 w-64 overflow-y-auto rounded-lg border border-neutral-200 bg-white shadow-lg z-10">
