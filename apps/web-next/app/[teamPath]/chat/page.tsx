@@ -2317,6 +2317,7 @@ export default function ChatPage() {
                           taskNumber={task ? taskNumbers.get(task.id) : undefined}
                           replyCount={replyCount}
                           active={threadRootId === msg.id}
+                          selected={selectedMessageId === msg.id}
                           humanProfiles={humanProfiles}
                           channelMembers={channelMembers}
                           onOpen={() => openThread(msg.id)}
@@ -4803,6 +4804,7 @@ function TopicCard({
   taskNumber,
   replyCount,
   active,
+  selected = false,
   humanProfiles = [],
   channelMembers = [],
   onOpen,
@@ -4812,6 +4814,8 @@ function TopicCard({
   taskNumber?: number;
   replyCount: number;
   active: boolean;
+  /** 消息选中态(?message= 深链/点击选中);与 active(讨论串打开)独立,驱动 data-message-selected。 */
+  selected?: boolean;
   humanProfiles?: HumanProfile[];
   channelMembers?: ChannelMemberEntry[];
   onOpen: () => void;
@@ -4836,12 +4840,13 @@ function TopicCard({
       id={`message-${msg.id}`}
       data-smoke="chat-message"
       data-message-body={msg.body}
+      data-message-selected={selected ? 'true' : 'false'}
       role="button"
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(); } }}
       className={`mt-3 flex cursor-pointer gap-2.5 rounded-md border px-3 py-2.5 transition-colors first:mt-0 ${
-        active
+        active || selected
           ? 'border-amber-400 bg-amber-50/60 shadow-[inset_3px_0_0_#f59e0b]'
           : 'border-neutral-200 bg-white shadow-sm hover:border-neutral-900'
       }`}
