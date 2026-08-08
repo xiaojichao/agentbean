@@ -711,7 +711,7 @@ function assertProjectDocumentInputSetResult(value: unknown): void {
     if ((item.status === 'committed' && (!nonEmpty(item.artifactId) || !nonEmpty(item.revisionId))
       || item.status === 'conflict' && (!nonEmpty(item.artifactId) || !nonEmpty(item.error))
       || item.status === 'failed' && item.artifactId !== undefined && !nonEmpty(item.artifactId)
-      || item.status === 'failed' && item.error !== undefined && !nonEmpty(item.error))) {
+      || item.status === 'failed' && !nonEmpty(item.error))) {
       throw new Error('MANAGEMENT_WORKER_V2_PAYLOAD_INVALID');
     }
   });
