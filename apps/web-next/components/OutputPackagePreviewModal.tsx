@@ -147,8 +147,10 @@ export function OutputPackagePreviewModal({
       filename,
       expectedCollectionRevision: active.collection.revision,
       revisionBasis: {
+        // 手动编辑语义:基于当前 current 版本修订,不带 package/delivery——
+        // domain 要求 packageId+deliveryId 成对且 source 必须是包冻结成员版本,
+        // 而 current 可能已前移;只传 sourceVersionId 才是合法且语义正确的 basis。
         sourceVersionId: base.id,
-        packageId: packageMeta.packageId,
       },
       // 每次保存动作为独立幂等键;同一 base+内容重复提交由 Server revision fence 去重。
       idempotencyKey: `pkg-preview-edit:${active.collection.id}:${base.id}:${crypto.randomUUID()}`,
