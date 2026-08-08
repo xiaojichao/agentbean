@@ -10558,6 +10558,35 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           let replayWorkspaceRunCreateId = typeof replayDeliveryMessage?.meta?.workspaceRunId === 'string'
             ? replayDeliveryMessage.meta.workspaceRunId
             : resultInput.workspaceRun.id;
+          const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
+            teamId: dispatch.teamId,
+            publishId: resultInput.workspaceRun.publishId,
+          });
+          if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
+            // 在写入补建消息/运行前确认 publish 已提交，避免无效重放留下幽灵事实。
+            return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+          }
+          if (replayStaging.channelId !== dispatch.channelId
+            || replayStaging.provenance?.agentId !== dispatch.agentId) {
+            return makeFailure('CONFLICT', 'OutputPackage publish does not belong to dispatch');
+          }
+          const replayWorkspaceRunId = replayStaging.provenance?.workspaceRunId;
+          const replayWorkspaceRunById = replayWorkspaceRunId
+            ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
+            : null;
+          if (replayWorkspaceRunById && replayWorkspaceRunById.dispatchId !== dispatch.id) {
+            return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
+          }
+          let replayWorkspaceRun = replayWorkspaceRunId
+            ? replayWorkspaceRunById
+              ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
+              ?? null
+            : null;
+          if (replayWorkspaceRunId
+            && replayWorkspaceRunId !== dispatch.id
+            && !replayWorkspaceRun) {
+            return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+          }
           if (!replayWorkspaceRunCreateId && !replayDeliveryMessage && replayPublishesToRoot) {
             replayWorkspaceRunCreateId = ids.nextId();
           }
@@ -10591,19 +10620,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             }
           }
           if (replayPublishesToRoot || resultInput.workspaceRun.publishId) {
-            const replayStaging = await repositories.workspacePublishStagings.getByPublishId({
-              teamId: dispatch.teamId,
-              publishId: resultInput.workspaceRun.publishId,
-            });
-            const replayWorkspaceRunId = replayStaging?.provenance?.workspaceRunId;
-            const replayWorkspaceRunById = replayWorkspaceRunId
-              ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
-              : null;
-            let replayWorkspaceRun = replayWorkspaceRunId
-              ? replayWorkspaceRunById
-                ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
-                ?? null
-              : null;
             if (!replayWorkspaceRun && resultInput.workspaceRun) {
               const replayAgent = await repositories.agents.getById(resultInput.agentId);
               if (!replayAgent || replayAgent.deletedAt !== undefined) {
@@ -10638,20 +10654,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               }
             }
             if (replayPublishesToRoot) {
-            if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
-              // publishId 只应在 commit 已落库后回报；否则不能发 delivered ack，
-              // 让 daemon 按原 publish identity 重试，避免 pending 永久丢失。
-              return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
-            }
-            if (replayStaging.channelId !== dispatch.channelId
-              || replayStaging.provenance?.agentId !== dispatch.agentId) {
-              return makeFailure('CONFLICT', 'OutputPackage publish does not belong to dispatch');
-            }
-            if (replayWorkspaceRunId
-              && replayWorkspaceRunId !== dispatch.id
-              && replayWorkspaceRun?.dispatchId !== dispatch.id) {
-              return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
-            }
             let replayResult;
             try {
               replayResult = await outputPackageService.formPackage({
