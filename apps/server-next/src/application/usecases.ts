@@ -10549,18 +10549,42 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               teamId: dispatch.teamId,
               publishId: resultInput.workspaceRun.publishId,
             });
-            if (replayStaging?.committedRevisionId) {
-              try {
-                await outputPackageService.formPackage({
-                  teamId: dispatch.teamId,
-                  channelId: dispatch.channelId,
-                  publishId: resultInput.workspaceRun.publishId,
-                  workspaceRevisionId: replayStaging.committedRevisionId,
-                });
-              } catch {
-                // INTERNAL_ERROR 不会被 daemon 当作 delivered ack，保留重试机会。
-                return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
-              }
+            if (!replayStaging || replayStaging.status !== 'committed' || !replayStaging.committedRevisionId) {
+              // publishId 只应在 commit 已落库后回报；否则不能发 delivered ack，
+              // 让 daemon 按原 publish identity 重试，避免 pending 永久丢失。
+              return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+            }
+            if (replayStaging.channelId !== dispatch.channelId
+              || replayStaging.provenance?.agentId !== dispatch.agentId) {
+              return makeFailure('CONFLICT', 'OutputPackage publish does not belong to dispatch');
+            }
+            const replayWorkspaceRunId = replayStaging.provenance?.workspaceRunId;
+            const replayWorkspaceRun = replayWorkspaceRunId
+              ? await repositories.workspaceRuns.getForTeam({ teamId: dispatch.teamId, runId: replayWorkspaceRunId })
+              : null;
+            if (replayWorkspaceRunId
+              && replayWorkspaceRunId !== dispatch.id
+              && replayWorkspaceRun?.dispatchId !== dispatch.id) {
+              return makeFailure('CONFLICT', 'OutputPackage workspace run does not belong to dispatch');
+            }
+            let replayResult;
+            try {
+              replayResult = await outputPackageService.formPackage({
+                teamId: dispatch.teamId,
+                channelId: dispatch.channelId,
+                publishId: resultInput.workspaceRun.publishId,
+                workspaceRevisionId: replayStaging.committedRevisionId,
+              });
+            } catch {
+              // INTERNAL_ERROR 不会被 daemon 当作 delivered ack，保留重试机会。
+              return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+            }
+            if (replayResult.kind === 'rejected' || replayResult.kind === 'conflict') {
+              return makeFailure('INTERNAL_ERROR', `OutputPackage reconciliation ${replayResult.kind}`);
+            }
+            // 只有 staging 的 workspaceRun 能回溯到当前 dispatch 时，才把卡片
+            // 内嵌到当前 Agent 回复；旧 daemon 没有该 provenance 时仍由独立卡片兜底。
+            if (replayWorkspaceRunId) {
               const replayCard = await readOutputPackageCardMeta(repositories, {
                 teamId: dispatch.teamId,
                 publishId: resultInput.workspaceRun.publishId,
@@ -10942,6 +10966,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // #1111 内嵌形态:daemon ≥0.3.43 结果回报带 publishId 时,把 output-package 卡片
       // meta 挂进回复消息——卡片随回复气泡内嵌渲染(原型:卡片在 agent 消息 div 内),
       // web 端据此隐藏同 packageId 的独立卡片。读取失败/旧 daemon → 独立卡片兜底。
+      let outputPackageReconciliationPending = false;
       let inlinePackageCard = publishResult && resultInput.workspaceRun?.publishId
         ? await readOutputPackageCardMeta(repositories, {
             teamId: completed.dispatch.teamId,
@@ -10999,7 +11024,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           teamId: completed.dispatch.teamId,
           publishId: resultInput.workspaceRun.publishId,
         });
-        if (staging?.committedRevisionId) {
+        if (!staging || staging.status !== 'committed' || !staging.committedRevisionId) {
+          outputPackageReconciliationPending = true;
+        } else {
           try {
             await outputPackageService.formPackage({
               teamId: completed.dispatch.teamId,
@@ -11008,7 +11035,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               workspaceRevisionId: staging.committedRevisionId,
             });
           } catch {
-            // best-effort:回复链路不因 package reconciliation 失败而中断。
+            // dispatch 已持久化为 terminal，但不能在 formation 异常时发成功 ack；
+            // daemon 的重试会走上面的 replay reconciliation 分支。
+            outputPackageReconciliationPending = true;
           }
         }
         if (!inlinePackageCard) {
@@ -11166,6 +11195,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         teamId: completed.dispatch.teamId,
         lastSeenAt: now,
       });
+
+      if (outputPackageReconciliationPending) {
+        return makeFailure('INTERNAL_ERROR', 'OutputPackage reconciliation pending');
+      }
 
       return makeSuccess({
         dispatch: toDispatchDto(completed.dispatch),

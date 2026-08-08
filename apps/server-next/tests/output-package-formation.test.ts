@@ -893,6 +893,31 @@ for (const variant of variants) {
       expect(replay.ok).toBe(true);
     });
 
+    test('终态重复回报:publish staging 未提交时不确认 delivered,保留重试机会', async () => {
+      seedValue = await seed(variant);
+      const { repositories, app, teamId, channelId, agentId, userId } = seedValue;
+      const dispatchId = 'dispatch-replay-pending';
+      await repositories.messages.append({
+        id: 'msg-replay-pending', teamId, channelId, threadId: 'msg-replay-pending',
+        senderKind: 'user', senderId: userId, body: '等待文件包', createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-replay-pending', agentId,
+        status: 'succeeded', requestId: 'request-replay-pending', prompt: '等待文件包',
+        createdAt: 5, updatedAt: 6, completedAt: 6,
+      });
+
+      const result = await app.receiveDispatchResult({
+        dispatchId,
+        agentId,
+        body: '已完成',
+        workspaceRun: { status: 'succeeded', publishId: 'publish-not-committed' },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe('INTERNAL_ERROR');
+    });
+
     test('#1111 AC4:解析链断裂(无 workspaceRunId)时卡片回退主线(无 threadId),不丢卡片', async () => {
       seedValue = await seed(variant);
       const { repositories, teamId, channelId, agentId } = seedValue;
