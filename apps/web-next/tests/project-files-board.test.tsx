@@ -188,6 +188,20 @@ const readyProjection = {
   consistencyToken: { schemaVersion: 1, entries: [] },
 };
 
+const blockedCurrentProjection = {
+  ...readyProjection,
+  status: 'not_ready' as const,
+  members: readyProjection.members.map((member) => member.versionId === 'ver-c1'
+    ? { ...member, reviewState: 'rejected' as const }
+    : member),
+  blockers: [{
+    code: 'current_not_formal' as const,
+    collectionId: 'col-1',
+    shortLabel: 'F1',
+    filename: '第1集剧本.md',
+  }],
+};
+
 const notReadyFinalProjection = {
   policy: 'final' as const,
   status: 'not_ready' as const,
@@ -334,6 +348,23 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
       expect(card.textContent).toContain('F1 v4');
       expect(card.textContent).toContain('F2 v3');
     });
+  });
+
+  test('current projection not_ready 时仍保留可解析成员行与修订入口', async () => {
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      ...packageDetail,
+      projection: blockedCurrentProjection,
+      asOf: 2000,
+      audienceScope: 'team-1:channel-1:u-1',
+    });
+    renderBoard();
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+    expect(document.querySelector('[data-smoke="files-package-projection-blocked"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).not.toBeNull();
   });
 
   test('选中文件集合 → 版本行(当前版/最终版/审核/来源)同步渲染', async () => {
@@ -607,6 +638,31 @@ describe('ProjectFilesBoard 行动作(步骤 6)', () => {
     ]);
   });
 
+  test('包 current 已前移时按 collection 找回冻结成员身份聚焦预览', async () => {
+    const opened: { meta: OutputPackageMeta; versionId?: string }[] = [];
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      ...packageDetail,
+      package: {
+        ...packageDetail.package,
+        members: [
+          { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
+          { ...packageDetail.package.members[1], artifactVersionId: 'ver-delivered-c2' },
+        ],
+      },
+      asOf: 2000,
+      audienceScope: 'team-1:channel-1:u-1',
+    });
+    renderBoard({ onOpenPackagePreview: (meta, versionId) => opened.push({ meta, versionId }) });
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+    fireEvent.click(document.querySelector('[data-smoke="files-row-preview-edit"][data-version-id="ver-c2"]')!);
+    expect(opened).toHaveLength(1);
+    expect(opened[0].versionId).toBe('ver-delivered-c2');
+  });
+
   test('包成员行「基于此修改」→ basisReviewId 从 availableActions.latestReviewId 冻结 + package/delivery provenance', async () => {
     await selectPackage2();
     fireEvent.click(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')!);
@@ -646,14 +702,67 @@ describe('ProjectFilesBoard 行动作(步骤 6)', () => {
       canDecideVersion: () => true,
       onReview: vi.fn().mockResolvedValue(null),
       onFinalize: vi.fn().mockResolvedValue(null),
+      onOpenReadOnlyArtifact: vi.fn(),
     });
     await selectCollection1();
+    expect(document.querySelector('[data-smoke="files-row-preview-edit"][data-version-id="ver-c1"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-rej"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-view"][data-version-id="ver-c1"]')).not.toBeNull();
     fireEvent.click(document.querySelector('[data-smoke="files-row-detail"][data-version-id="ver-1"]')!);
     await waitFor(() => {
       expect(document.querySelector('[data-smoke="files-version-detail"]')).not.toBeNull();
     });
     expect(screen.queryByText('追加审核')).toBeNull();
     expect(screen.queryByText('设为最终版')).toBeNull();
+  });
+
+  test('归档频道的包成员不暴露预览编辑或修订入口', async () => {
+    mocks.getOutputPackage.mockResolvedValue({
+      ok: true,
+      ...packageDetail,
+      asOf: 2000,
+      audienceScope: 'team-1:channel-1:u-1',
+    });
+    renderBoard({
+      libraryOverride: { ...library, archived: true },
+      onOpenPackagePreview: vi.fn(),
+    });
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+    expect(document.querySelector('[data-smoke="files-row-preview-edit"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-revise"]')).toBeNull();
+  });
+
+  test('被拒绝的非 Markdown 集合版本仅可查看，不暴露基于此修改', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    const rejectedImageLibrary = {
+      ...library,
+      collections: library.collections.map((collection) => collection.id !== 'col-1'
+        ? collection
+        : {
+            ...collection,
+            versions: collection.versions.map((entry) => entry.id !== 'ver-img'
+              ? entry
+              : {
+                  ...entry,
+                  reviewState: 'rejected',
+                  reviews: [{
+                    id: 'rev-img', teamId: 'team-1', channelId: 'channel-1', collectionId: 'col-1',
+                    versionId: 'ver-img', decision: 'rejected', comment: '图片需调整', basis: [],
+                    reviewedBy: 'user-1', createdAt: 1250,
+                  }],
+                }),
+          }),
+    };
+    renderBoard({
+      libraryOverride: rejectedImageLibrary,
+      onOpenReadOnlyArtifact: vi.fn(),
+    });
+    await selectCollection1();
+    expect(document.querySelector('[data-smoke="files-row-view"][data-version-id="ver-img"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-img"]')).toBeNull();
   });
 });
 
