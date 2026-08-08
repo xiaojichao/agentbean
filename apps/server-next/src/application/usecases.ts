@@ -732,6 +732,8 @@ export interface ServerNextUseCases {
       deliveryId?: string;
     };
     idempotencyKey: string;
+    /** socket bind 层注入的传输元数据;usecase 剥离,不进 wire payload 校验。 */
+    currentDeviceId?: string | null;
   }): Promise<
     Ack<{
       revision: ArtifactVersionRevisionSaveResultDto;
@@ -7505,7 +7507,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
     // #1062 基于明确版本保存 Markdown 修订(AC1-AC10)。
     async saveArtifactVersionRevision(revisionInput) {
-      const { userId, teamId, ...wireInput } = revisionInput;
+      // 与 listOutputPackages 同坑(9024 行注释):currentDeviceId 由 socket bind 层
+      // withAuthenticatedUserId 无条件注入,必须与 userId/teamId 一同剥离,
+      // 否则 assertExactKeys 拒绝未知字段 → ARTIFACT_REVISION_PAYLOAD_INVALID(#1062 起全链路即坏)。
+      const { userId, teamId, currentDeviceId, ...wireInput } = revisionInput;
+      void currentDeviceId;
       const parsed = parseArtifactRevisionCommandInputV1('save-artifact-version-revision', wireInput);
       const result = await saveArtifactVersionRevisionCommand(
         {
