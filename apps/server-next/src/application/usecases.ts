@@ -10532,6 +10532,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (dispatch.agentId !== resultInput.agentId) {
         return makeFailure('FORBIDDEN', 'Dispatch does not belong to agent');
       }
+      const resultFingerprint = dispatchResultFingerprint(resultInput);
       if (!isCompletableDispatchStatus(dispatch.status)) {
         if (dispatch.status === 'cancelled') {
           return makeFailure('CONFLICT', 'Dispatch is already cancelled');
@@ -10555,6 +10556,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             dispatch.channelId,
             10_000,
           )).find((message) => message.meta?.dispatchId === dispatch.id) ?? null;
+          const replayStoredFingerprint = replayDeliveryMessage?.meta?.dispatchResultFingerprint;
+          if (typeof replayStoredFingerprint === 'string' && replayStoredFingerprint !== resultFingerprint) {
+            return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+          }
+          const replayStoredProposals = replayHandoff?.result?.collaborationProposals;
+          if (replayHandoff?.result && JSON.stringify(replayStoredProposals ?? [])
+            !== JSON.stringify(resultInput.collaborationProposals ?? [])) {
+            return makeFailure('CONFLICT', 'Dispatch collaboration proposals do not match the first terminal report');
+          }
           let replayWorkspaceRunCreateId = typeof replayDeliveryMessage?.meta?.workspaceRunId === 'string'
             ? replayDeliveryMessage.meta.workspaceRunId
             : resultInput.workspaceRun.id;
@@ -10582,6 +10592,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ?? (await repositories.workspaceRuns.listByDispatch(dispatch.id)).at(-1)
               ?? null
             : null;
+          if (!replayStoredFingerprint && replayDeliveryMessage
+            && replayDeliveryMessage.body !== resultInput.body) {
+            return makeFailure('CONFLICT', 'Dispatch result does not match the first terminal report');
+          }
+          const replayStoredArtifactIds = Array.isArray(replayDeliveryMessage?.meta?.artifactIds)
+            ? replayDeliveryMessage.meta.artifactIds.filter((value): value is string => typeof value === 'string')
+            : replayWorkspaceRun?.artifactIds;
+          if (!replayStoredFingerprint && replayStoredArtifactIds
+            && !sameIdSet(replayStoredArtifactIds, replayReportedArtifactIds)) {
+            return makeFailure('CONFLICT', 'Dispatch artifacts do not match the first terminal report');
+          }
           if (replayWorkspaceRunId
             && replayWorkspaceRunId !== dispatch.id
             && !replayWorkspaceRun) {
@@ -10612,6 +10633,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
                   ...(replayReportedArtifactIds.length > 0
                     ? { artifactIds: replayReportedArtifactIds }
                     : {}),
+                  dispatchResultFingerprint: resultFingerprint,
                   ...(replayWorkspaceRunCreateId ? { workspaceRunId: replayWorkspaceRunCreateId } : {}),
                 },
               });
@@ -11218,6 +11240,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(reportedArtifactIds.length > 0 ? { artifactIds: reportedArtifactIds } : {}),
           ...(workspaceRunId ? { workspaceRunId } : {}),
           ...(inlinePackageCard ? { outputPackageCard: inlinePackageCard } : {}),
+          dispatchResultFingerprint: resultFingerprint,
         },
       }) : null;
       const workspaceRun = resultInput.workspaceRun
@@ -19382,6 +19405,30 @@ async function agentForConfigUpdate(
 
 function uniqueIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
+}
+
+function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
+  const normalizedLeft = uniqueIds([...left]).sort();
+  const normalizedRight = uniqueIds([...right]).sort();
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function dispatchResultFingerprint(input: ReceiveDispatchResultInput): string {
+  const artifacts = (input.artifacts ?? []).map((artifact) => ({
+    ...artifact,
+    ...(artifact.contentBase64
+      ? { contentBase64: createHash('sha256').update(artifact.contentBase64).digest('hex') }
+      : {}),
+  }));
+  return createHash('sha256').update(JSON.stringify({
+    body: input.body,
+    artifactIds: uniqueIds([...(input.artifactIds ?? []), ...artifacts.map((artifact) => artifact.id)]),
+    artifacts,
+    workspaceRun: input.workspaceRun ?? null,
+    collaborationProposals: input.collaborationProposals ?? [],
+    projectDocumentInputSetResult: input.projectDocumentInputSetResult ?? null,
+  })).digest('hex');
 }
 
 function hasOwn(value: object, key: PropertyKey): boolean {
