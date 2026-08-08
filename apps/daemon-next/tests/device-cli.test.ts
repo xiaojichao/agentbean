@@ -85,6 +85,28 @@ describe('MacOSLaunchAgentAdapter', () => {
     ]);
   });
 
+  test('bootout 按路径失败时按 label 兜底(#1114 僵尸 job 可杀)', async () => {
+    const calls: Array<readonly string[]> = [];
+    const adapter = createMacOSLaunchAgentAdapter({
+      uid: 501,
+      home: '/Users/test',
+      baseDir: '/Users/test/.agentbean',
+      run: vi.fn(async (_executable, argv) => {
+        calls.push(argv);
+        // 按路径(domain + plistFile)失败;按 label(仅 target)成功。
+        return argv.length === 3
+          ? { exitCode: 5, stdout: '', stderr: 'Boot-out failed: No such file' }
+          : { exitCode: 0, stdout: '', stderr: '' };
+      }),
+    });
+    const result = await adapter.bootout();
+    expect(result.exitCode).toBe(0);
+    expect(calls).toEqual([
+      ['bootout', 'gui/501', '/Users/test/Library/LaunchAgents/com.agentbean.device-service.plist'],
+      ['bootout', 'gui/501/com.agentbean.device-service'],
+    ]);
+  });
+
   test('generates a deterministic secret-free plist for the internal service entrypoint', () => {
     const first = generateMacOSLaunchAgentPlist({
       executablePath: '/opt/AgentBean/bin/agentbean',
