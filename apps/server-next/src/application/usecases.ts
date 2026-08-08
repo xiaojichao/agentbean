@@ -2699,7 +2699,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (existing) {
         const sameRequest = existing.senderId === messageInput.userId
           && existing.body === messageInput.body
-          && existing.meta?.projectReferenceRequestFingerprint === referenceFingerprint;
+          && projectReferenceRequestFingerprintMatches(existing.meta?.projectReferenceRequestFingerprint, messageInput);
         if (!sameRequest) {
           return makeFailure('CONFLICT', 'Client message id was already used for a different message');
         }
@@ -2853,7 +2853,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           channelId: messageInput.channelId,
           clientMessageId: messageInput.clientMessageId,
         });
-        if (replay?.meta?.projectReferenceRequestFingerprint === referenceFingerprint) {
+        if (replay && projectReferenceRequestFingerprintMatches(replay.meta?.projectReferenceRequestFingerprint, messageInput)) {
           const [projected] = await enrichMessagesWithArtifacts(repositories, [replay]);
           return makeSuccess({
             message: projected ?? replay,
@@ -5425,7 +5425,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               && existingMessage.channelId === messageInput.channelId
               && existingMessage.senderId === messageInput.userId
               && existingMessage.body === messageInput.body
-              && existingMessage.meta?.projectReferenceRequestFingerprint === referenceFingerprint
+              && projectReferenceRequestFingerprintMatches(existingMessage.meta?.projectReferenceRequestFingerprint, messageInput)
               && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
             if (!sameRequest) return { kind: 'conflict' as const };
             const replayArtifacts = await transaction.artifacts.listByMessage(existingMessage.id);
@@ -15421,6 +15421,39 @@ function projectReferenceRequestFingerprint(
     meta: input.meta ?? null,
     selections: input.selections ?? [],
   })).digest('hex');
+}
+
+function legacyProjectReferenceRequestFingerprint(
+  input: Pick<
+    SendMessageInput,
+    'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
+    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+  >,
+): string {
+  return createHash('sha256').update(JSON.stringify({
+    userId: input.userId,
+    teamId: input.teamId,
+    channelId: input.channelId,
+    messageId: input.messageId ?? null,
+    threadId: input.threadId ?? null,
+    body: input.body,
+    asTask: input.asTask === true,
+    artifactIds: input.artifactIds ?? [],
+    meta: input.meta ?? null,
+    selections: input.selections ?? [],
+  })).digest('hex');
+}
+
+function projectReferenceRequestFingerprintMatches(
+  storedFingerprint: unknown,
+  input: Pick<
+    SendMessageInput,
+    'userId' | 'teamId' | 'channelId' | 'messageId' | 'threadId' | 'body'
+    | 'asTask' | 'artifactIds' | 'meta' | 'selections'
+  >,
+): boolean {
+  return storedFingerprint === projectReferenceRequestFingerprint(input)
+    || storedFingerprint === legacyProjectReferenceRequestFingerprint(input);
 }
 
 function stableSerialize(value: unknown): string {
