@@ -1739,10 +1739,6 @@ export default function ChatPage() {
     const linkedTaskId = taskIdForStatusMessageDeepLink(messages, targetMessageId);
     if (linkedTaskId) {
       const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === linkedTaskId) ?? null;
-      setTaskDetailMessageId(taskMessage?.id ?? null);
-      setTaskDetailOnlyTaskId(taskMessage ? null : linkedTaskId);
-      setThreadRootId(null);
-      setSelectedMessageId(taskMessage?.id ?? null);
       setChatTaskMenuTarget(null);
       const params = new URLSearchParams(searchParams.toString());
       params.set('task', taskMessage ? `${activeChannel}:${taskMessage.id}` : `task:${linkedTaskId}`);

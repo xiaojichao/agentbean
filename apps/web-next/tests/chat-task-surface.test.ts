@@ -32,6 +32,17 @@ describe('chat task surface', () => {
     expect(source).toContain('taskIdForStatusMessageDeepLink(messages, targetMessageId)');
   });
 
+  test('隐藏状态消息深链只重写 Task URL，不复制 TaskDetail 本地状态', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('const linkedTaskId = taskIdForStatusMessageDeepLink');
+    const end = source.indexOf("setTab('chat');", start);
+    const redirectBranch = source.slice(start, end);
+
+    expect(redirectBranch).toContain("params.set('task'");
+    expect(redirectBranch).not.toContain('setTaskDetailMessageId');
+    expect(redirectBranch).not.toContain('setTaskDetailOnlyTaskId');
+  });
+
   test('ThreadPanel 只把根消息解析出的 Task id 交给既有活动卡 section', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ThreadPanel');
