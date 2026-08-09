@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { createServerNextUseCases, type ArtifactContentStore, type BeginWorkspacePublishStagingInput, type CreateServerNextUseCasesInput } from './application/usecases.js';
+import { getEmergencyStopActive } from './application/pi-provider-service.js';
 import { createFileWorkspaceStagingContentStore } from './application/workspace-staging-content-store.js';
 import { createArtifactPreviewService, type ArtifactPreviewService } from './application/artifact-preview-service.js';
 import { createChannelFileMetrics, parseChannelFileRolloutConfig, type ChannelFileRolloutConfig } from './application/channel-file-rollout.js';
@@ -2170,18 +2171,26 @@ function createDefaultApp(
       repositories, ids,
     );
     const serverWorker = createDefaultServerWorker(config, clock, ids);
-    let appForPiHealth: ServerNextUseCases | undefined;
-    const resolvePiHealthy = async () => {
-      const health = await appForPiHealth?.getPublicPiHealth({});
-      return health?.ok === true && health.health.status === 'normal';
+    let appForPiReadiness: ServerNextUseCases | undefined;
+    const resolvePiConfigurationReady = async () => {
+      const result = await appForPiReadiness?.getPiConfigurationReadiness();
+      return result?.ok === true && result.readiness.status === 'ready';
+    };
+    const resolvePiRuntimeHealthy = async () => !getEmergencyStopActive();
+    const resolvePiAutomationAvailable = async () => {
+      const [configurationReady, runtimeHealthy] = await Promise.all([
+        resolvePiConfigurationReady(),
+        resolvePiRuntimeHealthy(),
+      ]);
+      return configurationReady && runtimeHealthy;
     };
     // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
     const taskClaimBroker = createTaskClaimBroker({
-      repositories, clock, ids, piHealthy: resolvePiHealthy,
+      repositories, clock, ids, piAutomationAvailable: resolvePiAutomationAvailable,
     });
     const management = createDefaultManagementRuntime(
       repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
-      resolvePiHealthy,
+      resolvePiAutomationAvailable,
       projectCollaborationRollout.managerAutoAdvance,
       serverWorker?.pool,
       { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
@@ -2202,7 +2211,7 @@ function createDefaultApp(
       managementKernel: management.kernel,
       taskCoordinationKernel: management.taskCoordinationKernel,
       serverCapsuleRuntimeContextResolver,
-      resolvePiHealthy,
+      resolvePiAutomationAvailable,
       resolveProjectStageCandidates: (taskId, options) =>
         taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
       // #1064：Task-linked @Agent 请求的 eligibility 解析（复用 broker resolveCandidates，
@@ -2227,7 +2236,7 @@ function createDefaultApp(
       onMessageTracerDelivered,
       onWorkspaceRevisionCommitted,
     });
-    appForPiHealth = app;
+    appForPiReadiness = app;
     return {
       app,
       artifactPreviewService,
@@ -2277,18 +2286,26 @@ function createDefaultApp(
     repositories, ids,
   );
   const serverWorker = createDefaultServerWorker(config, clock, ids);
-  let appForPiHealth: ServerNextUseCases | undefined;
-  const resolvePiHealthy = async () => {
-    const health = await appForPiHealth?.getPublicPiHealth({});
-    return health?.ok === true && health.health.status === 'normal';
+  let appForPiReadiness: ServerNextUseCases | undefined;
+  const resolvePiConfigurationReady = async () => {
+    const result = await appForPiReadiness?.getPiConfigurationReadiness();
+    return result?.ok === true && result.readiness.status === 'ready';
+  };
+  const resolvePiRuntimeHealthy = async () => !getEmergencyStopActive();
+  const resolvePiAutomationAvailable = async () => {
+    const [configurationReady, runtimeHealthy] = await Promise.all([
+      resolvePiConfigurationReady(),
+      resolvePiRuntimeHealthy(),
+    ]);
+    return configurationReady && runtimeHealthy;
   };
   // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
   const taskClaimBroker = createTaskClaimBroker({
-    repositories, clock, ids, piHealthy: resolvePiHealthy,
+    repositories, clock, ids, piAutomationAvailable: resolvePiAutomationAvailable,
   });
   const management = createDefaultManagementRuntime(
     repositories, clock, ids, serverCapsuleRuntimeContextResolver, taskClaimBroker,
-    resolvePiHealthy,
+    resolvePiAutomationAvailable,
     projectCollaborationRollout.managerAutoAdvance,
     serverWorker?.pool,
     { queueTimeoutMs: serverWorker?.queueTimeoutMs, leaseTtlMs: serverWorker?.leaseTtlMs },
@@ -2309,7 +2326,7 @@ function createDefaultApp(
     managementKernel: management.kernel,
     taskCoordinationKernel: management.taskCoordinationKernel,
     serverCapsuleRuntimeContextResolver,
-    resolvePiHealthy,
+    resolvePiAutomationAvailable,
     resolveProjectStageCandidates: (taskId, options) =>
       taskClaimBroker.resolveProjectStageCandidates(taskId, options?.dependencyTaskIds),
     resolveTaskLinkedEligibleAgentIds: async (taskId) => {
@@ -2332,7 +2349,7 @@ function createDefaultApp(
     onMessageTracerDelivered,
     onWorkspaceRevisionCommitted,
   });
-  appForPiHealth = app;
+  appForPiReadiness = app;
   return {
     app,
     artifactPreviewService,
@@ -2448,7 +2465,7 @@ function createDefaultManagementRuntime(
   ids: { nextId(): string },
   memoryCapsules: ReturnType<typeof createDefaultServerCapsuleRuntimeContextResolver>,
   taskClaimBroker: TaskClaimBroker,
-  piHealthy: () => Promise<boolean>,
+  piAutomationAvailable: () => Promise<boolean>,
   projectStageAutoAdvanceEnabled: boolean,
   serverWorkerPool?: ServerWorkerPool,
   serverWorkerTuning?: { queueTimeoutMs?: number; leaseTtlMs?: number },
@@ -2520,7 +2537,7 @@ function createDefaultManagementRuntime(
           channelId: task.channelId,
         });
         const outcome = outcomes.find((item) => item.taskId === claim.taskId);
-        if (outcome?.reason === 'pi_degraded') {
+        if (outcome?.reason === 'automation_unavailable') {
           scheduleProjectStageRetry(claim);
         } else {
           projectStageRetryAttempts.delete(key);
@@ -2579,7 +2596,7 @@ function createDefaultManagementRuntime(
   projectStageAutoAdvance = createProjectStageAutoAdvance({
     repositories,
     broker: taskClaimBroker,
-    piHealthy,
+    piAutomationAvailable,
     invokeClaimedProjectStage,
     now: clock.now,
     emitTaskOffers: async (taskId, options) => {

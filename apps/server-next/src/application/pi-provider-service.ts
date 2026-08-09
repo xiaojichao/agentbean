@@ -12,7 +12,7 @@ import {
   type PiProviderCardRevisionDto,
   type PiProviderConfigDto,
   type PiProviderTestResultDto,
-  type PublicPiHealthDto,
+  type PiConfigurationReadinessDto,
   type PublishPiProviderCardResult,
   type RunPiProviderTestResult,
 } from '../../../../packages/contracts/src/index.js';
@@ -29,7 +29,6 @@ import {
   parseListPiProviderPresetsRequest,
   parsePublishPiProviderCardRequest,
   parseGetActivePiModelRequest,
-  parsePublicPiHealthRequest,
   parseRunPiProviderTestRequest,
   parseSetActivePiModelRequest,
   parseUpdatePiProviderCardRequest,
@@ -267,23 +266,23 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     return { ...active, modelId: revision.config.modelId };
   }
 
-  async function activeModelHealth(repositories: PiProviderRepositories): Promise<PublicPiHealthDto> {
+  async function activeModelConfigurationReadiness(repositories: PiProviderRepositories): Promise<PiConfigurationReadinessDto> {
     const active = await repositories.activeModel.get();
-    if (!active) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' };
+    if (!active) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' };
     const revision = await repositories.revisions.getById(active.revisionId);
     if (!revision || revision.status !== 'published' || revision.cardId !== active.cardId) {
-      return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+      return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     }
     const card = await repositories.cards.getById(active.cardId);
-    if (!card) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
+    if (!card) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_INVALID' };
     const credential = await resolveApiKey(repositories, card.credentialRef);
-    if (!credential.ok) return { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
+    if (!credential.ok) return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_CREDENTIAL_UNAVAILABLE' };
     const summary = computePiProviderConfigSummary({ ...revision.config, credentialFingerprint: credential.fingerprint });
     const test = await repositories.tests.getLatestByConfigSummary({ cardId: card.id, configSummary: summary });
     if (!test || test.status !== 'passed' || test.configSummary !== summary) {
-      return { status: 'degraded', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' };
+      return { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' };
     }
-    return { status: 'normal', diagnosticCode: null };
+    return { status: 'ready', diagnosticCode: null };
   }
 
   async function resolveApiKey(
@@ -851,7 +850,7 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
     // Card。应用层 deleteCard API 因需要跨 8+ 文件变更（repository 接口/实现、
     // socket handler、contract DTO、domain parse 函数），留作后续独立 PR。
 
-    async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; health: PublicPiHealthDto }>> {
+    async getActiveModel(raw: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelHistoryEntryDto[]; readiness: PiConfigurationReadinessDto }>> {
       const parsed = parseGetActivePiModelRequest(raw);
       if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
       const admin = await requireSystemAdmin(parsed.value.userId);
@@ -862,19 +861,17 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
         return makeSuccess({
           activeModel: active ? await toActiveModelDto(active, repositories) : null,
           history: (await Promise.all(history.map((entry) => toActiveModelDto(entry, repositories)))).filter((entry): entry is ActivePiModelHistoryEntryDto => entry !== null),
-          health: await activeModelHealth(repositories),
+          readiness: await activeModelConfigurationReadiness(repositories),
         });
       });
       assertSafeAckPayload(result);
       return result;
     },
 
-    async getPublicHealth(raw: unknown): Promise<Ack<{ health: PublicPiHealthDto }>> {
-      const parsed = parsePublicPiHealthRequest(raw);
-      if (!parsed.ok) return makeFailure('VALIDATION_ERROR', parsed.message);
-      const user = await deps.users.getById(parsed.value.userId);
-      if (!user) return makeFailure('UNAUTHENTICATED', 'User not found');
-      const result = makeSuccess({ health: await deps.unitOfWork.run(activeModelHealth) });
+    async getConfigurationReadiness(): Promise<Ack<{ readiness: PiConfigurationReadinessDto }>> {
+      const result = makeSuccess({
+        readiness: await deps.unitOfWork.run(activeModelConfigurationReadiness),
+      });
       assertSafeAckPayload(result);
       return result;
     },
@@ -921,8 +918,12 @@ export function createPiProviderService(deps: PiProviderServiceDependencies) {
       return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
     },
 
-    /** #699 US 84：读取 PI 紧急停止状态。无需鉴权（公开健康信息一部分）。 */
-    async getEmergencyStop(): Promise<Ack<{ emergencyStopActive: boolean }>> {
+    /** #699 US 84：读取 PI 紧急停止状态。仅系统管理员可见。 */
+    async getEmergencyStop(raw: unknown): Promise<Ack<{ emergencyStopActive: boolean }>> {
+      const input = raw as Record<string, unknown> | null | undefined;
+      if (!input || typeof input.userId !== 'string') return makeFailure('VALIDATION_ERROR', 'userId required');
+      const admin = await requireSystemAdmin(input.userId);
+      if (!admin.ok) return admin;
       return makeSuccess({ emergencyStopActive: emergencyStopActiveFlag });
     },
   };

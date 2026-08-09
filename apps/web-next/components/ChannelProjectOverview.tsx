@@ -676,7 +676,7 @@ function stageAdvanceReasonLabel(
 ): string {
   const labels: Record<typeof reason, string> = {
     channel_archived: '频道已归档',
-    pi_degraded: 'PI 当前降级或不可用',
+    automation_unavailable: '自动推进暂不可用',
     task_not_pending: 'Task 当前状态不可推进',
     task_revision_stale: 'Task 或 Stage revision 已变化',
     execution_gate_blocked: '阶段依赖或审核门禁未满足',

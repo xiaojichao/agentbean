@@ -202,12 +202,6 @@ export function parseGetActivePiModelRequest(
   return parseActorOnly(payload, LIST_KEYS);
 }
 
-export function parsePublicPiHealthRequest(
-  payload: unknown,
-): PiProviderRequestParseResult<ParsedPiProviderActor> {
-  return parseActorOnly(payload, LIST_KEYS);
-}
-
 export function parseSetActivePiModelRequest(
   payload: unknown,
 ): PiProviderRequestParseResult<ParsedSetActivePiModelRequest> {

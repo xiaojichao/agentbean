@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   PiProviderCardDto,
   ActivePiModelDto,
-  PublicPiHealthDto,
+  PiConfigurationReadinessDto,
   PiProviderEndpointMode,
   PiProviderPreset,
   PiProviderPresetDescriptorDto,
 } from '@agentbean/contracts';
 import { piProviderEvents, systemKnowledgeEvents } from '@/lib/socket';
+import { announcePiConfigurationReadinessChanged } from '@/lib/pi-configuration-readiness';
 import { SystemUserMemoryPanel } from '@/components/SystemUserMemoryPanel';
 
 type EditorMode = 'form' | 'advanced';
@@ -118,7 +119,7 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
   const [cards, setCards] = useState<PiProviderCardDto[]>([]);
   const [activeModel, setActiveModel] = useState<ActivePiModelDto | null>(null);
   const [activeHistory, setActiveHistory] = useState<ActivePiModelDto[]>([]);
-  const [activeHealth, setActiveHealth] = useState<PublicPiHealthDto | null>(null);
+  const [configurationReadiness, setConfigurationReadiness] = useState<PiConfigurationReadinessDto | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [selectedPreset, setSelectedPreset] = useState<PiProviderPreset>('openai');
@@ -155,7 +156,8 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
     if (activeResult.ok) {
       setActiveModel(activeResult.activeModel ?? null);
       setActiveHistory(activeResult.history ?? []);
-      setActiveHealth(activeResult.health ?? null);
+      setConfigurationReadiness(activeResult.readiness ?? null);
+      announcePiConfigurationReadinessChanged();
     }
     if (!options.preserveEditor && !editorInitializedRef.current && (presetResult.presets?.length ?? 0) > 0) {
       const first = presetResult.presets![0]!;
@@ -458,8 +460,8 @@ export function PiManagementPanel({ isSystemAdmin }: { isSystemAdmin: boolean })
           <section className="rounded-lg border border-neutral-200 p-5" data-smoke="settings-pi-active-model">
             <h3 className="text-sm font-semibold text-neutral-700">Active PI Model</h3>
             <p className="mt-1 text-xs text-neutral-500">
-              全系统唯一；仅可切换至已发布且测试通过的 revision。健康：{activeHealth?.status ?? 'unknown'}。
-              {activeHealth?.diagnosticCode ? ` 诊断：${activeHealth.diagnosticCode}。` : ''}
+              全系统唯一；仅可切换至已发布且测试通过的 revision。配置就绪：{configurationReadiness?.status === 'ready' ? '就绪' : configurationReadiness?.status === 'attention_required' ? '需要处理' : '未知'}。
+              {configurationReadiness?.diagnosticCode ? ` 诊断：${configurationReadiness.diagnosticCode}。` : ''}
             </p>
             <p className="mt-2 text-sm">{activeModel ? `当前模型：${activeModel.modelId}` : '尚未配置 Active PI Model'}</p>
             <div className="mt-3 space-y-2">

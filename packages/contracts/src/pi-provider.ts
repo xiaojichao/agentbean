@@ -198,9 +198,9 @@ export interface SetActivePiModelInput {
   readonly revisionId: ID;
 }
 
-/** Team 可见投影：刻意不含 Provider、Model、Card 或 Credential 身份。 */
-export interface PublicPiHealthDto {
-  readonly status: 'normal' | 'degraded' | 'unavailable';
+/** 系统管理员可见的 Active PI Model 配置就绪事实；不代表实时运行健康。 */
+export interface PiConfigurationReadinessDto {
+  readonly status: 'ready' | 'attention_required';
   readonly diagnosticCode: string | null;
 }
 

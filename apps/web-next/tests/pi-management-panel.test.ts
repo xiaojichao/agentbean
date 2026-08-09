@@ -102,7 +102,7 @@ beforeEach(() => {
     card: { ...sourceCard, draftRevision: null, canPublish: false },
   });
   mocks.getActiveModel.mockResolvedValue({
-    ok: true, activeModel: null, history: [], health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+    ok: true, activeModel: null, history: [], readiness: { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
   });
   mocks.setActiveModel.mockResolvedValue({ ok: true });
 });
@@ -151,12 +151,15 @@ describe('PI Management console scope', () => {
     expect(panelSource).toContain('仅系统管理员可访问');
   });
 
-  test('team users can consume only the public PI health projection', () => {
-    expect(socketSource).toContain('getPublicHealth()');
-    expect(socketSource).toContain('WEB_EVENTS.piProvider.getPublicHealth');
-    expect(sidebarSource).toContain('piProviderEvents().getPublicHealth()');
-    expect(sidebarSource).toContain('data-smoke="pi-public-health"');
-    expect(sidebarSource).not.toContain('activeModel');
+  test('only system admins receive an exception-only PI configuration reminder', () => {
+    expect(socketSource).not.toContain('getPublicHealth');
+    expect(sidebarSource).toContain("currentUser?.role !== 'admin'");
+    expect(sidebarSource).toContain('piProviderEvents().getActiveModel()');
+    expect(sidebarSource).toContain("piReadiness?.status === 'attention_required'");
+    expect(sidebarSource).toContain('data-smoke="pi-configuration-readiness-alert"');
+    expect(sidebarSource).toContain('dashboard/pi');
+    expect(sidebarSource).toContain('PI 需要处理');
+    expect(sidebarSource).not.toContain('diagnosticCode');
   });
 
   test('system admin panel supports four presets, form/advanced editors, and credential-safe UX', () => {
@@ -179,7 +182,7 @@ describe('PI Management console scope', () => {
     expect(panelSource).toContain('settings-pi-publish');
     expect(panelSource).toContain('settings-pi-active-model');
     expect(panelSource).toContain('设为 Active');
-    expect(panelSource).toContain('activeHealth.diagnosticCode');
+    expect(panelSource).toContain('configurationReadiness.diagnosticCode');
     expect(panelSource).not.toContain('只影响后续新建 Run');
   });
 

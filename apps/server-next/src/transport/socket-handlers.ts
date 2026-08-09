@@ -293,7 +293,6 @@ export function registerWebSocketHandlers(
     bind(socket, WEB_EVENTS.piProvider.publishCard, app, 'publishPiProviderCard', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.setActiveModel, app, 'setActivePiModel', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getActiveModel, app, 'getActivePiModel', undefined, piProviderBindOptions);
-    bind(socket, WEB_EVENTS.piProvider.getPublicHealth, app, 'getPublicPiHealth', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.setEmergencyStop, app, 'setEmergencyStop', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piProvider.getEmergencyStop, app, 'getEmergencyStop', undefined, piProviderBindOptions);
     bind(socket, WEB_EVENTS.piUsage.getTeamUsage, app, 'getTeamPiTokenUsage', undefined, { authenticatedUser: options.authenticatedUser });

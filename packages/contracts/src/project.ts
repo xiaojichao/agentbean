@@ -117,7 +117,7 @@ export interface ProjectStageDto {
 
 export type ProjectStageAdvanceWaitingReason =
   | 'channel_archived'
-  | 'pi_degraded'
+  | 'automation_unavailable'
   | 'task_not_pending'
   | 'task_revision_stale'
   | 'execution_gate_blocked'

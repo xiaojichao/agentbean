@@ -2,11 +2,12 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock } from 'lucide-react';
+import { Bot, MessagesSquare, ClipboardList, Users, ChevronDown, Settings, Monitor, LayoutDashboard, Plus, Check, Globe, Lock, TriangleAlert } from 'lucide-react';
 import { agentEvents, channelEvents, deviceEvents, getWebSocket, piProviderEvents, teamEvents } from '@/lib/socket';
-import type { PublicPiHealthDto } from '@agentbean/contracts';
+import type { PiConfigurationReadinessDto } from '@agentbean/contracts';
 import { useAgentBeanStore } from '@/lib/store';
 import { writeStoredTeamPath } from '@/lib/team-path';
+import { PI_CONFIGURATION_READINESS_CHANGED_EVENT } from '@/lib/pi-configuration-readiness';
 import type { TeamSummary } from '@/lib/schema';
 
 export function Sidebar() {
@@ -21,7 +22,7 @@ export function Sidebar() {
   const applyTeamsSnapshot = useAgentBeanStore((s) => s.applyTeamsSnapshot);
   const [showTeams, setShowTeams] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [piHealth, setPiHealth] = useState<PublicPiHealthDto | null>(null);
+  const [piReadiness, setPiReadiness] = useState<PiConfigurationReadinessDto | null>(null);
 
   useEffect(() => {
     if (conn !== 'open') return;
@@ -35,16 +36,23 @@ export function Sidebar() {
   }, [conn, applyTeamsSnapshot]);
 
   useEffect(() => {
-    if (conn !== 'open' || !currentUser) {
-      setPiHealth(null);
+    if (conn !== 'open' || currentUser?.role !== 'admin') {
+      setPiReadiness(null);
       return;
     }
     let active = true;
-    void piProviderEvents().getPublicHealth().then((result) => {
-      if (active && result.ok && result.health) setPiHealth(result.health);
-    });
-    return () => { active = false; };
-  }, [conn, currentUser?.id]);
+    const refresh = () => {
+      void piProviderEvents().getActiveModel().then((result) => {
+        if (active) setPiReadiness(result.ok ? result.readiness ?? null : null);
+      });
+    };
+    refresh();
+    window.addEventListener(PI_CONFIGURATION_READINESS_CHANGED_EVENT, refresh);
+    return () => {
+      active = false;
+      window.removeEventListener(PI_CONFIGURATION_READINESS_CHANGED_EVENT, refresh);
+    };
+  }, [conn, currentUser?.id, currentUser?.role]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -156,11 +164,15 @@ export function Sidebar() {
 
       {/* Bottom: settings */}
       <div className="space-y-2 border-t border-neutral-200 px-2 py-2">
-        {piHealth && (
-          <div className="rounded-md bg-white px-2 py-1.5 text-[11px] text-neutral-500" data-smoke="pi-public-health">
-            <span className="font-medium text-neutral-700">PI {piHealth.status}</span>
-            {piHealth.diagnosticCode && <div className="mt-0.5 break-all">{piHealth.diagnosticCode}</div>}
-          </div>
+        {isAdmin && piReadiness?.status === 'attention_required' && (
+          <Link
+            href={`/${np}/dashboard/pi`}
+            className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100"
+            data-smoke="pi-configuration-readiness-alert"
+          >
+            <TriangleAlert size={14} className="shrink-0" />
+            <span>PI 需要处理</span>
+          </Link>
         )}
         <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
       </div>
