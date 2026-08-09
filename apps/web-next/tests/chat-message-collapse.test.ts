@@ -29,7 +29,7 @@ describe('channel message expand/collapse surface', () => {
       chatPage.indexOf('function ChatArtifactPreview('),
       chatPage.indexOf('function formatTime('),
     );
-    expect(threadPanel).toContain('readOnlyArtifacts');
+    expect(threadPanel).toContain('readOnlyArtifacts={readOnlyArtifacts}');
     expect(bubble).toContain('collapsibleMarkdownPreview={!readOnlyArtifacts}');
     expect(artifactPreview).toContain('<MarkdownMessage body={content} collapsible={collapsibleMarkdownPreview} />');
   });

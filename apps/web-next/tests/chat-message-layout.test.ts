@@ -42,7 +42,7 @@ describe('chat message layout', () => {
       chatPage.indexOf('function ThreadPanel('),
       chatPage.indexOf('function ProfilePanel('),
     );
-    expect(threadPanel).toContain('readOnlyArtifacts');
+    expect(threadPanel).toContain('readOnlyArtifacts={readOnlyArtifacts}');
     const preview = chatPage.slice(
       chatPage.indexOf('function ChatArtifactPreview('),
       chatPage.indexOf('function formatTime('),

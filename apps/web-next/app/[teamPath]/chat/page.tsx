@@ -4605,7 +4605,7 @@ function ThreadPanel({
         onAddPackageReference={onAddSelection}
         onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
-        readOnlyArtifacts
+        readOnlyArtifacts={readOnlyArtifacts}
         showReplyAction={false}
         showTaskBadge={shouldShowThreadTaskBadge(taskId, rootTaskId)}
         showReplyCount={false}
