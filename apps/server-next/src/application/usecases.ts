@@ -9974,22 +9974,12 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (await taskHasManagedGovernance(repositories, task)) {
         return makeFailure('CONFLICT', 'Managed tasks cannot be deleted; use cancel-task or close-task');
       }
-      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
-      const deletedInvocationIds = coordination
-        ? (await repositories.management.invocations.listByRun(coordination.managementRunId))
-          .filter((invocation) => invocation.intent.taskContext?.taskId === task.id)
-          .map((invocation) => invocation.id)
-        : [];
       const deleted = await repositories.tasks.delete({ taskId: task.id });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
       await invalidateSourcesAfterDeletion({
         teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
-      });
-      await invalidateSourcesAfterDeletion({
-        teamId: taskInput.teamId, sourceKind: 'invocation', sourceIds: deletedInvocationIds,
-        actorId: taskInput.userId,
       });
       return makeSuccess({ task: deleted });
     },

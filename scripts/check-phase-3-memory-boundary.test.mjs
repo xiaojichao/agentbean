@@ -138,6 +138,18 @@ test('fails closed when reactive Memory source invalidation disappears', () => {
   assert.match(result.stderr, /P3_SOURCE_INVALIDATION_INVALID/);
 });
 
+test('fails closed when managed task deletion no longer preserves invocation Memory', () => {
+  const result = withFixture('agentbean-phase3-managed-task-deletion-', (fixture) => {
+    const path = join(fixture, 'apps/server-next/tests/memory-source-invalidation-service.test.ts');
+    writeFileSync(path, readFileSync(path, 'utf8').replaceAll(
+      'keeps invocation sources when managed task deletion is rejected',
+      'removed managed task deletion fence test',
+    ));
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /P3_SOURCE_INVALIDATION_INVALID/);
+});
+
 test('fails closed when minimal Memory Capsule creation disappears', () => {
   const result = withFixture('agentbean-phase3-capsule-', (fixture) => {
     const path = join(fixture, 'apps/server-next/src/application/memory-capsule-service.ts');

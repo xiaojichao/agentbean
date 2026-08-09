@@ -170,8 +170,10 @@ if (!invalidationMarkers.every((marker) => memorySourceInvalidationService.inclu
   || !serverNextUsecases.includes("['workspace-run', deletedWorkspaceRunIds]")
   || !serverNextUsecases.includes("['invocation', deletedInvocationIds]")
   || !memorySourceInvalidationTests.includes('invalidates artifact, workspace-run, and invocation sources')
-  || !memorySourceInvalidationTests.includes('invalidates invocation sources bound to a deleted task')) {
-  violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation on deletion with dual-backend parity tests is required');
+  || !memorySourceInvalidationTests.includes('invalidates task sources bound to a deleted unmanaged task')
+  || !memorySourceInvalidationTests.includes('keeps invocation sources when managed task deletion is rejected')
+  || !serverNextUsecases.includes('Managed tasks cannot be deleted; use cancel-task or close-task')) {
+  violations.push('P3_SOURCE_INVALIDATION_INVALID: reactive Memory source invalidation and managed-task deletion fencing with dual-backend parity tests are required');
 }
 
 const capsuleMarkers = [
