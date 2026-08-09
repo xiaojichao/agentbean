@@ -14,6 +14,13 @@ export type ChatMessageDecorationVisibility = {
   showArtifactPreviews: boolean;
 };
 
+export function shouldShowThreadTaskBadge(
+  messageTaskId: string | null,
+  rootTaskId: string | null,
+): boolean {
+  return Boolean(messageTaskId) && messageTaskId !== rootTaskId;
+}
+
 export function chatMessageDecorationVisibility({
   taskId,
   showTaskBadge,

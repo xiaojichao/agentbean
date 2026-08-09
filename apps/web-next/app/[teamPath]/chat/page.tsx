@@ -21,7 +21,7 @@ import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMenti
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
-import { chatMessageDecorationVisibility } from '@/lib/chat-message-decorations';
+import { chatMessageDecorationVisibility, shouldShowThreadTaskBadge } from '@/lib/chat-message-decorations';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
@@ -4559,7 +4559,7 @@ function ThreadPanel({
         onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
         showReplyAction={false}
-        showTaskBadge={false}
+        showTaskBadge={shouldShowThreadTaskBadge(taskId, rootTaskId)}
         showReplyCount={false}
       />
     );

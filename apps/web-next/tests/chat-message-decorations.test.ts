@@ -1,5 +1,18 @@
 import { describe, expect, test } from 'vitest';
-import { chatMessageDecorationVisibility } from '../lib/chat-message-decorations';
+import {
+  chatMessageDecorationVisibility,
+  shouldShowThreadTaskBadge,
+} from '../lib/chat-message-decorations';
+
+describe('thread task badge visibility', () => {
+  test('隐藏与讨论串根 Task 相同的任务标识', () => {
+    expect(shouldShowThreadTaskBadge('task-root', 'task-root')).toBe(false);
+  });
+
+  test('保留回复转换出的独立 Task 标识', () => {
+    expect(shouldShowThreadTaskBadge('task-reply', 'task-root')).toBe(true);
+  });
+});
 
 describe('chat message decorations', () => {
   test('讨论串内的 Task 关联回复不重复展示任务编号和 Agent 名称', () => {
