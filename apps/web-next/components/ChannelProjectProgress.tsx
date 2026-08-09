@@ -66,7 +66,11 @@ export function ChannelProjectProgress({
     if (creatorFilter !== 'all' && entry.task.creatorId !== creatorFilter) return false;
     if (focusFilter !== 'all' && channelTaskResponsibilityFocusFilterValue(entry) !== focusFilter) return false;
     if (reviewerFilter === 'pending-me') {
-      return Boolean(currentUserId && entry.review.reviewerIds.includes(currentUserId) && !entry.review.latest);
+      return Boolean(
+        currentUserId
+        && entry.review.reviewerIds.includes(currentUserId)
+        && entry.delivery.focusReviewState === 'pending',
+      );
     }
     if (reviewerFilter.startsWith('suggested:')) {
       return entry.review.reviewerIds.includes(reviewerFilter.slice('suggested:'.length));

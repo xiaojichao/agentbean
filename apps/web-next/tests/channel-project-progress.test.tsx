@@ -68,6 +68,30 @@ describe('频道项目推进工作区', () => {
     expect(screen.getByText('当前筛选下没有项目任务')).toBeTruthy();
   });
 
+  test('待我审核依据当前焦点交付，不受历史审核干扰且不包含尚无交付的任务', () => {
+    const current = workspace({ includeSecond: true });
+    const historicalReviewWithPendingDelivery = {
+      ...current.entries[0]!,
+      delivery: { ...current.entries[0]!.delivery, focusReviewState: 'pending' as const },
+    };
+    render(
+      <ChannelProjectProgress
+        overview={overview()}
+        workspace={{ ...current, entries: [historicalReviewWithPendingDelivery, current.entries[1]!] }}
+        participants={participants}
+        currentUserId="reviewer-1"
+        state="ready"
+        archived={false}
+        onOpenStage={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText('项目任务审核人'), { target: { value: 'pending-me' } });
+    expect(screen.getByRole('button', { name: /打开阶段 发布准备/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /打开受管任务/ })).toBeNull();
+  });
+
   test('准确区分 loading、not_ready、无权限、错误和无阶段', () => {
     const props = {
       overview: null,
@@ -170,6 +194,7 @@ function workspace(options: { includeSecond?: boolean } = {}): ChannelTaskWorksp
       task: taskDto('managed-2', 'creator-2'),
       stage: undefined,
       responsibilityFocus: { kind: 'none', detail: '尚未产生责任' },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
       review: { reviewerIds: ['reviewer-1'] },
     });
   }
