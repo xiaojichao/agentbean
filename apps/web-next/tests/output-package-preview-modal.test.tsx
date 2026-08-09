@@ -168,6 +168,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByText('可直接改一句话')).toBeNull();
     expect(screen.queryByText('实时预览')).toBeNull();
     expect(screen.queryByText(/保存后直接更新该文档的最新 Server 修订/)).toBeNull();
+    expect(screen.queryByText(/保存会生成 v/)).toBeNull();
   });
 
   test('成员行打开时聚焦指定版本，并可在左栏切换文件', async () => {

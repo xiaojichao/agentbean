@@ -470,13 +470,9 @@ export function OutputPackagePreviewModal({
             <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${savedNotice ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
               {savedNotice ? '已保存' : 'Server source of truth'}
             </span>
-            {savedNotice ? (
+            {savedNotice && (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
-            ) : active ? (
-              <span className="truncate">
-                当前编辑基于 <strong>{active.collection.name} v{active.current.versionNumber}</strong>；保存会生成 v{active.current.versionNumber + 1}，替换 current 指针，但不会自动移动 final。
-              </span>
-            ) : null}
+            )}
           </div>
           {active && isMarkdownFilename((active.current.artifact as unknown as Artifact).filename) ? (
             <div className="flex shrink-0 items-center gap-1.5">
