@@ -28,7 +28,7 @@ export interface ProjectStageAutoAdvanceOutcome {
 export function createProjectStageAutoAdvance(input: {
   readonly repositories: ServerNextRepositories;
   readonly broker: TaskClaimBroker;
-  readonly piHealthy: () => Promise<boolean>;
+  readonly piAutomationAvailable: () => Promise<boolean>;
   readonly emitTaskOffers: (
     taskId: string,
     options: { readonly allowedAgentIds: readonly string[]; readonly projectStageAuto: true },
@@ -43,9 +43,9 @@ export function createProjectStageAutoAdvance(input: {
     }): Promise<readonly ProjectStageAutoAdvanceOutcome[]> {
       const channel = await input.repositories.channels.getById(scope.channelId);
       if (!channel || channel.teamId !== scope.teamId) return [];
-      const [policy, piHealthy, stages, edges] = await Promise.all([
+      const [policy, piAutomationAvailable, stages, edges] = await Promise.all([
         input.repositories.teamPiPolicy.getOrDefault(scope.teamId),
-        input.piHealthy(),
+        input.piAutomationAvailable(),
         input.repositories.channelProjects.listStages(scope),
         input.repositories.channelProjects.listEdges(scope),
       ]);
@@ -98,7 +98,7 @@ export function createProjectStageAutoAdvance(input: {
             && offer.objective.constraints.includes('agentbean:project-stage-auto'));
         const decision = evaluateProjectStageAdvance({
           channelWritable: channel.archivedAt == null,
-          piHealthy,
+          piAutomationAvailable,
           autoCoordinationEnabled: policy.autoCoordinationEnabled,
           taskStatus: task.status,
           taskRevision: task.revision,

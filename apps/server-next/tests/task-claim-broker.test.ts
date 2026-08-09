@@ -196,7 +196,7 @@ describe('Task Claim Broker', () => {
     const autoAdvance = createProjectStageAutoAdvance({
       repositories: harness.repositories,
       broker: harness.broker,
-      piHealthy: async () => true,
+      piAutomationAvailable: async () => true,
       emitTaskOffers,
       invokeClaimedProjectStage: async () => undefined,
       now: () => harness.clock.value,
@@ -231,7 +231,7 @@ describe('Task Claim Broker', () => {
     const autoAdvance = createProjectStageAutoAdvance({
       repositories: healthy.repositories,
       broker: healthy.broker,
-      piHealthy: async () => true,
+      piAutomationAvailable: async () => true,
       emitTaskOffers: async (taskId, options) => {
         emitted.push(taskId);
         emittedOffers.push(...await healthy.broker.prepareOffers(taskId, options));
@@ -306,7 +306,7 @@ describe('Task Claim Broker', () => {
     const degradedAdvance = createProjectStageAutoAdvance({
       repositories: degraded.repositories,
       broker: degraded.broker,
-      piHealthy: async () => false,
+      piAutomationAvailable: async () => false,
       emitTaskOffers: degradedEmit,
       invokeClaimedProjectStage: async () => undefined,
       now: () => degraded.clock.value,
@@ -318,7 +318,7 @@ describe('Task Claim Broker', () => {
     })).resolves.toEqual([{
       taskId: 'task-a',
       kind: 'waiting',
-      reason: 'pi_degraded',
+      reason: 'automation_unavailable',
       targetAgentIds: [],
     }]);
     expect(degradedEmit).not.toHaveBeenCalled();
@@ -355,7 +355,7 @@ describe('Task Claim Broker', () => {
     const legacyAdvance = createProjectStageAutoAdvance({
       repositories: legacy.repositories,
       broker: legacy.broker,
-      piHealthy: async () => true,
+      piAutomationAvailable: async () => true,
       emitTaskOffers: legacyEmit,
       invokeClaimedProjectStage: async () => undefined,
       now: () => legacy.clock.value,
@@ -418,7 +418,7 @@ describe('Task Claim Broker', () => {
     const executionAdvance = createProjectStageAutoAdvance({
       repositories: execution.repositories,
       broker: execution.broker,
-      piHealthy: async () => true,
+      piAutomationAvailable: async () => true,
       emitTaskOffers: async (taskId, options) => {
         await execution.broker.prepareOffers(taskId, options);
       },
@@ -1306,7 +1306,7 @@ async function createHarness(options: { offerTtlMs?: number; leaseTtlMs?: number
     ids: { nextId: () => `broker-${++brokerId}` },
     leaseTokens: { nextToken: () => `raw-token-${++tokenId}` },
     offerTtlMs: options.offerTtlMs ?? 20, leaseTtlMs: options.leaseTtlMs ?? 100,
-    piHealthy: async () => true });
+    piAutomationAvailable: async () => true });
   return { repositories, clock, broker, coordination, authority };
 }
 

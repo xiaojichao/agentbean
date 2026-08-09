@@ -729,7 +729,7 @@ _Avoid_: PI Runtime Profile、Team 模型选择、按 Team Provider、公开底�
 
 ## PI configuration readiness
 
-系统管理员可见的 Active PI Model 配置就绪事实，根据已发布 revision、Credential 与当前配置对应的最新生产同路径测试判断 `ready` 或 `attention_required`。它不代表实时运行健康，不向 Team 或普通用户投影，也不能替代 PI degraded。
+系统管理员可见的 Active PI Model 配置就绪事实，根据已发布 revision、Credential 与当前配置对应的最新生产同路径测试判断 `ready` 或 `attention_required`。它可以作为自动化 admission 的独立前置条件，但不代表实时运行健康，不向 Team 或普通用户投影，也不能替代 PI degraded。
 _Avoid_: Public PI health、普通用户 PI 状态、侧栏常驻 normal、把测试过期称为运行降级。
 
 ## PI Provider Card

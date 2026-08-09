@@ -1877,8 +1877,8 @@ export interface CreateServerNextUseCasesInput {
   onArtifactCommitted?: (artifact: ArtifactRecord) => Promise<void>;
   /** #829 项目审核/最终化事实变化后，best-effort 触发 Server 权威阶段推进重算。 */
   onProjectFactsChanged?: (scope: { teamId: string; channelId: string }) => Promise<void>;
-  /** #829 阶段投影与自动推进共用同一条公开 PI 健康判定，避免 UI 显示可推进但 Server fail closed。 */
-  resolvePiHealthy?: () => Promise<boolean>;
+  /** #829 阶段投影与自动推进共用配置与运行门禁聚合后的自动化可用性。 */
+  resolvePiAutomationAvailable?: () => Promise<boolean>;
   /** #829 Overview 使用与自动推进相同的 Broker 候选事实。 */
   resolveProjectStageCandidates?: (taskId: string, options?: {
     readonly dependencyTaskIds?: readonly string[];
@@ -1942,7 +1942,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     clock,
     resolveEligibleAgentIds: resolveTaskLinkedEligibleAgentIds,
   } as const;
-  const resolveProjectPiHealthy = input.resolvePiHealthy
+  const resolveProjectPiAutomationAvailable = input.resolvePiAutomationAvailable
     ?? (async () => !getEmergencyStopActive());
   const notifyProjectFactsChanged = async (scope: { teamId: string; channelId: string }) => {
     try {
@@ -7763,7 +7763,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const overview = await buildChannelProjectOverview(
         repositories,
         access.channel,
-        await resolveProjectPiHealthy(),
+        await resolveProjectPiAutomationAvailable(),
         clock.now(),
         input.resolveProjectStageCandidates,
       );
@@ -7892,7 +7892,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         profile,
         [stage],
         [],
-        await resolveProjectPiHealthy(),
+        await resolveProjectPiAutomationAvailable(),
         now,
         input.resolveProjectStageCandidates,
       );
@@ -7984,7 +7984,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         { ...profile, revision: nextRevision, updatedAt: now },
         [...stages, stage],
         edges,
-        await resolveProjectPiHealthy(),
+        await resolveProjectPiAutomationAvailable(),
         now,
         input.resolveProjectStageCandidates,
       );
@@ -8094,7 +8094,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         { ...profile, revision: nextRevision, updatedAt: now },
         stages,
         [...edges, edge],
-        await resolveProjectPiHealthy(),
+        await resolveProjectPiAutomationAvailable(),
         now,
         input.resolveProjectStageCandidates,
       );
@@ -8144,7 +8144,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         { ...profile, revision: nextRevision, updatedAt: now },
         stages,
         edges.filter((candidate) => candidate.id !== edge.id),
-        await resolveProjectPiHealthy(),
+        await resolveProjectPiAutomationAvailable(),
         now,
         input.resolveProjectStageCandidates,
       );
@@ -9146,7 +9146,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         taskId: overviewInput.taskId,
         userId,
         now: clock.now(),
-        piHealthy: await resolveProjectPiHealthy(),
+        piAutomationAvailable: await resolveProjectPiAutomationAvailable(),
         includeStage: projectCollaborationRollout.projectStage,
         ...(input.resolveProjectStageCandidates
           ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
@@ -16287,7 +16287,7 @@ async function prepareProjectStageEdgeMutation<N extends Record<string, unknown>
 async function buildChannelProjectOverview(
   repositories: ServerNextRepositories,
   channel: ChannelRecord,
-  piHealthy: boolean,
+  piAutomationAvailable: boolean,
   now: number,
   resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto | null> {
@@ -16306,7 +16306,7 @@ async function buildChannelProjectOverview(
     profile,
     records,
     edges,
-    piHealthy,
+    piAutomationAvailable,
     now,
     resolveProjectStageCandidates,
   );
@@ -16324,7 +16324,7 @@ async function projectChannelProjectOverview(
   profile: ChannelProjectProfileRecord,
   stageRecords: readonly ProjectStageRecord[],
   edgeRecords: readonly ProjectStageEdgeRecord[],
-  piHealthy: boolean,
+  piAutomationAvailable: boolean,
   now: number,
   resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto> {
@@ -16348,7 +16348,7 @@ async function projectChannelProjectOverview(
       facts,
       stageFacts,
       edgeRecords,
-      piHealthy,
+      piAutomationAvailable,
       now,
       resolveProjectStageCandidates,
     ));
@@ -16680,7 +16680,7 @@ async function buildTaskDeliveryOverview(
     taskId: ID;
     userId: ID;
     now: UnixMs;
-    piHealthy: boolean;
+    piAutomationAvailable: boolean;
     /** #822 阶段功能开关由调用方(闭包内)判定后传入。 */
     includeStage: boolean;
     resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'];
@@ -16724,7 +16724,7 @@ async function buildTaskDeliveryOverview(
       const overview = await buildChannelProjectOverview(
         repositories,
         channel,
-        input.piHealthy,
+        input.piAutomationAvailable,
         input.now,
         input.resolveProjectStageCandidates,
       );
@@ -17534,7 +17534,7 @@ async function projectStageDto(
   facts: ProjectStageFacts,
   stageFacts: ReadonlyMap<string, ProjectStageFacts>,
   edgeRecords: readonly ProjectStageEdgeRecord[],
-  piHealthy: boolean,
+  piAutomationAvailable: boolean,
   now: number,
   resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'],
 ): Promise<ChannelProjectOverviewDto['stages'][number]> {
@@ -17662,7 +17662,7 @@ async function projectStageDto(
   const policy = await repositories.teamPiPolicy.getOrDefault(task.teamId);
   const advanceDecision = evaluateProjectStageAdvance({
     channelWritable: !(await repositories.channels.getById(record.channelId))?.archivedAt,
-    piHealthy,
+    piAutomationAvailable,
     autoCoordinationEnabled: policy.autoCoordinationEnabled,
     taskStatus: task.status,
     taskRevision: task.revision,

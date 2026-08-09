@@ -2,7 +2,7 @@ import type { TaskStatus } from '@agentbean/contracts';
 
 export type ProjectStageAdvanceWaitingReason =
   | 'channel_archived'
-  | 'pi_degraded'
+  | 'automation_unavailable'
   | 'task_not_pending'
   | 'task_revision_stale'
   | 'execution_gate_blocked'
@@ -14,7 +14,7 @@ export type ProjectStageAdvanceWaitingReason =
 
 export interface ProjectStageAdvanceFacts {
   readonly channelWritable: boolean;
-  readonly piHealthy: boolean;
+  readonly piAutomationAvailable: boolean;
   readonly autoCoordinationEnabled: boolean;
   readonly taskStatus: TaskStatus;
   readonly taskRevision: number;
@@ -44,7 +44,7 @@ export function evaluateProjectStageAdvance(
   facts: ProjectStageAdvanceFacts,
 ): ProjectStageAdvanceDecision {
   if (!facts.channelWritable) return { kind: 'waiting', reason: 'channel_archived' };
-  if (!facts.piHealthy) return { kind: 'waiting', reason: 'pi_degraded' };
+  if (!facts.piAutomationAvailable) return { kind: 'waiting', reason: 'automation_unavailable' };
   if (facts.taskStatus !== 'todo' && facts.taskStatus !== 'in_progress') {
     return { kind: 'waiting', reason: 'task_not_pending' };
   }

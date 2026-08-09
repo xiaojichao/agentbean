@@ -214,7 +214,7 @@ export interface CreateTaskClaimBrokerInput {
   readonly leaseTokens?: { nextToken(): string };
   readonly offerTtlMs?: number;
   readonly leaseTtlMs?: number;
-  readonly piHealthy?: () => Promise<boolean>;
+  readonly piAutomationAvailable?: () => Promise<boolean>;
 }
 
 const PROJECT_STAGE_AUTO_CONSTRAINT = 'agentbean:project-stage-auto';
@@ -979,7 +979,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
         : null;
       if (params.projectStageAuto) {
         const policy = await input.repositories.teamPiPolicy.getOrDefault(task.teamId);
-        const piHealthy = await input.piHealthy?.() ?? false;
+        const piAutomationAvailable = await input.piAutomationAvailable?.() ?? false;
         const strictAgentIds = await filterStrictProjectStageAgentIds(input.repositories, {
           teamId: task.teamId,
           candidateAgentIds: [params.agentId],
@@ -989,7 +989,7 @@ export function createTaskClaimBroker(input: CreateTaskClaimBrokerInput): TaskCl
             : {}),
           now,
         });
-        if (!policy.autoCoordinationEnabled || !piHealthy || !projectStageFence
+        if (!policy.autoCoordinationEnabled || !piAutomationAvailable || !projectStageFence
           || strictAgentIds.length !== 1) {
           throw new Error('TASK_CLAIM_PROJECT_STAGE_AUTO_BLOCKED');
         }
@@ -1534,9 +1534,9 @@ async function projectStageAutoOfferStillCurrent(
     .getByTaskId(offer.taskId);
   if (!task || !coordination) return false;
   const currentFence = await resolveProjectStageOfferFence(input.repositories, task);
-  const [policy, piHealthy, gate, strictAgentIds] = await Promise.all([
+  const [policy, piAutomationAvailable, gate, strictAgentIds] = await Promise.all([
     input.repositories.teamPiPolicy.getOrDefault(task.teamId),
-    input.piHealthy?.() ?? Promise.resolve(false),
+    input.piAutomationAvailable?.() ?? Promise.resolve(false),
     resolveProjectStageExecutionGate(input.repositories, task),
     filterStrictProjectStageAgentIds(input.repositories, {
       teamId: task.teamId,
@@ -1551,7 +1551,7 @@ async function projectStageAutoOfferStillCurrent(
   const frozenFence = offer.objective.inputs
     .find((item) => item.startsWith(PROJECT_STAGE_FENCE_PREFIX));
   return policy.autoCoordinationEnabled
-    && piHealthy
+    && piAutomationAvailable
     && !gate.blocked
     && strictAgentIds.length === 1
     && currentFence !== null

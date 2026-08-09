@@ -8,7 +8,7 @@ import {
 function facts(overrides: Partial<ProjectStageAdvanceFacts> = {}): ProjectStageAdvanceFacts {
   return {
     channelWritable: true,
-    piHealthy: true,
+    piAutomationAvailable: true,
     autoCoordinationEnabled: true,
     taskStatus: 'todo',
     taskRevision: 4,
@@ -44,7 +44,7 @@ describe('Project Stage 推进策略', () => {
 
   test.each([
     ['channel_archived', { channelWritable: false }],
-    ['pi_degraded', { piHealthy: false }],
+    ['automation_unavailable', { piAutomationAvailable: false }],
     ['execution_gate_blocked', { executionGateAllowed: false }],
     ['required_input_incomplete', { stableInputCount: 1 }],
     ['stable_input_stale', { stableInputFenceCurrent: false }],
