@@ -209,12 +209,11 @@ export function TaskThreadActivitySection(props: {
       teamId: props.teamId,
       taskId: props.taskId,
       channelId: props.channelId,
-      threadId: props.threadId,
     });
     if (requestRevision !== requestRevisionRef.current) return;
     setResult({
       queryKey,
-      card: loaded.card,
+      card: loaded.card && loaded.card.milestones.length > 0 ? loaded.card : null,
       notReady: loaded.projectionNotReady,
     });
   }, [props.channelId, props.taskId, props.teamId, props.threadId, props.userId, queryKey]);

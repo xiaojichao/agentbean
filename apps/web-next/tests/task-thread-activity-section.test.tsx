@@ -20,6 +20,20 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function milestone(taskId: string, summary: string) {
+  return {
+    projectionId: `projection-${taskId}`,
+    eventId: `event-${taskId}`,
+    surface: 'thread_card' as const,
+    level: 'milestone' as const,
+    factKind: 'delivery_accepted',
+    taskId,
+    summary,
+    occurredAt: 10,
+    actorKind: 'system' as const,
+  };
+}
+
 vi.mock('@/lib/system-activity-client', () => ({
   loadThreadTaskCard: mocks.loadThreadTaskCard,
   loadTaskTimeline: vi.fn(),
@@ -80,8 +94,31 @@ describe('TaskThreadActivitySection', () => {
       teamId: 'team-1',
       taskId: 'task-1',
       channelId: 'channel-1',
-      threadId: 'root-1',
     });
+  });
+
+  test('没有里程碑时不渲染空活动卡', async () => {
+    mocks.loadThreadTaskCard.mockResolvedValue({
+      card: {
+        taskId: 'task-1',
+        currentLevel: 'info',
+        currentSummary: '',
+        milestones: [],
+      },
+      projectionNotReady: false,
+    });
+
+    const { container } = render(<TaskThreadActivitySection
+      taskId="task-1"
+      channelId="channel-1"
+      threadId="root-1"
+      teamId="team-1"
+      userId="user-1"
+    />);
+
+    await waitFor(() => expect(mocks.loadThreadTaskCard).toHaveBeenCalledTimes(1));
+    expect(container.innerHTML).toBe('');
+    expect(screen.queryByTestId('thread-task-card')).toBeNull();
   });
 
   test('普通 Thread 不查询也不渲染活动卡', async () => {
@@ -100,11 +137,11 @@ describe('TaskThreadActivitySection', () => {
 
   test('切换 Thread 后忽略旧请求的迟到响应并清理旧订阅', async () => {
     const first = deferred<{
-      card: { taskId: string; currentLevel: 'milestone'; currentSummary: string; milestones: [] };
+      card: { taskId: string; currentLevel: 'milestone'; currentSummary: string; milestones: ReturnType<typeof milestone>[] };
       projectionNotReady: false;
     }>();
     const second = deferred<{
-      card: { taskId: string; currentLevel: 'milestone'; currentSummary: string; milestones: [] };
+      card: { taskId: string; currentLevel: 'milestone'; currentSummary: string; milestones: ReturnType<typeof milestone>[] };
       projectionNotReady: false;
     }>();
     const firstOff = vi.fn();
@@ -135,20 +172,30 @@ describe('TaskThreadActivitySection', () => {
 
     await act(async () => {
       second.resolve({
-        card: { taskId: 'task-2', currentLevel: 'milestone', currentSummary: '新讨论串里程碑', milestones: [] },
+        card: {
+          taskId: 'task-2',
+          currentLevel: 'milestone',
+          currentSummary: '新讨论串里程碑',
+          milestones: [milestone('task-2', '新讨论串里程碑')],
+        },
         projectionNotReady: false,
       });
     });
-    expect(await screen.findByText('新讨论串里程碑')).toBeTruthy();
+    expect((await screen.findAllByText('新讨论串里程碑')).length).toBeGreaterThan(0);
 
     await act(async () => {
       first.resolve({
-        card: { taskId: 'task-1', currentLevel: 'milestone', currentSummary: '旧讨论串里程碑', milestones: [] },
+        card: {
+          taskId: 'task-1',
+          currentLevel: 'milestone',
+          currentSummary: '旧讨论串里程碑',
+          milestones: [milestone('task-1', '旧讨论串里程碑')],
+        },
         projectionNotReady: false,
       });
     });
     expect(screen.queryByText('旧讨论串里程碑')).toBeNull();
-    expect(screen.getByText('新讨论串里程碑')).toBeTruthy();
+    expect(screen.getAllByText('新讨论串里程碑').length).toBeGreaterThan(0);
 
     rerender(<TaskThreadActivitySection
       taskId={null}
