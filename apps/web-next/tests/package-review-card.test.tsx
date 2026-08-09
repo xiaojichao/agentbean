@@ -8,17 +8,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getOutputPackage: vi.fn(),
-  submitPackageArtifactReview: vi.fn(),
-  submitPackageReviewAndFinalize: vi.fn(),
-  submitPackageReviewAndRejectDelivery: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
   projectEvents: () => ({
     getOutputPackage: mocks.getOutputPackage,
-    submitPackageArtifactReview: mocks.submitPackageArtifactReview,
-    submitPackageReviewAndFinalize: mocks.submitPackageReviewAndFinalize,
-    submitPackageReviewAndRejectDelivery: mocks.submitPackageReviewAndRejectDelivery,
   }),
 }));
 
@@ -42,43 +36,58 @@ const packageMeta = {
 };
 
 /**
- * #1061 AC11：卡片按钮可见性完全由 Server 的 availableActions 决定。
- * - 无 channelId：纯静态展示,不查询、不显示按钮;
- * - 有 channelId：渲染 Server 给出的动作,空清单不显示任何按钮;
- * - 无 review 权：不显示审核/最终化按钮(客户端不推断权限)。
+ * #1061 AC11：卡片只把 Server 投影的 reviewState/isFinalVersion 显示为状态。
+ * - 无 channelId：纯静态展示，不查询;
+ * - 有 channelId：每个成员只显示一个着色状态标签;
+ * - availableActions 中的审核/最终化动作不在成员行展开成按钮。
  */
 describe('OutputPackageCard review actions (#1061 AC11)', () => {
   function reviewActionButtons(): HTMLElement[] {
     return Array.from(document.querySelectorAll('[data-smoke="package-review-action"]'));
   }
 
-  test('无 channelId 时保持静态(不查询、无按钮)', () => {
+  test('无 channelId 时保持静态，标签后显示文件包名称', () => {
     render(<OutputPackageCard packageMeta={packageMeta} />);
-    expect(screen.getByText('任务「写剧本」交付文件包')).not.toBeNull();
+    expect(screen.getByText('Agent 交付文件包')).not.toBeNull();
+    expect(screen.getByText('写剧本')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="output-package-name"]')?.textContent).toBe('写剧本');
+    expect(document.querySelector('[data-smoke="output-package-title"]')?.textContent).toBe('Agent 交付文件包·写剧本');
     expect(reviewActionButtons()).toHaveLength(0);
     expect(mocks.getOutputPackage).not.toHaveBeenCalled();
   });
 
-  test('Server 给出审核动作 → 渲染对应按钮;空清单 → 无按钮', async () => {
+  test('Server 状态投影 → 每个文件只显示一个着色状态标签，不显示审核按钮', async () => {
+    const statusPackageMeta = {
+      ...packageMeta,
+      memberCount: 5,
+      members: [
+        { shortLabel: 'F1', filename: 'pending.md', artifactVersionId: 'ver-pending', collectionId: 'col-pending' },
+        { shortLabel: 'F2', filename: 'approved.md', artifactVersionId: 'ver-approved', collectionId: 'col-approved' },
+        { shortLabel: 'F3', filename: 'changes.md', artifactVersionId: 'ver-changes', collectionId: 'col-changes' },
+        { shortLabel: 'F4', filename: 'rejected.md', artifactVersionId: 'ver-rejected', collectionId: 'col-rejected' },
+        { shortLabel: 'F5', filename: 'final.md', artifactVersionId: 'ver-final', collectionId: 'col-final' },
+      ],
+    };
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
       package: { taskRevision: 1 },
-      availableActions: [{
-        collectionId: 'col-1',
-        versionId: 'ver-1',
-        reviewState: 'pending',
-        isFinalVersion: false,
-        collectionRevision: 1,
-        actions: ['review-approved', 'review-changes-requested', 'review-rejected', 'review-and-finalize'],
-      }],
+      availableActions: [
+        { collectionId: 'col-pending', versionId: 'ver-pending', reviewState: 'pending', isFinalVersion: false, collectionRevision: 1, actions: ['review-approved'] },
+        { collectionId: 'col-approved', versionId: 'ver-approved', reviewState: 'approved', isFinalVersion: false, collectionRevision: 1, actions: ['set-final'] },
+        { collectionId: 'col-changes', versionId: 'ver-changes', reviewState: 'changes_requested', isFinalVersion: false, collectionRevision: 1, actions: ['revise-version'] },
+        { collectionId: 'col-rejected', versionId: 'ver-rejected', reviewState: 'rejected', isFinalVersion: false, collectionRevision: 1, actions: [] },
+        { collectionId: 'col-final', versionId: 'ver-final', reviewState: 'approved', isFinalVersion: true, collectionRevision: 1, actions: [] },
+      ],
     });
-    render(<OutputPackageCard packageMeta={packageMeta} channelId="ch-1" />);
-    await waitFor(() => expect(reviewActionButtons().length).toBeGreaterThan(0));
-    expect(screen.getByText('待审核')).not.toBeNull();
-    expect(screen.getByText('通过')).not.toBeNull();
-    expect(screen.getByText('要求修改')).not.toBeNull();
-    expect(screen.getByText('拒绝')).not.toBeNull();
-    expect(screen.getByText('通过并设为最终版')).not.toBeNull();
+    render(<OutputPackageCard packageMeta={statusPackageMeta} channelId="ch-1" />);
+
+    await waitFor(() => expect(document.querySelectorAll('[data-smoke="package-review-state"]')).toHaveLength(5));
+    expect(screen.getByText('待审核').className).toContain('amber');
+    expect(screen.getByText('通过').className).toContain('emerald');
+    expect(screen.getByText('要求修改').className).toContain('orange');
+    expect(screen.getByText('拒绝').className).toContain('red');
+    expect(screen.getByText('通过并设为最终版').className).toContain('violet');
+    expect(reviewActionButtons()).toHaveLength(0);
     expect(mocks.getOutputPackage).toHaveBeenCalledWith({ channelId: 'ch-1', packageId: 'pkg-1' });
   });
 
@@ -96,7 +105,7 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
       }],
     });
     render(<OutputPackageCard packageMeta={packageMeta} channelId="ch-1" />);
-    await waitFor(() => expect(screen.getByText('已通过 · 最终版')).not.toBeNull());
+    await waitFor(() => expect(screen.getByText('通过并设为最终版')).not.toBeNull());
     expect(reviewActionButtons()).toHaveLength(0);
   });
 });

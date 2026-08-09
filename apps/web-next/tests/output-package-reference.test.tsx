@@ -78,7 +78,7 @@ const notReadyProjection = {
  * - 整包 current:预览 ready → package_projection 选择(带 expectedMemberRevisions fence);
  * - 整包 final:预览 not_ready → 阻断清单,不产生选择;
  * - 成员单选/多选 → package_members;
- * - “基于此修改”显式选择被拒版本。
+ * - rejected/changes_requested 成员仍可引用，但文件包卡片暂时不显示“基于此修改”。
  */
 describe('OutputPackageCard package reference (#1063)', () => {
   function collectSelections(): ProjectReferenceSelectionRequestDto[] {
@@ -176,7 +176,7 @@ describe('OutputPackageCard package reference (#1063)', () => {
     });
   });
 
-  test('rejected 成员显示“基于此修改”并显式选择被拒版本', async () => {
+  test('rejected 成员保留状态与引用入口，但不显示“基于此修改”', async () => {
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
       availableActions: [{
@@ -192,14 +192,12 @@ describe('OutputPackageCard package reference (#1063)', () => {
       onAddReference={(selection) => collected.push(selection)}
     />);
     await waitFor(() => {
-      expect(document.querySelector('[data-smoke="output-package-member-based-on"]')).not.toBeNull();
+      expect(screen.getByText('拒绝')).not.toBeNull();
     });
-    fireEvent.click(document.querySelector('[data-smoke="output-package-member-based-on"]')!);
-    expect(collected).toHaveLength(1);
-    expect(collected[0]).toEqual({
-      kind: 'package_members', packageId: 'pkg-1',
-      members: [{ collectionId: 'col-1', versionId: 'ver-1' }],
-    });
+    expect(document.querySelector('[data-smoke="output-package-member-based-on"]')).toBeNull();
+    expect(screen.queryByText('基于此修改')).toBeNull();
+    expect(document.querySelector('[data-smoke="output-package-member-ref"]')).not.toBeNull();
+    expect(collected).toHaveLength(0);
   });
 });
 
