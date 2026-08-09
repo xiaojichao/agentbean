@@ -13,9 +13,10 @@ export interface ArtifactCardProps {
   downloadUrl?: string | null;
   imagePrimaryAction?: 'preview' | 'download';
   renderTextPreview?: (content: string, artifact: Artifact) => ReactNode;
+  variant?: 'card' | 'list';
 }
 
-export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null, downloadUrl = null, imagePrimaryAction = 'preview', renderTextPreview }: ArtifactCardProps) {
+export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null, downloadUrl = null, imagePrimaryAction = 'preview', renderTextPreview, variant = 'card' }: ArtifactCardProps) {
   const [viewerOpen, setViewerOpen] = useState(false);
   const viewerTriggerRef = useRef<HTMLElement | null>(null);
   const effectivePreviewUrl = resolveArtifactPreviewUrl(artifact, previewUrl);
@@ -48,7 +49,24 @@ export function ArtifactCard({ artifact, previewUrl = null, thumbnailUrl = null,
 
   return (
     <>
-      {imageArtifact ? (
+      {variant === 'list' ? (
+        <div data-smoke="artifact-list-row" className="group relative flex min-h-14 w-full overflow-hidden bg-white text-xs text-neutral-700 transition-colors hover:bg-neutral-50 focus-within:bg-neutral-50">
+          <button type="button" onClick={openViewer} disabled={!canPreview} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 pr-24 text-left disabled:cursor-default" title={canPreview ? labels.preview : '文件暂不可预览'} aria-label={canPreview ? labels.preview : undefined}>
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-neutral-50 text-neutral-500 group-hover:bg-white group-focus-within:bg-white">
+              <Paperclip size={15} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-neutral-900">{artifact.filename}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-neutral-500">
+                <span className="truncate">{artifactKind(artifact).documentLabel}</span>
+                <span aria-hidden="true">·</span>
+                <span className="shrink-0">{formatFileSize(artifact.sizeBytes)}</span>
+              </span>
+            </span>
+          </button>
+          <ArtifactActions previewUrl={effectivePreviewUrl} downloadUrl={downloadUrl} labels={labels} onPreview={openViewer} className="right-3 top-1/2 -translate-y-1/2" dataSmoke="artifact-list-actions" />
+        </div>
+      ) : imageArtifact ? (
         <div className="group relative block max-w-80">
           {cardImageUrl && imagePrimaryAction === 'download' && downloadUrl ? (
             <a href={downloadUrl} target="_blank" rel="noreferrer" className="block text-left" title={labels.download} aria-label={labels.download}>
@@ -122,16 +140,17 @@ function PreviewPlaceholder({ filename }: { filename: string }) {
   );
 }
 
-function ArtifactActions({ previewUrl, downloadUrl, labels, onPreview, className = 'right-2 top-2' }: {
+function ArtifactActions({ previewUrl, downloadUrl, labels, onPreview, className = 'right-2 top-2', dataSmoke }: {
   previewUrl: string | null;
   downloadUrl: string | null;
   labels: { preview: string; download: string };
   onPreview: (event: MouseEvent<HTMLButtonElement>) => void;
   className?: string;
+  dataSmoke?: string;
 }) {
   if (!previewUrl && !downloadUrl) return null;
   return (
-    <div className={`absolute flex gap-1 ${className} opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100`}>
+    <div data-smoke={dataSmoke} className={`absolute flex gap-1 ${className} opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100`}>
       {previewUrl && <button type="button" onClick={onPreview} className="flex h-7 w-7 items-center justify-center rounded-md bg-white/95 text-neutral-700 shadow-sm hover:bg-neutral-100" title={labels.preview} aria-label={labels.preview}>
         <Eye size={14} />
       </button>}
