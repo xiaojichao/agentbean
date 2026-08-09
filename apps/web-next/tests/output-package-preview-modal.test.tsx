@@ -146,7 +146,7 @@ afterEach(() => {
 });
 
 describe('OutputPackagePreviewModal 原型收敛', () => {
-  test('使用包成员 + Markdown 源文 + 实时预览三栏，并只保留真实 Server 保存动作', async () => {
+  test('使用包成员 + Markdown 源文 + Markdown 预览三栏，并移除原型说明性备注', async () => {
     renderModal();
 
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
@@ -154,13 +154,15 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.getByText('F2 角色表.md')).toBeTruthy();
     expect(await screen.findByText('Markdown 源文')).toBeTruthy();
     expect(screen.getByText('Markdown 预览')).toBeTruthy();
-    expect(screen.getByText('实时预览')).toBeTruthy();
     expect((await screen.findByTestId('rendered-markdown')).textContent).toBe('# 温暖的一步');
     expect(document.querySelector('[data-smoke="package-preview-save"]')).not.toBeNull();
     expect(screen.getByText('Server source of truth')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'edit' })).toBeNull();
     expect(screen.queryByText('模拟冲突')).toBeNull();
     expect(screen.queryByText('保存并提交审核')).toBeNull();
+    expect(screen.queryByText('可直接改一句话')).toBeNull();
+    expect(screen.queryByText('实时预览')).toBeNull();
+    expect(screen.queryByText(/保存后直接更新该文档的最新 Server 修订/)).toBeNull();
   });
 
   test('成员行打开时聚焦指定版本，并可在左栏切换文件', async () => {

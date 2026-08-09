@@ -531,9 +531,8 @@ export function MarkdownDocumentEditor({
     {packagePreview ? (
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2" data-smoke="package-preview-split-editor">
         <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)] border-r border-neutral-200">
-          <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
+          <div className="flex items-center border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
             <span>Markdown 源文</span>
-            <span className="rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] font-normal text-neutral-600">可直接改一句话</span>
           </div>
           <textarea
             ref={textareaRef}
@@ -560,9 +559,8 @@ export function MarkdownDocumentEditor({
           />
         </section>
         <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)]">
-          <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
+          <div className="flex items-center border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
             <span>Markdown 预览</span>
-            <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-normal text-emerald-700">实时预览</span>
           </div>
           <article className="min-h-0 overflow-y-auto px-4 py-3 text-sm leading-7" data-smoke="package-preview-rendered-markdown">
             {renderPreview(content)}
