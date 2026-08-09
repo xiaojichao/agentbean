@@ -23,7 +23,7 @@ import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedCh
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { chatMessageDecorationVisibility, shouldShowThreadTaskBadge } from '@/lib/chat-message-decorations';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
-import { formatMessageDateLabel, formatMessageDateTime, shouldShowMessageDateDivider } from '@/lib/chat-message-date';
+import { formatMessageDateLabel, formatMessageDateTime, millisecondsUntilNextLocalDate, shouldShowMessageDateDivider } from '@/lib/chat-message-date';
 import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
@@ -249,7 +249,28 @@ function serializeReactionEmojis(reactions: ReactionEmojiMap): string {
   return JSON.stringify(Object.fromEntries(reactions));
 }
 
+function useMessageDateReference(): number {
+  const [reference, setReference] = useState(() => Date.now());
+
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const scheduleNextDate = () => {
+      timeoutId = window.setTimeout(() => {
+        setReference(Date.now());
+        scheduleNextDate();
+      }, millisecondsUntilNextLocalDate() + 100);
+    };
+    scheduleNextDate();
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
+  return reference;
+}
+
 export default function ChatPage() {
+  const messageDateReference = useMessageDateReference();
   const conn = useAgentBeanStore((s) => s.conn);
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -2353,7 +2374,7 @@ export default function ChatPage() {
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
                     return (
                       <Fragment key={msg.id}>
-                        {showDateDivider && <MessageDateDivider timestamp={msg.createdAt} />}
+                        {showDateDivider && <MessageDateDivider timestamp={msg.createdAt} now={messageDateReference} />}
                         <ChatBubble
                           msg={msg}
                           groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}
@@ -5268,9 +5289,7 @@ function ChatBubble({
       )}
       {/* Avatar */}
       {groupedWithPrevious ? (
-        <div className="flex w-9 shrink-0 items-start justify-center pt-1" aria-hidden="true">
-          <span className="text-[9px] text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">{time}</span>
-        </div>
+        <div className="w-9 shrink-0" aria-hidden="true" />
       ) : (
         <button
           onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
@@ -5281,12 +5300,15 @@ function ChatBubble({
         </button>
       )}
       <div className="min-w-0 flex-1">
+        {groupedWithPrevious && (
+          <div className="mb-0.5 text-[10px] text-neutral-400" data-smoke="chat-message-timestamp">{time}</div>
+        )}
         {!groupedWithPrevious && (
           <div className="flex items-center gap-2">
             <button onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }} className="text-sm font-semibold text-neutral-900 hover:underline">{speaker}</button>
             {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
             {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
-            <span className="text-[10px] text-neutral-400">{time}</span>
+            <span className="text-[10px] text-neutral-400" data-smoke="chat-message-timestamp">{time}</span>
             {!isDeleted && meta.editedAt && <span className="text-[10px] text-neutral-400">已编辑</span>}
           </div>
         )}
@@ -5428,12 +5450,12 @@ function ChatBubble({
   );
 }
 
-function MessageDateDivider({ timestamp }: { timestamp: number }) {
+function MessageDateDivider({ timestamp, now }: { timestamp: number; now: number }) {
   return (
     <div className="my-4 flex items-center gap-3" data-smoke="chat-message-date-divider">
       <div className="h-px flex-1 bg-neutral-200" />
       <span className="shrink-0 text-[11px] font-medium text-neutral-400">
-        {formatMessageDateLabel(timestamp)}
+        {formatMessageDateLabel(timestamp, now)}
       </span>
       <div className="h-px flex-1 bg-neutral-200" />
     </div>

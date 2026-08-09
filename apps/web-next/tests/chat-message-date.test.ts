@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   formatMessageDateLabel,
   formatMessageDateTime,
+  millisecondsUntilNextLocalDate,
   shouldShowMessageDateDivider,
 } from '../lib/chat-message-date';
 
@@ -27,5 +28,11 @@ describe('频道聊天消息日期时间', () => {
     expect(shouldShowMessageDateDivider(undefined, morning)).toBe(true);
     expect(shouldShowMessageDateDivider(morning, evening)).toBe(false);
     expect(shouldShowMessageDateDivider(evening, nextDay)).toBe(true);
+  });
+
+  test('计算到下一个本地日历日的刷新延迟', () => {
+    const beforeMidnight = new Date(2026, 7, 9, 23, 59, 59, 500).getTime();
+
+    expect(millisecondsUntilNextLocalDate(beforeMidnight)).toBe(500);
   });
 });

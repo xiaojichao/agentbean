@@ -18,6 +18,12 @@ export function formatMessageDateTime(timestamp: number): string {
   return `${formatMessageDate(timestamp)} ${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
 }
 
+export function millisecondsUntilNextLocalDate(now = Date.now()): number {
+  const date = new Date(now);
+  const nextDate = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  return Math.max(0, nextDate.getTime() - now);
+}
+
 export function shouldShowMessageDateDivider(
   previousTimestamp: number | undefined,
   currentTimestamp: number,

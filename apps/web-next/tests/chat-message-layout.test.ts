@@ -56,7 +56,7 @@ describe('chat message layout', () => {
       chatPage.indexOf('<div ref={messagesEndRef} />'),
     );
     expect(timeline).toContain('shouldShowMessageDateDivider(previousMessage?.createdAt, msg.createdAt)');
-    expect(timeline).toContain('showDateDivider && <MessageDateDivider timestamp={msg.createdAt} />');
+    expect(timeline).toContain('showDateDivider && <MessageDateDivider timestamp={msg.createdAt} now={messageDateReference} />');
     expect(timeline).toContain('groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}');
   });
 
@@ -66,5 +66,16 @@ describe('chat message layout', () => {
       chatPage.indexOf('function MessageContextMenuItem('),
     );
     expect(bubble).toContain('const time = formatMessageDateTime(msg.createdAt)');
+    expect(bubble).toContain('data-smoke="chat-message-timestamp">{time}</div>');
+    expect(bubble).not.toContain('group-hover:opacity-100">{time}</span>');
+  });
+
+  test('“今天”标签在下一个本地日历日自动刷新', () => {
+    const hook = chatPage.slice(
+      chatPage.indexOf('function useMessageDateReference()'),
+      chatPage.indexOf('export default function ChatPage()'),
+    );
+    expect(hook).toContain('millisecondsUntilNextLocalDate() + 100');
+    expect(hook).toContain('setReference(Date.now())');
   });
 });
