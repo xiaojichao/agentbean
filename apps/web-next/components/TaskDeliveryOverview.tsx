@@ -38,7 +38,7 @@ export function TaskDeliveryOverview({
   channelId?: string;
   taskId: string;
   /** #1065 AC9：可发现性动作的导航回调(delegate/review-package 由父级处理)。 */
-  onAction?: (action: TaskLevelAction, focusPackageId?: string) => void;
+  onAction?: (action: TaskLevelAction) => void;
 }) {
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -180,13 +180,7 @@ export function TaskDeliveryOverview({
             key={action.action}
             type="button"
             disabled={Boolean(action.disabled)}
-            onClick={() => {
-              if (action.action === 'review-package') {
-                onAction?.(action.action, overview.delivery.focusPackageId);
-              } else {
-                onAction?.(action.action);
-              }
-            }}
+            onClick={() => onAction?.(action.action)}
             title={action.disabledReason}
             className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
             data-smoke={`task-action-${action.action}`}

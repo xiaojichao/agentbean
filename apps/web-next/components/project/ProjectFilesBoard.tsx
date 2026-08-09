@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckSquare, Clock, Layers, Search, Square } from 'lucide-react';
 import { projectEvents } from '@/lib/socket';
 import {
@@ -42,7 +42,6 @@ import type {
   ProjectReferenceSelectionRequestDto,
   ProjectArtifactVersionDto,
   OutputPackageProjectionResultV1,
-  PackageReviewAction,
 } from '@agentbean/contracts';
 
 /**
@@ -61,8 +60,7 @@ import type {
  *
  * 行内动作(本组件已接入):
  * - 审核/设最终版:集合版本行「详情」展开区复用 ProjectArtifactLibrary 的
- *   VersionDecisionPanel + FinalizationHistory(canDecideVersion/onReview/onFinalize)；
- *   输出包成员的 Server 授权命令集中到独立「审核交付包」面板，不塞回成员行；
+ *   VersionDecisionPanel + FinalizationHistory(canDecideVersion/onReview/onFinalize);
  * - 预览/编辑:Markdown 集合行 → onOpenRevisionEditor(saveArtifactVersionRevision
  *   冲突流,basis 只传 sourceVersionId,遵循 #1131);包成员行 → onOpenPackagePreview;
  *   非 Markdown 集合行 → onOpenReadOnlyArtifact(ArtifactViewer 只读);
@@ -85,19 +83,6 @@ interface PackageDetailCache {
   projection: OutputPackageProjectionResultV1 | null;
 }
 
-const PACKAGE_REVIEW_ACTION_LABELS: Record<PackageReviewAction, string> = {
-  'review-approved': '通过',
-  'review-changes-requested': '要求修改',
-  'review-rejected': '拒绝',
-  'review-and-finalize': '通过并设为最终版',
-  'review-and-reject-delivery': '退回交付',
-  'set-final': '设为最终版',
-};
-
-function isPackageReviewAction(action: PackageMemberAvailableActionsDto['actions'][number]): action is PackageReviewAction {
-  return action !== 'revise-version';
-}
-
 export interface ProjectFilesBoardProps {
   channelId: string;
   packages: readonly OutputPackageSummaryDto[];
@@ -108,10 +93,6 @@ export interface ProjectFilesBoardProps {
   agentNames: ReadonlyMap<string, string>;
   /** 缓存失效令牌:onArtifactsUpdated / packages 刷新时由调用方 +1。 */
   dataRevision: number;
-  /** Task 审核入口指定的目标包；首次可用时选中，避免多包频道误审其他包。 */
-  focusPackageId?: string | null;
-  /** 每次审核导航的请求标识；同一包重复进入时也应重新定位。 */
-  focusPackageRequestKey?: string | null;
   /** 引用加入主 composer(发送时冻结 ProjectReferenceSet;去重语义由调用方决定)。 */
   onAddReference: (selection: ProjectReferenceSelectionRequestDto) => void;
   /**
@@ -172,8 +153,6 @@ export function ProjectFilesBoard({
   stages,
   agentNames,
   dataRevision,
-  focusPackageId,
-  focusPackageRequestKey,
   onAddReference,
   onOpenRevisionEditor,
   onOpenPackagePreview,
@@ -193,13 +172,9 @@ export function ProjectFilesBoard({
   const [refBusy, setRefBusy] = useState(false);
   const [blockers, setBlockers] = useState<PackageProjectionBlocker[]>([]);
   const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
-  const [showPackageReview, setShowPackageReview] = useState(false);
-  const [packageReviewBusy, setPackageReviewBusy] = useState(false);
-  const [packageReviewError, setPackageReviewError] = useState<string | null>(null);
   const [showPromote, setShowPromote] = useState(false);
   const [packageDetailCache, setPackageDetailCache] = useState<ReadonlyMap<string, PackageDetailCache>>(new Map());
   const [packageFinalReadyCache, setPackageFinalReadyCache] = useState<ReadonlyMap<string, boolean>>(new Map());
-  const appliedFocusRequestRef = useRef<string | null>(null);
   const archived = library?.archived ?? false;
 
   const stageNameById = useMemo(() => new Map(stages.map((stage) => [stage.id, stage.name])), [stages]);
@@ -278,26 +253,6 @@ export function ProjectFilesBoard({
     [displayCards, filter, search],
   );
 
-  useEffect(() => {
-    if (!focusPackageId) return;
-    const requestIdentity = `${focusPackageId}:${focusPackageRequestKey ?? ''}`;
-    if (appliedFocusRequestRef.current === requestIdentity) return;
-    const target = displayCards.find((card) => card.kind === 'package'
-      && card.payload.kind === 'package'
-      && card.payload.package.packageId === focusPackageId);
-    if (!target) return;
-    appliedFocusRequestRef.current = requestIdentity;
-    setSearch('');
-    setFilter('all');
-    setSelectedId(target.id);
-    setBlockers([]);
-    setMultiSelect(false);
-    setSelectedVersionIds(new Set());
-    setExpandedVersionId(null);
-    setShowPackageReview(false);
-    setPackageReviewError(null);
-  }, [displayCards, focusPackageId, focusPackageRequestKey]);
-
   // 选中卡:显式选中优先;未选中/被筛选掉时回落列表首卡(首帧即有右侧内容)。
   const selectedCard = filteredCards.find((card) => card.id === selectedId) ?? filteredCards[0] ?? null;
   const selectedPackageId = selectedCard?.kind === 'package' && selectedCard.payload.kind === 'package'
@@ -323,96 +278,6 @@ export function ProjectFilesBoard({
   const packageProjectionBlocked = selectedCard?.kind === 'package'
     && selectedCard.payload.kind === 'package'
     && packageDetailCache.get(selectedCard.payload.package.packageId)?.projection?.status === 'not_ready';
-  const selectedPackageDetail = selectedPackageId ? packageDetailCache.get(selectedPackageId) : undefined;
-  const selectedPackageReviewMembers = useMemo(
-    () => (selectedPackageDetail?.availableActions ?? [])
-      .map((member) => ({
-        member,
-        actions: member.actions.filter(isPackageReviewAction),
-      }))
-      .filter((entry) => entry.actions.length > 0),
-    [selectedPackageDetail],
-  );
-
-  const refreshPackageDetail = useCallback(async (packageId: string) => {
-    const result = await projectEvents().getOutputPackage({
-      channelId,
-      packageId,
-      projection: { policy: 'current' },
-    });
-    if (!result.ok) {
-      setPackageReviewError(result.message ?? '刷新文件包审核状态失败');
-      return;
-    }
-    setPackageDetailCache((current) => {
-      const next = new Map(current);
-      next.set(packageId, {
-        package: result.package,
-        availableActions: result.availableActions ?? [],
-        projection: result.projection ?? null,
-      });
-      return next;
-    });
-  }, [channelId]);
-
-  const runPackageReviewAction = useCallback(async (
-    member: PackageMemberAvailableActionsDto,
-    action: PackageReviewAction,
-  ) => {
-    const pkg = selectedPackageDetail?.package;
-    if (!pkg) return;
-    setPackageReviewBusy(true);
-    setPackageReviewError(null);
-    try {
-      const base = {
-        channelId,
-        packageId: pkg.packageId,
-        collectionId: member.collectionId,
-        versionId: member.versionId,
-        idempotencyKey: `pkg-review:${pkg.packageId}:${member.versionId}:${action}`,
-      };
-      let result: { ok: boolean; message?: string };
-      if (action === 'review-approved' || action === 'review-changes-requested' || action === 'review-rejected') {
-        result = await projectEvents().submitPackageArtifactReview({
-          ...base,
-          decision: action === 'review-approved' ? 'approved'
-            : action === 'review-changes-requested' ? 'changes_requested' : 'rejected',
-          comment: PACKAGE_REVIEW_ACTION_LABELS[action],
-        });
-      } else if (action === 'review-and-finalize') {
-        result = await projectEvents().submitPackageReviewAndFinalize({
-          ...base,
-          decision: 'approved',
-          comment: PACKAGE_REVIEW_ACTION_LABELS[action],
-          expectedCollectionRevision: member.collectionRevision,
-        });
-      } else if (action === 'review-and-reject-delivery') {
-        result = await projectEvents().submitPackageReviewAndRejectDelivery({
-          ...base,
-          decision: 'changes_requested',
-          comment: PACKAGE_REVIEW_ACTION_LABELS[action],
-          expectedTaskRevision: pkg.taskRevision ?? 1,
-          expectedTaskAttempt: pkg.taskAttempt,
-          rejectReason: '需要修改后重新交付',
-        });
-      } else {
-        result = await projectEvents().setArtifactFinalVersion({
-          channelId,
-          collectionId: member.collectionId,
-          versionId: member.versionId,
-          idempotencyKey: `pkg-final:${pkg.packageId}:${member.versionId}`,
-          expectedCollectionRevision: member.collectionRevision,
-        });
-      }
-      if (!result.ok) {
-        setPackageReviewError(result.message ?? '审核操作失败');
-        return;
-      }
-      await refreshPackageDetail(pkg.packageId);
-    } finally {
-      setPackageReviewBusy(false);
-    }
-  }, [channelId, refreshPackageDetail, selectedPackageDetail]);
 
   // 整包引用:预览 ready → 选择;not_ready → 阻断清单(与 OutputPackageCard 同实现)。
   const addProjectionReference = useCallback(async (policy: PackageProjectionPolicy) => {
@@ -618,8 +483,6 @@ export function ProjectFilesBoard({
                 setMultiSelect(false);
                 setSelectedVersionIds(new Set());
                 setExpandedVersionId(null);
-                setShowPackageReview(false);
-                setPackageReviewError(null);
                 setShowPromote(false);
               }}
             />
@@ -642,68 +505,6 @@ export function ProjectFilesBoard({
             <p className="text-sm text-neutral-400">暂无文件行</p>
           ) : (
             <>
-              {!archived && selectedPackageDetail?.package && selectedPackageReviewMembers.length > 0 ? (
-                <div className="mb-3 rounded-lg border border-violet-200 bg-violet-50/50 p-3" data-smoke="files-package-review-entry">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-xs font-semibold text-violet-900">交付包审核</div>
-                      <p className="mt-0.5 text-[11px] text-violet-700">审核命令集中在独立面板；文件列表只展示当前状态。</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowPackageReview((current) => !current);
-                        setPackageReviewError(null);
-                      }}
-                      className="rounded-md border border-violet-300 bg-white px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100"
-                      data-smoke="files-package-review-open"
-                    >
-                      {showPackageReview ? '收起审核面' : '审核交付包'}
-                    </button>
-                  </div>
-                  {showPackageReview ? (
-                    <div className="mt-3 space-y-2 border-t border-violet-200 pt-3" data-smoke="files-package-review-panel">
-                      {selectedPackageReviewMembers.map(({ member, actions }) => {
-                        const row = currentRows.find((candidate) => candidate.collectionId === member.collectionId);
-                        return (
-                          <div
-                            key={`${member.collectionId}:${member.versionId}`}
-                            className="flex flex-wrap items-center gap-2 rounded-md border border-violet-100 bg-white p-2"
-                            data-smoke="files-package-review-member"
-                            data-version-id={member.versionId}
-                          >
-                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-neutral-800">
-                              {row?.filename ?? member.versionId}
-                            </span>
-                            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${reviewStateChipClass(member.reviewState)}`}>
-                              {reviewStateLabel(member.reviewState)}
-                            </span>
-                            <div className="flex flex-wrap gap-1">
-                              {actions.map((action) => (
-                                <button
-                                  key={action}
-                                  type="button"
-                                  disabled={packageReviewBusy}
-                                  onClick={() => { void runPackageReviewAction(member, action); }}
-                                  className="rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-[11px] text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-                                  data-smoke="files-package-review-action"
-                                  data-action={action}
-                                  data-version-id={member.versionId}
-                                >
-                                  {PACKAGE_REVIEW_ACTION_LABELS[action]}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {packageReviewError ? (
-                        <p className="text-xs text-red-700" role="alert" data-smoke="files-package-review-error">{packageReviewError}</p>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
               {packageProjectionBlocked ? (
                 <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800" data-smoke="files-package-projection-blocked">
                   当前包不能作为整包正式输入；仍可查看成员，并显式引用或修订具体版本。

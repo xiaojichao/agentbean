@@ -16746,9 +16746,7 @@ async function buildTaskDeliveryOverview(
     finalizedCount: 0,
     complete: false,
   };
-  // listPackagesByChannel 按 createdAt/packageId 降序返回，首条才是最新交付。
-  // 验收覆盖与客户端审核定位必须消费同一个焦点包，避免多次交付时误审旧包。
-  const focusRecord = packageRecords[0];
+  const focusRecord = packageRecords[packageRecords.length - 1];
   if (focusRecord) {
     const projection = await repositories.outputPackages.getPackageById({
       teamId,
@@ -16911,7 +16909,7 @@ async function buildTaskDeliveryOverview(
     delivery: {
       packages,
       pendingDeliveries,
-      ...(focusRecord ? { focusPackageId: focusRecord.packageId } : {}),
+      ...(packageRecords.length > 0 ? { focusPackageId: packageRecords[packageRecords.length - 1]!.packageId } : {}),
     },
     availableActions,
     timeline,

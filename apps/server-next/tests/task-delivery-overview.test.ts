@@ -338,33 +338,6 @@ for (const variant of variants) {
       });
     });
 
-    test('AC3:多次交付时 focusPackageId 与验收覆盖都指向最新文件包', async () => {
-      const seedValue = await seed(variant);
-      cleanups.push(seedValue.close);
-      const taskId = 'task-overview-latest-package';
-      await seedTask(seedValue, taskId, { status: 'in_review', preboundAuthorityIds: [seedValue.userId] });
-      await commitDelivery(seedValue, 'pub-old', [{ path: 'docs/old.md', body: Buffer.from('old') }], {
-        agentId: seedValue.agentId, taskId, taskAttempt: 1,
-      });
-      await commitDelivery(seedValue, 'pub-latest', [{ path: 'docs/latest.md', body: Buffer.from('latest') }], {
-        agentId: seedValue.agentId, taskId, taskAttempt: 1,
-      });
-
-      const latestPackage = await seedValue.repositories.outputPackages.getPackageByPublishId({
-        teamId: seedValue.teamId,
-        publishId: 'pub-latest',
-      });
-      if (!latestPackage) throw new Error('latest package not found');
-
-      const overview = await queryOverview(seedValue, taskId);
-      expect(overview.delivery.packages).toHaveLength(2);
-      expect(overview.delivery.packages[0]!.packageId).toBe(latestPackage.package.packageId);
-      expect(overview.delivery.focusPackageId).toBe(latestPackage.package.packageId);
-      expect(overview.acceptanceContract.requiredReviewCoverage.requiredForFinalCount).toBe(
-        latestPackage.members.filter((member) => member.requiredForFinal).length,
-      );
-    });
-
     test('AC4:focus 只由 Server 事实投影(offer_wait/execution_active/review_wait)', async () => {
       const seedValue = await seed(variant);
       cleanups.push(seedValue.close);

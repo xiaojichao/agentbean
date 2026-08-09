@@ -118,7 +118,7 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
     );
     // 新响应先到并应用。
     await vi.waitFor(() => {
-      expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('通过');
+      expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('已通过');
     });
     // 旧响应(慢)后到:被 cancelled 忽略,不覆盖新状态。
     resolveOld({
@@ -127,6 +127,6 @@ describe('OutputPackageCard 入口(#1065 AC2)', () => {
       availableActions: [{ versionId: 'ver-1', reviewState: 'pending', actions: [] }],
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('通过');
+    expect(document.querySelector('[data-smoke="package-review-state"]')?.textContent).toContain('已通过');
   });
 });

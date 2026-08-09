@@ -9,19 +9,11 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getOutputPackage: vi.fn(),
-  submitPackageArtifactReview: vi.fn(),
-  submitPackageReviewAndFinalize: vi.fn(),
-  submitPackageReviewAndRejectDelivery: vi.fn(),
-  setArtifactFinalVersion: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
   projectEvents: () => ({
     getOutputPackage: mocks.getOutputPackage,
-    submitPackageArtifactReview: mocks.submitPackageArtifactReview,
-    submitPackageReviewAndFinalize: mocks.submitPackageReviewAndFinalize,
-    submitPackageReviewAndRejectDelivery: mocks.submitPackageReviewAndRejectDelivery,
-    setArtifactFinalVersion: mocks.setArtifactFinalVersion,
   }),
 }));
 
@@ -240,7 +232,6 @@ const packageDetail = {
     agentId: 'agent-b',
     taskId: 'task-2',
     taskBinding: 'managed',
-    taskRevision: 1,
     taskAttempt: 1,
     members: [
       { artifactVersionId: 'ver-c1', collectionId: 'col-1', shortLabel: 'F1', filename: '第1集剧本.md', sourcePath: 'outputs/scripts/ep1.md' },
@@ -270,8 +261,6 @@ interface BoardCallbacks {
   canPromote?: boolean;
   promotableArtifacts?: ProjectFilesBoardProps['promotableArtifacts'];
   libraryOverride?: ProjectFilesBoardProps['library'];
-  focusPackageId?: string;
-  focusPackageRequestKey?: string;
 }
 
 function renderBoard(callbacks: BoardCallbacks = {}) {
@@ -284,8 +273,6 @@ function renderBoard(callbacks: BoardCallbacks = {}) {
     stages={stages}
     agentNames={agentNames}
     dataRevision={0}
-    focusPackageId={callbacks.focusPackageId}
-    focusPackageRequestKey={callbacks.focusPackageRequestKey}
     onAddReference={(selection) => collected.push(selection)}
     onOpenRevisionEditor={(request) => revisionRequests.push(request)}
     canPromote={callbacks.canPromote ?? false}
@@ -360,54 +347,6 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
       const card = document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!;
       expect(card.textContent).toContain('F1 v4');
       expect(card.textContent).toContain('F2 v3');
-    });
-  });
-
-  test('Task 审核入口指定 focusPackageId 时优先选中目标输出包', async () => {
-    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
-    renderBoard({ focusPackageId: 'pkg-1' });
-    await waitFor(() => {
-      const target = document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-1"]');
-      expect(target?.className).toContain('border-sky-300');
-    });
-    expect(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')?.className)
-      .not.toContain('border-sky-300');
-  });
-
-  test('同一 focusPackageId 的新请求令牌会再次定位目标包', async () => {
-    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
-    function Harness() {
-      const [requestKey, setRequestKey] = React.useState('request-1');
-      return (
-        <>
-          <button type="button" data-smoke="repeat-focus" onClick={() => setRequestKey('request-2')}>再次审核</button>
-          <ProjectFilesBoard
-            channelId="channel-1"
-            packages={[pkg1, pkg2]}
-            pendingDeliveries={[pendingDelivery]}
-            library={library}
-            stages={stages}
-            agentNames={agentNames}
-            dataRevision={0}
-            focusPackageId="pkg-1"
-            focusPackageRequestKey={requestKey}
-            onAddReference={vi.fn()}
-            canPromote={false}
-            promotableArtifacts={[]}
-            onPromote={vi.fn().mockResolvedValue(null)}
-          />
-        </>
-      );
-    }
-    render(<Harness />);
-    await waitFor(() => {
-      expect(document.querySelector('[data-package-id="pkg-1"]')?.className).toContain('border-sky-300');
-    });
-    fireEvent.click(document.querySelector('[data-package-id="pkg-2"]')!);
-    expect(document.querySelector('[data-package-id="pkg-2"]')?.className).toContain('border-sky-300');
-    fireEvent.click(document.querySelector('[data-smoke="repeat-focus"]')!);
-    await waitFor(() => {
-      expect(document.querySelector('[data-package-id="pkg-1"]')?.className).toContain('border-sky-300');
     });
   });
 
@@ -771,66 +710,6 @@ describe('ProjectFilesBoard 行动作(步骤 6)', () => {
       expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(2);
     });
     expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).toBeNull();
-  });
-
-  test('包成员行只展示状态，Server 审核命令迁移到独立交付包审核面', async () => {
-    const reviewableDetail = {
-      ...packageDetail,
-      availableActions: [
-        {
-          collectionId: 'col-1', versionId: 'ver-c1', reviewState: 'pending',
-          isFinalVersion: false, collectionRevision: 5,
-          actions: ['review-approved', 'review-changes-requested', 'review-rejected', 'review-and-finalize', 'review-and-reject-delivery'],
-        },
-        {
-          collectionId: 'col-2', versionId: 'ver-c2', reviewState: 'approved',
-          isFinalVersion: false, collectionRevision: 2, actions: ['set-final'],
-        },
-      ],
-    };
-    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...reviewableDetail });
-    mocks.submitPackageArtifactReview.mockResolvedValue({ ok: true });
-    mocks.submitPackageReviewAndFinalize.mockResolvedValue({ ok: true });
-    mocks.submitPackageReviewAndRejectDelivery.mockResolvedValue({ ok: true });
-    mocks.setArtifactFinalVersion.mockResolvedValue({ ok: true });
-    renderBoard();
-    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
-    await waitFor(() => {
-      expect(document.querySelector('[data-smoke="files-package-review-open"]')).not.toBeNull();
-    });
-
-    const memberRows = Array.from(document.querySelectorAll('[data-smoke="file-version-row"]'));
-    expect(memberRows).toHaveLength(2);
-    expect(memberRows.every((row) => row.querySelector('[data-smoke="files-package-review-action"]') === null)).toBe(true);
-
-    fireEvent.click(document.querySelector('[data-smoke="files-package-review-open"]')!);
-    expect(document.querySelector('[data-smoke="files-package-review-panel"]')).not.toBeNull();
-
-    fireEvent.click(document.querySelector('[data-smoke="files-package-review-action"][data-action="review-approved"]')!);
-    await waitFor(() => expect(mocks.submitPackageArtifactReview).toHaveBeenCalledWith({
-      channelId: 'channel-1', packageId: 'pkg-2', collectionId: 'col-1', versionId: 'ver-c1',
-      idempotencyKey: 'pkg-review:pkg-2:ver-c1:review-approved', decision: 'approved', comment: '通过',
-    }));
-
-    fireEvent.click(document.querySelector('[data-smoke="files-package-review-action"][data-action="review-and-finalize"]')!);
-    await waitFor(() => expect(mocks.submitPackageReviewAndFinalize).toHaveBeenCalledWith({
-      channelId: 'channel-1', packageId: 'pkg-2', collectionId: 'col-1', versionId: 'ver-c1',
-      idempotencyKey: 'pkg-review:pkg-2:ver-c1:review-and-finalize', decision: 'approved',
-      comment: '通过并设为最终版', expectedCollectionRevision: 5,
-    }));
-
-    fireEvent.click(document.querySelector('[data-smoke="files-package-review-action"][data-action="review-and-reject-delivery"]')!);
-    await waitFor(() => expect(mocks.submitPackageReviewAndRejectDelivery).toHaveBeenCalledWith({
-      channelId: 'channel-1', packageId: 'pkg-2', collectionId: 'col-1', versionId: 'ver-c1',
-      idempotencyKey: 'pkg-review:pkg-2:ver-c1:review-and-reject-delivery', decision: 'changes_requested',
-      comment: '退回交付', expectedTaskRevision: 1, expectedTaskAttempt: 1, rejectReason: '需要修改后重新交付',
-    }));
-
-    fireEvent.click(document.querySelector('[data-smoke="files-package-review-action"][data-action="set-final"]')!);
-    await waitFor(() => expect(mocks.setArtifactFinalVersion).toHaveBeenCalledWith({
-      channelId: 'channel-1', collectionId: 'col-2', versionId: 'ver-c2',
-      idempotencyKey: 'pkg-final:pkg-2:ver-c2', expectedCollectionRevision: 2,
-    }));
   });
 
   test('归档频道的详情只读，不暴露追加审核或设为最终版入口', async () => {
