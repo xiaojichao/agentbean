@@ -48,7 +48,7 @@ const systemMsg = {
   body: 'Agent 交付 1 个文件',
   channelId: 'ch-1',
   teamId: 't-1',
-  createdAt: 1000,
+  createdAt: new Date(2026, 7, 9, 19, 17).getTime(),
 } as unknown as ChatMessage;
 
 describe('SystemMessageBubble —— system 消息渲染文件包卡片', () => {
@@ -71,5 +71,12 @@ describe('SystemMessageBubble —— system 消息渲染文件包卡片', () => 
   test('output-package 卡片挂载 chat-message 锚点(data-smoke)', () => {
     const { container } = render(<SystemMessageBubble msg={systemMsg} meta={packageMeta} />);
     expect(container.querySelector('[data-smoke="chat-message"]')).not.toBeNull();
+  });
+
+  test('system 消息同样显示完整日期时间', () => {
+    const { container } = render(
+      <SystemMessageBubble msg={systemMsg} meta={{ kind: 'plain-event' }} />,
+    );
+    expect(container.textContent).toContain('2026-08-09 19:17');
   });
 });

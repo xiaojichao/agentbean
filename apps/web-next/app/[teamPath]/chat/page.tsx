@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
+import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
@@ -23,6 +23,7 @@ import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedCh
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { chatMessageDecorationVisibility, shouldShowThreadTaskBadge } from '@/lib/chat-message-decorations';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
+import { formatMessageDateLabel, formatMessageDateTime, millisecondsUntilNextLocalDate, shouldShowMessageDateDivider } from '@/lib/chat-message-date';
 import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
@@ -248,7 +249,28 @@ function serializeReactionEmojis(reactions: ReactionEmojiMap): string {
   return JSON.stringify(Object.fromEntries(reactions));
 }
 
+function useMessageDateReference(): number {
+  const [reference, setReference] = useState(() => Date.now());
+
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const scheduleNextDate = () => {
+      timeoutId = window.setTimeout(() => {
+        setReference(Date.now());
+        scheduleNextDate();
+      }, millisecondsUntilNextLocalDate() + 100);
+    };
+    scheduleNextDate();
+    return () => {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, []);
+
+  return reference;
+}
+
 export default function ChatPage() {
+  const messageDateReference = useMessageDateReference();
   const conn = useAgentBeanStore((s) => s.conn);
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
@@ -2346,60 +2368,64 @@ export default function ChatPage() {
                 )}
                 <div>
                   {rootMessages.map((msg, index) => {
+                    const previousMessage = rootMessages[index - 1];
+                    const showDateDivider = shouldShowMessageDateDivider(previousMessage?.createdAt, msg.createdAt);
                     const taskId = metaTaskId(msg);
                     const task = taskId ? tasks.find((item) => item.id === taskId) ?? null : null;
                     return (
-                      <ChatBubble
-                        key={msg.id}
-                        msg={msg}
-                        groupedWithPrevious={isMessageGroupContinuation(rootMessages[index - 1], msg)}
-                        task={task}
-                        taskNumber={task ? taskNumbers.get(task.id) : undefined}
-                        taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
-                        taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
-                        selected={selectedMessageId === msg.id}
-                        saved={savedIds.has(msg.id)}
-                        pinned={pinnedIds.has(msg.id)}
-                        onAddPackageReference={(selection) => {
-                          // #1063 包内引用入口:加到 composer,发送时 Server 重新解析并冻结。
-                          const packageId = selection.kind === 'package_projection' || selection.kind === 'package_members'
-                            ? selection.packageId
-                            : undefined;
-                          setProjectReferenceSelections((current) => [
-                            ...current.filter((item) =>
-                              (item.kind !== 'package_projection' && item.kind !== 'package_members')
-                              || item.packageId !== packageId),
-                            selection,
-                          ]);
-                        }}
-                        reacted={reactionEmojis.has(msg.id)}
-                        reactionEmoji={reactionEmojis.get(msg.id)}
-                        humanProfiles={humanProfiles}
-                        channelMembers={channelMembers}
-                        mentionMembers={mentionMembers}
-                        onReply={() => handleReply(msg)}
-                        onOpenThread={() => openThread(msg.id)}
-                        onOpenProfile={openProfile}
-                        onToggleReaction={() => toggleReaction(msg.id)}
-                        onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
-                        onToggleSave={() => toggleSave(msg.id)}
-                        onTogglePin={() => togglePin(msg)}
-                        onCopyLink={() => copyMessageLink(msg)}
-                        onCopyMarkdown={() => copyMessageMarkdown(msg)}
-                        onSelectMessage={() => selectMessage(msg)}
-                        onEditMessage={(body) => editMessage(msg, body)}
-                        onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
-                        onDeleteMessage={() => deleteMessage(msg)}
-                        onOpenTaskDetail={() => openTaskDetail(msg)}
-                        onContinueWithAgent={continueWithAgentFromCard}
-                        onOpenPackagePreview={openPackagePreviewModal}
-                        onOpenTaskDetailById={openTaskDetailById}
-                        onConvertToTask={() => convertMessageToTask(msg)}
-                        onUnfollowThread={() => unfollowThreadLocally(msg)}
-                        onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
-                        onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                        replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
-                      />
+                      <Fragment key={msg.id}>
+                        {showDateDivider && <MessageDateDivider timestamp={msg.createdAt} now={messageDateReference} />}
+                        <ChatBubble
+                          msg={msg}
+                          groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}
+                          task={task}
+                          taskNumber={task ? taskNumbers.get(task.id) : undefined}
+                          taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
+                          taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
+                          selected={selectedMessageId === msg.id}
+                          saved={savedIds.has(msg.id)}
+                          pinned={pinnedIds.has(msg.id)}
+                          onAddPackageReference={(selection) => {
+                            // #1063 包内引用入口:加到 composer,发送时 Server 重新解析并冻结。
+                            const packageId = selection.kind === 'package_projection' || selection.kind === 'package_members'
+                              ? selection.packageId
+                              : undefined;
+                            setProjectReferenceSelections((current) => [
+                              ...current.filter((item) =>
+                                (item.kind !== 'package_projection' && item.kind !== 'package_members')
+                                || item.packageId !== packageId),
+                              selection,
+                            ]);
+                          }}
+                          reacted={reactionEmojis.has(msg.id)}
+                          reactionEmoji={reactionEmojis.get(msg.id)}
+                          humanProfiles={humanProfiles}
+                          channelMembers={channelMembers}
+                          mentionMembers={mentionMembers}
+                          onReply={() => handleReply(msg)}
+                          onOpenThread={() => openThread(msg.id)}
+                          onOpenProfile={openProfile}
+                          onToggleReaction={() => toggleReaction(msg.id)}
+                          onReactWithEmoji={(emoji) => reactWithEmoji(msg.id, emoji)}
+                          onToggleSave={() => toggleSave(msg.id)}
+                          onTogglePin={() => togglePin(msg)}
+                          onCopyLink={() => copyMessageLink(msg)}
+                          onCopyMarkdown={() => copyMessageMarkdown(msg)}
+                          onSelectMessage={() => selectMessage(msg)}
+                          onEditMessage={(body) => editMessage(msg, body)}
+                          onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
+                          onDeleteMessage={() => deleteMessage(msg)}
+                          onOpenTaskDetail={() => openTaskDetail(msg)}
+                          onContinueWithAgent={continueWithAgentFromCard}
+                          onOpenPackagePreview={openPackagePreviewModal}
+                          onOpenTaskDetailById={openTaskDetailById}
+                          onConvertToTask={() => convertMessageToTask(msg)}
+                          onUnfollowThread={() => unfollowThreadLocally(msg)}
+                          onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
+                          onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
+                          replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
+                        />
+                      </Fragment>
                     );
                   })}
                 </div>
@@ -5061,7 +5087,7 @@ function ChatBubble({
 
   const isHuman = msg.senderKind === 'human';
   const speaker = messageSpeakerName(msg, agents, { currentUser, humanProfiles, channelMembers });
-  const time = formatTime(msg.createdAt);
+  const time = formatMessageDateTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
   const outputPackageMeta = outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta);
@@ -5263,9 +5289,7 @@ function ChatBubble({
       )}
       {/* Avatar */}
       {groupedWithPrevious ? (
-        <div className="flex w-9 shrink-0 items-start justify-center pt-1" aria-hidden="true">
-          <span className="text-[9px] text-neutral-400 opacity-0 transition-opacity group-hover:opacity-100">{time}</span>
-        </div>
+        <div className="w-9 shrink-0" aria-hidden="true" />
       ) : (
         <button
           onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }}
@@ -5276,12 +5300,15 @@ function ChatBubble({
         </button>
       )}
       <div className="min-w-0 flex-1">
+        {groupedWithPrevious && (
+          <div className="mb-0.5 text-[10px] text-neutral-400" data-smoke="chat-message-timestamp">{time}</div>
+        )}
         {!groupedWithPrevious && (
           <div className="flex items-center gap-2">
             <button onClick={() => { if (canOpenProfile) onOpenProfile(profileTarget); }} className="text-sm font-semibold text-neutral-900 hover:underline">{speaker}</button>
             {isOwner && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">你</span>}
             {!isHuman && agent?.role && <span className="text-xs text-neutral-400">{agent.role}</span>}
-            <span className="text-[10px] text-neutral-400">{time}</span>
+            <span className="text-[10px] text-neutral-400" data-smoke="chat-message-timestamp">{time}</span>
             {!isDeleted && meta.editedAt && <span className="text-[10px] text-neutral-400">已编辑</span>}
           </div>
         )}
@@ -5419,6 +5446,18 @@ function ChatBubble({
         )}
         {!isDeleted && !editing && renderDispatchStatus()}
       </div>
+    </div>
+  );
+}
+
+function MessageDateDivider({ timestamp, now }: { timestamp: number; now: number }) {
+  return (
+    <div className="my-4 flex items-center gap-3" data-smoke="chat-message-date-divider">
+      <div className="h-px flex-1 bg-neutral-200" />
+      <span className="shrink-0 text-[11px] font-medium text-neutral-400">
+        {formatMessageDateLabel(timestamp, now)}
+      </span>
+      <div className="h-px flex-1 bg-neutral-200" />
     </div>
   );
 }
