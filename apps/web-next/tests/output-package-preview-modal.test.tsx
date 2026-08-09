@@ -163,6 +163,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.getByRole('button', { name: '查看版本历史' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '保存为 Server 新版本' })).toBeTruthy();
     expect(screen.getByRole('button', { name: '保存并提交审核' })).toBeTruthy();
+    expect(document.querySelector('[data-smoke="package-preview-actions"]')?.className).toContain('overflow-x-auto');
     expect(screen.getByText('Server source of truth')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'edit' })).toBeNull();
     expect(screen.queryByText('可直接改一句话')).toBeNull();
@@ -177,6 +178,18 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /F1 第1集剧本\.md/ }));
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
+  });
+
+  test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
+    const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
+    renderModal();
+
+    expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 分镜.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看版本历史' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '模拟冲突' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '保存为 Server 新版本' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '保存并提交审核' })).toBeNull();
   });
 
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {

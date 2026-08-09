@@ -150,6 +150,9 @@ export function OutputPackagePreviewModal({
     if (!current) return null;
     return { collection, current };
   })();
+  const activeIsMarkdown = active
+    ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
+    : false;
 
   // 加载当前成员内容(Server 最新修订,不信任本地缓存)。
   useEffect(() => {
@@ -354,7 +357,7 @@ export function OutputPackagePreviewModal({
               <div className="flex h-full items-center justify-center text-sm text-red-600">{loadError}</div>
             ) : !active ? (
               <div className="flex h-full items-center justify-center text-sm text-neutral-400">选择左侧文件</div>
-            ) : !isMarkdownFilename((active.current.artifact as unknown as Artifact).filename) ? (
+            ) : !activeIsMarkdown ? (
               <NonMarkdownPreview target={active} />
             ) : contentError ? (
               <div className="flex h-full items-center justify-center text-sm text-red-600">{contentError}</div>
@@ -474,18 +477,23 @@ export function OutputPackagePreviewModal({
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
             )}
           </div>
-          {active && isMarkdownFilename((active.current.artifact as unknown as Artifact).filename) ? (
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-simulate-conflict]')?.click()}
-                disabled={!editorState.dirty || editorState.saving || editorState.conflicted}
-                title="仅演示冲突处理，不写入 Server"
-                className="rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
-                data-smoke="package-preview-simulate-conflict"
-              >
-                模拟冲突
-              </button>
+          {active ? (
+            <div
+              className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
+              data-smoke="package-preview-actions"
+            >
+              {activeIsMarkdown && (
+                <button
+                  type="button"
+                  onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-simulate-conflict]')?.click()}
+                  disabled={!editorState.dirty || editorState.saving || editorState.conflicted}
+                  title="仅演示冲突处理，不写入 Server"
+                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-smoke="package-preview-simulate-conflict"
+                >
+                  模拟冲突
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -498,24 +506,28 @@ export function OutputPackagePreviewModal({
               >
                 查看版本历史
               </button>
-              <button
-                type="button"
-                onClick={() => triggerEditorSave('version')}
-                disabled={editorState.saveDisabled}
-                className="rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300"
-                data-smoke="package-preview-save"
-              >
-                {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
-              </button>
-              <button
-                type="button"
-                onClick={() => triggerEditorSave('review')}
-                disabled={editorState.saveDisabled}
-                className="rounded-md border border-amber-500 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-500 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300 disabled:text-white"
-                data-smoke="package-preview-save-review"
-              >
-                {editorState.saving ? '提交中…' : '保存并提交审核'}
-              </button>
+              {activeIsMarkdown && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => triggerEditorSave('version')}
+                    disabled={editorState.saveDisabled}
+                    className="rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300"
+                    data-smoke="package-preview-save"
+                  >
+                    {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => triggerEditorSave('review')}
+                    disabled={editorState.saveDisabled}
+                    className="rounded-md border border-amber-500 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-500 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300 disabled:text-white"
+                    data-smoke="package-preview-save-review"
+                  >
+                    {editorState.saving ? '提交中…' : '保存并提交审核'}
+                  </button>
+                </>
+              )}
             </div>
           ) : null}
         </footer>
