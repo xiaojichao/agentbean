@@ -2748,6 +2748,7 @@ export default function ChatPage() {
             agents={agents}
             humanProfiles={humanProfiles}
             title={`讨论串 — ${isDm ? `@${activeDmName}` : `#${activeName}`}`}
+            readOnlyArtifacts={isDefaultPublicChannel}
             input={threadInput}
             attachments={threadAttachments}
             selections={threadSelections}
@@ -4321,6 +4322,7 @@ function ThreadPanel({
   agents,
   humanProfiles,
   title,
+  readOnlyArtifacts,
   input,
   attachments,
   selections,
@@ -4377,6 +4379,8 @@ function ThreadPanel({
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
   title: string;
+  /** 仅 Team 默认公共频道 #all 的讨论串附件使用只读全文预览。 */
+  readOnlyArtifacts: boolean;
   input: string;
   attachments: ComposerAttachment[];
   /** #1064：线程 composer 的项目引用选择（Task 页预填 / 后续扩展选择入口）。 */
@@ -5063,7 +5067,7 @@ function ChatBubble({
   /** 原型对齐:文件包「预览/编辑」浮窗入口(standalone + 内嵌卡片共用)。 */
   onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
   replyCount: number;
-  /** 讨论串附件只读：保留预览/下载，Markdown 预览直接展示全文且不提供编辑入口。 */
+  /** #all 讨论串附件只读：保留预览/下载，Markdown 预览直接展示全文且不提供编辑入口。 */
   readOnlyArtifacts?: boolean;
   showReplyAction?: boolean;
   showTaskBadge?: boolean;
@@ -6256,7 +6260,7 @@ function ChatArtifactPreview({
   channelId?: string;
   onEdit?: () => void;
   editable?: boolean;
-  /** 主聊天沿用折叠预览；讨论串传 false，弹窗直接展示 Markdown 全文。 */
+  /** 主聊天及其他频道沿用折叠预览；#all 讨论串传 false，弹窗直接展示 Markdown 全文。 */
   collapsibleMarkdownPreview?: boolean;
 }) {
   // #1084 切片3：预览/下载字节优先读本机 .agentbean snapshots 副本，失败/离线/版本不匹配回退 server。

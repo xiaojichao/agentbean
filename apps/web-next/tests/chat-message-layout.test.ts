@@ -28,7 +28,10 @@ describe('chat message layout', () => {
     expect(dispatchIndex).toBeGreaterThan(artifactsIndex);
   });
 
-  test('主聊天只有 Agent 输出的 Markdown 附件显示编辑入口，讨论串附件保持只读', () => {
+  test('#all 讨论串附件保持只读，主聊天和其他频道仍按 Agent 来源显示编辑入口', () => {
+    const chatPageShell = chatPage.slice(0, chatPage.indexOf('function ThreadPanel('));
+    expect(chatPageShell).toContain("const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';");
+    expect(chatPageShell).toContain('readOnlyArtifacts={isDefaultPublicChannel}');
     const bubble = chatPage.slice(
       chatPage.indexOf('function ChatBubble('),
       chatPage.indexOf('function MessageContextMenuItem('),

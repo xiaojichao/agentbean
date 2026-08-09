@@ -16,7 +16,7 @@ describe('channel message expand/collapse surface', () => {
     expect(chatPage).toContain('safeDocumentResources collapsible={false}');
   });
 
-  test('讨论串附件预览禁用折叠并直接展示 Markdown 全文', () => {
+  test('#all 讨论串附件预览禁用折叠并直接展示 Markdown 全文', () => {
     const threadPanel = chatPage.slice(
       chatPage.indexOf('function ThreadPanel('),
       chatPage.indexOf('function ProfilePanel('),
