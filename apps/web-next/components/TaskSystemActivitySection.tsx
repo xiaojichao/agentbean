@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { SystemActivityPanels } from '@/components/SystemActivityPanels';
 import type {
   NamedActivityActionCommand,
@@ -175,6 +175,75 @@ export function TaskSystemActivitySection(props: {
         projectionNotReady={notReady}
         onMarkSeen={onMarkSeen}
         onNamedAction={onNamedAction}
+      />
+    </div>
+  );
+}
+
+/**
+ * Task 关联 Thread 的稀疏里程碑卡。只消费现有 thread_card 投影；普通 Thread
+ * （taskId 为空）不查询，也不渲染占位。
+ */
+export function TaskThreadActivitySection(props: {
+  taskId: string | null;
+  channelId: string;
+  threadId: string;
+  teamId: string | null | undefined;
+  userId: string | null | undefined;
+}) {
+  const queryKey = props.taskId && props.teamId && props.userId && props.channelId
+    ? JSON.stringify([props.teamId, props.userId, props.channelId, props.threadId, props.taskId])
+    : null;
+  const requestRevisionRef = useRef(0);
+  const [result, setResult] = useState<{
+    queryKey: string;
+    card: ThreadTaskCardView | null;
+    notReady: boolean;
+  } | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!queryKey || !props.taskId || !props.teamId || !props.userId || !props.channelId) return;
+    const requestRevision = ++requestRevisionRef.current;
+    const loaded = await loadThreadTaskCard({
+      userId: props.userId,
+      teamId: props.teamId,
+      taskId: props.taskId,
+      channelId: props.channelId,
+      threadId: props.threadId,
+    });
+    if (requestRevision !== requestRevisionRef.current) return;
+    setResult({
+      queryKey,
+      card: loaded.card,
+      notReady: loaded.projectionNotReady,
+    });
+  }, [props.channelId, props.taskId, props.teamId, props.threadId, props.userId, queryKey]);
+
+  useEffect(() => {
+    if (!queryKey) {
+      requestRevisionRef.current += 1;
+      setResult(null);
+      return;
+    }
+    void refresh();
+    const off = systemActivityEvents().onNotice(() => {
+      void refresh();
+    });
+    return () => {
+      requestRevisionRef.current += 1;
+      off();
+    };
+  }, [queryKey, refresh]);
+
+  const currentResult = result?.queryKey === queryKey ? result : null;
+
+  if (!queryKey || !currentResult || (!currentResult.card && !currentResult.notReady)) return null;
+
+  return (
+    <div data-testid="thread-task-activity-section">
+      <SystemActivityPanels
+        threadCard={currentResult.card}
+        projectionNotReady={currentResult.notReady}
       />
     </div>
   );

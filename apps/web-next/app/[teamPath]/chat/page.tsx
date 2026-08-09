@@ -10,8 +10,12 @@ import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus,
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
 import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
-import { taskRootIdFromMessageMeta, taskStatusEventForTask, taskStatusEventSummary, type TaskStatusEventSummary } from '@/lib/task-status-event';
-import { mergedStandalonePackageCardIds, shouldHideSystemMessage } from '@/lib/system-messages';
+import { taskRootIdFromMessageMeta, taskStatusEventForTask, type TaskStatusEventSummary } from '@/lib/task-status-event';
+import {
+  projectChatViewMessages,
+  taskIdForStatusMessageDeepLink,
+  taskStatusMessagesForTask,
+} from '@/lib/chat-message-projection';
 import { ownedAgentsForMember } from '@/lib/agent-list';
 import { archivePreflightItemLabel } from '@/lib/archive-labels';
 import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfileTitle } from '@/lib/agent-profile';
@@ -27,7 +31,7 @@ import { formatMessageDateLabel, formatMessageDateTime, millisecondsUntilNextLoc
 import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
 import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
-import { ChatAttentionInboxSection } from '@/components/TaskSystemActivitySection';
+import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
@@ -363,7 +367,7 @@ export default function ChatPage() {
   const activityVisibleIds = activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady);
   const activityVisibleList = [...activityVisibleIds];
   const activityVisibleKey = activityVisibleList.join('\u001f');
-  const inboxUnread = inboxActivityMessages(activityMessages, activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
+  const inboxUnread = inboxActivityMessages(projectChatViewMessages(activityMessages), activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -1700,10 +1704,8 @@ export default function ChatPage() {
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
-  // #1111 内嵌形态:被 agent 回复内嵌吸收的独立卡片从视图隐藏(含实时窗口:
-  // 回复一到,独立卡片即消失,卡片内容随回复气泡渲染)。
-  const mergedCardIds = mergedStandalonePackageCardIds(messages);
-  const visibleMessages = messages.filter((msg) => !shouldHideSystemMessage(msg) && !mergedCardIds.has(msg.id));
+  // Chat-view 投影只影响呈现：原始 messages 仍保留状态事件，供 TaskDetail 恢复完整历史。
+  const visibleMessages = projectChatViewMessages(messages);
   const messagesById = new Map<string, ChatMessage>();
   for (const msg of messages) messagesById.set(msg.id, msg);
   const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
@@ -1712,17 +1714,19 @@ export default function ChatPage() {
   const taskDetailMessage = taskDetailMessageId
     ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
     : null;
-  const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : null;
+  const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : taskDetailOnlyTaskId;
   const taskDetailTask = (taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null)
     ?? (taskDetailOnlyTaskId ? tasks.find((task) => task.id === taskDetailOnlyTaskId) ?? null : null);
-  const taskDetailMessages = taskDetailMessage
-    ? visibleMessages
-        .filter((msg) =>
-          msg.id === taskDetailMessage.id ||
-          msg.threadId === taskDetailMessage.id ||
-          parentMessageId(msg, messagesById) === taskDetailMessage.id ||
-          Boolean(taskStatusEventForTask(parseMeta(msg), taskDetailTaskId)))
-        .sort((a, b) => a.createdAt - b.createdAt)
+  const taskDetailMessages = taskDetailTaskId
+    ? uniqueMessages([
+        ...(taskDetailMessage
+          ? visibleMessages.filter((msg) =>
+              msg.id === taskDetailMessage.id
+              || msg.threadId === taskDetailMessage.id
+              || parentMessageId(msg, messagesById) === taskDetailMessage.id)
+          : []),
+        ...taskStatusMessagesForTask(messages, taskDetailTaskId),
+      ]).sort((a, b) => a.createdAt - b.createdAt)
     : [];
 
   useEffect(() => {
@@ -1730,6 +1734,22 @@ export default function ChatPage() {
     const targetMessageId = parseScopedMessageId(messageParam, activeChannel);
     if (!targetMessageId) {
       if (messageParam === null) setSelectedMessageId(null);
+      return;
+    }
+    const linkedTaskId = taskIdForStatusMessageDeepLink(messages, targetMessageId);
+    if (linkedTaskId) {
+      const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === linkedTaskId) ?? null;
+      setTaskDetailMessageId(taskMessage?.id ?? null);
+      setTaskDetailOnlyTaskId(taskMessage ? null : linkedTaskId);
+      setThreadRootId(null);
+      setSelectedMessageId(taskMessage?.id ?? null);
+      setChatTaskMenuTarget(null);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set('task', taskMessage ? `${activeChannel}:${taskMessage.id}` : `task:${linkedTaskId}`);
+      params.delete('thread');
+      params.delete('message');
+      params.delete('profile');
+      router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
       return;
     }
     setTab('chat');
@@ -1748,7 +1768,7 @@ export default function ChatPage() {
       document.getElementById(`message-${targetMessageId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [activeChannel, messageParam, threadParam, visibleMessages.length]);
+  }, [activeChannel, messageParam, threadParam, messages, router, searchParams]);
   const toggleSave = (msgId: string) => {
     const isSaved = savedIds.has(msgId);
     // Optimistic update
@@ -4422,6 +4442,7 @@ function ThreadPanel({
   const rootTaskId = metaTaskId(root);
   const rootTask = rootTaskId ? tasks.find((task) => task.id === rootTaskId) ?? null : null;
   const currentUser = useAgentBeanStore((s) => s.currentUser);
+  const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const [showThreadMention, setShowThreadMention] = useState(false);
   const [threadMentionQuery, setThreadMentionQuery] = useState('');
   const [threadMentionIndex, setThreadMentionIndex] = useState(0);
@@ -4609,6 +4630,13 @@ function ThreadPanel({
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {renderThreadBubble(root, replies.length)}
+        <TaskThreadActivitySection
+          taskId={rootTaskId}
+          channelId={root.channelId}
+          threadId={root.id}
+          teamId={currentTeamId}
+          userId={currentUser?.id}
+        />
         <div className="border-t border-neutral-100 pt-3 text-center text-[11px] text-neutral-400">
           <div>回复的开头</div>
           <div>{replies.length === 0 ? '暂无回复' : `${replies.length} 条回复`}</div>
@@ -6477,7 +6505,7 @@ function SearchView({
         };
       })
     : [];
-  const messageMatches = (results ?? [])
+  const messageMatches = projectChatViewMessages(results ?? [])
     .filter((msg) => !mineOnly || msg.senderId === currentUser?.id)
     .filter((msg) => !channelScope || msg.channelId === channelScope.channelId)
     .filter((msg) => {
@@ -6596,7 +6624,7 @@ function ActivityView({
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const visibleIds = activityConversationIds(visibleConversationIds(channels, dms), mutedChannelIds);
 
-  const allMessages = inboxActivityMessages(activityMessages, visibleIds);
+  const allMessages = inboxActivityMessages(projectChatViewMessages(activityMessages), visibleIds);
   const unreadCount = allMessages.filter((m) => !doneIds.has(m.id)).length;
   const visible = allMessages.filter((m) => {
     if (filter === 'unread') return !doneIds.has(m.id);
