@@ -241,6 +241,59 @@ describe('archive gate closeout (#1066)', () => {
         return s;
       }
 
+      test('归档后通用 Task 写接口 fail closed 且保留历史事实', async () => {
+        const s = await makeSeed();
+        const created = await s.app.createTask({
+          userId: s.userId,
+          teamId: s.teamId,
+          channelId: s.channelId,
+          title: '归档只读任务',
+        });
+        expect(created.ok).toBe(true);
+        if (!created.ok) return;
+        const taskId = created.task.id;
+
+        await archive(s);
+
+        const createAfterArchive = await s.app.createTask({
+          userId: s.userId,
+          teamId: s.teamId,
+          channelId: s.channelId,
+          title: '不应创建',
+        });
+        const updateAfterArchive = await s.app.updateTask({
+          userId: s.userId,
+          teamId: s.teamId,
+          taskId,
+          status: 'todo',
+        });
+        const deleteAfterArchive = await s.app.deleteTask({
+          userId: s.userId,
+          teamId: s.teamId,
+          taskId,
+        });
+        const reorderAfterArchive = await s.app.reorderTask({
+          userId: s.userId,
+          teamId: s.teamId,
+          taskId,
+          sortOrder: 999,
+        });
+
+        for (const result of [createAfterArchive, updateAfterArchive, deleteAfterArchive, reorderAfterArchive]) {
+          expect(result.ok).toBe(false);
+          expect(result.error).toBe('CONFLICT');
+          expect(result.message).toBe('Archived channels are read-only');
+        }
+        const listed = await s.app.listTasks({
+          userId: s.userId,
+          teamId: s.teamId,
+          channelId: s.channelId,
+        });
+        expect(listed.ok).toBe(true);
+        if (!listed.ok) return;
+        expect(listed.tasks).toContainEqual(expect.objectContaining({ id: taskId, status: 'closed' }));
+      });
+
       test('AC1/AC12:preflight 列出 pending delivery 与 package 级待审核 delivery;confirm 收口 staging 并写审计', async () => {
         const s = await makeSeed();
         const taskId = 'task-gate-1';

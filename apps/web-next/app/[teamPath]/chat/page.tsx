@@ -2140,6 +2140,10 @@ export default function ChatPage() {
   };
 
   const updateTaskStatus = async (task: TaskItem, status: TaskStatus) => {
+    if (activeChannelObj?.archivedAt) {
+      setChatTaskMenuTarget(null);
+      return;
+    }
     if (status === task.status) {
       setChatTaskMenuTarget(null);
       return;
@@ -2857,6 +2861,7 @@ export default function ChatPage() {
           mentionMembers={mentionMembers}
           currentTeamId={currentTeamId}
           routeTeamPath={routeTeamPath}
+          readOnly={Boolean(activeChannelObj?.archivedAt)}
           onClose={closeTaskDetail}
           onViewInChannel={() => { if (taskDetailMessage) jumpToMessage(taskDetailMessage.id); }}
           onOpenThread={() => {
@@ -4219,6 +4224,7 @@ function TaskDetailPanel({
   mentionMembers,
   currentTeamId,
   routeTeamPath,
+  readOnly,
   onClose,
   onViewInChannel,
   onOpenThread,
@@ -4237,6 +4243,7 @@ function TaskDetailPanel({
   mentionMembers: MentionProfileMember[];
   currentTeamId?: string | null;
   routeTeamPath: string;
+  readOnly: boolean;
   onClose: () => void;
   onViewInChannel: () => void;
   onOpenThread: () => void;
@@ -4275,7 +4282,9 @@ function TaskDetailPanel({
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
   const workspaceTeamId = currentTeamId ?? message?.teamId ?? null;
   const detailChannelId = message?.channelId ?? task?.channelId ?? null;
-  const managedStatusOptions = workspaceEntry?.governance.mode === 'managed'
+  const managedStatusOptions = readOnly
+    ? []
+    : workspaceEntry?.governance.mode === 'managed'
     ? TASK_COLUMNS.filter((column) => (
         column.id === 'cancelled'
         || column.id === 'closed'
@@ -4569,6 +4578,9 @@ function TaskDetailPanel({
 
         <section className="py-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">任务状态</h3>
+          {readOnly && (
+            <p data-smoke="task-detail-readonly" className="text-xs text-neutral-500">频道已归档，任务状态只读。</p>
+          )}
           {workspaceEntry?.governance.mode === 'managed' && (
             <p className="mb-2 text-[11px] text-violet-700">状态由任务执行与验收流程推进，仅显示当前可用的具名流程操作。</p>
           )}
