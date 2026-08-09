@@ -91,7 +91,7 @@ describe('OutputPackageCard revise-version (#1062)', () => {
     expect(screen.queryByText('基于此修改')).toBeNull();
   });
 
-  test('AC1:Server 下发 revise-version 时按钮出现,点击回调冻结 deliveryId/basis/package', async () => {
+  test('文件包卡片暂不展示 revise-version，即使 Server 下发动作与回调', async () => {
     const onRevise = vi.fn();
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
@@ -135,22 +135,10 @@ describe('OutputPackageCard revise-version (#1062)', () => {
       channelId="ch-1"
       onReviseVersion={onRevise}
     />);
-    // Server 动作驱动:按钮出现。
-    const button = await screen.findByText('基于此修改');
-    expect(button).not.toBeNull();
-    fireEvent.click(button);
-    // P0 修复:回调必须携带 deliveryId(package 冻结事实,与 domain 成对校验一致)。
-    await waitFor(() => expect(onRevise).toHaveBeenCalledWith({
-      collectionId: 'col-1',
-      collectionName: 'report.md',
-      filename: 'report.md',
-      baseVersionId: 'ver-1',
-      sourceVersionId: 'ver-1',
-      basisReviewId: 'rev-1',
-      packageId: 'pkg-1',
-      deliveryId: 'del-1',
-      collectionRevision: 1,
-    }));
+    await waitFor(() => expect(screen.getByText('要求修改')).not.toBeNull());
+    expect(screen.queryByText('基于此修改')).toBeNull();
+    expect(document.querySelector('[data-smoke="package-revise-action"]')).toBeNull();
+    expect(onRevise).not.toHaveBeenCalled();
   });
 
   test('Files 入口(AC1):rejected Markdown 版本显示基于此修改,点击回调冻结 basis;approved 不显示', () => {
