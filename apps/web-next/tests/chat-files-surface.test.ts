@@ -94,5 +94,7 @@ describe('chat files surface', () => {
   test('私聊文件标签页继续使用普通文件视图，不进入频道逻辑产物板', () => {
     expect(source).toMatch(/\{activeChannel && !isDm \? \(\s+<ProjectFilesBoard/);
     expect(source).toMatch(/<ProjectFilesBoard[\s\S]+?\) : \(\s+<ConversationFiles/);
+    expect(source).toContain('const isActiveDm = dms.some((dm) => dm.id === activeChannel);');
+    expect(source).toContain("if (tab === 'files' && isActiveDm) void loadChannelFiles(true);");
   });
 });

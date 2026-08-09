@@ -445,6 +445,35 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     });
   });
 
+  test('包详情或成员投影不可用时保留原集合卡', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard();
+    await waitFor(() => {
+      const collectionIds = Array.from(document.querySelectorAll('[data-smoke="project-artifact-collection"]'))
+        .map((card) => card.getAttribute('data-collection-id'));
+      expect(collectionIds).toEqual(expect.arrayContaining(['col-1', 'col-2']));
+    });
+  });
+
+  test('集合历史版本仅将 finalVersionId 对应行标为最终版', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard({
+      libraryOverride: {
+        ...library,
+        collections: library.collections.map((collection) => collection.id === 'col-1'
+          ? { ...collection, finalVersionId: 'ver-1' }
+          : collection),
+      },
+    });
+    fireEvent.click(document.querySelector('[data-smoke="project-artifact-collection"][data-collection-id="col-1"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(4);
+    });
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-1"]')?.textContent).toContain('v1 final');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c1"]')?.textContent).toContain('未设置');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-rej"]')?.textContent).toContain('未设置');
+  });
+
   test('仅属于不可见历史包的集合仍保留集合卡，不会被首屏去重误隐藏', () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
     const historicalCollection = {

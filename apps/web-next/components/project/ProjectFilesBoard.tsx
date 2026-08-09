@@ -254,19 +254,13 @@ export function ProjectFilesBoard({
 
   const packageMemberCollectionIds = useMemo(() => {
     const ids = new Set<string>();
-    const visiblePackageIds = new Set(packages.map((pkg) => pkg.packageId));
-    for (const collection of library?.collections ?? []) {
-      if (collection.versions.some((version) => version.packageMemberships?.some(
-        (membership) => visiblePackageIds.has(membership.packageId),
-      ))) {
-        ids.add(collection.id);
-      }
-    }
     for (const detail of packageDetailCache.values()) {
-      for (const member of detail.package?.members ?? []) ids.add(member.collectionId);
+      // 只有 Server 已返回可展示的成员投影时才去重。详情失败或缺少 projection 时
+      // 保留集合卡，避免包卡无文件行且原集合也不可访问。
+      for (const member of detail.projection?.members ?? []) ids.add(member.collectionId);
     }
     return ids;
-  }, [library, packageDetailCache, packages]);
+  }, [packageDetailCache]);
 
   // 卡片模型:聚合 → Agent 名入搜索池 → 「有 final」(final projection ready)→
   // 短编号版本摘要(来自缓存投影)→ 筛选/搜索。
@@ -1040,10 +1034,10 @@ function collectionVersionRows(
           ? `v${version.versionNumber} current`
           : `v${version.versionNumber}`,
         currentSub: '',
-        finalLabel: collection.finalVersionId
-          ? `v${collection.versions.find((candidate) => candidate.id === collection.finalVersionId)?.versionNumber ?? '?'} final`
+        finalLabel: version.id === collection.finalVersionId
+          ? `v${version.versionNumber} final`
           : '未设置',
-        isFinal: Boolean(collection.finalVersionId),
+        isFinal: version.id === collection.finalVersionId,
         reviewLabel: reviewStateLabel(version.reviewState),
         reviewState: version.reviewState,
         isCurrent: version.id === collection.currentVersionId,

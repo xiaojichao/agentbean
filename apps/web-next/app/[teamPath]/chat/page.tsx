@@ -607,8 +607,9 @@ export default function ChatPage() {
     setChannelFilesCursor(undefined);
     setChannelFileDirectories([]);
     setChannelFilesLoading(false);
-    if (tab === 'files') void loadChannelFiles(true);
-  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
+    const isActiveDm = dms.some((dm) => dm.id === activeChannel);
+    if (tab === 'files' && isActiveDm) void loadChannelFiles(true);
+  }, [activeChannel, conn, dms, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
   // #823 逻辑产物视图按需拉取 Server 投影；没有项目数据的频道保持空投影，不影响普通文件视图。
   // #825 文档包与文件列表分开取，Bundle 读失败不牵连既有文件库渲染。
