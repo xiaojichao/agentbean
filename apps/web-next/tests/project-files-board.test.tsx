@@ -445,6 +445,17 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     });
   });
 
+  test('产物库投影缺失时仍使用包成员的 isFinalVersion 事实', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
+    renderBoard({ libraryOverride: null });
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c2"]')?.textContent).toContain('v3 final');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c1"]')?.textContent).toContain('未设置');
+  });
+
   test('包详情或成员投影不可用时保留原集合卡', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
     renderBoard();

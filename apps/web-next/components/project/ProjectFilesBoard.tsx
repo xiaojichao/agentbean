@@ -976,8 +976,12 @@ function packageProjectionRows(
         .join(' · '),
       currentLabel: `v${member.versionNumber} current`,
       currentSub: `server revision r${member.collectionRevision}`,
-      finalLabel: finalVersion ? `v${finalVersion.versionNumber} final` : '未设置',
-      isFinal: Boolean(finalVersion),
+      finalLabel: finalVersion
+        ? `v${finalVersion.versionNumber} final`
+        : member.isFinalVersion
+          ? `v${member.versionNumber} final`
+          : '未设置',
+      isFinal: Boolean(finalVersion) || member.isFinalVersion,
       reviewLabel: reviewStateLabel(member.reviewState),
       reviewState: member.reviewState,
       isCurrent: true,
