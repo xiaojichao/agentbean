@@ -15,6 +15,7 @@ import { OutputPackageCard, type ReviseVersionRequest } from '@/components/Outpu
 import { outputPackageFromMeta } from '@/lib/output-package';
 import { taskStatusEventSummary } from '@/lib/task-status-event';
 import { taskStatusDotClass, taskStatusText } from '@/lib/task-status';
+import { formatMessageDateTime } from '@/lib/chat-message-date';
 import type { ChatMessage } from '@/lib/schema';
 import type { ProjectReferenceSelectionRequestDto } from '@agentbean/contracts';
 
@@ -46,6 +47,7 @@ export function SystemMessageBubble({
     'data-smoke': 'chat-message',
     'data-message-selected': selected ? 'true' : 'false',
   };
+  const timestamp = formatMessageDateTime(msg.createdAt);
   const statusEventClassName = `mx-auto my-2 flex max-w-fit items-center gap-2 rounded-full border px-3 py-1.5 text-xs text-neutral-600 shadow-sm ${
     selected
       ? 'border-amber-400 bg-amber-50/80 shadow-[inset_3px_0_0_#f59e0b]'
@@ -60,6 +62,7 @@ export function SystemMessageBubble({
       <>
         <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(taskStatusEvent.status)}`} />
         <span>任务 {taskStatusEvent.label} 状态更新为 {taskStatusText(taskStatusEvent.status)}</span>
+        <span className="text-neutral-400">{timestamp}</span>
         {canOpenTask && <ExternalLink size={12} className="text-neutral-400" />}
       </>
     );
@@ -85,6 +88,7 @@ export function SystemMessageBubble({
   if (pkg) {
     return (
       <div {...anchorProps} className="mx-auto my-2 w-full max-w-2xl">
+        <div className="mb-1 text-right text-[10px] text-neutral-400">{timestamp}</div>
         <OutputPackageCard
           packageMeta={pkg}
           channelId={msg.channelId}
@@ -112,7 +116,8 @@ export function SystemMessageBubble({
           : 'border-amber-200 bg-amber-50'
       }`}
     >
-      {msg.body}
+      <span>{msg.body}</span>
+      <span className="ml-2 text-neutral-400">{timestamp}</span>
     </div>
   );
 }

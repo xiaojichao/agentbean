@@ -49,4 +49,22 @@ describe('chat message layout', () => {
     );
     expect(filesSurface).toMatch(/editable=\{file\.senderKind === 'agent'\}/);
   });
+
+  test('主聊天线跨日显示日期分隔线，并断开跨日消息分组', () => {
+    const timeline = chatPage.slice(
+      chatPage.indexOf('{rootMessages.map((msg, index) => {'),
+      chatPage.indexOf('<div ref={messagesEndRef} />'),
+    );
+    expect(timeline).toContain('shouldShowMessageDateDivider(previousMessage?.createdAt, msg.createdAt)');
+    expect(timeline).toContain('showDateDivider && <MessageDateDivider timestamp={msg.createdAt} />');
+    expect(timeline).toContain('groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}');
+  });
+
+  test('ChatBubble 的消息时间使用完整日期时间', () => {
+    const bubble = chatPage.slice(
+      chatPage.indexOf('function ChatBubble('),
+      chatPage.indexOf('function MessageContextMenuItem('),
+    );
+    expect(bubble).toContain('const time = formatMessageDateTime(msg.createdAt)');
+  });
 });
