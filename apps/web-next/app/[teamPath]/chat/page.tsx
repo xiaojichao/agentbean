@@ -35,7 +35,7 @@ import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/componen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
-import { ChannelTaskCard } from '@/components/ChannelTaskCard';
+import { ChannelTaskCard, ChannelTaskFactSummary } from '@/components/ChannelTaskCard';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
   type PromoteArtifactDraft,
@@ -3450,13 +3450,28 @@ function ConversationTasks({
     [channelId],
   );
 
+  const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, entry] as const) ?? []);
+  const responsibilityFocusFilterValue = (task: TaskItem): string => {
+    const entry = workspaceEntries.get(task.id);
+    if (entry?.governance.mode === 'managed') {
+      if (entry.responsibilityFocus.kind === 'review_wait') return 'review_wait';
+      return entry.responsibilityFocus.agentId ?? 'unassigned';
+    }
+    return task.assigneeId ?? 'unassigned';
+  };
   const filteredTasks = tasks.filter((task) => {
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
-    if (assigneeFilter === 'unassigned' && task.assigneeId) return false;
-    if (assigneeFilter !== 'all' && assigneeFilter !== 'unassigned' && task.assigneeId !== assigneeFilter) return false;
+    if (assigneeFilter !== 'all' && responsibilityFocusFilterValue(task) !== assigneeFilter) return false;
     return true;
   });
-  const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, entry] as const) ?? []);
+  const reviewerLabelForEntry = (entry: ChannelTaskWorkspaceEntryV1): string => {
+    const reviewerIds = entry.review.latest
+      ? [entry.review.latest.reviewedBy]
+      : entry.review.reviewerIds;
+    return reviewerIds.length > 0
+      ? reviewerIds.map((id) => participantName(id, participants, currentUserId)).join('、')
+      : '未绑定';
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -3557,10 +3572,12 @@ function ConversationTasks({
 
   const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
   const assigneeLabel = assigneeFilter === 'all'
-    ? '负责人'
+    ? '责任焦点'
     : assigneeFilter === 'unassigned'
-      ? '未分配'
-      : participantName(assigneeFilter, participants, currentUserId);
+      ? '未产生责任'
+      : assigneeFilter === 'review_wait'
+        ? '等待审核'
+        : participantName(assigneeFilter, participants, currentUserId);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
@@ -3588,9 +3605,14 @@ function ConversationTasks({
           </button>
           {showAssigneeFilter && (
             <TaskFilterMenu
-              title="负责人"
+              title="责任焦点"
               value={assigneeFilter}
-              options={[{ id: 'all', name: '全部负责人' }, { id: 'unassigned', name: '未分配' }, ...participants]}
+              options={[
+                { id: 'all', name: '全部责任焦点' },
+                { id: 'unassigned', name: '未产生责任' },
+                { id: 'review_wait', name: '等待审核' },
+                ...participants,
+              ]}
               onSelect={(id) => { onAssigneeFilterChange(id); onCloseFilters(); }}
             />
           )}
@@ -3668,9 +3690,6 @@ function ConversationTasks({
                     {colTasks.map((task) => {
                       const entry = workspaceEntries.get(task.id);
                       if (!entry) return null;
-                      const reviewerIds = entry.review.latest
-                        ? [entry.review.latest.reviewedBy]
-                        : entry.review.reviewerIds;
                       return (
                         <ChannelTaskCard
                           key={task.id}
@@ -3686,9 +3705,7 @@ function ConversationTasks({
                           }}
                           creatorName={participantName(task.creatorId, participants, currentUserId)}
                           assigneeName={task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}
-                          reviewerLabel={reviewerIds.length > 0
-                            ? reviewerIds.map((id) => participantName(id, participants, currentUserId)).join('、')
-                            : '未绑定'}
+                          reviewerLabel={reviewerLabelForEntry(entry)}
                           onDelete={() => deleteTask(task.id)}
                           onMove={(status) => moveTask(task, status)}
                           onDragStart={() => onDragStart(task.id)}
@@ -3717,7 +3734,7 @@ function ConversationTasks({
                 <th className="pb-2 pr-4 font-medium">标题</th>
                 <th className="pb-2 pr-4 font-medium">状态</th>
                 <th className="pb-2 pr-4 font-medium">创建者</th>
-                <th className="pb-2 pr-4 font-medium">负责人</th>
+                <th className="pb-2 pr-4 font-medium">项目事实</th>
                 <th className="pb-2 font-medium">操作</th>
               </tr>
             </thead>
@@ -3725,7 +3742,6 @@ function ConversationTasks({
               {filteredTasks.map((task) => {
                 const entry = workspaceEntries.get(task.id);
                 if (!entry) return null;
-                const managed = entry.governance.mode === 'managed';
                 return <tr key={task.id} className="border-b border-neutral-100">
                   <td className="py-2 pr-4 text-xs text-neutral-400">#{taskNumbers.get(task.id) ?? '任务'}</td>
                   <td className="max-w-lg py-2 pr-4">
@@ -3740,7 +3756,14 @@ function ConversationTasks({
                     ) : <span className="text-xs text-neutral-500">{taskStatusText(task.status)} · 流程推进</span>}
                   </td>
                   <td className="py-2 pr-4 text-xs text-neutral-600">{participantName(task.creatorId, participants, currentUserId)}</td>
-                  <td className="py-2 pr-4 text-xs text-neutral-600">{managed ? entry.responsibilityFocus.detail : task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}</td>
+                  <td className="min-w-64 py-2 pr-4">
+                    <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabelForEntry(entry)} />
+                    {entry.governance.mode === 'plain' && task.assigneeId ? (
+                      <div className="mt-1 text-[11px] text-neutral-500">
+                        普通任务负责人：{participantName(task.assigneeId, participants, currentUserId)}
+                      </div>
+                    ) : null}
+                  </td>
                   <td className="py-2">
                     <div className="flex items-center gap-1">
                       <button onClick={() => onOpenTaskDetail(task.id)} className="flex h-7 items-center rounded border border-neutral-200 px-2 text-xs text-neutral-600 hover:border-neutral-900 hover:text-neutral-900" title="打开任务详情">

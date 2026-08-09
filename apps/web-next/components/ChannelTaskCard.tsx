@@ -6,6 +6,58 @@ import type { ChannelTaskWorkspaceEntryV1, TaskStatus } from '@agentbean/contrac
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import { TASK_STATUS_COLUMNS } from '@/lib/task-status';
 
+export function ChannelTaskFactSummary({
+  entry,
+  reviewerLabel,
+  className = '',
+}: {
+  entry: ChannelTaskWorkspaceEntryV1;
+  reviewerLabel: string;
+  className?: string;
+}) {
+  const { governance, responsibilityFocus, delivery, review, stage } = entry;
+  const managed = governance.mode === 'managed';
+  return (
+    <div
+      className={`${className} space-y-1.5 border-y border-neutral-100 py-2 text-[11px] text-neutral-600`}
+      data-smoke="task-card-facts"
+    >
+      <div className="flex flex-wrap items-center gap-1.5" data-smoke="task-card-governance">
+        <span className={`border px-1 ${managed ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500'}`}>
+          {managed ? '受管任务' : '普通任务'}
+        </span>
+        {stage ? <span className="truncate border border-sky-200 bg-sky-50 px-1 text-sky-700">阶段：{stage.name}</span> : null}
+      </div>
+      <div className="flex items-start gap-1.5" data-smoke="task-card-focus">
+        <CircleDot size={11} className="mt-0.5 shrink-0 text-pink-500" />
+        <span>责任焦点：{responsibilityFocus.detail}</span>
+      </div>
+      {stage && (!stage.executionAllowed || stage.blockingReasons.length > 0 || stage.missingRequiredInputs.length > 0) ? (
+        <div className="flex items-start gap-1.5 text-amber-700" data-smoke="task-card-blockers">
+          <ShieldCheck size={11} className="mt-0.5 shrink-0" />
+          <span>
+            {stage.missingRequiredInputs.length > 0
+              ? `缺少输入：${stage.missingRequiredInputs.map((item) => item.label || item.key).join('、')}`
+              : `存在 ${stage.blockingReasons.length || 1} 个执行阻塞点`}
+          </span>
+        </div>
+      ) : null}
+      <div className="flex items-start gap-1.5" data-smoke="task-card-delivery">
+        <Package size={11} className="mt-0.5 shrink-0 text-violet-600" />
+        <span>
+          {delivery.packageCount > 0
+            ? `交付包 ${delivery.packageCount} 个${delivery.focusReviewState ? ` · ${reviewStateLabel(delivery.focusReviewState)}` : ''}`
+            : '暂无交付包'}
+          {delivery.pendingDeliveryCount > 0 ? ` · ${delivery.pendingDeliveryCount} 批处理中` : ''}
+        </span>
+      </div>
+      <div data-smoke="task-card-reviewer">
+        {review.latest ? '实际审核人' : '建议审核人'}：{reviewerLabel}
+      </div>
+    </div>
+  );
+}
+
 export function ChannelTaskCard({
   entry,
   creatorName,
@@ -27,7 +79,7 @@ export function ChannelTaskCard({
   onDragEnd: () => void;
   onOpenDetail: () => void;
 }) {
-  const { task, governance, responsibilityFocus, delivery, stage } = entry;
+  const { task, governance } = entry;
   const managed = governance.mode === 'managed';
   return (
     <article
@@ -42,8 +94,6 @@ export function ChannelTaskCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[11px] text-neutral-400">
             <span>任务</span>
-            {managed ? <span className="border border-violet-200 bg-violet-50 px-1 text-violet-700">受管</span> : null}
-            {stage ? <span className="truncate border border-sky-200 bg-sky-50 px-1 text-sky-700">阶段：{stage.name}</span> : null}
           </div>
           <button
             type="button"
@@ -64,36 +114,7 @@ export function ChannelTaskCard({
 
       {task.description ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{task.description}</div> : null}
 
-      {managed ? (
-        <div className="mt-3 space-y-1.5 border-y border-neutral-100 py-2 text-[11px] text-neutral-600">
-          <div className="flex items-start gap-1.5" data-smoke="task-card-focus">
-            <CircleDot size={11} className="mt-0.5 shrink-0 text-pink-500" />
-            <span>{responsibilityFocus.detail}</span>
-          </div>
-          {stage && (!stage.executionAllowed || stage.blockingReasons.length > 0 || stage.missingRequiredInputs.length > 0) ? (
-            <div className="flex items-start gap-1.5 text-amber-700" data-smoke="task-card-blockers">
-              <ShieldCheck size={11} className="mt-0.5 shrink-0" />
-              <span>
-                {stage.missingRequiredInputs.length > 0
-                  ? `缺少输入：${stage.missingRequiredInputs.map((item) => item.label || item.key).join('、')}`
-                  : `存在 ${stage.blockingReasons.length || 1} 个执行阻塞点`}
-              </span>
-            </div>
-          ) : null}
-          <div className="flex items-start gap-1.5" data-smoke="task-card-delivery">
-            <Package size={11} className="mt-0.5 shrink-0 text-violet-600" />
-            <span>
-              {delivery.packageCount > 0
-                ? `交付包 ${delivery.packageCount} 个${delivery.focusReviewState ? ` · ${reviewStateLabel(delivery.focusReviewState)}` : ''}`
-                : '暂无交付包'}
-              {delivery.pendingDeliveryCount > 0 ? ` · ${delivery.pendingDeliveryCount} 批处理中` : ''}
-            </span>
-          </div>
-          <div data-smoke="task-card-reviewer">
-            审核人：{reviewerLabel}
-          </div>
-        </div>
-      ) : null}
+      <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabel} className="mt-3" />
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
         <span className="inline-flex items-center gap-1 border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">

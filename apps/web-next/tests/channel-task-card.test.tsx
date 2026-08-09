@@ -42,7 +42,7 @@ function renderCard(entry: ChannelTaskWorkspaceEntryV1) {
       entry={entry}
       creatorName="小王"
       assigneeName="旧负责人"
-      reviewerLabel="审核员"
+      reviewerLabel={entry.review.latest || entry.review.reviewerIds.length > 0 ? '审核员' : '未绑定'}
       {...callbacks}
     />,
   );
@@ -58,7 +58,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('Agent A');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('要求修改');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
-    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('审核员');
+    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('建议审核人：审核员');
     expect(document.querySelector('select')).toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).toBeNull();
     fireEvent.click(document.querySelector('[data-smoke="task-card-open-detail"]')!);
@@ -77,10 +77,51 @@ describe('ChannelTaskCard', () => {
       review: { reviewerIds: [] },
     };
     const callbacks = renderCard(plainEntry);
+    expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
+    expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('尚无协调事实');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('暂无交付包');
+    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('未绑定');
     const select = document.querySelector('select')!;
     fireEvent.change(select, { target: { value: 'done' } });
     expect(callbacks.onMove).toHaveBeenCalledWith('done');
     fireEvent.click(document.querySelector('button[title="删除任务"]')!);
     expect(callbacks.onDelete).toHaveBeenCalledOnce();
+  });
+
+  test('普通任务也展示已有的 Server 交付与审核事实，但不升级为受管任务', () => {
+    const plainEntry: ChannelTaskWorkspaceEntryV1 = {
+      ...baseEntry,
+      governance: {
+        mode: 'plain', sources: [], allowDirectStatusMutation: true,
+        allowDirectAssigneeMutation: true, allowDirectDelete: true,
+      },
+      responsibilityFocus: { kind: 'none', detail: '尚无协调事实' },
+      delivery: {
+        packageCount: 2,
+        pendingDeliveryCount: 1,
+        focusPackageId: 'package-2',
+        focusReviewState: 'approved',
+      },
+      review: {
+        reviewerIds: ['reviewer-1'],
+        latest: {
+          reviewId: 'review-1',
+          reviewedBy: 'reviewer-1',
+          decision: 'approved',
+          comment: '可以继续',
+          createdAt: 3,
+        },
+      },
+    };
+
+    renderCard(plainEntry);
+
+    expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('交付包 2 个');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('已通过');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
+    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('实际审核人：审核员');
+    expect(document.querySelector('select')).not.toBeNull();
+    expect(document.querySelector('button[title="删除任务"]')).not.toBeNull();
   });
 });
