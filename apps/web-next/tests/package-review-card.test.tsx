@@ -46,6 +46,10 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
     return Array.from(document.querySelectorAll('[data-smoke="package-review-action"]'));
   }
 
+  function revisionActionButtons(): HTMLElement[] {
+    return Array.from(document.querySelectorAll('[data-smoke="package-revise-action"]'));
+  }
+
   test('无 channelId 时保持静态，标签后显示文件包名称', () => {
     render(<OutputPackageCard packageMeta={packageMeta} />);
     expect(screen.getByText('Agent 交付文件包')).not.toBeNull();
@@ -53,6 +57,7 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
     expect(document.querySelector('[data-smoke="output-package-name"]')?.textContent).toBe('写剧本');
     expect(document.querySelector('[data-smoke="output-package-title"]')?.textContent).toBe('Agent 交付文件包·写剧本');
     expect(reviewActionButtons()).toHaveLength(0);
+    expect(revisionActionButtons()).toHaveLength(0);
     expect(mocks.getOutputPackage).not.toHaveBeenCalled();
   });
 
@@ -114,7 +119,11 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
         },
       ],
     });
-    render(<OutputPackageCard packageMeta={statusPackageMeta} channelId="ch-1" />);
+    render(<OutputPackageCard
+      packageMeta={statusPackageMeta}
+      channelId="ch-1"
+      onReviseVersion={vi.fn()}
+    />);
 
     await waitFor(() => expect(document.querySelectorAll('[data-smoke="package-review-state"]')).toHaveLength(5));
     const pending = screen.getByText('待审核');
@@ -128,6 +137,8 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
     expect(rejected.className).toContain('red');
     expect(final.className).toContain('violet');
     expect(reviewActionButtons()).toHaveLength(0);
+    expect(revisionActionButtons()).toHaveLength(1);
+    expect(revisionActionButtons()[0]?.dataset.action).toBe('revise-version');
     expect(mocks.getOutputPackage).toHaveBeenCalledWith({ channelId: 'ch-1', packageId: 'pkg-1' });
   });
 
@@ -147,5 +158,6 @@ describe('OutputPackageCard review actions (#1061 AC11)', () => {
     render(<OutputPackageCard packageMeta={packageMeta} channelId="ch-1" />);
     await waitFor(() => expect(screen.getByText('通过并设为最终版')).not.toBeNull());
     expect(reviewActionButtons()).toHaveLength(0);
+    expect(revisionActionButtons()).toHaveLength(0);
   });
 });

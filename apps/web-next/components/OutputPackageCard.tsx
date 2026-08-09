@@ -32,7 +32,7 @@ import type {
  * (“选择”→ checkbox + 计数)与“基于此修改”(显式选择 rejected/changes_requested 版本)。
  */
 
-// #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射,颜色只作修饰)。
+// 引用策略标签跨 surface 共享；成员状态文案按 #1157 的文件包契约展示。
 import { POLICY_LABELS } from '@/lib/delivery-labels';
 
 const PACKAGE_REVIEW_STATE_STYLES: Record<PackageMemberAvailableActionsDto['reviewState'], string> = {
