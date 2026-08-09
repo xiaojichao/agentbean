@@ -2645,6 +2645,22 @@ export default function ChatPage() {
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
                 onAddReference={addFilesBoardReference}
+                documentBundleSection={projectDocumentBundles.length > 0 ? (
+                  <ProjectDocumentBundleList
+                    bundles={projectDocumentBundles}
+                    archived={projectDocumentBundlesArchived}
+                    onLoadDetail={loadProjectDocumentBundleDetail}
+                    selections={projectReferenceSelections}
+                    onSelectionChange={(selection, bundleId) => {
+                      setProjectReferenceSelections((current) => [
+                        ...current.filter((item) =>
+                          (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
+                          || item.bundleId !== bundleId),
+                        ...(selection ? [selection] : []),
+                      ]);
+                    }}
+                  />
+                ) : undefined}
                 onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel })}
                 onOpenPackagePreview={openPackagePreviewModal}
                 onOpenReadOnlyArtifact={(artifact) => setReadOnlyArtifact(artifact)}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CheckSquare, Clock, Layers, Search, Square } from 'lucide-react';
 import { projectEvents } from '@/lib/socket';
 import {
@@ -101,6 +101,11 @@ export interface ProjectFilesBoardProps {
   /** 引用加入主 composer(发送时冻结 ProjectReferenceSet;去重语义由调用方决定)。 */
   onAddReference: (selection: ProjectReferenceSelectionRequestDto) => void;
   /**
+   * 既有 Server 冻结文档包引用区。它不参与左栏三类文件组聚合，避免把
+   * ProjectDocumentBundle 伪装成 ProjectArtifactCollection 或 OutputPackage。
+   */
+  documentBundleSection?: ReactNode;
+  /**
    * 集合版本行「预览/编辑」(Markdown)与「基于此修改」→ page.tsx 的
    * openArtifactRevisionEditor 流(带 expectedCollectionRevision fence;不复制逻辑)。
    * 未提供时不渲染对应入口。
@@ -162,6 +167,7 @@ export function ProjectFilesBoard({
   agentNames,
   dataRevision,
   onAddReference,
+  documentBundleSection,
   onOpenRevisionEditor,
   onOpenPackagePreview,
   onOpenReadOnlyArtifact,
@@ -510,6 +516,11 @@ export function ProjectFilesBoard({
           </div>
         )}
       </div>
+      {documentBundleSection ? (
+        <div className="max-h-64 shrink-0 overflow-y-auto border-b border-neutral-200 px-3 pt-3" data-smoke="files-document-bundle-section">
+          {documentBundleSection}
+        </div>
+      ) : null}
       {showPromote && canPromote && !archived ? (
         <div className="shrink-0 border-b border-amber-200 bg-amber-50/40 px-3 py-2" data-smoke="files-promote-form">
           {promotableArtifactsLoading ? (
