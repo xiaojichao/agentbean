@@ -3,6 +3,7 @@ import type { ChannelTaskWorkspaceEntryV1 } from '@agentbean/contracts';
 
 import {
   channelTaskEntrySubview,
+  channelTasksHistoryMode,
   channelTasksRouteParams,
   parseChannelTasksSubview,
   resolveChannelTasksSubview,
@@ -45,6 +46,12 @@ describe('频道 Tasks 路由与 Server 事实分流', () => {
     expect(plain.get('tasksView')).toBe('plain');
     expect(plain.has('stage')).toBe(false);
     expect(plain.has('task')).toBe(false);
+  });
+
+  test('默认视图规范化不污染历史，用户主动切换和打开任务写入浏览历史', () => {
+    expect(channelTasksHistoryMode('resolve_default')).toBe('replace');
+    expect(channelTasksHistoryMode('select_subview')).toBe('push');
+    expect(channelTasksHistoryMode('open_task')).toBe('push');
   });
 });
 

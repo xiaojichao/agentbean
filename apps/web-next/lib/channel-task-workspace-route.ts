@@ -1,6 +1,13 @@
 import type { ChannelTaskWorkspaceEntryV1 } from '@agentbean/contracts';
 
 export type ChannelTasksSubview = 'project' | 'plain';
+export type ChannelTasksNavigationIntent = 'resolve_default' | 'select_subview' | 'open_task';
+
+export function channelTasksHistoryMode(
+  intent: ChannelTasksNavigationIntent,
+): 'push' | 'replace' {
+  return intent === 'resolve_default' ? 'replace' : 'push';
+}
 
 export function parseChannelTasksSubview(value: string | null): ChannelTasksSubview | undefined {
   return value === 'project' || value === 'plain' ? value : undefined;

@@ -82,6 +82,7 @@ import {
 } from '@/lib/task-status';
 import {
   channelTaskEntrySubview,
+  channelTasksHistoryMode,
   channelTasksRouteParams,
   parseChannelTasksSubview,
   resolveChannelTasksSubview,
@@ -1353,9 +1354,14 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   };
 
-  const replaceChannelTasksRoute = useCallback((nextParams: URLSearchParams) => {
+  const navigateChannelTasksRoute = useCallback((
+    nextParams: URLSearchParams,
+    historyMode: 'push' | 'replace',
+  ) => {
     const query = nextParams.toString();
-    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+    const href = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    if (historyMode === 'push') router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
   }, [router]);
 
   const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
@@ -1363,28 +1369,34 @@ export default function ChatPage() {
       setTaskDetailMessageId(null);
       setTaskDetailOnlyTaskId(null);
     }
-    replaceChannelTasksRoute(channelTasksRouteParams(searchParams, { view }));
-  }, [replaceChannelTasksRoute, searchParams]);
+    navigateChannelTasksRoute(
+      channelTasksRouteParams(searchParams, { view }),
+      channelTasksHistoryMode('select_subview'),
+    );
+  }, [navigateChannelTasksRoute, searchParams]);
 
   const resolveDefaultTasksSubview = useCallback((view: ChannelTasksSubview) => {
     if (tasksViewParam) return;
     const next = new URLSearchParams(searchParams.toString());
     next.set('chatTab', 'tasks');
     next.set('tasksView', view);
-    replaceChannelTasksRoute(next);
-  }, [replaceChannelTasksRoute, searchParams, tasksViewParam]);
+    navigateChannelTasksRoute(next, channelTasksHistoryMode('resolve_default'));
+  }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
 
   const openProjectStage = useCallback((stageId: string | null, taskId: string) => {
     setTaskDetailOnlyTaskId(taskId);
     setTaskDetailMessageId(null);
     setThreadRootId(null);
     setChatTaskMenuTarget(null);
-    replaceChannelTasksRoute(channelTasksRouteParams(searchParams, {
-      view: 'project',
-      stageId,
-      taskId,
-    }));
-  }, [replaceChannelTasksRoute, searchParams]);
+    navigateChannelTasksRoute(
+      channelTasksRouteParams(searchParams, {
+        view: 'project',
+        stageId,
+        taskId,
+      }),
+      channelTasksHistoryMode('open_task'),
+    );
+  }, [navigateChannelTasksRoute, searchParams]);
 
   const handleArchiveChannel = async (channelId: string, confirmationToken?: string) => {
     const res = await channelEvents().archive(channelId, currentTeamId, confirmationToken);
@@ -1440,7 +1452,10 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
-  const setTaskDetailUrl = useCallback((messageId: string | null) => {
+  const setTaskDetailUrl = useCallback((
+    messageId: string | null,
+    historyMode: 'push' | 'replace' = 'replace',
+  ) => {
     const params = new URLSearchParams(searchParams.toString());
     if (messageId && activeChannel) {
       params.set('task', `${activeChannel}:${messageId}`);
@@ -1451,7 +1466,9 @@ export default function ChatPage() {
       params.delete('task');
     }
     const query = params.toString();
-    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+    const href = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    if (historyMode === 'push') router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
   const openThread = useCallback((messageId: string) => {
@@ -2009,7 +2026,10 @@ export default function ChatPage() {
     });
   };
 
-  const openTaskDetail = useCallback((msg: ChatMessage) => {
+  const openTaskDetail = useCallback((
+    msg: ChatMessage,
+    historyMode: 'push' | 'replace' = 'replace',
+  ) => {
     if (!metaTaskId(msg)) return;
     setTaskDetailMessageId(msg.id);
     setTaskDetailOnlyTaskId(null);
@@ -2022,13 +2042,13 @@ export default function ChatPage() {
     });
     setSelectedMessageId(msg.id);
     setChatTaskMenuTarget(null);
-    setTaskDetailUrl(msg.id);
+    setTaskDetailUrl(msg.id, historyMode);
   }, [setTaskDetailUrl]);
 
   const openTaskDetailById = useCallback((taskId: string) => {
     const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
     if (taskMessage) {
-      openTaskDetail(taskMessage);
+      openTaskDetail(taskMessage, channelTasksHistoryMode('open_task'));
       return;
     }
     // 原型收敛:看板直接创建的任务没有关联消息——task-only 详情(URL 记 task:<taskId>)。
@@ -2040,7 +2060,7 @@ export default function ChatPage() {
     params.delete('thread');
     params.delete('message');
     params.delete('profile');
-    router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+    router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
   }, [openTaskDetail, visibleMessages, router, searchParams]);
 
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),

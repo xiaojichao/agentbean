@@ -1763,6 +1763,18 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, chan
     'channel Tasks switches to project progress and records it in URL',
     timeoutMs,
   );
+  await page.evaluateJson('history.back(); true');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
+    'channel Tasks browser back restores the previous subview',
+    timeoutMs,
+  );
+  await page.evaluateJson('history.forward(); true');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    'channel Tasks browser forward restores the selected subview',
+    timeoutMs,
+  );
   await page.reload();
   await page.waitForFunction(
     `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
