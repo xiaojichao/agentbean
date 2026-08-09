@@ -54,9 +54,27 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
 
 ### 5. shouldHideSystemMessage：委托 contracts 的 isHiddenSystemMessage
 
-`apps/web-next/lib/system-messages.ts:14-16` 的 `shouldHideSystemMessage(msg)` 把 `{ senderKind, meta }` 传给 `@agentbean/contracts` 的 `isHiddenSystemMessage`。规则单一真相源在 contracts（服务端在序列化边界同样用它）；前端这层是防御兜底。**保留可见**的例外：`management-question`（需回应）、`management-delivery`（需验收）。改隐藏规则要改 contracts，不要在前端单方面加白名单/黑名单。
+`apps/web-next/lib/system-messages.ts:14-16` 的 `shouldHideSystemMessage(msg)` 把 `{ senderKind, meta }` 传给 `@agentbean/contracts` 的 `isHiddenSystemMessage`。跨 transport 隐藏合同的单一真相源在 contracts（服务端在序列化边界同样用它）；前端这层是防御兜底。**保留可见**的例外：`management-question`（需回应）、`management-delivery`（需验收）。修改跨 transport 规则要改 contracts，不要在前端单方面加白名单/黑名单；只影响特定界面的 presentation projection 见下一节。
 
-### 6. isTopLevelAgentReply：判定 Agent 回复进主时间线还是嵌套
+### 6. projectChatViewMessages：transport 原始消息与聊天投影分层
+
+`apps/web-next/lib/chat-message-projection.ts` 负责 Web 聊天消费面的统一投影：
+
+- transport/store 的原始消息集合继续保留 `task-status-updated`，供 TaskDetail 通过
+  `taskStatusMessagesForTask(...)` 恢复完整状态历史；
+- 频道主线、Thread 回复/计数、Activity 与消息搜索统一消费
+  `projectChatViewMessages(...)`，不展示任务状态流水；
+- 历史 `?message=` 指向被隐藏的状态事件时，使用
+  `taskIdForStatusMessageDeepLink(...)` 改道 TaskDetail；
+- 投影复用 `taskStatusEventSummary` / `taskStatusEventForTask` 与
+  `mergedStandalonePackageCardIds`，不在页面重复解析任务状态语义；
+- 这是 presentation projection，不得下沉为 Contracts/Server 的 Message 序列化过滤，
+  也不得把里程碑卡重新制造成 Message。
+
+`shouldHideSystemMessage` 仍只委托 Contracts 的跨 transport 隐藏合同；
+`task-status-updated` 的 chat-view 分层是上述受控例外，不扩写该合同。
+
+### 7. isTopLevelAgentReply：判定 Agent 回复进主时间线还是嵌套
 
 `apps/web-next/lib/chat-scope.ts:122-131` 的 `isTopLevelAgentReply(reply, origin)`：
 
@@ -74,11 +92,12 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
 - `apps/web-next/lib/chat-scope.ts:122-131`（isTopLevelAgentReply）、`:133-192`（mergeChannelHistory docblock+实现）、`:194-206`（pending/contextLoaded/window 辅助判定）。
 - `apps/web-next/lib/system-messages.ts:14-16`（shouldHideSystemMessage 委托）。
 - `apps/web-next/components/conversation-page.tsx:17-62`（订阅+清理样板，onHistory/onMessage/onDispatchStatus）。
+- `apps/web-next/lib/chat-message-projection.ts`（transport 原始消息 → chat-view 投影、TaskDetail 状态恢复、历史深链改道）。
 
 ## 反模式
 
 - 用 `applyChannelHistory` 整数组替换 `messagesByChannel[channelId]`——会抹掉客户端 `dispatchStatus`/`dispatchId`（切频道时「正在处理…」消失）。必须走 `mergeChannelHistory`。
-- 在前端自行扩 `shouldHideSystemMessage` 的可见/隐藏名单——真相源在 contracts 的 `isHiddenSystemMessage`。
+- 在前端自行扩 `shouldHideSystemMessage` 的跨 transport 可见/隐藏名单——真相源在 contracts 的 `isHiddenSystemMessage`；仅界面分层规则进入 `chat-message-projection.ts`。
 - 直接 `socket.emit(...)` 不走 `emitWithTimeout`——调用方未 catch 时 ack 超时会变 Unhandled rejection。
 - 订阅事件不在 effect return 里 `socket.off`——跨页泄漏。
 - 把 `dispatchStatus` 当服务端字段写进 history merge 的「权威内容」——它只是 `?? existing` 的兜底。
@@ -89,4 +108,5 @@ export function agentEvents(socket: Socket = getWebSocket()): AgentEvents {
 cd apps/web-next && npm test                                # 含 chat-scope.test.ts
 cd apps/web-next && npx vitest run tests/chat-scope.test.ts # mergeChannelHistory/isTopLevelAgentReply 单测
 cd apps/web-next && npx vitest run tests/chat-message-collapse.test.ts tests/chat-task-surface.test.ts
+cd apps/web-next && npx vitest run tests/chat-message-projection.test.ts tests/task-thread-activity-section.test.tsx
 ```

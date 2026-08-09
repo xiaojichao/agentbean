@@ -83,3 +83,24 @@ PR #1136 合并(57feba3f gate 放宽 + d70c78ac Review 阻塞收敛);修复生�
 ### Next Steps
 
 - 无；后续功能工作另开分支/worktree
+
+
+## Session 4: 调整任务状态信息分层
+
+**Date**: 2026-08-09
+**Task**: 调整任务状态信息分层
+**Branch**: `codex/task-status-information-layer`
+
+### Summary
+
+隐藏频道与 Thread 中的任务状态流水，保留 TaskDetail 完整历史；频道任务讨论串复用既有 thread_card 关键里程碑，并补齐搜索、深链和异步竞态回归。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `466a2259` | (see git log) |
+
+### Status
+
+[OK] **Completed**
