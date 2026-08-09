@@ -272,17 +272,18 @@ function collectionCard(
 }
 
 function waitingCard(stage: FileGroupStageInput): FileGroupCardModel {
+  const title = `${stage.name.replace(/阶段$/, '')}输出包`;
   return {
     kind: 'waiting',
     id: `waiting:${stage.id}`,
-    title: `${stage.name.replace(/阶段$/, '')}输出包`,
+    title,
     chips: ['等待上游'],
     summaryLines: stage.goal ? [stage.goal] : ['暂无产物'],
     lastActivityAt: 0,
     pendingReview: false,
     hasFinal: false,
     agentOutput: false,
-    searchText: [stage.name, '等待上游', stage.goal ?? ''].join(' ').toLowerCase(),
+    searchText: [title, stage.name, '等待上游', stage.goal ?? ''].join(' ').toLowerCase(),
     payload: { kind: 'waiting', stage },
   };
 }

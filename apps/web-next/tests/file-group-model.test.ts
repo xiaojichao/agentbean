@@ -213,6 +213,7 @@ describe('buildFileGroupCards', () => {
     expect(waiting[0].chips).toEqual(['等待上游']);
     expect(waiting[0].summaryLines).toEqual(['产出分镜图组']);
     expect(waiting[0].payload).toEqual({ kind: 'waiting', stage: { id: 'stage-3', name: '分镜', goal: '产出分镜图组', taskId: 'task-3' } });
+    expect(filterFileGroupCards(waiting, 'all', '分镜输出包').map((card) => card.id)).toEqual(['waiting:stage-3']);
   });
 
   test('空数据:无包/无集合/无阶段 → 空列表', () => {
