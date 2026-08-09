@@ -283,7 +283,7 @@ export function ProjectFilesBoard({
     return cards.map((card) => {
       if (card.kind === 'package' && card.payload.kind === 'package') {
         const detail = packageDetailCache.get(card.payload.package.packageId);
-        if (detail?.projection?.status === 'ready') {
+        if (detail?.projection) {
           const memberSearchText = detail.projection.members.flatMap((member) => [
             member.filename,
             member.shortLabel,
@@ -293,7 +293,9 @@ export function ProjectFilesBoard({
           ]).join(' ');
           return {
             ...card,
-            summaryLines: packageProjectionSummaryLines(detail.projection.members),
+            ...(detail.projection.status === 'ready'
+              ? { summaryLines: packageProjectionSummaryLines(detail.projection.members) }
+              : {}),
             searchText: `${card.searchText} ${memberSearchText}`.toLowerCase(),
           };
         }

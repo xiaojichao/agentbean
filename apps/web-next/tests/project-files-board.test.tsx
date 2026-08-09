@@ -364,20 +364,22 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
   });
 
   test('current projection not_ready 时仍保留可解析成员行与修订入口', async () => {
-    mocks.getOutputPackage.mockResolvedValue({
-      ok: true,
-      ...packageDetail,
-      package: {
-        ...packageDetail.package,
-        members: [
-          { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
-          packageDetail.package.members[1],
-        ],
-      },
-      projection: blockedCurrentProjection,
-      asOf: 2000,
-      audienceScope: 'team-1:channel-1:u-1',
-    });
+    mocks.getOutputPackage.mockImplementation(async ({ packageId }: { packageId: string }) => packageId === 'pkg-2'
+      ? {
+          ok: true,
+          ...packageDetail,
+          package: {
+            ...packageDetail.package,
+            members: [
+              { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
+              packageDetail.package.members[1],
+            ],
+          },
+          projection: blockedCurrentProjection,
+          asOf: 2000,
+          audienceScope: 'team-1:channel-1:u-1',
+        }
+      : { ok: false });
     renderBoard();
     fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
     await waitFor(() => {
@@ -386,6 +388,14 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     expect(document.querySelector('[data-smoke="files-package-projection-blocked"]')).not.toBeNull();
     expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).not.toBeNull();
     expect(document.querySelector('[data-smoke="files-row-ref"][data-version-id="ver-c1"]')?.textContent).toBe('引用以修改');
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, {
+      target: { value: '第1集剧本.md' },
+    });
+    await waitFor(() => {
+      const packageCards = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
+      expect(packageCards.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-2']);
+    });
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, { target: { value: '' } });
     fireEvent.click(document.querySelector('[data-smoke="files-ref-multi"]')!);
     expect(document.querySelector('[data-smoke="files-row-select"][data-version-id="ver-c1"]')).not.toBeNull();
     expect(document.querySelector('[data-smoke="files-row-select"][data-version-id="ver-c2"]')).not.toBeNull();
