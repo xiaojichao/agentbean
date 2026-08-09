@@ -47,3 +47,39 @@ PR #1136 合并(57feba3f gate 放宽 + d70c78ac Review 阻塞收敛);修复生�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: 同步 README 与 CI_CD 文档至 AgentBean Next
+
+**Date**: 2026-08-09
+**Task**: 同步 README 与 CI_CD 文档至 AgentBean Next
+**Branch**: `docs/update-readme-cicd`
+
+### Summary
+
+按当前代码与流水线重写 README.md 与中文 CI_CD.md，经 PR #1150 合并入 main；收尾归档 #1114 任务并写入 update 自更新链 release 规范。
+
+### Main Changes
+
+- 重写 README：AgentBean Next 架构、功能面、设备接入、开发与验证
+- 重写 CI_CD 为中文：对齐 validate/publish/Railway/smoke 与 Secrets
+- 归档 trellis 任务 08-07-update-fence-self-lock，补全 release 实证条目
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `496921ad` | (see git log) |
+| `d9c51cd2` | (see git log) |
+
+### Testing
+
+- [OK] 文档-only PR #1150；Validate 通过，publish/deploy 按变更面跳过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 无；后续功能工作另开分支/worktree
