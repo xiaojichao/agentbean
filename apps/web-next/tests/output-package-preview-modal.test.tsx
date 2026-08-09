@@ -65,7 +65,10 @@ function version(id: string, collectionId: string, filename: string, versionNumb
   };
 }
 
-function library(firstVersion = version('version-1', 'collection-1', '第1集剧本.md', 4)) {
+function library(
+  firstVersion = version('version-1', 'collection-1', '第1集剧本.md', 4),
+  firstVersions = [firstVersion],
+) {
   return {
     archived: false,
     collections: [
@@ -77,7 +80,7 @@ function library(firstVersion = version('version-1', 'collection-1', '第1集剧
         kind: 'deliverable',
         revision: firstVersion.versionNumber,
         currentVersionId: firstVersion.id,
-        versions: [firstVersion],
+        versions: firstVersions,
         finalizations: [],
         createdBy: 'user-1',
         createdAt: 100,
@@ -146,7 +149,7 @@ afterEach(() => {
 });
 
 describe('OutputPackagePreviewModal 原型收敛', () => {
-  test('使用包成员 + Markdown 源文 + Markdown 预览三栏，并移除原型说明性备注', async () => {
+  test('使用三栏布局并渲染四个页脚动作，同时移除原型说明性备注', async () => {
     renderModal();
 
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
@@ -156,13 +159,17 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.getByText('Markdown 预览')).toBeTruthy();
     expect((await screen.findByTestId('rendered-markdown')).textContent).toBe('# 温暖的一步');
     expect(document.querySelector('[data-smoke="package-preview-save"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: '模拟冲突' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看版本历史' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '保存为 Server 新版本' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '保存并提交审核' })).toBeTruthy();
+    expect(document.querySelector('[data-smoke="package-preview-actions"]')?.className).toContain('overflow-x-auto');
     expect(screen.getByText('Server source of truth')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'edit' })).toBeNull();
-    expect(screen.queryByText('模拟冲突')).toBeNull();
-    expect(screen.queryByText('保存并提交审核')).toBeNull();
     expect(screen.queryByText('可直接改一句话')).toBeNull();
     expect(screen.queryByText('实时预览')).toBeNull();
     expect(screen.queryByText(/保存后直接更新该文档的最新 Server 修订/)).toBeNull();
+    expect(screen.queryByText(/保存会生成 v/)).toBeNull();
   });
 
   test('成员行打开时聚焦指定版本，并可在左栏切换文件', async () => {
@@ -171,6 +178,18 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /F1 第1集剧本\.md/ }));
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
+  });
+
+  test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
+    const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
+    mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
+    renderModal();
+
+    expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 分镜.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '查看版本历史' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '模拟冲突' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '保存为 Server 新版本' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '保存并提交审核' })).toBeNull();
   });
 
   test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {
@@ -209,6 +228,52 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     confirm.mockReturnValue(true);
     fireEvent.click(secondMember);
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
+  });
+
+  test('模拟冲突只进入本地冲突处理，不写入 Server', async () => {
+    renderModal();
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.change(editor, { target: { value: '# 保留的本地草稿' } });
+    const simulateButton = screen.getByRole('button', { name: '模拟冲突' });
+    await waitFor(() => expect((simulateButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(simulateButton);
+
+    expect((await screen.findByRole('alert')).textContent).toContain('模拟冲突：假设 Server 已有 script.ep01 v5');
+    expect(screen.getByRole('button', { name: '查看最新版' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '复制草稿' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '继续手工合并' })).toBeTruthy();
+    expect(mocks.saveArtifactVersionRevision).not.toHaveBeenCalled();
+  });
+
+  test('版本历史读取真实集合版本，并提供只读预览和下载', async () => {
+    const current = version('version-1', 'collection-1', '第1集剧本.md', 4);
+    const previous = {
+      ...version('version-previous', 'collection-1', '第1集剧本.md', 3, 'approved'),
+      revisionBasis: { sourceVersionId: 'version-2-before' },
+    };
+    mocks.artifactCollections.mockResolvedValue({
+      ok: true,
+      library: library(current, [current, previous]),
+    });
+    vi.mocked(globalThis.fetch).mockImplementation(async (url) => ({
+      ok: true,
+      status: 200,
+      text: async () => String(url).includes('version-previous') ? '# 历史版本正文' : '# 温暖的一步',
+    } as Response));
+    renderModal();
+
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '查看版本历史' }));
+    expect(await screen.findByRole('dialog', { name: 'script.ep01 版本历史' })).toBeTruthy();
+    expect(screen.getByText('v4')).toBeTruthy();
+    expect(screen.getByText('v3')).toBeTruthy();
+    expect(screen.getByText('current')).toBeTruthy();
+    expect(screen.getByText('手动修改', { exact: false })).toBeTruthy();
+    expect(screen.getByRole('link', { name: '下载 v3' }).getAttribute('href')).toBe('/artifacts/artifact-version-previous/download');
+
+    fireEvent.click(screen.getByRole('button', { name: '预览 v3' }));
+    expect(await screen.findByText('# 历史版本正文')).toBeTruthy();
   });
 
   test('底部保存按钮沿用 revision fence，成功后显示 Server 新版本状态', async () => {
@@ -260,5 +325,20 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     })));
     expect(await screen.findByText(/已保存：Server 生成 script\.ep01 v9/)).toBeTruthy();
     expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  test('保存并提交审核生成新版本并进入待审核，不代替审核人记录决定', async () => {
+    renderModal();
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.change(editor, { target: { value: '# 待审核的新版本' } });
+    const reviewButton = document.querySelector<HTMLButtonElement>('[data-smoke="package-preview-save-review"]')!;
+    await waitFor(() => expect(reviewButton.disabled).toBe(false));
+    fireEvent.click(reviewButton);
+
+    await waitFor(() => expect(mocks.saveArtifactVersionRevision).toHaveBeenCalledTimes(1));
+    const notice = await waitFor(() => document.querySelector<HTMLElement>('[data-smoke="package-preview-saved"]'));
+    expect(notice?.textContent).toContain('已保存并提交审核：Server 生成 script.ep01 v5');
+    expect(notice?.textContent).toContain('新版本已进入待审核');
   });
 });

@@ -30,6 +30,7 @@ export interface MarkdownDocumentEditorState {
   dirty: boolean;
   saving: boolean;
   saveDisabled: boolean;
+  conflicted: boolean;
 }
 
 export interface MarkdownDocumentEditorProps {
@@ -46,6 +47,8 @@ export interface MarkdownDocumentEditorProps {
   onRestoreRevision?: (revisionId: string, baseRevisionId: string, idempotencyKey: string) => Promise<MarkdownDocumentRestoreResult>;
   getRevisionDownloadUrl?: (revision: ChannelDocumentRevisionDto) => string | undefined;
   onLoadLatest?: () => Promise<MarkdownDocumentSnapshot>;
+  /** 文件包原型演示冲突处理；仅设置本地冲突态，不写入 Server。 */
+  simulateConflictMessage?: string;
   onClose?: () => void;
   onStateChange?: (state: MarkdownDocumentEditorState) => void;
   renderPreview: (content: string) => ReactNode;
@@ -68,6 +71,7 @@ export function MarkdownDocumentEditor({
   onRestoreRevision,
   getRevisionDownloadUrl,
   onLoadLatest,
+  simulateConflictMessage,
   onClose,
   onStateChange,
   renderPreview,
@@ -370,8 +374,8 @@ export function MarkdownDocumentEditor({
   const saveDisabled = readOnly || saving || !dirty || Boolean(conflict && (!manualMergeStart || !manualMergeChanged));
 
   useEffect(() => {
-    onStateChange?.({ dirty, saving, saveDisabled });
-  }, [dirty, onStateChange, saveDisabled, saving]);
+    onStateChange?.({ dirty, saving, saveDisabled, conflicted: Boolean(conflict) });
+  }, [conflict, dirty, onStateChange, saveDisabled, saving]);
 
   return <section className={packagePreview ? 'flex h-full min-h-0 flex-col' : 'flex min-h-0 flex-col gap-3'} aria-label="Markdown 文档编辑器">
     {notice && <div role="status" className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</div>}
@@ -408,6 +412,20 @@ export function MarkdownDocumentEditor({
       disabled={saveDisabled}
       onClick={() => void save()}
     >{saving ? '保存中…' : '保存为 Server 新版本'}</button>}
+    {packagePreview && simulateConflictMessage && <button
+      type="button"
+      className="sr-only"
+      data-markdown-document-simulate-conflict
+      aria-hidden="true"
+      tabIndex={-1}
+      disabled={readOnly || saving || !dirty || Boolean(conflict)}
+      onClick={() => {
+        setConflict(simulateConflictMessage);
+        setLatest(null);
+        setManualMergeStart(null);
+        setSaveError(null);
+      }}
+    >模拟冲突</button>}
     {revisions.length > 0 && <section aria-label="版本历史" className="rounded border p-3">
       <h3 className="mb-2 text-sm font-medium">版本历史</h3>
       <ol className="space-y-2">

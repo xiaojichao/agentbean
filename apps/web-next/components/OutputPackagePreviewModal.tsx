@@ -34,10 +34,16 @@ interface ActiveTarget {
   current: ProjectArtifactVersionDto;
 }
 
+interface HistoryPreview {
+  version: ProjectArtifactVersionDto;
+  content: string;
+}
+
 const EMPTY_EDITOR_STATE: MarkdownDocumentEditorState = {
   dirty: false,
   saving: false,
   saveDisabled: true,
+  conflicted: false,
 };
 
 function isMarkdownFilename(filename: string): boolean {
@@ -48,14 +54,7 @@ function isImageFilename(filename: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(filename);
 }
 
-export function OutputPackagePreviewModal({
-  packageMeta,
-  channelId,
-  initialVersionId,
-  renderPreview,
-  onClose,
-  onSaved,
-}: {
+export interface OutputPackagePreviewModalProps {
   packageMeta: OutputPackageMeta;
   channelId: string;
   /** 成员行「预览」进入时聚焦的成员(交付冻结版本 id)。 */
@@ -64,16 +63,30 @@ export function OutputPackagePreviewModal({
   onClose: () => void;
   /** 保存成功后通知父级(刷新卡片/library 投影)。 */
   onSaved: () => void;
-}) {
+}
+
+export function OutputPackagePreviewModal({
+  packageMeta,
+  channelId,
+  initialVersionId,
+  renderPreview,
+  onClose,
+  onSaved,
+}: OutputPackagePreviewModalProps) {
   const [collections, setCollections] = useState<ProjectArtifactCollectionDto[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyPreview, setHistoryPreview] = useState<HistoryPreview | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyBusyVersionId, setHistoryBusyVersionId] = useState<string | null>(null);
   // 每次切换成员/保存成功后递增,重挂载编辑器(reset 内部草稿态)。
   const [editorEpoch, setEditorEpoch] = useState(0);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const saveIntentRef = useRef<'version' | 'review'>('version');
   const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>(EMPTY_EDITOR_STATE);
 
   const requestClose = useCallback(() => {
@@ -86,6 +99,9 @@ export function OutputPackagePreviewModal({
     setEditorState(EMPTY_EDITOR_STATE);
     setActiveCollectionId(collectionId);
     setSavedNotice(null);
+    setHistoryOpen(false);
+    setHistoryPreview(null);
+    setHistoryError(null);
   }, [activeCollectionId, editorState.dirty]);
 
   const loadLibrary = useCallback(async () => {
@@ -105,11 +121,16 @@ export function OutputPackagePreviewModal({
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') requestClose();
+      if (event.key !== 'Escape') return;
+      if (historyOpen) {
+        setHistoryOpen(false);
+        return;
+      }
+      requestClose();
     };
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [requestClose]);
+  }, [historyOpen, requestClose]);
 
   // 初始聚焦成员:initialVersionId 对应 collection,否则第一个成员。
   useEffect(() => {
@@ -129,6 +150,9 @@ export function OutputPackagePreviewModal({
     if (!current) return null;
     return { collection, current };
   })();
+  const activeIsMarkdown = active
+    ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
+    : false;
 
   // 加载当前成员内容(Server 最新修订,不信任本地缓存)。
   useEffect(() => {
@@ -168,6 +192,8 @@ export function OutputPackagePreviewModal({
 
   const saveCurrent = useCallback(async (nextContent: string, filename: string): Promise<MarkdownDocumentSaveResult> => {
     if (!active) return { ok: false, conflict: true, message: '未选择成员' };
+    const saveIntent = saveIntentRef.current;
+    saveIntentRef.current = 'version';
     const base = active.current;
     const result = await projectEvents().saveArtifactVersionRevision({
       channelId,
@@ -186,7 +212,9 @@ export function OutputPackagePreviewModal({
       idempotencyKey: `pkg-preview-edit:${active.collection.id}:${base.id}:${crypto.randomUUID()}`,
     });
     if (result.ok && result.revision) {
-      setSavedNotice(`已保存：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新；final 未移动。`);
+      setSavedNotice(saveIntent === 'review'
+        ? `已保存并提交审核：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，新版本已进入待审核；当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新，final 未移动。`
+        : `已保存：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新；final 未移动。`);
       await loadLibrary();
       setEditorEpoch((n) => n + 1);
       onSaved();
@@ -228,6 +256,37 @@ export function OutputPackagePreviewModal({
     };
   }, [loadLibrary, activeCollectionId]);
 
+  const previewHistoryVersion = useCallback(async (version: ProjectArtifactVersionDto) => {
+    const artifact = version.artifact as unknown as Artifact;
+    const url = chatArtifactUrl(artifact, 'preview', {
+      serverUrl: getResolvedServerUrl(),
+      token: getStoredAuthToken(),
+      ...(artifact.teamId ? { teamId: artifact.teamId } : {}),
+    });
+    if (!url) {
+      setHistoryError('该历史版本没有可用的在线内容');
+      return;
+    }
+    setHistoryBusyVersionId(version.id);
+    setHistoryError(null);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(response.status === 415 ? '该历史版本不是 UTF-8，仅支持下载' : '历史版本加载失败');
+      }
+      setHistoryPreview({ version, content: await response.text() });
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '历史版本加载失败');
+    } finally {
+      setHistoryBusyVersionId(null);
+    }
+  }, []);
+
+  const triggerEditorSave = useCallback((intent: 'version' | 'review') => {
+    saveIntentRef.current = intent;
+    editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-save]')?.click();
+  }, []);
+
   return (
     <div
       className="fixed inset-0 z-[70] grid place-items-center bg-neutral-950/35"
@@ -237,7 +296,7 @@ export function OutputPackagePreviewModal({
       onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
     >
       <div
-        className="grid h-[min(740px,calc(100vh-32px))] w-[min(1120px,calc(100vw-32px))] grid-rows-[48px_minmax(0,1fr)_48px] overflow-hidden rounded-lg border border-white/80 bg-white shadow-2xl sm:h-[min(740px,calc(100vh-56px))] sm:w-[min(1120px,calc(100vw-56px))]"
+        className="relative grid h-[min(740px,calc(100vh-32px))] w-[min(1120px,calc(100vw-32px))] grid-rows-[48px_minmax(0,1fr)_48px] overflow-hidden rounded-lg border border-white/80 bg-white shadow-2xl sm:h-[min(740px,calc(100vh-56px))] sm:w-[min(1120px,calc(100vw-56px))]"
         data-smoke="output-package-preview-modal"
       >
         {/* header:原型顺序为包 + 当前文件标题，右侧展示 Server basis 与审核态。 */}
@@ -298,7 +357,7 @@ export function OutputPackagePreviewModal({
               <div className="flex h-full items-center justify-center text-sm text-red-600">{loadError}</div>
             ) : !active ? (
               <div className="flex h-full items-center justify-center text-sm text-neutral-400">选择左侧文件</div>
-            ) : !isMarkdownFilename((active.current.artifact as unknown as Artifact).filename) ? (
+            ) : !activeIsMarkdown ? (
               <NonMarkdownPreview target={active} />
             ) : contentError ? (
               <div className="flex h-full items-center justify-center text-sm text-red-600">{contentError}</div>
@@ -313,36 +372,163 @@ export function OutputPackagePreviewModal({
                 onLoadLatest={loadLatest}
                 renderPreview={renderPreview}
                 presentation="package-preview"
+                simulateConflictMessage={`模拟冲突：假设 Server 已有 ${active.collection.name} v${active.current.versionNumber + 1}；你的草稿仍保留，请先查看最新版再手工合并。`}
                 onStateChange={setEditorState}
               />
             )}
           </div>
         </div>
 
-        {/* footer:Server 状态 + 已有的真实保存动作；不复制原型里的演示按钮。 */}
+        {historyOpen && active && (
+          <section
+            className="absolute inset-0 z-20 grid grid-rows-[48px_minmax(0,1fr)] bg-white"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${active.collection.name} 版本历史`}
+            data-smoke="package-preview-history"
+          >
+            <header className="flex items-center border-b border-neutral-200 bg-neutral-50/80 px-3">
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-sm font-semibold text-neutral-900">版本历史 · {active.collection.name}</h3>
+                <p className="truncate text-[10px] text-neutral-500">历史版本只读预览；下载不会改变 current 或 final。</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                title="关闭版本历史"
+              >
+                <X size={16} />
+              </button>
+            </header>
+            <div className="grid min-h-0 grid-cols-[260px_minmax(0,1fr)]">
+              <ol className="min-h-0 space-y-2 overflow-y-auto border-r border-neutral-200 bg-neutral-50/60 p-3">
+                {[...active.collection.versions]
+                  .sort((left, right) => right.versionNumber - left.versionNumber)
+                  .map((version) => {
+                    const artifact = version.artifact as unknown as Artifact;
+                    const downloadUrl = chatArtifactUrl(artifact, 'download', {
+                      serverUrl: getResolvedServerUrl(),
+                      token: getStoredAuthToken(),
+                      ...(artifact.teamId ? { teamId: artifact.teamId } : {}),
+                    });
+                    const isCurrent = active.collection.currentVersionId === version.id;
+                    const isFinal = active.collection.finalVersionId === version.id;
+                    return (
+                      <li key={version.id} className="rounded-lg border border-neutral-200 bg-white p-2.5 text-xs">
+                        <div className="flex items-center gap-1.5">
+                          <strong className="text-neutral-900">v{version.versionNumber}</strong>
+                          {isCurrent && <span className="rounded bg-sky-50 px-1 py-0.5 text-[10px] text-sky-700">current</span>}
+                          {isFinal && <span className="rounded bg-emerald-50 px-1 py-0.5 text-[10px] text-emerald-700">final</span>}
+                          <span className="ml-auto text-[10px] text-neutral-500">{reviewStateLabel(version.reviewState)}</span>
+                        </div>
+                        <p className="mt-1 truncate text-neutral-700">{artifact.filename}</p>
+                        <p className="mt-1 text-[10px] text-neutral-500">
+                          {version.revisionBasis ? '手动修改' : 'Agent 修订'} · {new Date(version.createdAt).toLocaleString('zh-CN')}
+                        </p>
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            disabled={historyBusyVersionId !== null || !isMarkdownFilename(artifact.filename)}
+                            onClick={() => void previewHistoryVersion(version)}
+                            className="rounded border border-neutral-300 px-2 py-1 text-[10px] text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label={`预览 v${version.versionNumber}`}
+                          >
+                            {historyBusyVersionId === version.id ? '加载中…' : '预览'}
+                          </button>
+                          {downloadUrl && (
+                            <a
+                              href={downloadUrl}
+                              download
+                              className="rounded border border-neutral-300 px-2 py-1 text-[10px] text-neutral-700 hover:bg-neutral-50"
+                              aria-label={`下载 v${version.versionNumber}`}
+                            >
+                              下载
+                            </a>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+              </ol>
+              <div className="min-h-0 overflow-y-auto p-5">
+                {historyError ? (
+                  <div role="alert" className="text-sm text-red-600">{historyError}</div>
+                ) : historyPreview ? (
+                  <article data-smoke="package-preview-history-rendered">
+                    <p className="mb-3 text-xs font-semibold text-neutral-500">v{historyPreview.version.versionNumber} 只读预览</p>
+                    {renderPreview(historyPreview.content)}
+                  </article>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm text-neutral-400">选择左侧版本进行预览</div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* footer:原型四入口；模拟冲突只演示客户端处理，不写入 Server。 */}
         <footer className="flex min-w-0 items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50/80 px-3">
           <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-600">
             <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${savedNotice ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
               {savedNotice ? '已保存' : 'Server source of truth'}
             </span>
-            {savedNotice ? (
+            {savedNotice && (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
-            ) : active ? (
-              <span className="truncate">
-                当前编辑基于 <strong>{active.collection.name} v{active.current.versionNumber}</strong>；保存会生成 v{active.current.versionNumber + 1}，替换 current 指针，但不会自动移动 final。
-              </span>
-            ) : null}
+            )}
           </div>
-          {active && isMarkdownFilename((active.current.artifact as unknown as Artifact).filename) ? (
-            <button
-              type="button"
-              onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-save]')?.click()}
-              disabled={editorState.saveDisabled}
-              className="shrink-0 rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300"
-              data-smoke="package-preview-save"
+          {active ? (
+            <div
+              className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
+              data-smoke="package-preview-actions"
             >
-              {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
-            </button>
+              {activeIsMarkdown && (
+                <button
+                  type="button"
+                  onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-simulate-conflict]')?.click()}
+                  disabled={!editorState.dirty || editorState.saving || editorState.conflicted}
+                  title="仅演示冲突处理，不写入 Server"
+                  className="rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  data-smoke="package-preview-simulate-conflict"
+                >
+                  模拟冲突
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setHistoryPreview(null);
+                  setHistoryError(null);
+                  setHistoryOpen(true);
+                }}
+                className="rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                data-smoke="package-preview-history-open"
+              >
+                查看版本历史
+              </button>
+              {activeIsMarkdown && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => triggerEditorSave('version')}
+                    disabled={editorState.saveDisabled}
+                    className="rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300"
+                    data-smoke="package-preview-save"
+                  >
+                    {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => triggerEditorSave('review')}
+                    disabled={editorState.saveDisabled}
+                    className="rounded-md border border-amber-500 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-500 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300 disabled:text-white"
+                    data-smoke="package-preview-save-review"
+                  >
+                    {editorState.saving ? '提交中…' : '保存并提交审核'}
+                  </button>
+                </>
+              )}
+            </div>
           ) : null}
         </footer>
       </div>
