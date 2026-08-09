@@ -26,6 +26,12 @@ export type MarkdownDocumentRestoreResult =
   | { ok: true; snapshot: MarkdownDocumentSnapshot }
   | { ok: false; conflict: true; message: string };
 
+export interface MarkdownDocumentEditorState {
+  dirty: boolean;
+  saving: boolean;
+  saveDisabled: boolean;
+}
+
 export interface MarkdownDocumentEditorProps {
   draftIdentity?: ChannelDocumentDraftIdentity;
   filename: string;
@@ -41,7 +47,10 @@ export interface MarkdownDocumentEditorProps {
   getRevisionDownloadUrl?: (revision: ChannelDocumentRevisionDto) => string | undefined;
   onLoadLatest?: () => Promise<MarkdownDocumentSnapshot>;
   onClose?: () => void;
+  onStateChange?: (state: MarkdownDocumentEditorState) => void;
   renderPreview: (content: string) => ReactNode;
+  /** 文件包浮窗使用固定的「源文 + 实时预览」双栏，不展示通用文档工具栏。 */
+  presentation?: 'default' | 'package-preview';
 }
 
 /** 安全的源码编辑器：预览由 React 节点渲染，不把原始 HTML 交给 innerHTML。 */
@@ -60,7 +69,9 @@ export function MarkdownDocumentEditor({
   getRevisionDownloadUrl,
   onLoadLatest,
   onClose,
+  onStateChange,
   renderPreview,
+  presentation = 'default',
 }: MarkdownDocumentEditorProps) {
   const [content, setContent] = useState(initialContent);
   const [filename, setFilename] = useState(initialFilename);
@@ -355,9 +366,16 @@ export function MarkdownDocumentEditor({
     }
   };
 
-  return <section className="flex min-h-0 flex-col gap-3" aria-label="Markdown 文档编辑器">
+  const packagePreview = presentation === 'package-preview';
+  const saveDisabled = readOnly || saving || !dirty || Boolean(conflict && (!manualMergeStart || !manualMergeChanged));
+
+  useEffect(() => {
+    onStateChange?.({ dirty, saving, saveDisabled });
+  }, [dirty, onStateChange, saveDisabled, saving]);
+
+  return <section className={packagePreview ? 'flex h-full min-h-0 flex-col' : 'flex min-h-0 flex-col gap-3'} aria-label="Markdown 文档编辑器">
     {notice && <div role="status" className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</div>}
-    <header className="flex flex-wrap items-center gap-2">
+    {!packagePreview && <header className="flex flex-wrap items-center gap-2">
       <input value={filename} disabled={readOnly || saving} onChange={(event) => setFilename(event.target.value)} aria-label="文档标题" className="rounded border px-2 py-1 text-sm" />
       <div className="flex gap-1" role="toolbar" aria-label="Markdown 工具栏">
         <button type="button" onClick={() => insert('**')} disabled={readOnly || saving} title="粗体">B</button>
@@ -370,7 +388,7 @@ export function MarkdownDocumentEditor({
       {(['edit', 'preview', 'split'] as Mode[]).map((value) => <button key={value} type="button" onClick={() => setMode(value)} aria-pressed={mode === value}>{value}</button>)}
       <button
         type="button"
-        disabled={readOnly || saving || !dirty || Boolean(conflict && (!manualMergeStart || !manualMergeChanged))}
+        disabled={saveDisabled}
         onClick={() => void save()}
       >{saving ? '保存中…' : '保存'}</button>
       {!readOnly && onPublish && <button
@@ -380,7 +398,16 @@ export function MarkdownDocumentEditor({
       >保存并分享到频道</button>}
       {onClose && <button type="button" onClick={() => { if (!dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose(); }}>关闭</button>}
       {readOnly && <span className="text-xs text-neutral-500">{readOnlyReason ?? '只读'}</span>}
-    </header>
+    </header>}
+    {packagePreview && <button
+      type="button"
+      className="sr-only"
+      data-markdown-document-save
+      aria-hidden="true"
+      tabIndex={-1}
+      disabled={saveDisabled}
+      onClick={() => void save()}
+    >{saving ? '保存中…' : '保存为 Server 新版本'}</button>}
     {revisions.length > 0 && <section aria-label="版本历史" className="rounded border p-3">
       <h3 className="mb-2 text-sm font-medium">版本历史</h3>
       <ol className="space-y-2">
@@ -501,9 +528,52 @@ export function MarkdownDocumentEditor({
       </div>}
     </div>}
     {saveError && <div role="alert" className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{saveError}</div>}
-    <div className={`grid min-h-0 flex-1 gap-3 ${mode === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
-      {mode !== 'preview' && <textarea ref={textareaRef} data-channel-document-editor value={content} disabled={readOnly || saving} onChange={(event) => setContent(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!readOnly) void save(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') { event.preventDefault(); insert('**'); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') { event.preventDefault(); insert('*'); } }} className="min-h-64 w-full resize-none rounded border p-3 font-mono text-sm" />}
-      {mode !== 'edit' && <article className="prose min-h-64 max-w-none overflow-y-auto rounded border p-3">{renderPreview(content)}</article>}
-    </div>
+    {packagePreview ? (
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-2" data-smoke="package-preview-split-editor">
+        <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)] border-r border-neutral-200">
+          <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
+            <span>Markdown 源文</span>
+            <span className="rounded border border-neutral-200 bg-white px-1.5 py-0.5 text-[10px] font-normal text-neutral-600">可直接改一句话</span>
+          </div>
+          <textarea
+            ref={textareaRef}
+            data-channel-document-editor
+            value={content}
+            disabled={readOnly || saving}
+            onChange={(event) => setContent(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+                event.preventDefault();
+                if (!readOnly) void save();
+              }
+              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+                event.preventDefault();
+                insert('**');
+              }
+              if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') {
+                event.preventDefault();
+                insert('*');
+              }
+            }}
+            aria-label="Markdown 源文"
+            className="h-full min-h-0 w-full resize-none border-0 p-3 font-mono text-xs leading-6 text-neutral-800 outline-none disabled:bg-neutral-50"
+          />
+        </section>
+        <section className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)]">
+          <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-3 text-xs font-semibold text-neutral-500">
+            <span>Markdown 预览</span>
+            <span className="rounded border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-normal text-emerald-700">实时预览</span>
+          </div>
+          <article className="min-h-0 overflow-y-auto px-4 py-3 text-sm leading-7" data-smoke="package-preview-rendered-markdown">
+            {renderPreview(content)}
+          </article>
+        </section>
+      </div>
+    ) : (
+      <div className={`grid min-h-0 flex-1 gap-3 ${mode === 'split' ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
+        {mode !== 'preview' && <textarea ref={textareaRef} data-channel-document-editor value={content} disabled={readOnly || saving} onChange={(event) => setContent(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (!readOnly) void save(); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') { event.preventDefault(); insert('**'); } if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'i') { event.preventDefault(); insert('*'); } }} className="min-h-64 w-full resize-none rounded border p-3 font-mono text-sm" />}
+        {mode !== 'edit' && <article className="prose min-h-64 max-w-none overflow-y-auto rounded border p-3">{renderPreview(content)}</article>}
+      </div>
+    )}
   </section>;
 }
