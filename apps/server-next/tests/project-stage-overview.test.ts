@@ -164,6 +164,10 @@ describe('频道项目首个 Stage 总览', () => {
             code: 'task_not_started',
             taskId: 'task-1',
           }],
+          advance: {
+            kind: 'waiting',
+            reason: 'automation_unavailable',
+          },
         }],
       },
     });

@@ -1943,7 +1943,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     resolveEligibleAgentIds: resolveTaskLinkedEligibleAgentIds,
   } as const;
   const resolveProjectPiAutomationAvailable = input.resolvePiAutomationAvailable
-    ?? (async () => !getEmergencyStopActive());
+    // 未接线的测试/嵌入式入口无法证明 Active PI 配置就绪，必须 fail closed；
+    // 生产 host 会注入同时聚合配置就绪与运行状态的 resolver。
+    ?? (async () => false);
   const notifyProjectFactsChanged = async (scope: { teamId: string; channelId: string }) => {
     try {
       await input.onProjectFactsChanged?.(scope);
