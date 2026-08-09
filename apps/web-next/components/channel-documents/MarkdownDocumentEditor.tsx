@@ -26,6 +26,12 @@ export type MarkdownDocumentRestoreResult =
   | { ok: true; snapshot: MarkdownDocumentSnapshot }
   | { ok: false; conflict: true; message: string };
 
+export interface MarkdownDocumentEditorState {
+  dirty: boolean;
+  saving: boolean;
+  saveDisabled: boolean;
+}
+
 export interface MarkdownDocumentEditorProps {
   draftIdentity?: ChannelDocumentDraftIdentity;
   filename: string;
@@ -41,6 +47,7 @@ export interface MarkdownDocumentEditorProps {
   getRevisionDownloadUrl?: (revision: ChannelDocumentRevisionDto) => string | undefined;
   onLoadLatest?: () => Promise<MarkdownDocumentSnapshot>;
   onClose?: () => void;
+  onStateChange?: (state: MarkdownDocumentEditorState) => void;
   renderPreview: (content: string) => ReactNode;
   /** 文件包浮窗使用固定的「源文 + 实时预览」双栏，不展示通用文档工具栏。 */
   presentation?: 'default' | 'package-preview';
@@ -62,6 +69,7 @@ export function MarkdownDocumentEditor({
   getRevisionDownloadUrl,
   onLoadLatest,
   onClose,
+  onStateChange,
   renderPreview,
   presentation = 'default',
 }: MarkdownDocumentEditorProps) {
@@ -361,6 +369,10 @@ export function MarkdownDocumentEditor({
   const packagePreview = presentation === 'package-preview';
   const saveDisabled = readOnly || saving || !dirty || Boolean(conflict && (!manualMergeStart || !manualMergeChanged));
 
+  useEffect(() => {
+    onStateChange?.({ dirty, saving, saveDisabled });
+  }, [dirty, onStateChange, saveDisabled, saving]);
+
   return <section className={packagePreview ? 'flex h-full min-h-0 flex-col' : 'flex min-h-0 flex-col gap-3'} aria-label="Markdown 文档编辑器">
     {notice && <div role="status" className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">{notice}</div>}
     {!packagePreview && <header className="flex flex-wrap items-center gap-2">
@@ -391,6 +403,8 @@ export function MarkdownDocumentEditor({
       type="button"
       className="sr-only"
       data-markdown-document-save
+      aria-hidden="true"
+      tabIndex={-1}
       disabled={saveDisabled}
       onClick={() => void save()}
     >{saving ? '保存中…' : '保存为 Server 新版本'}</button>}

@@ -13,6 +13,7 @@ import type {
 } from '@agentbean/contracts';
 import {
   MarkdownDocumentEditor,
+  type MarkdownDocumentEditorState,
   type MarkdownDocumentSaveResult,
 } from './channel-documents/MarkdownDocumentEditor';
 
@@ -67,6 +68,15 @@ export function OutputPackagePreviewModal({
   // 每次切换成员/保存成功后递增,重挂载编辑器(reset 内部草稿态)。
   const [editorEpoch, setEditorEpoch] = useState(0);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>({
+    dirty: false,
+    saving: false,
+    saveDisabled: true,
+  });
+
+  const requestClose = useCallback(() => {
+    if (!editorState.dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose();
+  }, [editorState.dirty, onClose]);
 
   const loadLibrary = useCallback(async () => {
     const result = await projectEvents().artifactCollections(channelId);
@@ -85,11 +95,11 @@ export function OutputPackagePreviewModal({
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') requestClose();
     };
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [onClose]);
+  }, [requestClose]);
 
   // 初始聚焦成员:initialVersionId 对应 collection,否则第一个成员。
   useEffect(() => {
@@ -214,7 +224,7 @@ export function OutputPackagePreviewModal({
       role="dialog"
       aria-modal="true"
       aria-label={`预览/编辑 ${shortPkg(packageMeta.packageId)}`}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
     >
       <div
         className="grid h-[min(740px,calc(100vh-32px))] w-[min(1120px,calc(100vw-32px))] grid-rows-[48px_minmax(0,1fr)_48px] overflow-hidden rounded-lg border border-white/80 bg-white shadow-2xl sm:h-[min(740px,calc(100vh-56px))] sm:w-[min(1120px,calc(100vw-56px))]"
@@ -237,7 +247,7 @@ export function OutputPackagePreviewModal({
               </span>
             </>
           )}
-          <button onClick={onClose} className="shrink-0 rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭">
+          <button onClick={requestClose} className="shrink-0 rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700" title="关闭">
             <X size={16} />
           </button>
         </header>
@@ -296,6 +306,7 @@ export function OutputPackagePreviewModal({
                 onLoadLatest={loadLatest}
                 renderPreview={renderPreview}
                 presentation="package-preview"
+                onStateChange={setEditorState}
               />
             )}
           </div>
@@ -319,10 +330,11 @@ export function OutputPackagePreviewModal({
             <button
               type="button"
               onClick={() => editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-save]')?.click()}
-              className="shrink-0 rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700"
+              disabled={editorState.saveDisabled}
+              className="shrink-0 rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300"
               data-smoke="package-preview-save"
             >
-              保存为 Server 新版本
+              {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
             </button>
           ) : null}
         </footer>

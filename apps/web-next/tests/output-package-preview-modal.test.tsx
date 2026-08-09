@@ -102,14 +102,14 @@ function library(firstVersion = version('version-1', 'collection-1', '第1集剧
   };
 }
 
-function renderModal(options: { initialVersionId?: string; onSaved?: () => void } = {}) {
+function renderModal(options: { initialVersionId?: string; onClose?: () => void; onSaved?: () => void } = {}) {
   return render(
     <OutputPackagePreviewModal
       packageMeta={packageMeta}
       channelId="channel-1"
       {...(options.initialVersionId ? { initialVersionId: options.initialVersionId } : {})}
       renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
-      onClose={vi.fn()}
+      onClose={options.onClose ?? vi.fn()}
       onSaved={options.onSaved ?? vi.fn()}
     />,
   );
@@ -171,10 +171,30 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
   });
 
+  test('关闭脏草稿前确认，并让页脚保存按钮跟随编辑器状态', async () => {
+    const onClose = vi.fn();
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderModal({ onClose });
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    const saveButton = document.querySelector<HTMLButtonElement>('[data-smoke="package-preview-save"]')!;
+    expect(saveButton.disabled).toBe(true);
+
+    fireEvent.change(editor, { target: { value: '# 尚未保存' } });
+    await waitFor(() => expect(saveButton.disabled).toBe(false));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByTitle('关闭'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   test('底部保存按钮沿用 revision fence，成功后显示 Server 新版本状态', async () => {
     const onSaved = vi.fn();
     const next = version('server-version-9', 'collection-1', '第1集剧本.md', 9);
-    mocks.saveArtifactVersionRevision.mockResolvedValue({
+    const savedResult = {
       ok: true,
       revision: {
         commandName: 'save-artifact-version-revision',
@@ -188,7 +208,11 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
         currentVersionId: 'server-version-9',
         createdAt: 200,
       },
-    });
+    };
+    let resolveSave!: (result: typeof savedResult) => void;
+    mocks.saveArtifactVersionRevision.mockReturnValue(new Promise((resolve) => {
+      resolveSave = resolve;
+    }));
     mocks.artifactCollections
       .mockResolvedValueOnce({ ok: true, library: library() })
       .mockResolvedValue({ ok: true, library: library(next) });
@@ -196,7 +220,14 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
 
     const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
     fireEvent.change(editor, { target: { value: '# 修改后的结尾' } });
-    fireEvent.click(document.querySelector('[data-smoke="package-preview-save"]')!);
+    const saveButton = document.querySelector<HTMLButtonElement>('[data-smoke="package-preview-save"]')!;
+    await waitFor(() => expect(saveButton.disabled).toBe(false));
+    fireEvent.click(saveButton);
+    await waitFor(() => {
+      expect(saveButton.disabled).toBe(true);
+      expect(saveButton.textContent).toBe('保存中…');
+    });
+    resolveSave(savedResult);
 
     await waitFor(() => expect(mocks.saveArtifactVersionRevision).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'channel-1',
