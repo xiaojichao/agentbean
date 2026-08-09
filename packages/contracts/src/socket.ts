@@ -61,7 +61,6 @@ export const WEB_EVENTS = {
     publishCard: 'pi-provider:publish-card',
     setActiveModel: 'pi-provider:set-active-model',
     getActiveModel: 'pi-provider:get-active-model',
-    getPublicHealth: 'pi-provider:get-public-health',
     /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */
     setEmergencyStop: 'pi-provider:set-emergency-stop',
     getEmergencyStop: 'pi-provider:get-emergency-stop',

@@ -212,12 +212,24 @@ describe('pi provider service', () => {
     });
   });
 
-  test('public PI health never reveals provider or model identity and degrades safely without a usable credential', async () => {
+  test('PI configuration readiness is system-admin only and does not masquerade as runtime health', async () => {
     const { repos, service } = createService(undefined, { fetch: passingTestFetch() });
     await seedUsers(repos);
-    await expect(service.getPublicHealth({ userId: 'member-1' })).resolves.toEqual({
+    await expect(service.getActiveModel({ userId: 'member-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(service.getEmergencyStop({ userId: 'member-1' })).resolves.toMatchObject({
+      ok: false,
+      error: 'FORBIDDEN',
+    });
+    await expect(service.getEmergencyStop({ userId: 'admin-1' })).resolves.toEqual({
       ok: true,
-      health: { status: 'unavailable', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
+      emergencyStopActive: false,
+    });
+    await expect(service.getActiveModel({ userId: 'admin-1' })).resolves.toMatchObject({
+      ok: true,
+      readiness: { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_NOT_CONFIGURED' },
     });
 
     const created = await service.createCard(validCreate());
@@ -228,9 +240,17 @@ describe('pi provider service', () => {
     if (!published.ok) return;
     await service.setActiveModel({ userId: 'admin-1', revisionId: published.card.publishedRevision!.id });
 
-    const health = await service.getPublicHealth({ userId: 'member-1' });
-    expect(health).toEqual({ ok: true, health: { status: 'normal', diagnosticCode: null } });
-    expect(JSON.stringify(health)).not.toMatch(/openai|gpt-4|credential|apiKey/i);
+    const active = await service.getActiveModel({ userId: 'admin-1' });
+    expect(active).toMatchObject({ ok: true, readiness: { status: 'ready', diagnosticCode: null } });
+    expect(JSON.stringify(active)).not.toMatch(/apiKey|ciphertext|encrypted_payload/i);
+
+    const card = await repos.piProvider.cards.getById(created.card.id);
+    const credential = await repos.piProvider.credentials.getById(card!.credentialRef);
+    await repos.piProvider.credentials.update({ ...credential!, fingerprint: 'changed-fingerprint' });
+    await expect(service.getActiveModel({ userId: 'admin-1' })).resolves.toMatchObject({
+      ok: true,
+      readiness: { status: 'attention_required', diagnosticCode: 'PI_ACTIVE_MODEL_TEST_STALE' },
+    });
   });
 
   test('system admin can create a draft card from preset without leaking secrets', async () => {

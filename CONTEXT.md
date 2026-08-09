@@ -727,6 +727,11 @@ _Avoid_: arm64-only、未经验证的 universal binary、Rosetta-only。
 系统管理员从已发布 PI Provider Card 中选择一个 Model ID，形成全系统唯一生效的 PI 模型绑定。所有 Team 的实时协调、深度编排和 Memory 管理统一使用它，不能选择或覆盖，也不向 Team 或普通用户披露 Provider、Model、Endpoint 或切换历史；这些细节只对系统管理员可见。
 _Avoid_: PI Runtime Profile、Team 模型选择、按 Team Provider、公开底层模型身份。
 
+## PI configuration readiness
+
+系统管理员可见的 Active PI Model 配置就绪事实，根据已发布 revision、Credential 与当前配置对应的最新生产同路径测试判断 `ready` 或 `attention_required`。它不代表实时运行健康，不向 Team 或普通用户投影，也不能替代 PI degraded。
+_Avoid_: Public PI health、普通用户 PI 状态、侧栏常驻 normal、把测试过期称为运行降级。
+
 ## PI Provider Card
 
 系统管理员维护的一份完整 Server provider 配置，也是 PI Provider Supply 在 MVP 中的基本管理单元。它从预设或 Custom 创建，包含显示信息、协议、Endpoint、Credential 引用、可选模型目录、默认模型和经过校验的高级配置；支持复制、模型获取、生产同路径测试、备注与控制台链接。高级配置不作为默认入口，Credential 不向 Team 暴露。
@@ -769,8 +774,8 @@ _Avoid_: 费用、账单、Team 配额、伪造为零。
 
 ## PI degraded
 
-Active PI Model 在有限同模型重试后仍不可用的显式全系统运行状态。频道消息继续保存和展示，但 PI 暂停自动建 Task、分解、认领和 Memory 写入；Team 与普通用户只看到 PI 正常、降级或不可用，不看到 Provider 或 Model 身份。MVP 不静默切换到其他模型。
-_Avoid_: 消息发送失败、隐式跨模型 fallback、伪装成正常协调、静默丢弃自动化。
+Active PI Model 在有限同模型重试后仍不可用的显式全系统运行状态。频道消息继续保存和展示，但 PI 暂停自动建 Task、分解、认领和 Memory 写入；该系统状态只向系统管理员投影，普通用户只获得当前操作的适当结果，不看到 PI、Provider、Model 或诊断身份。MVP 不静默切换到其他模型。
+_Avoid_: PI configuration readiness、消息发送失败、普通用户 PI 状态、隐式跨模型 fallback、伪装成正常协调、静默丢弃自动化。
 
 ## PI Management
 

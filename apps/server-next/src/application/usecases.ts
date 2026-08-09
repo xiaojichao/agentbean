@@ -321,7 +321,7 @@ import type {
   ListPiProviderCardsResult,
   ListPiProviderPresetsResult,
   PiProviderCardDto,
-  PublicPiHealthDto,
+  PiConfigurationReadinessDto,
   PublishPiProviderCardResult,
   RunPiProviderTestResult,
 } from '../../../../packages/contracts/src/index.js';
@@ -807,8 +807,9 @@ export interface ServerNextUseCases {
   cancelPiProviderTest(input: unknown): Promise<Ack<CancelPiProviderTestResult>>;
   publishPiProviderCard(input: unknown): Promise<Ack<PublishPiProviderCardResult>>;
   setActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto }>>;
-  getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; health: PublicPiHealthDto }>>;
-  getPublicPiHealth(input: unknown): Promise<Ack<{ health: PublicPiHealthDto }>>;
+  getActivePiModel(input: unknown): Promise<Ack<{ activeModel: ActivePiModelDto | null; history: ActivePiModelDto[]; readiness: PiConfigurationReadinessDto }>>;
+  /** Server 内部配置门禁；不绑定到 Web socket。 */
+  getPiConfigurationReadiness(): Promise<Ack<{ readiness: PiConfigurationReadinessDto }>>;
   /** #699 US 84：系统管理员紧急停止/恢复 PI 自动协调。 */
   setEmergencyStop(input: unknown): Promise<Ack<{ emergencyStopActive: boolean }>>;
   /** #699 US 84：读取 PI 紧急停止状态。 */
@@ -12175,8 +12176,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return piProvider.getActiveModel(input);
     },
 
-    async getPublicPiHealth(input) {
-      return piProvider.getPublicHealth(input);
+    async getPiConfigurationReadiness() {
+      return piProvider.getConfigurationReadiness();
     },
 
     // #699 US 84：紧急停止
@@ -12184,8 +12185,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return piProvider.setEmergencyStop(input);
     },
 
-    async getEmergencyStop(_input) {
-      return piProvider.getEmergencyStop();
+    async getEmergencyStop(input) {
+      return piProvider.getEmergencyStop(input);
     },
 
     // #699 US 29：查询当前 Team 的 PI Token Usage。

@@ -2170,10 +2170,10 @@ function createDefaultApp(
       repositories, ids,
     );
     const serverWorker = createDefaultServerWorker(config, clock, ids);
-    let appForPiHealth: ServerNextUseCases | undefined;
+    let appForPiReadiness: ServerNextUseCases | undefined;
     const resolvePiHealthy = async () => {
-      const health = await appForPiHealth?.getPublicPiHealth({});
-      return health?.ok === true && health.health.status === 'normal';
+      const result = await appForPiReadiness?.getPiConfigurationReadiness();
+      return result?.ok === true && result.readiness.status === 'ready';
     };
     // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
     const taskClaimBroker = createTaskClaimBroker({
@@ -2227,7 +2227,7 @@ function createDefaultApp(
       onMessageTracerDelivered,
       onWorkspaceRevisionCommitted,
     });
-    appForPiHealth = app;
+    appForPiReadiness = app;
     return {
       app,
       artifactPreviewService,
@@ -2277,10 +2277,10 @@ function createDefaultApp(
     repositories, ids,
   );
   const serverWorker = createDefaultServerWorker(config, clock, ids);
-  let appForPiHealth: ServerNextUseCases | undefined;
+  let appForPiReadiness: ServerNextUseCases | undefined;
   const resolvePiHealthy = async () => {
-    const health = await appForPiHealth?.getPublicPiHealth({});
-    return health?.ok === true && health.health.status === 'normal';
+    const result = await appForPiReadiness?.getPiConfigurationReadiness();
+    return result?.ok === true && result.readiness.status === 'ready';
   };
   // broker 先于 management runtime 构造：#807 AC#2 的 allocationService 需要它解析候选。
   const taskClaimBroker = createTaskClaimBroker({
@@ -2332,7 +2332,7 @@ function createDefaultApp(
     onMessageTracerDelivered,
     onWorkspaceRevisionCommitted,
   });
-  appForPiHealth = app;
+  appForPiReadiness = app;
   return {
     app,
     artifactPreviewService,
