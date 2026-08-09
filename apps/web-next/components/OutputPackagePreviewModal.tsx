@@ -290,9 +290,6 @@ export function OutputPackagePreviewModal({
                 </button>
               );
             })}
-            <p className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-2 py-2 text-[10px] leading-4 text-sky-700">
-              保存后直接更新该文档的最新 Server 修订；后续引用当前包自动读取 current projection。final 不会自动移动。
-            </p>
           </aside>
 
           {/* 右栏:编辑器 / 占位 */}
