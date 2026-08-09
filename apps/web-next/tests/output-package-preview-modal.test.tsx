@@ -191,6 +191,24 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  test('切换成员前确认未保存修改，取消时保留当前编辑器', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderModal();
+
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.change(editor, { target: { value: '# 尚未保存' } });
+    const secondMember = screen.getByRole('button', { name: /F2 角色表\.md/ });
+    fireEvent.click(secondMember);
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'Markdown 源文' }) as HTMLTextAreaElement).value).toBe('# 尚未保存');
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(secondMember);
+    expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
+  });
+
   test('底部保存按钮沿用 revision fence，成功后显示 Server 新版本状态', async () => {
     const onSaved = vi.fn();
     const next = version('server-version-9', 'collection-1', '第1集剧本.md', 9);

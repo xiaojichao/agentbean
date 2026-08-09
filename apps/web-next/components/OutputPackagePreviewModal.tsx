@@ -34,6 +34,12 @@ interface ActiveTarget {
   current: ProjectArtifactVersionDto;
 }
 
+const EMPTY_EDITOR_STATE: MarkdownDocumentEditorState = {
+  dirty: false,
+  saving: false,
+  saveDisabled: true,
+};
+
 function isMarkdownFilename(filename: string): boolean {
   return /\.(md|markdown)$/i.test(filename);
 }
@@ -68,15 +74,19 @@ export function OutputPackagePreviewModal({
   // 每次切换成员/保存成功后递增,重挂载编辑器(reset 内部草稿态)。
   const [editorEpoch, setEditorEpoch] = useState(0);
   const editorContainerRef = useRef<HTMLDivElement>(null);
-  const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>({
-    dirty: false,
-    saving: false,
-    saveDisabled: true,
-  });
+  const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>(EMPTY_EDITOR_STATE);
 
   const requestClose = useCallback(() => {
     if (!editorState.dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose();
   }, [editorState.dirty, onClose]);
+
+  const selectMember = useCallback((collectionId: string) => {
+    if (collectionId === activeCollectionId) return;
+    if (editorState.dirty && !window.confirm('有未保存的修改，确定放弃并切换文件吗？')) return;
+    setEditorState(EMPTY_EDITOR_STATE);
+    setActiveCollectionId(collectionId);
+    setSavedNotice(null);
+  }, [activeCollectionId, editorState.dirty]);
 
   const loadLibrary = useCallback(async () => {
     const result = await projectEvents().artifactCollections(channelId);
@@ -263,7 +273,7 @@ export function OutputPackagePreviewModal({
                 <button
                   key={member.artifactVersionId}
                   type="button"
-                  onClick={() => { setActiveCollectionId(member.collectionId); setSavedNotice(null); }}
+                  onClick={() => selectMember(member.collectionId)}
                   data-smoke="package-preview-member"
                   className={`mb-2 block w-full rounded-lg border px-2 py-2 text-left ${
                     isActive ? 'border-sky-200 bg-sky-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
