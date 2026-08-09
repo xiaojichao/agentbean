@@ -16,6 +16,24 @@ describe('channel message expand/collapse surface', () => {
     expect(chatPage).toContain('safeDocumentResources collapsible={false}');
   });
 
+  test('讨论串附件预览禁用折叠并直接展示 Markdown 全文', () => {
+    const threadPanel = chatPage.slice(
+      chatPage.indexOf('function ThreadPanel('),
+      chatPage.indexOf('function ProfilePanel('),
+    );
+    const bubble = chatPage.slice(
+      chatPage.indexOf('function ChatBubble('),
+      chatPage.indexOf('function MessageContextMenuItem('),
+    );
+    const artifactPreview = chatPage.slice(
+      chatPage.indexOf('function ChatArtifactPreview('),
+      chatPage.indexOf('function formatTime('),
+    );
+    expect(threadPanel).toContain('readOnlyArtifacts');
+    expect(bubble).toContain('collapsibleMarkdownPreview={!readOnlyArtifacts}');
+    expect(artifactPreview).toContain('<MarkdownMessage body={content} collapsible={collapsibleMarkdownPreview} />');
+  });
+
   test('channel-message bubbles also support expand/collapse', () => {
     expect(channelMessage).toContain('CollapsibleMessageBody');
   });

@@ -4601,6 +4601,7 @@ function ThreadPanel({
         onAddPackageReference={onAddSelection}
         onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
+        readOnlyArtifacts
         showReplyAction={false}
         showTaskBadge={shouldShowThreadTaskBadge(taskId, rootTaskId)}
         showReplyCount={false}
@@ -5017,6 +5018,7 @@ function ChatBubble({
   onContinueWithAgent,
   onOpenPackagePreview,
   replyCount,
+  readOnlyArtifacts = false,
   showReplyAction = true,
   showTaskBadge = true,
   showReplyCount = true,
@@ -5061,6 +5063,8 @@ function ChatBubble({
   /** 原型对齐:文件包「预览/编辑」浮窗入口(standalone + 内嵌卡片共用)。 */
   onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
   replyCount: number;
+  /** 讨论串附件只读：保留预览/下载，Markdown 预览直接展示全文且不提供编辑入口。 */
+  readOnlyArtifacts?: boolean;
   showReplyAction?: boolean;
   showTaskBadge?: boolean;
   showReplyCount?: boolean;
@@ -5404,7 +5408,8 @@ function ChatBubble({
                 artifact={artifact}
                 teamId={msg.teamId}
                 channelId={msg.channelId}
-                editable={msg.senderKind === 'agent'}
+                collapsibleMarkdownPreview={!readOnlyArtifacts}
+                editable={!readOnlyArtifacts && msg.senderKind === 'agent'}
                 onEdit={() => onEditArtifact(artifact)}
               />
             ))}
@@ -6244,12 +6249,15 @@ function ChatArtifactPreview({
   channelId,
   onEdit,
   editable,
+  collapsibleMarkdownPreview = true,
 }: {
   artifact: Artifact;
   teamId?: string;
   channelId?: string;
   onEdit?: () => void;
   editable?: boolean;
+  /** 主聊天沿用折叠预览；讨论串传 false，弹窗直接展示 Markdown 全文。 */
+  collapsibleMarkdownPreview?: boolean;
 }) {
   // #1084 切片3：预览/下载字节优先读本机 .agentbean snapshots 副本，失败/离线/版本不匹配回退 server。
   const serverPreviewUrl = messageArtifactUrl(artifact, 'preview', teamId);
@@ -6264,7 +6272,7 @@ function ChatArtifactPreview({
         : null}
       downloadUrl={downloadUrl}
       renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
-        ? <MarkdownMessage body={content} />
+        ? <MarkdownMessage body={content} collapsible={collapsibleMarkdownPreview} />
         : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
     />
     {onEdit && editable && isMarkdownArtifact(artifact) && artifact.sizeBytes <= 10 * 1024 * 1024 && (
