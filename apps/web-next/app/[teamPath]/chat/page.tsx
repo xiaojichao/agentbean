@@ -5136,6 +5136,7 @@ function ChatBubble({
     artifactCount: msg.artifacts?.length ?? 0,
     hasOutputPackage: Boolean(outputPackageMeta),
   });
+  const showArtifactList = readOnlyArtifacts && msg.senderKind === 'agent' && (msg.artifacts?.length ?? 0) > 1;
   const dispatch = isHuman ? msg.dispatchStatus : undefined;
   const hasPendingDispatch = dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running';
   const canEdit = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
@@ -5405,7 +5406,13 @@ function ChatBubble({
           <ArtifactVersionRevisionActivity meta={artifactVersionRevisionFromMeta(msg.meta)!} />
         )}
         {!isDeleted && !editing && showArtifactPreviews && msg.artifacts && msg.artifacts.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div
+            data-smoke={showArtifactList ? 'thread-artifact-list' : undefined}
+            role={showArtifactList ? 'list' : undefined}
+            className={showArtifactList
+              ? 'mt-2 w-full overflow-hidden rounded-md border border-neutral-200 bg-white divide-y divide-neutral-200'
+              : 'mt-2 flex flex-wrap gap-2'}
+          >
             {msg.artifacts.map((artifact) => (
               <ChatArtifactPreview
                 key={artifact.id}
@@ -5414,6 +5421,7 @@ function ChatBubble({
                 channelId={msg.channelId}
                 collapsibleMarkdownPreview={!readOnlyArtifacts}
                 editable={!readOnlyArtifacts && msg.senderKind === 'agent'}
+                variant={showArtifactList ? 'list' : 'card'}
                 onEdit={() => onEditArtifact(artifact)}
               />
             ))}
@@ -6254,6 +6262,7 @@ function ChatArtifactPreview({
   onEdit,
   editable,
   collapsibleMarkdownPreview = true,
+  variant = 'card',
 }: {
   artifact: Artifact;
   teamId?: string;
@@ -6262,12 +6271,14 @@ function ChatArtifactPreview({
   editable?: boolean;
   /** 主聊天及其他频道沿用折叠预览；#all 讨论串传 false，弹窗直接展示 Markdown 全文。 */
   collapsibleMarkdownPreview?: boolean;
+  /** #all 讨论串内 Agent 的多文件消息使用单列文件列表；其余展示面保留卡片。 */
+  variant?: 'card' | 'list';
 }) {
   // #1084 切片3：预览/下载字节优先读本机 .agentbean snapshots 副本，失败/离线/版本不匹配回退 server。
   const serverPreviewUrl = messageArtifactUrl(artifact, 'preview', teamId);
   const serverDownloadUrl = messageArtifactUrl(artifact, 'download', teamId);
   const { previewUrl, downloadUrl } = useLocalFirstArtifactUrls(artifact, serverPreviewUrl, serverDownloadUrl, channelId);
-  return <div className="space-y-1">
+  return <div role={variant === 'list' ? 'listitem' : undefined} className={variant === 'list' ? 'min-w-0' : 'space-y-1'}>
     <ArtifactCard
       artifact={artifact}
       previewUrl={artifact.sizeBytes > 10 * 1024 * 1024 && isMarkdownArtifact(artifact) ? null : previewUrl}
@@ -6275,6 +6286,7 @@ function ChatArtifactPreview({
         ? artifactUrl(artifact.preview.url)
         : null}
       downloadUrl={downloadUrl}
+      variant={variant}
       renderTextPreview={(content, previewedArtifact) => isMarkdownArtifact(previewedArtifact)
         ? <MarkdownMessage body={content} collapsible={collapsibleMarkdownPreview} />
         : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}

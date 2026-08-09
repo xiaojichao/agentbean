@@ -51,6 +51,16 @@ describe('chat message layout', () => {
     expect(preview).toContain('onEdit && editable && isMarkdownArtifact(artifact)');
   });
 
+  test('#all 讨论串仅在 Agent 消息包含多个文件时合并为文件列表', () => {
+    const bubble = chatPage.slice(
+      chatPage.indexOf('function ChatBubble('),
+      chatPage.indexOf('function MessageContextMenuItem('),
+    );
+    expect(bubble).toContain("const showArtifactList = readOnlyArtifacts && msg.senderKind === 'agent' && (msg.artifacts?.length ?? 0) > 1;");
+    expect(bubble).toContain("data-smoke={showArtifactList ? 'thread-artifact-list' : undefined}");
+    expect(bubble).toContain("variant={showArtifactList ? 'list' : 'card'}");
+  });
+
   test('文件库（ConversationFiles）按文件来源 senderKind 门禁编辑入口', () => {
     const filesSurface = chatPage.slice(
       chatPage.indexOf('function ConversationFiles('),

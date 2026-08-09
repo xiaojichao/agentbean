@@ -212,6 +212,28 @@ describe('ArtifactCard', () => {
 
     expect(screen.getByLabelText('正在生成预览')).toBeTruthy();
   });
+
+  test('renders the list variant with file metadata and hover actions', () => {
+    render(
+      <ArtifactCard
+        artifact={{ ...imageArtifact, filename: 'report.md', mimeType: 'text/markdown' }}
+        previewUrl="https://example.test/artifacts/markdown/preview"
+        downloadUrl="https://example.test/artifacts/markdown/download"
+        variant="list"
+      />,
+    );
+
+    const row = document.querySelector('[data-smoke="artifact-list-row"]');
+    expect(row).toBeTruthy();
+    expect(screen.getByText('report.md')).toBeTruthy();
+    expect(screen.getByText('Markdown 文档')).toBeTruthy();
+    expect(screen.getByText('2.0 KB')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '预览文件' })).toHaveLength(2);
+    expect(screen.getByRole('link', { name: '下载文件' })).toBeTruthy();
+    const actions = document.querySelector('[data-smoke="artifact-list-actions"]');
+    expect(actions?.className).toContain('sm:opacity-0');
+    expect(actions?.className).toContain('sm:group-hover:opacity-100');
+  });
 });
 
 describe('ArtifactCard 视频时长（#799）', () => {
