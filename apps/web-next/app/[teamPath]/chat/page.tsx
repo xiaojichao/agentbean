@@ -21,6 +21,7 @@ import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMenti
 import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
+import { chatMessageDecorationVisibility } from '@/lib/chat-message-decorations';
 import { isMessageGroupContinuation } from '@/lib/chat-message-grouping';
 import { createClientMessageId, messageSendFailureText, shouldSubmitComposerKey } from '@/lib/message-send';
 import { THREAD_PANEL_MIN_WIDTH, useThreadPanelWidth } from '@/lib/thread-panel-resize';
@@ -4558,6 +4559,7 @@ function ThreadPanel({
         onOpenPackagePreview={onOpenPackagePreview}
         replyCount={replyCount}
         showReplyAction={false}
+        showTaskBadge={false}
         showReplyCount={false}
       />
     );
@@ -4966,6 +4968,7 @@ function ChatBubble({
   onOpenPackagePreview,
   replyCount,
   showReplyAction = true,
+  showTaskBadge = true,
   showReplyCount = true,
 }: {
   msg: ChatMessage;
@@ -5009,6 +5012,7 @@ function ChatBubble({
   onOpenPackagePreview?: (packageMeta: import('@/lib/output-package').OutputPackageMeta, versionId?: string) => void;
   replyCount: number;
   showReplyAction?: boolean;
+  showTaskBadge?: boolean;
   showReplyCount?: boolean;
   /** #1063 包内引用入口(把选择加进 composer)。 */
   onAddPackageReference?: (selection: ProjectReferenceSelectionRequestDto) => void;
@@ -5060,9 +5064,20 @@ function ChatBubble({
   const time = formatTime(msg.createdAt);
   const isOwner = isHuman && currentUser?.id === msg.senderId;
   const taskId = typeof meta.taskId === 'string' ? meta.taskId : null;
-  const hasThreadSurface = showReplyCount && (replyCount > 0 || Boolean(taskId));
-  const showInlineTaskBadge = Boolean(taskId) && !hasThreadSurface;
-  const showInlineReplyBadge = showReplyCount && replyCount > 0 && !hasThreadSurface;
+  const outputPackageMeta = outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta);
+  const {
+    hasThreadSurface,
+    showInlineTaskBadge,
+    showInlineReplyBadge,
+    showArtifactPreviews,
+  } = chatMessageDecorationVisibility({
+    taskId,
+    showTaskBadge,
+    showReplyCount,
+    replyCount,
+    artifactCount: msg.artifacts?.length ?? 0,
+    hasOutputPackage: Boolean(outputPackageMeta),
+  });
   const dispatch = isHuman ? msg.dispatchStatus : undefined;
   const hasPendingDispatch = dispatch === 'queued' || dispatch === 'sent' || dispatch === 'accepted' || dispatch === 'running';
   const canEdit = isOwner && !taskId && !isDeleted && !hasPendingDispatch;
@@ -5314,9 +5329,9 @@ function ChatBubble({
             teamId={msg.teamId}
           />
         )}
-        {!isDeleted && !editing && (outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta)) && (
+        {!isDeleted && !editing && outputPackageMeta && (
           <OutputPackageCard
-            packageMeta={(outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta))!}
+            packageMeta={outputPackageMeta}
             channelId={msg.channelId}
             onAddReference={onAddPackageReference}
             onReviseVersion={(request) => onReviseVersion?.({ ...request, channelId: msg.channelId })}
@@ -5324,13 +5339,13 @@ function ChatBubble({
             // composer(delivered 整包引用 + 说明文本 + 焦点),未发送不创建任何事实。
             onOpenTask={onOpenTaskDetailById}
             onContinueWithAgent={onContinueWithAgent}
-            onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview((outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta))!, versionId) : undefined}
+            onOpenPreview={onOpenPackagePreview ? (versionId) => onOpenPackagePreview(outputPackageMeta, versionId) : undefined}
           />
         )}
         {!isDeleted && !editing && artifactVersionRevisionFromMeta(msg.meta) && (
           <ArtifactVersionRevisionActivity meta={artifactVersionRevisionFromMeta(msg.meta)!} />
         )}
-        {!isDeleted && !editing && msg.artifacts && msg.artifacts.length > 0 && (
+        {!isDeleted && !editing && showArtifactPreviews && msg.artifacts && msg.artifacts.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-2">
             {msg.artifacts.map((artifact) => (
               <ChatArtifactPreview
