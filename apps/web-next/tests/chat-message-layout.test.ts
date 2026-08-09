@@ -28,12 +28,21 @@ describe('chat message layout', () => {
     expect(dispatchIndex).toBeGreaterThan(artifactsIndex);
   });
 
-  test('只有 Agent 输出（senderKind === agent）的 Markdown 附件才显示编辑入口', () => {
+  test('#all 讨论串附件保持只读，主聊天和其他频道仍按 Agent 来源显示编辑入口', () => {
+    const chatPageShell = chatPage.slice(0, chatPage.indexOf('function ThreadPanel('));
+    expect(chatPageShell).toContain("const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';");
+    expect(chatPageShell).toContain('readOnlyArtifacts={isDefaultPublicChannel}');
     const bubble = chatPage.slice(
       chatPage.indexOf('function ChatBubble('),
       chatPage.indexOf('function MessageContextMenuItem('),
     );
-    expect(bubble).toMatch(/editable=\{msg\.senderKind === 'agent'\}/);
+    expect(bubble).toContain('readOnlyArtifacts = false');
+    expect(bubble).toMatch(/editable=\{!readOnlyArtifacts && msg\.senderKind === 'agent'\}/);
+    const threadPanel = chatPage.slice(
+      chatPage.indexOf('function ThreadPanel('),
+      chatPage.indexOf('function ProfilePanel('),
+    );
+    expect(threadPanel).toContain('readOnlyArtifacts={readOnlyArtifacts}');
     const preview = chatPage.slice(
       chatPage.indexOf('function ChatArtifactPreview('),
       chatPage.indexOf('function formatTime('),
