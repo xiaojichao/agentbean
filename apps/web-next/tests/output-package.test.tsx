@@ -76,7 +76,8 @@ describe('OutputPackageCard (#1060)', () => {
         publishId: 'pub-1',
       }}
     />);
-    expect(screen.getByText('任务「写剧本」交付文件包')).not.toBeNull();
+    expect(screen.getByText('Agent 交付文件包')).not.toBeNull();
+    expect(screen.getByText('写剧本')).not.toBeNull();
     expect(screen.getByText('2 个文件')).not.toBeNull();
     expect(screen.getByText('F1')).not.toBeNull();
     expect(screen.getByText('ep1.md')).not.toBeNull();
