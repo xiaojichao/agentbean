@@ -82,8 +82,10 @@ describe('chat files surface', () => {
 
   test('Task 审核入口锁定逻辑产物子视图与目标输出包', () => {
     expect(source).toContain("const focusPackageIdParam = searchParams.get('focusPackageId')");
+    expect(source).toContain("const focusPackageRequestParam = searchParams.get('focusPackageRequest')");
     expect(source).toContain("params.set('fileView', 'artifacts')");
     expect(source).toContain('focusPackageId={focusPackageIdParam}');
+    expect(source).toContain('focusPackageRequestKey={focusPackageRequestParam}');
     expect(source).toContain("setChannelFilesView('artifacts')");
   });
 });

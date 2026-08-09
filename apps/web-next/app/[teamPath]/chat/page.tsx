@@ -320,6 +320,7 @@ export default function ChatPage() {
   const chatTabParam = searchParams.get('chatTab');
   const fileViewParam = searchParams.get('fileView');
   const focusPackageIdParam = searchParams.get('focusPackageId');
+  const focusPackageRequestParam = searchParams.get('focusPackageRequest');
   const threadParam = searchParams.get('thread');
   // #1064：Task 页「交给 Agent 处理」预填导航——JSON { text, selections }，仅写本地 state，
   // 未发送前不创建任何 Message/Offer/claim/Invocation 事实。
@@ -2592,6 +2593,7 @@ export default function ChatPage() {
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
                 focusPackageId={focusPackageIdParam}
+                focusPackageRequestKey={focusPackageRequestParam}
                 onAddReference={addFilesBoardReference}
                 onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
                 onOpenPackagePreview={openPackagePreviewModal}
@@ -2719,6 +2721,7 @@ export default function ChatPage() {
               params.set('fileView', 'artifacts');
               if (focusPackageId) params.set('focusPackageId', focusPackageId);
               else params.delete('focusPackageId');
+              params.set('focusPackageRequest', String(Date.now()));
               router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
             } else if (action === 'open-task') {
               closeTaskDetail();

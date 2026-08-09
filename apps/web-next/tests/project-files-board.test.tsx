@@ -271,6 +271,7 @@ interface BoardCallbacks {
   promotableArtifacts?: ProjectFilesBoardProps['promotableArtifacts'];
   libraryOverride?: ProjectFilesBoardProps['library'];
   focusPackageId?: string;
+  focusPackageRequestKey?: string;
 }
 
 function renderBoard(callbacks: BoardCallbacks = {}) {
@@ -284,6 +285,7 @@ function renderBoard(callbacks: BoardCallbacks = {}) {
     agentNames={agentNames}
     dataRevision={0}
     focusPackageId={callbacks.focusPackageId}
+    focusPackageRequestKey={callbacks.focusPackageRequestKey}
     onAddReference={(selection) => collected.push(selection)}
     onOpenRevisionEditor={(request) => revisionRequests.push(request)}
     canPromote={callbacks.canPromote ?? false}
@@ -370,6 +372,43 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     });
     expect(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')?.className)
       .not.toContain('border-sky-300');
+  });
+
+  test('同一 focusPackageId 的新请求令牌会再次定位目标包', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
+    function Harness() {
+      const [requestKey, setRequestKey] = React.useState('request-1');
+      return (
+        <>
+          <button type="button" data-smoke="repeat-focus" onClick={() => setRequestKey('request-2')}>再次审核</button>
+          <ProjectFilesBoard
+            channelId="channel-1"
+            packages={[pkg1, pkg2]}
+            pendingDeliveries={[pendingDelivery]}
+            library={library}
+            stages={stages}
+            agentNames={agentNames}
+            dataRevision={0}
+            focusPackageId="pkg-1"
+            focusPackageRequestKey={requestKey}
+            onAddReference={vi.fn()}
+            canPromote={false}
+            promotableArtifacts={[]}
+            onPromote={vi.fn().mockResolvedValue(null)}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    await waitFor(() => {
+      expect(document.querySelector('[data-package-id="pkg-1"]')?.className).toContain('border-sky-300');
+    });
+    fireEvent.click(document.querySelector('[data-package-id="pkg-2"]')!);
+    expect(document.querySelector('[data-package-id="pkg-2"]')?.className).toContain('border-sky-300');
+    fireEvent.click(document.querySelector('[data-smoke="repeat-focus"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-package-id="pkg-1"]')?.className).toContain('border-sky-300');
+    });
   });
 
   test('current projection not_ready 时仍保留可解析成员行与修订入口', async () => {

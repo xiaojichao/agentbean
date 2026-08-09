@@ -1195,6 +1195,7 @@ function TaskThreadPanel({
                 } else if (action === 'review-package') {
                   const query = new URLSearchParams({ chatTab: 'files', fileView: 'artifacts' });
                   if (focusPackageId) query.set('focusPackageId', focusPackageId);
+                  query.set('focusPackageRequest', String(Date.now()));
                   router.push(`/${teamPath}/channel/${task.channelId}?${query.toString()}`);
                 }
               }}
