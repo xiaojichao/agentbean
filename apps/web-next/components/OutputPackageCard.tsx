@@ -12,9 +12,7 @@ import {
 } from '@/lib/output-package-reference';
 import type {
   PackageMemberAvailableActionsDto,
-  PackageReviewAction,
   ProjectReferenceSelectionRequestDto,
-  ArtifactRevisionAction,
 } from '@agentbean/contracts';
 
 /**
@@ -23,8 +21,9 @@ import type {
  * 展示 package 身份、来源与冻结成员(短标识 + 文件名);成员是交付时冻结快照,
  * 不与 Server 事实漂移。卡片不承载任何业务状态、不推进 Task。
  *
- * #1061：卡片经 getOutputPackage 读取 Server 计算的 availableActions(当前用户可执行动作),
- * 按钮可见性完全由 Server 动作清单决定——客户端绝不依据角色名称或按钮存在自行推断权限。
+ * #1061：卡片经 getOutputPackage 读取 Server 计算的 availableActions 投影。
+ * 成员行只展示 Server 给出的 reviewState/isFinalVersion 状态标签，不把审核/最终化
+ * 动作并列成多个按钮；“基于此修改”仍只在 Server 下发 revise-version 时展示。
  * 无 channelId(上下文不可得)时保持纯静态展示,不查询。
  *
  * #1063：整包引用(delivered/current/final 三入口)先经 getOutputPackage projection 预览——
@@ -33,18 +32,33 @@ import type {
  * (“选择”→ checkbox + 计数)与“基于此修改”(显式选择 rejected/changes_requested 版本)。
  */
 
-const ACTION_LABELS: Record<PackageReviewAction | ArtifactRevisionAction, string> = {
-  'review-approved': '通过',
-  'review-changes-requested': '要求修改',
-  'review-rejected': '拒绝',
-  'review-and-finalize': '通过并设为最终版',
-  'review-and-reject-delivery': '退回交付',
-  'set-final': '设为最终版',
-  'revise-version': '基于此修改',
+// #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射,颜色只作修饰)。
+import { POLICY_LABELS } from '@/lib/delivery-labels';
+
+const PACKAGE_REVIEW_STATE_STYLES: Record<PackageMemberAvailableActionsDto['reviewState'], string> = {
+  pending: 'border-amber-200 bg-amber-50 text-amber-700',
+  approved: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  changes_requested: 'border-orange-200 bg-orange-50 text-orange-700',
+  rejected: 'border-red-200 bg-red-50 text-red-700',
 };
 
-// #1065 AC11：三处 surface 共享同一组文本标签(server 事实的本地映射,颜色只作修饰)。
-import { POLICY_LABELS, reviewStateLabel } from '@/lib/delivery-labels';
+function packageReviewStateStyle(reviewState: PackageMemberAvailableActionsDto['reviewState'], isFinalVersion: boolean): string {
+  return reviewState === 'approved' && isFinalVersion
+    ? 'border-violet-200 bg-violet-50 text-violet-700'
+    : PACKAGE_REVIEW_STATE_STYLES[reviewState];
+}
+
+function packageReviewStateLabel(reviewState: PackageMemberAvailableActionsDto['reviewState'], isFinalVersion: boolean): string {
+  const label = reviewState === 'pending'
+    ? '待审核'
+    : reviewState === 'approved'
+      ? '通过'
+      : reviewState === 'changes_requested'
+        ? '要求修改'
+        : '拒绝';
+  if (!isFinalVersion) return label;
+  return reviewState === 'approved' ? '通过并设为最终版' : `${label} · 最终版`;
+}
 
 /** 成员行 file-sub 的时间:当天 HH:MM,跨天 M/D HH:MM(原型「手动修改于 19:41」)。 */
 function formatPackageMemberClock(ts?: number): string {
@@ -102,8 +116,6 @@ export function OutputPackageCard({
   onOpenPreview?: (versionId?: string) => void;
 }) {
   const [memberActions, setMemberActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
-  const [frozenTaskRevision, setFrozenTaskRevision] = useState<number | undefined>(undefined);
-  const [frozenTaskAttempt, setFrozenTaskAttempt] = useState<number | undefined>(undefined);
   // #1062 AC1:来源 delivery(冻结修订 provenance 的成对字段;web 从 package DTO 读取,不猜测)。
   const [frozenDeliveryId, setFrozenDeliveryId] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -157,8 +169,6 @@ export function OutputPackageCard({
       .getOutputPackage({ channelId, packageId: packageMeta.packageId });
     if (result.ok) {
       setMemberActions(result.availableActions ?? []);
-      setFrozenTaskRevision(result.package?.taskRevision);
-      setFrozenTaskAttempt(result.package?.taskAttempt);
       setFrozenDeliveryId(result.package?.deliveryId);
     }
   }, [channelId, packageMeta.packageId]);
@@ -172,8 +182,6 @@ export function OutputPackageCard({
         if (cancelled) return;
         if (result.ok) {
           setMemberActions(result.availableActions ?? []);
-          setFrozenTaskRevision(result.package?.taskRevision);
-          setFrozenTaskAttempt(result.package?.taskAttempt);
           setFrozenDeliveryId(result.package?.deliveryId);
         }
       })
@@ -185,78 +193,32 @@ export function OutputPackageCard({
     };
   }, [channelId, packageMeta.packageId]);
 
-  const runAction = useCallback(async (member: PackageMemberAvailableActionsDto, action: PackageReviewAction | ArtifactRevisionAction) => {
+  const runRevisionAction = useCallback(async (member: PackageMemberAvailableActionsDto) => {
     if (!channelId) return;
     setBusy(true);
     try {
-      if (action === 'revise-version') {
-        // #1062 AC1:交给上层打开修订编辑器(冻结 sourceVersion/review basis/package/delivery)。
-        const memberMeta = packageMeta.members.find((m) => m.artifactVersionId === member.versionId);
-        if (!frozenDeliveryId) {
-          // delivery 是 package 冻结事实;取不到(未加载/包异常)则不伪造,刷新后重试。
-          await refresh();
-          return;
-        }
-        onReviseVersion?.({
-          collectionId: member.collectionId,
-          collectionName: memberMeta?.filename ?? member.collectionId,
-          filename: memberMeta?.filename ?? 'document.md',
-          baseVersionId: member.versionId,
-          sourceVersionId: member.versionId,
-          ...(member.latestReviewId ? { basisReviewId: member.latestReviewId } : {}),
-          packageId: packageMeta.packageId,
-          deliveryId: frozenDeliveryId,
-          collectionRevision: member.collectionRevision,
-        });
+      // #1062 AC1:交给上层打开修订编辑器(冻结 sourceVersion/review basis/package/delivery)。
+      const memberMeta = packageMeta.members.find((m) => m.artifactVersionId === member.versionId);
+      if (!frozenDeliveryId) {
+        // delivery 是 package 冻结事实;取不到(未加载/包异常)则不伪造,刷新后重试。
+        await refresh();
         return;
       }
-      const base = {
-        channelId,
-        packageId: packageMeta.packageId,
+      onReviseVersion?.({
         collectionId: member.collectionId,
-        versionId: member.versionId,
-        idempotencyKey: `pkg-review:${packageMeta.packageId}:${member.versionId}:${action}`,
-      };
-      if (action === 'review-approved' || action === 'review-changes-requested' || action === 'review-rejected') {
-        await projectEvents().submitPackageArtifactReview({
-          ...base,
-          decision: action === 'review-approved' ? 'approved'
-            : action === 'review-changes-requested' ? 'changes_requested' : 'rejected',
-          comment: ACTION_LABELS[action],
-        });
-      } else if (action === 'review-and-finalize') {
-        await projectEvents().submitPackageReviewAndFinalize({
-          ...base,
-          decision: 'approved',
-          comment: ACTION_LABELS[action],
-          expectedCollectionRevision: member.collectionRevision,
-        });
-      } else if (action === 'review-and-reject-delivery') {
-        // revision/attempt 用 package 冻结值;漂移时 Server 返回 conflict,刷新重试。
-        await projectEvents().submitPackageReviewAndRejectDelivery({
-          ...base,
-          decision: 'changes_requested',
-          comment: ACTION_LABELS[action],
-          expectedTaskRevision: frozenTaskRevision ?? 1,
-          expectedTaskAttempt: frozenTaskAttempt,
-          rejectReason: '需要修改后重新交付',
-        });
-      } else if (action === 'set-final') {
-        // #824 最终化命令:复用既有 setArtifactFinalVersion(集合 revision fence 来自 Server)。
-        await projectEvents().setArtifactFinalVersion({
-          channelId,
-          collectionId: member.collectionId,
-          versionId: member.versionId,
-          idempotencyKey: `pkg-final:${packageMeta.packageId}:${member.versionId}`,
-          expectedCollectionRevision: member.collectionRevision,
-        });
-      }
-      // 提交后刷新 Server 计算的动作清单(按钮可见性始终由 Server 决定)。
-      await refresh();
+        collectionName: memberMeta?.filename ?? member.collectionId,
+        filename: memberMeta?.filename ?? 'document.md',
+        baseVersionId: member.versionId,
+        sourceVersionId: member.versionId,
+        ...(member.latestReviewId ? { basisReviewId: member.latestReviewId } : {}),
+        packageId: packageMeta.packageId,
+        deliveryId: frozenDeliveryId,
+        collectionRevision: member.collectionRevision,
+      });
     } finally {
       setBusy(false);
     }
-  }, [channelId, packageMeta.packageId, packageMeta.members, frozenDeliveryId, frozenTaskRevision, frozenTaskAttempt, refresh, onReviseVersion]);
+  }, [channelId, packageMeta.packageId, packageMeta.members, frozenDeliveryId, refresh, onReviseVersion]);
 
   // #1063:整包投影选择(构建逻辑在 lib/output-package-reference,与文件库工具栏共用)。
   // 预览 ready → 产生选择;not_ready → 展示阻断清单。
@@ -299,8 +261,6 @@ export function OutputPackageCard({
   }, []);
 
   const selectedVersionIds = Array.from(selectedMemberIds);
-  const title = packageMeta.taskTitle ? `任务「${packageMeta.taskTitle}」交付文件包` : 'Agent 交付文件包';
-
   return (
     <div
       className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3"
@@ -309,8 +269,20 @@ export function OutputPackageCard({
     >
       <div className="flex items-center gap-2">
         <Package className="h-4 w-4 text-neutral-600" aria-hidden="true" />
-        <span className="text-sm font-medium text-neutral-800">{title}</span>
-        <span className="ml-auto text-xs text-neutral-500">
+        <div className="flex min-w-0 items-center gap-2" data-smoke="output-package-title">
+          <span className="shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700" data-smoke="output-package-label">
+            Agent 交付文件包
+          </span>
+          {packageMeta.taskTitle ? (
+            <>
+              <span className="text-sm text-neutral-400" aria-hidden="true">·</span>
+              <span className="min-w-0 truncate text-sm font-medium text-neutral-700" data-smoke="output-package-name" title={packageMeta.taskTitle}>
+                {packageMeta.taskTitle}
+              </span>
+            </>
+          ) : null}
+        </div>
+        <span className="ml-auto shrink-0 text-xs text-neutral-500">
           {packageMeta.memberCount} 个文件
         </span>
       </div>
@@ -418,29 +390,23 @@ export function OutputPackageCard({
               {actions ? (
                 <>
                   <span
-                    className="ml-auto shrink-0 rounded-full border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600"
+                    className={`ml-auto shrink-0 rounded-full border px-2 py-0.5 text-xs ${packageReviewStateStyle(actions.reviewState, actions.isFinalVersion)}`}
                     data-smoke="package-review-state"
                   >
-                    {reviewStateLabel(actions.reviewState)}
-                    {actions.isFinalVersion ? ' · 最终版' : ''}
+                    {packageReviewStateLabel(actions.reviewState, actions.isFinalVersion)}
                   </span>
-                  {actions.actions
-                    // #1062:无 onReviseVersion(纯展示场景,如 channel-message)时不渲染
-                    // revise-version 按钮——Server 下发动作但客户端无法执行时不得静默 no-op。
-                    .filter((action) => action !== 'revise-version' || Boolean(onReviseVersion))
-                    .map((action) => (
-                      <button
-                        key={action}
-                        type="button"
-                        disabled={busy}
-                        onClick={() => runAction(actions, action)}
-                        className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
-                        data-smoke="package-review-action"
-                        data-action={action}
-                      >
-                        {ACTION_LABELS[action]}
-                      </button>
-                    ))}
+                  {actions.actions.includes('revise-version') && onReviseVersion ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => runRevisionAction(actions)}
+                      className="shrink-0 rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+                      data-smoke="package-revise-action"
+                      data-action="revise-version"
+                    >
+                      基于此修改
+                    </button>
+                  ) : null}
                 </>
               ) : null}
               {/* 原型对齐:成员行「预览」→ 包内预览/编辑浮窗(聚焦该成员) */}
