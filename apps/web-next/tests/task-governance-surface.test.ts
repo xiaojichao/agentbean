@@ -10,6 +10,7 @@ describe('standalone task governance surface', () => {
   test('批量读取频道治理投影，不在卡片内逐项请求', () => {
     expect(source).toContain('taskEvents().channelWorkspace(channelId)');
     expect(source).toContain('workspaceEntriesByTaskId');
+    expect(source).toContain('events.onArtifactsUpdated(channelId, refresh)');
     expect(source).not.toMatch(/function TaskCard[\s\S]*?taskEvents\(\)\.channelWorkspace/);
   });
 

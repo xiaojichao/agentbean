@@ -9177,7 +9177,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       const now = clock.now();
       const piAutomationAvailable = await resolveProjectPiAutomationAvailable();
-      const [tasks, projectOverview, reviews, finalizations, versions, collections] = await Promise.all([
+      const [tasks, projectOverview, projectStages, reviews, finalizations, versions, collections] = await Promise.all([
         repositories.tasks.list({ teamId, channelIds: [channelId], includeGlobal: false }),
         projectCollaborationRollout.projectStage
           ? buildChannelProjectOverview(
@@ -9188,6 +9188,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             input.resolveProjectStageCandidates,
           )
           : Promise.resolve(null),
+        repositories.channelProjects.listStages({ teamId, channelId }),
         repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
         repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
         repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
@@ -9195,6 +9196,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       ]);
       const stagesByTaskId = new Map(
         (projectOverview?.stages ?? []).map((stage) => [stage.task.id, stage] as const),
+      );
+      const stageRecordsByTaskId = new Map(
+        projectStages.map((stage) => [stage.taskId, stage] as const),
       );
       const governanceFacts = await Promise.all(
         tasks.map((task) => Promise.all([
@@ -9205,6 +9209,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const entries = await Promise.all(tasks.map(async (task, index) => {
         const [coordination = null, managementRun = null] = governanceFacts[index] ?? [];
         const stage = stagesByTaskId.get(task.id);
+        const stageRecord = stageRecordsByTaskId.get(task.id);
         const overview = await buildTaskDeliveryOverview(repositories, {
           teamId,
           channelId,
@@ -9223,7 +9228,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         const sources: Array<'management_run' | 'task_coordination' | 'project_stage'> = [];
         if (managementRun) sources.push('management_run');
         if (coordination) sources.push('task_coordination');
-        if (stage) sources.push('project_stage');
+        if (stageRecord) sources.push('project_stage');
         const managed = sources.length > 0;
         const taskReviews = reviews
           .filter((review) => review.taskId === task.id)
@@ -9257,7 +9262,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             } : {}),
           },
           review: {
-            reviewerIds: stage?.reviewerIds ?? coordination?.humanAcceptanceAuthorityIds ?? [],
+            reviewerIds: stage?.reviewerIds ?? stageRecord?.reviewerIds
+              ?? coordination?.humanAcceptanceAuthorityIds ?? [],
             ...(latestReview ? {
               latest: {
                 reviewId: latestReview.id,

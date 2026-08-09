@@ -208,7 +208,11 @@ export default function TasksPage() {
     ));
     if (channelIds.length === 0) return;
     const refresh = () => { void refreshTaskWorkspaces(tasks); };
-    const unsubscribe = channelIds.map((channelId) => projectEvents().onUpdated(channelId, refresh));
+    const events = projectEvents();
+    const unsubscribe = channelIds.flatMap((channelId) => [
+      events.onUpdated(channelId, refresh),
+      events.onArtifactsUpdated(channelId, refresh),
+    ]);
     return () => { unsubscribe.forEach((stop) => stop()); };
   }, [conn, tasks, refreshTaskWorkspaces]);
 
