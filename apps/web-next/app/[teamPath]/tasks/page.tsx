@@ -1188,13 +1188,14 @@ function TaskThreadPanel({
               teamId={teamId}
               channelId={task.channelId}
               taskId={task.id}
-              onAction={(action) => {
+              onAction={(action, focusPackageId) => {
                 // #1065 AC9：可发现性动作只是入口;实际 command 提交时 Server 仍完整复验。
                 if (action === 'delegate-to-agent') {
                   onDelegateToAgent();
                 } else if (action === 'review-package') {
-                  // 审核面在频道 Files 视图(交付包列表/成员审核按钮)。
-                  router.push(`/${teamPath}/channel/${task.channelId}?chatTab=files`);
+                  const query = new URLSearchParams({ chatTab: 'files', fileView: 'artifacts' });
+                  if (focusPackageId) query.set('focusPackageId', focusPackageId);
+                  router.push(`/${teamPath}/channel/${task.channelId}?${query.toString()}`);
                 }
               }}
             />

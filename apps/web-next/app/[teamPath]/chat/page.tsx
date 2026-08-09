@@ -318,6 +318,8 @@ export default function ChatPage() {
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
+  const fileViewParam = searchParams.get('fileView');
+  const focusPackageIdParam = searchParams.get('focusPackageId');
   const threadParam = searchParams.get('thread');
   // #1064：Task 页「交给 Agent 处理」预填导航——JSON { text, selections }，仅写本地 state，
   // 未发送前不创建任何 Message/Offer/claim/Invocation 事实。
@@ -468,6 +470,14 @@ export default function ChatPage() {
       setTab(chatTabParam);
     }
   }, [chatTabParam]);
+
+  useEffect(() => {
+    if (fileViewParam === 'files' || fileViewParam === 'artifacts') {
+      setChannelFilesView(fileViewParam);
+    } else if (focusPackageIdParam) {
+      setChannelFilesView('artifacts');
+    }
+  }, [fileViewParam, focusPackageIdParam]);
 
   useEffect(() => {
     setProfileAgentCache({});
@@ -2581,6 +2591,7 @@ export default function ChatPage() {
                 })) ?? []}
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
+                focusPackageId={focusPackageIdParam}
                 onAddReference={addFilesBoardReference}
                 onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
                 onOpenPackagePreview={openPackagePreviewModal}
@@ -2685,7 +2696,7 @@ export default function ChatPage() {
             setThreadInput('要求后续变更：');
           }}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
-          onDeliveryAction={(action) => {
+          onDeliveryAction={(action, focusPackageId) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
             // task-only(无关联消息)回落到主 composer;审核面在 Files 逻辑产物视图。
             if (action === 'delegate-to-agent') {
@@ -2701,7 +2712,14 @@ export default function ChatPage() {
               }
             } else if (action === 'review-package') {
               closeTaskDetail();
-              switchTab('files');
+              setTab('files');
+              setChannelFilesView('artifacts');
+              const params = new URLSearchParams(searchParams.toString());
+              params.set('chatTab', 'files');
+              params.set('fileView', 'artifacts');
+              if (focusPackageId) params.set('focusPackageId', focusPackageId);
+              else params.delete('focusPackageId');
+              router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
             } else if (action === 'open-task') {
               closeTaskDetail();
               switchTab('tasks');
@@ -3941,7 +3959,7 @@ function TaskDetailPanel({
   onOpenThread: () => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
-  onDeliveryAction?: (action: TaskLevelAction) => void;
+  onDeliveryAction?: (action: TaskLevelAction, focusPackageId?: string) => void;
 }) {
   // 原型收敛:看板直接创建的任务没有关联消息,message 可为 null(task-only 模式)。
   const sortedMessages = relatedMessages.length > 0

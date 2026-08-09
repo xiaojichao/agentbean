@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckSquare, Clock, Layers, Search, Square } from 'lucide-react';
 import { projectEvents } from '@/lib/socket';
 import {
@@ -108,6 +108,8 @@ export interface ProjectFilesBoardProps {
   agentNames: ReadonlyMap<string, string>;
   /** 缓存失效令牌:onArtifactsUpdated / packages 刷新时由调用方 +1。 */
   dataRevision: number;
+  /** Task 审核入口指定的目标包；首次可用时选中，避免多包频道误审其他包。 */
+  focusPackageId?: string | null;
   /** 引用加入主 composer(发送时冻结 ProjectReferenceSet;去重语义由调用方决定)。 */
   onAddReference: (selection: ProjectReferenceSelectionRequestDto) => void;
   /**
@@ -168,6 +170,7 @@ export function ProjectFilesBoard({
   stages,
   agentNames,
   dataRevision,
+  focusPackageId,
   onAddReference,
   onOpenRevisionEditor,
   onOpenPackagePreview,
@@ -193,6 +196,7 @@ export function ProjectFilesBoard({
   const [showPromote, setShowPromote] = useState(false);
   const [packageDetailCache, setPackageDetailCache] = useState<ReadonlyMap<string, PackageDetailCache>>(new Map());
   const [packageFinalReadyCache, setPackageFinalReadyCache] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const appliedFocusPackageIdRef = useRef<string | null>(null);
   const archived = library?.archived ?? false;
 
   const stageNameById = useMemo(() => new Map(stages.map((stage) => [stage.id, stage.name])), [stages]);
@@ -270,6 +274,24 @@ export function ProjectFilesBoard({
     () => filterFileGroupCards(displayCards, filter, search),
     [displayCards, filter, search],
   );
+
+  useEffect(() => {
+    if (!focusPackageId || appliedFocusPackageIdRef.current === focusPackageId) return;
+    const target = displayCards.find((card) => card.kind === 'package'
+      && card.payload.kind === 'package'
+      && card.payload.package.packageId === focusPackageId);
+    if (!target) return;
+    appliedFocusPackageIdRef.current = focusPackageId;
+    setSearch('');
+    setFilter('all');
+    setSelectedId(target.id);
+    setBlockers([]);
+    setMultiSelect(false);
+    setSelectedVersionIds(new Set());
+    setExpandedVersionId(null);
+    setShowPackageReview(false);
+    setPackageReviewError(null);
+  }, [displayCards, focusPackageId]);
 
   // 选中卡:显式选中优先;未选中/被筛选掉时回落列表首卡(首帧即有右侧内容)。
   const selectedCard = filteredCards.find((card) => card.id === selectedId) ?? filteredCards[0] ?? null;

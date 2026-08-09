@@ -79,4 +79,11 @@ describe('chat files surface', () => {
     // 提升入口在无 overview 时关闭(canPromote=false),不误开。
     expect(source).toContain('(channelProjectOverview?.profile.projectLeadId ?? null) === (currentUser?.id ?? null)');
   });
+
+  test('Task 审核入口锁定逻辑产物子视图与目标输出包', () => {
+    expect(source).toContain("const focusPackageIdParam = searchParams.get('focusPackageId')");
+    expect(source).toContain("params.set('fileView', 'artifacts')");
+    expect(source).toContain('focusPackageId={focusPackageIdParam}');
+    expect(source).toContain("setChannelFilesView('artifacts')");
+  });
 });

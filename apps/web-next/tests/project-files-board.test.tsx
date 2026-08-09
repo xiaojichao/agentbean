@@ -270,6 +270,7 @@ interface BoardCallbacks {
   canPromote?: boolean;
   promotableArtifacts?: ProjectFilesBoardProps['promotableArtifacts'];
   libraryOverride?: ProjectFilesBoardProps['library'];
+  focusPackageId?: string;
 }
 
 function renderBoard(callbacks: BoardCallbacks = {}) {
@@ -282,6 +283,7 @@ function renderBoard(callbacks: BoardCallbacks = {}) {
     stages={stages}
     agentNames={agentNames}
     dataRevision={0}
+    focusPackageId={callbacks.focusPackageId}
     onAddReference={(selection) => collected.push(selection)}
     onOpenRevisionEditor={(request) => revisionRequests.push(request)}
     canPromote={callbacks.canPromote ?? false}
@@ -357,6 +359,17 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
       expect(card.textContent).toContain('F1 v4');
       expect(card.textContent).toContain('F2 v3');
     });
+  });
+
+  test('Task 审核入口指定 focusPackageId 时优先选中目标输出包', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
+    renderBoard({ focusPackageId: 'pkg-1' });
+    await waitFor(() => {
+      const target = document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-1"]');
+      expect(target?.className).toContain('border-sky-300');
+    });
+    expect(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')?.className)
+      .not.toContain('border-sky-300');
   });
 
   test('current projection not_ready 时仍保留可解析成员行与修订入口', async () => {

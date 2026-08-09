@@ -137,7 +137,7 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     expect(text).toContain('暂无交付文件包');
     const reviewButton = document.querySelector('[data-smoke="task-action-review-package"]')!;
     fireEvent.click(reviewButton);
-    expect(onAction).toHaveBeenCalledWith('review-package');
+    expect(onAction).toHaveBeenCalledWith('review-package', 'pkg-1');
   });
 
   test('加载与错误态有文本反馈', async () => {
