@@ -1340,7 +1340,7 @@ describe('AgentBean Next browser smoke script', () => {
     })).rejects.toThrow('Browser artifact row was not rendered');
   });
 
-  test('exercises the channel file library root and download link', async () => {
+  test('exercises the channel logical artifact board and keeps the ordinary file surface hidden', async () => {
     const { exerciseChannelFilesBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const page = {
@@ -1352,18 +1352,17 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
-        return { filename: 'browser-smoke-artifact.md', downloadStatus: 200, downloadBody: '# artifact browser smoke\n' };
+        return { filename: 'browser-smoke-artifact.md', logicalBoardVisible: true, ordinaryEntryVisible: false };
       },
     };
 
     await expect(exerciseChannelFilesBrowserSmoke({
       page,
       filename: 'browser-smoke-artifact.md',
-      expectedBody: '# artifact browser smoke\n',
       timeoutMs: 1000,
-    })).resolves.toMatchObject({ filename: 'browser-smoke-artifact.md', downloadStatus: 200 });
+    })).resolves.toMatchObject({ filename: 'browser-smoke-artifact.md', logicalBoardVisible: true, ordinaryEntryVisible: false });
     expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
-    expect(calls.filter((call) => call[0] === 'waitForFunction')).toHaveLength(2);
+    expect(calls.filter((call) => call[0] === 'waitForFunction')).toHaveLength(1);
     expect(calls.filter((call) => call[0] === 'evaluateJson')).toHaveLength(1);
   });
 
@@ -1385,10 +1384,18 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
+        if (expression.includes('downloadResponse')) {
+          return {
+            filename: 'webui-channel-files-artifact-smoke.md',
+            status: 200,
+            body: '# WebUI channel file smoke\n',
+            disposition: 'attachment; filename="webui-channel-files-artifact-smoke.md"',
+          };
+        }
         return {
           filename: 'webui-channel-files-artifact-smoke.md',
-          downloadStatus: 200,
-          downloadBody: '# WebUI channel file smoke\n',
+          logicalBoardVisible: true,
+          ordinaryEntryVisible: false,
         };
       },
     };
@@ -1399,11 +1406,15 @@ describe('AgentBean Next browser smoke script', () => {
       timeoutMs: 1000,
     })).resolves.toMatchObject({
       filename: 'webui-channel-files-artifact-smoke.md',
-      downloadStatus: 200,
+      logicalBoardVisible: true,
+      ordinaryEntryVisible: false,
+      uploadReadable: true,
     });
     expect(calls[0]?.[0]).toBe('setFileInputFiles');
     expect(calls).toContainEqual(['click', '[data-smoke="chat-message-send"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
+    expect(calls.some((call) => call[0] === 'evaluateJson'
+      && String(call[1]).includes('downloadResponse'))).toBe(true);
   });
 
   test('exercises thread reply click, indicator, and nested render in the browser', async () => {

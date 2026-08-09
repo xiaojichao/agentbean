@@ -1,16 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckSquare, Clock, Layers, Search, Square } from 'lucide-react';
 import { projectEvents } from '@/lib/socket';
 import {
   buildFileGroupCards,
-  filterFileGroupCards,
+  filterFileGroupCardsByRoleAndStatus,
   packageProjectionSummaryLines,
   withAgentNames,
   withPackageFinalStates,
   type FileGroupCardModel,
-  type FileGroupFilterKind,
+  type FileGroupStatusFilterKind,
   type FileGroupStageInput,
 } from '@/lib/file-group-model';
 import {
@@ -49,7 +49,7 @@ import type {
  *
  * 左栏 FileGroupRail:输出包/文件集合/等待上游三类卡片混排(FileGroupCardModel,
  * 最近活跃倒序,等待上游排尾);右栏 FileVersionTable:七列文件表(§8.7)。
- * 工具栏:搜索 + 筛选 chip + 整包引用三入口(引用当前包/引用最终版包/多选引用)。
+ * 工具栏:搜索 + 角色/状态下拉 + 多选引用/引用最终版包/引用当前包。
  *
  * 数据原则:
  * - 卡片模型来自 lib/file-group-model(纯函数);包短编号摘要与「有 final」来自
@@ -66,15 +66,20 @@ import type {
  *   非 Markdown 集合行 → onOpenReadOnlyArtifact(ArtifactViewer 只读);
  * - 基于此修改:被拒/需修改行 → onOpenRevisionEditor,包行 basisReviewId 来自
  *   availableActions.latestReviewId,集合行来自最新审核记录(#1062,不从历史猜);
- * - 提升为逻辑产物版本:工具栏按钮(canPromote=project-lead)复用 PromoteArtifactForm。
+ * - 提升为逻辑产物版本:左栏按钮(canPromote=project-lead)复用 PromoteArtifactForm。
  */
 
-const FILTER_OPTIONS: { value: FileGroupFilterKind; label: string }[] = [
-  { value: 'all', label: '全部' },
-  { value: 'pending_review', label: '待审核' },
-  { value: 'has_final', label: '有 final' },
-  { value: 'agent_output', label: 'Agent 输出' },
+const STATUS_OPTIONS: { value: FileGroupStatusFilterKind; label: string }[] = [
+  { value: 'all', label: '全部状态' },
+  { value: 'pending', label: '待审核' },
+  { value: 'approved', label: '已通过' },
+  { value: 'changes_requested', label: '要求修改' },
+  { value: 'rejected', label: '已拒绝' },
+  { value: 'final', label: '有最终版' },
+  { value: 'waiting', label: '等待上游' },
 ];
+
+const INTERNAL_GENERIC_KINDS = new Set(['deliverable', 'run_output', 'intermediate']);
 
 /** 包详情缓存:getOutputPackage(projection current) 一次调用取 package+availableActions+projection。 */
 interface PackageDetailCache {
@@ -111,7 +116,8 @@ export interface ProjectFilesBoardProps {
   onFinalize?: (draft: SetArtifactFinalVersionDraft) => Promise<string | null>;
   /** 提升为逻辑产物版本(project-lead 限定;复用 PromoteArtifactForm)。 */
   canPromote: boolean;
-  promotableArtifacts: readonly PromotableArtifactOption[];
+  /** 独立加载完整频道文件树，不复用普通文件视图的目录/筛选/分页状态。 */
+  loadPromotableArtifacts: () => Promise<readonly PromotableArtifactOption[]>;
   onPromote: (draft: PromoteArtifactDraft) => Promise<string | null>;
 }
 
@@ -132,6 +138,8 @@ interface FileTableRow {
   reviewLabel: string;
   reviewState: string;
   isCurrent: boolean;
+  /** 审核未通过时只能显式引用为修改依据，不能进入整包默认正式输入。 */
+  referenceRequiresRevisionContext: boolean;
   /** 集合当前 revision(修订编辑器 fence;包成员行取投影解析值)。 */
   collectionRevision: number;
   isMarkdown: boolean;
@@ -161,11 +169,12 @@ export function ProjectFilesBoard({
   onReview,
   onFinalize,
   canPromote,
-  promotableArtifacts,
+  loadPromotableArtifacts,
   onPromote,
 }: ProjectFilesBoardProps) {
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<FileGroupFilterKind>('all');
+  const [agentFilter, setAgentFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<FileGroupStatusFilterKind>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedVersionIds, setSelectedVersionIds] = useState<Set<string>>(new Set());
@@ -173,9 +182,21 @@ export function ProjectFilesBoard({
   const [blockers, setBlockers] = useState<PackageProjectionBlocker[]>([]);
   const [expandedVersionId, setExpandedVersionId] = useState<string | null>(null);
   const [showPromote, setShowPromote] = useState(false);
+  const [promotableArtifacts, setPromotableArtifacts] = useState<readonly PromotableArtifactOption[]>([]);
+  const [promotableArtifactsLoading, setPromotableArtifactsLoading] = useState(false);
+  const [promotableArtifactsError, setPromotableArtifactsError] = useState<string | null>(null);
+  const promotableArtifactsRequestRevisionRef = useRef(0);
   const [packageDetailCache, setPackageDetailCache] = useState<ReadonlyMap<string, PackageDetailCache>>(new Map());
   const [packageFinalReadyCache, setPackageFinalReadyCache] = useState<ReadonlyMap<string, boolean>>(new Map());
   const archived = library?.archived ?? false;
+
+  useEffect(() => {
+    promotableArtifactsRequestRevisionRef.current += 1;
+    setShowPromote(false);
+    setPromotableArtifacts([]);
+    setPromotableArtifactsLoading(false);
+    setPromotableArtifactsError(null);
+  }, [channelId]);
 
   const stageNameById = useMemo(() => new Map(stages.map((stage) => [stage.id, stage.name])), [stages]);
 
@@ -213,7 +234,7 @@ export function ProjectFilesBoard({
   // 「有 final」必须按 final projection 是否 ready 判断。current 成员即使不等于 final，
   // 或 current 因审核态不可作为正式输入，已经冻结的 final projection 仍可能完整可用。
   useEffect(() => {
-    if (!channelId || filter !== 'has_final') return;
+    if (!channelId || statusFilter !== 'final') return;
     let cancelled = false;
     setPackageFinalReadyCache(new Map());
     for (const pkg of packages) {
@@ -229,28 +250,65 @@ export function ProjectFilesBoard({
         });
     }
     return () => { cancelled = true; };
-  }, [channelId, packages, dataRevision, filter]);
+  }, [channelId, packages, dataRevision, statusFilter]);
+
+  const packageMemberCollectionIds = useMemo(() => {
+    const ids = new Set<string>();
+    const visiblePackageIds = new Set(packages.map((pkg) => pkg.packageId));
+    for (const collection of library?.collections ?? []) {
+      if (collection.versions.some((version) => version.packageMemberships?.some(
+        (membership) => visiblePackageIds.has(membership.packageId),
+      ))) {
+        ids.add(collection.id);
+      }
+    }
+    for (const detail of packageDetailCache.values()) {
+      for (const member of detail.package?.members ?? []) ids.add(member.collectionId);
+    }
+    return ids;
+  }, [library, packageDetailCache, packages]);
 
   // 卡片模型:聚合 → Agent 名入搜索池 → 「有 final」(final projection ready)→
   // 短编号版本摘要(来自缓存投影)→ 筛选/搜索。
   const displayCards = useMemo(() => {
-    let cards = buildFileGroupCards({ packages, pendingDeliveries, library, stages });
+    let cards = buildFileGroupCards({
+      packages,
+      pendingDeliveries,
+      library,
+      stages,
+      packageMemberCollectionIds,
+    });
     cards = withAgentNames(cards, agentNames);
     cards = withPackageFinalStates(cards, packageFinalReadyCache);
     return cards.map((card) => {
       if (card.kind === 'package' && card.payload.kind === 'package') {
         const detail = packageDetailCache.get(card.payload.package.packageId);
         if (detail?.projection?.status === 'ready') {
-          return { ...card, summaryLines: packageProjectionSummaryLines(detail.projection.members) };
+          const memberSearchText = detail.projection.members.flatMap((member) => [
+            member.filename,
+            member.shortLabel,
+            `v${member.versionNumber}`,
+            member.versionId,
+            member.collectionId,
+          ]).join(' ');
+          return {
+            ...card,
+            summaryLines: packageProjectionSummaryLines(detail.projection.members),
+            searchText: `${card.searchText} ${memberSearchText}`.toLowerCase(),
+          };
         }
       }
       return card;
     });
-  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache, packageFinalReadyCache]);
+  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache, packageFinalReadyCache, packageMemberCollectionIds]);
 
   const filteredCards = useMemo(
-    () => filterFileGroupCards(displayCards, filter, search),
-    [displayCards, filter, search],
+    () => filterFileGroupCardsByRoleAndStatus(displayCards, {
+      agentId: agentFilter,
+      status: statusFilter,
+      search,
+    }),
+    [agentFilter, displayCards, search, statusFilter],
   );
 
   // 选中卡:显式选中优先;未选中/被筛选掉时回落列表首卡(首帧即有右侧内容)。
@@ -339,9 +397,38 @@ export function ProjectFilesBoard({
     ? selectedCard.payload.stage
     : null;
 
+  const refreshPromotableArtifacts = useCallback(async () => {
+    const requestRevision = promotableArtifactsRequestRevisionRef.current + 1;
+    promotableArtifactsRequestRevisionRef.current = requestRevision;
+    setPromotableArtifactsLoading(true);
+    setPromotableArtifactsError(null);
+    try {
+      const loaded = await loadPromotableArtifacts();
+      if (requestRevision !== promotableArtifactsRequestRevisionRef.current) return;
+      setPromotableArtifacts(loaded);
+    } catch (error) {
+      if (requestRevision !== promotableArtifactsRequestRevisionRef.current) return;
+      setPromotableArtifacts([]);
+      setPromotableArtifactsError(error instanceof Error ? error.message : '加载可提升文件失败');
+    } finally {
+      if (requestRevision === promotableArtifactsRequestRevisionRef.current) {
+        setPromotableArtifactsLoading(false);
+      }
+    }
+  }, [loadPromotableArtifacts]);
+
+  const openPromote = useCallback(() => {
+    if (showPromote) {
+      setShowPromote(false);
+      return;
+    }
+    setShowPromote(true);
+    void refreshPromotableArtifacts();
+  }, [refreshPromotableArtifacts, showPromote]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-smoke="project-files-board">
-      {/* 工具栏:搜索 + 筛选 chip + 整包引用三入口(多选态切换为多选提交条)。 */}
+      {/* 工具栏顺序与原型一致:搜索、角色、状态、多选、final、current。 */}
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-neutral-200 px-3 py-2">
         <div className="relative min-w-0 flex-1">
           <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" aria-hidden="true" />
@@ -353,22 +440,27 @@ export function ProjectFilesBoard({
             data-smoke="files-toolbar-search"
           />
         </div>
-        <div className="flex items-center gap-1" data-smoke="files-filter-chips">
-          {FILTER_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => setFilter(option.value)}
-              className={`h-7 rounded-md px-2.5 text-xs font-medium ${filter === option.value
-                ? 'bg-neutral-900 text-white'
-                : 'border border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-100'}`}
-              data-smoke="files-filter-chip"
-              data-filter={option.value}
-            >
-              {option.label}
-            </button>
+        <select
+          aria-label="全部角色"
+          value={agentFilter}
+          onChange={(event) => setAgentFilter(event.target.value)}
+          className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-xs text-neutral-700"
+          data-smoke="files-role-filter"
+        >
+          <option value="all">全部角色</option>
+          {Array.from(agentNames.entries()).map(([agentId, name]) => (
+            <option key={agentId} value={agentId}>{name}</option>
           ))}
-        </div>
+        </select>
+        <select
+          aria-label="全部状态"
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value as FileGroupStatusFilterKind)}
+          className="h-8 rounded-md border border-neutral-300 bg-white px-2 text-xs text-neutral-700"
+          data-smoke="files-status-filter"
+        >
+          {STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </select>
         {multiSelect && selectedPackageId ? (
           <div className="flex items-center gap-1.5" data-smoke="files-multi-select-bar">
             <span className="text-xs text-neutral-600">已选 {selectedVersionIds.size} 个文件</span>
@@ -394,58 +486,57 @@ export function ProjectFilesBoard({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={!selectedPackageId || refBusy}
-              onClick={() => { void addProjectionReference('current'); }}
-              className="h-7 rounded-md border border-sky-300 bg-white px-2.5 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
-              data-smoke="files-ref-current"
+              disabled={!selectedPackageId}
+              onClick={toggleMultiSelect}
+              className="h-8 rounded-md border border-neutral-300 bg-white px-3 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
+              data-smoke="files-ref-multi"
             >
-              引用当前包
+              多选引用
             </button>
             <button
               type="button"
               disabled={!selectedPackageId || refBusy}
               onClick={() => { void addProjectionReference('final'); }}
-              className="h-7 rounded-md border border-sky-300 bg-white px-2.5 text-xs font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+              className="h-8 rounded-md border border-neutral-300 bg-white px-3 text-xs text-neutral-700 hover:bg-neutral-100 disabled:opacity-50"
               data-smoke="files-ref-final"
             >
               引用最终版包
             </button>
             <button
               type="button"
-              disabled={!selectedPackageId}
-              onClick={toggleMultiSelect}
-              className="h-7 rounded-md border border-neutral-300 bg-white px-2.5 text-xs text-neutral-600 hover:bg-neutral-100 disabled:opacity-50"
-              data-smoke="files-ref-multi"
+              disabled={!selectedPackageId || refBusy}
+              onClick={() => { void addProjectionReference('current'); }}
+              className="h-8 rounded-md border border-amber-400 bg-amber-400 px-3 text-xs font-medium text-neutral-900 hover:bg-amber-300 disabled:opacity-50"
+              data-smoke="files-ref-current"
             >
-              多选引用
+              引用当前包
             </button>
           </div>
         )}
-        {/* 提升为逻辑产物版本(project-lead 限定;复用 PromoteArtifactForm)。 */}
-        {canPromote && !archived && stages.length > 0 ? (
-          promotableArtifacts.length > 0 ? (
-            <button
-              type="button"
-              onClick={() => setShowPromote((current) => !current)}
-              className="h-7 rounded-md border border-amber-300 bg-amber-50 px-2.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-              data-smoke="files-promote-open"
-            >
-              提升为逻辑产物版本
-            </button>
-          ) : (
-            <span className="text-[11px] text-neutral-400">先在文件视图中打开目标文件所在目录,再回到这里提升</span>
-          )
-        ) : null}
       </div>
       {showPromote && canPromote && !archived ? (
         <div className="shrink-0 border-b border-amber-200 bg-amber-50/40 px-3 py-2" data-smoke="files-promote-form">
-          <PromoteArtifactForm
-            stages={stages}
-            promotableArtifacts={promotableArtifacts}
-            collections={library?.collections ?? []}
-            onCancel={() => setShowPromote(false)}
-            onPromote={onPromote}
-          />
+          {promotableArtifactsLoading ? (
+            <p className="py-3 text-center text-xs text-neutral-500">加载完整频道文件列表…</p>
+          ) : promotableArtifactsError ? (
+            <div className="flex items-center justify-between gap-3 py-2 text-xs text-red-700">
+              <span>{promotableArtifactsError}</span>
+              <button type="button" onClick={() => { void refreshPromotableArtifacts(); }} className="border border-red-300 px-2 py-1">重试</button>
+            </div>
+          ) : promotableArtifacts.length === 0 ? (
+            <div className="flex items-center justify-between gap-3 py-2 text-xs text-neutral-500">
+              <span>频道中暂无可提升文件</span>
+              <button type="button" onClick={() => setShowPromote(false)} className="border border-neutral-300 px-2 py-1">关闭</button>
+            </div>
+          ) : (
+            <PromoteArtifactForm
+              stages={stages}
+              promotableArtifacts={promotableArtifacts}
+              collections={library?.collections ?? []}
+              onCancel={() => setShowPromote(false)}
+              onPromote={onPromote}
+            />
+          )}
         </div>
       ) : null}
       {/* 整包引用阻断清单(final 缺失/被拒 current;与卡片同文案)。 */}
@@ -487,6 +578,16 @@ export function ProjectFilesBoard({
               }}
             />
           ))}
+          {canPromote && !archived && stages.length > 0 ? (
+            <button
+              type="button"
+              onClick={openPromote}
+              className="mt-1 w-full rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              data-smoke="files-promote-open"
+            >
+              提升为逻辑产物版本
+            </button>
+          ) : null}
         </aside>
         {/* 右栏:七列文件表 / 等待上游占位。 */}
         <div className="min-w-0 flex-1 overflow-auto p-4" data-smoke="file-version-table">
@@ -533,7 +634,7 @@ export function ProjectFilesBoard({
                           <button
                             type="button"
                             aria-pressed={selected}
-                            aria-label={`选择 ${row.filename}`}
+                            aria-label={`${row.referenceRequiresRevisionContext ? '选择以修改' : '选择'} ${row.filename}`}
                             onClick={() => toggleRowSelection(row.rowId)}
                             className="text-neutral-500 hover:text-neutral-800"
                             data-smoke="files-row-select"
@@ -546,13 +647,13 @@ export function ProjectFilesBoard({
                       <td className="py-2 pr-3">
                         <div className="font-medium text-neutral-900">{row.filename}</div>
                         <div className="text-[11px] text-neutral-400" data-smoke="file-row-collection-id">
-                          collection: {row.collectionName || row.collectionId}
+                          collection: {row.collectionId}{row.collectionName ? ` · ${row.collectionName}` : ''}
                         </div>
                       </td>
                       <td className="py-2 pr-3">
                         {row.collectionKind ? (
                           <span className="inline-flex rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                            {row.collectionKind}
+                            {projectSemanticKindLabel(row.collectionKind)}
                           </span>
                         ) : null}
                         {row.stageName ? (
@@ -602,7 +703,7 @@ export function ProjectFilesBoard({
                             data-smoke="files-row-ref"
                             data-version-id={row.versionId}
                           >
-                            引用
+                            {row.referenceRequiresRevisionContext ? '引用以修改' : '引用'}
                           </button>
                           {!archived && selectedPackageId && onOpenPackagePreview ? (
                             <button
@@ -781,6 +882,9 @@ function FileGroupCard({
   const smoke = card.kind === 'package'
     ? card.payload.kind === 'pending-delivery' ? 'output-package-pending' : 'output-package-item'
     : card.kind === 'collection' ? 'project-artifact-collection' : 'file-group-waiting';
+  const title = card.kind === 'package' && card.payload.kind === 'package'
+    ? `${card.payload.package.packageId} ${card.title}`
+    : card.title;
   return (
     <button
       type="button"
@@ -807,7 +911,7 @@ function FileGroupCard({
           </span>
         ))}
       </div>
-      <div className="mt-1.5 truncate text-[13px] font-semibold text-neutral-900">{card.title}</div>
+      <div className="mt-1.5 truncate text-[13px] font-semibold text-neutral-900">{title}</div>
       {card.summaryLines.length > 0 ? (
         <div className="mt-0.5 space-y-0.5 text-[11px] text-neutral-500">
           {card.summaryLines.map((line) => (
@@ -821,11 +925,12 @@ function FileGroupCard({
           Workspace revision 已提交,package 形成中
         </div>
       ) : null}
-      {card.kind === 'package' && card.payload.kind === 'package' ? (
-        <div className="mt-0.5 truncate text-[11px] text-neutral-400">{card.payload.package.packageId}</div>
-      ) : null}
     </button>
   );
+}
+
+function projectSemanticKindLabel(kind: string): string {
+  return INTERNAL_GENERIC_KINDS.has(kind) ? '未分类' : kind;
 }
 
 function reviewStateChipClass(state: string): string {
@@ -852,6 +957,9 @@ function packageProjectionRows(
   return projection.members.map((member) => {
     const collection = collectionById.get(member.collectionId);
     const version = collection?.versions.find((v) => v.id === member.versionId);
+    const finalVersion = collection?.finalVersionId
+      ? collection.versions.find((candidate) => candidate.id === collection.finalVersionId)
+      : undefined;
     const stageId = version?.source.stageId;
     const frozenMember = pkg?.members.find((candidate) => candidate.collectionId === member.collectionId);
     const isFrozenMemberVersion = frozenMember?.artifactVersionId === member.versionId;
@@ -867,14 +975,17 @@ function packageProjectionRows(
       collectionKind: collection?.kind ?? '',
       stageName: stageId ? (stageNameById.get(stageId) ?? stageId) : '',
       sourcePrimary: agentName ? `@${agentName}` : 'Agent 交付',
-      sourceSub: sourcePathById.get(member.versionId) ?? '',
+      sourceSub: [version?.source.workspaceRunId, version?.source.messageId, sourcePathById.get(member.versionId)]
+        .filter((value): value is string => Boolean(value))
+        .join(' · '),
       currentLabel: `v${member.versionNumber} current`,
       currentSub: `server revision r${member.collectionRevision}`,
-      finalLabel: member.isFinalVersion ? `v${member.versionNumber} final` : '未设置',
-      isFinal: member.isFinalVersion,
+      finalLabel: finalVersion ? `v${finalVersion.versionNumber} final` : '未设置',
+      isFinal: Boolean(finalVersion),
       reviewLabel: reviewStateLabel(member.reviewState),
       reviewState: member.reviewState,
       isCurrent: true,
+      referenceRequiresRevisionContext: member.reviewState === 'rejected' || member.reviewState === 'changes_requested',
       collectionRevision: member.collectionRevision,
       isMarkdown: isMarkdownFilename(member.filename),
       canRevise,
@@ -905,9 +1016,11 @@ function collectionVersionRows(
         : (version.packageMemberships?.length ?? 0) > 0
           ? 'Agent 交付'
           : '任务提升';
-      const sourceSub = version.source.workspaceRunId
-        ?? version.source.messageId
-        ?? `task ${version.source.taskId}`;
+      const sourceSub = [
+        version.source.workspaceRunId,
+        version.source.messageId,
+        version.source.taskId ? `task ${version.source.taskId}` : undefined,
+      ].filter((value): value is string => Boolean(value)).join(' · ');
       // #1062:可修订性沿用 ProjectArtifactLibrary 既有判定;basisReviewId 取最新审核记录。
       const latestReview = version.reviews.at(-1);
       const blockedReview = latestReview?.decision === 'rejected' || latestReview?.decision === 'changes_requested';
@@ -925,13 +1038,14 @@ function collectionVersionRows(
           ? `v${version.versionNumber} current`
           : `v${version.versionNumber}`,
         currentSub: '',
-        finalLabel: version.id === collection.finalVersionId
-          ? `v${version.versionNumber} final`
+        finalLabel: collection.finalVersionId
+          ? `v${collection.versions.find((candidate) => candidate.id === collection.finalVersionId)?.versionNumber ?? '?'} final`
           : '未设置',
-        isFinal: version.id === collection.finalVersionId,
+        isFinal: Boolean(collection.finalVersionId),
         reviewLabel: reviewStateLabel(version.reviewState),
         reviewState: version.reviewState,
         isCurrent: version.id === collection.currentVersionId,
+        referenceRequiresRevisionContext: version.reviewState === 'rejected' || version.reviewState === 'changes_requested',
         collectionRevision: collection.revision,
         isMarkdown: isMarkdownFilename(version.artifact.filename),
         canRevise: Boolean(blockedReview) && isMarkdownFilename(version.artifact.filename),

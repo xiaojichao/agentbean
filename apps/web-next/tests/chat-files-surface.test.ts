@@ -8,6 +8,11 @@ const filesSurface = source.slice(
 );
 
 describe('chat files surface', () => {
+  test('频道文件标签页只展示逻辑产物，不再暴露普通文件子页面', () => {
+    expect(source).not.toContain('channel-files-view-files');
+    expect(source).not.toContain('channelFilesView');
+  });
+
   test('reuses the shared Artifact viewer instead of opening previews in a new tab', () => {
     expect(filesSurface).toContain('<ChatArtifactPreview');
     expect(filesSurface).not.toContain('target="_blank"');
@@ -21,10 +26,9 @@ describe('chat files surface', () => {
     expect(source).toMatch(/useEffect\(\(\) => \{\s+channelFilesRequestRevisionRef\.current \+= 1;\s+setChannelFiles\(\[\]\)/);
   });
 
-  test('keeps directory navigation in the URL and exposes role filtering', () => {
-    expect(source).toContain("searchParams.get('filePath')");
-    expect(source).toContain("params.set('filePath', path)");
-    expect(source).toContain("params.delete('filePath')");
+  test('普通文件组件保留复用能力，但频道文件标签页不再挂载它', () => {
+    expect(source).toMatch(/\{activeChannel && !isDm \? \(\s+<ProjectFilesBoard/);
+    expect(source).toMatch(/<ProjectFilesBoard[\s\S]+?\) : \(\s+<ConversationFiles/);
     expect(filesSurface).toContain('按文件角色筛选');
     expect(filesSurface).toContain('directories.map');
     expect(source).toContain('data-smoke="chat-file-input"');
@@ -69,14 +73,26 @@ describe('chat files surface', () => {
     expect(source).toContain("messageArtifactUrl(readOnlyArtifact as unknown as Artifact, 'download', readOnlyArtifact.teamId)");
   });
 
-  test('逻辑产物视图 gate 放宽:无 overview 但有输出包/产物集合也进入 ProjectFilesBoard(#1134)', () => {
-    expect(source).toContain("projectFilesAvailable && channelFilesView === 'artifacts'");
-    expect(source).toContain('outputPackages.length > 0');
-    expect(source).toContain('outputPackagePendings.length > 0');
-    expect(source).toContain('(projectArtifactLibrary?.collections.length ?? 0) > 0');
+  test('频道文件标签页无条件进入逻辑产物板，不再因数据为空回落普通文件页', () => {
+    expect(source).not.toContain('projectFilesAvailable');
+    expect(source).not.toContain('channelFilesView');
+    expect(source).toMatch(/\{activeChannel && !isDm \? \(\s+<ProjectFilesBoard/);
     // stages 容空:overview 缺失时传空数组,等待上游卡自然不出现。
     expect(source).toMatch(/stages=\{channelProjectOverview\?\.stages\.map\(/);
     // 提升入口在无 overview 时关闭(canPromote=false),不误开。
     expect(source).toContain('(channelProjectOverview?.profile.projectLeadId ?? null) === (currentUser?.id ?? null)');
+  });
+
+  test('提升入口独立遍历完整文件树，不复用 URL 目录、筛选或当前分页', () => {
+    expect(source).toContain('const loadChannelPromotableArtifacts = useCallback');
+    expect(source).toContain('loadAllPromotableArtifacts((path, cursor) =>');
+    expect(source).toContain("channelEvents().listFiles(activeChannel, cursor, 100, path, 'all')");
+    expect(source).toContain('loadPromotableArtifacts={loadChannelPromotableArtifacts}');
+    expect(source).not.toContain('promotableArtifacts={channelFiles.map');
+  });
+
+  test('私聊文件标签页继续使用普通文件视图，不进入频道逻辑产物板', () => {
+    expect(source).toMatch(/\{activeChannel && !isDm \? \(\s+<ProjectFilesBoard/);
+    expect(source).toMatch(/<ProjectFilesBoard[\s\S]+?\) : \(\s+<ConversationFiles/);
   });
 });

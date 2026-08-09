@@ -404,9 +404,9 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       timeoutMs,
     });
     checks.push(
-      check('webui-channel-files-root-visible', true, 'WebUI opens the channel file library root'),
-      check('webui-channel-files-entry-visible', true, `WebUI renders ${channelFilesResult.filename} in the channel file library`),
-      check('webui-channel-files-download-readable', true, 'WebUI channel file download returns the uploaded bytes'),
+      check('webui-channel-file-upload-readable', channelFilesResult.uploadReadable === true, `WebUI uploaded and downloaded ordinary attachment ${channelFilesResult.filename}`),
+      check('webui-channel-files-root-visible', true, 'WebUI opens the channel logical artifact board'),
+      check('webui-channel-files-legacy-surface-hidden', true, `WebUI keeps ordinary attachment ${channelFilesResult.filename} out of the channel logical artifact board`),
     );
 
     const channelResult = await exerciseWebUiChannelsBusinessSmoke({
@@ -4550,32 +4550,27 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
   };
 }
 
-export async function exerciseChannelFilesBrowserSmoke({ page, filename, expectedBody, timeoutMs }) {
+export async function exerciseChannelFilesBrowserSmoke({ page, filename, timeoutMs }) {
   await page.click('[data-smoke="channel-files-tab"]');
   await page.waitForFunction(
-    'Boolean(document.querySelector(\'[data-smoke="channel-files-view"]\'))',
-    'channel file library root to render',
-    timeoutMs,
-  );
-  await page.waitForFunction(
-    `Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]')).some((entry) => entry.dataset.filename === ${JSON.stringify(filename)})`,
-    'channel file entry to render',
+    'Boolean(document.querySelector(\'[data-smoke="project-files-board"]\'))',
+    'channel logical artifact board to render',
     timeoutMs,
   );
   const result = await page.evaluateJson(`
-    (async () => {
+    (() => {
       const filename = ${JSON.stringify(filename)};
-      const row = Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
-        .find((entry) => entry.dataset.filename === filename);
-      if (!row) return null;
-      const downloadHref = row.querySelector('a[title="下载文件"]')?.href;
-      if (!downloadHref) return { filename, downloadStatus: 0, downloadBody: '' };
-      const response = await fetch(downloadHref);
-      return { filename, downloadStatus: response.status, downloadBody: await response.text() };
+      const ordinaryEntryVisible = Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
+        .some((entry) => entry.dataset.filename === filename);
+      return {
+        filename,
+        logicalBoardVisible: Boolean(document.querySelector('[data-smoke="project-files-board"]')),
+        ordinaryEntryVisible,
+      };
     })()
   `);
-  if (!result || result.filename !== filename || result.downloadStatus !== 200 || result.downloadBody !== expectedBody) {
-    throw new Error('Channel file library download failed');
+  if (!result || result.filename !== filename || result.logicalBoardVisible !== true || result.ordinaryEntryVisible !== false) {
+    throw new Error('Channel logical artifact board contract failed');
   }
   return result;
 }
@@ -4597,12 +4592,38 @@ export async function exerciseWebUiChannelFilesBrowserSmoke({ page, suffix, time
   );
   await page.click('[data-smoke="chat-message-send"]');
   await waitForWebUiChatMessage({ page, body, timeoutMs });
-  return exerciseChannelFilesBrowserSmoke({
+  await page.waitForFunction(
+    `Array.from(document.querySelectorAll('a[title="下载文件"]')).some((link) => link.closest('.group')?.textContent.includes(${JSON.stringify(filename)}))`,
+    'uploaded channel attachment download action to render in its message',
+    timeoutMs,
+  );
+  const uploaded = await page.evaluateJson(`
+    (async () => {
+      const filename = ${JSON.stringify(filename)};
+      const downloadLink = Array.from(document.querySelectorAll('a[title="下载文件"]'))
+        .find((link) => link.closest('.group')?.textContent.includes(filename));
+      if (!downloadLink?.href) return null;
+      const downloadResponse = await fetch(downloadLink.href);
+      return {
+        filename,
+        status: downloadResponse.status,
+        body: await downloadResponse.text(),
+        disposition: downloadResponse.headers.get('content-disposition') || '',
+      };
+    })()
+  `);
+  if (uploaded?.filename !== filename
+    || uploaded.status !== 200
+    || uploaded.body !== content
+    || !uploaded.disposition.includes(filename)) {
+    throw new Error('Uploaded channel attachment download verification failed');
+  }
+  const board = await exerciseChannelFilesBrowserSmoke({
     page,
     filename,
-    expectedBody: content,
     timeoutMs,
   });
+  return { ...board, uploadReadable: true };
 }
 
 export async function exerciseTaskBrowserSmoke({ page, suffix, timeoutMs }) {

@@ -30,6 +30,7 @@ export type FileGroupCardKind = 'package' | 'collection' | 'waiting';
 
 /** 左侧筛选 chip(全部 / 待审核 / 有 final / Agent 输出)。 */
 export type FileGroupFilterKind = 'all' | 'pending_review' | 'has_final' | 'agent_output';
+export type FileGroupStatusFilterKind = 'all' | 'pending' | 'approved' | 'changes_requested' | 'rejected' | 'final' | 'waiting';
 
 /** 阶段轻量输入(ProjectStageDto 的结构子集;taskId 用于输出包→阶段关联)。 */
 export interface FileGroupStageInput {
@@ -70,15 +71,22 @@ export function buildFileGroupCards(input: {
   pendingDeliveries: readonly OutputPackagePendingDeliveryDto[];
   library: ProjectArtifactLibraryDto | null;
   stages: readonly FileGroupStageInput[];
+  /** 已属于输出包的集合由包卡统一承载，不能在包外再次生成集合卡。 */
+  packageMemberCollectionIds?: ReadonlySet<string>;
 }): FileGroupCardModel[] {
-  const { packages, pendingDeliveries, library, stages } = input;
+  const { packages, pendingDeliveries, library, stages, packageMemberCollectionIds = new Set<string>() } = input;
   const collections = library?.collections ?? [];
+  const visiblePackageIds = new Set(packages.map((pkg) => pkg.packageId));
+  const standaloneCollections = collections.filter((collection) =>
+    !packageMemberCollectionIds.has(collection.id)
+    && !collection.versions.some((version) => version.packageMemberships?.some((membership) =>
+      visiblePackageIds.has(membership.packageId))));
   const stageNameById = new Map(stages.map((stage) => [stage.id, stage.name]));
 
   const cards: FileGroupCardModel[] = [
-    ...packages.map(packageCard),
+    ...packages.map((pkg) => packageCard(pkg, stages)),
     ...pendingDeliveries.map(pendingDeliveryCard),
-    ...collections.map((collection) => collectionCard(collection, stageNameById)),
+    ...standaloneCollections.map((collection) => collectionCard(collection, stageNameById)),
     ...stages
       .filter((stage) => !collectionCoversStage(collections, stage.id)
         && !packageCoversStage(packages, stage.taskId))
@@ -102,6 +110,34 @@ export function filterFileGroupCards(
     if (query && !card.searchText.includes(query)) return false;
     return true;
   });
+}
+
+/** 原型工具栏的独立角色/状态下拉；组合搜索时仍只过滤呈现，不修改 Server 事实。 */
+export function filterFileGroupCardsByRoleAndStatus(
+  cards: readonly FileGroupCardModel[],
+  input: { agentId: string; status: FileGroupStatusFilterKind; search: string },
+): FileGroupCardModel[] {
+  return filterFileGroupCards(cards, 'all', input.search)
+    .filter((card) => {
+      if (input.agentId === 'all') return true;
+      if (card.agentId === input.agentId) return true;
+      return card.payload.kind === 'collection'
+        && card.payload.collection.versions.some((version) => version.promotedBy === input.agentId);
+    })
+    .filter((card) => {
+      if (input.status === 'all') return true;
+      if (input.status === 'waiting') return card.kind === 'waiting';
+      if (card.kind === 'waiting' || card.payload.kind === 'pending-delivery') return false;
+      if (input.status === 'final') return card.hasFinal;
+      if (card.payload.kind === 'package') return card.payload.package.reviewState === input.status;
+      if (card.payload.kind === 'collection') {
+        const collection = card.payload.collection;
+        const current = collection.versions.find((version) =>
+          version.id === collection.currentVersionId);
+        return current?.reviewState === input.status;
+      }
+      return false;
+    });
 }
 
 /** 调用方把 agentId 映射为显示名后追加进搜索池(不新增卡片、不改其它字段)。 */
@@ -140,7 +176,10 @@ export function withPackageFinalStates(
   });
 }
 
-function packageCard(pkg: OutputPackageSummaryDto): FileGroupCardModel {
+function packageCard(pkg: OutputPackageSummaryDto, stages: readonly FileGroupStageInput[]): FileGroupCardModel {
+  const stage = stages.find((candidate) => candidate.taskId !== undefined && candidate.taskId === pkg.taskId);
+  const semanticName = stage?.name.replace(/阶段$/, '') ?? '';
+  const title = `${semanticName}输出包`;
   const chips = [
     `${pkg.memberCount} 个文件`,
     reviewStateLabel(pkg.reviewState),
@@ -151,7 +190,7 @@ function packageCard(pkg: OutputPackageSummaryDto): FileGroupCardModel {
   return {
     kind: 'package',
     id: pkg.packageId,
-    title: '输出包',
+    title,
     chips,
     summaryLines: [],
     lastActivityAt: pkg.createdAt,
@@ -159,7 +198,7 @@ function packageCard(pkg: OutputPackageSummaryDto): FileGroupCardModel {
     pendingReview: pkg.reviewState === 'pending',
     hasFinal: false,
     agentOutput: true,
-    searchText: ['输出包', pkg.packageId, pkg.taskId ?? '', ...chips].join(' ').toLowerCase(),
+    searchText: [title, pkg.packageId, pkg.taskId ?? '', ...chips].join(' ').toLowerCase(),
     payload: { kind: 'package', package: pkg },
   };
 }
@@ -236,7 +275,7 @@ function waitingCard(stage: FileGroupStageInput): FileGroupCardModel {
   return {
     kind: 'waiting',
     id: `waiting:${stage.id}`,
-    title: stage.name,
+    title: `${stage.name.replace(/阶段$/, '')}输出包`,
     chips: ['等待上游'],
     summaryLines: stage.goal ? [stage.goal] : ['暂无产物'],
     lastActivityAt: 0,

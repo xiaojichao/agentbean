@@ -18,6 +18,7 @@ import { describe, expect, test } from 'vitest';
 import {
   buildFileGroupCards,
   filterFileGroupCards,
+  filterFileGroupCardsByRoleAndStatus,
   packageProjectionSummaryLines,
   withAgentNames,
   withPackageFinalStates,
@@ -162,6 +163,18 @@ describe('buildFileGroupCards', () => {
     expect(card.payload).toEqual({ kind: 'package', package: pkg1 });
   });
 
+  test('输出包成员集合由包卡统一承载，不在包外重复生成集合卡', () => {
+    const cards = buildFileGroupCards({
+      packages: [pkg1],
+      pendingDeliveries: [],
+      library,
+      stages,
+      packageMemberCollectionIds: new Set(['col-1']),
+    });
+    expect(cards.some((card) => card.kind === 'package' && card.id === 'pkg-1')).toBe(true);
+    expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(false);
+  });
+
   test('交付处理中:以 package 类卡片呈现,不伪造完整交付', () => {
     const cards = buildFileGroupCards({ packages: [], pendingDeliveries: [pending], library: null, stages: [] });
     expect(cards).toHaveLength(1);
@@ -196,7 +209,7 @@ describe('buildFileGroupCards', () => {
     const cards = buildFileGroupCards({ packages: [pkg1, pkg2], pendingDeliveries: [], library, stages });
     const waiting = cards.filter((card) => card.kind === 'waiting');
     expect(waiting.map((card) => card.id)).toEqual(['waiting:stage-3']);
-    expect(waiting[0].title).toBe('分镜');
+    expect(waiting[0].title).toBe('分镜输出包');
     expect(waiting[0].chips).toEqual(['等待上游']);
     expect(waiting[0].summaryLines).toEqual(['产出分镜图组']);
     expect(waiting[0].payload).toEqual({ kind: 'waiting', stage: { id: 'stage-3', name: '分镜', goal: '产出分镜图组', taskId: 'task-3' } });
@@ -229,14 +242,14 @@ describe('filterFileGroupCards', () => {
     expect(filterFileGroupCards(enriched, 'has_final', '').map((card) => card.id)).toEqual(['col-1', 'pkg-1']);
   });
 
-  test('Agent 输出:package 恒命中;集合有版本带 packageMemberships 命中', () => {
+  test('Agent 输出筛选只返回包卡；带 packageMemberships 的集合不重复列出', () => {
     const filtered = filterFileGroupCards(cards, 'agent_output', '');
     // pkg-1/pkg-2/pending(agentOutput=true)、col-1 无 packageMemberships → 不命中。
     // 保持构建序(按 lastActivityAt 倒序):pending 2500、pkg-2 2000、pkg-1 1000。
     expect(filtered.map((card) => card.id)).toEqual([`pending:${pending.publishId}`, 'pkg-2', 'pkg-1']);
-    // 集合带交付包成员后命中。
+    // 集合带交付包成员后由包卡承载，不再生成集合卡。
     const withDelivery = buildFileGroupCards({
-      packages: [],
+      packages: [pkg2],
       pendingDeliveries: [],
       library: {
         archived: false,
@@ -250,10 +263,11 @@ describe('filterFileGroupCards', () => {
       },
       stages,
     });
-    expect(filterFileGroupCards(withDelivery, 'agent_output', '').map((card) => card.id)).toEqual(['col-1']);
+    expect(filterFileGroupCards(withDelivery, 'agent_output', '').map((card) => card.id)).toEqual(['pkg-2']);
   });
 
   test('搜索:按文件组名/文件名/版本号过滤;大小写不敏感', () => {
+    expect(filterFileGroupCards(cards, 'all', '服装').map((card) => card.id)).toEqual(['pkg-2']);
     expect(filterFileGroupCards(cards, 'all', 'script.ep01').map((card) => card.id)).toEqual(['col-1']);
     expect(filterFileGroupCards(cards, 'all', 'ver-c1.md').map((card) => card.id)).toEqual(['col-1']);
     expect(filterFileGroupCards(cards, 'all', 'v4').map((card) => card.id)).toEqual(['col-1']);
@@ -264,6 +278,24 @@ describe('filterFileGroupCards', () => {
   test('搜索 + 筛选叠加生效', () => {
     expect(filterFileGroupCards(cards, 'pending_review', 'pkg-2')).toEqual([]);
     expect(filterFileGroupCards(cards, 'pending_review', 'pkg-1').map((card) => card.id)).toEqual(['pkg-1']);
+  });
+
+  test('原型角色/状态下拉可独立组合', () => {
+    expect(filterFileGroupCardsByRoleAndStatus(cards, {
+      agentId: 'agent-a',
+      status: 'pending',
+      search: '',
+    }).map((card) => card.id)).toEqual(['pkg-1']);
+    expect(filterFileGroupCardsByRoleAndStatus(cards, {
+      agentId: 'all',
+      status: 'approved',
+      search: '',
+    }).map((card) => card.id)).toEqual(['pkg-2', 'col-1']);
+    expect(filterFileGroupCardsByRoleAndStatus(cards, {
+      agentId: 'all',
+      status: 'waiting',
+      search: '分镜',
+    }).map((card) => card.id)).toEqual(['waiting:stage-3']);
   });
 });
 
