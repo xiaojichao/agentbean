@@ -9820,6 +9820,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!channel.ok) {
           return channel;
         }
+        if (channel.channel.archivedAt != null) {
+          return makeFailure('CONFLICT', 'Archived channels are read-only');
+        }
       }
       if (assigneeId && !(await isAssignableToTask(repositories, taskInput.teamId, assigneeId))) {
         return makeFailure('FORBIDDEN', 'Task assignee is not visible in team');
@@ -9859,6 +9862,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (!channel.ok) {
           return channel;
         }
+        if (channel.channel.archivedAt != null) {
+          return makeFailure('CONFLICT', 'Archived channels are read-only');
+        }
       }
       const nextChannelId = hasOwn(taskInput, 'channelId') ? normalizeOptionalId(taskInput.channelId ?? undefined) : undefined;
       const nextAssigneeId = hasOwn(taskInput, 'assigneeId') ? normalizeOptionalId(taskInput.assigneeId ?? undefined) : undefined;
@@ -9875,6 +9881,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
         if (!channel.ok) {
           return channel;
+        }
+        if (channel.channel.archivedAt != null) {
+          return makeFailure('CONFLICT', 'Archived channels are read-only');
         }
       }
       if (taskInput.status !== undefined && !isTaskStatus(taskInput.status)) {
@@ -9973,6 +9982,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = await repositories.tasks.getById(taskInput.taskId);
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (task.channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId: task.channelId,
+        });
+        if (!channel.ok) return channel;
+        if (channel.channel.archivedAt != null) {
+          return makeFailure('CONFLICT', 'Archived channels are read-only');
+        }
       }
       if (await taskIsBoundToProjectStage(repositories, task)) {
         return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
@@ -10175,6 +10195,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = await repositories.tasks.getById(taskInput.taskId);
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (task.channelId) {
+        const channel = await ensureUserCanViewChannel(repositories, {
+          userId: taskInput.userId,
+          teamId: taskInput.teamId,
+          channelId: task.channelId,
+        });
+        if (!channel.ok) return channel;
+        if (channel.channel.archivedAt != null) {
+          return makeFailure('CONFLICT', 'Archived channels are read-only');
+        }
       }
       if (taskInput.sortOrder !== task.sortOrder && await taskHasManagedGovernance(repositories, task)) {
         return makeFailure('CONFLICT', 'Managed tasks cannot be reordered directly');

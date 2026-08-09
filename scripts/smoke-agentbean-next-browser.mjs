@@ -1740,6 +1740,7 @@ export async function exerciseWebUiTaskBusinessSmoke({
   } finally {
     await phase2.close();
   }
+  await exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs });
   return {
     title,
     status: targetStatus,
@@ -1747,6 +1748,45 @@ export async function exerciseWebUiTaskBusinessSmoke({
     deletedTitle: secondaryTitle,
     phase2Title: phase2.title,
   };
+}
+
+async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs }) {
+  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
+    'channel Tasks restores the plain subview from URL',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="channel-tasks-view-project"]');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    'channel Tasks switches to project progress and records it in URL',
+    timeoutMs,
+  );
+  await page.evaluateJson('history.back(); true');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
+    'channel Tasks browser back restores the previous subview',
+    timeoutMs,
+  );
+  await page.evaluateJson('history.forward(); true');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    'channel Tasks browser forward restores the selected subview',
+    timeoutMs,
+  );
+  await page.reload();
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    'channel Tasks preserves the project subview after refresh',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="channel-tasks-view-plain"]');
+  await page.waitForFunction(
+    `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
+    'channel Tasks can return to plain tasks',
+    timeoutMs,
+  );
 }
 
 async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, suffix, timeoutMs }) {
@@ -2643,7 +2683,7 @@ export async function exerciseWebUiProjectCollaborationSmoke({
   `);
   if (!openedTasksTab) throw new Error(`Could not open channel task view for project Task "${taskTitle}"`);
   await page.waitForFunction(
-    `(() => { const text = document.querySelector('[aria-label="项目总览"]')?.textContent ?? ''; return text.includes(${JSON.stringify(stageName)}) && !text.includes(${JSON.stringify(`${stageName} stale`)}); })()`,
+    `(() => { const text = document.querySelector('[data-smoke="channel-project-progress"]')?.textContent ?? ''; return text.includes(${JSON.stringify(stageName)}) && !text.includes(${JSON.stringify(`${stageName} stale`)}); })()`,
     `project Stage "${stageName}" to render from the Server projection`,
     timeoutMs,
   );

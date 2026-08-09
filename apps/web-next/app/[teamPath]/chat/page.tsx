@@ -41,6 +41,7 @@ import {
   channelTaskResponsibilityFocusFilterValue,
 } from '@/components/ChannelTaskCard';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
+import { ChannelProjectProgress, type ChannelProjectProgressState } from '@/components/ChannelProjectProgress';
 import {
   type PromoteArtifactDraft,
   type SetArtifactFinalVersionDraft,
@@ -79,6 +80,14 @@ import {
   taskStatusText,
   type TaskStatus,
 } from '@/lib/task-status';
+import {
+  channelTaskEntrySubview,
+  channelTasksHistoryMode,
+  channelTasksRouteParams,
+  parseChannelTasksSubview,
+  resolveChannelTasksSubview,
+  type ChannelTasksSubview,
+} from '@/lib/channel-task-workspace-route';
 
 type ChatTab = 'chat' | 'tasks' | 'files';
 type TaskViewMode = 'board' | 'list';
@@ -336,10 +345,14 @@ export default function ChatPage() {
   const messageParam = searchParams.get('message');
   const profileParam = searchParams.get('profile');
   const taskParam = searchParams.get('task');
+  const tasksViewParam = parseChannelTasksSubview(searchParams.get('tasksView'));
+  const selectedStageId = searchParams.get('stage');
   const routeChannelId = typeof params.channelId === 'string' ? params.channelId : null;
   const routeDmId = typeof params.dmId === 'string' ? params.dmId : null;
   const [input, setInput] = useState('');
-  const [tab, setTab] = useState<ChatTab>('chat');
+  const [tab, setTab] = useState<ChatTab>(() => (
+    chatTabParam === 'tasks' || chatTabParam === 'files' ? chatTabParam : 'chat'
+  ));
   const [asTask, setAsTask] = useState(false);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showEditChannel, setShowEditChannel] = useState(false);
@@ -430,6 +443,7 @@ export default function ChatPage() {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
   const [tasksLoading, setTasksLoading] = useState(false);
+  const [tasksLoadError, setTasksLoadError] = useState<{ kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null>(null);
   const [taskView, setTaskView] = useState<TaskViewMode>('board');
   const [taskCreatorFilter, setTaskCreatorFilter] = useState<string>('all');
   const [taskAssigneeFilter, setTaskAssigneeFilter] = useState<string>('all');
@@ -490,6 +504,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (chatTabParam === 'chat' || chatTabParam === 'tasks' || chatTabParam === 'files') {
       setTab(chatTabParam);
+    } else {
+      setTab('chat');
     }
   }, [chatTabParam]);
 
@@ -1338,6 +1354,50 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   };
 
+  const navigateChannelTasksRoute = useCallback((
+    nextParams: URLSearchParams,
+    historyMode: 'push' | 'replace',
+  ) => {
+    const query = nextParams.toString();
+    const href = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    if (historyMode === 'push') router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
+  }, [router]);
+
+  const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
+    if (view === 'plain') {
+      setTaskDetailMessageId(null);
+      setTaskDetailOnlyTaskId(null);
+    }
+    navigateChannelTasksRoute(
+      channelTasksRouteParams(searchParams, { view }),
+      channelTasksHistoryMode('select_subview'),
+    );
+  }, [navigateChannelTasksRoute, searchParams]);
+
+  const resolveDefaultTasksSubview = useCallback((view: ChannelTasksSubview) => {
+    if (tasksViewParam) return;
+    const next = new URLSearchParams(searchParams.toString());
+    next.set('chatTab', 'tasks');
+    next.set('tasksView', view);
+    navigateChannelTasksRoute(next, channelTasksHistoryMode('resolve_default'));
+  }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
+
+  const openProjectStage = useCallback((stageId: string | null, taskId: string) => {
+    setTaskDetailOnlyTaskId(taskId);
+    setTaskDetailMessageId(null);
+    setThreadRootId(null);
+    setChatTaskMenuTarget(null);
+    navigateChannelTasksRoute(
+      channelTasksRouteParams(searchParams, {
+        view: 'project',
+        stageId,
+        taskId,
+      }),
+      channelTasksHistoryMode('open_task'),
+    );
+  }, [navigateChannelTasksRoute, searchParams]);
+
   const handleArchiveChannel = async (channelId: string, confirmationToken?: string) => {
     const res = await channelEvents().archive(channelId, currentTeamId, confirmationToken);
     if (confirmationToken) {
@@ -1392,7 +1452,10 @@ export default function ChatPage() {
     router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
-  const setTaskDetailUrl = useCallback((messageId: string | null) => {
+  const setTaskDetailUrl = useCallback((
+    messageId: string | null,
+    historyMode: 'push' | 'replace' = 'replace',
+  ) => {
     const params = new URLSearchParams(searchParams.toString());
     if (messageId && activeChannel) {
       params.set('task', `${activeChannel}:${messageId}`);
@@ -1403,7 +1466,9 @@ export default function ChatPage() {
       params.delete('task');
     }
     const query = params.toString();
-    router.replace(`${window.location.pathname}${query ? `?${query}` : ''}`, { scroll: false });
+    const href = `${window.location.pathname}${query ? `?${query}` : ''}`;
+    if (historyMode === 'push') router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
   }, [activeChannel, router, searchParams]);
 
   const openThread = useCallback((messageId: string) => {
@@ -1444,12 +1509,23 @@ export default function ChatPage() {
   const loadTasks = useCallback(async () => {
     if (!activeChannel || conn !== 'open') return;
     setTasksLoading(true);
+    setTasksLoadError(null);
     try {
       const res = await taskEvents().channelWorkspace(activeChannel);
       if (res.ok && res.workspace) {
         setChannelTaskWorkspace(res.workspace);
         setTasks(res.workspace.entries.map((entry) => entry.task) as TaskItem[]);
+      } else if (res.ok) {
+        setTasksLoadError({ kind: 'not_ready', message: '频道任务事实尚未就绪' });
+      } else {
+        const code = res.error ?? '';
+        setTasksLoadError({
+          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
+          message: res.message ?? res.error ?? '频道任务加载失败，请稍后重试',
+        });
       }
+    } catch {
+      setTasksLoadError({ kind: 'error', message: '频道任务加载失败，请稍后重试' });
     } finally {
       setTasksLoading(false);
     }
@@ -1458,6 +1534,7 @@ export default function ChatPage() {
   useEffect(() => {
     setTasks([]);
     setChannelTaskWorkspace(null);
+    setTasksLoadError(null);
     void loadTasks();
   }, [loadTasks]);
 
@@ -1949,7 +2026,10 @@ export default function ChatPage() {
     });
   };
 
-  const openTaskDetail = useCallback((msg: ChatMessage) => {
+  const openTaskDetail = useCallback((
+    msg: ChatMessage,
+    historyMode: 'push' | 'replace' = 'replace',
+  ) => {
     if (!metaTaskId(msg)) return;
     setTaskDetailMessageId(msg.id);
     setTaskDetailOnlyTaskId(null);
@@ -1962,13 +2042,13 @@ export default function ChatPage() {
     });
     setSelectedMessageId(msg.id);
     setChatTaskMenuTarget(null);
-    setTaskDetailUrl(msg.id);
+    setTaskDetailUrl(msg.id, historyMode);
   }, [setTaskDetailUrl]);
 
   const openTaskDetailById = useCallback((taskId: string) => {
     const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
     if (taskMessage) {
-      openTaskDetail(taskMessage);
+      openTaskDetail(taskMessage, channelTasksHistoryMode('open_task'));
       return;
     }
     // 原型收敛:看板直接创建的任务没有关联消息——task-only 详情(URL 记 task:<taskId>)。
@@ -1980,7 +2060,7 @@ export default function ChatPage() {
     params.delete('thread');
     params.delete('message');
     params.delete('profile');
-    router.replace(`${window.location.pathname}?${params.toString()}`, { scroll: false });
+    router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
   }, [openTaskDetail, visibleMessages, router, searchParams]);
 
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
@@ -2009,7 +2089,14 @@ export default function ChatPage() {
     setTaskDetailOnlyTaskId(null);
     setChatTaskMenuTarget(null);
     setTaskDetailUrl(null);
-  }, [setTaskDetailUrl]);
+    if (selectedStageId) {
+      requestAnimationFrame(() => {
+        const stageCard = Array.from(document.querySelectorAll<HTMLElement>('[data-smoke="channel-project-stage-card"]'))
+          .find((candidate) => candidate.dataset.stageId === selectedStageId);
+        stageCard?.focus();
+      });
+    }
+  }, [selectedStageId, setTaskDetailUrl]);
 
   const deleteMessage = async (msg: ChatMessage) => {
     const res = await messageReactionEvents().delete(msg.id);
@@ -2053,6 +2140,10 @@ export default function ChatPage() {
   };
 
   const updateTaskStatus = async (task: TaskItem, status: TaskStatus) => {
+    if (activeChannelObj?.archivedAt) {
+      setChatTaskMenuTarget(null);
+      return;
+    }
     if (status === task.status) {
       setChatTaskMenuTarget(null);
       return;
@@ -2597,6 +2688,10 @@ export default function ChatPage() {
               workspace={channelTaskWorkspace}
               taskNumbers={taskNumbers}
               loading={tasksLoading}
+              loadError={tasksLoadError}
+              requestedSubview={tasksViewParam}
+              selectedStageId={selectedStageId}
+              archived={Boolean(activeChannelObj?.archivedAt)}
               view={taskView}
               creatorFilter={taskCreatorFilter}
               assigneeFilter={taskAssigneeFilter}
@@ -2627,6 +2722,9 @@ export default function ChatPage() {
               })}
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
               onOpenTaskDetail={openTaskDetailById}
+              onOpenProjectStage={openProjectStage}
+              onSubviewChange={selectTasksSubview}
+              onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">选择一个频道或私聊查看任务</div>
@@ -2763,6 +2861,7 @@ export default function ChatPage() {
           mentionMembers={mentionMembers}
           currentTeamId={currentTeamId}
           routeTeamPath={routeTeamPath}
+          readOnly={Boolean(activeChannelObj?.archivedAt)}
           onClose={closeTaskDetail}
           onViewInChannel={() => { if (taskDetailMessage) jumpToMessage(taskDetailMessage.id); }}
           onOpenThread={() => {
@@ -3365,6 +3464,10 @@ function ConversationTasks({
   workspace,
   taskNumbers,
   loading,
+  loadError,
+  requestedSubview,
+  selectedStageId,
+  archived,
   view,
   creatorFilter,
   assigneeFilter,
@@ -3391,11 +3494,18 @@ function ConversationTasks({
   onToggleColumn,
   onTaskUpdate,
   onOpenTaskDetail,
+  onOpenProjectStage,
+  onSubviewChange,
+  onResolveDefaultSubview,
 }: {
   tasks: TaskItem[];
   workspace: ChannelTaskWorkspaceV1 | null;
   taskNumbers: Map<string, number>;
   loading: boolean;
+  loadError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
+  requestedSubview?: ChannelTasksSubview;
+  selectedStageId: string | null;
+  archived: boolean;
   view: TaskViewMode;
   creatorFilter: string;
   assigneeFilter: string;
@@ -3423,12 +3533,17 @@ function ConversationTasks({
   onTaskUpdate: (task: TaskItem) => void;
   /** 原型收敛:看板/列表点击任务标题打开详情(含无关联消息的 task-only)。 */
   onOpenTaskDetail: (taskId: string) => void;
+  onOpenProjectStage: (stageId: string | null, taskId: string) => void;
+  onSubviewChange: (view: ChannelTasksSubview) => void;
+  onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
   const [projectOverview, setProjectOverview] = useState<ChannelProjectOverviewDto | null>();
+  const [projectOverviewError, setProjectOverviewError] = useState<{ kind: 'no_permission' | 'error'; message: string } | null>(null);
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
+  const [showProjectSettings, setShowProjectSettings] = useState(false);
   const projectTaskVersion = tasks
     .map((task) => `${task.id}:${task.status}:${task.updatedAt}`)
     .sort()
@@ -3437,29 +3552,65 @@ function ConversationTasks({
   useEffect(() => {
     let active = true;
     setProjectOverview(undefined);
+    setProjectOverviewError(null);
     void Promise.all([
       projectEvents().overview(channelId),
       projectEvents().artifactCollections(channelId),
     ]).then(([overviewResult, artifactResult]) => {
       if (!active) return;
-      if (overviewResult.ok) setProjectOverview(overviewResult.overview ?? null);
+      if (overviewResult.ok) {
+        setProjectOverview(overviewResult.overview ?? null);
+      } else {
+        const code = overviewResult.error ?? '';
+        setProjectOverviewError({
+          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
+          message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
+        });
+      }
       if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
+    }).catch(() => {
+      if (!active) return;
+      setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
     });
     return () => { active = false; };
   }, [channelId, projectTaskVersion]);
 
-  useEffect(() => projectEvents().onUpdated(channelId, setProjectOverview), [channelId]);
+  useEffect(() => projectEvents().onUpdated(channelId, (nextOverview) => {
+    setProjectOverview(nextOverview);
+    setProjectOverviewError(null);
+  }), [channelId]);
   useEffect(
     () => projectEvents().onArtifactsUpdated(channelId, setProjectArtifactLibrary),
     [channelId],
   );
 
-  const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, entry] as const) ?? []);
+  const hasProjectStages = (projectOverview?.stages.length ?? 0) > 0;
+  const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
+  const subview = requestedSubview
+    ?? (loadError || projectOverviewError ? 'project' : resolveChannelTasksSubview(undefined, hasProjectStages));
+  useEffect(() => {
+    if (projectOverview === undefined || projectOverviewError || requestedSubview) return;
+    onResolveDefaultSubview(resolveChannelTasksSubview(undefined, (projectOverview?.stages.length ?? 0) > 0));
+  }, [onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview]);
+
+  const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, workspaceReadOnly
+    ? {
+      ...entry,
+      governance: {
+        ...entry.governance,
+        allowDirectStatusMutation: false,
+        allowDirectAssigneeMutation: false,
+        allowDirectDelete: false,
+      },
+    }
+    : entry] as const) ?? []);
   const filteredTasks = tasks.filter((task) => {
+    const entry = workspaceEntries.get(task.id);
+    if (!entry || channelTaskEntrySubview(entry) !== 'plain') return false;
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
     if (
       assigneeFilter !== 'all'
-      && channelTaskResponsibilityFocusFilterValue(workspaceEntries.get(task.id)) !== assigneeFilter
+      && channelTaskResponsibilityFocusFilterValue(entry) !== assigneeFilter
     ) return false;
     return true;
   });
@@ -3577,9 +3728,71 @@ function ConversationTasks({
       : assigneeFilter === 'review_wait'
         ? '等待审核'
         : participantName(assigneeFilter, participants, currentUserId);
+  const projectProgressState: ChannelProjectProgressState = loadError?.kind
+    ?? projectOverviewError?.kind
+    ?? (projectOverview === undefined || (loading && !workspace)
+      ? 'loading'
+      : hasProjectStages && !workspace
+        ? 'not_ready'
+        : 'ready');
+  const projectProgressErrorMessage = loadError?.message ?? projectOverviewError?.message;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4" role="tablist" aria-label="频道任务子视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subview === 'project'}
+          data-smoke="channel-tasks-view-project"
+          onClick={() => onSubviewChange('project')}
+          className={`h-8 rounded-md px-3 text-xs font-semibold ${subview === 'project' ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
+        >
+          项目推进 / 审核流转
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subview === 'plain'}
+          data-smoke="channel-tasks-view-plain"
+          onClick={() => onSubviewChange('plain')}
+          className={`h-8 rounded-md px-3 text-xs font-semibold ${subview === 'plain' ? 'bg-neutral-900 text-white' : 'text-neutral-600 hover:bg-neutral-100'}`}
+        >
+          普通任务
+        </button>
+        <div className="flex-1" />
+        {subview === 'plain' ? (
+          <button
+            type="button"
+            onClick={() => setShowProjectSettings(true)}
+            className="h-8 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            {workspaceReadOnly ? '查看项目设置' : '项目设置 / 阶段配置'}
+          </button>
+        ) : null}
+      </div>
+
+      {subview === 'project' ? (
+        <ChannelProjectProgress
+          overview={projectOverview ?? null}
+          workspace={workspace}
+          participants={participants}
+          currentUserId={currentUserId}
+          selectedStageId={selectedStageId}
+          state={projectProgressState}
+          errorMessage={projectProgressErrorMessage}
+          archived={workspaceReadOnly}
+          onOpenStage={onOpenProjectStage}
+          onOpenSettings={() => setShowProjectSettings(true)}
+        />
+      ) : loadError ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center bg-neutral-50 p-6" data-smoke={`channel-plain-${loadError.kind}`}>
+          <div className="border border-neutral-200 bg-white px-6 py-5 text-sm text-neutral-600">
+            {loadError.kind === 'no_permission' ? '你没有查看该频道任务的权限' : loadError.message}
+          </div>
+        </div>
+      ) : (
+        <>
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4">
         <div className="relative">
           <button onClick={() => { onToggleCreatorFilter(); if (showAssigneeFilter) onToggleAssigneeFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
@@ -3616,10 +3829,12 @@ function ConversationTasks({
             />
           )}
         </div>
-        <button onClick={onToggleCreate} className="flex h-8 items-center gap-1 rounded-md bg-pink-500 px-3 text-xs font-semibold text-white hover:bg-pink-600">
-          <Plus size={13} />
-          新建任务
-        </button>
+        {!workspaceReadOnly ? (
+          <button onClick={onToggleCreate} className="flex h-8 items-center gap-1 rounded-md bg-pink-500 px-3 text-xs font-semibold text-white hover:bg-pink-600">
+            <Plus size={13} />
+            新建任务
+          </button>
+        ) : <span className="text-xs font-medium text-neutral-500">频道已归档 · 普通任务只读</span>}
         <div className="flex-1" />
         <div className="flex overflow-hidden rounded-md border border-neutral-300">
           <button onClick={() => onViewChange('board')} className={`flex h-8 items-center gap-1 border-r border-neutral-300 px-2.5 text-xs font-medium ${view === 'board' ? 'bg-amber-300 text-neutral-900' : 'bg-white text-neutral-500 hover:bg-neutral-50'}`} title="看板">
@@ -3633,20 +3848,7 @@ function ConversationTasks({
         </div>
       </div>
 
-      {projectOverview !== undefined && (
-        <ChannelProjectOverview
-          overview={projectOverview}
-          tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
-          participants={participants}
-          currentUserId={currentUserId}
-          artifactLibrary={projectArtifactLibrary}
-          onCreate={createInitialProjectStage}
-          onCreateEdge={createProjectStageEdge}
-          onDeleteEdge={deleteProjectStageEdge}
-        />
-      )}
-
-      {showCreate && (
+      {showCreate && !workspaceReadOnly && (
         <form onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.5fr)_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
           <label className="min-w-0">
             <span className="mb-1 block text-xs font-medium text-neutral-500">标题</span>
@@ -3784,6 +3986,50 @@ function ConversationTasks({
           </table>
         </div>
       )}
+        </>
+      )}
+
+      {showProjectSettings ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" role="dialog" aria-modal="true" aria-label="项目设置 / 阶段配置">
+          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex h-12 shrink-0 items-center border-b border-neutral-200 px-4">
+              <div>
+                <div className="text-sm font-semibold text-neutral-900">项目设置 / 阶段配置</div>
+                <div className="text-[11px] text-neutral-500">配置能力与运行工作区分离；阶段事实仍由 Server 持久化。</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowProjectSettings(false)}
+                className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
+                aria-label="关闭项目设置"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="min-h-0 overflow-y-auto">
+              <ChannelProjectOverview
+                overview={projectOverview ?? null}
+                tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
+                participants={participants}
+                currentUserId={currentUserId}
+                artifactLibrary={projectArtifactLibrary}
+                onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
+                onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
+                onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
+              />
+              {projectOverview === undefined ? (
+                <div className="p-6 text-center text-sm text-neutral-500">正在加载项目设置…</div>
+              ) : null}
+              {projectOverviewError ? (
+                <div className="p-6 text-center text-sm text-red-600">{projectOverviewError.message}</div>
+              ) : null}
+              {workspaceReadOnly && !projectOverview ? (
+                <div className="p-6 text-center text-sm text-neutral-500">频道已归档，不能创建项目阶段。</div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3978,6 +4224,7 @@ function TaskDetailPanel({
   mentionMembers,
   currentTeamId,
   routeTeamPath,
+  readOnly,
   onClose,
   onViewInChannel,
   onOpenThread,
@@ -3996,6 +4243,7 @@ function TaskDetailPanel({
   mentionMembers: MentionProfileMember[];
   currentTeamId?: string | null;
   routeTeamPath: string;
+  readOnly: boolean;
   onClose: () => void;
   onViewInChannel: () => void;
   onOpenThread: () => void;
@@ -4034,7 +4282,9 @@ function TaskDetailPanel({
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
   const workspaceTeamId = currentTeamId ?? message?.teamId ?? null;
   const detailChannelId = message?.channelId ?? task?.channelId ?? null;
-  const managedStatusOptions = workspaceEntry?.governance.mode === 'managed'
+  const managedStatusOptions = readOnly
+    ? []
+    : workspaceEntry?.governance.mode === 'managed'
     ? TASK_COLUMNS.filter((column) => (
         column.id === 'cancelled'
         || column.id === 'closed'
@@ -4328,6 +4578,9 @@ function TaskDetailPanel({
 
         <section className="py-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">任务状态</h3>
+          {readOnly && (
+            <p data-smoke="task-detail-readonly" className="text-xs text-neutral-500">频道已归档，任务状态只读。</p>
+          )}
           {workspaceEntry?.governance.mode === 'managed' && (
             <p className="mb-2 text-[11px] text-violet-700">状态由任务执行与验收流程推进，仅显示当前可用的具名流程操作。</p>
           )}

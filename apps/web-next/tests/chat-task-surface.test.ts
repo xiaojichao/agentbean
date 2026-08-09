@@ -67,6 +67,10 @@ describe('chat task surface', () => {
     expect(detailPanel).toContain('此任务未进入 Phase 2 协作。');
     expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");
     expect(detailPanel).toContain('仅显示当前可用的具名流程操作');
+    expect(detailPanel).toContain('data-smoke="task-detail-readonly"');
+    expect(detailPanel).toContain('频道已归档，任务状态只读。');
+    expect(source).toContain('readOnly={Boolean(activeChannelObj?.archivedAt)}');
+    expect(source).toContain('if (activeChannelObj?.archivedAt)');
   });
 
   test('有关联消息的任务深链保留显式 Tasks / Files 主区', () => {
@@ -89,7 +93,7 @@ describe('chat task surface', () => {
   test('频道任务按责任焦点筛选，并让看板和列表共用 Server 事实摘要', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
-    expect(source).toContain('channelTaskResponsibilityFocusFilterValue(workspaceEntries.get(task.id))');
+    expect(source).toContain('channelTaskResponsibilityFocusFilterValue(entry)');
     expect(source).not.toContain("return task.assigneeId ?? 'unassigned'");
     expect(source).toContain('全部责任焦点');
     expect(source).toContain('未产生责任');

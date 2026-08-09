@@ -54,7 +54,7 @@ export function ChannelProjectOverview({
   participants: ProjectParticipantOption[];
   currentUserId?: string;
   artifactLibrary?: ProjectArtifactLibraryDto | null;
-  onCreate: (draft: InitialProjectStageDraft) => Promise<string | null>;
+  onCreate?: (draft: InitialProjectStageDraft) => Promise<string | null>;
   onCreateEdge?: (draft: ProjectStageEdgeDraft) => Promise<string | null>;
   onDeleteEdge?: (edgeId: string) => Promise<string | null>;
 }) {
@@ -209,7 +209,7 @@ export function ChannelProjectOverview({
   }
 
   if (!showCreate) {
-    return tasks.length > 0 && currentUserId ? (
+    return tasks.length > 0 && currentUserId && onCreate ? (
       <div className="shrink-0 border-b border-neutral-100 px-4 py-2">
         <button
           type="button"
@@ -225,6 +225,7 @@ export function ChannelProjectOverview({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!onCreate) return;
     const acceptanceCriteria = criteria.split('\n').map((item) => item.trim()).filter(Boolean);
     if (!name.trim() || !goal.trim() || !taskId || !ownerId || !projectLeadId
       || defaultReviewerIds.length === 0 || stageReviewerIds.length === 0
