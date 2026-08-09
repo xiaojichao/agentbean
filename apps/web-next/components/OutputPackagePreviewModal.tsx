@@ -165,13 +165,15 @@ export function OutputPackagePreviewModal({
       // 每次保存动作为独立幂等键;同一 base+内容重复提交由 Server revision fence 去重。
       idempotencyKey: `pkg-preview-edit:${active.collection.id}:${base.id}:${crypto.randomUUID()}`,
     });
-    if (result.ok) {
-      const nextVersionNumber = base.versionNumber + 1;
-      setSavedNotice(`已保存：Server 生成 ${active.collection.name} v${nextVersionNumber}，当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新；final 未移动。`);
+    if (result.ok && result.revision) {
+      setSavedNotice(`已保存：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新；final 未移动。`);
       await loadLibrary();
       setEditorEpoch((n) => n + 1);
       onSaved();
-      return { ok: true, revisionId: '' };
+      return { ok: true, revisionId: result.revision.versionId };
+    }
+    if (result.ok) {
+      return { ok: false, conflict: true, message: 'Server 未返回保存后的版本信息，请重试' };
     }
     if (result.error === 'CONFLICT' && result.revisionConflict) {
       return {

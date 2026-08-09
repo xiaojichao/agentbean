@@ -118,7 +118,21 @@ function renderModal(options: { initialVersionId?: string; onSaved?: () => void 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.artifactCollections.mockResolvedValue({ ok: true, library: library() });
-  mocks.saveArtifactVersionRevision.mockResolvedValue({ ok: true });
+  mocks.saveArtifactVersionRevision.mockResolvedValue({
+    ok: true,
+    revision: {
+      commandName: 'save-artifact-version-revision',
+      versionId: 'server-version-5',
+      collectionId: 'collection-1',
+      versionNumber: 5,
+      artifactId: 'artifact-server-version-5',
+      baseVersionId: 'version-1',
+      sourceVersionId: 'version-1',
+      collectionRevision: 5,
+      currentVersionId: 'server-version-5',
+      createdAt: 200,
+    },
+  });
   vi.stubGlobal('fetch', vi.fn().mockImplementation(async (url: string) => ({
     ok: true,
     status: 200,
@@ -159,7 +173,22 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
 
   test('底部保存按钮沿用 revision fence，成功后显示 Server 新版本状态', async () => {
     const onSaved = vi.fn();
-    const next = version('version-3', 'collection-1', '第1集剧本.md', 5);
+    const next = version('server-version-9', 'collection-1', '第1集剧本.md', 9);
+    mocks.saveArtifactVersionRevision.mockResolvedValue({
+      ok: true,
+      revision: {
+        commandName: 'save-artifact-version-revision',
+        versionId: 'server-version-9',
+        collectionId: 'collection-1',
+        versionNumber: 9,
+        artifactId: 'artifact-server-version-9',
+        baseVersionId: 'version-1',
+        sourceVersionId: 'version-1',
+        collectionRevision: 9,
+        currentVersionId: 'server-version-9',
+        createdAt: 200,
+      },
+    });
     mocks.artifactCollections
       .mockResolvedValueOnce({ ok: true, library: library() })
       .mockResolvedValue({ ok: true, library: library(next) });
@@ -178,7 +207,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       expectedCollectionRevision: 4,
       revisionBasis: { sourceVersionId: 'version-1' },
     })));
-    expect(await screen.findByText(/已保存：Server 生成 script\.ep01 v5/)).toBeTruthy();
+    expect(await screen.findByText(/已保存：Server 生成 script\.ep01 v9/)).toBeTruthy();
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 });
