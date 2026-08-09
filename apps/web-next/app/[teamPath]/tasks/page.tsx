@@ -29,7 +29,13 @@ import {
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, channelEvents, dmEvents, memberEvents, projectEvents, taskEvents, messageReactionEvents } from '@/lib/socket';
 import { OutputPackageList } from '@/components/project/OutputPackageList';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
-import { WEB_EVENTS, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type TaskDagViewDto } from '@agentbean/contracts';
+import {
+  WEB_EVENTS,
+  type ChannelTaskWorkspaceEntryV1,
+  type OutputPackagePendingDeliveryDto,
+  type OutputPackageSummaryDto,
+  type TaskDagViewDto,
+} from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
 import { TaskSystemActivitySection } from '@/components/TaskSystemActivitySection';
@@ -101,6 +107,7 @@ export default function TasksPage() {
   const searchParams = useSearchParams();
 
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [workspaceEntriesByTaskId, setWorkspaceEntriesByTaskId] = useState<Record<string, ChannelTaskWorkspaceEntryV1>>({});
   const [taskDag, setTaskDag] = useState<TaskDagViewDto | null>(null);
   const [taskDagLoading, setTaskDagLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -116,7 +123,6 @@ export default function TasksPage() {
   const [createTitle, setCreateTitle] = useState('');
   const [createDescription, setCreateDescription] = useState('');
   const [createChannelId, setCreateChannelId] = useState('');
-  const [createAssigneeId, setCreateAssigneeId] = useState('');
   const [createTags, setCreateTags] = useState('');
   const [creating, setCreating] = useState(false);
   const [humans, setHumans] = useState<Participant[]>([]);
@@ -129,19 +135,50 @@ export default function TasksPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const savedKey = `agentbean:tasks:saved:${np}`;
   const reactionsKey = `agentbean:tasks:reactions:${np}`;
+  const workspaceRequestRef = useRef(0);
 
   const threadTarget = parseThreadParam(searchParams.get('thread'));
   const threadChannelId = threadTarget?.channelId ?? null;
+
+  const refreshTaskWorkspaces = useCallback(async (nextTasks: Task[]) => {
+    const requestId = ++workspaceRequestRef.current;
+    const channelIds = Array.from(new Set(
+      nextTasks.map((task) => task.channelId).filter((channelId): channelId is string => Boolean(channelId)),
+    ));
+    if (channelIds.length === 0) {
+      setWorkspaceEntriesByTaskId({});
+      return;
+    }
+    const responses = await Promise.all(channelIds.map(async (channelId) => {
+      try {
+        return await taskEvents().channelWorkspace(channelId);
+      } catch {
+        return null;
+      }
+    }));
+    if (requestId !== workspaceRequestRef.current) return;
+    const nextEntries: Record<string, ChannelTaskWorkspaceEntryV1> = {};
+    for (const response of responses) {
+      if (!response?.ok || !response.workspace) continue;
+      for (const entry of response.workspace.entries) nextEntries[entry.task.id] = entry;
+    }
+    setWorkspaceEntriesByTaskId(nextEntries);
+  }, []);
+
+  const applyTaskSnapshot = useCallback((nextTasks: Task[]) => {
+    setTasks(nextTasks);
+    void refreshTaskWorkspaces(nextTasks);
+  }, [refreshTaskWorkspaces]);
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
       const res = await taskEvents().list();
-      if (res.ok && res.tasks) setTasks(res.tasks as Task[]);
+      if (res.ok && res.tasks) applyTaskSnapshot(res.tasks as Task[]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyTaskSnapshot]);
 
   useEffect(() => {
     if (conn !== 'open' || !currentTeamId) return;
@@ -149,7 +186,7 @@ export default function TasksPage() {
     channelEvents(socket).subscribe(currentTeamId);
     const onChannels = (list: ChannelSummary[]) => applyChannelsSnapshot(list);
     socket.on('channels:snapshot', onChannels);
-    const unsubscribeTasks = taskEvents(socket).onSnapshot((list) => setTasks(list as Task[]));
+    const unsubscribeTasks = taskEvents(socket).onSnapshot((list) => applyTaskSnapshot(list as Task[]));
     const unsubscribeDms = dmEvents(socket).onSnapshot(applyDmsSnapshot);
     loadTasks();
     memberEvents().list({ teamId: currentTeamId }).then((res) => {
@@ -162,7 +199,18 @@ export default function TasksPage() {
       unsubscribeTasks();
       unsubscribeDms();
     };
-  }, [conn, currentTeamId, applyChannelsSnapshot, applyDmsSnapshot, loadTasks]);
+  }, [conn, currentTeamId, applyChannelsSnapshot, applyDmsSnapshot, applyTaskSnapshot, loadTasks]);
+
+  useEffect(() => {
+    if (conn !== 'open') return;
+    const channelIds = Array.from(new Set(
+      tasks.map((task) => task.channelId).filter((channelId): channelId is string => Boolean(channelId)),
+    ));
+    if (channelIds.length === 0) return;
+    const refresh = () => { void refreshTaskWorkspaces(tasks); };
+    const unsubscribe = channelIds.map((channelId) => projectEvents().onUpdated(channelId, refresh));
+    return () => { unsubscribe.forEach((stop) => stop()); };
+  }, [conn, tasks, refreshTaskWorkspaces]);
 
   useEffect(() => {
     const next = searchParams.get('view') === 'list' ? 'list' : 'board';
@@ -367,6 +415,21 @@ export default function TasksPage() {
   };
 
   const updateTaskStatus = async (task: Task, status: TaskStatus) => {
+    if (status === task.status) {
+      setStatusMenuFor(null);
+      return;
+    }
+    const workspaceEntry = workspaceEntriesByTaskId[task.id];
+    const governance = workspaceEntry?.governance;
+    const namedManagedTransition = status === 'cancelled'
+      || status === 'closed'
+      || (governance?.nodeKind === 'root'
+        && task.status === 'in_review'
+        && (status === 'done' || status === 'in_progress'));
+    if (!allowsDirectTaskMutation(task, workspaceEntry) && !namedManagedTransition) {
+      setStatusMenuFor(null);
+      return;
+    }
     const maxSort = tasks.filter((item) => item.status === status && item.id !== task.id).reduce((max, item) => Math.max(max, item.sortOrder), 0);
     const optimistic = { ...task, status, sortOrder: maxSort + 1, updatedAt: Date.now() };
     setTasks((prev) => prev.map((item) => item.id === task.id ? optimistic : item));
@@ -415,6 +478,7 @@ export default function TasksPage() {
   };
 
   const moveTaskToTop = async (task: Task) => {
+    if (!allowsDirectTaskMutation(task, workspaceEntriesByTaskId[task.id])) return;
     const sameStatus = tasks.filter((item) => item.status === task.status && item.id !== task.id);
     const nextSortOrder = sameStatus.length > 0
       ? Math.min(...sameStatus.map((item) => item.sortOrder)) - 1
@@ -428,6 +492,8 @@ export default function TasksPage() {
   };
 
   const deleteTask = async (taskId: string) => {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!task || !allowsDirectTaskMutation(task, workspaceEntriesByTaskId[taskId])) return;
     const previousTasks = tasks;
     setTasks((prev) => prev.filter((task) => task.id !== taskId));
     const res = await taskEvents().delete(taskId);
@@ -448,7 +514,6 @@ export default function TasksPage() {
         title: createTitle.trim(),
         description: createDescription.trim() || undefined,
         status: 'todo',
-        assigneeId: createAssigneeId || undefined,
         channelId: createChannelId || undefined,
         tags,
       });
@@ -457,7 +522,6 @@ export default function TasksPage() {
         setCreateTitle('');
         setCreateDescription('');
         setCreateTags('');
-        setCreateAssigneeId('');
         setShowCreate(false);
       }
     } finally {
@@ -585,7 +649,7 @@ export default function TasksPage() {
         </div>
 
         {showCreate && (
-          <form data-smoke="tasks-create-form" onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(160px,1fr)_minmax(180px,1.4fr)_150px_150px_minmax(120px,0.8fr)_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
+          <form data-smoke="tasks-create-form" onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(160px,1fr)_minmax(180px,1.4fr)_150px_minmax(120px,0.8fr)_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
             <Field label="标题">
               <input data-smoke="tasks-create-title" value={createTitle} onChange={(e) => setCreateTitle(e.target.value)} autoFocus placeholder="任务标题" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
             </Field>
@@ -596,12 +660,6 @@ export default function TasksPage() {
               <select data-smoke="tasks-create-channel" value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
                 <option value="">无频道</option>
                 {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-              </select>
-            </Field>
-            <Field label="执行人">
-              <select value={createAssigneeId} onChange={(e) => setCreateAssigneeId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
-                <option value="">未分配</option>
-                {participants.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
               </select>
             </Field>
             <Field label="标签">
@@ -626,6 +684,7 @@ export default function TasksPage() {
             dragId={dragId}
             collapsedColumns={collapsedColumns}
             statusMenuFor={statusMenuFor}
+            workspaceEntriesByTaskId={workspaceEntriesByTaskId}
             onOpen={openTaskThread}
             onDragStart={setDragId}
             onDragEnd={() => setDragId(null)}
@@ -645,6 +704,7 @@ export default function TasksPage() {
             loading={loading}
             collapsedColumns={collapsedColumns}
             statusMenuFor={statusMenuFor}
+            workspaceEntriesByTaskId={workspaceEntriesByTaskId}
             onOpen={openTaskThread}
             onToggleColumn={(status) => setCollapsedColumns((prev) => toggleSet(prev, status))}
             onMove={updateTaskStatus}
@@ -716,6 +776,7 @@ function TaskBoard({
   dragId,
   collapsedColumns,
   statusMenuFor,
+  workspaceEntriesByTaskId,
   onOpen,
   onDragStart,
   onDragEnd,
@@ -735,6 +796,7 @@ function TaskBoard({
   dragId: string | null;
   collapsedColumns: Set<TaskStatus>;
   statusMenuFor: string | null;
+  workspaceEntriesByTaskId: Record<string, ChannelTaskWorkspaceEntryV1>;
   onOpen: (task: Task) => void;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
@@ -762,7 +824,9 @@ function TaskBoard({
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={() => {
                   const task = allTasks.find((item) => item.id === dragId);
-                  if (task) onMove(task, column.id);
+                  if (task && allowsDirectTaskMutation(task, workspaceEntriesByTaskId[task.id])) {
+                    onMove(task, column.id);
+                  }
                   onDragEnd();
                 }}
               >
@@ -775,6 +839,7 @@ function TaskBoard({
                     currentUserId={currentUserId}
                     number={taskNumbers.get(task.id) ?? 1}
                     statusMenuOpen={statusMenuFor === task.id}
+                    workspaceEntry={workspaceEntriesByTaskId[task.id]}
                     onOpen={() => onOpen(task)}
                     onDragStart={() => onDragStart(task.id)}
                     onDragEnd={onDragEnd}
@@ -807,6 +872,7 @@ function TaskList({
   loading,
   collapsedColumns,
   statusMenuFor,
+  workspaceEntriesByTaskId,
   onOpen,
   onToggleColumn,
   onMove,
@@ -822,6 +888,7 @@ function TaskList({
   loading: boolean;
   collapsedColumns: Set<TaskStatus>;
   statusMenuFor: string | null;
+  workspaceEntriesByTaskId: Record<string, ChannelTaskWorkspaceEntryV1>;
   onOpen: (task: Task) => void;
   onToggleColumn: (status: TaskStatus) => void;
   onMove: (task: Task, status: TaskStatus) => void;
@@ -853,6 +920,7 @@ function TaskList({
                       currentUserId={currentUserId}
                       number={taskNumbers.get(task.id) ?? 1}
                       statusMenuOpen={statusMenuFor === task.id}
+                      workspaceEntry={workspaceEntriesByTaskId[task.id]}
                       onOpen={() => onOpen(task)}
                       onMove={(status) => onMove(task, status)}
                       onReorderTop={() => onReorderTop(task)}
@@ -882,6 +950,7 @@ function TaskCard(props: {
   currentUserId?: string;
   number: number;
   statusMenuOpen: boolean;
+  workspaceEntry?: ChannelTaskWorkspaceEntryV1;
   onOpen: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -891,18 +960,22 @@ function TaskCard(props: {
   onStatusMenu: (open: boolean) => void;
 }) {
   const channelName = channelLabel(props.task.channelId, props.channels);
+  const directMutationAllowed = allowsDirectTaskMutation(props.task, props.workspaceEntry);
+  const managed = props.workspaceEntry?.governance.mode === 'managed';
   return (
-    <article data-smoke="task-card" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} draggable onClick={props.onOpen} onDragStart={props.onDragStart} onDragEnd={props.onDragEnd} className="group cursor-pointer rounded-md border border-neutral-200 bg-white p-3 shadow-sm transition-colors hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing">
+    <article data-smoke="task-card" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} data-governance={managed ? 'managed' : directMutationAllowed ? 'plain' : 'loading'} draggable={directMutationAllowed} onClick={props.onOpen} onDragStart={directMutationAllowed ? props.onDragStart : undefined} onDragEnd={props.onDragEnd} className="group cursor-pointer rounded-md border border-neutral-200 bg-white p-3 shadow-sm transition-colors hover:border-neutral-300 hover:bg-neutral-50 active:cursor-grabbing">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[11px] font-medium text-neutral-400">{channelName} #{props.number}</div>
           <div className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-5 text-neutral-900">{props.task.title}</div>
         </div>
-        <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} />
+        {directMutationAllowed
+          ? <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} />
+          : <span className="shrink-0 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700">{managed ? '流程受管' : '治理加载中'}</span>}
       </div>
       {props.task.description && <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{props.task.description}</div>}
       <TaskMeta task={props.task} participants={props.participants} currentUserId={props.currentUserId} />
-      <StatusButton task={props.task} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} />
+      <StatusButton task={props.task} workspaceEntry={props.workspaceEntry} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} />
     </article>
   );
 }
@@ -914,14 +987,17 @@ function TaskRow(props: {
   currentUserId?: string;
   number: number;
   statusMenuOpen: boolean;
+  workspaceEntry?: ChannelTaskWorkspaceEntryV1;
   onOpen: () => void;
   onMove: (status: TaskStatus) => void;
   onReorderTop: () => void;
   onDelete: () => void;
   onStatusMenu: (open: boolean) => void;
 }) {
+  const directMutationAllowed = allowsDirectTaskMutation(props.task, props.workspaceEntry);
+  const managed = props.workspaceEntry?.governance.mode === 'managed';
   return (
-    <article data-smoke="task-row" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_64px] items-center gap-3 bg-white px-3 py-2 transition-colors hover:bg-neutral-50">
+    <article data-smoke="task-row" data-task-id={props.task.id} data-task-title={props.task.title} data-task-status={props.task.status} data-task-sort-order={props.task.sortOrder} data-governance={managed ? 'managed' : directMutationAllowed ? 'plain' : 'loading'} onClick={props.onOpen} className="group grid cursor-pointer grid-cols-[minmax(220px,1fr)_180px_140px_120px_64px] items-center gap-3 bg-white px-3 py-2 transition-colors hover:bg-neutral-50">
       <div className="min-w-0">
         <div className="truncate text-[11px] font-medium text-neutral-400">{channelLabel(props.task.channelId, props.channels)} #{props.number}</div>
         <div className="truncate text-sm font-semibold text-neutral-900">{props.task.title}</div>
@@ -929,8 +1005,10 @@ function TaskRow(props: {
       </div>
       <div className="truncate text-xs text-neutral-600">{participantName(props.task.creatorId, props.participants, props.currentUserId)}</div>
       <div className="truncate text-xs text-neutral-600">{props.task.assigneeId ? participantName(props.task.assigneeId, props.participants, props.currentUserId) : '未分配'}</div>
-      <StatusButton task={props.task} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} compact />
-      <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} compact />
+      <StatusButton task={props.task} workspaceEntry={props.workspaceEntry} open={props.statusMenuOpen} onOpen={props.onStatusMenu} onMove={props.onMove} compact />
+      {directMutationAllowed
+        ? <TaskActionButtons onReorderTop={props.onReorderTop} onDelete={props.onDelete} compact />
+        : <span className="text-[10px] font-semibold text-violet-700">{managed ? '流程受管' : '治理加载中'}</span>}
     </article>
   );
 }
@@ -984,18 +1062,31 @@ function TaskMeta({ task, participants, currentUserId }: { task: Task; participa
   );
 }
 
-function StatusButton({ task, open, compact, onOpen, onMove }: { task: Task; open: boolean; compact?: boolean; onOpen: (open: boolean) => void; onMove: (status: TaskStatus) => void }) {
+function StatusButton({ task, workspaceEntry, open, compact, onOpen, onMove }: { task: Task; workspaceEntry?: ChannelTaskWorkspaceEntryV1; open: boolean; compact?: boolean; onOpen: (open: boolean) => void; onMove: (status: TaskStatus) => void }) {
   const status = STATUS_BY_ID[task.status];
+  const managed = workspaceEntry?.governance.mode === 'managed';
+  const governancePending = Boolean(task.channelId) && !workspaceEntry;
+  const options = governancePending
+    ? []
+    : managed
+    ? STATUS_COLUMNS.filter((column) => (
+        column.id === 'cancelled'
+        || column.id === 'closed'
+        || (workspaceEntry.governance.nodeKind === 'root'
+          && task.status === 'in_review'
+          && (column.id === 'done' || column.id === 'in_progress'))
+      ) && column.id !== task.status)
+    : STATUS_COLUMNS;
   return (
     <div className={`relative inline-block ${compact ? '' : 'mt-3'}`} onClick={(event) => event.stopPropagation()}>
-      <button data-smoke="task-status-trigger" onClick={() => onOpen(!open)} className={`inline-flex h-7 items-center gap-1.5 rounded border px-2 text-xs font-semibold ${status.badge}`}>
+      <button data-smoke="task-status-trigger" disabled={options.length === 0} onClick={() => onOpen(!open)} className={`inline-flex h-7 items-center gap-1.5 rounded border px-2 text-xs font-semibold disabled:cursor-default ${status.badge}`}>
         <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
         {status.label}
-        <ChevronDown size={12} />
+        {options.length > 0 && <ChevronDown size={12} />}
       </button>
-      {open && (
+      {open && options.length > 0 && (
         <div className={`absolute left-0 top-8 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
-          {STATUS_COLUMNS.map((column) => (
+          {options.map((column) => (
             <button key={column.id} data-smoke={`task-status-option-${column.id}`} onClick={() => onMove(column.id)} className={TASK_STATUS_MENU_ITEM_CLASS}>
               <span className={`${TASK_STATUS_MENU_DOT_CLASS} ${column.dot}`} />
               <span className={TASK_STATUS_MENU_LABEL_CLASS}>{column.menuLabel}</span>
@@ -1006,6 +1097,10 @@ function StatusButton({ task, open, compact, onOpen, onMove }: { task: Task; ope
       )}
     </div>
   );
+}
+
+function allowsDirectTaskMutation(task: Task, workspaceEntry?: ChannelTaskWorkspaceEntryV1): boolean {
+  return !task.channelId || workspaceEntry?.governance.mode === 'plain';
 }
 
 function FilterButton({
@@ -1357,16 +1452,32 @@ function TaskOutputPackageSummary({
   const [pendings, setPendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
   useEffect(() => {
     let active = true;
+    let requestId = 0;
     setPackages([]);
     setPendings([]);
-    void projectEvents().listOutputPackages({ channelId, taskId }).then((result) => {
-      if (!active) return;
+    const project = projectEvents();
+    const load = async () => {
+      const currentRequestId = ++requestId;
+      const result = await project.listOutputPackages({ channelId, taskId });
+      if (!active || currentRequestId !== requestId) return;
       const next = result.ok ? result.packages ?? [] : [];
       setPackages(next);
       setPendings(result.ok ? result.pendingDeliveries ?? [] : []);
       onPackages?.(next);
+    };
+    void load();
+    const refresh = () => { void load(); };
+    const stopProject = project.onUpdated(channelId, refresh);
+    const stopArtifacts = project.onArtifactsUpdated(channelId, refresh);
+    const stopTasks = taskEvents().onSnapshot((tasks) => {
+      if (tasks.some((task) => task.id === taskId && task.channelId === channelId)) refresh();
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      stopProject();
+      stopArtifacts();
+      stopTasks();
+    };
     // onPackages 由父组件 useCallback 包裹，taskId 变化时随任务切换重置。
   }, [teamId, channelId, taskId, onPackages]);
   return (

@@ -7,7 +7,7 @@ import type {
   TaskLevelAction,
   TaskLevelAvailableActionDto,
 } from '@agentbean/contracts';
-import { projectEvents } from '@/lib/socket';
+import { projectEvents, taskEvents } from '@/lib/socket';
 // #1065 AC11：与 Chat 卡片/Files 列表共享同一组文本标签。
 import { reviewStateLabel, timelineKindLabel } from '@/lib/delivery-labels';
 
@@ -46,30 +46,48 @@ export function TaskDeliveryOverview({
 
   useEffect(() => {
     let alive = true;
+    let requestId = 0;
     setLoading(true);
     setError(null);
     if (!channelId) {
       setLoading(false);
       return () => { alive = false; };
     }
-    projectEvents()
-      .queryTaskDeliveryOverview({ channelId, taskId })
+    const project = projectEvents();
+    const load = (showLoading: boolean) => {
+      const currentRequestId = ++requestId;
+      if (showLoading) setLoading(true);
+      return project.queryTaskDeliveryOverview({ channelId, taskId })
       .then((result) => {
-        if (!alive) return;
+        if (!alive || currentRequestId !== requestId) return;
         if (result.ok && result.overview) {
           setOverview(result.overview);
+          setError(null);
         } else {
           setError(result.message ?? '交付视图暂不可用');
         }
         setLoading(false);
       })
       .catch(() => {
-        if (!alive) return;
+        if (!alive || currentRequestId !== requestId) return;
         setError('交付视图暂不可用');
         setLoading(false);
       });
-    return () => { alive = false; };
-  }, [channelId, taskId]);
+    };
+    void load(true);
+    const refresh = () => { void load(false); };
+    const stopProject = project.onUpdated(channelId, refresh);
+    const stopArtifacts = project.onArtifactsUpdated(channelId, refresh);
+    const stopTasks = taskEvents().onSnapshot((tasks) => {
+      if (tasks.some((task) => task.id === taskId && task.channelId === channelId)) refresh();
+    });
+    return () => {
+      alive = false;
+      stopProject();
+      stopArtifacts();
+      stopTasks();
+    };
+  }, [teamId, channelId, taskId]);
 
   if (loading) {
     return <div className="text-center text-[11px] text-neutral-400" data-smoke="task-delivery-loading">正在读取交付视图…</div>;

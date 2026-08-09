@@ -298,6 +298,8 @@ export const WEB_EVENTS = {
     rejectRootDelivery: 'task:reject-root-delivery',
     /** #1065 AC3/AC4：Task 交付聚合视图(目标/acceptance/焦点/availableActions/时间线)。 */
     deliveryOverview: 'task:delivery-overview',
+    /** 频道 Tasks 标签单次读取 Server 权威卡片投影，避免逐卡 N+1。 */
+    channelWorkspace: 'task:channel-workspace',
     snapshot: 'tasks:snapshot',
     updated: 'task:updated',
   },

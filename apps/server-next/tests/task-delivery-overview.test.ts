@@ -475,5 +475,46 @@ for (const variant of variants) {
       expect(wrongChannel.ok).toBe(false);
       if (!wrongChannel.ok) expect(wrongChannel.error).toBe('NOT_FOUND');
     });
+
+    test('频道任务工作区一次返回受管与普通任务的 Server 治理投影', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const managedTaskId = 'task-workspace-managed';
+      await seedTask(seedValue, managedTaskId, { status: 'in_progress' });
+      await seedClaim(seedValue, managedTaskId, 'claim-workspace', 'active');
+      const plainTaskId = 'task-workspace-plain';
+      await seedValue.repositories.tasks.create({
+        id: plainTaskId, teamId: seedValue.teamId, title: 'plain', status: 'todo',
+        creatorId: seedValue.userId, channelId: seedValue.channelId, tags: [], sortOrder: 1,
+        createdAt: 1, updatedAt: 1,
+      });
+
+      const result = await seedValue.app.queryChannelTaskWorkspace({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.workspace.schemaVersion).toBe(1);
+      expect(result.workspace.audienceScope).toBe(`${seedValue.teamId}:${seedValue.channelId}:${seedValue.userId}`);
+      const managed = result.workspace.entries.find((entry) => entry.task.id === managedTaskId)!;
+      expect(managed.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['task_coordination'],
+        allowDirectStatusMutation: false,
+        allowDirectAssigneeMutation: false,
+        allowDirectDelete: false,
+      });
+      expect(managed.responsibilityFocus).toMatchObject({
+        kind: 'execution_active', claimLeaseId: 'claim-workspace', agentId: seedValue.agentId,
+      });
+      const plain = result.workspace.entries.find((entry) => entry.task.id === plainTaskId)!;
+      expect(plain.governance).toMatchObject({
+        mode: 'plain', sources: [], allowDirectStatusMutation: true,
+        allowDirectAssigneeMutation: true, allowDirectDelete: true,
+      });
+      expect(plain.responsibilityFocus.kind).toBe('none');
+    });
   });
 }

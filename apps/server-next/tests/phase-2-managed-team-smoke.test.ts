@@ -279,6 +279,41 @@ describe('Phase 3 managed 真实双 Agent / 跨 Task Memory smoke', () => {
       status: 'merged', mergedIntoMemoryId: expect.any(String),
     } } });
 
+    // Tasks 标签页必须消费同一条 Server 权威链路，不能靠 status / assignee 猜测治理状态。
+    const workspace = await authenticatedWebSocket.emitWithAck(WEB_EVENTS.task.channelWorkspace, {
+      token, userId, teamId, channelId,
+    }) as { ok: boolean; workspace: { entries: Array<{
+      task: { id: string; status: string };
+      governance: { mode: string; sources: string[]; nodeKind?: string; allowDirectStatusMutation: boolean; allowDirectDelete: boolean };
+      responsibilityFocus: { kind: string };
+    }> } };
+    expect(workspace.ok).toBe(true);
+    expect(workspace.workspace.entries.find((entry) => entry.task.id === sent.task!.id)).toMatchObject({
+      task: { status: 'in_review' },
+      governance: {
+        mode: 'managed', sources: ['management_run', 'task_coordination'], nodeKind: 'root',
+        allowDirectStatusMutation: false, allowDirectDelete: false,
+      },
+      responsibilityFocus: { kind: 'review_wait' },
+    });
+    for (const taskId of [managerState.openTaskId!, managerState.targetedTaskId!]) {
+      expect(workspace.workspace.entries.find((entry) => entry.task.id === taskId)).toMatchObject({
+        task: { status: 'done' },
+        governance: {
+          mode: 'managed', sources: ['task_coordination'], nodeKind: 'subtask',
+          allowDirectStatusMutation: false, allowDirectDelete: false,
+        },
+      });
+      const detail = await authenticatedWebSocket.emitWithAck(WEB_EVENTS.task.deliveryOverview, {
+        token, userId, teamId, channelId, taskId,
+      }) as { ok: boolean; overview: { timeline: Array<{ kind: string }> } };
+      expect(detail.ok).toBe(true);
+      // 自动 acquire 不额外制造显式 Offer response；主动 respond 的路径才包含 acceptance。
+      expect(detail.overview.timeline.map((event) => event.kind)).toEqual(expect.arrayContaining([
+        'offer', 'claim', 'delivery',
+      ]));
+    }
+
     const dag = await webSocket.emitWithAck(WEB_EVENTS.task.dag, {
       userId, teamId, rootTaskId: sent.task!.id,
     }) as { ok: boolean; dag: { rootTaskId: string; nodes: Array<{

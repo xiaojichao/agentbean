@@ -9,22 +9,35 @@
  */
 import React from 'react';
 import { cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const mocks = vi.hoisted(() => ({
   queryTaskDeliveryOverview: vi.fn(),
+  onUpdated: vi.fn(),
+  onArtifactsUpdated: vi.fn(),
+  onSnapshot: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
-  projectEvents: () => ({ queryTaskDeliveryOverview: mocks.queryTaskDeliveryOverview }),
+  projectEvents: () => ({
+    queryTaskDeliveryOverview: mocks.queryTaskDeliveryOverview,
+    onUpdated: mocks.onUpdated,
+    onArtifactsUpdated: mocks.onArtifactsUpdated,
+  }),
+  taskEvents: () => ({ onSnapshot: mocks.onSnapshot }),
 }));
 
 import { TaskDeliveryOverview } from '../components/TaskDeliveryOverview';
 import type { TaskDeliveryOverviewV1 } from '@agentbean/contracts';
 
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+beforeEach(() => {
+  mocks.onUpdated.mockReturnValue(() => {});
+  mocks.onArtifactsUpdated.mockReturnValue(() => {});
+  mocks.onSnapshot.mockReturnValue(() => {});
+});
 
 const overviewFixture: TaskDeliveryOverviewV1 = {
   schemaVersion: 1,
@@ -75,6 +88,27 @@ const overviewFixture: TaskDeliveryOverviewV1 = {
 };
 
 describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
+  test('项目、产物或任务事实更新时重新读取 Server 投影', async () => {
+    let artifactRefresh: (() => void) | undefined;
+    let taskRefresh: ((tasks: Array<{ id: string; channelId?: string }>) => void) | undefined;
+    mocks.onArtifactsUpdated.mockImplementation((_channelId, handler) => {
+      artifactRefresh = handler;
+      return () => {};
+    });
+    mocks.onSnapshot.mockImplementation((handler) => {
+      taskRefresh = handler;
+      return () => {};
+    });
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({ ok: true, overview: overviewFixture });
+    render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(1));
+
+    artifactRefresh?.();
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
+    taskRefresh?.([{ id: 'task-1', channelId: 'ch-1' }]);
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(3));
+  });
+
   test('渲染责任焦点/验收约定/当前交付/availableActions/执行链(文本标签)', async () => {
     mocks.queryTaskDeliveryOverview.mockResolvedValue({ ok: true, overview: overviewFixture });
     render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);

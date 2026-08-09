@@ -506,7 +506,7 @@ describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
     }
   });
 
-  test.each(usecaseBackends)('invalidates invocation sources bound to a deleted task (%s)', async (_backend, createBackend) => {
+  test.each(usecaseBackends)('keeps invocation sources when managed task deletion is rejected (%s)', async (_backend, createBackend) => {
     const { repositories, close } = createBackend();
     try {
     let counter = 0;
@@ -557,8 +557,11 @@ describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
       sources: [{ sourceKind: 'invocation', sourceId: 'invocation-task-delete' }],
     });
 
-    await app.deleteTask({ userId, teamId, taskId });
-    expect(await getStatus(repositories, teamId, 'mem-task-invocation')).toBe('expired');
+    await expect(app.deleteTask({ userId, teamId, taskId })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    expect(await getStatus(repositories, teamId, 'mem-task-invocation')).toBe('active');
     } finally {
       close();
     }

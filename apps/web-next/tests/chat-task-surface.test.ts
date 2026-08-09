@@ -54,4 +54,35 @@ describe('chat task surface', () => {
     expect(threadPanel).toContain('taskId={rootTaskId}');
     expect(threadPanel).toContain('threadId={root.id}');
   });
+
+  test('频道任务详情复用 Server Task DAG 投影', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('function TaskDetailPanel');
+    const end = source.indexOf('function ThreadPanel', start);
+    const detailPanel = source.slice(start, end);
+
+    expect(detailPanel).toContain('taskEvents().getDag(detailTaskId)');
+    expect(detailPanel).toContain('acceptTaskDagSnapshot(current, result.dag)');
+    expect(detailPanel).toContain('<TaskDagPanel');
+    expect(detailPanel).toContain('此任务未进入 Phase 2 协作。');
+    expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");
+    expect(detailPanel).toContain('仅显示当前可用的具名流程操作');
+  });
+
+  test('有关联消息的任务深链保留显式 Tasks / Files 主区', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('const nextTaskMessageId = parseScopedMessageId(taskParam, activeChannel);');
+    const end = source.indexOf('}, [activeChannel, chatTabParam, taskParam]);', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const taskParamEffect = source.slice(start, end);
+    expect(taskParamEffect).toContain("if (chatTabParam !== 'tasks' && chatTabParam !== 'files') setTab('chat');");
+  });
+
+  test('公开频道任务投影补齐当前用户，并让任务详情复用同一参与者集合', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    expect(source).toContain("!channelMembers.some((member) => member.kind === 'human' && member.id === currentUser.id)");
+    expect(source).toContain('channelMembers={taskParticipants}');
+  });
 });
