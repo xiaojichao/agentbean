@@ -152,7 +152,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
     expect(screen.getByText('F1 第1集剧本.md')).toBeTruthy();
     expect(screen.getByText('F2 角色表.md')).toBeTruthy();
-    expect(screen.getByText('Markdown 源文')).toBeTruthy();
+    expect(await screen.findByText('Markdown 源文')).toBeTruthy();
     expect(screen.getByText('Markdown 预览')).toBeTruthy();
     expect(screen.getByText('实时预览')).toBeTruthy();
     expect((await screen.findByTestId('rendered-markdown')).textContent).toBe('# 温暖的一步');
