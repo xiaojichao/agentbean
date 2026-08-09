@@ -475,5 +475,128 @@ for (const variant of variants) {
       expect(wrongChannel.ok).toBe(false);
       if (!wrongChannel.ok) expect(wrongChannel.error).toBe('NOT_FOUND');
     });
+
+    test('频道任务工作区一次返回受管与普通任务的 Server 治理投影', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const managedTaskId = 'task-workspace-managed';
+      await seedTask(seedValue, managedTaskId, { status: 'in_progress' });
+      await seedClaim(seedValue, managedTaskId, 'claim-workspace', 'active');
+      const plainTaskId = 'task-workspace-plain';
+      await seedValue.repositories.tasks.create({
+        id: plainTaskId, teamId: seedValue.teamId, title: 'plain', status: 'todo',
+        creatorId: seedValue.userId, channelId: seedValue.channelId, tags: [], sortOrder: 1,
+        createdAt: 1, updatedAt: 1,
+      });
+
+      const result = await seedValue.app.queryChannelTaskWorkspace({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.workspace.schemaVersion).toBe(1);
+      expect(result.workspace.audienceScope).toBe(`${seedValue.teamId}:${seedValue.channelId}:${seedValue.userId}`);
+      const managed = result.workspace.entries.find((entry) => entry.task.id === managedTaskId)!;
+      expect(managed.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['task_coordination'],
+        allowDirectStatusMutation: false,
+        allowDirectAssigneeMutation: false,
+        allowDirectDelete: false,
+      });
+      expect(managed.responsibilityFocus).toMatchObject({
+        kind: 'execution_active', claimLeaseId: 'claim-workspace', agentId: seedValue.agentId,
+      });
+      const plain = result.workspace.entries.find((entry) => entry.task.id === plainTaskId)!;
+      expect(plain.governance).toMatchObject({
+        mode: 'plain', sources: [], allowDirectStatusMutation: true,
+        allowDirectAssigneeMutation: true, allowDirectDelete: true,
+      });
+      expect(plain.responsibilityFocus.kind).toBe('none');
+    });
+
+    test('频道任务工作区在 Stage 灰度关闭后仍保留已持久化的治理约束', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-workspace-persisted-stage';
+      await seedValue.repositories.tasks.create({
+        id: taskId, teamId: seedValue.teamId, title: 'persisted stage', status: 'todo',
+        creatorId: seedValue.userId, channelId: seedValue.channelId, tags: [], sortOrder: 0,
+        createdAt: 1, updatedAt: 1,
+      });
+      const profile = {
+        id: 'profile-workspace-persisted-stage',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        projectLeadId: seedValue.userId,
+        defaultReviewerIds: [seedValue.userId],
+        revision: 1,
+        createdBy: seedValue.userId,
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      const stage = {
+        id: 'stage-workspace-persisted-stage',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        taskId,
+        taskRevision: 1,
+        name: '持久化阶段',
+        goal: '灰度回退后仍保持治理',
+        ownerId: seedValue.userId,
+        reviewerIds: [seedValue.userId],
+        acceptanceCriteria: ['保持只读治理'],
+        createdAt: 1,
+        updatedAt: 1,
+      };
+      await seedValue.repositories.channelProjects.createInitialStage({
+        expectedRevision: 0,
+        profile,
+        stage,
+        mutation: {
+          teamId: seedValue.teamId,
+          channelId: seedValue.channelId,
+          idempotencyKey: 'persisted-stage-workspace',
+          requestFingerprint: 'persisted-stage-workspace',
+          profileId: profile.id,
+          stageId: stage.id,
+          resultRevision: 1,
+          resultOverview: {} as never,
+          createdAt: 1,
+        },
+      });
+      const rollbackApp = createServerNextUseCases({
+        repositories: seedValue.repositories,
+        clock: { now: () => 1_000 },
+        ids: { nextId: () => 'unused' },
+        projectCollaborationRollout: {
+          projectStage: false,
+          reviewFinalization: false,
+          bundleSelection: false,
+          inputSetOutput: false,
+          managerAutoAdvance: false,
+        },
+      });
+
+      const result = await rollbackApp.queryChannelTaskWorkspace({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      const entry = result.workspace.entries.find((item) => item.task.id === taskId)!;
+      expect(entry.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['project_stage'],
+        allowDirectStatusMutation: false,
+        allowDirectAssigneeMutation: false,
+        allowDirectDelete: false,
+      });
+      expect(entry.review.reviewerIds).toEqual([seedValue.userId]);
+      expect(entry.stage).toBeUndefined();
+    });
   });
 }

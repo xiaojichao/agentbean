@@ -13,7 +13,7 @@
 import type { ID, UnixMs } from './common.js';
 import type { ConsistencyTokenV1 } from './system-activity.js';
 import type { TaskDto } from './task.js';
-import type { ProjectStageDto } from './project.js';
+import type { ProjectArtifactReviewDecision, ProjectStageDto } from './project.js';
 import type { OutputPackageSummaryDto, OutputPackagePendingDeliveryDto } from './output-package.js';
 
 export const TASK_DELIVERY_OVERVIEW_SCHEMA_VERSION = 1;
@@ -128,5 +128,56 @@ export interface TaskDeliveryOverviewV1 {
 export interface QueryTaskDeliveryOverviewInputV1 {
   readonly channelId: ID;
   readonly taskId: ID;
+  readonly minimumConsistency?: ConsistencyTokenV1;
+}
+
+/**
+ * 频道任务卡片投影。受管状态只由 Server 的 management / coordination / ProjectStage 事实判定，
+ * Web 不根据 assignee、tag 或 task status 猜测。
+ */
+export interface ChannelTaskWorkspaceEntryV1 {
+  readonly schemaVersion: 1;
+  readonly task: TaskDto;
+  readonly governance: {
+    readonly mode: 'plain' | 'managed';
+    readonly sources: readonly ('management_run' | 'task_coordination' | 'project_stage')[];
+    readonly nodeKind?: 'root' | 'subtask';
+    readonly allowDirectStatusMutation: boolean;
+    readonly allowDirectAssigneeMutation: boolean;
+    readonly allowDirectDelete: boolean;
+  };
+  readonly responsibilityFocus: TaskResponsibilityFocusV1;
+  readonly stage?: ProjectStageDto;
+  readonly delivery: {
+    readonly packageCount: number;
+    readonly pendingDeliveryCount: number;
+    readonly focusPackageId?: ID;
+    readonly focusMemberCount?: number;
+    readonly focusReviewState?: OutputPackageSummaryDto['reviewState'];
+  };
+  readonly review: {
+    readonly reviewerIds: readonly ID[];
+    readonly latest?: {
+      readonly reviewId: ID;
+      readonly reviewedBy: ID;
+      readonly decision: ProjectArtifactReviewDecision;
+      readonly comment: string;
+      readonly createdAt: UnixMs;
+    };
+  };
+}
+
+/** 单次频道查询，避免 Task 看板逐卡请求 delivery overview。 */
+export interface ChannelTaskWorkspaceV1 {
+  readonly schemaVersion: 1;
+  readonly channelId: ID;
+  readonly entries: readonly ChannelTaskWorkspaceEntryV1[];
+  readonly asOf: UnixMs;
+  readonly audienceScope: string;
+  readonly consistencyToken: ConsistencyTokenV1;
+}
+
+export interface QueryChannelTaskWorkspaceInputV1 {
+  readonly channelId: ID;
   readonly minimumConsistency?: ConsistencyTokenV1;
 }

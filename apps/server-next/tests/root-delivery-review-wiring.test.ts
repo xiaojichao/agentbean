@@ -82,6 +82,68 @@ describe('root-delivery review wiring (#995)', () => {
     });
   });
 
+  test('managed root 仅允许 generic metadata 更新，流程字段、排序和删除必须走具名命令', async () => {
+    const harness = await createReviewHarness();
+
+    await expect(harness.app.queryChannelTaskWorkspace({
+      userId: 'user-1', teamId: 'team-1', channelId: 'channel-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      workspace: {
+        entries: [{
+          task: { id: 'root-task' },
+          governance: { mode: 'managed', sources: ['management_run', 'task_coordination'], nodeKind: 'root' },
+        }],
+      },
+    });
+
+    await expect(harness.app.updateTask({
+      userId: 'user-1',
+      teamId: 'team-1',
+      taskId: 'root-task',
+      title: 'Root review renamed',
+      description: '补充验收说明',
+      tags: ['review'],
+    })).resolves.toMatchObject({
+      ok: true,
+      task: {
+        id: 'root-task',
+        title: 'Root review renamed',
+        description: '补充验收说明',
+        tags: ['review'],
+      },
+    });
+
+    for (const changes of [
+      { status: 'todo' as const },
+      { assigneeId: 'user-1' },
+      { sortOrder: 42 },
+    ]) {
+      await expect(harness.app.updateTask({
+        userId: 'user-1',
+        teamId: 'team-1',
+        taskId: 'root-task',
+        ...changes,
+      })).resolves.toMatchObject({
+        ok: false,
+        error: 'CONFLICT',
+        message: expect.stringContaining('named lifecycle commands'),
+      });
+    }
+
+    await expect(harness.app.reorderTask({
+      userId: 'user-1', teamId: 'team-1', taskId: 'root-task', sortOrder: -1,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.app.deleteTask({
+      userId: 'user-1', teamId: 'team-1', taskId: 'root-task',
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+    await expect(harness.repositories.tasks.getById('root-task')).resolves.toMatchObject({
+      title: 'Root review renamed',
+      status: 'in_review',
+      sortOrder: 0,
+    });
+  });
+
   test('非成员禁止 accept/reject', async () => {
     const harness = await createReviewHarness();
     await expect(harness.app.acceptRootDelivery({

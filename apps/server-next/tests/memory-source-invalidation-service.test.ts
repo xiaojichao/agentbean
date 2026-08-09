@@ -506,7 +506,37 @@ describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
     }
   });
 
-  test.each(usecaseBackends)('invalidates invocation sources bound to a deleted task (%s)', async (_backend, createBackend) => {
+  test.each(usecaseBackends)('invalidates task sources bound to a deleted unmanaged task (%s)', async (_backend, createBackend) => {
+    const { repositories, close } = createBackend();
+    try {
+    let counter = 0;
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 3_500 + counter },
+      ids: { nextId: () => `id-${++counter}` },
+    });
+    const registered = await app.registerUser({ username: 'carol', password: 'secret', teamName: 'Team' });
+    if (!registered.ok) throw new Error(`register failed: ${registered.error}`);
+    const userId = registered.user.id;
+    const teamId = registered.currentTeam.id;
+    const channelId = registered.defaultChannel.id;
+    const created = await app.createTask({ userId, teamId, channelId, title: 'temporary task' });
+    if (!created.ok) throw new Error(`task setup failed: ${created.error}`);
+    const taskId = created.task.id;
+    await seedMemory(repositories, {
+      teamId,
+      memoryId: 'mem-unmanaged-task',
+      sources: [{ sourceKind: 'task', sourceId: taskId }],
+    });
+
+    await expect(app.deleteTask({ userId, teamId, taskId })).resolves.toMatchObject({ ok: true });
+    expect(await getStatus(repositories, teamId, 'mem-unmanaged-task')).toBe('expired');
+    } finally {
+      close();
+    }
+  });
+
+  test.each(usecaseBackends)('keeps invocation sources when managed task deletion is rejected (%s)', async (_backend, createBackend) => {
     const { repositories, close } = createBackend();
     try {
     let counter = 0;
@@ -557,8 +587,11 @@ describe('Phase 3 Memory Source Invalidation usecase wiring', () => {
       sources: [{ sourceKind: 'invocation', sourceId: 'invocation-task-delete' }],
     });
 
-    await app.deleteTask({ userId, teamId, taskId });
-    expect(await getStatus(repositories, teamId, 'mem-task-invocation')).toBe('expired');
+    await expect(app.deleteTask({ userId, teamId, taskId })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+    });
+    expect(await getStatus(repositories, teamId, 'mem-task-invocation')).toBe('active');
     } finally {
       close();
     }

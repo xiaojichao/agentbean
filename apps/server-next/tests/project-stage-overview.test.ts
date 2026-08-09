@@ -289,6 +289,16 @@ describe('频道项目首个 Stage 总览', () => {
       error: 'CONFLICT',
       message: expect.stringContaining('Project Stage'),
     });
+    await expect(app.updateTask({
+      userId: 'owner-1', teamId: 'team-1', taskId: 'task-1', status: 'in_progress',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      message: expect.stringContaining('named lifecycle commands'),
+    });
+    await expect(app.reorderTask({
+      userId: 'owner-1', teamId: 'team-1', taskId: 'task-1', sortOrder: -1,
+    })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
     await expect(repositories.tasks.update({
       taskId: 'task-1',
       changes: { channelId: 'channel-2', updatedAt: ++now },

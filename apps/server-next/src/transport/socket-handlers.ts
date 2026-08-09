@@ -1049,6 +1049,10 @@ export function registerWebSocketHandlers(
     authenticatedUser: options.authenticatedUser,
     requireAuthenticatedUser: true,
   });
+  bind(socket, WEB_EVENTS.task.channelWorkspace, app, 'queryChannelTaskWorkspace', undefined, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
 }
 
 export function registerAgentSocketHandlers(

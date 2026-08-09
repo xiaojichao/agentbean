@@ -291,6 +291,7 @@ import { createOutputPackageService, type OutputPackageService } from './output-
 import { readOutputPackageCardMeta } from './output-package-handler.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
 import type {
+  ChannelTaskWorkspaceV1,
   TaskAcceptanceContractV1,
   TaskDeliveryOverviewV1,
   TaskLevelAvailableActionDto,
@@ -715,6 +716,10 @@ export interface ServerNextUseCases {
   queryTaskDeliveryOverview(
     input: { teamId: string; channelId: string; taskId: string; userId: string; minimumConsistency?: ConsistencyTokenV1 },
   ): Promise<Ack<{ overview: TaskDeliveryOverviewV1 }>>;
+  /** 频道 Tasks 标签页的 Server 权威批量卡片投影。 */
+  queryChannelTaskWorkspace(
+    input: { teamId: string; channelId: string; userId: string; minimumConsistency?: ConsistencyTokenV1 },
+  ): Promise<Ack<{ workspace: ChannelTaskWorkspaceV1 }>>;
   /** #1062 基于明确版本保存 Markdown 修订(原子产生新版本并移动 current;stale → 结构化 conflict)。 */
   saveArtifactVersionRevision(input: {
     userId: string;
@@ -9160,6 +9165,138 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ overview });
     },
 
+    async queryChannelTaskWorkspace(workspaceInput) {
+      const { userId, teamId, channelId } = workspaceInput;
+      if (!(await repositories.teams.isMember(teamId, userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, { userId, teamId, channelId });
+      if (!access.ok) return access;
+      const notReady = await ensureOutputPackageConsistency(repositories, workspaceInput.minimumConsistency);
+      if (notReady) return notReady;
+
+      const now = clock.now();
+      const piAutomationAvailable = await resolveProjectPiAutomationAvailable();
+      const [tasks, projectOverview, projectStages, reviews, finalizations, versions, collections] = await Promise.all([
+        repositories.tasks.list({ teamId, channelIds: [channelId], includeGlobal: false }),
+        projectCollaborationRollout.projectStage
+          ? buildChannelProjectOverview(
+            repositories,
+            access.channel,
+            piAutomationAvailable,
+            now,
+            input.resolveProjectStageCandidates,
+          )
+          : Promise.resolve(null),
+        repositories.channelProjects.listStages({ teamId, channelId }),
+        repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
+        repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
+        repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
+        repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
+      ]);
+      const stagesByTaskId = new Map(
+        (projectOverview?.stages ?? []).map((stage) => [stage.task.id, stage] as const),
+      );
+      const stageRecordsByTaskId = new Map(
+        projectStages.map((stage) => [stage.taskId, stage] as const),
+      );
+      const governanceFacts = await Promise.all(
+        tasks.map((task) => Promise.all([
+          repositories.taskCoordination.coordinations.getByTaskId(task.id),
+          repositories.management.runs.getByRootTaskId(task.id),
+        ])),
+      );
+      const entries = await Promise.all(tasks.map(async (task, index) => {
+        const [coordination = null, managementRun = null] = governanceFacts[index] ?? [];
+        const stage = stagesByTaskId.get(task.id);
+        const stageRecord = stageRecordsByTaskId.get(task.id);
+        const overview = await buildTaskDeliveryOverview(repositories, {
+          teamId,
+          channelId,
+          taskId: task.id,
+          userId,
+          now,
+          piAutomationAvailable,
+          includeStage: projectCollaborationRollout.projectStage,
+          ...(input.resolveProjectStageCandidates
+            ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
+            : {}),
+          preloaded: { task, coordination, stage },
+          sharedChannelFacts: { reviews, finalizations, versions, collections },
+        });
+        if (!overview) return null;
+        const sources: Array<'management_run' | 'task_coordination' | 'project_stage'> = [];
+        if (managementRun) sources.push('management_run');
+        if (coordination) sources.push('task_coordination');
+        if (stageRecord) sources.push('project_stage');
+        const managed = sources.length > 0;
+        const taskReviews = reviews
+          .filter((review) => review.taskId === task.id)
+          .sort((left, right) => right.createdAt - left.createdAt);
+        const latestReview = taskReviews[0];
+        const focusPackage = overview.delivery.packages.find(
+          (item) => item.packageId === overview.delivery.focusPackageId,
+        );
+        return {
+          schemaVersion: 1 as const,
+          task: overview.task,
+          governance: {
+            mode: managed ? 'managed' as const : 'plain' as const,
+            sources,
+            ...(coordination
+              ? { nodeKind: coordination.nodeKind }
+              : managementRun ? { nodeKind: 'root' as const } : {}),
+            allowDirectStatusMutation: !managed,
+            allowDirectAssigneeMutation: !managed,
+            allowDirectDelete: !managed,
+          },
+          responsibilityFocus: overview.responsibilityFocus,
+          ...(stage ? { stage } : {}),
+          delivery: {
+            packageCount: overview.delivery.packages.length,
+            pendingDeliveryCount: overview.delivery.pendingDeliveries.length,
+            ...(overview.delivery.focusPackageId ? { focusPackageId: overview.delivery.focusPackageId } : {}),
+            ...(focusPackage ? {
+              focusMemberCount: focusPackage.memberCount,
+              focusReviewState: focusPackage.reviewState,
+            } : {}),
+          },
+          review: {
+            reviewerIds: stage?.reviewerIds ?? stageRecord?.reviewerIds
+              ?? coordination?.humanAcceptanceAuthorityIds ?? [],
+            ...(latestReview ? {
+              latest: {
+                reviewId: latestReview.id,
+                reviewedBy: latestReview.reviewedBy,
+                decision: latestReview.decision,
+                comment: latestReview.comment,
+                createdAt: latestReview.createdAt,
+              },
+            } : {}),
+          },
+        };
+      }));
+      const watermark = await repositories.systemActivity?.watermarks
+        .get(OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, channelId) ?? null;
+      return makeSuccess({
+        workspace: {
+          schemaVersion: 1,
+          channelId,
+          entries: entries.filter((entry): entry is NonNullable<typeof entry> => entry !== null),
+          asOf: now,
+          audienceScope: `${teamId}:${channelId}:${userId}`,
+          consistencyToken: {
+            schemaVersion: 1,
+            entries: [{
+              streamKind: OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
+              streamId: channelId,
+              revision: watermark?.revision ?? 0,
+            }],
+          },
+        },
+      });
+    },
+
     async createProjectDocumentBundle(bundleInput) {
       if (!projectCollaborationRollout.bundleSelection) {
         projectCollaborationMetrics.recordMutationFailure('disabled');
@@ -9777,6 +9914,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           );
         }
       }
+      const protectedMutation = (
+        (taskInput.status !== undefined && taskInput.status !== task.status)
+        || (hasOwn(taskInput, 'assigneeId') && nextAssigneeId !== (task.assigneeId ?? undefined))
+        || (hasOwn(taskInput, 'channelId') && nextChannelId !== (task.channelId ?? undefined))
+        || (taskInput.sortOrder !== undefined && taskInput.sortOrder !== task.sortOrder)
+      );
+      if (protectedMutation && await taskHasManagedGovernance(repositories, task)) {
+        return makeFailure(
+          'CONFLICT',
+          'Managed task workflow fields must use named lifecycle commands',
+        );
+      }
       const updated = await repositories.tasks.update({
         taskId: task.id,
         changes: {
@@ -9828,22 +9977,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (await taskIsBoundToProjectStage(repositories, task)) {
         return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
       }
-      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
-      const deletedInvocationIds = coordination
-        ? (await repositories.management.invocations.listByRun(coordination.managementRunId))
-          .filter((invocation) => invocation.intent.taskContext?.taskId === task.id)
-          .map((invocation) => invocation.id)
-        : [];
+      if (await taskHasManagedGovernance(repositories, task)) {
+        return makeFailure('CONFLICT', 'Managed tasks cannot be deleted; use cancel-task or close-task');
+      }
       const deleted = await repositories.tasks.delete({ taskId: task.id });
       if (!deleted) {
         return makeFailure('NOT_FOUND', 'Task not found');
       }
       await invalidateSourcesAfterDeletion({
         teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
-      });
-      await invalidateSourcesAfterDeletion({
-        teamId: taskInput.teamId, sourceKind: 'invocation', sourceIds: deletedInvocationIds,
-        actorId: taskInput.userId,
       });
       return makeSuccess({ task: deleted });
     },
@@ -10033,6 +10175,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const task = await repositories.tasks.getById(taskInput.taskId);
       if (!task || task.teamId !== taskInput.teamId) {
         return makeFailure('NOT_FOUND', 'Task not found');
+      }
+      if (taskInput.sortOrder !== task.sortOrder && await taskHasManagedGovernance(repositories, task)) {
+        return makeFailure('CONFLICT', 'Managed tasks cannot be reordered directly');
       }
       const updated = await repositories.tasks.update({
         taskId: task.id,
@@ -16686,14 +16831,29 @@ async function buildTaskDeliveryOverview(
     /** #822 阶段功能开关由调用方(闭包内)判定后传入。 */
     includeStage: boolean;
     resolveProjectStageCandidates?: CreateServerNextUseCasesInput['resolveProjectStageCandidates'];
+    /** 频道批量投影预加载的 task/coordination/stage，避免重复读取与重复构建阶段图。 */
+    preloaded?: {
+      task: TaskRecord;
+      coordination: TaskCoordinationRecord | null;
+      stage?: ProjectStageDto;
+    };
+    /** 频道级审核事实由批量查询一次读取；单 Task 查询仍按原路径加载。 */
+    sharedChannelFacts?: {
+      reviews: ProjectArtifactReviewRecord[];
+      finalizations: ProjectArtifactFinalizationRecord[];
+      versions: ProjectArtifactVersionRecord[];
+      collections: ProjectArtifactCollectionRecord[];
+    };
   },
 ): Promise<TaskDeliveryOverviewV1 | null> {
   const { teamId, channelId, taskId } = input;
-  const task = await repositories.tasks.getById(taskId);
+  const task = input.preloaded?.task ?? await repositories.tasks.getById(taskId);
   if (!task || task.teamId !== teamId || (task.channelId !== undefined && task.channelId !== channelId)) {
     return null;
   }
-  const coordination = await repositories.taskCoordination.coordinations.getByTaskId(taskId);
+  const coordination = input.preloaded
+    ? input.preloaded.coordination
+    : await repositories.taskCoordination.coordinations.getByTaskId(taskId);
   const [criteria, offers] = await Promise.all([
     coordination ? repositories.taskCoordination.criteria.list(taskId) : Promise.resolve([]),
     repositories.taskCoordination.offers.listByTask(taskId),
@@ -16719,8 +16879,8 @@ async function buildTaskDeliveryOverview(
   ]);
 
   // stage:该 task 绑定 ProjectStage 时携带(目标/依赖/executionAllowed,AC3)。
-  let stage: ProjectStageDto | undefined;
-  if (input.includeStage) {
+  let stage: ProjectStageDto | undefined = input.preloaded?.stage;
+  if (input.includeStage && !input.preloaded) {
     const channel = await repositories.channels.getById(channelId);
     if (channel && channel.teamId === teamId) {
       const overview = await buildChannelProjectOverview(
@@ -16735,13 +16895,24 @@ async function buildTaskDeliveryOverview(
   }
 
   // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
-  const [reviews, finalizations, versions, deliveries, collections] = await Promise.all([
-    repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
-    repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
-    repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
-    coordination ? repositories.taskCoordination.deliveries.listByTask(taskId) : Promise.resolve([]),
-    repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
-  ]);
+  const deliveriesPromise = coordination
+    ? repositories.taskCoordination.deliveries.listByTask(taskId)
+    : Promise.resolve([]);
+  const [reviews, finalizations, versions, deliveries, collections] = input.sharedChannelFacts
+    ? [
+      input.sharedChannelFacts.reviews,
+      input.sharedChannelFacts.finalizations,
+      input.sharedChannelFacts.versions,
+      await deliveriesPromise,
+      input.sharedChannelFacts.collections,
+    ]
+    : await Promise.all([
+      repositories.channelProjects.listArtifactReviews({ teamId, channelId }),
+      repositories.channelProjects.listArtifactFinalizations({ teamId, channelId }),
+      repositories.channelProjects.listArtifactVersions({ teamId, channelId }),
+      deliveriesPromise,
+      repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
+    ]);
 
   // #1065 AC3：required review coverage——焦点交付包中 final 必需成员数 vs 已达 final 数。
   let requiredReviewCoverage: TaskAcceptanceContractV1['requiredReviewCoverage'] = {
@@ -17784,6 +17955,18 @@ async function taskIsBoundToProjectStage(
     channelId: task.channelId,
   });
   return stages.some((stage) => stage.taskId === task.id);
+}
+
+async function taskHasManagedGovernance(
+  repositories: ServerNextRepositories,
+  task: TaskRecord,
+): Promise<boolean> {
+  const [coordination, managementRun, stageBound] = await Promise.all([
+    repositories.taskCoordination.coordinations.getByTaskId(task.id),
+    repositories.management.runs.getByRootTaskId(task.id),
+    taskIsBoundToProjectStage(repositories, task),
+  ]);
+  return Boolean(coordination || managementRun || stageBound);
 }
 
 /**
