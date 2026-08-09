@@ -84,6 +84,7 @@ describe('chat files surface', () => {
     expect(source).toContain("const focusPackageIdParam = searchParams.get('focusPackageId')");
     expect(source).toContain("const focusPackageRequestParam = searchParams.get('focusPackageRequest')");
     expect(source).toContain("params.set('fileView', 'artifacts')");
+    expect(source).toContain("params.delete('task')");
     expect(source).toContain('focusPackageId={focusPackageIdParam}');
     expect(source).toContain('focusPackageRequestKey={focusPackageRequestParam}');
     expect(source).toContain("setChannelFilesView('artifacts')");

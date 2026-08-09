@@ -2717,6 +2717,9 @@ export default function ChatPage() {
               setTab('files');
               setChannelFilesView('artifacts');
               const params = new URLSearchParams(searchParams.toString());
+              // closeTaskDetail 的 replace 与本次导航相邻；显式删除旧参数，避免这里
+              // 从 stale searchParams 重建 URL 时把 Task 详情再次写回。
+              params.delete('task');
               params.set('chatTab', 'files');
               params.set('fileView', 'artifacts');
               if (focusPackageId) params.set('focusPackageId', focusPackageId);
