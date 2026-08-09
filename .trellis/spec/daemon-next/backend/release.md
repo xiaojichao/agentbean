@@ -48,6 +48,14 @@ CI 在 `:495-496` 守卫：`npm view @agentbean/daemon dist-tags.legacy` 必须�
 
 漏改任何一处，`cutover-audit` 审计会在 CI 挂掉。它校验「npm registry 与 GitHub 配置就绪」，mock 的版本号必须与真实 `package.json` 一致。
 
+## update 自更新链(macOS launchd,#1114 三期实证)
+
+- **bootstrap 悖论**:update-cli 的修复只能被**已安装的新版 updater**执行。验证 update 修复必须连发两版(修复版 + 靶子版),或用 tsx 直接驱动 worktree 的 `runUpdateCli` 打真实系统(`currentPackage` dep 显式声明,免误读 worktree 包)。
+- **子进程必须经 node 显式执行**(`buildAgentBeanSpawn`):npm reify 后 bin.js 可能缺 +x,直接 spawn bin 软链 EACCES 且 stdout/stderr 全空(静音)。`runCommand` 已把 spawn error.message 兜底进 stderr。
+- **bootout 按 plist 路径对无文件 job 永远失败**:job 的 in-memory 注册与 plist 文件可脱节(残留/复活),`adapter.bootout` 按路径失败自动按 label 兜底;fence 卸载以「print 失败」为准,不认 bootout 退出码。
+- **error.log 无时间戳**:update 失败摘要已附当下实况(launchd loaded/running + state.json version/pid),引用历史日志行归因是反模式。
+- **postinstall chmod 755 bin.js**:npm bin-links 的 chmod 时机不可靠(实测同 tarball 两种结果),交互 CLI `agentbean` 依赖此位。
+
 ## 本地模式（bump 版本清单）
 
 1. 改 `apps/daemon-next/package.json` 的 `version`。
