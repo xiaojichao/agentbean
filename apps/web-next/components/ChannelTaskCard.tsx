@@ -6,6 +6,14 @@ import type { ChannelTaskWorkspaceEntryV1, TaskStatus } from '@agentbean/contrac
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import { TASK_STATUS_COLUMNS } from '@/lib/task-status';
 
+export function channelTaskResponsibilityFocusFilterValue(
+  entry: ChannelTaskWorkspaceEntryV1 | undefined,
+): string {
+  if (!entry) return 'unassigned';
+  if (entry.responsibilityFocus.kind === 'review_wait') return 'review_wait';
+  return entry.responsibilityFocus.agentId ?? 'unassigned';
+}
+
 export function ChannelTaskFactSummary({
   entry,
   reviewerLabel,
@@ -38,7 +46,9 @@ export function ChannelTaskFactSummary({
           <span>
             {stage.missingRequiredInputs.length > 0
               ? `缺少输入：${stage.missingRequiredInputs.map((item) => item.label || item.key).join('、')}`
-              : `存在 ${stage.blockingReasons.length || 1} 个执行阻塞点`}
+              : stage.blockingReasons.length > 0
+                ? `存在 ${stage.blockingReasons.length} 个执行阻塞点`
+                : '当前阶段不可执行'}
           </span>
         </div>
       ) : null}

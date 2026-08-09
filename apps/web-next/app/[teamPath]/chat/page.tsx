@@ -35,7 +35,11 @@ import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/componen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
-import { ChannelTaskCard, ChannelTaskFactSummary } from '@/components/ChannelTaskCard';
+import {
+  ChannelTaskCard,
+  ChannelTaskFactSummary,
+  channelTaskResponsibilityFocusFilterValue,
+} from '@/components/ChannelTaskCard';
 import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
 import {
   type PromoteArtifactDraft,
@@ -3451,17 +3455,12 @@ function ConversationTasks({
   );
 
   const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, entry] as const) ?? []);
-  const responsibilityFocusFilterValue = (task: TaskItem): string => {
-    const entry = workspaceEntries.get(task.id);
-    if (entry?.governance.mode === 'managed') {
-      if (entry.responsibilityFocus.kind === 'review_wait') return 'review_wait';
-      return entry.responsibilityFocus.agentId ?? 'unassigned';
-    }
-    return task.assigneeId ?? 'unassigned';
-  };
   const filteredTasks = tasks.filter((task) => {
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
-    if (assigneeFilter !== 'all' && responsibilityFocusFilterValue(task) !== assigneeFilter) return false;
+    if (
+      assigneeFilter !== 'all'
+      && channelTaskResponsibilityFocusFilterValue(workspaceEntries.get(task.id)) !== assigneeFilter
+    ) return false;
     return true;
   });
   const reviewerLabelForEntry = (entry: ChannelTaskWorkspaceEntryV1): string => {

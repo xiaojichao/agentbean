@@ -89,11 +89,11 @@ describe('chat task surface', () => {
   test('频道任务按责任焦点筛选，并让看板和列表共用 Server 事实摘要', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
-    expect(source).toContain("entry?.governance.mode === 'managed'");
-    expect(source).toContain('entry.responsibilityFocus.agentId');
+    expect(source).toContain('channelTaskResponsibilityFocusFilterValue(workspaceEntries.get(task.id))');
+    expect(source).not.toContain("return task.assigneeId ?? 'unassigned'");
     expect(source).toContain('全部责任焦点');
     expect(source).toContain('未产生责任');
-    expect(source).toContain("entry.responsibilityFocus.kind === 'review_wait'");
+    expect(source).toContain('channelTaskResponsibilityFocusFilterValue');
     expect(source).toContain('等待审核');
     expect(source.match(/<ChannelTaskFactSummary/g)?.length).toBeGreaterThanOrEqual(1);
   });
