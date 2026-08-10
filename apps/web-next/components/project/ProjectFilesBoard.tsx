@@ -101,10 +101,10 @@ export interface ProjectFilesBoardProps {
   /** 引用加入主 composer(发送时冻结 ProjectReferenceSet;去重语义由调用方决定)。 */
   onAddReference: (selection: ProjectReferenceSelectionRequestDto) => void;
   /**
-   * 既有 Server 冻结文档包引用区。它不参与左栏三类文件组聚合，避免把
-   * ProjectDocumentBundle 伪装成 ProjectArtifactCollection 或 OutputPackage。
+   * 既有 Server 版本化文档与冻结文档包引用区。它不参与左栏三类文件组聚合，
+   * 避免把 ChannelDocument / ProjectDocumentBundle 伪装成 ArtifactCollection。
    */
-  documentBundleSection?: ReactNode;
+  documentReferenceSection?: ReactNode;
   /**
    * 集合版本行「预览/编辑」(Markdown)与「基于此修改」→ page.tsx 的
    * openArtifactRevisionEditor 流(带 expectedCollectionRevision fence;不复制逻辑)。
@@ -167,7 +167,7 @@ export function ProjectFilesBoard({
   agentNames,
   dataRevision,
   onAddReference,
-  documentBundleSection,
+  documentReferenceSection,
   onOpenRevisionEditor,
   onOpenPackagePreview,
   onOpenReadOnlyArtifact,
@@ -516,9 +516,9 @@ export function ProjectFilesBoard({
           </div>
         )}
       </div>
-      {documentBundleSection ? (
-        <div className="max-h-64 shrink-0 overflow-y-auto border-b border-neutral-200 px-3 pt-3" data-smoke="files-document-bundle-section">
-          {documentBundleSection}
+      {documentReferenceSection ? (
+        <div className="max-h-64 shrink-0 overflow-y-auto border-b border-neutral-200 px-3 pt-3" data-smoke="files-document-reference-section">
+          {documentReferenceSection}
         </div>
       ) : null}
       {showPromote && canPromote && !archived ? (

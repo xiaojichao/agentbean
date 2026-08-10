@@ -47,6 +47,7 @@ import {
   type SubmitArtifactReviewDraft,
 } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
+import { ProjectDocumentList } from '@/components/channel-documents/ProjectDocumentList';
 import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
@@ -402,6 +403,7 @@ export default function ChatPage() {
   const channelFilesRequestRevisionRef = useRef(0);
   const outputPackageProjectionRequestRef = useRef(0);
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
+  const [projectDocuments, setProjectDocuments] = useState<ChannelDocumentDto[]>([]);
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
   // #1060 OutputPackage 投影(Files 面;与讨论串/Task 同一 Server 事实)。
@@ -617,6 +619,7 @@ export default function ChatPage() {
     let active = true;
     setProjectArtifactLibrary(null);
     setChannelProjectOverview(null);
+    setProjectDocuments([]);
     setProjectDocumentBundles([]);
     setProjectDocumentBundlesArchived(false);
     if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') return () => { active = false; };
@@ -625,6 +628,9 @@ export default function ChatPage() {
     });
     void projectEvents().overview(activeChannel).then((result) => {
       if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
+    });
+    void channelEvents().listDocuments(activeChannel).then((result) => {
+      if (active) setProjectDocuments(result.ok ? result.documents ?? [] : []);
     });
     void projectEvents().documentBundles(activeChannel).then((result) => {
       if (!active) return;
@@ -1061,6 +1067,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     return { ok: true as const, revisionId: result.document.currentRevisionId };
   }, [activeChannel, openChannelDocument]);
 
@@ -1104,6 +1112,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     return {
       ok: true as const,
       snapshot: {
@@ -1145,6 +1155,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     appendMessage({
       ...result.message,
       artifacts: [result.document.currentRevision.artifact],
@@ -2645,21 +2657,39 @@ export default function ChatPage() {
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
                 onAddReference={addFilesBoardReference}
-                documentBundleSection={projectDocumentBundles.length > 0 ? (
-                  <ProjectDocumentBundleList
-                    bundles={projectDocumentBundles}
-                    archived={projectDocumentBundlesArchived}
-                    onLoadDetail={loadProjectDocumentBundleDetail}
-                    selections={projectReferenceSelections}
-                    onSelectionChange={(selection, bundleId) => {
-                      setProjectReferenceSelections((current) => [
-                        ...current.filter((item) =>
-                          (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
-                          || item.bundleId !== bundleId),
-                        ...(selection ? [selection] : []),
-                      ]);
-                    }}
-                  />
+                documentReferenceSection={projectDocuments.length > 0 || projectDocumentBundles.length > 0 ? (
+                  <>
+                    <ProjectDocumentList
+                      documents={projectDocuments}
+                      archived={projectDocumentBundlesArchived}
+                      selections={projectReferenceSelections}
+                      onOpenDocument={(documentId) => {
+                        const document = projectDocuments.find((candidate) => candidate.id === documentId);
+                        if (document) void openMarkdownDocumentEditor(document.currentRevision.artifact as Artifact, document.id);
+                      }}
+                      onSelectionChange={(selection, documentId) => {
+                        setProjectReferenceSelections((current) => [
+                          ...current.filter((item) =>
+                            item.kind !== 'document' || item.documentId !== documentId),
+                          ...(selection ? [selection] : []),
+                        ]);
+                      }}
+                    />
+                    <ProjectDocumentBundleList
+                      bundles={projectDocumentBundles}
+                      archived={projectDocumentBundlesArchived}
+                      onLoadDetail={loadProjectDocumentBundleDetail}
+                      selections={projectReferenceSelections}
+                      onSelectionChange={(selection, bundleId) => {
+                        setProjectReferenceSelections((current) => [
+                          ...current.filter((item) =>
+                            (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
+                            || item.bundleId !== bundleId),
+                          ...(selection ? [selection] : []),
+                        ]);
+                      }}
+                    />
+                  </>
                 ) : undefined}
                 onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel })}
                 onOpenPackagePreview={openPackagePreviewModal}

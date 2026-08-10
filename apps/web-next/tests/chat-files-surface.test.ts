@@ -98,9 +98,11 @@ describe('chat files surface', () => {
     expect(source).toContain("if (tab === 'files' && isActiveDm) void loadChannelFiles(true);");
   });
 
-  test('频道逻辑产物板保留 Server 冻结文档包的查看与稳定引用入口', () => {
-    expect(source).toContain('documentBundleSection={projectDocumentBundles.length > 0 ? (');
-    expect(source).toMatch(/documentBundleSection=\{projectDocumentBundles\.length > 0 \? \([\s\S]+?<ProjectDocumentBundleList/);
+  test('频道逻辑产物板保留 Server 版本化文档与冻结文档包的稳定引用入口', () => {
+    expect(source).toContain('documentReferenceSection={projectDocuments.length > 0 || projectDocumentBundles.length > 0 ? (');
+    expect(source).toMatch(/documentReferenceSection=\{projectDocuments\.length > 0 \|\| projectDocumentBundles\.length > 0 \? \([\s\S]+?<ProjectDocumentList/);
+    expect(source).toContain('<ProjectDocumentBundleList');
+    expect(source).toContain('channelEvents().listDocuments(activeChannel)');
     expect(source).toContain('onLoadDetail={loadProjectDocumentBundleDetail}');
     expect(source).toContain('selections={projectReferenceSelections}');
   });
