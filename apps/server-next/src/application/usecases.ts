@@ -17075,7 +17075,8 @@ async function buildTaskDeliveryOverview(
     finalizedCount: 0,
     complete: false,
   };
-  const focusRecord = packageRecords[packageRecords.length - 1];
+  // 仓储契约按 createdAt/packageId 倒序返回；首项才是当前交付。
+  const focusRecord = packageRecords[0];
   if (focusRecord) {
     const projection = await repositories.outputPackages.getPackageById({
       teamId,
@@ -17238,7 +17239,7 @@ async function buildTaskDeliveryOverview(
     delivery: {
       packages,
       pendingDeliveries,
-      ...(packageRecords.length > 0 ? { focusPackageId: packageRecords[packageRecords.length - 1]!.packageId } : {}),
+      ...(focusRecord ? { focusPackageId: focusRecord.packageId } : {}),
     },
     availableActions,
     timeline,

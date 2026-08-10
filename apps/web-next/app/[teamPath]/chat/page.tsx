@@ -87,6 +87,7 @@ import {
   channelTaskEntrySubview,
   channelTasksHistoryMode,
   channelTasksRouteParams,
+  matchingChannelTaskStageId,
   parseChannelTasksSubview,
   resolveChannelTasksSubview,
   type ChannelTasksSubview,
@@ -1842,6 +1843,9 @@ export default function ChatPage() {
   const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : taskDetailOnlyTaskId;
   const taskDetailTask = (taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null)
     ?? (taskDetailOnlyTaskId ? tasks.find((task) => task.id === taskDetailOnlyTaskId) ?? null : null);
+  const taskDetailWorkspaceEntry = taskDetailTask
+    ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
+    : undefined;
   const taskDetailMessages = taskDetailTaskId
     ? uniqueMessages([
         ...(taskDetailMessage
@@ -2874,10 +2878,8 @@ export default function ChatPage() {
           message={taskDetailMessage}
           relatedMessages={taskDetailMessages}
           task={taskDetailTask}
-          workspaceEntry={taskDetailTask
-            ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
-            : undefined}
-          stageId={selectedStageId}
+          workspaceEntry={taskDetailWorkspaceEntry}
+          stageId={matchingChannelTaskStageId(taskDetailWorkspaceEntry, selectedStageId)}
           minimumConsistency={channelTaskWorkspace?.consistencyToken}
           taskNumber={taskDetailTask ? taskNumbers.get(taskDetailTask.id) : undefined}
           agents={agents}

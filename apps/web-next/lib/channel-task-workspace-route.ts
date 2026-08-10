@@ -28,6 +28,14 @@ export function channelTaskEntrySubview(entry: ChannelTaskWorkspaceEntryV1): Cha
   return entry.governance.mode === 'managed' || entry.stage ? 'project' : 'plain';
 }
 
+/** 仅把 URL 中的阶段上下文交给实际绑定该阶段的任务，避免残留 deep link 污染其他任务详情。 */
+export function matchingChannelTaskStageId(
+  entry: ChannelTaskWorkspaceEntryV1 | undefined,
+  selectedStageId: string | null,
+): string | null {
+  return entry?.stage?.id === selectedStageId ? selectedStageId : null;
+}
+
 export function channelTasksRouteParams(
   current: URLSearchParams,
   selection: {

@@ -655,6 +655,48 @@ for (const variant of variants) {
       expect(forbidden).toMatchObject({ ok: false, error: 'FORBIDDEN' });
     });
 
+    test('#1176:同一 Task 多次交付时以最新 OutputPackage 作为审核焦点', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-stage-latest-package';
+      await seedTask(seedValue, taskId, { status: 'in_review' });
+      const stageId = await seedStage(seedValue, taskId);
+
+      await commitDelivery(seedValue, 'pub-stage-old', [
+        { path: 'docs/old.md', body: Buffer.from('old') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+      await commitDelivery(seedValue, 'pub-stage-new', [
+        { path: 'docs/new.md', body: Buffer.from('new') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+      const oldPackage = await seedValue.repositories.outputPackages.getPackageByPublishId({
+        teamId: seedValue.teamId,
+        publishId: 'pub-stage-old',
+      });
+      const newPackage = await seedValue.repositories.outputPackages.getPackageByPublishId({
+        teamId: seedValue.teamId,
+        publishId: 'pub-stage-new',
+      });
+      if (!oldPackage || !newPackage) throw new Error('package not found');
+
+      const result = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+        specifiedProjection: {
+          packageId: newPackage.package.packageId,
+          versions: [],
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.workspace.taskOverview.delivery.focusPackageId).toBe(newPackage.package.packageId);
+      expect(result.workspace.focusPackage?.package.packageId).toBe(newPackage.package.packageId);
+      expect(result.workspace.focusPackage?.package.packageId).not.toBe(oldPackage.package.packageId);
+    });
+
     test('#1176:归档频道保留只读审核工作区并明确 archived', async () => {
       const seedValue = await seed(variant);
       cleanups.push(seedValue.close);
