@@ -508,6 +508,123 @@ describe('archive gate closeout (#1066)', () => {
         const channel = await s.repositories.channels.getById(s.channelId);
         expect(channel?.archivedAt).toBeFalsy();
       });
+
+      test('#1179 归档收口非终态 Task、active claim 与 pending Invocation/Dispatch', async () => {
+        const s = await makeSeed();
+        await seedManagedTask(s, 'task-root', 1, 'run-root');
+        await seedManagedTask(s, 'task-child', 1, 'run-child');
+        await s.repositories.taskCoordination.claimLeases.create({
+          id: 'claim-root',
+          teamId: s.teamId,
+          taskId: 'task-root',
+          taskRevision: 1,
+          taskAttempt: 1,
+          agentId: s.agentId,
+          leaseTokenHash: 'hash-root',
+          leaseFingerprint: 'fp-root',
+          fencingToken: 1,
+          status: 'active',
+          acquiredAt: 100,
+          heartbeatAt: 100,
+          expiresAt: 10_000,
+        });
+        await s.repositories.taskCoordination.claimLeases.create({
+          id: 'claim-child',
+          teamId: s.teamId,
+          taskId: 'task-child',
+          taskRevision: 1,
+          taskAttempt: 1,
+          agentId: s.agentId,
+          leaseTokenHash: 'hash-child',
+          leaseFingerprint: 'fp-child',
+          fencingToken: 2,
+          status: 'active',
+          acquiredAt: 100,
+          heartbeatAt: 100,
+          expiresAt: 10_000,
+        });
+        await s.repositories.dispatches.create({
+          id: 'dispatch-open',
+          teamId: s.teamId,
+          channelId: s.channelId,
+          messageId: 'msg-open',
+          agentId: s.agentId,
+          status: 'queued',
+          requestId: 'request-open',
+          prompt: '继续执行',
+          createdAt: 100,
+          updatedAt: 100,
+        });
+        await s.repositories.management.invocations.create({
+          schemaVersion: 1,
+          id: 'invocation-open',
+          managementRunId: 'run-root',
+          intent: {
+            schemaVersion: 1,
+            teamId: s.teamId,
+            channelId: s.channelId,
+            targetAgentId: s.agentId,
+            targetKind: 'custom',
+            objective: '继续执行',
+            taskContext: {
+              taskId: 'task-root',
+              rootTaskId: 'task-root',
+              taskRevision: 1,
+              taskAttempt: 1,
+              claimLeaseId: 'claim-root',
+            },
+            acceptanceCriteria: [],
+            dependencyResults: [],
+            attachmentIds: [],
+          },
+          intentHash: 'hash-invocation-open',
+          idempotencyKey: 'invoke-open',
+          createdAt: 100,
+        });
+        await s.repositories.management.dispatchAttempts.create({
+          id: 'attempt-open',
+          invocationId: 'invocation-open',
+          dispatchId: 'dispatch-open',
+          attemptNumber: 1,
+          status: 'queued',
+          startedAt: 100,
+        });
+
+        const preflight = await s.app.archiveChannel({
+          userId: s.userId, teamId: s.teamId, channelId: s.channelId,
+        });
+        expect(preflight.ok).toBe(true);
+        if (!preflight.ok || !preflight.preflight) return;
+        expect(preflight.preflight.items).toEqual(expect.arrayContaining([
+          expect.objectContaining({ kind: 'task', id: 'task-root' }),
+          expect.objectContaining({ kind: 'task', id: 'task-child' }),
+          expect.objectContaining({ kind: 'claim', id: 'claim-root' }),
+          expect.objectContaining({ kind: 'claim', id: 'claim-child' }),
+          expect.objectContaining({ kind: 'invocation', id: 'invocation-open' }),
+        ]));
+
+        const confirm = await s.app.archiveChannel({
+          userId: s.userId,
+          teamId: s.teamId,
+          channelId: s.channelId,
+          confirmationToken: preflight.preflight.confirmationToken,
+        });
+        expect(confirm.ok).toBe(true);
+        if (!confirm.ok || !confirm.confirmation) return;
+        expect(confirm.confirmation.cancelledTaskIds).toEqual(expect.arrayContaining(['task-root', 'task-child']));
+        expect(confirm.confirmation.releasedClaimIds).toEqual(expect.arrayContaining(['claim-root', 'claim-child']));
+        expect(confirm.confirmation.cancelledInvocationIds).toEqual(expect.arrayContaining(['invocation-open']));
+
+        const rootTask = await s.repositories.tasks.getById('task-root');
+        const childTask = await s.repositories.tasks.getById('task-child');
+        expect(rootTask?.status).toBe('closed');
+        expect(childTask?.status).toBe('closed');
+        await expect(s.repositories.taskCoordination.claimLeases.listActive()).resolves.toEqual([]);
+        const dispatch = await s.repositories.dispatches.getById('dispatch-open');
+        expect(dispatch?.status).toBe('cancelled');
+        const channel = await s.repositories.channels.getById(s.channelId);
+        expect(channel?.archivedAt).toBeTruthy();
+      });
     });
   }
 });

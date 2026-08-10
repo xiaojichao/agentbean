@@ -101,4 +101,29 @@ describe('chat task surface', () => {
     expect(source).toContain('等待审核');
     expect(source.match(/<ChannelTaskFactSummary/g)?.length).toBeGreaterThanOrEqual(1);
   });
+
+  test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    const start = source.indexOf('function ConversationTasks');
+    const end = source.indexOf('function TaskFilterMenu', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const panel = source.slice(start, end);
+
+    expect(panel).toContain('showProjectSettings');
+    expect(panel).toContain('data-smoke="channel-project-settings-dialog"');
+    expect(panel).toContain('acceptChannelProjectOverview');
+    expect(panel).toContain('onCreateStage={workspaceReadOnly ? undefined : createProjectStage}');
+    expect(panel).toContain("projectEvents().createStage({");
+    expect(panel).toContain('closeProjectSettings');
+    expect(panel).toContain('void refreshProjectOverview()');
+
+    const progressStart = panel.indexOf('subview === \'project\'');
+    const progressEnd = panel.indexOf('loadError ?', progressStart);
+    const progressBranch = panel.slice(progressStart, progressEnd);
+    expect(progressBranch).toContain('<ChannelProjectProgress');
+    expect(progressBranch).not.toContain('<ChannelProjectOverview');
+    expect(progressBranch).not.toContain('onCreateEdge');
+    expect(progressBranch).not.toContain('createInitialProjectStage');
+  });
 });

@@ -6,7 +6,11 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, test } from 'vitest';
 import { WEB_EVENTS, type ChannelProjectOverviewDto } from '@agentbean/contracts';
 
-import { ChannelProjectOverview, type InitialProjectStageDraft } from '../components/ChannelProjectOverview';
+import {
+  ChannelProjectOverview,
+  type InitialProjectStageDraft,
+  type ProjectStageDraft,
+} from '../components/ChannelProjectOverview';
 import { createServerNextUseCases } from '../../server-next/src/application/usecases';
 import {
   applyGlobalMigrations,
@@ -110,6 +114,19 @@ describe('频道项目页面到 SQLite', () => {
       createdAt: now,
       updatedAt: now,
     });
+    await repositories.tasks.create({
+      id: 'task-2',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      title: '完成分镜',
+      status: 'todo',
+      creatorId: 'owner-1',
+      assigneeId: 'owner-1',
+      tags: [],
+      sortOrder: 2,
+      createdAt: now,
+      updatedAt: now,
+    });
 
     const app = createServerNextUseCases({
       repositories,
@@ -140,16 +157,32 @@ describe('频道项目页面到 SQLite', () => {
         setOverview(result.overview);
         return null;
       };
+      const onCreateStage = async (draft: ProjectStageDraft) => {
+        if (!overview) return '缺少项目画像';
+        const result = await socket.trigger(WEB_EVENTS.project.createStage, {
+          channelId: 'channel-1',
+          expectedRevision: overview.profile.revision,
+          idempotencyKey: 'page-stage-2',
+          stage: draft,
+        }) as { ok: boolean; overview?: ChannelProjectOverviewDto; message?: string };
+        if (!result.ok || !result.overview) return result.message ?? '创建失败';
+        setOverview(result.overview);
+        return null;
+      };
       return (
         <ChannelProjectOverview
           overview={overview}
-          tasks={[{ id: 'task-1', title: '完成发布方案' }]}
+          tasks={[
+            { id: 'task-1', title: '完成发布方案' },
+            { id: 'task-2', title: '完成分镜' },
+          ]}
           participants={[
             { id: 'owner-1', name: '项目负责人', kind: 'human' },
             { id: 'reviewer-1', name: '审核人', kind: 'human' },
           ]}
           currentUserId="owner-1"
           onCreate={onCreate}
+          onCreateStage={onCreateStage}
         />
       );
     }
@@ -174,6 +207,28 @@ describe('频道项目页面到 SQLite', () => {
       })).resolves.toEqual([
         expect.objectContaining({ taskId: 'task-1', name: '发布准备' }),
       ]);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '添加阶段' }));
+    fireEvent.change(screen.getByLabelText('阶段名称'), { target: { value: '分镜' } });
+    fireEvent.change(screen.getByLabelText('阶段目标'), { target: { value: '完成分镜稿' } });
+    fireEvent.change(screen.getByLabelText('绑定任务'), { target: { value: 'task-2' } });
+    fireEvent.change(screen.getByLabelText('验收标准（每行一条）'), { target: { value: '分镜完整' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建阶段' }));
+
+    expect(await screen.findByText('完成分镜稿')).toBeTruthy();
+    await waitFor(async () => {
+      await expect(repositories.channelProjects.getProfile({
+        teamId: 'team-1',
+        channelId: 'channel-1',
+      })).resolves.toMatchObject({ revision: 2 });
+      await expect(repositories.channelProjects.listStages({
+        teamId: 'team-1',
+        channelId: 'channel-1',
+      })).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskId: 'task-1', name: '发布准备' }),
+        expect.objectContaining({ taskId: 'task-2', name: '分镜' }),
+      ]));
     });
   });
 });

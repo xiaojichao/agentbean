@@ -12,8 +12,8 @@ import { ChannelProjectOverview } from '../components/ChannelProjectOverview';
 afterEach(cleanup);
 
 describe('频道任务页项目总览', () => {
-  test('无项目数据且没有可绑定任务时不渲染 Project 容器', () => {
-    const { container } = render(
+  test('无项目数据且没有可绑定任务时提示先创建普通任务', () => {
+    render(
       <ChannelProjectOverview
         overview={null}
         tasks={[]}
@@ -22,8 +22,8 @@ describe('频道任务页项目总览', () => {
         onCreate={vi.fn()}
       />,
     );
-    expect(container.innerHTML).toBe('');
-    expect(screen.queryByLabelText('项目总览')).toBeNull();
+    expect(screen.getByText('请先在「普通任务」中创建任务，再配置项目阶段。')).toBeTruthy();
+    expect(document.querySelector('[data-smoke="channel-project-settings"]')).toBeTruthy();
   });
 
   test('展示 Stage 责任、绑定 Task、聚合状态、阻塞原因和归档只读状态', () => {
@@ -39,13 +39,65 @@ describe('频道任务页项目总览', () => {
         onCreate={vi.fn()}
       />,
     );
-    expect(screen.getByLabelText('项目总览')).toBeTruthy();
+    expect(screen.getByLabelText('项目设置')).toBeTruthy();
     expect(screen.getByText('发布准备')).toBeTruthy();
     expect(screen.getByText('完成发布方案')).toBeTruthy();
     expect(screen.getByText('待开始')).toBeTruthy();
     expect(screen.getByText('绑定任务尚未开始')).toBeTruthy();
     expect(screen.getByText('已归档 · 只读')).toBeTruthy();
     expect(screen.getByText('审核人')).toBeTruthy();
+  });
+
+  test('#1179 已有阶段时可添加后续阶段，且不把配置表单混入运行态字段之外的入口', async () => {
+    const onCreateStage = vi.fn(async () => null);
+    render(
+      <ChannelProjectOverview
+        overview={{ ...overview(), archived: false }}
+        tasks={[
+          { id: 'task-1', title: '完成发布方案' },
+          { id: 'task-2', title: '完成分镜' },
+        ]}
+        participants={[
+          { id: 'owner-1', name: '项目负责人', kind: 'human' },
+          { id: 'reviewer-1', name: '审核人', kind: 'human' },
+        ]}
+        currentUserId="owner-1"
+        onCreateStage={onCreateStage}
+        onCreateEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('项目阶段配置')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '添加阶段' }));
+    fireEvent.change(screen.getByLabelText('阶段名称'), { target: { value: '分镜' } });
+    fireEvent.change(screen.getByLabelText('阶段目标'), { target: { value: '完成分镜稿' } });
+    fireEvent.change(screen.getByLabelText('绑定任务'), { target: { value: 'task-2' } });
+    fireEvent.change(screen.getByLabelText('验收标准（每行一条）'), { target: { value: '分镜完整' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建阶段' }));
+
+    await waitFor(() => expect(onCreateStage).toHaveBeenCalledWith({
+      name: '分镜',
+      goal: '完成分镜稿',
+      ownerId: 'owner-1',
+      reviewerIds: ['reviewer-1'],
+      acceptanceCriteria: ['分镜完整'],
+      taskId: 'task-2',
+    }));
+  });
+
+  test('#1179 归档频道不提供添加阶段入口', () => {
+    render(
+      <ChannelProjectOverview
+        overview={overview()}
+        tasks={[
+          { id: 'task-1', title: '完成发布方案' },
+          { id: 'task-2', title: '完成分镜' },
+        ]}
+        participants={[{ id: 'owner-1', name: '项目负责人', kind: 'human' }]}
+        currentUserId="owner-1"
+        onCreateStage={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '添加阶段' })).toBeNull();
   });
 
   test('#824 阶段详情展示审核状态、当前版与最终版', () => {

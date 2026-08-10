@@ -41,8 +41,14 @@ import {
   ChannelTaskFactSummary,
   channelTaskResponsibilityFocusFilterValue,
 } from '@/components/ChannelTaskCard';
-import { ChannelProjectOverview, type InitialProjectStageDraft, type ProjectStageEdgeDraft } from '@/components/ChannelProjectOverview';
+import {
+  ChannelProjectOverview,
+  type InitialProjectStageDraft,
+  type ProjectStageDraft,
+  type ProjectStageEdgeDraft,
+} from '@/components/ChannelProjectOverview';
 import { ChannelProjectProgress, type ChannelProjectProgressState } from '@/components/ChannelProjectProgress';
+import { acceptChannelProjectOverview } from '@/lib/channel-project-overview';
 import {
   type PromoteArtifactDraft,
   type SetArtifactFinalVersionDraft,
@@ -3585,6 +3591,32 @@ function ConversationTasks({
     .sort()
     .join('|');
 
+  const applyProjectOverview = useCallback((incoming: ChannelProjectOverviewDto | null) => {
+    setProjectOverview((current) => acceptChannelProjectOverview(current, incoming));
+    setProjectOverviewError(null);
+  }, []);
+
+  const refreshProjectOverview = useCallback(async () => {
+    try {
+      const [overviewResult, artifactResult] = await Promise.all([
+        projectEvents().overview(channelId),
+        projectEvents().artifactCollections(channelId),
+      ]);
+      if (overviewResult.ok) {
+        applyProjectOverview(overviewResult.overview ?? null);
+      } else {
+        const code = overviewResult.error ?? '';
+        setProjectOverviewError({
+          kind: code === 'FORBIDDEN' || code === 'UNAUTHORIZED' ? 'no_permission' : 'error',
+          message: overviewResult.message ?? overviewResult.error ?? '项目推进加载失败，请稍后重试',
+        });
+      }
+      if (artifactResult.ok) setProjectArtifactLibrary(artifactResult.library ?? null);
+    } catch {
+      setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
+    }
+  }, [applyProjectOverview, channelId]);
+
   useEffect(() => {
     let active = true;
     setProjectOverview(undefined);
@@ -3595,7 +3627,7 @@ function ConversationTasks({
     ]).then(([overviewResult, artifactResult]) => {
       if (!active) return;
       if (overviewResult.ok) {
-        setProjectOverview(overviewResult.overview ?? null);
+        applyProjectOverview(overviewResult.overview ?? null);
       } else {
         const code = overviewResult.error ?? '';
         setProjectOverviewError({
@@ -3609,12 +3641,11 @@ function ConversationTasks({
       setProjectOverviewError({ kind: 'error', message: '项目推进加载失败，请稍后重试' });
     });
     return () => { active = false; };
-  }, [channelId, projectTaskVersion]);
+  }, [applyProjectOverview, channelId, projectTaskVersion]);
 
   useEffect(() => projectEvents().onUpdated(channelId, (nextOverview) => {
-    setProjectOverview(nextOverview);
-    setProjectOverviewError(null);
-  }), [channelId]);
+    applyProjectOverview(nextOverview);
+  }), [applyProjectOverview, channelId]);
   useEffect(
     () => projectEvents().onArtifactsUpdated(channelId, setProjectArtifactLibrary),
     [channelId],
@@ -3708,7 +3739,7 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '创建项目阶段失败，请刷新后重试';
     }
-    setProjectOverview(result.overview);
+    applyProjectOverview(result.overview);
     return null;
   };
 
@@ -3717,6 +3748,21 @@ function ConversationTasks({
       ? globalThis.crypto.randomUUID()
       : `${prefix}-${Date.now()}`
   );
+
+  const createProjectStage = async (draft: ProjectStageDraft): Promise<string | null> => {
+    if (!projectOverview) return '阶段已变化，请刷新后重试';
+    const result = await projectEvents().createStage({
+      channelId,
+      expectedRevision: projectOverview.profile.revision,
+      idempotencyKey: nextIdempotencyKey('project-stage'),
+      stage: draft,
+    });
+    if (!result.ok || !result.overview) {
+      return result.message ?? '创建项目阶段失败，请刷新后重试';
+    }
+    applyProjectOverview(result.overview);
+    return null;
+  };
 
   const createProjectStageEdge = async (draft: ProjectStageEdgeDraft): Promise<string | null> => {
     const stages = projectOverview?.stages ?? [];
@@ -3737,7 +3783,7 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '配置阶段依赖失败，请刷新后重试';
     }
-    setProjectOverview(result.overview);
+    applyProjectOverview(result.overview);
     return null;
   };
 
@@ -3752,8 +3798,13 @@ function ConversationTasks({
     if (!result.ok || !result.overview) {
       return result.message ?? '删除阶段依赖失败，请刷新后重试';
     }
-    setProjectOverview(result.overview);
+    applyProjectOverview(result.overview);
     return null;
+  };
+
+  const closeProjectSettings = () => {
+    setShowProjectSettings(false);
+    void refreshProjectOverview();
   };
 
   const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
@@ -4026,7 +4077,13 @@ function ConversationTasks({
       )}
 
       {showProjectSettings ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6" role="dialog" aria-modal="true" aria-label="项目设置 / 阶段配置">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label="项目设置 / 阶段配置"
+          data-smoke="channel-project-settings-dialog"
+        >
           <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
             <div className="flex h-12 shrink-0 items-center border-b border-neutral-200 px-4">
               <div>
@@ -4035,31 +4092,34 @@ function ConversationTasks({
               </div>
               <button
                 type="button"
-                onClick={() => setShowProjectSettings(false)}
+                onClick={closeProjectSettings}
                 className="ml-auto flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
                 aria-label="关闭项目设置"
+                data-smoke="channel-project-settings-close"
               >
                 <X size={16} />
               </button>
             </div>
             <div className="min-h-0 overflow-y-auto">
-              <ChannelProjectOverview
-                overview={projectOverview ?? null}
-                tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
-                participants={participants}
-                currentUserId={currentUserId}
-                artifactLibrary={projectArtifactLibrary}
-                onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
-                onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
-                onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
-              />
               {projectOverview === undefined ? (
                 <div className="p-6 text-center text-sm text-neutral-500">正在加载项目设置…</div>
-              ) : null}
+              ) : (
+                <ChannelProjectOverview
+                  overview={projectOverview}
+                  tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
+                  participants={participants}
+                  currentUserId={currentUserId}
+                  artifactLibrary={projectArtifactLibrary}
+                  onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
+                  onCreateStage={workspaceReadOnly ? undefined : createProjectStage}
+                  onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
+                  onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
+                />
+              )}
               {projectOverviewError ? (
                 <div className="p-6 text-center text-sm text-red-600">{projectOverviewError.message}</div>
               ) : null}
-              {workspaceReadOnly && !projectOverview ? (
+              {workspaceReadOnly && projectOverview === null ? (
                 <div className="p-6 text-center text-sm text-neutral-500">频道已归档，不能创建项目阶段。</div>
               ) : null}
             </div>
