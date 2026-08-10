@@ -4124,24 +4124,25 @@ function ConversationTasks({
               </button>
             </div>
             <div className="min-h-0 overflow-y-auto">
-              <ChannelProjectOverview
-                overview={projectOverview ?? null}
-                tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
-                participants={participants}
-                currentUserId={currentUserId}
-                artifactLibrary={projectArtifactLibrary}
-                onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
-                onCreateStage={workspaceReadOnly ? undefined : createProjectStage}
-                onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
-                onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
-              />
               {projectOverview === undefined ? (
                 <div className="p-6 text-center text-sm text-neutral-500">正在加载项目设置…</div>
-              ) : null}
+              ) : (
+                <ChannelProjectOverview
+                  overview={projectOverview}
+                  tasks={tasks.map((task) => ({ id: task.id, title: task.title }))}
+                  participants={participants}
+                  currentUserId={currentUserId}
+                  artifactLibrary={projectArtifactLibrary}
+                  onCreate={workspaceReadOnly ? undefined : createInitialProjectStage}
+                  onCreateStage={workspaceReadOnly ? undefined : createProjectStage}
+                  onCreateEdge={workspaceReadOnly ? undefined : createProjectStageEdge}
+                  onDeleteEdge={workspaceReadOnly ? undefined : deleteProjectStageEdge}
+                />
+              )}
               {projectOverviewError ? (
                 <div className="p-6 text-center text-sm text-red-600">{projectOverviewError.message}</div>
               ) : null}
-              {workspaceReadOnly && !projectOverview ? (
+              {workspaceReadOnly && projectOverview === null ? (
                 <div className="p-6 text-center text-sm text-neutral-500">频道已归档，不能创建项目阶段。</div>
               ) : null}
             </div>

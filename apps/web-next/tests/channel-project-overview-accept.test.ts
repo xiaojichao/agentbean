@@ -10,8 +10,11 @@ describe('acceptChannelProjectOverview (#1179)', () => {
     expect(acceptChannelProjectOverview(null, next)).toBe(next);
   });
 
-  test('入站 null 清空本地画像', () => {
-    expect(acceptChannelProjectOverview(overview({ revision: 2, updatedAt: 20 }), null)).toBeNull();
+  test('入站 null 在尚无本地画像时采纳，已有画像时忽略 stale null', () => {
+    expect(acceptChannelProjectOverview(undefined, null)).toBeNull();
+    expect(acceptChannelProjectOverview(null, null)).toBeNull();
+    const current = overview({ revision: 2, updatedAt: 20 });
+    expect(acceptChannelProjectOverview(current, null)).toBe(current);
   });
 
   test('旧 revision 不能覆盖新配置', () => {
