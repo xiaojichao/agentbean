@@ -333,6 +333,29 @@ describe('阶段交付审核 mutation 闭环 (#1177)', () => {
     expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).toBeNull();
   });
 
+  test('子任务不展示验收/退回按钮（accept/rejectRootDelivery 仅对 root 合法）', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'approved',
+        availableActions: [],
+        taskInReview: true,
+        nodeKind: 'subtask',
+      }),
+    });
+    render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        currentUserId="reviewer-1"
+      />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).not.toBeNull());
+    expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).toBeNull();
+  });
+
   test('失败后清除 lock，原 idempotency key 可重试；soft refresh 不拆掉对话框', async () => {
     mocks.query.mockResolvedValue({
       ok: true,
@@ -400,6 +423,7 @@ function workspaceFixture(options: {
     | 'set-final'
   >;
   taskInReview?: boolean;
+  nodeKind?: 'root' | 'subtask';
 } = {}): StageDeliveryReviewWorkspaceV1 {
   const reviewState = options.reviewState ?? 'approved';
   const availableActions = options.availableActions ?? [];
@@ -460,7 +484,7 @@ function workspaceFixture(options: {
   const taskOverview = {
     schemaVersion: 1 as const, taskId: 'task-1', channelId: 'channel-1', task, stage,
     acceptanceContract: {
-      nodeKind: 'root' as const, reviewPolicy: 'human', humanAcceptanceAuthorityIds: ['reviewer-1'],
+      nodeKind: options.nodeKind ?? ('root' as const), reviewPolicy: 'human', humanAcceptanceAuthorityIds: ['reviewer-1'],
       requiresHumanAcceptance: true, acceptanceCriteria: ['交付可用'], taskRevision: 1, attempt: 1, maxAttempts: 3,
       requiredReviewCoverage: { requiredForFinalCount: 1, finalizedCount: reviewState === 'approved' ? 1 : 0, complete: reviewState === 'approved' },
     },

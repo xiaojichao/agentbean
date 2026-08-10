@@ -276,9 +276,12 @@ export function StageDeliveryReviewWorkspace({
   const focusPackage = workspace.focusPackage;
   // Task delivery 按钮不是 package availableActions；在 Server 未投影 delivery action 前，
   // 仅当当前用户落在预绑定 humanAcceptanceAuthorityIds 时展示（仍由 Command 复验）。
+  // nodeKind 必须为 root：accept/rejectRootDelivery 对子任务一律 TASK_ROOT_REQUIRED，
+  // 不同步这道门禁会向子任务审核者展示必然失败的按钮。
   const acceptanceIds = workspace.taskOverview.acceptanceContract.humanAcceptanceAuthorityIds;
   const canMutateDelivery = !workspace.archived
     && workspace.taskOverview.task.status === 'in_review'
+    && workspace.taskOverview.acceptanceContract.nodeKind === 'root'
     && workspace.taskOverview.acceptanceContract.requiresHumanAcceptance
     && Boolean(currentUserId)
     && acceptanceIds.includes(currentUserId!);

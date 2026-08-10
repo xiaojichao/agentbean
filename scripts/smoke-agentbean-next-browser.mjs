@@ -2796,16 +2796,14 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       const dialog = document.querySelector('[data-smoke="stage-review-mutation-dialog"]');
       const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
       const text = workspace?.textContent ?? '';
-      const reviewerCandidates = ${JSON.stringify([
-        session.user.username,
-        session.user.id,
-      ].filter(Boolean))};
+      // 锚定提交前不存在的事实：刚写入的审核意见进入记录、最终化行取代「尚无最终化事实」，
+      // 防止谓词面对未刷新的旧投影提前成立（按钮文案本就含「通过/最终」）。
       return !dialog
-        && reviewerCandidates.some((candidate) => text.includes(candidate))
-        && (text.includes('通过') || text.includes('已通过') || text.includes('最终'));
+        && text.includes('真实浏览器 smoke 审核并最终化')
+        && !text.includes('尚无最终化事实');
     })()
     `,
-    `stage review workspace to reflect the actual reviewer after UI finalize`,
+    `stage review workspace to project the new review record and finalization after UI finalize`,
     timeoutMs,
   );
 
