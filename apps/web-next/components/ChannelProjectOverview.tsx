@@ -283,7 +283,10 @@ export function ChannelProjectOverview({
 
   if (!showCreate) {
     return tasks.length > 0 && currentUserId && onCreate ? (
-      <div className="shrink-0 border-b border-neutral-100 px-4 py-2">
+      <div
+        data-smoke="channel-project-settings"
+        className="shrink-0 border-b border-neutral-100 px-4 py-2"
+      >
         <button
           type="button"
           onClick={() => setShowCreate(true)}
@@ -293,7 +296,16 @@ export function ChannelProjectOverview({
           创建首个项目阶段
         </button>
       </div>
-    ) : null;
+    ) : (
+      <div
+        data-smoke="channel-project-settings"
+        className="p-6 text-center text-sm text-neutral-500"
+      >
+        {currentUserId
+          ? '请先在「普通任务」中创建任务，再配置项目阶段。'
+          : '登录后可配置项目阶段。'}
+      </div>
+    );
   }
 
   const submit = async (event: FormEvent) => {
@@ -325,7 +337,11 @@ export function ChannelProjectOverview({
   };
 
   return (
-    <form onSubmit={submit} className="shrink-0 border-b border-neutral-200 bg-amber-50/60 px-4 py-3">
+    <form
+      onSubmit={submit}
+      data-smoke="channel-project-settings"
+      className="shrink-0 border-b border-neutral-200 bg-amber-50/60 px-4 py-3"
+    >
       <div className="mb-3 flex items-center">
         <h2 className="text-sm font-semibold text-neutral-900">创建首个项目阶段</h2>
         <button type="button" onClick={() => setShowCreate(false)} className="ml-auto text-neutral-400 hover:text-neutral-700" title="取消">

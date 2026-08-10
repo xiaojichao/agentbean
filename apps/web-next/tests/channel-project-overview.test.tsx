@@ -12,8 +12,8 @@ import { ChannelProjectOverview } from '../components/ChannelProjectOverview';
 afterEach(cleanup);
 
 describe('频道任务页项目总览', () => {
-  test('无项目数据且没有可绑定任务时不渲染 Project 容器', () => {
-    const { container } = render(
+  test('无项目数据且没有可绑定任务时提示先创建普通任务', () => {
+    render(
       <ChannelProjectOverview
         overview={null}
         tasks={[]}
@@ -22,8 +22,8 @@ describe('频道任务页项目总览', () => {
         onCreate={vi.fn()}
       />,
     );
-    expect(container.innerHTML).toBe('');
-    expect(screen.queryByLabelText('项目设置')).toBeNull();
+    expect(screen.getByText('请先在「普通任务」中创建任务，再配置项目阶段。')).toBeTruthy();
+    expect(document.querySelector('[data-smoke="channel-project-settings"]')).toBeTruthy();
   });
 
   test('展示 Stage 责任、绑定 Task、聚合状态、阻塞原因和归档只读状态', () => {
