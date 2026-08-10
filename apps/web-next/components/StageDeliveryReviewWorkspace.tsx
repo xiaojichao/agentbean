@@ -1,10 +1,11 @@
 'use client';
 
-import { AlertTriangle, ArrowLeft, FileSearch, PackageCheck } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, FileSearch, PackageCheck, PencilLine } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type {
   ConsistencyTokenV1,
   OutputPackageDto,
+  ProjectReferenceSelectionRequestDto,
   StageDeliveryReviewBlockerV1,
   StageDeliveryReviewMemberV1,
   StageDeliveryReviewVersionIdentityV1,
@@ -14,6 +15,7 @@ import type {
 
 import { TaskDeliveryOverviewContent } from '@/components/TaskDeliveryOverview';
 import { reviewStateLabel } from '@/lib/delivery-labels';
+import { buildPackageMembersSelection } from '@/lib/output-package-reference';
 import {
   isStagePackageMutationAction,
   mutationErrorCopy,
@@ -35,6 +37,23 @@ import {
 import { projectEvents, taskEvents } from '@/lib/socket';
 
 type DetailState = 'loading' | 'not_ready' | 'no_permission' | 'error' | 'ready';
+
+/**
+ * #1178：阶段交接动作（web 本地类型，不进合同）。
+ * 点击只产生本地预填导航——发送前不创建 Message/Offer/claim/Invocation 事实；
+ * 引用选择随发送由 Server 事务内冻结为具体 artifactVersionId。
+ */
+export interface StageHandoffAction {
+  readonly action: 'delegate-to-agent' | 'continue-after-changes';
+  /**
+   * 预填引用选择：delegate 为 current 整包投影（带逐成员 revision fence）；
+   * continue-after-changes 为 delivered 成员版本的 package_members 显式选择。
+   * 无交付包或投影未就绪时为空（父级只预填意图文案）。
+   */
+  readonly selection?: ProjectReferenceSelectionRequestDto;
+  /** 绑定讨论串根消息；为空时父级回落主 composer。 */
+  readonly threadRootMessageId?: string;
+}
 
 type PendingDialog =
   | {
@@ -62,6 +81,8 @@ export interface StageDeliveryReviewWorkspaceProps {
   readonly onOpenThread?: (rootMessageId: string) => void;
   readonly onViewAssetSource?: (packageId: string) => void;
   readonly onAction?: (action: TaskLevelAction) => void;
+  /** #1178：阶段交接入口（交给智能体处理/要求修改后继续）携带焦点包引用与绑定 Thread 上抛。 */
+  readonly onStageHandoff?: (action: StageHandoffAction) => void;
   /** 审核/验收成功后通知父级刷新 Tasks 列表等；工作区自身会重读 Server projection。 */
   readonly onMutationSucceeded?: () => void;
 }
@@ -77,6 +98,7 @@ export function StageDeliveryReviewWorkspace({
   onOpenThread,
   onViewAssetSource,
   onAction,
+  onStageHandoff,
   onMutationSucceeded,
 }: StageDeliveryReviewWorkspaceProps) {
   const [workspace, setWorkspace] = useState<StageDeliveryReviewWorkspaceV1 | null>(null);
@@ -286,6 +308,55 @@ export function StageDeliveryReviewWorkspace({
     && Boolean(currentUserId)
     && acceptanceIds.includes(currentUserId!);
 
+  // #1178：交接预填引用。current 是指针策略——发送时 Server 要求逐成员 collection
+  // revision fence（缺/不符即 revision_stale fail closed），fence 取自焦点包 current
+  // 投影的 Server 事实。current 投影未就绪时不造 fence：发送由 Server 返回
+  // memberBlockers 结构化拒绝，预填保留在 composer，用户可改选 final/delivered。
+  const delegateHandoffSelection = (): ProjectReferenceSelectionRequestDto | undefined => {
+    if (!focusPackage) return undefined;
+    if (focusPackage.projections.current.status === 'ready') {
+      return {
+        kind: 'package_projection',
+        packageId: focusPackage.package.packageId,
+        policy: 'current',
+        expectedMemberRevisions: focusPackage.projections.current.members.map((member) => ({
+          collectionId: member.collectionId,
+          revision: member.collectionRevision,
+        })),
+      };
+    }
+    return { kind: 'package_projection', packageId: focusPackage.package.packageId, policy: 'current' };
+  };
+
+  // #1178 AC6（设计修正）：「要求修改后继续」引用 delivered 成员版本的 package_members
+  // 显式选择——reject-delivery 写入 changes_requested/rejected review 后，delivered
+  // 指针解析出的版本会被 REVIEW_BASIS_BLOCKED 挡住（只豁免显式选择、不豁免指针），
+  // 显式版本才是合法交付依据。成员版本取自 Server delivered 投影（冻结事实）；
+  // delivered 投影 not_ready（成员不可见/缺失无法枚举版本）时不造选择，
+  // 父级只预填意图文案。
+  const continueHandoffSelection = (): ProjectReferenceSelectionRequestDto | undefined => {
+    if (!focusPackage) return undefined;
+    const delivered = focusPackage.projections.delivered;
+    if (delivered.status !== 'ready' || delivered.members.length === 0) return undefined;
+    return buildPackageMembersSelection(
+      focusPackage.package.packageId,
+      delivered.members.map((member) => ({ collectionId: member.collectionId, versionId: member.versionId })),
+    ) ?? undefined;
+  };
+
+  // #1178 AC6：「要求修改后继续」可见性纯由 Server 事实推导——焦点包存在、任一成员
+  // 最新审核为「要求修改/已拒绝」（覆盖交付被退回：reject-delivery 前置要求
+  // changes_requested/rejected 审核决策，review 记录 append-only 保留）、
+  // Task 非终态、频道未归档。
+  const handoffTaskStatus = workspace.taskOverview.task.status;
+  const hasRevisionBasis = focusPackage?.members.some(
+    (member) => member.review.state === 'changes_requested' || member.review.state === 'rejected',
+  ) ?? false;
+  const canContinueAfterChanges = Boolean(focusPackage)
+    && hasRevisionBasis
+    && handoffTaskStatus !== 'done' && handoffTaskStatus !== 'closed' && handoffTaskStatus !== 'cancelled'
+    && !workspace.archived;
+
   return (
     <div className="space-y-3" data-smoke="stage-delivery-review-workspace">
       <section className="rounded-md border border-neutral-200 bg-white p-3" data-smoke="stage-review-context">
@@ -415,7 +486,23 @@ export function StageDeliveryReviewWorkspace({
         </section>
       ) : null}
 
-      <TaskDeliveryOverviewContent overview={workspace.taskOverview} onAction={onAction} />
+      <TaskDeliveryOverviewContent
+        overview={workspace.taskOverview}
+        onAction={(action) => {
+          // #1178：阶段上下文的「交给智能体处理」携带焦点包引用与绑定 Thread 上抛
+          // （父级做本地预填）；父级未接 onStageHandoff 时保持原 action 直通。
+          if (action === 'delegate-to-agent' && onStageHandoff) {
+            const selection = delegateHandoffSelection();
+            onStageHandoff({
+              action: 'delegate-to-agent',
+              ...(selection ? { selection } : {}),
+              ...(workspace.threadRootMessageId ? { threadRootMessageId: workspace.threadRootMessageId } : {}),
+            });
+            return;
+          }
+          onAction?.(action);
+        }}
+      />
 
       <div className="flex flex-wrap gap-2" data-smoke="stage-review-navigation">
         <button
@@ -427,6 +514,26 @@ export function StageDeliveryReviewWorkspace({
           <ArrowLeft size={13} />
           回到讨论串
         </button>
+        {canContinueAfterChanges ? (
+          <button
+            type="button"
+            data-smoke="stage-review-continue-handoff"
+            disabled={!workspace.threadRootMessageId || !onStageHandoff}
+            onClick={() => {
+              if (!workspace.threadRootMessageId) return;
+              const selection = continueHandoffSelection();
+              onStageHandoff?.({
+                action: 'continue-after-changes',
+                ...(selection ? { selection } : {}),
+                threadRootMessageId: workspace.threadRootMessageId,
+              });
+            }}
+            className={navigationButtonClass}
+          >
+            <PencilLine size={13} />
+            要求修改后继续
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={!focusPackage || !onViewAssetSource}

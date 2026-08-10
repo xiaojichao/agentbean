@@ -1,0 +1,13 @@
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/prd.md", "reason": "需求与验收标准（issue #1178 原文转写）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/design.md", "reason": "技术设计：接线切片判断、三入口数据流、策略选择理由、测试设计"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/stage-delivery-review-workspace.md", "reason": "阶段工作区组件树/现有按钮/接线点（切片 1-3 落点）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/composer-prefill-mechanism.md", "reason": "composer 预填三法、@选择器、引用 chips、焦点恢复（切片 1/2/3 直接依赖）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/task-thread-binding.md", "reason": "Task↔Thread 绑定与 thread 深链机制（AC1 关联保持）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/reference-policy-display.md", "reason": "四策略类型与展示现状、specified 缺口结论（切片 3）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/project-reference-set.md", "reason": "ProjectReferenceSet 合同/解析/冻结全链（切片 4 测试断言依据）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/offer-acceptance-claim.md", "reason": "Offer→acceptance→claim→Invocation 链路与 stale 复验点（切片 4）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/stale-basis-fail-closed.md", "reason": "六种 fence 模式（AC8 测试设计依据）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/request-changes-flow.md", "reason": "reject-delivery 的 revision/attempt 语义（切片 2 可见条件与 AC6）"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/web-next-testing-conventions.md", "reason": "RTL/jsdom/data-smoke/renderToString 惯例"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/server-next-testing.md", "reason": "双后端 variants 样板与命令测试写法（切片 4）"}
+{"file": ".trellis/spec/web-next/frontend/index.md", "reason": "web-next 组件/state/socket 规约索引"}
