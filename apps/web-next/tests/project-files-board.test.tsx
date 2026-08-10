@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { renderToString } from 'react-dom/server';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -102,7 +102,6 @@ const library = {
           versionNumber: 1,
           createdAt: 800,
           reviewState: 'approved',
-          packageMemberships: [{ packageId: 'pkg-1', sequence: 1, shortLabel: 'F1', deliveredAt: 1000 }],
         }),
         version('ver-rej', {
           versionNumber: 2,
@@ -258,6 +257,7 @@ interface BoardCallbacks {
   onReview?: ProjectFilesBoardProps['onReview'];
   onFinalize?: ProjectFilesBoardProps['onFinalize'];
   onPromote?: ProjectFilesBoardProps['onPromote'];
+  loadPromotableArtifacts?: ProjectFilesBoardProps['loadPromotableArtifacts'];
   canPromote?: boolean;
   promotableArtifacts?: ProjectFilesBoardProps['promotableArtifacts'];
   libraryOverride?: ProjectFilesBoardProps['library'];
@@ -276,7 +276,8 @@ function renderBoard(callbacks: BoardCallbacks = {}) {
     onAddReference={(selection) => collected.push(selection)}
     onOpenRevisionEditor={(request) => revisionRequests.push(request)}
     canPromote={callbacks.canPromote ?? false}
-    promotableArtifacts={callbacks.promotableArtifacts ?? []}
+    loadPromotableArtifacts={callbacks.loadPromotableArtifacts
+      ?? vi.fn().mockResolvedValue(callbacks.promotableArtifacts ?? [])}
     onPromote={callbacks.onPromote ?? vi.fn().mockResolvedValue(null)}
     {...(callbacks.onOpenPackagePreview ? { onOpenPackagePreview: callbacks.onOpenPackagePreview } : {})}
     {...(callbacks.onOpenReadOnlyArtifact ? { onOpenReadOnlyArtifact: callbacks.onOpenReadOnlyArtifact } : {})}
@@ -298,6 +299,7 @@ describe('ProjectFilesBoard 首帧(renderToString)', () => {
       agentNames,
       dataRevision: 0,
       onAddReference: () => {},
+      loadPromotableArtifacts: async () => [],
     }));
     expect(html).toContain('data-smoke="project-files-board"');
     expect(html).toContain('data-smoke="output-package-item"');
@@ -306,10 +308,20 @@ describe('ProjectFilesBoard 首帧(renderToString)', () => {
     expect(html).toContain('data-smoke="file-group-waiting"');
     expect(html).toContain('data-smoke="output-package-review-state"');
     expect(html).toContain('data-smoke="files-toolbar-search"');
-    expect(html).toContain('data-smoke="files-filter-chip"');
+    expect(html).toContain('data-smoke="files-role-filter"');
+    expect(html).toContain('data-smoke="files-status-filter"');
     expect(html).toContain('data-smoke="files-ref-current"');
     expect(html).toContain('data-smoke="files-ref-final"');
     expect(html).toContain('data-smoke="files-ref-multi"');
+    const toolbarOrder = [
+      'files-toolbar-search',
+      'files-role-filter',
+      'files-status-filter',
+      'files-ref-multi',
+      'files-ref-final',
+      'files-ref-current',
+    ].map((smoke) => html.indexOf(`data-smoke="${smoke}"`));
+    expect(toolbarOrder).toEqual([...toolbarOrder].sort((left, right) => left - right));
     // 首帧无缓存:默认选中的首卡(pending)无成员行,不崩(表格在有行时才渲染表头)。
     expect(html).toContain('暂无文件行');
     expect(html).not.toContain('data-smoke="file-version-row"');
@@ -330,7 +342,7 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     expect(headers).toEqual(['名称', '类型 / 阶段', '来源', '当前版', '最终版', '审核', '动作']);
     const firstRow = document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c1"]')!;
     expect(firstRow.textContent).toContain('第1集剧本.md');
-    expect(firstRow.textContent).toContain('collection: script.ep01');
+    expect(firstRow.textContent).toContain('collection: col-1 · script.ep01');
     expect(firstRow.textContent).toContain('script');
     expect(firstRow.textContent).toContain('剧本');
     expect(firstRow.textContent).toContain('@服装Agent');
@@ -345,26 +357,29 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     // 包卡短编号摘要随投影加载。
     await waitFor(() => {
       const card = document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!;
+      expect(card.textContent).toContain('pkg-2 服装输出包');
       expect(card.textContent).toContain('F1 v4');
       expect(card.textContent).toContain('F2 v3');
     });
   });
 
   test('current projection not_ready 时仍保留可解析成员行与修订入口', async () => {
-    mocks.getOutputPackage.mockResolvedValue({
-      ok: true,
-      ...packageDetail,
-      package: {
-        ...packageDetail.package,
-        members: [
-          { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
-          packageDetail.package.members[1],
-        ],
-      },
-      projection: blockedCurrentProjection,
-      asOf: 2000,
-      audienceScope: 'team-1:channel-1:u-1',
-    });
+    mocks.getOutputPackage.mockImplementation(async ({ packageId }: { packageId: string }) => packageId === 'pkg-2'
+      ? {
+          ok: true,
+          ...packageDetail,
+          package: {
+            ...packageDetail.package,
+            members: [
+              { ...packageDetail.package.members[0], artifactVersionId: 'ver-delivered-c1' },
+              packageDetail.package.members[1],
+            ],
+          },
+          projection: blockedCurrentProjection,
+          asOf: 2000,
+          audienceScope: 'team-1:channel-1:u-1',
+        }
+      : { ok: false });
     renderBoard();
     fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
     await waitFor(() => {
@@ -372,6 +387,18 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     });
     expect(document.querySelector('[data-smoke="files-package-projection-blocked"]')).not.toBeNull();
     expect(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-ref"][data-version-id="ver-c1"]')?.textContent).toBe('引用以修改');
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, {
+      target: { value: '第1集剧本.md' },
+    });
+    await waitFor(() => {
+      const packageCards = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
+      expect(packageCards.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-2']);
+    });
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, { target: { value: '' } });
+    fireEvent.click(document.querySelector('[data-smoke="files-ref-multi"]')!);
+    expect(document.querySelector('[data-smoke="files-row-select"][data-version-id="ver-c1"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="files-row-select"][data-version-id="ver-c2"]')).not.toBeNull();
     fireEvent.click(document.querySelector('[data-smoke="files-row-revise"][data-version-id="ver-c1"]')!);
     expect(revisionRequests).toEqual([{
       collectionId: 'col-1',
@@ -386,7 +413,7 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
 
   test('选中文件集合 → 版本行(当前版/最终版/审核/来源)同步渲染', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
-    renderBoard();
+    const collected = renderBoard();
     fireEvent.click(document.querySelector('[data-smoke="project-artifact-collection"][data-collection-id="col-1"]')!);
     await waitFor(() => {
       expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(4);
@@ -397,10 +424,104 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     expect(currentRow.textContent).toContain('待审核');
     expect(currentRow.textContent).toContain('未设置');
     const oldRow = document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-1"]')!;
-    expect(oldRow.textContent).toContain('Agent 交付');
+    expect(oldRow.textContent).toContain('任务提升');
     expect(oldRow.textContent).toContain('已通过');
     const rejectedRow = document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-rej"]')!;
     expect(rejectedRow.textContent).toContain('已拒绝');
+    expect(rejectedRow.querySelector('[data-smoke="files-row-ref"]')?.textContent).toBe('引用以修改');
+    fireEvent.click(rejectedRow.querySelector('[data-smoke="files-row-ref"]')!);
+    expect(collected).toContainEqual({ kind: 'artifact_version', collectionId: 'col-1', versionId: 'ver-rej' });
+  });
+
+  test('输出包成员只在包卡右表出现，不在左侧重复生成集合卡', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
+    renderBoard();
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="project-artifact-collection"]')).toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+  });
+
+  test('产物库投影缺失时仍使用包成员的 isFinalVersion 事实', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
+    renderBoard({ libraryOverride: null });
+    fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(2);
+    });
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c2"]')?.textContent).toContain('v3 final');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c1"]')?.textContent).toContain('未设置');
+  });
+
+  test('包详情或成员投影不可用时保留原集合卡', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard();
+    await waitFor(() => {
+      const collectionIds = Array.from(document.querySelectorAll('[data-smoke="project-artifact-collection"]'))
+        .map((card) => card.getAttribute('data-collection-id'));
+      expect(collectionIds).toEqual(expect.arrayContaining(['col-1', 'col-2']));
+    });
+  });
+
+  test('集合历史版本仅将 finalVersionId 对应行标为最终版', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard({
+      libraryOverride: {
+        ...library,
+        collections: library.collections.map((collection) => collection.id === 'col-1'
+          ? { ...collection, finalVersionId: 'ver-1' }
+          : collection),
+      },
+    });
+    fireEvent.click(document.querySelector('[data-smoke="project-artifact-collection"][data-collection-id="col-1"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(4);
+    });
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-1"]')?.textContent).toContain('v1 final');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-c1"]')?.textContent).toContain('未设置');
+    expect(document.querySelector('[data-smoke="file-version-row"][data-version-id="ver-rej"]')?.textContent).toContain('未设置');
+  });
+
+  test('仅属于不可见历史包的集合仍保留集合卡，不会被首屏去重误隐藏', () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    const historicalCollection = {
+      ...library.collections[1]!,
+      id: 'col-history',
+      name: '历史角色设定',
+      currentVersionId: 'ver-history',
+      finalVersionId: undefined,
+      versions: [version('ver-history', {
+        collectionId: 'col-history',
+        packageMemberships: [{
+          packageId: 'pkg-outside-visible-page',
+          sequence: 1,
+          shortLabel: 'F1',
+          deliveredAt: 500,
+        }],
+      })],
+    };
+    renderBoard({ libraryOverride: { ...library, collections: [historicalCollection] } });
+    const card = document.querySelector('[data-smoke="project-artifact-collection"]');
+    expect(card?.getAttribute('data-collection-id')).toBe('col-history');
+  });
+
+  test('类型 / 阶段不暴露内部 deliverable 角色', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    renderBoard({
+      libraryOverride: {
+        ...library,
+        collections: [{ ...library.collections[1]!, kind: 'deliverable' }],
+      },
+    });
+    fireEvent.click(document.querySelector('[data-smoke="project-artifact-collection"][data-collection-id="col-2"]')!);
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-smoke="file-version-row"]')).toHaveLength(1);
+    });
+    expect(document.querySelector('[data-smoke="file-version-table"]')!.textContent).not.toContain('deliverable');
+    expect(document.querySelector('[data-smoke="file-version-table"]')!.textContent).toContain('未分类');
   });
 
   test('选中等待上游卡 → 右侧阶段目标占位', () => {
@@ -411,25 +532,25 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     expect(document.querySelector('[data-smoke="files-waiting-placeholder"]')!.textContent).toContain('产出分镜图组');
   });
 
-  test('筛选 chip 与搜索作用于左栏卡片', async () => {
+  test('角色/状态下拉与搜索作用于左栏卡片', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
     renderBoard();
     // 待审核:pkg-1(pending) + col-1(current pending);pkg-2(approved)/col-2(approved)排除。
-    fireEvent.click(document.querySelector('[data-smoke="files-filter-chip"][data-filter="pending_review"]')!);
+    fireEvent.change(document.querySelector('[data-smoke="files-status-filter"]')!, { target: { value: 'pending' } });
     await waitFor(() => {
       const cards = Array.from(document.querySelectorAll('[data-smoke="output-package-item"], [data-smoke="project-artifact-collection"]'));
       expect(cards.map((card) => card.getAttribute('data-package-id') ?? card.getAttribute('data-collection-id')))
         .toEqual(['col-1', 'pkg-1']);
     });
     // 有 final:仅 col-2(pkg final 事实需投影 enrichment,未加载时恒 false)。
-    fireEvent.click(document.querySelector('[data-smoke="files-filter-chip"][data-filter="has_final"]')!);
+    fireEvent.change(document.querySelector('[data-smoke="files-status-filter"]')!, { target: { value: 'final' } });
     await waitFor(() => {
       expect(document.querySelector('[data-smoke="project-artifact-collection"]')).not.toBeNull();
       expect(document.querySelector('[data-smoke="output-package-item"]')).toBeNull();
       expect(document.querySelector('[data-smoke="project-artifact-collection"]')!.getAttribute('data-collection-id')).toBe('col-2');
     });
     // 搜索:按集合名。
-    fireEvent.click(document.querySelector('[data-smoke="files-filter-chip"][data-filter="all"]')!);
+    fireEvent.change(document.querySelector('[data-smoke="files-status-filter"]')!, { target: { value: 'all' } });
     fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, { target: { value: 'script.ep01' } });
     await waitFor(() => {
       expect(document.querySelectorAll('[data-smoke="output-package-item"], [data-smoke="project-artifact-collection"]').length).toBe(1);
@@ -440,6 +561,12 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
     await waitFor(() => {
       expect(document.querySelectorAll('[data-smoke="output-package-item"]').length).toBe(1);
       expect(document.querySelector('[data-smoke="output-package-item"]')!.getAttribute('data-package-id')).toBe('pkg-2');
+    });
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, { target: { value: '' } });
+    fireEvent.change(document.querySelector('[data-smoke="files-role-filter"]')!, { target: { value: 'agent-a' } });
+    await waitFor(() => {
+      const packages = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
+      expect(packages.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-1']);
     });
   });
 
@@ -454,10 +581,37 @@ describe('ProjectFilesBoard 左栏卡片与右栏表格', () => {
         : { ok: true, projection: notReadyFinalProjection };
     });
     renderBoard();
-    fireEvent.click(document.querySelector('[data-smoke="files-filter-chip"][data-filter="has_final"]')!);
+    fireEvent.change(document.querySelector('[data-smoke="files-status-filter"]')!, { target: { value: 'final' } });
     await waitFor(() => {
       const packageCards = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
       expect(packageCards.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-2']);
+    });
+  });
+
+  test('包成员集合隐藏后，按成员文件名和稳定版本 ID 搜索仍命中包卡', async () => {
+    mocks.getOutputPackage.mockImplementation(async ({ packageId }: { packageId: string }) =>
+      packageId === 'pkg-2'
+        ? { ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' }
+        : { ok: false });
+    renderBoard();
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')?.textContent)
+        .toContain('F1 v4');
+    });
+
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, {
+      target: { value: '第1集剧本.md' },
+    });
+    await waitFor(() => {
+      const packages = Array.from(document.querySelectorAll('[data-smoke="output-package-item"]'));
+      expect(packages.map((card) => card.getAttribute('data-package-id'))).toEqual(['pkg-2']);
+    });
+
+    fireEvent.change(document.querySelector('[data-smoke="files-toolbar-search"]')!, {
+      target: { value: 'ver-c2' },
+    });
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="output-package-item"]')?.getAttribute('data-package-id')).toBe('pkg-2');
     });
   });
 });
@@ -533,7 +687,7 @@ describe('ProjectFilesBoard 整包引用三入口(#1063 同语义)', () => {
     expect(document.querySelector('[data-smoke="files-multi-confirm"]')).toBeNull();
   });
 
-  test('行内引用:包成员行 → package_members 单选;集合版本行 → artifact_version', async () => {
+  test('行内引用:包成员行 → package_members 单选', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: true, ...packageDetail, asOf: 2000, audienceScope: 'team-1:channel-1:u-1' });
     const collected = renderBoard();
     fireEvent.click(document.querySelector('[data-smoke="output-package-item"][data-package-id="pkg-2"]')!);
@@ -547,14 +701,18 @@ describe('ProjectFilesBoard 整包引用三入口(#1063 同语义)', () => {
       packageId: 'pkg-2',
       members: [{ collectionId: 'col-1', versionId: 'ver-c1' }],
     });
-    // 切到集合视图,行内引用为 artifact_version。
+  });
+
+  test('独立集合版本行 → artifact_version', async () => {
+    mocks.getOutputPackage.mockResolvedValue({ ok: false });
+    const collected = renderBoard();
     fireEvent.click(document.querySelector('[data-smoke="project-artifact-collection"][data-collection-id="col-1"]')!);
     await waitFor(() => {
       expect(document.querySelectorAll('[data-smoke="file-version-row"]').length).toBe(4);
     });
     fireEvent.click(document.querySelector('[data-smoke="files-row-ref"][data-version-id="ver-c1"]')!);
-    expect(collected).toHaveLength(2);
-    expect(collected[1]).toEqual({ kind: 'artifact_version', collectionId: 'col-1', versionId: 'ver-c1' });
+    expect(collected).toHaveLength(1);
+    expect(collected[0]).toEqual({ kind: 'artifact_version', collectionId: 'col-1', versionId: 'ver-c1' });
   });
 });
 
@@ -784,14 +942,19 @@ describe('ProjectFilesBoard 行动作(步骤 6)', () => {
 });
 
 describe('ProjectFilesBoard 提升入口(步骤 7)', () => {
-  test('canPromote 且有待提升文件 → 工具栏按钮 → PromoteArtifactForm 复用', async () => {
+  test('canPromote 且有待提升文件 → 左栏按钮 → PromoteArtifactForm 复用', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
-    renderBoard({ canPromote: true, promotableArtifacts: [{ id: 'art-x', filename: 'x.md' }] });
+    const loadPromotableArtifacts = vi.fn().mockResolvedValue([
+      { id: 'art-x', filename: 'x.md', logicalPath: 'outputs/deep/x.md' },
+    ]);
+    renderBoard({ canPromote: true, loadPromotableArtifacts });
     fireEvent.click(document.querySelector('[data-smoke="files-promote-open"]')!);
     await waitFor(() => {
       expect(document.querySelector('[data-smoke="files-promote-form"]')).not.toBeNull();
     });
     expect(document.querySelector('[data-smoke="files-promote-form"]')!.textContent).toContain('提升为版本');
+    expect(screen.getByText('outputs/deep/x.md')).not.toBeNull();
+    expect(loadPromotableArtifacts).toHaveBeenCalledTimes(1);
     // 取消关闭表单(表单右上角 X 按钮,title=取消)。
     fireEvent.click(document.querySelector('[title="取消"]')!);
     await waitFor(() => {
@@ -799,11 +962,15 @@ describe('ProjectFilesBoard 提升入口(步骤 7)', () => {
     });
   });
 
-  test('canPromote 但无可提升文件 → 提示文案而非按钮', async () => {
+  test('canPromote 但当前页无文件 → 仍保留独立加载入口并显示完整查询结果', async () => {
     mocks.getOutputPackage.mockResolvedValue({ ok: false });
     renderBoard({ canPromote: true });
-    expect(document.querySelector('[data-smoke="files-promote-open"]')).toBeNull();
-    expect(document.body.textContent).toContain('先在文件视图中打开目标文件所在目录');
+    expect(document.querySelector('[data-smoke="files-promote-open"]')).not.toBeNull();
+    fireEvent.click(document.querySelector('[data-smoke="files-promote-open"]')!);
+    await waitFor(() => {
+      expect(screen.getByText('频道中暂无可提升文件')).not.toBeNull();
+    });
+    expect(document.body.textContent).not.toContain('先在文件视图中打开目标文件所在目录');
   });
 
   test('canPromote=false → 无提升入口', async () => {
@@ -811,6 +978,51 @@ describe('ProjectFilesBoard 提升入口(步骤 7)', () => {
     renderBoard();
     expect(document.querySelector('[data-smoke="files-promote-open"]')).toBeNull();
     expect(document.body.textContent).not.toContain('先在文件视图中打开目标文件所在目录');
+  });
+
+  test('切换频道会取消旧频道候选请求并清空提升状态', async () => {
+    let resolveOld!: (value: readonly { id: string; filename: string; logicalPath?: string }[]) => void;
+    const oldRequest = new Promise<readonly { id: string; filename: string; logicalPath?: string }[]>((resolve) => {
+      resolveOld = resolve;
+    });
+    const oldLoader = vi.fn(() => oldRequest);
+    const newLoader = vi.fn().mockResolvedValue([
+      { id: 'art-new', filename: 'new.md', logicalPath: 'new/new.md' },
+    ]);
+    const board = (channelId: string, loadPromotableArtifacts: ProjectFilesBoardProps['loadPromotableArtifacts']) => (
+      <ProjectFilesBoard
+        channelId={channelId}
+        packages={[]}
+        pendingDeliveries={[]}
+        library={null}
+        stages={stages}
+        agentNames={agentNames}
+        dataRevision={0}
+        onAddReference={() => {}}
+        canPromote
+        loadPromotableArtifacts={loadPromotableArtifacts}
+        onPromote={vi.fn().mockResolvedValue(null)}
+      />
+    );
+    const view = render(board('channel-old', oldLoader));
+    fireEvent.click(document.querySelector('[data-smoke="files-promote-open"]')!);
+    expect(screen.getByText('加载完整频道文件列表…')).not.toBeNull();
+
+    view.rerender(board('channel-new', newLoader));
+    await waitFor(() => {
+      expect(document.querySelector('[data-smoke="files-promote-form"]')).toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="files-promote-open"]')!);
+    await waitFor(() => {
+      expect(screen.getByText('new/new.md')).not.toBeNull();
+    });
+
+    await act(async () => {
+      resolveOld([{ id: 'art-old', filename: 'old.md', logicalPath: 'old/old.md' }]);
+      await oldRequest;
+    });
+    expect(screen.queryByText('old/old.md')).toBeNull();
+    expect(screen.getByText('new/new.md')).not.toBeNull();
   });
 });
 
@@ -826,6 +1038,7 @@ describe('ProjectFilesBoard 无项目画像回退(#1134 gate 放宽)', () => {
       agentNames={agentNames}
       dataRevision={0}
       onAddReference={() => {}}
+      loadPromotableArtifacts={async () => []}
     />);
     expect(document.querySelectorAll('[data-smoke="output-package-item"]').length).toBe(1);
     expect(document.querySelectorAll('[data-smoke="output-package-pending"]').length).toBe(0);

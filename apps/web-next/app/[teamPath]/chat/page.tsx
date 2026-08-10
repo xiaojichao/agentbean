@@ -49,6 +49,7 @@ import {
   type SubmitArtifactReviewDraft,
 } from '@/components/ProjectArtifactLibrary';
 import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
+import { ProjectDocumentList } from '@/components/channel-documents/ProjectDocumentList';
 import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
@@ -57,6 +58,7 @@ import { OutputPackageCard, type ReviseVersionRequest } from '@/components/Outpu
 import { SystemMessageBubble } from '@/components/SystemMessageBubble';
 import { ArtifactVersionRevisionActivity } from '@/components/ArtifactVersionRevisionActivity';
 import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
+import { loadAllPromotableArtifacts } from '@/lib/promotable-artifacts';
 import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
@@ -414,10 +416,8 @@ export default function ChatPage() {
   } | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   const outputPackageProjectionRequestRef = useRef(0);
-  // #823 文件库的逻辑产物视图与普通文件视图并存，默认仍是普通文件视图。
-  // 原型收敛:文件库默认按逻辑产物(输出包/产物集合)组织;无项目数据时回落到文件浏览。
-  const [channelFilesView, setChannelFilesView] = useState<'files' | 'artifacts'>('artifacts');
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
+  const [projectDocuments, setProjectDocuments] = useState<ChannelDocumentDto[]>([]);
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
   // #1060 OutputPackage 投影(Files 面;与讨论串/Task 同一 Server 事实)。
@@ -626,8 +626,9 @@ export default function ChatPage() {
     setChannelFilesCursor(undefined);
     setChannelFileDirectories([]);
     setChannelFilesLoading(false);
-    if (tab === 'files') void loadChannelFiles(true);
-  }, [activeChannel, conn, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
+    const isActiveDm = dms.some((dm) => dm.id === activeChannel);
+    if (tab === 'files' && isActiveDm) void loadChannelFiles(true);
+  }, [activeChannel, conn, dms, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
 
   // #823 逻辑产物视图按需拉取 Server 投影；没有项目数据的频道保持空投影，不影响普通文件视图。
   // #825 文档包与文件列表分开取，Bundle 读失败不牵连既有文件库渲染。
@@ -635,6 +636,7 @@ export default function ChatPage() {
     let active = true;
     setProjectArtifactLibrary(null);
     setChannelProjectOverview(null);
+    setProjectDocuments([]);
     setProjectDocumentBundles([]);
     setProjectDocumentBundlesArchived(false);
     if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') return () => { active = false; };
@@ -643,6 +645,9 @@ export default function ChatPage() {
     });
     void projectEvents().overview(activeChannel).then((result) => {
       if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
+    });
+    void channelEvents().listDocuments(activeChannel).then((result) => {
+      if (active) setProjectDocuments(result.ok ? result.documents ?? [] : []);
     });
     void projectEvents().documentBundles(activeChannel).then((result) => {
       if (!active) return;
@@ -893,6 +898,12 @@ export default function ChatPage() {
     return null;
   }, [activeChannel]);
 
+  const loadChannelPromotableArtifacts = useCallback(async () => {
+    if (!activeChannel || conn !== 'open') return [];
+    return loadAllPromotableArtifacts((path, cursor) =>
+      channelEvents().listFiles(activeChannel, cursor, 100, path, 'all'));
+  }, [activeChannel, conn]);
+
   const reviewChannelArtifact = useCallback(async (
     draft: SubmitArtifactReviewDraft,
   ): Promise<string | null> => {
@@ -1073,6 +1084,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     return { ok: true as const, revisionId: result.document.currentRevisionId };
   }, [activeChannel, openChannelDocument]);
 
@@ -1116,6 +1129,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     return {
       ok: true as const,
       snapshot: {
@@ -1157,6 +1172,8 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
+    setProjectDocuments((documents) => documents.map((document) =>
+      document.id === result.document!.id ? result.document! : document));
     appendMessage({
       ...result.message,
       artifacts: [result.document.currentRevision.artifact],
@@ -1300,14 +1317,6 @@ export default function ChatPage() {
     activeChannelObj.createdBy === currentUser.id,
   );
   const activeDmAgent = activeDm ? agents[activeDm.dmTargetId] : undefined;
-  // 文件库逻辑产物视图触发条件:有项目画像(阶段)或已有输出包/产物集合即可进入,
-  // 不要求先创建阶段(输出包也是项目数据,见 #1134 后续)。
-  const projectFilesAvailable = Boolean(
-    channelProjectOverview ||
-    outputPackages.length > 0 ||
-    outputPackagePendings.length > 0 ||
-    (projectArtifactLibrary?.collections.length ?? 0) > 0,
-  );
   const activeDmName = activeDmAgent?.name ?? activeDm?.name ?? '';
   const activeDmSubtitle = activeDmAgent?.description?.trim() || activeDmAgent?.role || '智能体私聊';
   const taskParticipants: ChannelMemberEntry[] = [
@@ -2732,26 +2741,9 @@ export default function ChatPage() {
           )
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            {projectFilesAvailable && (
-              <div className="flex shrink-0 items-center gap-1 border-b border-neutral-200 px-4 py-2">
-                {([['files', '文件'], ['artifacts', '逻辑产物']] as const).map(([view, label]) => (
-                  <button
-                    key={view}
-                    type="button"
-                    data-smoke={`channel-files-view-${view}`}
-                    onClick={() => setChannelFilesView(view)}
-                    className={`h-7 rounded-md px-2.5 text-xs font-medium ${channelFilesView === view
-                      ? 'bg-neutral-900 text-white'
-                      : 'text-neutral-600 hover:bg-neutral-100'}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {projectFilesAvailable && channelFilesView === 'artifacts' ? (
+            {activeChannel && !isDm ? (
               <ProjectFilesBoard
-                channelId={activeChannel ?? ''}
+                channelId={activeChannel}
                 packages={outputPackages}
                 pendingDeliveries={outputPackagePendings}
                 library={projectArtifactLibrary}
@@ -2764,18 +2756,48 @@ export default function ChatPage() {
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
                 onAddReference={addFilesBoardReference}
-                onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
+                documentReferenceSection={projectDocuments.length > 0 || projectDocumentBundles.length > 0 ? (
+                  <>
+                    <ProjectDocumentList
+                      documents={projectDocuments}
+                      archived={projectDocumentBundlesArchived}
+                      selections={projectReferenceSelections}
+                      onOpenDocument={(documentId) => {
+                        const document = projectDocuments.find((candidate) => candidate.id === documentId);
+                        if (document) void openMarkdownDocumentEditor(document.currentRevision.artifact as Artifact, document.id);
+                      }}
+                      onSelectionChange={(selection, documentId) => {
+                        setProjectReferenceSelections((current) => [
+                          ...current.filter((item) =>
+                            item.kind !== 'document' || item.documentId !== documentId),
+                          ...(selection ? [selection] : []),
+                        ]);
+                      }}
+                    />
+                    <ProjectDocumentBundleList
+                      bundles={projectDocumentBundles}
+                      archived={projectDocumentBundlesArchived}
+                      onLoadDetail={loadProjectDocumentBundleDetail}
+                      selections={projectReferenceSelections}
+                      onSelectionChange={(selection, bundleId) => {
+                        setProjectReferenceSelections((current) => [
+                          ...current.filter((item) =>
+                            (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
+                            || item.bundleId !== bundleId),
+                          ...(selection ? [selection] : []),
+                        ]);
+                      }}
+                    />
+                  </>
+                ) : undefined}
+                onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel })}
                 onOpenPackagePreview={openPackagePreviewModal}
                 onOpenReadOnlyArtifact={(artifact) => setReadOnlyArtifact(artifact)}
                 canDecideVersion={canDecideProjectArtifactVersion}
                 onReview={reviewChannelArtifact}
                 onFinalize={finalizeChannelArtifact}
                 canPromote={(channelProjectOverview?.profile.projectLeadId ?? null) === (currentUser?.id ?? null)}
-                promotableArtifacts={channelFiles.map((file) => ({
-                  id: file.artifact.id,
-                  filename: file.artifact.filename,
-                  ...(file.logicalPath ? { logicalPath: file.logicalPath } : {}),
-                }))}
+                loadPromotableArtifacts={loadChannelPromotableArtifacts}
                 onPromote={promoteChannelArtifact}
               />
             ) : (
