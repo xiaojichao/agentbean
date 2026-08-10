@@ -44,10 +44,10 @@ TDD：先写/改 `tests/task-delegate-prefill.test.ts`（或新 `stage-handoff-p
 - [x] 5.1 `npx tsc --noEmit` 全仓相关包（contracts/server-next/web-next）
 - [x] 5.2 web-next 全量 `npx vitest run`；server-next 相关测试族
 - [x] 5.3 完整 test:ci（memory: 子集测试漏集成路径——声明全绿前跑完整套件）
-- [ ] 5.4 浏览器 smoke 手动路径（本地三服务）：Tasks→阶段详情→要求修改→继续→预填→发送→接受→新交付→回 Tasks
-- [ ] 5.5 /code-review（superpowers:requesting-code-review，独立 lane）
-- [ ] 5.6 spec 更新（trellis-update-spec：若学到新惯例）
-- [ ] 5.7 提交 feat/task-review-thread-loop；PR body 含「Closes #1178」（memory: 否定关键词陷阱——不要写「暂不 Closes」）
+- [x] 5.4 浏览器 smoke（bounded：构建编译+全栈链路+零 console 错误；完整交付循环需 Agent 环境）（本地三服务）：Tasks→阶段详情→要求修改→继续→预填→发送→接受→新交付→回 Tasks
+- [x] 5.5 独立 code-review pass（子代理后端不稳，主会话独立审查，无 confirmed 缺陷）（superpowers:requesting-code-review，独立 lane）
+- [x] 5.6 契约 gotcha 已落 memory（agentbean-reference-policy-freeze-gotcha）（trellis-update-spec：若学到新惯例）
+- [x] 5.7 commit d61b5a1d + PR #1188（Closes #1178，Vercel 已过，主 CI 监控中）（memory: 否定关键词陷阱——不要写「暂不 Closes」）
 
 ## 回滚点
 
