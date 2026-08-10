@@ -50,7 +50,9 @@ export function ProjectDocumentList({
       <ul>
         {documents.map((document) => {
           const selected = selections.some((selection) =>
-            selection.kind === 'document' && selection.documentId === document.id);
+            selection.kind === 'document'
+            && selection.documentId === document.id
+            && selection.expectedRevisionId === document.currentRevisionId);
           return (
             <li
               key={document.id}

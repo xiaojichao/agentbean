@@ -60,4 +60,27 @@ describe('ProjectDocumentList', () => {
       selection: { kind: 'document', documentId: 'document-1', expectedRevisionId: 'revision-2' },
     }]);
   });
+
+  test('旧 revision 引用不冒充当前版选中态，可一键替换为 current revision', () => {
+    const changes: Array<ProjectReferenceSelectionRequestDto | null> = [];
+    render(<ProjectDocumentList
+      documents={[document]}
+      archived={false}
+      selections={[{
+        kind: 'document',
+        documentId: 'document-1',
+        expectedRevisionId: 'revision-1',
+      }]}
+      onSelectionChange={(selection) => changes.push(selection)}
+    />);
+
+    expect(screen.getByText('引用文档')).toBeTruthy();
+    expect(screen.queryByText('已引用')).toBeNull();
+    fireEvent.click(screen.getByText('引用文档'));
+    expect(changes).toEqual([{
+      kind: 'document',
+      documentId: 'document-1',
+      expectedRevisionId: 'revision-2',
+    }]);
+  });
 });
