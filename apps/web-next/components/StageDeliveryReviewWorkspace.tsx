@@ -1,10 +1,10 @@
 'use client';
 
 import { AlertTriangle, ArrowLeft, FileSearch, PackageCheck } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type {
   ConsistencyTokenV1,
-  PackageReviewAction,
+  OutputPackageDto,
   StageDeliveryReviewBlockerV1,
   StageDeliveryReviewMemberV1,
   StageDeliveryReviewVersionIdentityV1,
@@ -14,9 +14,41 @@ import type {
 
 import { TaskDeliveryOverviewContent } from '@/components/TaskDeliveryOverview';
 import { reviewStateLabel } from '@/lib/delivery-labels';
+import {
+  isStagePackageMutationAction,
+  mutationErrorCopy,
+  mutationLockKey,
+  nextMutationIdempotencyKey,
+  packageActionImpact,
+  packageActionRequiresComment,
+  packageActionRequiresRejectReason,
+  packageMutationActionLabel,
+  submitDeliveryMutation,
+  submitPackageMutation,
+  validateDeliveryMutationDraft,
+  validatePackageMutationDraft,
+  type DeliveryMutationTarget,
+  type MutationDialogDraft,
+  type PackageMutationTarget,
+  type StagePackageMutationAction,
+} from '@/lib/package-review-actions';
 import { projectEvents, taskEvents } from '@/lib/socket';
 
 type DetailState = 'loading' | 'not_ready' | 'no_permission' | 'error' | 'ready';
+
+type PendingDialog =
+  | {
+      readonly kind: 'package';
+      readonly target: PackageMutationTarget;
+      readonly lockKey: string;
+      readonly focusSelector: string;
+    }
+  | {
+      readonly kind: 'delivery';
+      readonly target: DeliveryMutationTarget;
+      readonly lockKey: string;
+      readonly focusSelector: string;
+    };
 
 export interface StageDeliveryReviewWorkspaceProps {
   readonly teamId: string;
@@ -24,10 +56,14 @@ export interface StageDeliveryReviewWorkspaceProps {
   readonly stageId: string;
   readonly taskId: string;
   readonly minimumConsistency?: ConsistencyTokenV1;
+  /** 当前人类用户 id；用于 Task delivery 验收按钮的本地发现门禁（仍由 Server 复验 authority）。 */
+  readonly currentUserId?: string;
   readonly participantName?: (id: string) => string;
   readonly onOpenThread?: (rootMessageId: string) => void;
   readonly onViewAssetSource?: (packageId: string) => void;
   readonly onAction?: (action: TaskLevelAction) => void;
+  /** 审核/验收成功后通知父级刷新 Tasks 列表等；工作区自身会重读 Server projection。 */
+  readonly onMutationSucceeded?: () => void;
 }
 
 export function StageDeliveryReviewWorkspace({
@@ -36,23 +72,41 @@ export function StageDeliveryReviewWorkspace({
   stageId,
   taskId,
   minimumConsistency,
+  currentUserId,
   participantName = (id) => id,
   onOpenThread,
   onViewAssetSource,
   onAction,
+  onMutationSucceeded,
 }: StageDeliveryReviewWorkspaceProps) {
   const [workspace, setWorkspace] = useState<StageDeliveryReviewWorkspaceV1 | null>(null);
   const [state, setState] = useState<DetailState>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
+  const [draft, setDraft] = useState<MutationDialogDraft>({ comment: '', rejectReason: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [activeLockKey, setActiveLockKey] = useState<string | null>(null);
   const latestConsistency = useRef(minimumConsistency);
+  const hasReadyProjectionRef = useRef(false);
+  const skipInitialConsistencyRefresh = useRef(true);
+  const refreshRef = useRef<(() => void) | null>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
+  const restoreFocusSelectorRef = useRef<string | null>(null);
 
+  // identity 变化时全量重载；minimumConsistency 水位只软刷新，不拆掉进行中对话框。
   useEffect(() => {
     let alive = true;
     let requestId = 0;
     latestConsistency.current = minimumConsistency;
+    hasReadyProjectionRef.current = false;
+    skipInitialConsistencyRefresh.current = true;
     setWorkspace(null);
     setState('loading');
     setErrorMessage(null);
+    setPendingDialog(null);
+    setSubmitError(null);
+    setActiveLockKey(null);
     const project = projectEvents();
     const load = (showLoading: boolean) => {
       const currentRequestId = ++requestId;
@@ -67,23 +121,33 @@ export function StageDeliveryReviewWorkspace({
         if (!alive || currentRequestId !== requestId) return;
         if (result.ok && result.workspace) {
           latestConsistency.current = result.workspace.consistencyToken;
+          hasReadyProjectionRef.current = true;
           setWorkspace(result.workspace);
           setState('ready');
           setErrorMessage(null);
           return;
         }
+        // 软刷新失败时保留已有 ready 投影，避免冲掉进行中的 mutation 对话框。
+        if (!showLoading && hasReadyProjectionRef.current) return;
+        hasReadyProjectionRef.current = false;
         setWorkspace(null);
         setState(detailStateForError(result.error));
         setErrorMessage(result.message ?? null);
       }).catch(() => {
         if (!alive || currentRequestId !== requestId) return;
+        if (!showLoading && hasReadyProjectionRef.current) return;
+        hasReadyProjectionRef.current = false;
         setWorkspace(null);
         setState('error');
         setErrorMessage('阶段交付审核工作区加载失败，请稍后重试');
       });
     };
-    void load(true);
+    void load(true).finally(() => {
+      // identity 全量加载完成后，允许后续 minimumConsistency 水位触发软刷新。
+      if (alive) skipInitialConsistencyRefresh.current = false;
+    });
     const refresh = () => { void load(false); };
+    refreshRef.current = refresh;
     const stopProject = project.onUpdated(channelId, refresh);
     const stopArtifacts = project.onArtifactsUpdated(channelId, refresh);
     const stopTasks = taskEvents().onSnapshot((tasks) => {
@@ -91,11 +155,116 @@ export function StageDeliveryReviewWorkspace({
     });
     return () => {
       alive = false;
+      refreshRef.current = null;
       stopProject();
       stopArtifacts();
       stopTasks();
     };
-  }, [teamId, channelId, stageId, taskId, minimumConsistency]);
+  }, [teamId, channelId, stageId, taskId]);
+
+  useEffect(() => {
+    latestConsistency.current = minimumConsistency;
+    // identity 全量加载期间忽略水位软刷新，避免挂载时双请求/冲掉 loading。
+    if (skipInitialConsistencyRefresh.current) return;
+    // 水位推进时软刷新；不重置 loading/dialog。
+    refreshRef.current?.();
+  }, [minimumConsistency]);
+  const closeDialog = useCallback((restoreFocus: boolean) => {
+    const selector = restoreFocusSelectorRef.current;
+    setPendingDialog(null);
+    setDraft({ comment: '', rejectReason: '' });
+    setSubmitError(null);
+    setSubmitting(false);
+    setActiveLockKey(null);
+    idempotencyKeyRef.current = null;
+    if (restoreFocus && selector) {
+      queueMicrotask(() => {
+        const node = document.querySelector<HTMLElement>(selector);
+        node?.focus();
+      });
+    }
+    restoreFocusSelectorRef.current = null;
+  }, []);
+
+  const openPackageDialog = useCallback((
+    action: StagePackageMutationAction,
+    member: StageDeliveryReviewMemberV1,
+    pkg: OutputPackageDto,
+  ) => {
+    if (!workspace || workspace.archived) return;
+    const lockKey = mutationLockKey({
+      kind: 'package',
+      collectionId: member.collectionId,
+      versionId: member.artifactVersionId,
+      action,
+    });
+    const focusSelector = `[data-smoke="package-review-action"][data-action="${action}"][data-collection-id="${member.collectionId}"]`;
+    restoreFocusSelectorRef.current = focusSelector;
+    idempotencyKeyRef.current = nextMutationIdempotencyKey(`stage-package:${action}:${member.collectionId}:${member.artifactVersionId}`);
+    setDraft({
+      comment: action === 'set-final' ? '设为最终版' : '',
+      rejectReason: '',
+    });
+    setSubmitError(null);
+    setPendingDialog({
+      kind: 'package',
+      target: { channelId, package: pkg, member, action },
+      lockKey,
+      focusSelector,
+    });
+  }, [channelId, workspace]);
+
+  const openDeliveryDialog = useCallback((kind: 'accept-delivery' | 'reject-delivery') => {
+    if (!workspace || workspace.archived) return;
+    const expectedTaskRevision = workspace.taskOverview.acceptanceContract.taskRevision;
+    const lockKey = mutationLockKey({ kind: 'delivery', taskId, action: kind });
+    const focusSelector = `[data-smoke="stage-delivery-action"][data-action="${kind}"]`;
+    restoreFocusSelectorRef.current = focusSelector;
+    idempotencyKeyRef.current = nextMutationIdempotencyKey(`stage-delivery:${kind}:${taskId}:${expectedTaskRevision}`);
+    setDraft({ comment: '', rejectReason: '' });
+    setSubmitError(null);
+    setPendingDialog({
+      kind: 'delivery',
+      target: { taskId, expectedTaskRevision, kind },
+      lockKey,
+      focusSelector,
+    });
+  }, [taskId, workspace]);
+
+  const confirmMutation = useCallback(async () => {
+    if (!pendingDialog || submitting) return;
+    const validation = pendingDialog.kind === 'package'
+      ? validatePackageMutationDraft(pendingDialog.target.action, draft)
+      : validateDeliveryMutationDraft(pendingDialog.target.kind, draft);
+    if (validation) {
+      setSubmitError(validation);
+      return;
+    }
+    const key = idempotencyKeyRef.current ?? nextMutationIdempotencyKey('stage-mutation');
+    idempotencyKeyRef.current = key;
+    setSubmitting(true);
+    setActiveLockKey(pendingDialog.lockKey);
+    setSubmitError(null);
+    try {
+      const result = pendingDialog.kind === 'package'
+        ? await submitPackageMutation(pendingDialog.target, draft, key)
+        : await submitDeliveryMutation(pendingDialog.target, draft);
+      if (!result.ok) {
+        setSubmitError(mutationErrorCopy(result));
+        setSubmitting(false);
+        setActiveLockKey(null);
+        // 保留同一 idempotency key，便于网络丢失后原 key 重试。
+        return;
+      }
+      closeDialog(true);
+      refreshRef.current?.();
+      onMutationSucceeded?.();
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '操作失败，请稍后重试');
+      setSubmitting(false);
+      setActiveLockKey(null);
+    }
+  }, [closeDialog, draft, onMutationSucceeded, pendingDialog, submitting]);
 
   if (state !== 'ready') {
     return <StageDeliveryReviewState state={state} errorMessage={errorMessage} />;
@@ -105,6 +274,15 @@ export function StageDeliveryReviewWorkspace({
   }
 
   const focusPackage = workspace.focusPackage;
+  // Task delivery 按钮不是 package availableActions；在 Server 未投影 delivery action 前，
+  // 仅当当前用户落在预绑定 humanAcceptanceAuthorityIds 时展示（仍由 Command 复验）。
+  const acceptanceIds = workspace.taskOverview.acceptanceContract.humanAcceptanceAuthorityIds;
+  const canMutateDelivery = !workspace.archived
+    && workspace.taskOverview.task.status === 'in_review'
+    && workspace.taskOverview.acceptanceContract.requiresHumanAcceptance
+    && Boolean(currentUserId)
+    && acceptanceIds.includes(currentUserId!);
+
   return (
     <div className="space-y-3" data-smoke="stage-delivery-review-workspace">
       <section className="rounded-md border border-neutral-200 bg-white p-3" data-smoke="stage-review-context">
@@ -158,6 +336,11 @@ export function StageDeliveryReviewWorkspace({
                 {focusPackage.package.workspaceRunId ? ` · WorkspaceRun ${focusPackage.package.workspaceRunId}` : ''}
                 {focusPackage.package.invocationId ? ` · Invocation ${focusPackage.package.invocationId}` : ''}
               </div>
+              <div className="mt-1 text-[11px] text-neutral-500" data-smoke="stage-review-package-basis">
+                Task revision {focusPackage.package.taskRevision ?? '—'}
+                {focusPackage.package.taskAttempt !== undefined ? ` · attempt ${focusPackage.package.taskAttempt}` : ''}
+                {' · '}delivery {focusPackage.package.deliveryId}
+              </div>
             </div>
           </div>
 
@@ -175,7 +358,14 @@ export function StageDeliveryReviewWorkspace({
 
           <div className="mt-3 space-y-2">
             {focusPackage.members.map((member) => (
-              <PackageMemberDetail key={member.collectionId} member={member} participantName={participantName} />
+              <PackageMemberDetail
+                key={member.collectionId}
+                member={member}
+                participantName={participantName}
+                archived={workspace.archived}
+                activeLockKey={activeLockKey}
+                onAction={(action) => openPackageDialog(action, member, focusPackage.package)}
+              />
             ))}
           </div>
         </section>
@@ -186,6 +376,41 @@ export function StageDeliveryReviewWorkspace({
       )}
 
       <StageReviewBlockers blockers={workspace.blockers} />
+
+      {canMutateDelivery ? (
+        <section className="rounded-md border border-emerald-200 bg-emerald-50/40 p-3" data-smoke="stage-delivery-acceptance">
+          <div className="text-xs font-semibold text-neutral-900">Task 交付验收</div>
+          <p className="mt-1 text-[11px] text-neutral-600">
+            验收与文件包审核是独立事实。按钮仅表示可发现性；提交时 Server 仍复验 acceptance authority。
+          </p>
+          <div className="mt-1 text-[11px] text-neutral-500">
+            expected Task revision {workspace.taskOverview.acceptanceContract.taskRevision}
+            {' · '}attempt {workspace.taskOverview.acceptanceContract.attempt}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-smoke="stage-delivery-action"
+              data-action="accept-delivery"
+              disabled={Boolean(activeLockKey)}
+              onClick={() => openDeliveryDialog('accept-delivery')}
+              className={actionButtonClass('accept')}
+            >
+              验收交付
+            </button>
+            <button
+              type="button"
+              data-smoke="stage-delivery-action"
+              data-action="reject-delivery"
+              disabled={Boolean(activeLockKey)}
+              onClick={() => openDeliveryDialog('reject-delivery')}
+              className={actionButtonClass('reject')}
+            >
+              退回交付
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <TaskDeliveryOverviewContent overview={workspace.taskOverview} onAction={onAction} />
 
@@ -209,6 +434,19 @@ export function StageDeliveryReviewWorkspace({
           查看资产来源
         </button>
       </div>
+
+      {pendingDialog ? (
+        <MutationConfirmDialog
+          pending={pendingDialog}
+          draft={draft}
+          submitting={submitting}
+          error={submitError}
+          participantName={participantName}
+          onDraftChange={setDraft}
+          onCancel={() => closeDialog(true)}
+          onConfirm={() => { void confirmMutation(); }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -216,10 +454,17 @@ export function StageDeliveryReviewWorkspace({
 function PackageMemberDetail({
   member,
   participantName,
+  archived,
+  activeLockKey,
+  onAction,
 }: {
   member: StageDeliveryReviewMemberV1;
   participantName: (id: string) => string;
+  archived: boolean;
+  activeLockKey: string | null;
+  onAction: (action: StagePackageMutationAction) => void;
 }) {
+  const mutationActions = (member.availableActions?.actions ?? []).filter(isStagePackageMutationAction);
   return (
     <article className="border border-neutral-200 bg-white p-3" data-smoke="stage-review-member" data-collection-id={member.collectionId}>
       <div className="flex items-start justify-between gap-3">
@@ -266,6 +511,7 @@ function PackageMemberDetail({
         {member.review.records.map((review) => (
           <div key={review.id} className="mt-1 text-neutral-500">
             {reviewStateLabel(review.decision)} · {review.comment || '无备注'} · authority {review.authorityBasis}
+            {' · '}审核人 {participantName(review.reviewedBy)}
           </div>
         ))}
         <div className="mt-1">
@@ -276,11 +522,177 @@ function PackageMemberDetail({
             ? `${member.finalization.versionId}（由 ${participantName(member.finalization.finalizedBy)} 确认）`
             : '尚无最终化事实'}
         </div>
-        {member.availableActions && member.availableActions.actions.length > 0 ? (
-          <div className="mt-1">Server 可发现动作：{member.availableActions.actions.map(packageActionLabel).join('、')}</div>
+        {mutationActions.length > 0 && !archived ? (
+          <div className="mt-2 flex flex-wrap gap-1.5" data-smoke="stage-review-member-actions">
+            {mutationActions.map((action) => {
+              const lockKey = mutationLockKey({
+                kind: 'package',
+                collectionId: member.collectionId,
+                versionId: member.artifactVersionId,
+                action,
+              });
+              const locked = Boolean(activeLockKey && activeLockKey !== lockKey);
+              const pending = activeLockKey === lockKey;
+              return (
+                <button
+                  key={action}
+                  type="button"
+                  data-smoke="package-review-action"
+                  data-action={action}
+                  data-collection-id={member.collectionId}
+                  data-version-id={member.artifactVersionId}
+                  disabled={locked || pending}
+                  onClick={() => onAction(action)}
+                  className={actionButtonClass(action)}
+                >
+                  {pending ? '提交中…' : packageMutationActionLabel(action)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+        {archived && mutationActions.length > 0 ? (
+          <div className="mt-2 text-[11px] text-neutral-400">归档频道只读，审核动作已禁用。</div>
         ) : null}
       </div>
     </article>
+  );
+}
+
+function MutationConfirmDialog({
+  pending,
+  draft,
+  submitting,
+  error,
+  participantName,
+  onDraftChange,
+  onCancel,
+  onConfirm,
+}: {
+  pending: PendingDialog;
+  draft: MutationDialogDraft;
+  submitting: boolean;
+  error: string | null;
+  participantName: (id: string) => string;
+  onDraftChange: (draft: MutationDialogDraft) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const titleId = useId();
+  const title = pending.kind === 'package'
+    ? packageMutationActionLabel(pending.target.action)
+    : packageMutationActionLabel(pending.target.kind);
+  const needsComment = pending.kind === 'package' && packageActionRequiresComment(pending.target.action);
+  const needsRejectReason = pending.kind === 'package'
+    ? packageActionRequiresRejectReason(pending.target.action)
+    : pending.target.kind === 'reject-delivery';
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submitting) onCancel();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [onCancel, submitting]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+      role="presentation"
+      data-smoke="stage-review-mutation-dialog"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !submitting) onCancel();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-lg rounded-lg border border-neutral-200 bg-white p-4 shadow-xl"
+      >
+        <h2 id={titleId} className="text-sm font-semibold text-neutral-900">{title}</h2>
+        {pending.kind === 'package' ? (
+          <div className="mt-2 space-y-1 text-[11px] text-neutral-600" data-smoke="stage-review-mutation-target">
+            <div>文件包：{pending.target.package.packageId}</div>
+            <div>成员：{pending.target.member.shortLabel} · {pending.target.member.filename}</div>
+            <div>collection：{pending.target.member.collectionId}</div>
+            <div>version：{pending.target.member.artifactVersionId}</div>
+            <div>
+              Task revision {pending.target.package.taskRevision ?? '—'}
+              {pending.target.package.taskAttempt !== undefined ? ` · attempt ${pending.target.package.taskAttempt}` : ''}
+            </div>
+            <div>影响：{packageActionImpact(pending.target.action)}</div>
+          </div>
+        ) : (
+          <div className="mt-2 space-y-1 text-[11px] text-neutral-600" data-smoke="stage-review-mutation-target">
+            <div>Task：{pending.target.taskId}</div>
+            <div>expected revision：{pending.target.expectedTaskRevision}</div>
+            <div>
+              影响：{pending.target.kind === 'accept-delivery'
+                ? '在合法 acceptance authority 下验收当前 delivery，将 Task 推进到完成态。'
+                : '退回当前 delivery，保留旧 delivery/review 事实并产生新的合法 revision/attempt。'}
+            </div>
+            <div className="text-neutral-500">当前操作者身份由 Server 复验；界面可见不代表已获授权。</div>
+            <div className="sr-only">{participantName('self')}</div>
+          </div>
+        )}
+
+        {needsComment ? (
+          <label className="mt-3 block text-[11px] text-neutral-700">
+            审核意见
+            <textarea
+              value={draft.comment}
+              onChange={(event) => onDraftChange({ ...draft, comment: event.target.value })}
+              disabled={submitting}
+              className="mt-1 min-h-20 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-xs text-neutral-800"
+              data-smoke="stage-review-comment"
+              aria-label="审核意见"
+            />
+          </label>
+        ) : null}
+
+        {needsRejectReason ? (
+          <label className="mt-3 block text-[11px] text-neutral-700">
+            退回理由
+            <textarea
+              value={draft.rejectReason}
+              onChange={(event) => onDraftChange({ ...draft, rejectReason: event.target.value })}
+              disabled={submitting}
+              className="mt-1 min-h-16 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-xs text-neutral-800"
+              data-smoke="stage-review-reject-reason"
+              aria-label="退回理由"
+            />
+          </label>
+        ) : null}
+
+        {error ? (
+          <div className="mt-3 rounded border border-rose-200 bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700" data-smoke="stage-review-mutation-error">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onCancel}
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+            data-smoke="stage-review-mutation-cancel"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={onConfirm}
+            className="rounded-md border border-neutral-900 bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+            data-smoke="stage-review-mutation-confirm"
+          >
+            {submitting ? '提交中…' : '确认提交'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -348,19 +760,6 @@ function stableInputLabel(input: StageDeliveryReviewWorkspaceV1['stage']['advanc
   return `${input.key}: Document revision ${input.revisionId}`;
 }
 
-function packageActionLabel(action: PackageReviewAction | string): string {
-  const labels: Partial<Record<PackageReviewAction | string, string>> = {
-    'review-approved': '通过审核',
-    'review-changes-requested': '要求修改',
-    'review-rejected': '拒绝',
-    'review-and-finalize': '通过并最终化',
-    'review-and-reject-delivery': '审核并退回交付',
-    'set-final': '设为最终版',
-    'revise-version': '基于此修改',
-  };
-  return labels[action] ?? action;
-}
-
 function detailStateForError(error: string | undefined): DetailState {
   if (error === 'PROJECTION_NOT_READY') return 'not_ready';
   if (error === 'FORBIDDEN' || error === 'UNAUTHENTICATED') return 'no_permission';
@@ -380,6 +779,19 @@ function StageDeliveryReviewState({ state, errorMessage }: { state: Exclude<Deta
       {copy}
     </div>
   );
+}
+
+function actionButtonClass(action: string): string {
+  if (action === 'review-and-finalize' || action === 'set-final' || action === 'accept') {
+    return 'rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40';
+  }
+  if (action === 'review-rejected' || action === 'review-and-reject-delivery' || action === 'reject' || action === 'reject-delivery') {
+    return 'rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-800 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40';
+  }
+  if (action === 'review-changes-requested') {
+    return 'rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-800 hover:bg-orange-100 disabled:cursor-not-allowed disabled:opacity-40';
+  }
+  return 'rounded-md border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40';
 }
 
 const navigationButtonClass = 'inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40';

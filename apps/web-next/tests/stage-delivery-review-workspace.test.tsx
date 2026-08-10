@@ -12,6 +12,12 @@ const mocks = vi.hoisted(() => ({
   onUpdated: vi.fn(),
   onArtifactsUpdated: vi.fn(),
   onSnapshot: vi.fn(),
+  submitPackageArtifactReview: vi.fn(),
+  submitPackageReviewAndFinalize: vi.fn(),
+  submitPackageReviewAndRejectDelivery: vi.fn(),
+  setArtifactFinalVersion: vi.fn(),
+  acceptRootDelivery: vi.fn(),
+  rejectRootDelivery: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -19,8 +25,16 @@ vi.mock('@/lib/socket', () => ({
     queryStageDeliveryReviewWorkspace: mocks.query,
     onUpdated: mocks.onUpdated,
     onArtifactsUpdated: mocks.onArtifactsUpdated,
+    submitPackageArtifactReview: mocks.submitPackageArtifactReview,
+    submitPackageReviewAndFinalize: mocks.submitPackageReviewAndFinalize,
+    submitPackageReviewAndRejectDelivery: mocks.submitPackageReviewAndRejectDelivery,
+    setArtifactFinalVersion: mocks.setArtifactFinalVersion,
   }),
-  taskEvents: () => ({ onSnapshot: mocks.onSnapshot }),
+  taskEvents: () => ({
+    onSnapshot: mocks.onSnapshot,
+    acceptRootDelivery: mocks.acceptRootDelivery,
+    rejectRootDelivery: mocks.rejectRootDelivery,
+  }),
 }));
 
 import { StageDeliveryReviewWorkspace } from '../components/StageDeliveryReviewWorkspace';
@@ -125,16 +139,274 @@ describe('阶段交付审核工作区', () => {
   });
 });
 
+describe('阶段交付审核 mutation 闭环 (#1177)', () => {
+  test('只渲染 Server availableActions 按钮，并在确认后提交具名 command', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'pending',
+        availableActions: ['review-approved', 'review-changes-requested', 'review-rejected', 'review-and-finalize', 'review-and-reject-delivery'],
+      }),
+    });
+    mocks.submitPackageArtifactReview.mockResolvedValue({ ok: true, review: { id: 'review-new' } });
+    const onMutationSucceeded = vi.fn();
+    render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        onMutationSucceeded={onMutationSucceeded}
+      />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="package-review-action"]')).not.toBeNull());
+    const buttons = Array.from(document.querySelectorAll('[data-smoke="package-review-action"]'));
+    expect(buttons.map((node) => node.getAttribute('data-action'))).toEqual([
+      'review-approved',
+      'review-changes-requested',
+      'review-rejected',
+      'review-and-finalize',
+      'review-and-reject-delivery',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: '通过审核' }));
+    expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="stage-review-mutation-target"]')?.textContent).toContain('package-1');
+    expect(document.querySelector('[data-smoke="stage-review-mutation-target"]')?.textContent).toContain('version-1');
+    fireEvent.change(screen.getByLabelText('审核意见'), { target: { value: '质量合格' } });
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'approved',
+        availableActions: ['set-final'],
+        asOf: 200,
+      }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(mocks.submitPackageArtifactReview).toHaveBeenCalledTimes(1));
+    expect(mocks.submitPackageArtifactReview).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'channel-1',
+      packageId: 'package-1',
+      collectionId: 'collection-1',
+      versionId: 'version-1',
+      decision: 'approved',
+      comment: '质量合格',
+    }));
+    const idempotencyKey = mocks.submitPackageArtifactReview.mock.calls[0]?.[0]?.idempotencyKey as string;
+    expect(idempotencyKey).toMatch(/^stage-package:review-approved:/);
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).toBeNull());
+    expect(onMutationSucceeded).toHaveBeenCalled();
+    // 成功后以 Server projection 刷新，不乐观改本地 reviewState。
+    await vi.waitFor(() => expect(mocks.query.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  test('结构化失败保留对话框与原 idempotency key，可原 key 重试', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'pending',
+        availableActions: ['review-changes-requested'],
+      }),
+    });
+    mocks.submitPackageArtifactReview
+      .mockResolvedValueOnce({ ok: false, error: 'CONFLICT', message: 'task-revision-stale' })
+      .mockResolvedValueOnce({ ok: true, review: { id: 'review-retry' } });
+    render(
+      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '要求修改' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '要求修改' }));
+    fireEvent.change(screen.getByLabelText('审核意见'), { target: { value: '请补截图' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-review-mutation-error"]')?.textContent).toContain('task-revision-stale'));
+    expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).not.toBeNull();
+    const firstKey = mocks.submitPackageArtifactReview.mock.calls[0]?.[0]?.idempotencyKey;
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(mocks.submitPackageArtifactReview).toHaveBeenCalledTimes(2));
+    expect(mocks.submitPackageArtifactReview.mock.calls[1]?.[0]?.idempotencyKey).toBe(firstKey);
+  });
+
+  test('通过并设为最终版走原子组合命令，不拆成 review + set-final', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'pending',
+        availableActions: ['review-and-finalize'],
+      }),
+    });
+    mocks.submitPackageReviewAndFinalize.mockResolvedValue({ ok: true });
+    render(
+      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '通过并设为最终版' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '通过并设为最终版' }));
+    fireEvent.change(screen.getByLabelText('审核意见'), { target: { value: '可最终化' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(mocks.submitPackageReviewAndFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      decision: 'approved',
+      expectedCollectionRevision: 2,
+      comment: '可最终化',
+    })));
+    expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
+    expect(mocks.setArtifactFinalVersion).not.toHaveBeenCalled();
+  });
+
+  test('审核并退回交付需要 rejectReason，并提交 expectedTaskRevision/attempt', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'pending',
+        availableActions: ['review-and-reject-delivery'],
+      }),
+    });
+    mocks.submitPackageReviewAndRejectDelivery.mockResolvedValue({ ok: true });
+    render(
+      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '审核并退回交付' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '审核并退回交付' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    expect(document.querySelector('[data-smoke="stage-review-mutation-error"]')?.textContent).toMatch(/审核意见|退回理由/);
+    fireEvent.change(screen.getByLabelText('审核意见'), { target: { value: '需要重做' } });
+    fireEvent.change(screen.getByLabelText('退回理由'), { target: { value: '验收材料不完整' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(mocks.submitPackageReviewAndRejectDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      decision: 'changes_requested',
+      expectedTaskRevision: 1,
+      expectedTaskAttempt: 1,
+      rejectReason: '验收材料不完整',
+      comment: '需要重做',
+    })));
+  });
+
+  test('Task 验收/退回走 lifecycle commands，提交中锁定同目标动作', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'approved',
+        availableActions: [],
+        taskInReview: true,
+      }),
+    });
+    let resolveAccept: ((value: { ok: boolean }) => void) | undefined;
+    mocks.acceptRootDelivery.mockReturnValue(new Promise((resolve) => { resolveAccept = resolve; }));
+    render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        currentUserId="reviewer-1"
+      />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '验收交付' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '提交中…' })).toBeTruthy());
+    expect(mocks.acceptRootDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-1',
+      expectedTaskRevision: 1,
+    }));
+    resolveAccept?.({ ok: true });
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).toBeNull());
+  });
+
+  test('非预绑定验收人看不到 Task delivery 验收按钮', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'approved',
+        availableActions: [],
+        taskInReview: true,
+      }),
+    });
+    render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        currentUserId="outsider"
+      />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).not.toBeNull());
+    expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).toBeNull();
+  });
+
+  test('失败后清除 lock，原 idempotency key 可重试；soft refresh 不拆掉对话框', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'pending',
+        availableActions: ['review-approved'],
+      }),
+    });
+    mocks.submitPackageArtifactReview.mockResolvedValue({
+      ok: false,
+      error: 'FORBIDDEN',
+      message: 'actor-not-authorized',
+    });
+    let refresh: (() => void) | undefined;
+    mocks.onArtifactsUpdated.mockImplementation((_channelId, handler) => {
+      refresh = handler;
+      return () => {};
+    });
+    render(
+      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => expect(screen.getByRole('button', { name: '通过审核' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: '通过审核' }));
+    fireEvent.change(screen.getByLabelText('审核意见'), { target: { value: 'ok' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-review-mutation-error"]')?.textContent).toContain('actor-not-authorized'));
+    expect(screen.getByRole('button', { name: '通过审核' }).textContent).not.toContain('提交中');
+    refresh?.();
+    await Promise.resolve();
+    expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).not.toBeNull();
+    expect(screen.getByLabelText('审核意见')).toBeTruthy();
+  });
+
+  test('归档频道不展示 package mutation 按钮', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        archived: true,
+        reviewState: 'pending',
+        availableActions: ['review-approved'],
+      }),
+    });
+    render(
+      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).not.toBeNull());
+    expect(document.querySelectorAll('[data-smoke="package-review-action"]')).toHaveLength(0);
+    expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).toBeNull();
+  });
+});
+
 function workspaceFixture(options: {
   noDelivery?: boolean;
   archived?: boolean;
   unavailableVersion?: boolean;
   stageName?: string;
   asOf?: number;
+  reviewState?: 'pending' | 'approved' | 'changes_requested' | 'rejected';
+  availableActions?: Array<
+    | 'review-approved'
+    | 'review-changes-requested'
+    | 'review-rejected'
+    | 'review-and-finalize'
+    | 'review-and-reject-delivery'
+    | 'set-final'
+  >;
+  taskInReview?: boolean;
 } = {}): StageDeliveryReviewWorkspaceV1 {
+  const reviewState = options.reviewState ?? 'approved';
+  const availableActions = options.availableActions ?? [];
   const task = {
     id: 'task-1', teamId: 'team-1', channelId: 'channel-1', title: '审核发布包', description: '',
-    status: 'in_review' as const, creatorId: 'reviewer-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 2,
+    status: (options.taskInReview || reviewState === 'pending' ? 'in_review' : 'in_review') as const,
+    creatorId: 'reviewer-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 2,
   };
   const stage = {
     id: 'stage-1', teamId: 'team-1', channelId: 'channel-1', name: options.stageName ?? '发布审核',
@@ -161,7 +433,7 @@ function workspaceFixture(options: {
     versionNumber,
     artifactId: `artifact-${versionId}`,
     filename: 'release.md',
-    reviewState: 'approved' as const,
+    reviewState: reviewState,
     isFinalVersion: policy === 'final',
     collectionRevision: 2,
     source: { taskId: 'task-1', taskRevision: 1, workspaceRunId: 'run-1', invocationId: 'invocation-1' },
@@ -190,7 +462,7 @@ function workspaceFixture(options: {
     acceptanceContract: {
       nodeKind: 'root' as const, reviewPolicy: 'human', humanAcceptanceAuthorityIds: ['reviewer-1'],
       requiresHumanAcceptance: true, acceptanceCriteria: ['交付可用'], taskRevision: 1, attempt: 1, maxAttempts: 3,
-      requiredReviewCoverage: { requiredForFinalCount: 1, finalizedCount: 1, complete: true },
+      requiredReviewCoverage: { requiredForFinalCount: 1, finalizedCount: reviewState === 'approved' ? 1 : 0, complete: reviewState === 'approved' },
     },
     responsibilityFocus: { kind: 'review_wait' as const, detail: '等待人类验收/审核交付' },
     delivery: options.noDelivery ? { packages: [], pendingDeliveries: [] } : {
@@ -198,7 +470,7 @@ function workspaceFixture(options: {
         schemaVersion: 1 as const, packageId: 'package-1', teamId: 'team-1', channelId: 'channel-1', revision: 1,
         deliveryId: 'delivery-1', publishId: 'publish-1', workspaceRevisionId: 'workspace-revision-1', agentId: 'agent-1',
         taskId: 'task-1', taskBinding: 'managed' as const, taskRevision: 1, taskAttempt: 1,
-        memberCount: 1, reviewState: 'approved' as const, status: 'recorded' as const, createdAt: 10,
+        memberCount: 1, reviewState, status: 'recorded' as const, createdAt: 10,
       }], pendingDeliveries: [], focusPackageId: 'package-1',
     },
     availableActions: [{ action: 'open-task' as const, label: '打开 Task' }],
@@ -230,23 +502,36 @@ function workspaceFixture(options: {
             specified: identity('specified', 'version-2', 2),
           }),
           review: {
-            state: 'approved' as const, covered: true, actualReviewerIds: ['reviewer-1'],
-            records: [{
+            state: reviewState, covered: reviewState !== 'pending', actualReviewerIds: reviewState === 'pending' ? [] : ['reviewer-1'],
+            records: reviewState === 'pending' ? [] : [{
               id: 'review-1', teamId: 'team-1', channelId: 'channel-1', collectionId: 'collection-1',
               versionId: 'version-1', packageId: 'package-1', deliveryId: 'delivery-1', taskId: 'task-1',
               taskRevision: 1, taskAttempt: 1, decision: 'approved' as const, comment: '符合要求',
               authorityBasis: 'stage-reviewer-delegation' as const, reviewedBy: 'reviewer-1', createdAt: 20,
             }],
           },
-          finalization: {
+          finalization: reviewState === 'approved' ? {
             id: 'finalization-1', teamId: 'team-1', channelId: 'channel-1', collectionId: 'collection-1',
             versionId: 'version-1', basisReviewId: 'review-1', actorKind: 'human' as const,
             finalizedBy: 'reviewer-1', createdAt: 21,
+          } : undefined,
+          availableActions: {
+            collectionId: 'collection-1',
+            versionId: 'version-1',
+            reviewState,
+            isFinalVersion: false,
+            collectionRevision: 2,
+            actions: availableActions,
           },
         }],
         coverage: {
-          requiredCount: 1, reviewedCount: 1, approvedCount: 1, uncoveredCount: 0,
-          complete: true, uncoveredCollectionIds: [], actualReviewerIds: ['reviewer-1'],
+          requiredCount: 1,
+          reviewedCount: reviewState === 'pending' ? 0 : 1,
+          approvedCount: reviewState === 'approved' ? 1 : 0,
+          uncoveredCount: reviewState === 'pending' ? 1 : 0,
+          complete: reviewState === 'approved',
+          uncoveredCollectionIds: reviewState === 'pending' ? ['collection-1'] : [],
+          actualReviewerIds: reviewState === 'pending' ? [] : ['reviewer-1'],
         },
       },
     }),

@@ -2771,18 +2771,64 @@ export async function exerciseWebUiProjectCollaborationSmoke({
     (() => {
       const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
       const text = workspace?.textContent ?? '';
+      const finalize = document.querySelector('[data-smoke="package-review-action"][data-action="review-and-finalize"]');
+      return text.includes(${JSON.stringify(deliveryReview.packageId)})
+        && text.includes(${JSON.stringify(deliveryReview.versionId)})
+        && Boolean(finalize);
+    })()
+    `,
+    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and review-and-finalize`,
+    timeoutMs,
+  );
+
+  // #1177：在 Tasks 阶段详情工作区完成「通过并设为最终版」与「验收交付」。
+  await page.click('[data-smoke="package-review-action"][data-action="review-and-finalize"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="stage-review-mutation-dialog"]'))`,
+    'stage review mutation dialog to open',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="stage-review-comment"]', '真实浏览器 smoke 审核并最终化');
+  await page.click('[data-smoke="stage-review-mutation-confirm"]');
+  await page.waitForFunction(
+    `
+    (() => {
+      const dialog = document.querySelector('[data-smoke="stage-review-mutation-dialog"]');
+      const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
+      const text = workspace?.textContent ?? '';
       const reviewerCandidates = ${JSON.stringify([
         session.user.username,
         session.user.id,
       ].filter(Boolean))};
-      return text.includes(${JSON.stringify(deliveryReview.packageId)})
-        && text.includes(${JSON.stringify(deliveryReview.versionId)})
-        && reviewerCandidates.some((candidate) => text.includes(candidate));
+      return !dialog
+        && reviewerCandidates.some((candidate) => text.includes(candidate))
+        && (text.includes('通过') || text.includes('已通过') || text.includes('最终'));
     })()
     `,
-    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and the actual reviewer`,
+    `stage review workspace to reflect the actual reviewer after UI finalize`,
     timeoutMs,
   );
+
+  const hasAccept = await page.evaluateJson(`
+    (() => {
+      const button = document.querySelector('[data-smoke="stage-delivery-action"][data-action="accept-delivery"]');
+      return Boolean(button instanceof HTMLButtonElement && !button.disabled);
+    })()
+  `);
+  if (hasAccept) {
+    await page.click('[data-smoke="stage-delivery-action"][data-action="accept-delivery"]');
+    await page.waitForFunction(
+      `Boolean(document.querySelector('[data-smoke="stage-review-mutation-dialog"]'))`,
+      'delivery acceptance dialog to open',
+      timeoutMs,
+    );
+    await page.click('[data-smoke="stage-review-mutation-confirm"]');
+    await page.waitForFunction(
+      `!document.querySelector('[data-smoke="stage-review-mutation-dialog"]')`,
+      'delivery acceptance dialog to close after success',
+      timeoutMs,
+    );
+  }
 
   return {
     stageName,
@@ -2898,34 +2944,16 @@ async function createStageDeliveryReviewSmokeFacts({
   if (detail?.ok !== true || !member?.artifactVersionId || !actions) {
     throw new Error(`Stage delivery review smoke could not read the package member facts: ${formatAck(detail)}`);
   }
-  const reviewed = await emitAck(webSocket, WEB_EVENTS.project.submitPackageReviewAndFinalize, {
-    ...scope,
+  // #1177：留下 pending package，让浏览器在 Tasks 工作区通过 UI 提交审核/最终化/验收。
+  if (!Array.isArray(actions.actions) || !actions.actions.includes('review-and-finalize')) {
+    throw new Error(`Stage delivery review smoke expected review-and-finalize discovery for the owner: ${formatAck(detail)}`);
+  }
+  return {
     packageId: packageSummary.packageId,
-    collectionId: member.collectionId,
     versionId: member.artifactVersionId,
-    decision: 'approved',
-    comment: '真实浏览器 smoke 审核并最终化',
-    expectedCollectionRevision: actions.collectionRevision,
-    idempotencyKey: `stage-review-finalize-${suffix}`,
-  }, timeoutMs);
-  if (reviewed?.ok !== true || reviewed?.review?.reviewedBy !== session.user.id) {
-    throw new Error(`Stage delivery review smoke could not persist the actual reviewer: ${formatAck(reviewed)}`);
-  }
-  const workspace = await emitAck(webSocket, WEB_EVENTS.task.stageDeliveryReviewWorkspace, {
-    ...scope,
-    schemaVersion: 1,
-    stageId: stage.id,
-    taskId: task.id,
-  }, timeoutMs);
-  const projectedMember = workspace?.workspace?.focusPackage?.members?.find(
-    (candidate) => candidate?.artifactVersionId === member.artifactVersionId,
-  );
-  if (workspace?.ok !== true
-    || workspace.workspace?.focusPackage?.package?.packageId !== packageSummary.packageId
-    || !projectedMember?.review?.actualReviewerIds?.includes(session.user.id)) {
-    throw new Error(`Stage delivery review smoke did not receive matching Server review facts: ${formatAck(workspace)}`);
-  }
-  return { packageId: packageSummary.packageId, versionId: member.artifactVersionId };
+    collectionId: member.collectionId,
+    collectionRevision: actions.collectionRevision,
+  };
 }
 
 async function exerciseProjectInputSetLifecycleSmoke({
