@@ -564,6 +564,44 @@ describe('server-next SQLite repositories', () => {
     }
   });
 
+  test('listVisibleByChannel and search exclude hidden system messages before limiting with SQLite', async () => {
+    const { globalDb, teamDb, close } = openMigratedDatabases();
+    try {
+      const repositories = createSqliteRepositories({ globalDb, teamDb });
+      const records = [
+        { id: 'visible-1', senderKind: 'human' as const, senderId: 'user-1', body: 'needle', createdAt: 100 },
+        { id: 'visible-system', senderKind: 'system' as const, senderId: 'system', body: '普通系统消息', createdAt: 200 },
+        { id: 'visible-2', senderKind: 'human' as const, senderId: 'user-1', body: 'needle', createdAt: 300 },
+        {
+          id: 'hidden-revision', senderKind: 'system' as const, senderId: 'system', body: 'needle', createdAt: 400,
+          meta: { kind: 'artifact-version-revision' },
+        },
+        {
+          id: 'hidden-coordination', senderKind: 'system' as const, senderId: 'pi-coordinator', body: 'needle', createdAt: 500,
+          meta: { coordination: null },
+        },
+      ];
+      for (const record of records) {
+        await repositories.messages.append({
+          ...record,
+          teamId: 'team-1',
+          channelId: 'channel-1',
+          threadId: record.id,
+        });
+      }
+
+      await expect(repositories.messages.listVisibleByChannel('channel-1', 2)).resolves.toMatchObject([
+        { id: 'visible-system' },
+        { id: 'visible-2' },
+      ]);
+      await expect(repositories.messages.search({
+        channelIds: ['channel-1'], query: 'needle', limit: 1,
+      })).resolves.toMatchObject([{ id: 'visible-2' }]);
+    } finally {
+      close();
+    }
+  });
+
   test('listByChannel uses insertion order for same-millisecond limit boundaries', async () => {
     const { globalDb, teamDb, close } = openMigratedDatabases();
     try {

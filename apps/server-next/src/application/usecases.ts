@@ -5349,7 +5349,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (!agent || !agent.visibleTeamIds.includes(dmInput.teamId)) {
         return makeFailure('NOT_FOUND', 'Agent not found');
       }
-      const messages = await repositories.messages.listByChannel(channel.id, normalizeLimit(dmInput.limit));
+      const messages = await repositories.messages.listVisibleByChannel(channel.id, normalizeLimit(dmInput.limit));
       return makeSuccess({
         dm: toDmChannelDto(channel, agent),
         messages: await enrichMessagesWithArtifacts(repositories, messages),
@@ -5917,7 +5917,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     async listChannelMessages(listInput) {
-      const messages = await repositories.messages.listByChannel(listInput.channelId, listInput.limit);
+      const messages = await repositories.messages.listVisibleByChannel(listInput.channelId, listInput.limit);
       return makeSuccess({
         messages: await enrichMessagesWithArtifacts(repositories, messages),
       });
@@ -7618,6 +7618,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const message = await repositories.messages.getById(contextInput.messageId);
       if (!message || message.teamId !== contextInput.teamId) {
+        return makeFailure('NOT_FOUND', 'Message not found');
+      }
+      if (isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })) {
         return makeFailure('NOT_FOUND', 'Message not found');
       }
       const channelAccess = await ensureUserCanViewChannel(repositories, {
@@ -13899,34 +13902,38 @@ async function enrichMessagesWithArtifacts(
   messages: MessageRecord[],
 ): Promise<MessageDto[]> {
   const enriched: MessageDto[] = [];
+  const hiddenThreadRoots = new Map<ID, boolean>();
   for (const message of messages) {
     // ADR-0066：PI Manager 系统消息（management-status / coordination 协调输出）不在用户对话视图出现，
     // 服务端在序列化边界统一过滤，使前端不再收到这些消息（replyCount、Thread 面板随之正确）。
     if (isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })) continue;
-    const isDeleted = isDeletedMessage(message);
+    const projectedMessage = await projectReplyOutOfHiddenThread(repositories, message, hiddenThreadRoots);
+    const isDeleted = isDeletedMessage(projectedMessage);
     // The internal workspace-run.log is reachable via the workspace-run detail endpoint; it must
     // not leak into chat-facing message attachments (channel history, DM snapshot, search results).
     const artifacts = isDeleted
       ? []
-      : (await repositories.artifacts.listByMessage(message.id))
+      : (await repositories.artifacts.listByMessage(projectedMessage.id))
           .filter((artifact) => !isWorkspaceRunLogArtifact(artifact));
-    const workspaceRunId = !isDeleted && typeof message.meta?.workspaceRunId === 'string' ? message.meta.workspaceRunId : undefined;
+    const workspaceRunId = !isDeleted && typeof projectedMessage.meta?.workspaceRunId === 'string'
+      ? projectedMessage.meta.workspaceRunId
+      : undefined;
     const workspaceRun = workspaceRunId
-      ? await repositories.workspaceRuns.getForTeam({ teamId: message.teamId, runId: workspaceRunId })
+      ? await repositories.workspaceRuns.getForTeam({ teamId: projectedMessage.teamId, runId: workspaceRunId })
       : null;
     // 投影 dispatch 状态：dispatchStatus/dispatchId 不在 MessageRecord，靠 dispatches.listByMessage 查。
     // 进行中的优先（让前端切频道/刷新后能恢复「正在处理」）；否则取最新一条的终态。
-    const dispatches = isDeleted ? [] : await repositories.dispatches.listByMessage(message.id);
+    const dispatches = isDeleted ? [] : await repositories.dispatches.listByMessage(projectedMessage.id);
     const chosenDispatch = dispatches.find((d) => isPendingDispatchStatus(d.status)) ?? dispatches[dispatches.length - 1];
     const referenceSet = isDeleted
       ? null
       : await repositories.projectReferenceSets.getByMessageId({
-        teamId: message.teamId,
-        channelId: message.channelId,
-        messageId: message.id,
-      });
+          teamId: projectedMessage.teamId,
+          channelId: projectedMessage.channelId,
+          messageId: projectedMessage.id,
+        });
     enriched.push({
-      ...message,
+      ...projectedMessage,
       ...(artifacts.length > 0 ? { artifacts: artifacts.map(toArtifactDto) } : {}),
       ...(workspaceRun ? { workspaceRun } : {}),
       ...(chosenDispatch ? { dispatchStatus: chosenDispatch.status, dispatchId: chosenDispatch.id } : {}),
@@ -13934,6 +13941,31 @@ async function enrichMessagesWithArtifacts(
     });
   }
   return enriched;
+}
+
+async function projectReplyOutOfHiddenThread(
+  repositories: ServerNextRepositories,
+  message: MessageRecord,
+  hiddenThreadRoots: Map<ID, boolean>,
+): Promise<MessageRecord> {
+  if (!message.threadId || message.threadId === message.id) return message;
+  let rootIsHidden = hiddenThreadRoots.get(message.threadId);
+  if (rootIsHidden === undefined) {
+    const root = await repositories.messages.getById(message.threadId);
+    rootIsHidden = Boolean(root && isHiddenSystemMessage({ senderKind: root.senderKind, meta: root.meta }));
+    hiddenThreadRoots.set(message.threadId, rootIsHidden);
+  }
+  if (!rootIsHidden) return message;
+
+  const meta = message.meta ? { ...message.meta } : undefined;
+  if (meta?.parentMessageId === message.threadId) delete meta.parentMessageId;
+  if (meta?.inReplyTo === message.threadId) delete meta.inReplyTo;
+  const projected: MessageRecord = {
+    ...message,
+    ...(meta ? { meta } : {}),
+  };
+  delete projected.threadId;
+  return projected;
 }
 
 function isDeletedMessage(message: MessageRecord): boolean {
@@ -13947,10 +13979,13 @@ async function resolveExplicitThreadRootId(
   if (!message.threadId || message.threadId === message.id) {
     return null;
   }
+  const root = await repositories.messages.getById(message.threadId);
+  if (root && isHiddenSystemMessage({ senderKind: root.senderKind, meta: root.meta })) {
+    return null;
+  }
   if (message.meta?.replyScope === 'thread') {
     return message.threadId;
   }
-  const root = await repositories.messages.getById(message.threadId);
   const isTopLevelAgentReply = message.senderKind === 'agent'
     && (
       (root !== null && root.threadId === root.id)

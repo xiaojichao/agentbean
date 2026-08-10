@@ -88,6 +88,12 @@ export interface MessageSearchResultDto {
   messages: MessageDto[];
 }
 
+export const HIDDEN_SYSTEM_MESSAGE_KINDS = [
+  'task-created',
+  'management-status',
+  'artifact-version-revision',
+] as const;
+
 /**
  * 判断一条系统消息是否应从用户对话视图（频道主时间线、Thread、回复计数）中隐藏，
  * 且不应由服务端投递给前端。服务端在序列化边界、前端在渲染/计数处各自应用同一规则。
@@ -106,11 +112,7 @@ export function isHiddenSystemMessage(input: {
   if (input.senderKind !== 'system') return false;
   const meta = input.meta ?? {};
   const kind = meta.kind;
-  if (
-    kind === 'task-created'
-    || kind === 'management-status'
-    || kind === 'artifact-version-revision'
-  ) {
+  if (HIDDEN_SYSTEM_MESSAGE_KINDS.some((hiddenKind) => hiddenKind === kind)) {
     return true;
   }
   if (meta.coordination !== undefined) return true;
