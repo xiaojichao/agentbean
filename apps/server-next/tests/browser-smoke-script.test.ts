@@ -265,11 +265,8 @@ describe('AgentBean Next browser smoke script', () => {
           collectionId: 'package-collection-1',
           versionId: 'package-version-1',
           collectionRevision: 1,
+          actions: ['review-and-finalize'],
         }],
-      }],
-      'project:submit-package-review-and-finalize': [{
-        ok: true,
-        review: { reviewedBy: 'user-1' },
       }],
       'task:stage-delivery-review-workspace': [{
         ok: true,
@@ -384,7 +381,15 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
+        // #1177：验收按钮是否出现为可选路径；默认无按钮。
+        if (expression.includes('accept-delivery')) return false;
         return true;
+      },
+      async setInputValue(selector: string, value: string) {
+        calls.push(['setInputValue', { selector, value }]);
+      },
+      async click(selector: string) {
+        calls.push(['click', selector]);
       },
     };
 
@@ -431,6 +436,16 @@ describe('AgentBean Next browser smoke script', () => {
       'message:send',
       'navigate',
       'waitForFunction',
+      'click',
+      'setInputValue',
+    ]));
+    expect(calls).toEqual(expect.arrayContaining([
+      ['click', '[data-smoke="package-review-action"][data-action="review-and-finalize"]'],
+      ['setInputValue', {
+        selector: '[data-smoke="stage-review-comment"]',
+        value: '真实浏览器 smoke 审核并最终化',
+      }],
+      ['click', '[data-smoke="stage-review-mutation-confirm"]'],
     ]));
   });
 

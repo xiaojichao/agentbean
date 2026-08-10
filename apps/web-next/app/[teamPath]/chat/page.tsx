@@ -2881,6 +2881,7 @@ export default function ChatPage() {
           workspaceEntry={taskDetailWorkspaceEntry}
           stageId={matchingChannelTaskStageId(taskDetailWorkspaceEntry, selectedStageId)}
           minimumConsistency={channelTaskWorkspace?.consistencyToken}
+          currentUserId={currentUser?.id}
           taskNumber={taskDetailTask ? taskNumbers.get(taskDetailTask.id) : undefined}
           agents={agents}
           humanProfiles={humanProfiles}
@@ -2917,8 +2918,10 @@ export default function ChatPage() {
                 setTimeout(() => textareaRef.current?.focus(), 0);
               }
             } else if (action === 'review-package') {
-              closeTaskDetail();
-              switchTab('files');
+              // #1177：阶段详情工作区内已可完成审核闭环；保留详情，不再跳转到 Files。
+              const packageSection = document.querySelector<HTMLElement>('[data-smoke="stage-review-package"]')
+                ?? document.querySelector<HTMLElement>('[data-smoke="stage-delivery-review-workspace"]');
+              packageSection?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             } else if (action === 'open-task') {
               closeTaskDetail();
               switchTab('tasks');
@@ -4251,6 +4254,7 @@ function TaskDetailPanel({
   workspaceEntry,
   stageId,
   minimumConsistency,
+  currentUserId,
   taskNumber,
   agents,
   humanProfiles,
@@ -4273,6 +4277,7 @@ function TaskDetailPanel({
   workspaceEntry?: ChannelTaskWorkspaceEntryV1;
   stageId?: string | null;
   minimumConsistency?: ConsistencyTokenV1;
+  currentUserId?: string;
   taskNumber?: number;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
@@ -4464,6 +4469,7 @@ function TaskDetailPanel({
                 stageId={stageId}
                 taskId={detailTaskId}
                 minimumConsistency={minimumConsistency}
+                currentUserId={currentUserId}
                 participantName={(id) => participantName(id, channelMembers)}
                 onOpenThread={onOpenThread}
                 onViewAssetSource={onViewAssetSource}
