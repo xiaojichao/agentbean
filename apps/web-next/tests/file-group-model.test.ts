@@ -175,7 +175,7 @@ describe('buildFileGroupCards', () => {
     expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(false);
   });
 
-  test('输出包详情明确不可用时恢复成员集合卡，避免文件失去入口', () => {
+  test('输出包投影加载完成但未返回成员时恢复集合卡，避免部分/失败投影丢失入口', () => {
     const libraryWithMembership: ProjectArtifactLibraryDto = {
       archived: false,
       collections: [{
@@ -197,10 +197,34 @@ describe('buildFileGroupCards', () => {
       pendingDeliveries: [],
       library: libraryWithMembership,
       stages,
-      unavailablePackageIds: new Set(['pkg-1']),
+      loadingPackageIds: new Set(),
     });
     expect(cards.some((card) => card.kind === 'package' && card.id === 'pkg-1')).toBe(true);
     expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(true);
+  });
+
+  test('输出包详情加载中按 library membership 隐藏集合卡，避免首帧短暂重复', () => {
+    const cards = buildFileGroupCards({
+      packages: [pkg1],
+      pendingDeliveries: [],
+      library: {
+        archived: false,
+        collections: [{
+          ...collection1,
+          versions: [version('ver-c1', {
+            packageMemberships: [{
+              packageId: 'pkg-1',
+              sequence: 1,
+              shortLabel: 'F1',
+              deliveredAt: 1000,
+            }],
+          })],
+        }],
+      },
+      stages,
+      loadingPackageIds: new Set(['pkg-1']),
+    });
+    expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(false);
   });
 
   test('交付处理中:以 package 类卡片呈现,不伪造完整交付', () => {
@@ -291,6 +315,7 @@ describe('filterFileGroupCards', () => {
         }],
       },
       stages,
+      packageMemberCollectionIds: new Set(['col-1']),
     });
     expect(filterFileGroupCards(withDelivery, 'agent_output', '').map((card) => card.id)).toEqual(['pkg-2']);
   });

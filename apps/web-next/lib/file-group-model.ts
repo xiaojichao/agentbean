@@ -73,8 +73,8 @@ export function buildFileGroupCards(input: {
   stages: readonly FileGroupStageInput[];
   /** 已属于输出包的集合由包卡统一承载，不能在包外再次生成集合卡。 */
   packageMemberCollectionIds?: ReadonlySet<string>;
-  /** 详情已明确失败/缺少 projection 的包；其集合卡必须恢复，避免文件失去入口。 */
-  unavailablePackageIds?: ReadonlySet<string>;
+  /** 详情仍在加载的包；首帧按 library membership 隐藏，避免成员卡短暂重复。 */
+  loadingPackageIds?: ReadonlySet<string>;
 }): FileGroupCardModel[] {
   const {
     packages,
@@ -82,16 +82,16 @@ export function buildFileGroupCards(input: {
     library,
     stages,
     packageMemberCollectionIds = new Set<string>(),
-    unavailablePackageIds = new Set<string>(),
+    loadingPackageIds = new Set<string>(),
   } = input;
   const collections = library?.collections ?? [];
-  const visiblePackageIds = new Set(packages
-    .filter((pkg) => !unavailablePackageIds.has(pkg.packageId))
+  const loadingVisiblePackageIds = new Set(packages
+    .filter((pkg) => loadingPackageIds.has(pkg.packageId))
     .map((pkg) => pkg.packageId));
   const standaloneCollections = collections.filter((collection) =>
     !packageMemberCollectionIds.has(collection.id)
     && !collection.versions.some((version) => version.packageMemberships?.some((membership) =>
-      visiblePackageIds.has(membership.packageId))));
+      loadingVisiblePackageIds.has(membership.packageId))));
   const stageNameById = new Map(stages.map((stage) => [stage.id, stage.name]));
 
   const cards: FileGroupCardModel[] = [
