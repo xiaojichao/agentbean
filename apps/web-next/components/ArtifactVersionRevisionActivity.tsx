@@ -5,10 +5,10 @@ import { FileEdit } from 'lucide-react';
 import type { ArtifactVersionRevisionMeta } from '@/lib/artifact-revision';
 
 /**
- * #1062 AC9 讨论串轻量活动卡:展示「某人保存了新 revision」。
+ * #1062 历史兼容：曾用于聊天流「某人保存了新 revision」活动卡。
  *
- * 只渲染 Server 下发的 meta 快照(collection/version/provenance),不复制 Markdown 全文,
- * 不伪装成 PI/人类发言;保存者与版本号是 Server 事实,客户端不推断。
+ * 现行策略不再向聊天投影该消息（isHiddenSystemMessage 过滤）；组件保留以免旧代码路径
+ * 引用断裂。只渲染 meta 快照，不承载业务事实。
  */
 export function ArtifactVersionRevisionActivity({ meta }: { meta: ArtifactVersionRevisionMeta }) {
   const actor = meta.revisedByName ?? '某成员';

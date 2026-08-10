@@ -9,8 +9,7 @@
  * - AC5:原 Run artifact 行与旧版本行不被改写(不可变);
  * - AC6/AC8:stale base / stale collection revision / stale basis → 结构化 conflict
  *   (details.revisionConflict 带 base/Server 最新/草稿保留),零部分写入;归档/撤权 fail closed;
- * - AC9:成功后讨论串出现轻量 system 活动消息(meta kind=artifact-version-revision,
- *   clientMessageId 幂等),不复制 Markdown 全文;
+ * - AC9:保存成功不向聊天流投影 system 活动消息(版本状态看 Files/Task);
  * - AC10:receipt 幂等(同 key replay 恢复同一版本;异 payload conflict);
  *   availableActions 只在 rejected/changes_requested 成员下发 revise-version;
  * - 原子性:事务中段失败 → 零部分行(artifact/version/collection/receipt 全部不出现)。
@@ -376,24 +375,9 @@ for (const variant of variants) {
       expect(originArtifact?.workspaceRunId).toBe('run-1');
       expect(originArtifact?.sizeBytes).toBe(12);
 
-      // AC9:讨论串出现轻量 system 活动消息(不带 Markdown 全文)。
+      // AC9:版本状态只在 Files/Task 更新；不向聊天流写 system 活动消息。
       const messages = await s.repositories.messages.listByChannel(s.channelId, 100);
-      const activity = messages.find((message) => message.meta?.kind === 'artifact-version-revision');
-      expect(activity).toBeDefined();
-      expect(activity?.senderKind).toBe('system');
-      expect(activity?.body).not.toContain('回应审核意见');
-      expect(activity?.meta).toMatchObject({
-        kind: 'artifact-version-revision',
-        collectionId: fixture.collectionId,
-        versionId: saved.versionId,
-        versionNumber: 2,
-        sourceVersionId: fixture.versionId,
-        basisReviewId: reviewId,
-        packageId: fixture.packageId,
-        deliveryId: fixture.deliveryId,
-        clientMessageId: `artifact-version-revision:${saved.versionId}`,
-        revisedBy: s.userId,
-      });
+      expect(messages.filter((message) => message.meta?.kind === 'artifact-version-revision')).toHaveLength(0);
     });
 
     test('AC10:同 key replay 恢复同一版本不产生重复行;异 payload 同 key → conflict 无副作用', async () => {
@@ -411,9 +395,9 @@ for (const variant of variants) {
         teamId: s.teamId, channelId: s.channelId,
       });
       expect(versions).toHaveLength(2);
-      // replay 不重复投影讨论串活动卡。
+      // 保存/replay 均不向聊天流投影活动卡。
       const messages = await s.repositories.messages.listByChannel(s.channelId, 100);
-      expect(messages.filter((message) => message.meta?.kind === 'artifact-version-revision')).toHaveLength(1);
+      expect(messages.filter((message) => message.meta?.kind === 'artifact-version-revision')).toHaveLength(0);
 
       const conflict = await s.app.saveArtifactVersionRevision({ ...input, content: '# 别的内容' });
       expect(conflict).toMatchObject({ ok: false, error: 'CONFLICT' });

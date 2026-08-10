@@ -31,6 +31,16 @@ describe('shouldHideSystemMessage — 既有去重规则', () => {
     }))).toBe(false);
   });
 
+  test('hides artifact-version-revision (file state belongs to Files/Task, not chat)', () => {
+    expect(shouldHideSystemMessage(message({
+      metaJson: JSON.stringify({ kind: 'artifact-version-revision', versionId: 'v-1' }),
+    }))).toBe(true);
+    expect(shouldHideSystemMessage(message({
+      meta: { kind: 'artifact-version-revision', versionId: 'v-1' },
+      metaJson: null,
+    }))).toBe(true);
+  });
+
   test('keeps non-task and malformed system messages visible', () => {
     expect(shouldHideSystemMessage(message({
       metaJson: JSON.stringify({ kind: 'message-edit-fail' }),
