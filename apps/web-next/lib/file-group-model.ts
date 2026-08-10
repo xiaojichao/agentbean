@@ -73,10 +73,21 @@ export function buildFileGroupCards(input: {
   stages: readonly FileGroupStageInput[];
   /** 已属于输出包的集合由包卡统一承载，不能在包外再次生成集合卡。 */
   packageMemberCollectionIds?: ReadonlySet<string>;
+  /** 详情已明确失败/缺少 projection 的包；其集合卡必须恢复，避免文件失去入口。 */
+  unavailablePackageIds?: ReadonlySet<string>;
 }): FileGroupCardModel[] {
-  const { packages, pendingDeliveries, library, stages, packageMemberCollectionIds = new Set<string>() } = input;
+  const {
+    packages,
+    pendingDeliveries,
+    library,
+    stages,
+    packageMemberCollectionIds = new Set<string>(),
+    unavailablePackageIds = new Set<string>(),
+  } = input;
   const collections = library?.collections ?? [];
-  const visiblePackageIds = new Set(packages.map((pkg) => pkg.packageId));
+  const visiblePackageIds = new Set(packages
+    .filter((pkg) => !unavailablePackageIds.has(pkg.packageId))
+    .map((pkg) => pkg.packageId));
   const standaloneCollections = collections.filter((collection) =>
     !packageMemberCollectionIds.has(collection.id)
     && !collection.versions.some((version) => version.packageMemberships?.some((membership) =>

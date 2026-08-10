@@ -268,6 +268,14 @@ export function ProjectFilesBoard({
     return ids;
   }, [packageDetailCache]);
 
+  const unavailablePackageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [packageId, detail] of packageDetailCache) {
+      if (!detail.projection) ids.add(packageId);
+    }
+    return ids;
+  }, [packageDetailCache]);
+
   // 卡片模型:聚合 → Agent 名入搜索池 → 「有 final」(final projection ready)→
   // 短编号版本摘要(来自缓存投影)→ 筛选/搜索。
   const displayCards = useMemo(() => {
@@ -277,6 +285,7 @@ export function ProjectFilesBoard({
       library,
       stages,
       packageMemberCollectionIds,
+      unavailablePackageIds,
     });
     cards = withAgentNames(cards, agentNames);
     cards = withPackageFinalStates(cards, packageFinalReadyCache);
@@ -302,7 +311,7 @@ export function ProjectFilesBoard({
       }
       return card;
     });
-  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache, packageFinalReadyCache, packageMemberCollectionIds]);
+  }, [packages, pendingDeliveries, library, stages, agentNames, packageDetailCache, packageFinalReadyCache, packageMemberCollectionIds, unavailablePackageIds]);
 
   const filteredCards = useMemo(
     () => filterFileGroupCardsByRoleAndStatus(displayCards, {

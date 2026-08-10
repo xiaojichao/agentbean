@@ -175,6 +175,34 @@ describe('buildFileGroupCards', () => {
     expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(false);
   });
 
+  test('输出包详情明确不可用时恢复成员集合卡，避免文件失去入口', () => {
+    const libraryWithMembership: ProjectArtifactLibraryDto = {
+      archived: false,
+      collections: [{
+        ...collection1,
+        versions: [version('ver-c1', {
+          versionNumber: 4,
+          reviewState: 'approved',
+          packageMemberships: [{
+            packageId: 'pkg-1',
+            sequence: 1,
+            shortLabel: 'F1',
+            deliveredAt: 1000,
+          }],
+        })],
+      }],
+    };
+    const cards = buildFileGroupCards({
+      packages: [pkg1],
+      pendingDeliveries: [],
+      library: libraryWithMembership,
+      stages,
+      unavailablePackageIds: new Set(['pkg-1']),
+    });
+    expect(cards.some((card) => card.kind === 'package' && card.id === 'pkg-1')).toBe(true);
+    expect(cards.some((card) => card.kind === 'collection' && card.id === 'col-1')).toBe(true);
+  });
+
   test('交付处理中:以 package 类卡片呈现,不伪造完整交付', () => {
     const cards = buildFileGroupCards({ packages: [], pendingDeliveries: [pending], library: null, stages: [] });
     expect(cards).toHaveLength(1);
