@@ -5,6 +5,7 @@ import {
   channelTaskEntrySubview,
   channelTasksHistoryMode,
   channelTasksRouteParams,
+  matchingChannelTaskStageId,
   parseChannelTasksSubview,
   resolveChannelTasksSubview,
 } from '../lib/channel-task-workspace-route';
@@ -52,6 +53,16 @@ describe('频道 Tasks 路由与 Server 事实分流', () => {
     expect(channelTasksHistoryMode('resolve_default')).toBe('replace');
     expect(channelTasksHistoryMode('select_subview')).toBe('push');
     expect(channelTasksHistoryMode('open_task')).toBe('push');
+  });
+
+  test('只向实际绑定所选阶段的任务传递阶段上下文', () => {
+    const staged = entry({ mode: 'managed', withStage: true });
+    const plain = entry({ mode: 'plain', withStage: false });
+
+    expect(matchingChannelTaskStageId(staged, 'stage-1')).toBe('stage-1');
+    expect(matchingChannelTaskStageId(staged, 'stage-other')).toBeNull();
+    expect(matchingChannelTaskStageId(plain, 'stage-1')).toBeNull();
+    expect(matchingChannelTaskStageId(undefined, 'stage-1')).toBeNull();
   });
 });
 

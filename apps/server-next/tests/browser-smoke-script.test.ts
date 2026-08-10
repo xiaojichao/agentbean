@@ -235,14 +235,53 @@ describe('AgentBean Next browser smoke script', () => {
     const calls: Array<[string, unknown]> = [];
     const responses: Record<string, unknown[]> = {
       'task:list': [{ ok: true, tasks: [{ id: 'task-1', title: 'Ship' }] }],
-      'task:create': [{ ok: true, task: { id: 'task-blocked-1', revision: 1 } }],
+      'task:create': [
+        { ok: true, task: { id: 'task-blocked-1', revision: 1 } },
+        { ok: true, task: { id: 'task-review-1', revision: 1 } },
+      ],
       'project:create-initial-stage': [
         { ok: true, overview: { profile: { revision: 1 }, stages: [{ id: 'stage-1', name: '发布保护 smoke' }] } },
         { ok: false, error: 'CONFLICT', message: 'Project revision is stale' },
+        {
+          ok: true,
+          overview: { profile: { revision: 1 }, stages: [{ id: 'stage-review-1', name: '交付审核 smoke' }] },
+        },
       ],
       'project:overview': [{
         ok: true,
         overview: { profile: { revision: 1 }, stages: [{ id: 'stage-1', name: '发布保护 smoke' }] },
+      }],
+      'project:workspace': [{ ok: true, workspace: { currentRevisionId: 'workspace-revision-1' } }],
+      'project:list-output-packages': [{
+        ok: true,
+        packages: [{ packageId: 'package-review-1', publishId: 'stage-review-smoke' }],
+      }],
+      'project:get-output-package': [{
+        ok: true,
+        package: {
+          members: [{ collectionId: 'package-collection-1', artifactVersionId: 'package-version-1' }],
+        },
+        availableActions: [{
+          collectionId: 'package-collection-1',
+          versionId: 'package-version-1',
+          collectionRevision: 1,
+        }],
+      }],
+      'project:submit-package-review-and-finalize': [{
+        ok: true,
+        review: { reviewedBy: 'user-1' },
+      }],
+      'task:stage-delivery-review-workspace': [{
+        ok: true,
+        workspace: {
+          focusPackage: {
+            package: { packageId: 'package-review-1' },
+            members: [{
+              artifactVersionId: 'package-version-1',
+              review: { actualReviewerIds: ['user-1'] },
+            }],
+          },
+        },
       }],
       'project:create-stage': [{
         ok: true,
@@ -298,10 +337,11 @@ describe('AgentBean Next browser smoke script', () => {
         ok: true,
         bundle: { id: 'bundle-1' },
       }],
-      'channel:create': [{
-        ok: true,
-        channel: { id: 'channel-2' },
-      }],
+      'channel:create': [
+        { ok: true, channel: { id: 'channel-2' } },
+        { ok: true, channel: { id: 'channel-review-1' } },
+      ],
+      'channel:add-agent': [{ ok: true }],
       'project:resolve-references': [
         {
           ok: true,
@@ -354,15 +394,22 @@ describe('AgentBean Next browser smoke script', () => {
       webSocket,
       session: {
         token: 'token-1',
-        user: { id: 'user-1' },
+        user: { id: 'user-1', username: 'alice' },
         team: { id: 'team-1', path: 'team-one' },
         channel: { id: 'channel-1' },
       },
       taskTitle: 'Ship',
-      workspaceRun: { id: 'run-1', summaryArtifactId: 'summary-1' },
+      workspaceRun: { id: 'run-1', summaryArtifactId: 'summary-1', agentId: 'agent-1' },
       suffix: 'smoke',
       timeoutMs: 1000,
-      fetchImpl: async () => new Response('# Project rollout smoke\n\nsmoke\n'),
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes('/artifacts/')) return new Response('# Project rollout smoke\n\nsmoke\n');
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
     });
 
     expect(result).toMatchObject({
@@ -370,6 +417,9 @@ describe('AgentBean Next browser smoke script', () => {
       versionId: 'version-1',
       bundleId: 'bundle-1',
       referenceSetId: 'reference-set-1',
+      outputPackageId: 'package-review-1',
+      outputPackageVersionId: 'package-version-1',
+      deliveryReviewStageId: 'stage-review-1',
     });
     expect(calls.map(([event]) => event)).toEqual(expect.arrayContaining([
       'project:create-initial-stage',
@@ -896,6 +946,7 @@ describe('AgentBean Next browser smoke script', () => {
       dispatchId: 'dispatch-1',
       logArtifactId: 'webui-log-runs-smoke',
       summaryArtifactId: 'webui-summary-runs-smoke',
+      agentId: 'agent-1',
       adminUiVerified: true,
     });
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/dashboard/runs']);
@@ -1027,6 +1078,7 @@ describe('AgentBean Next browser smoke script', () => {
       dispatchId: 'dispatch-1',
       logArtifactId: 'webui-log-runs-skip-admin',
       summaryArtifactId: 'webui-summary-runs-skip-admin',
+      agentId: 'agent-1',
       adminUiVerified: false,
     });
     expect(calls.some((call) => call[0] === 'navigate')).toBe(false);

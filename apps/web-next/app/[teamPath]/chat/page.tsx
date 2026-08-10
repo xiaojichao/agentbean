@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -34,6 +34,7 @@ import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
+import { StageDeliveryReviewWorkspace } from '@/components/StageDeliveryReviewWorkspace';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
 import {
   ChannelTaskCard,
@@ -86,6 +87,7 @@ import {
   channelTaskEntrySubview,
   channelTasksHistoryMode,
   channelTasksRouteParams,
+  matchingChannelTaskStageId,
   parseChannelTasksSubview,
   resolveChannelTasksSubview,
   type ChannelTasksSubview,
@@ -1841,6 +1843,9 @@ export default function ChatPage() {
   const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : taskDetailOnlyTaskId;
   const taskDetailTask = (taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null)
     ?? (taskDetailOnlyTaskId ? tasks.find((task) => task.id === taskDetailOnlyTaskId) ?? null : null);
+  const taskDetailWorkspaceEntry = taskDetailTask
+    ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
+    : undefined;
   const taskDetailMessages = taskDetailTaskId
     ? uniqueMessages([
         ...(taskDetailMessage
@@ -2873,9 +2878,9 @@ export default function ChatPage() {
           message={taskDetailMessage}
           relatedMessages={taskDetailMessages}
           task={taskDetailTask}
-          workspaceEntry={taskDetailTask
-            ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
-            : undefined}
+          workspaceEntry={taskDetailWorkspaceEntry}
+          stageId={matchingChannelTaskStageId(taskDetailWorkspaceEntry, selectedStageId)}
+          minimumConsistency={channelTaskWorkspace?.consistencyToken}
           taskNumber={taskDetailTask ? taskNumbers.get(taskDetailTask.id) : undefined}
           agents={agents}
           humanProfiles={humanProfiles}
@@ -2886,10 +2891,15 @@ export default function ChatPage() {
           readOnly={Boolean(activeChannelObj?.archivedAt)}
           onClose={closeTaskDetail}
           onViewInChannel={() => { if (taskDetailMessage) jumpToMessage(taskDetailMessage.id); }}
-          onOpenThread={() => {
-            if (!taskDetailMessage) return;
-            openThread(taskDetailMessage.id);
+          onOpenThread={(rootMessageId) => {
+            const targetMessageId = rootMessageId ?? taskDetailMessage?.id;
+            if (!targetMessageId) return;
+            openThread(targetMessageId);
             setThreadInput('要求后续变更：');
+          }}
+          onViewAssetSource={() => {
+            closeTaskDetail();
+            switchTab('files');
           }}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
           onDeliveryAction={(action) => {
@@ -4239,6 +4249,8 @@ function TaskDetailPanel({
   relatedMessages,
   task,
   workspaceEntry,
+  stageId,
+  minimumConsistency,
   taskNumber,
   agents,
   humanProfiles,
@@ -4250,6 +4262,7 @@ function TaskDetailPanel({
   onClose,
   onViewInChannel,
   onOpenThread,
+  onViewAssetSource,
   onTaskStatus,
   onDeliveryAction,
 }: {
@@ -4258,6 +4271,8 @@ function TaskDetailPanel({
   relatedMessages: ChatMessage[];
   task: TaskItem | null;
   workspaceEntry?: ChannelTaskWorkspaceEntryV1;
+  stageId?: string | null;
+  minimumConsistency?: ConsistencyTokenV1;
   taskNumber?: number;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
@@ -4268,7 +4283,8 @@ function TaskDetailPanel({
   readOnly: boolean;
   onClose: () => void;
   onViewInChannel: () => void;
-  onOpenThread: () => void;
+  onOpenThread: (rootMessageId?: string) => void;
+  onViewAssetSource: (packageId: string) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAction) => void;
@@ -4441,12 +4457,26 @@ function TaskDetailPanel({
 
         {detailTaskId && workspaceTeamId && detailChannelId && (
           <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
-            <TaskDeliveryOverview
-              teamId={workspaceTeamId}
-              channelId={detailChannelId}
-              taskId={detailTaskId}
-              onAction={onDeliveryAction}
-            />
+            {stageId ? (
+              <StageDeliveryReviewWorkspace
+                teamId={workspaceTeamId}
+                channelId={detailChannelId}
+                stageId={stageId}
+                taskId={detailTaskId}
+                minimumConsistency={minimumConsistency}
+                participantName={(id) => participantName(id, channelMembers)}
+                onOpenThread={onOpenThread}
+                onViewAssetSource={onViewAssetSource}
+                onAction={onDeliveryAction}
+              />
+            ) : (
+              <TaskDeliveryOverview
+                teamId={workspaceTeamId}
+                channelId={detailChannelId}
+                taskId={detailTaskId}
+                onAction={onDeliveryAction}
+              />
+            )}
           </section>
         )}
 
@@ -4625,7 +4655,7 @@ function TaskDetailPanel({
       {message && (
       <div className="border-t border-neutral-200 p-3">
         <button
-          onClick={onOpenThread}
+          onClick={() => onOpenThread()}
           className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-neutral-900 text-sm font-medium text-white hover:bg-neutral-800"
         >
           <MessageSquare size={14} />

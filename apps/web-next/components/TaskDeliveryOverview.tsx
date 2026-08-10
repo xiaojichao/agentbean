@@ -101,6 +101,17 @@ export function TaskDeliveryOverview({
   }
   if (!overview) return null;
 
+  return <TaskDeliveryOverviewContent overview={overview} onAction={onAction} />;
+}
+
+/** 已加载投影的纯展示层，供阶段审核工作区复用而不产生第二次 Query。 */
+export function TaskDeliveryOverviewContent({
+  overview,
+  onAction,
+}: {
+  overview: TaskDeliveryOverviewV1;
+  onAction?: (action: TaskLevelAction) => void;
+}) {
   const focus = overview.responsibilityFocus;
   return (
     <div className="space-y-3 rounded-md border border-neutral-200 bg-neutral-50 p-3" data-smoke="task-delivery-overview">

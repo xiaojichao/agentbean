@@ -1,5 +1,5 @@
 'use client';
-import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiConfigurationReadinessDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageProjectionResultV1, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type SetProjectArtifactFinalVersionInput, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type TaskDeliveryOverviewV1, type ChannelTaskWorkspaceV1, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto, type ArtifactRevisionConflictDto, type ArtifactVersionRevisionSaveResultDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ActiveMemoryAttributionDto, type ActivePiModelDto, type AgentExposureActiveProjectionDto, type AgentExposureManifestRevisionDto, type AgentExposureRestrictionDto, type AgentMemoryProjectionConsumptionDto, type AgentMemoryProjectionDto, type AgentTeamCoverageDto, type ArtifactRole, type ChannelExperienceAttachmentDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ConsistencyTokenV1, type CopyPiProviderCardInput, type CreateInitialProjectStageInput, type CreatePiProviderCardInput, type CreateProjectStageEdgeInput, type CreateProjectStageInput, type DeleteProjectStageEdgeInput, type CreateProjectDocumentBundleInput, type ExperiencePackDto, type FormalCorrectionType, type FormalMemoryDetailDto, type FormalMemoryDto, type FormalMemoryKind, type FormalMemoryListDto, type FormalMemoryScopeType, type JoinLinkDto, type LocalMemoryGovernanceSummaryDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageMetaDto, type PiConfigurationReadinessDto, type PiProviderCardDto, type PiProviderPresetDescriptorDto, type OutputPackageDto, type OutputPackagePendingDeliveryDto, type OutputPackageProjectionResultV1, type OutputPackageSummaryDto, type PackageMemberAvailableActionsDto, type PackageReviewAction, type PackageReviewDto, type ProjectArtifactCollectionDto, type ProjectArtifactFinalizationDto, type ProjectArtifactLibraryDto, type ProjectArtifactReviewDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type PromoteArtifactToProjectVersionInput, type SetProjectArtifactFinalVersionInput, type StageDeliveryReviewWorkspaceV1, type SubmitProjectArtifactReviewInput, type TeamAgentMemoryOptInDto, type TeamDto, type TaskDagViewDto, type TaskDeliveryOverviewV1, type ChannelTaskWorkspaceV1, type UpdatePiProviderCardInput, type ProjectChannelWorkspaceDto, type ArtifactRevisionConflictDto, type ArtifactVersionRevisionSaveResultDto } from '@agentbean/contracts';
 
 /** #1061 三个 package review 命令的 socket payload(userId/teamId 由 Server 注入)。 */
 export type PackageReviewCommandSocketPayload = {
@@ -1058,6 +1058,19 @@ export interface ProjectEvents {
     error?: string;
     message?: string;
   }>;
+  /** #1176：只在阶段详情打开时读取一次完整交付审核工作区。 */
+  queryStageDeliveryReviewWorkspace(payload: {
+    schemaVersion: 1;
+    channelId: string;
+    stageId: string;
+    taskId: string;
+    minimumConsistency?: ConsistencyTokenV1;
+  }): Promise<{
+    ok: boolean;
+    workspace?: StageDeliveryReviewWorkspaceV1;
+    error?: string;
+    message?: string;
+  }>;
   /** #1061 AC1:对 package 成员版本提交审核(approved/changes_requested/rejected)。 */
   submitPackageArtifactReview(payload: Omit<PackageReviewCommandSocketPayload, 'userId' | 'teamId'>): Promise<{
     ok: boolean;
@@ -1193,6 +1206,9 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     queryTaskDeliveryOverview(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.task.deliveryOverview, payload);
+    },
+    queryStageDeliveryReviewWorkspace(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.task.stageDeliveryReviewWorkspace, payload);
     },
     submitPackageArtifactReview(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageArtifactReview, payload);

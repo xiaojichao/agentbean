@@ -341,6 +341,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.task.acceptRootDelivery,
       WEB_EVENTS.task.rejectRootDelivery,
       WEB_EVENTS.task.deliveryOverview,
+      WEB_EVENTS.task.stageDeliveryReviewWorkspace,
       WEB_EVENTS.task.channelWorkspace,
     ]);
     expect(socket.eventNames()).toContain(WEB_EVENTS.admin.listTeams);

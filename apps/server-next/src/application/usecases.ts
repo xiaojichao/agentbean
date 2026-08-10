@@ -298,6 +298,15 @@ import type {
   TaskResponsibilityFocusV1,
   TaskTimelineEventV1,
 } from '../../../../packages/contracts/src/task-delivery-overview.js';
+import {
+  parseQueryStageDeliveryReviewWorkspaceInputV1,
+  type QueryStageDeliveryReviewWorkspaceInputV1,
+  type StageDeliveryReviewBlockerV1,
+  type StageDeliveryReviewMemberV1,
+  type StageDeliveryReviewPackageV1,
+  type StageDeliveryReviewVersionIdentityV1,
+  type StageDeliveryReviewWorkspaceV1,
+} from '../../../../packages/contracts/src/stage-delivery-review-workspace.js';
 import { type SubmitPackageReviewResult } from './package-review-handler.js';
 
 /** #1061 三个 package review 命令的 socket 输入(teamId 由 socket 会话解析,userId 由 Server 注入)。 */
@@ -716,6 +725,14 @@ export interface ServerNextUseCases {
   queryTaskDeliveryOverview(
     input: { teamId: string; channelId: string; taskId: string; userId: string; minimumConsistency?: ConsistencyTokenV1 },
   ): Promise<Ack<{ overview: TaskDeliveryOverviewV1 }>>;
+  /** #1176：只在用户选中阶段后读取完整交付审核上下文。 */
+  queryStageDeliveryReviewWorkspace(
+    input: QueryStageDeliveryReviewWorkspaceInputV1 & {
+      teamId: string;
+      userId: string;
+      currentDeviceId?: string | null;
+    },
+  ): Promise<Ack<{ workspace: StageDeliveryReviewWorkspaceV1 }>>;
   /** 频道 Tasks 标签页的 Server 权威批量卡片投影。 */
   queryChannelTaskWorkspace(
     input: { teamId: string; channelId: string; userId: string; minimumConsistency?: ConsistencyTokenV1 },
@@ -9165,6 +9182,113 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       return makeSuccess({ overview });
     },
 
+    async queryStageDeliveryReviewWorkspace(reviewWorkspaceInput) {
+      const {
+        teamId,
+        userId,
+        currentDeviceId: _currentDeviceId,
+        ...wireInput
+      } = reviewWorkspaceInput;
+      let parsed: QueryStageDeliveryReviewWorkspaceInputV1;
+      try {
+        parsed = parseQueryStageDeliveryReviewWorkspaceInputV1(wireInput);
+      } catch {
+        return makeFailure('VALIDATION_ERROR', 'Stage delivery review workspace query is invalid');
+      }
+      if (!(await repositories.teams.isMember(teamId, userId))) {
+        return makeFailure('FORBIDDEN', 'User is not a team member');
+      }
+      const access = await ensureUserCanViewChannel(repositories, {
+        userId,
+        teamId,
+        channelId: parsed.channelId,
+      });
+      if (!access.ok) return access;
+      const notReady = await ensureOutputPackageConsistency(repositories, parsed.minimumConsistency);
+      if (notReady) return notReady;
+
+      const now = clock.now();
+      const piAutomationAvailable = await resolveProjectPiAutomationAvailable();
+      const projectOverview = projectCollaborationRollout.projectStage
+        ? await buildChannelProjectOverview(
+          repositories,
+          access.channel,
+          piAutomationAvailable,
+          now,
+          input.resolveProjectStageCandidates,
+        )
+        : null;
+      const stage = projectOverview?.stages.find((candidate) => candidate.id === parsed.stageId);
+      if (!stage || stage.task.id !== parsed.taskId) {
+        return makeFailure('NOT_FOUND', 'Stage delivery review workspace not found');
+      }
+      const task = await repositories.tasks.getById(parsed.taskId);
+      if (!task || task.teamId !== teamId || task.channelId !== parsed.channelId) {
+        return makeFailure('NOT_FOUND', 'Stage delivery review workspace not found');
+      }
+      const coordination = await repositories.taskCoordination.coordinations.getByTaskId(parsed.taskId);
+      const taskOverview = await buildTaskDeliveryOverview(repositories, {
+        teamId,
+        channelId: parsed.channelId,
+        taskId: parsed.taskId,
+        userId,
+        now,
+        piAutomationAvailable,
+        includeStage: true,
+        ...(input.resolveProjectStageCandidates
+          ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
+          : {}),
+        preloaded: { task, coordination, stage },
+      });
+      if (!taskOverview) {
+        return makeFailure('NOT_FOUND', 'Stage delivery review workspace not found');
+      }
+      if (
+        parsed.specifiedProjection
+        && parsed.specifiedProjection.packageId !== taskOverview.delivery.focusPackageId
+      ) {
+        return makeFailure('NOT_FOUND', 'Specified output package is not the current stage delivery');
+      }
+
+      const packageWorkspace = taskOverview.delivery.focusPackageId
+        ? await buildStageDeliveryReviewPackage(repositories, {
+          teamId,
+          channelId: parsed.channelId,
+          userId,
+          packageId: taskOverview.delivery.focusPackageId,
+          ...(parsed.specifiedProjection ? { specifiedVersions: parsed.specifiedProjection.versions } : {}),
+        })
+        : null;
+      if (taskOverview.delivery.focusPackageId && !packageWorkspace) {
+        return makeFailure('NOT_FOUND', 'Current output package is unavailable');
+      }
+      const managementRun = coordination
+        ? await repositories.management.runs.getById(coordination.managementRunId)
+        : null;
+      const blockers: StageDeliveryReviewBlockerV1[] = [
+        ...stage.blockingReasons.map((reason) => ({ source: 'stage' as const, ...reason })),
+        ...(packageWorkspace?.blockers ?? []),
+      ];
+      return makeSuccess({
+        workspace: {
+          schemaVersion: 1,
+          channelId: parsed.channelId,
+          stageId: stage.id,
+          taskId: parsed.taskId,
+          stage,
+          taskOverview,
+          ...(managementRun?.rootMessageId ? { threadRootMessageId: managementRun.rootMessageId } : {}),
+          suggestedReviewerIds: [...stage.reviewerIds],
+          archived: access.channel.archivedAt != null,
+          ...(packageWorkspace ? { focusPackage: packageWorkspace.focusPackage } : {}),
+          blockers,
+          asOf: now,
+          audienceScope: `${teamId}:${parsed.channelId}:${userId}`,
+          consistencyToken: taskOverview.consistencyToken,
+        },
+      });
+    },
+
     async queryChannelTaskWorkspace(workspaceInput) {
       const { userId, teamId, channelId } = workspaceInput;
       if (!(await repositories.teams.isMember(teamId, userId))) {
@@ -16951,7 +17075,8 @@ async function buildTaskDeliveryOverview(
     finalizedCount: 0,
     complete: false,
   };
-  const focusRecord = packageRecords[packageRecords.length - 1];
+  // 仓储契约按 createdAt/packageId 倒序返回；首项才是当前交付。
+  const focusRecord = packageRecords[0];
   if (focusRecord) {
     const projection = await repositories.outputPackages.getPackageById({
       teamId,
@@ -17114,7 +17239,7 @@ async function buildTaskDeliveryOverview(
     delivery: {
       packages,
       pendingDeliveries,
-      ...(packageRecords.length > 0 ? { focusPackageId: packageRecords[packageRecords.length - 1]!.packageId } : {}),
+      ...(focusRecord ? { focusPackageId: focusRecord.packageId } : {}),
     },
     availableActions,
     timeline,
@@ -17125,6 +17250,213 @@ async function buildTaskDeliveryOverview(
       entries: [{ streamKind: OUTPUT_PACKAGE_WATERMARK_STREAM_KIND, streamId: channelId, revision: watermark?.revision ?? 0 }],
     },
   };
+}
+
+/** #1176：从焦点 OutputPackage 与项目版本事实构建一次审核判断所需的只读详情。 */
+async function buildStageDeliveryReviewPackage(
+  repositories: ServerNextRepositories,
+  input: {
+    teamId: ID;
+    channelId: ID;
+    userId: ID;
+    packageId: ID;
+    specifiedVersions?: readonly { readonly collectionId: ID; readonly versionId: ID }[];
+  },
+): Promise<{
+  focusPackage: StageDeliveryReviewPackageV1;
+  blockers: StageDeliveryReviewBlockerV1[];
+} | null> {
+  const packageProjection = await repositories.outputPackages.getPackageById({
+    teamId: input.teamId,
+    packageId: input.packageId,
+  });
+  if (!packageProjection || packageProjection.package.channelId !== input.channelId) return null;
+
+  const [delivered, current, final, specified, reviews, finalizations, versions, availableActions] = await Promise.all([
+    computeOutputPackageProjection(repositories, {
+      teamId: input.teamId,
+      channelId: input.channelId,
+      packageProjection,
+      policy: 'delivered',
+    }),
+    computeOutputPackageProjection(repositories, {
+      teamId: input.teamId,
+      channelId: input.channelId,
+      packageProjection,
+      policy: 'current',
+    }),
+    computeOutputPackageProjection(repositories, {
+      teamId: input.teamId,
+      channelId: input.channelId,
+      packageProjection,
+      policy: 'final',
+    }),
+    input.specifiedVersions
+      ? computeOutputPackageProjection(repositories, {
+        teamId: input.teamId,
+        channelId: input.channelId,
+        packageProjection,
+        policy: 'specified',
+        specifiedVersions: input.specifiedVersions,
+      })
+      : Promise.resolve(undefined),
+    repositories.channelProjects.listArtifactReviews({ teamId: input.teamId, channelId: input.channelId }),
+    repositories.channelProjects.listArtifactFinalizations({ teamId: input.teamId, channelId: input.channelId }),
+    repositories.channelProjects.listArtifactVersions({ teamId: input.teamId, channelId: input.channelId }),
+    computePackageMemberAvailableActions(repositories, {
+      teamId: input.teamId,
+      userId: input.userId,
+      channelId: input.channelId,
+      packageProjection,
+      projectionMembers: input.specifiedVersions,
+    }),
+  ]);
+
+  const versionsById = new Map(versions.map((version) => [version.id, version] as const));
+  const actionByVersionId = new Map(availableActions.map((action) => [action.versionId, action] as const));
+  const packageReviews = reviews
+    .filter((review) => review.packageId === input.packageId)
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+  const projectionMember = (
+    projection: OutputPackageProjectionResultV1 | undefined,
+    collectionId: ID,
+  ) => projection?.members.find((member) => member.collectionId === collectionId);
+  const members: StageDeliveryReviewMemberV1[] = packageProjection.members.map((member) => {
+    const reviewRecords = packageReviews.filter((review) => review.versionId === member.artifactVersionId);
+    const reviewDtos = reviewRecords.map(packageReviewDto);
+    const actualReviewerIds = Array.from(new Set(reviewRecords.map((review) => review.reviewedBy)));
+    const deliveredMember = projectionMember(delivered, member.collectionId);
+    const currentMember = projectionMember(current, member.collectionId);
+    const finalMember = projectionMember(final, member.collectionId);
+    const specifiedMember = projectionMember(specified, member.collectionId);
+    const deliveredIdentity = stageDeliveryVersionIdentity(deliveredMember, versionsById);
+    const currentIdentity = stageDeliveryVersionIdentity(currentMember, versionsById);
+    const finalIdentity = stageDeliveryVersionIdentity(finalMember, versionsById);
+    const specifiedIdentity = stageDeliveryVersionIdentity(specifiedMember, versionsById);
+    const matchingFinalization = finalizations
+      .filter((candidate) => (
+        candidate.versionId === member.artifactVersionId
+        && reviewRecords.some((review) => review.id === candidate.basisReviewId)
+      ))
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))[0];
+    return {
+      sequence: member.sequence,
+      shortLabel: member.shortLabel,
+      collectionId: member.collectionId,
+      artifactVersionId: member.artifactVersionId,
+      requiredForFinal: member.requiredForFinal,
+      sourcePath: member.sourcePath,
+      filename: member.filename,
+      ...(deliveredIdentity ? { delivered: deliveredIdentity } : {}),
+      ...(currentIdentity ? { current: currentIdentity } : {}),
+      ...(finalIdentity ? { final: finalIdentity } : {}),
+      ...(specifiedIdentity ? { specified: specifiedIdentity } : {}),
+      review: {
+        ...(deliveredMember ? { state: deliveredMember.reviewState } : {}),
+        covered: reviewRecords.length > 0,
+        actualReviewerIds,
+        records: reviewDtos,
+      },
+      ...(matchingFinalization ? { finalization: projectArtifactFinalizationDto(matchingFinalization) } : {}),
+      ...(actionByVersionId.get(member.artifactVersionId)
+        ? { availableActions: actionByVersionId.get(member.artifactVersionId)! }
+        : {}),
+    };
+  });
+
+  const requiredMembers = members.filter((member) => member.requiredForFinal);
+  const reviewedMembers = requiredMembers.filter((member) => member.review.covered);
+  const approvedMembers = requiredMembers.filter((member) => (
+    member.review.records[member.review.records.length - 1]?.decision === 'approved'
+  ));
+  const uncoveredMembers = requiredMembers.filter((member) => !member.review.covered);
+  const actualReviewerIds = Array.from(new Set(members.flatMap((member) => member.review.actualReviewerIds)));
+  const projectionBlockers: StageDeliveryReviewBlockerV1[] = [
+    ...stageDeliveryProjectionBlockers('delivered', delivered),
+    ...stageDeliveryProjectionBlockers('current', current),
+    ...stageDeliveryProjectionBlockers('final', final),
+    ...(specified ? stageDeliveryProjectionBlockers('specified', specified) : []),
+  ];
+  const reviewBlockers: StageDeliveryReviewBlockerV1[] = uncoveredMembers.map((member) => ({
+    source: 'review',
+    code: 'required_review_missing',
+    collectionId: member.collectionId,
+    shortLabel: member.shortLabel,
+    filename: member.filename,
+  }));
+  return {
+    focusPackage: {
+      package: toOutputPackageDto(packageProjection.package, packageProjection.members),
+      projections: {
+        delivered,
+        current,
+        final,
+        ...(specified ? { specified } : {}),
+      },
+      members,
+      coverage: {
+        requiredCount: requiredMembers.length,
+        reviewedCount: reviewedMembers.length,
+        approvedCount: approvedMembers.length,
+        uncoveredCount: uncoveredMembers.length,
+        complete: requiredMembers.length > 0 && uncoveredMembers.length === 0,
+        uncoveredCollectionIds: uncoveredMembers.map((member) => member.collectionId),
+        actualReviewerIds,
+      },
+    },
+    blockers: [...projectionBlockers, ...reviewBlockers],
+  };
+}
+
+function stageDeliveryVersionIdentity(
+  member: OutputPackageProjectionResultV1['members'][number] | undefined,
+  versionsById: ReadonlyMap<ID, ProjectArtifactVersionRecord>,
+): StageDeliveryReviewVersionIdentityV1 | undefined {
+  if (!member) return undefined;
+  const version = versionsById.get(member.versionId);
+  if (!version) return undefined;
+  return {
+    ...member,
+    source: {
+      ...(version.stageId === undefined ? {} : { stageId: version.stageId }),
+      taskId: version.taskId,
+      taskRevision: version.taskRevision,
+      ...(version.sourceMessageId === undefined ? {} : { messageId: version.sourceMessageId }),
+      ...(version.sourceWorkspaceRunId === undefined ? {} : { workspaceRunId: version.sourceWorkspaceRunId }),
+      ...(version.sourceInvocationId === undefined ? {} : { invocationId: version.sourceInvocationId }),
+    },
+  };
+}
+
+function packageReviewDto(record: ProjectArtifactReviewRecord): PackageReviewDto {
+  return {
+    id: record.id,
+    teamId: record.teamId,
+    channelId: record.channelId,
+    collectionId: record.collectionId,
+    versionId: record.versionId,
+    ...(record.packageId ? { packageId: record.packageId } : {}),
+    ...(record.deliveryId ? { deliveryId: record.deliveryId } : {}),
+    ...(record.taskId ? { taskId: record.taskId } : {}),
+    ...(record.taskRevision !== undefined ? { taskRevision: record.taskRevision } : {}),
+    ...(record.taskAttempt !== undefined ? { taskAttempt: record.taskAttempt } : {}),
+    decision: record.decision,
+    comment: record.comment,
+    authorityBasis: record.authorityBasis,
+    reviewedBy: record.reviewedBy,
+    createdAt: record.createdAt,
+  };
+}
+
+function stageDeliveryProjectionBlockers(
+  policy: 'delivered' | 'current' | 'final' | 'specified',
+  projection: OutputPackageProjectionResultV1,
+): StageDeliveryReviewBlockerV1[] {
+  return projection.blockers.map((blocker) => ({
+    source: 'projection',
+    policy,
+    ...blocker,
+  }));
 }
 
 async function deriveTaskResponsibilityFocus(

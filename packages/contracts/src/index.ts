@@ -15,6 +15,7 @@ export * from './channel-file.js';
 export * from './channel-document.js';
 export * from './task.js';
 export * from './task-delivery-overview.js';
+export * from './stage-delivery-review-workspace.js';
 export * from './management.js';
 export * from './task-coordination.js';
 export * from './invocation.js';
