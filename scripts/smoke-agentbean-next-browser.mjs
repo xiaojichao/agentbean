@@ -68,8 +68,16 @@ const WEB_EVENTS = {
     setArtifactFinalVersion: 'project:set-artifact-final-version',
     createDocumentBundle: 'project:create-document-bundle',
     resolveReferences: 'project:resolve-references',
+    workspace: 'project:workspace',
+    listOutputPackages: 'project:list-output-packages',
+    getOutputPackage: 'project:get-output-package',
+    submitPackageReviewAndFinalize: 'project:submit-package-review-and-finalize',
   },
-  task: { create: 'task:create', list: 'task:list' },
+  task: {
+    create: 'task:create',
+    list: 'task:list',
+    stageDeliveryReviewWorkspace: 'task:stage-delivery-review-workspace',
+  },
   piPolicy: { get: 'pi-policy:get', update: 'pi-policy:update' },
   team: {
     create: 'team:create',
@@ -2078,7 +2086,6 @@ export async function exerciseWebUiRunsBusinessSmoke({
     if (!agentId) {
       throw new Error(`WebUI runs smoke could not create a custom agent: ${formatAck(agentAck)}`);
     }
-
     const sourceMessageBody = `@${agentName} produce workspace run`;
     const sendAck = await emitAck(webSocket, WEB_EVENTS.message.send, {
       userId: session.user.id,
@@ -2099,6 +2106,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
         dispatchId,
         logArtifactId,
         summaryArtifactId,
+        agentId,
         adminUiVerified: false,
       };
     }
@@ -2153,6 +2161,7 @@ export async function exerciseWebUiRunsBusinessSmoke({
       dispatchId,
       logArtifactId,
       summaryArtifactId,
+      agentId,
       adminUiVerified: true,
     };
   } finally {
@@ -2669,9 +2678,68 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       })
     : undefined;
 
+  const reviewChannelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: scope.teamId,
+    name: `stage-review-${suffix}`,
+    visibility: 'public',
+  }, timeoutMs);
+  const reviewChannelId = readNestedString(reviewChannelAck, ['channel', 'id']);
+  if (!reviewChannelId) {
+    throw new Error(`Stage delivery review smoke could not create its isolated channel: ${formatAck(reviewChannelAck)}`);
+  }
+  const reviewScope = { ...scope, channelId: reviewChannelId };
+  const membershipAck = await emitAck(webSocket, WEB_EVENTS.channel.addAgent, {
+    ...reviewScope,
+    agentId: workspaceRun.agentId,
+  }, timeoutMs);
+  if (membershipAck?.ok !== true) {
+    throw new Error(`Stage delivery review smoke could not bind the real Agent: ${formatAck(membershipAck)}`);
+  }
+  const reviewTaskAck = await emitAck(webSocket, WEB_EVENTS.task.create, {
+    ...reviewScope,
+    title: `Stage delivery review ${suffix}`,
+  }, timeoutMs);
+  const reviewTask = reviewTaskAck?.task;
+  if (reviewTaskAck?.ok !== true || typeof reviewTask?.id !== 'string') {
+    throw new Error(`Stage delivery review smoke could not create its Task: ${formatAck(reviewTaskAck)}`);
+  }
+  const reviewStageName = `交付审核 ${suffix}`;
+  const reviewStageAck = await emitAck(webSocket, WEB_EVENTS.project.createInitialStage, {
+    ...reviewScope,
+    expectedRevision: 0,
+    idempotencyKey: `stage-review-project-${suffix}`,
+    projectLeadId: session.user.id,
+    defaultReviewerIds: [session.user.id],
+    stage: {
+      name: reviewStageName,
+      goal: '核对真实 OutputPackage 版本与审核人事实',
+      ownerId: session.user.id,
+      reviewerIds: [session.user.id],
+      acceptanceCriteria: ['交付版本与实际审核人可核验'],
+      taskId: reviewTask.id,
+    },
+  }, timeoutMs);
+  const reviewStage = reviewStageAck?.overview?.stages?.[0];
+  if (reviewStageAck?.ok !== true || typeof reviewStage?.id !== 'string') {
+    throw new Error(`Stage delivery review smoke could not create its Stage: ${formatAck(reviewStageAck)}`);
+  }
+  const deliveryReview = await createStageDeliveryReviewSmokeFacts({
+    baseUrl,
+    fetchImpl,
+    webSocket,
+    session,
+    scope: reviewScope,
+    task: reviewTask,
+    stage: reviewStage,
+    workspaceRun,
+    suffix,
+    timeoutMs,
+  });
+
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const teamPath = session.team.path ?? session.team.id;
-  await page.navigate(new URL(`/${teamPath}/channel/${scope.channelId}`, root).toString());
+  await page.navigate(new URL(`/${teamPath}/channel/${reviewScope.channelId}`, root).toString());
   const openedTasksTab = await page.evaluateJson(`
     (() => {
       const button = Array.from(document.querySelectorAll('button'))
@@ -2683,8 +2751,36 @@ export async function exerciseWebUiProjectCollaborationSmoke({
   `);
   if (!openedTasksTab) throw new Error(`Could not open channel task view for project Task "${taskTitle}"`);
   await page.waitForFunction(
-    `(() => { const text = document.querySelector('[data-smoke="channel-project-progress"]')?.textContent ?? ''; return text.includes(${JSON.stringify(stageName)}) && !text.includes(${JSON.stringify(`${stageName} stale`)}); })()`,
-    `project Stage "${stageName}" to render from the Server projection`,
+    `(() => { const text = document.querySelector('[data-smoke="channel-project-progress"]')?.textContent ?? ''; return text.includes(${JSON.stringify(reviewStageName)}); })()`,
+    `project Stage "${reviewStageName}" to render from the Server projection`,
+    timeoutMs,
+  );
+  const openedStage = await page.evaluateJson(`
+    (() => {
+      const stageId = ${JSON.stringify(reviewStage.id)};
+      const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
+        .find((candidate) => candidate.dataset.stageId === stageId);
+      if (!card) return false;
+      card.click();
+      return true;
+    })()
+  `);
+  if (!openedStage) throw new Error(`Could not open project Stage "${reviewStageName}" review workspace`);
+  await page.waitForFunction(
+    `
+    (() => {
+      const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
+      const text = workspace?.textContent ?? '';
+      const reviewerCandidates = ${JSON.stringify([
+        session.user.username,
+        session.user.id,
+      ].filter(Boolean))};
+      return text.includes(${JSON.stringify(deliveryReview.packageId)})
+        && text.includes(${JSON.stringify(deliveryReview.versionId)})
+        && reviewerCandidates.some((candidate) => text.includes(candidate));
+    })()
+    `,
+    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and the actual reviewer`,
     timeoutMs,
   );
 
@@ -2694,8 +2790,142 @@ export async function exerciseWebUiProjectCollaborationSmoke({
     versionId: promoted.version.id,
     bundleId,
     referenceSetId: sent.referenceSet.id,
+    outputPackageId: deliveryReview.packageId,
+    outputPackageVersionId: deliveryReview.versionId,
+    deliveryReviewStageId: reviewStage.id,
     ...(inputSetResult ? { inputSetResult } : {}),
   };
+}
+
+async function createStageDeliveryReviewSmokeFacts({
+  baseUrl,
+  fetchImpl,
+  webSocket,
+  session,
+  scope,
+  task,
+  stage,
+  workspaceRun,
+  suffix,
+  timeoutMs,
+}) {
+  if (typeof workspaceRun?.agentId !== 'string') {
+    throw new Error('Stage delivery review smoke needs the real Agent created by the workspace run flow');
+  }
+  const workspaceAck = await emitAck(webSocket, WEB_EVENTS.project.workspace, scope, timeoutMs);
+  const baselineRevisionId = workspaceAck?.ok === true
+    ? workspaceAck.workspace?.currentRevisionId ?? ''
+    : '';
+  const publishId = `stage-review-${suffix}`;
+  const path = `docs/stage-review-${suffix}.md`;
+  const body = Buffer.from(`# Stage delivery review smoke\n\n${suffix}\n`);
+  const stagingUrl = new URL(
+    `/api/teams/${encodeURIComponent(scope.teamId)}/workspace-publish-staging`,
+    normalizeBaseUrlOrThrow(baseUrl),
+  );
+  const authorization = { Authorization: `Bearer ${session.token}` };
+  const beginResponse = await fetchImpl(new URL(`${stagingUrl.pathname}/begin`, stagingUrl), {
+    method: 'POST',
+    headers: { ...authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      channelId: scope.channelId,
+      publishId,
+      baselineRevisionId,
+      files: [{
+        path,
+        filename: path.split('/').pop(),
+        mimeType: 'text/markdown',
+        expectedSizeBytes: body.byteLength,
+        expectedSha256: createHash('sha256').update(body).digest('hex'),
+      }],
+      provenance: {
+        agentId: workspaceRun.agentId,
+        taskId: task.id,
+        taskAttempt: 1,
+        workspaceRunId: workspaceRun.id,
+      },
+    }),
+  });
+  const begin = await beginResponse.json();
+  if (!beginResponse.ok || begin?.ok !== true) {
+    throw new Error(`Stage delivery review smoke could not begin OutputPackage staging: ${formatAck(begin)}`);
+  }
+
+  const putUrl = new URL(`${stagingUrl.pathname}/put`, stagingUrl);
+  putUrl.searchParams.set('channelId', scope.channelId);
+  putUrl.searchParams.set('publishId', publishId);
+  putUrl.searchParams.set('path', path);
+  putUrl.searchParams.set('offset', '0');
+  const putResponse = await fetchImpl(putUrl, {
+    method: 'POST',
+    headers: { ...authorization, 'Content-Type': 'application/octet-stream' },
+    body,
+  });
+  const put = await putResponse.json();
+  if (!putResponse.ok || put?.ok !== true) {
+    throw new Error(`Stage delivery review smoke could not upload OutputPackage bytes: ${formatAck(put)}`);
+  }
+
+  const commitResponse = await fetchImpl(new URL(`${stagingUrl.pathname}/commit`, stagingUrl), {
+    method: 'POST',
+    headers: { ...authorization, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channelId: scope.channelId, publishId }),
+  });
+  const commit = await commitResponse.json();
+  if (!commitResponse.ok || commit?.ok !== true) {
+    throw new Error(`Stage delivery review smoke could not commit OutputPackage staging: ${formatAck(commit)}`);
+  }
+
+  const listed = await emitAck(webSocket, WEB_EVENTS.project.listOutputPackages, {
+    ...scope,
+    taskId: task.id,
+  }, timeoutMs);
+  const packageSummary = Array.isArray(listed?.packages)
+    ? listed.packages.find((candidate) => candidate?.publishId === publishId)
+    : undefined;
+  if (listed?.ok !== true || typeof packageSummary?.packageId !== 'string') {
+    throw new Error(`Stage delivery review smoke could not read the formed OutputPackage: ${formatAck(listed)}`);
+  }
+  const detail = await emitAck(webSocket, WEB_EVENTS.project.getOutputPackage, {
+    ...scope,
+    packageId: packageSummary.packageId,
+  }, timeoutMs);
+  const member = detail?.package?.members?.[0];
+  const actions = detail?.availableActions?.find(
+    (candidate) => candidate?.collectionId === member?.collectionId
+      && candidate?.versionId === member?.artifactVersionId,
+  );
+  if (detail?.ok !== true || !member?.artifactVersionId || !actions) {
+    throw new Error(`Stage delivery review smoke could not read the package member facts: ${formatAck(detail)}`);
+  }
+  const reviewed = await emitAck(webSocket, WEB_EVENTS.project.submitPackageReviewAndFinalize, {
+    ...scope,
+    packageId: packageSummary.packageId,
+    collectionId: member.collectionId,
+    versionId: member.artifactVersionId,
+    decision: 'approved',
+    comment: '真实浏览器 smoke 审核并最终化',
+    expectedCollectionRevision: actions.collectionRevision,
+    idempotencyKey: `stage-review-finalize-${suffix}`,
+  }, timeoutMs);
+  if (reviewed?.ok !== true || reviewed?.review?.reviewedBy !== session.user.id) {
+    throw new Error(`Stage delivery review smoke could not persist the actual reviewer: ${formatAck(reviewed)}`);
+  }
+  const workspace = await emitAck(webSocket, WEB_EVENTS.task.stageDeliveryReviewWorkspace, {
+    ...scope,
+    schemaVersion: 1,
+    stageId: stage.id,
+    taskId: task.id,
+  }, timeoutMs);
+  const projectedMember = workspace?.workspace?.focusPackage?.members?.find(
+    (candidate) => candidate?.artifactVersionId === member.artifactVersionId,
+  );
+  if (workspace?.ok !== true
+    || workspace.workspace?.focusPackage?.package?.packageId !== packageSummary.packageId
+    || !projectedMember?.review?.actualReviewerIds?.includes(session.user.id)) {
+    throw new Error(`Stage delivery review smoke did not receive matching Server review facts: ${formatAck(workspace)}`);
+  }
+  return { packageId: packageSummary.packageId, versionId: member.artifactVersionId };
 }
 
 async function exerciseProjectInputSetLifecycleSmoke({

@@ -228,6 +228,49 @@ async function seedTask(
   }
 }
 
+async function seedStage(seedValue: Seed, taskId: string, stageId = `stage-${taskId}`) {
+  await seedValue.repositories.channelProjects.createInitialStage({
+    expectedRevision: 0,
+    profile: {
+      id: `profile-${taskId}`,
+      teamId: seedValue.teamId,
+      channelId: seedValue.channelId,
+      projectLeadId: seedValue.userId,
+      defaultReviewerIds: [seedValue.userId],
+      revision: 1,
+      createdBy: seedValue.userId,
+      createdAt: 20,
+      updatedAt: 20,
+    },
+    stage: {
+      id: stageId,
+      teamId: seedValue.teamId,
+      channelId: seedValue.channelId,
+      taskId,
+      taskRevision: 1,
+      name: '发布审核',
+      goal: '形成可验收的发布文件包',
+      ownerId: seedValue.userId,
+      reviewerIds: [seedValue.userId],
+      acceptanceCriteria: ['全部必需成员有审核结论'],
+      createdAt: 20,
+      updatedAt: 20,
+    },
+    mutation: {
+      teamId: seedValue.teamId,
+      channelId: seedValue.channelId,
+      idempotencyKey: `stage:${stageId}`,
+      requestFingerprint: `stage:${stageId}`,
+      profileId: `profile-${taskId}`,
+      stageId,
+      resultRevision: 1,
+      resultOverview: {} as never,
+      createdAt: 20,
+    },
+  });
+  return stageId;
+}
+
 async function seedOffer(seedValue: Seed, taskId: string, offerId: string, opts?: { status?: string; responded?: boolean; frozen?: boolean }) {
   await seedValue.repositories.taskCoordination.offers.create({
     id: offerId,
@@ -455,6 +498,193 @@ for (const variant of variants) {
       });
       expect(stale.ok).toBe(false);
       if (!stale.ok) expect(stale.error).toBe('PROJECTION_NOT_READY');
+    });
+
+    test('#1176:所选阶段一次返回焦点包版本身份、审核覆盖、审核人和结构化阻断', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-stage-review';
+      await seedTask(seedValue, taskId, {
+        status: 'in_review',
+        preboundAuthorityIds: [seedValue.userId],
+        criteria: ['交付内容完整'],
+      });
+      const stageId = await seedStage(seedValue, taskId);
+      await commitDelivery(seedValue, 'pub-stage-review', [
+        { path: 'docs/script.md', body: Buffer.from('script') },
+        { path: 'docs/characters.md', body: Buffer.from('characters') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+      const packageRecord = await seedValue.repositories.outputPackages.getPackageByPublishId({
+        teamId: seedValue.teamId,
+        publishId: 'pub-stage-review',
+      });
+      if (!packageRecord) throw new Error('package not found');
+      const reviewedMember = packageRecord.members[0]!;
+      const uncoveredMember = packageRecord.members[1]!;
+      const collection = await seedValue.repositories.channelProjects.getArtifactCollection({
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        collectionId: reviewedMember.collectionId,
+      });
+      if (!collection) throw new Error('collection not found');
+      const finalized = await seedValue.app.submitPackageReviewAndFinalize({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        packageId: packageRecord.package.packageId,
+        collectionId: reviewedMember.collectionId,
+        versionId: reviewedMember.artifactVersionId,
+        decision: 'approved',
+        comment: '审核通过',
+        expectedCollectionRevision: collection.revision,
+        idempotencyKey: `stage-review-final:${reviewedMember.artifactVersionId}`,
+      });
+      expect(finalized.ok).toBe(true);
+
+      const result = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+        specifiedProjection: {
+          packageId: packageRecord.package.packageId,
+          versions: [{
+            collectionId: uncoveredMember.collectionId,
+            versionId: uncoveredMember.artifactVersionId,
+          }],
+        },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error(result.error);
+      expect(result.workspace).toMatchObject({
+        schemaVersion: 1,
+        stageId,
+        taskId,
+        suggestedReviewerIds: [seedValue.userId],
+        archived: false,
+      });
+      expect(result.workspace.focusPackage?.members).toHaveLength(2);
+      const first = result.workspace.focusPackage!.members[0]!;
+      expect(first).toMatchObject({
+        artifactVersionId: reviewedMember.artifactVersionId,
+        delivered: { versionId: reviewedMember.artifactVersionId },
+        current: { versionId: reviewedMember.artifactVersionId },
+        final: { versionId: reviewedMember.artifactVersionId },
+        review: { covered: true, state: 'approved', actualReviewerIds: [seedValue.userId] },
+      });
+      expect(first.delivered?.source).toMatchObject({ taskId, taskRevision: 1 });
+      const second = result.workspace.focusPackage!.members[1]!;
+      expect(second.specified?.versionId).toBe(uncoveredMember.artifactVersionId);
+      expect(result.workspace.focusPackage?.coverage).toMatchObject({
+        requiredCount: 2,
+        reviewedCount: 1,
+        approvedCount: 1,
+        uncoveredCount: 1,
+        complete: false,
+        uncoveredCollectionIds: [uncoveredMember.collectionId],
+        actualReviewerIds: [seedValue.userId],
+      });
+      expect(result.workspace.blockers).toContainEqual(expect.objectContaining({
+        source: 'review', code: 'required_review_missing', collectionId: uncoveredMember.collectionId,
+      }));
+      expect(result.workspace.taskOverview.timeline.map((event) => event.kind)).toEqual(
+        expect.arrayContaining(['delivery', 'review', 'finalization']),
+      );
+
+      const unavailableSpecified = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+        specifiedProjection: {
+          packageId: packageRecord.package.packageId,
+          versions: [{ collectionId: uncoveredMember.collectionId, versionId: 'invisible-version' }],
+        },
+      });
+      expect(unavailableSpecified.ok).toBe(true);
+      if (!unavailableSpecified.ok) throw new Error(unavailableSpecified.error);
+      expect(unavailableSpecified.workspace.focusPackage?.members[1]?.specified).toBeUndefined();
+      expect(unavailableSpecified.workspace.blockers).toContainEqual(expect.objectContaining({
+        source: 'projection', policy: 'specified', code: 'version_not_in_package', versionId: 'invisible-version',
+      }));
+    });
+
+    test('#1176:阶段与 Task 绑定不匹配时不泄露详情，最低水位未追上时 not ready', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-stage-scope';
+      await seedTask(seedValue, taskId);
+      const stageId = await seedStage(seedValue, taskId);
+      await seedTask(seedValue, 'task-other');
+
+      const mismatch = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId: 'task-other',
+      });
+      expect(mismatch).toMatchObject({ ok: false, error: 'NOT_FOUND' });
+
+      const notReady = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+        minimumConsistency: token(seedValue.channelId, 9),
+      });
+      expect(notReady).toMatchObject({ ok: false, error: 'PROJECTION_NOT_READY' });
+
+      const outsider = await seedValue.app.registerUser({ username: `outsider-${variant.name}`, password: 'secret', teamName: 'Other' });
+      if (!outsider.ok) throw new Error(outsider.error);
+      const forbidden = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: outsider.user.id,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+      });
+      expect(forbidden).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    });
+
+    test('#1176:归档频道保留只读审核工作区并明确 archived', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-stage-archived';
+      await seedTask(seedValue, taskId);
+      const stageId = await seedStage(seedValue, taskId);
+      const preflight = await seedValue.app.archiveChannel({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      if (!preflight.ok || !preflight.preflight) throw new Error('archive preflight failed');
+      const confirmed = await seedValue.app.archiveChannel({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        confirmationToken: preflight.preflight.confirmationToken,
+      });
+      expect(confirmed.ok).toBe(true);
+
+      const result = await seedValue.app.queryStageDeliveryReviewWorkspace({
+        schemaVersion: 1,
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        stageId,
+        taskId,
+      });
+      expect(result).toMatchObject({ ok: true, workspace: { archived: true } });
+      if (result.ok) expect(result.workspace.focusPackage).toBeUndefined();
     });
 
     test('权限:跨频道 task → NOT_FOUND;无 coordination 的裸 task 也能打开', async () => {
