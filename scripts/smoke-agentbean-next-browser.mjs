@@ -1789,6 +1789,49 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, chan
     'channel Tasks preserves the project subview after refresh',
     timeoutMs,
   );
+
+  // #1179：项目设置独立于默认推进面；打开后可见配置面，推进面本身不混排创建阶段/依赖表单。
+  await page.waitForFunction(
+    `
+    (() => {
+      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
+      if (!progress) return false;
+      const text = progress.textContent ?? '';
+      return !text.includes('创建首个项目阶段')
+        && !text.includes('阶段依赖')
+        && !text.includes('添加依赖')
+        && document.body.querySelector('[data-smoke="channel-project-settings-dialog"]') === null;
+    })()
+    `,
+    'project progress view keeps config forms out of the runtime surface',
+    timeoutMs,
+  );
+  const openedSettings = await page.evaluateJson(`
+    (() => {
+      const button = Array.from(document.querySelectorAll('button'))
+        .find((candidate) => {
+          const label = candidate.textContent?.trim() ?? '';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+        });
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!openedSettings) throw new Error('Could not open channel project settings from project progress');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-project-settings-dialog"]') !== null
+      && document.querySelector('[data-smoke="channel-project-settings"]') !== null`,
+    'project settings dialog renders the configuration surface',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="channel-project-settings-close"]');
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-project-settings-dialog"]') === null`,
+    'project settings dialog closes and returns to the runtime view',
+    timeoutMs,
+  );
+
   await page.click('[data-smoke="channel-tasks-view-plain"]');
   await page.waitForFunction(
     `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,

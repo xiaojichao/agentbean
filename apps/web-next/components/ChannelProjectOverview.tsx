@@ -39,6 +39,16 @@ export interface ProjectStageEdgeDraft {
   requiredInputs: ProjectStageRequiredInputRuleDto[];
 }
 
+/** #1179：在已有项目画像上追加后续阶段（createProjectStage）。 */
+export interface ProjectStageDraft {
+  name: string;
+  goal: string;
+  ownerId: string;
+  reviewerIds: string[];
+  acceptanceCriteria: string[];
+  taskId: string;
+}
+
 export function ChannelProjectOverview({
   overview,
   tasks,
@@ -46,6 +56,7 @@ export function ChannelProjectOverview({
   currentUserId,
   artifactLibrary,
   onCreate,
+  onCreateStage,
   onCreateEdge,
   onDeleteEdge,
 }: {
@@ -55,10 +66,13 @@ export function ChannelProjectOverview({
   currentUserId?: string;
   artifactLibrary?: ProjectArtifactLibraryDto | null;
   onCreate?: (draft: InitialProjectStageDraft) => Promise<string | null>;
+  /** 已有画像后追加阶段；归档或不传时隐藏创建入口。 */
+  onCreateStage?: (draft: ProjectStageDraft) => Promise<string | null>;
   onCreateEdge?: (draft: ProjectStageEdgeDraft) => Promise<string | null>;
   onDeleteEdge?: (edgeId: string) => Promise<string | null>;
 }) {
   const [showCreate, setShowCreate] = useState(false);
+  const [showCreateStage, setShowCreateStage] = useState(false);
   const [name, setName] = useState('');
   const [goal, setGoal] = useState('');
   const [taskId, setTaskId] = useState(tasks[0]?.id ?? '');
@@ -72,10 +86,17 @@ export function ChannelProjectOverview({
   const humanParticipants = participants.filter((participant) => participant.kind === 'human');
   const defaultReviewerId = humanParticipants.find((participant) => participant.id !== currentUserId)?.id
     ?? humanParticipants[0]?.id;
+  const boundTaskIds = new Set(overview?.stages.map((stage) => stage.task.id) ?? []);
+  const availableTasks = tasks.filter((task) => !boundTaskIds.has(task.id));
+  const availableTaskIdsKey = availableTasks.map((task) => task.id).join('|');
 
   useEffect(() => {
-    if (!taskId && tasks[0]) setTaskId(tasks[0].id);
-  }, [taskId, tasks]);
+    if (!taskId || boundTaskIds.has(taskId)) {
+      setTaskId(availableTasks[0]?.id ?? '');
+    }
+    // availableTaskIdsKey tracks unbound task set; avoid depending on new Set identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskId, availableTaskIdsKey]);
 
   useEffect(() => {
     if (!ownerId && currentUserId) setOwnerId(currentUserId);
@@ -89,22 +110,50 @@ export function ChannelProjectOverview({
   }, [defaultReviewerId, defaultReviewerIds.length, stageReviewerIds.length]);
 
   if (overview) {
+    const canAddStage = Boolean(onCreateStage) && !overview.archived && availableTasks.length > 0;
     return (
-      <section aria-label="项目总览" className="shrink-0 border-b border-neutral-200 bg-amber-50/60 px-4 py-3">
-        <div className="mb-2 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-neutral-900">项目阶段</h2>
+      <section
+        aria-label="项目设置"
+        data-smoke="channel-project-settings"
+        className="shrink-0 border-b border-neutral-200 bg-amber-50/60 px-4 py-3"
+      >
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <h2 className="text-sm font-semibold text-neutral-900">项目阶段配置</h2>
           <span className="text-xs text-neutral-500">
             负责人：{participantName(overview.profile.projectLeadId, participants)}
           </span>
+          <span className="text-xs text-neutral-500">
+            默认审核者：{overview.profile.defaultReviewerIds
+              .map((id) => participantName(id, participants)).join('、') || '未配置'}
+          </span>
+          <span className="text-[11px] text-neutral-400">revision {overview.profile.revision}</span>
           {overview.archived && (
             <span className="rounded bg-neutral-200 px-2 py-0.5 text-[11px] font-medium text-neutral-600">
               已归档 · 只读
             </span>
           )}
+          {canAddStage && !showCreateStage ? (
+            <button
+              type="button"
+              data-smoke="project-settings-add-stage"
+              onClick={() => {
+                setShowCreateStage(true);
+                setError(null);
+              }}
+              className="ml-auto flex items-center gap-1 text-xs font-medium text-amber-700 hover:text-amber-900"
+            >
+              <Plus size={13} />
+              添加阶段
+            </button>
+          ) : null}
         </div>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {overview.stages.map((stage) => (
-            <article key={stage.id} className="rounded-md border border-amber-200 bg-white p-3">
+            <article
+              key={stage.id}
+              data-testid={`project-settings-stage-${stage.id}`}
+              className="rounded-md border border-amber-200 bg-white p-3"
+            >
               <div className="flex items-start gap-2">
                 {stage.aggregateStatus === 'complete'
                   ? <CheckCircle2 size={15} className="mt-0.5 text-emerald-600" />
@@ -199,6 +248,30 @@ export function ChannelProjectOverview({
             </article>
           ))}
         </div>
+        {showCreateStage && canAddStage ? (
+          <AdditionalStageForm
+            tasks={availableTasks}
+            participants={participants}
+            humanParticipants={humanParticipants}
+            currentUserId={currentUserId}
+            defaultReviewerIds={overview.profile.defaultReviewerIds}
+            onCancel={() => {
+              setShowCreateStage(false);
+              setError(null);
+            }}
+            onSubmit={async (draft) => {
+              if (!onCreateStage) return '当前无法创建阶段';
+              const nextError = await onCreateStage(draft);
+              if (!nextError) setShowCreateStage(false);
+              return nextError;
+            }}
+          />
+        ) : null}
+        {!overview.archived && onCreateStage && availableTasks.length === 0 ? (
+          <p data-testid="project-settings-no-unbound-task" className="mt-3 text-xs text-neutral-500">
+            所有任务都已绑定阶段。请先在「普通任务」中创建新任务，再回来添加阶段。
+          </p>
+        ) : null}
         <ProjectStageEdgeSection
           overview={overview}
           onCreateEdge={onCreateEdge}
@@ -350,6 +423,129 @@ function reviewStateLabel(state: ProjectArtifactLibraryDto['collections'][number
   if (state === 'rejected') return '已拒绝';
   if (state === 'changes_requested') return '需修改';
   return '待审核';
+}
+
+/** #1179：已有项目画像后追加阶段的配置表单。 */
+function AdditionalStageForm({
+  tasks,
+  participants,
+  humanParticipants,
+  currentUserId,
+  defaultReviewerIds,
+  onCancel,
+  onSubmit,
+}: {
+  tasks: ProjectTaskOption[];
+  participants: ProjectParticipantOption[];
+  humanParticipants: ProjectParticipantOption[];
+  currentUserId?: string;
+  defaultReviewerIds: string[];
+  onCancel: () => void;
+  onSubmit: (draft: ProjectStageDraft) => Promise<string | null>;
+}) {
+  const seedReviewer = defaultReviewerIds[0]
+    ?? humanParticipants.find((participant) => participant.id !== currentUserId)?.id
+    ?? humanParticipants[0]?.id
+    ?? '';
+  const [name, setName] = useState('');
+  const [goal, setGoal] = useState('');
+  const [taskId, setTaskId] = useState(tasks[0]?.id ?? '');
+  const [ownerId, setOwnerId] = useState(currentUserId ?? '');
+  const [stageReviewerIds, setStageReviewerIds] = useState<string[]>(seedReviewer ? [seedReviewer] : []);
+  const [criteria, setCriteria] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!taskId && tasks[0]) setTaskId(tasks[0].id);
+  }, [taskId, tasks]);
+
+  useEffect(() => {
+    if (!ownerId && currentUserId) setOwnerId(currentUserId);
+  }, [currentUserId, ownerId]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const acceptanceCriteria = criteria.split('\n').map((item) => item.trim()).filter(Boolean);
+    if (!name.trim() || !goal.trim() || !taskId || !ownerId
+      || stageReviewerIds.length === 0 || acceptanceCriteria.length === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const nextError = await onSubmit({
+        name: name.trim(),
+        goal: goal.trim(),
+        ownerId,
+        reviewerIds: stageReviewerIds,
+        acceptanceCriteria,
+        taskId,
+      });
+      if (nextError) setError(nextError);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={submit}
+      data-smoke="project-settings-create-stage-form"
+      className="mt-3 rounded-md border border-amber-200 bg-white p-3"
+    >
+      <div className="mb-3 flex items-center">
+        <h3 className="text-sm font-semibold text-neutral-900">添加项目阶段</h3>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="ml-auto text-neutral-400 hover:text-neutral-700"
+          title="取消"
+          aria-label="取消添加阶段"
+        >
+          <X size={15} />
+        </button>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        <ProjectField label="阶段名称">
+          <input value={name} onChange={(event) => setName(event.target.value)} className={inputClass} placeholder="例如：分镜设计" />
+        </ProjectField>
+        <ProjectField label="绑定任务">
+          <select value={taskId} onChange={(event) => setTaskId(event.target.value)} className={inputClass}>
+            {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
+          </select>
+        </ProjectField>
+        <ProjectField label="阶段负责人">
+          <select value={ownerId} onChange={(event) => setOwnerId(event.target.value)} className={inputClass}>
+            {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+          </select>
+        </ProjectField>
+        <ProjectField label="阶段目标">
+          <input value={goal} onChange={(event) => setGoal(event.target.value)} className={inputClass} placeholder="本阶段要达成什么" />
+        </ProjectField>
+        <ProjectField label="阶段审核者（可多选）">
+          <select
+            multiple
+            value={stageReviewerIds}
+            onChange={(event) => setStageReviewerIds(selectedValues(event.currentTarget))}
+            className={`${inputClass} h-20 py-1`}
+          >
+            {humanParticipants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+          </select>
+        </ProjectField>
+        <ProjectField label="验收标准（每行一条）">
+          <textarea value={criteria} onChange={(event) => setCriteria(event.target.value)} className={`${inputClass} min-h-20 py-2`} placeholder={'分镜完整\n角色一致'} />
+        </ProjectField>
+      </div>
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      <button
+        type="submit"
+        disabled={saving}
+        data-smoke="project-settings-create-stage-submit"
+        className="mt-3 h-8 rounded-md bg-neutral-900 px-3 text-xs font-medium text-white disabled:opacity-50"
+      >
+        {saving ? '创建中...' : '创建阶段'}
+      </button>
+    </form>
+  );
 }
 
 /** #822 阶段依赖图：展示既有边并提供增删入口；归档频道只读。 */

@@ -134,6 +134,27 @@ describe('频道项目推进工作区', () => {
     expect(screen.getByRole('button', { name: '查看项目设置' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
+
+  test('#1179 默认推进面不展示创建阶段、依赖边或底层引用 ID 表单', () => {
+    render(
+      <ChannelProjectProgress
+        overview={overview()}
+        workspace={workspace()}
+        participants={participants}
+        state="ready"
+        archived={false}
+        onOpenStage={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('创建首个项目阶段')).toBeNull();
+    expect(screen.queryByText('添加阶段')).toBeNull();
+    expect(screen.queryByText('阶段依赖')).toBeNull();
+    expect(screen.queryByLabelText('前置阶段')).toBeNull();
+    expect(screen.queryByLabelText('产物集合 ID')).toBeNull();
+    expect(screen.queryByLabelText('必需输入来源 ID')).toBeNull();
+    expect(screen.getByRole('button', { name: '项目设置 / 阶段配置' })).toBeTruthy();
+  });
 });
 
 const participants = [

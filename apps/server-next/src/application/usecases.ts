@@ -5168,9 +5168,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           });
           if (!updated) throw new Error(`DISPATCH_CANCEL_FAILED:${dispatch.id}`);
           // 反向查找关联 invocation（若存在）用于返回值展示
-          const attempts = await transaction.management.dispatchAttempts.list(dispatch.id);
-          if (attempts.length > 0) {
-            cancelledInvocationIds.push(attempts[0]!.invocationId);
+          const attempt = await transaction.management.dispatchAttempts.getByDispatchId(dispatch.id);
+          if (attempt) {
+            cancelledInvocationIds.push(attempt.invocationId);
           }
         }
 
@@ -15409,8 +15409,8 @@ async function collectArchiveWorks(
 
   const invocations: { id: ID; title?: string; status: string }[] = [];
   for (const dispatch of channelDispatches) {
-    const attempts = await deps.management.dispatchAttempts.list(dispatch.id);
-    const attempt = attempts[0];
+    // list(invocationId) 不能按 dispatch 反查；必须用 getByDispatchId。
+    const attempt = await deps.management.dispatchAttempts.getByDispatchId(dispatch.id);
     if (attempt) {
       invocations.push({ id: attempt.invocationId, status: dispatch.status });
     }
