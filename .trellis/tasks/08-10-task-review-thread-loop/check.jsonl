@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/design.md", "reason": "验收对照设计：边界/策略/测试矩阵"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/output-package-projections.md", "reason": "三处投影与水位——AC10 一致性核对依据"}
+{"file": ".trellis/tasks/08-10-task-review-thread-loop/research/stale-basis-fail-closed.md", "reason": "fence 模式——核对 fail-closed 无旁路"}
+{"file": ".trellis/spec/server-next/backend/index.md", "reason": "server-next 规约索引（check 时按需展开）"}
+{"file": ".trellis/spec/web-next/frontend/index.md", "reason": "web-next 规约索引（check 时按需展开）"}

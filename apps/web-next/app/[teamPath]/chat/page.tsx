@@ -34,7 +34,7 @@ import { CollapsibleMessageBody } from '@/components/collapsible-message-body';
 import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/components/TaskSystemActivitySection';
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
-import { StageDeliveryReviewWorkspace } from '@/components/StageDeliveryReviewWorkspace';
+import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
 import {
   ChannelTaskCard,
@@ -1455,7 +1455,10 @@ export default function ChatPage() {
     if (messageId && activeChannel) {
       params.set('thread', `${activeChannel}:${messageId}`);
       params.delete('message');
-      params.delete('task');
+      // #1178 AC1：task-only 阶段详情深链（task=task:<taskId>）与 thread 共存——
+      // 刷新/返回后 task/stage/thread 关联同时恢复；消息型 task 深链与 thread 互斥
+      // （taskParam 回灌会清 threadRootId），仍清除。stage/chatTab/tasksView 不动。
+      if (!params.get('task')?.startsWith('task:')) params.delete('task');
     } else {
       params.delete('thread');
     }
@@ -2927,6 +2930,27 @@ export default function ChatPage() {
               switchTab('tasks');
             }
           }}
+          onStageHandoff={(handoff) => {
+            // #1178：阶段交接入口（交给智能体处理/要求修改后继续）——openThread +
+            // 本地预填意图文案/尾部 @/引用选择 + 焦点恢复。全部本地 state：
+            // 发送前不创建 Message/Offer/claim/Invocation 事实；引用选择在发送时
+            // 由 Server 事务内冻结为具体 artifactVersionId。
+            const targetMessageId = handoff.threadRootMessageId ?? taskDetailMessage?.id;
+            if (targetMessageId) {
+              openThread(targetMessageId);
+              setThreadInput(handoff.action === 'continue-after-changes'
+                ? '请基于已交付版本继续修改：@'
+                : '请继续处理任务当前文件包：@');
+              setThreadSelections(handoff.selection ? [handoff.selection] : []);
+              setTimeout(() => threadTextareaRef.current?.focus(), 0);
+              return;
+            }
+            // 无绑定 Thread（普通阶段任务）回落主 composer：仅预填 @ 触发智能体选择。
+            closeTaskDetail();
+            switchTab('chat');
+            setInput('@');
+            setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
         />
       )}
 
@@ -4269,6 +4293,7 @@ function TaskDetailPanel({
   onViewAssetSource,
   onTaskStatus,
   onDeliveryAction,
+  onStageHandoff,
 }: {
   /** task-only 模式(看板直接创建的任务无关联消息)时为 null。 */
   message: ChatMessage | null;
@@ -4293,6 +4318,8 @@ function TaskDetailPanel({
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAction) => void;
+  /** #1178：阶段工作区交接入口（交给智能体处理/要求修改后继续）的本地预填导航。 */
+  onStageHandoff?: (action: StageHandoffAction) => void;
 }) {
   // 原型收敛:看板直接创建的任务没有关联消息,message 可为 null(task-only 模式)。
   const sortedMessages = relatedMessages.length > 0
@@ -4474,6 +4501,7 @@ function TaskDetailPanel({
                 onOpenThread={onOpenThread}
                 onViewAssetSource={onViewAssetSource}
                 onAction={onDeliveryAction}
+                onStageHandoff={onStageHandoff}
               />
             ) : (
               <TaskDeliveryOverview
@@ -5127,6 +5155,12 @@ function ThreadPanel({
                   </span>
                 );
               })}
+            </div>
+          )}
+          {/* #1178 AC2：引用非空时明示发送即冻结语义（纯展示，不产生任何事实）。 */}
+          {selections.length > 0 && (
+            <div data-smoke="thread-reference-freeze-hint" className="px-3 pb-2 text-[11px] text-neutral-500">
+              发送时将按策略冻结为具体版本，冻结后不随后续更新漂移
             </div>
           )}
           {attachments.length > 0 && <AttachmentStrip attachments={attachments} onRemove={onRemoveAttachment} />}
