@@ -532,10 +532,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   };
   // #1084 fan-out 落地：拉取 revision 文件清单 → materialize 到本机 snapshots/<revisionId>/。
   // fire-and-forget 调用，失败 warn 不 throw（非阻塞，at-least-once 由重连 reconcile 兜底）。
-  const applyIncomingWorkspaceRevision = async (payload: WorkspaceRevisionCommittedPayload) => {
+  // 返回结果供 reconcile 熔断分类（传输失败计入 circuit）。
+  const applyIncomingWorkspaceRevision = async (
+    payload: WorkspaceRevisionCommittedPayload,
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
     if (!device.token || !serverUrl) {
       console.warn('daemon workspace-revision fan-out skipped: missing token or serverUrl (non-blocking)');
-      return;
+      return { ok: false, error: 'MISSING_TOKEN_OR_SERVER' };
     }
     const targetDir = prepareChannelWorkspaceRevisionSnapshot({
       agentBeanHome,
@@ -555,7 +558,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       console.warn(
         `daemon workspace-revision fan-out fetch ${payload.revisionId} failed (non-blocking): ${fetched.error}`,
       );
-      return;
+      return { ok: false, error: fetched.error };
     }
     const result = await materializeProjectChannelWorkspaceRevision({
       revision: {
@@ -581,7 +584,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       console.warn(
         `daemon workspace-revision fan-out materialize ${payload.revisionId} failed (non-blocking): ${result.error}${detail}`,
       );
+      return { ok: false, error: result.error };
     }
+    return { ok: true };
   };
   // #1084 离线 reconcile：扫描本地 channel snapshots，落后则 apply。
   // 经 WorkspaceRevisionReconciler 限流：single-flight + 负缓存 + 熔断，
@@ -619,7 +624,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       }
     },
     async applyRevision(ref) {
-      await applyIncomingWorkspaceRevision({
+      return applyIncomingWorkspaceRevision({
         teamId: ref.teamId,
         channelId: ref.channelId,
         workspaceId: '', // reconcile 路径不依赖 workspaceId
