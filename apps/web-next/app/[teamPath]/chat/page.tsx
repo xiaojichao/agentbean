@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDetailDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -48,8 +48,6 @@ import {
   type SetArtifactFinalVersionDraft,
   type SubmitArtifactReviewDraft,
 } from '@/components/ProjectArtifactLibrary';
-import { ProjectDocumentBundleList } from '@/components/channel-documents/ProjectDocumentBundleList';
-import { ProjectDocumentList } from '@/components/channel-documents/ProjectDocumentList';
 import {
   ProjectDocumentInputSetResultSummary,
   projectDocumentInputSetResultFromMeta,
@@ -418,9 +416,11 @@ export default function ChatPage() {
   const channelFilesRequestRevisionRef = useRef(0);
   const outputPackageProjectionRequestRef = useRef(0);
   const [projectArtifactLibrary, setProjectArtifactLibrary] = useState<ProjectArtifactLibraryDto | null>(null);
-  const [projectDocuments, setProjectDocuments] = useState<ChannelDocumentDto[]>([]);
+  /** 仅用于 composer 历史 chip 标签解析；文件库不再展示文档包列表。 */
   const [projectDocumentBundles, setProjectDocumentBundles] = useState<ProjectDocumentBundleDto[]>([]);
   const [projectDocumentBundlesArchived, setProjectDocumentBundlesArchived] = useState(false);
+  /** 文件页项目投影是否已完成首轮拉取，避免普通频道在空数据时闪一下逻辑产物板。 */
+  const [filesProjectSurfaceReady, setFilesProjectSurfaceReady] = useState(false);
   // #1060 OutputPackage 投影(Files 面;与讨论串/Task 同一 Server 事实)。
   const [outputPackages, setOutputPackages] = useState<OutputPackageSummaryDto[]>([]);
   const [outputPackagePendings, setOutputPackagePendings] = useState<OutputPackagePendingDeliveryDto[]>([]);
@@ -621,44 +621,73 @@ export default function ChatPage() {
     setChannelFilesPath(searchParams.get('filePath') ?? '');
   }, [searchParams]);
 
+  /**
+   * 文件页是否使用逻辑产物板（原型左栏三卡 + 七列表）。
+   * 有项目画像、输出包、pending 交付或产物集合时进入；否则普通公共频道回落附件浏览。
+   * ChannelDocument 数量不参与门禁——不得因「有 .md」单独冒出「频道文档」面。
+   */
+  const hasProjectFilesSurface = Boolean(channelProjectOverview)
+    || outputPackages.length > 0
+    || outputPackagePendings.length > 0
+    || (projectArtifactLibrary?.collections.length ?? 0) > 0;
+
+  // 私聊始终用附件文件页；普通公共频道在无项目投影时回落附件浏览。
   useEffect(() => {
     channelFilesRequestRevisionRef.current += 1;
     setChannelFiles([]);
     setChannelFilesCursor(undefined);
     setChannelFileDirectories([]);
     setChannelFilesLoading(false);
+    if (tab !== 'files' || !activeChannel || conn !== 'open') return;
     const isActiveDm = dms.some((dm) => dm.id === activeChannel);
-    if (tab === 'files' && isActiveDm) void loadChannelFiles(true);
-  }, [activeChannel, conn, dms, tab, channelFilesPath, channelFilesQuery, channelFilesRole]);
+    const useAttachmentFiles = isActiveDm
+      || (filesProjectSurfaceReady && !hasProjectFilesSurface);
+    if (useAttachmentFiles) void loadChannelFiles(true);
+  }, [
+    activeChannel,
+    conn,
+    dms,
+    tab,
+    channelFilesPath,
+    channelFilesQuery,
+    channelFilesRole,
+    filesProjectSurfaceReady,
+    hasProjectFilesSurface,
+    loadChannelFiles,
+  ]);
 
-  // #823 逻辑产物视图按需拉取 Server 投影；没有项目数据的频道保持空投影，不影响普通文件视图。
-  // #825 文档包与文件列表分开取，Bundle 读失败不牵连既有文件库渲染。
+  // #823 逻辑产物视图按需拉取 Server 投影。
+  // 设计/原型：文件库只展示输出包/文件集合/等待上游，不展示「频道文档」顶栏。
+  // 无项目投影的普通公共频道回落 ConversationFiles（附件浏览）。
   useEffect(() => {
     let active = true;
     setProjectArtifactLibrary(null);
     setChannelProjectOverview(null);
-    setProjectDocuments([]);
     setProjectDocumentBundles([]);
     setProjectDocumentBundlesArchived(false);
-    if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') return () => { active = false; };
-    void projectEvents().artifactCollections(activeChannel).then((result) => {
+    setOutputPackages([]);
+    setOutputPackagePendings([]);
+    setFilesProjectSurfaceReady(false);
+    if ((tab !== 'files' && !threadRootId) || !activeChannel || conn !== 'open') {
+      return () => { active = false; };
+    }
+    const libraryPromise = projectEvents().artifactCollections(activeChannel).then((result) => {
       if (active && result.ok && result.library) setProjectArtifactLibrary(result.library);
     });
-    void projectEvents().overview(activeChannel).then((result) => {
+    const overviewPromise = projectEvents().overview(activeChannel).then((result) => {
       if (active && result.ok) setChannelProjectOverview(result.overview ?? null);
     });
-    void channelEvents().listDocuments(activeChannel).then((result) => {
-      if (active) setProjectDocuments(result.ok ? result.documents ?? [] : []);
-    });
-    void projectEvents().documentBundles(activeChannel).then((result) => {
+    // composer 历史 document/bundle chip 标签仍可能需要 bundle 名；不渲染列表。
+    const bundlesPromise = projectEvents().documentBundles(activeChannel).then((result) => {
       if (!active) return;
       setProjectDocumentBundles(result.ok ? result.bundles ?? [] : []);
       setProjectDocumentBundlesArchived(result.ok ? Boolean(result.archived) : false);
     });
     // #1060 OutputPackage:Files 面读取同一 Server 事实(packages + pendingDeliveries)。
-    setOutputPackages([]);
-    setOutputPackagePendings([]);
-    void refreshOutputPackageProjection(activeChannel);
+    const packagesPromise = refreshOutputPackageProjection(activeChannel);
+    void Promise.all([libraryPromise, overviewPromise, bundlesPromise, packagesPromise]).finally(() => {
+      if (active) setFilesProjectSurfaceReady(true);
+    });
     return () => { active = false; };
   }, [activeChannel, conn, tab, threadRootId, refreshOutputPackageProjection]);
 
@@ -687,12 +716,6 @@ export default function ChatPage() {
     if (!activeChannel) return;
     return projectEvents().onDocumentBundlesUpdated(activeChannel, setProjectDocumentBundles);
   }, [activeChannel]);
-
-  const loadProjectDocumentBundleDetail = useCallback(async (bundleId: string) => {
-    if (!activeChannel || conn !== 'open') return null;
-    const result = await projectEvents().documentBundle({ channelId: activeChannel, bundleId });
-    return result.ok && result.bundle ? result.bundle : null;
-  }, [activeChannel, conn]);
 
   // Agent 改名后，server 已把历史消息的 @oldName 迁移进 meta.mentions（锁定稳定 id）。
   // 重新 join 当前频道，让 server 重推含迁移后 mentions 的 history（mergeChannelHistory
@@ -1085,8 +1108,6 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
-    setProjectDocuments((documents) => documents.map((document) =>
-      document.id === result.document!.id ? result.document! : document));
     return { ok: true as const, revisionId: result.document.currentRevisionId };
   }, [activeChannel, openChannelDocument]);
 
@@ -1130,8 +1151,6 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
-    setProjectDocuments((documents) => documents.map((document) =>
-      document.id === result.document!.id ? result.document! : document));
     return {
       ok: true as const,
       snapshot: {
@@ -1173,8 +1192,6 @@ export default function ChatPage() {
     setChannelFiles((files) => files.map((file) => file.documentId === result.document!.id
       ? { ...file, artifact: result.document!.currentRevision.artifact }
       : file));
-    setProjectDocuments((documents) => documents.map((document) =>
-      document.id === result.document!.id ? result.document! : document));
     appendMessage({
       ...result.message,
       artifacts: [result.document.currentRevision.artifact],
@@ -2748,7 +2765,11 @@ export default function ChatPage() {
           )
         ) : (
           <div className="flex min-h-0 flex-1 flex-col">
-            {activeChannel && !isDm ? (
+            {activeChannel && !isDm && !filesProjectSurfaceReady ? (
+              <div className="flex flex-1 items-center justify-center text-sm text-neutral-400" data-smoke="files-project-surface-loading">
+                加载文件库…
+              </div>
+            ) : activeChannel && !isDm && hasProjectFilesSurface ? (
               <ProjectFilesBoard
                 channelId={activeChannel}
                 packages={outputPackages}
@@ -2763,40 +2784,6 @@ export default function ChatPage() {
                 agentNames={filesBoardAgentNames}
                 dataRevision={projectDataRevision}
                 onAddReference={addFilesBoardReference}
-                documentReferenceSection={projectDocuments.length > 0 || projectDocumentBundles.length > 0 ? (
-                  <>
-                    <ProjectDocumentList
-                      documents={projectDocuments}
-                      archived={projectDocumentBundlesArchived}
-                      selections={projectReferenceSelections}
-                      onOpenDocument={(documentId) => {
-                        const document = projectDocuments.find((candidate) => candidate.id === documentId);
-                        if (document) void openMarkdownDocumentEditor(document.currentRevision.artifact as Artifact, document.id);
-                      }}
-                      onSelectionChange={(selection, documentId) => {
-                        setProjectReferenceSelections((current) => [
-                          ...current.filter((item) =>
-                            item.kind !== 'document' || item.documentId !== documentId),
-                          ...(selection ? [selection] : []),
-                        ]);
-                      }}
-                    />
-                    <ProjectDocumentBundleList
-                      bundles={projectDocumentBundles}
-                      archived={projectDocumentBundlesArchived}
-                      onLoadDetail={loadProjectDocumentBundleDetail}
-                      selections={projectReferenceSelections}
-                      onSelectionChange={(selection, bundleId) => {
-                        setProjectReferenceSelections((current) => [
-                          ...current.filter((item) =>
-                            (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
-                            || item.bundleId !== bundleId),
-                          ...(selection ? [selection] : []),
-                        ]);
-                      }}
-                    />
-                  </>
-                ) : undefined}
                 onOpenRevisionEditor={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel })}
                 onOpenPackagePreview={openPackagePreviewModal}
                 onOpenReadOnlyArtifact={(artifact) => setReadOnlyArtifact(artifact)}
@@ -2832,18 +2819,8 @@ export default function ChatPage() {
                 }}
                 onLoadMore={() => void loadChannelFiles(false)}
                 onEditArtifact={(artifact, documentId) => void openMarkdownDocumentEditor(artifact, documentId)}
-                documentBundles={projectDocumentBundles}
-                documentBundlesArchived={projectDocumentBundlesArchived}
-                onLoadDocumentBundleDetail={loadProjectDocumentBundleDetail}
+                documentReferenceArchived={projectDocumentBundlesArchived}
                 referenceSelections={projectReferenceSelections}
-                onReferenceSelection={(selection, bundleId) => {
-                  setProjectReferenceSelections((current) => [
-                    ...current.filter((item) =>
-                      (item.kind !== 'bundle_all' && item.kind !== 'bundle_subset')
-                      || item.bundleId !== bundleId),
-                    ...(selection ? [selection] : []),
-                  ]);
-                }}
                 onDocumentReferenceSelection={(selection, documentId) => {
                   setProjectReferenceSelections((current) => [
                     ...current.filter((item) =>
@@ -4120,11 +4097,8 @@ function ConversationFiles({
   onOpenRoot,
   onLoadMore,
   onEditArtifact,
-  documentBundles,
-  documentBundlesArchived,
-  onLoadDocumentBundleDetail,
+  documentReferenceArchived,
   referenceSelections,
-  onReferenceSelection,
   onDocumentReferenceSelection,
   agents,
   humanProfiles,
@@ -4144,11 +4118,8 @@ function ConversationFiles({
   onOpenRoot: () => void;
   onLoadMore: () => void;
   onEditArtifact: (artifact: Artifact, documentId?: string) => void;
-  documentBundles: ProjectDocumentBundleDto[];
-  documentBundlesArchived: boolean;
-  onLoadDocumentBundleDetail: (bundleId: string) => Promise<ProjectDocumentBundleDetailDto | null>;
+  documentReferenceArchived: boolean;
   referenceSelections: readonly ProjectReferenceSelectionRequestDto[];
-  onReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, bundleId: string) => void;
   onDocumentReferenceSelection: (selection: ProjectReferenceSelectionRequestDto | null, documentId: string) => void;
   agents: Record<string, AgentSnapshot>;
   humanProfiles: HumanProfile[];
@@ -4169,13 +4140,6 @@ function ConversationFiles({
           <option value="intermediate">中间产物</option>
         </select>
       </div>
-      <ProjectDocumentBundleList
-        bundles={documentBundles}
-        archived={documentBundlesArchived}
-        onLoadDetail={onLoadDocumentBundleDetail}
-        selections={referenceSelections}
-        onSelectionChange={onReferenceSelection}
-      />
       {path && (
         <div className="mb-3 flex flex-wrap items-center gap-1 text-xs text-neutral-500">
           <button onClick={onOpenRoot} className="hover:text-neutral-900">文件</button>
@@ -4232,7 +4196,7 @@ function ConversationFiles({
                         revisionId={file.documentRevisionId}
                         selected={referenceSelections.some((selection) =>
                           selection.kind === 'document' && selection.documentId === file.documentId)}
-                        disabled={documentBundlesArchived}
+                        disabled={documentReferenceArchived}
                         onChange={(selection) => onDocumentReferenceSelection(selection, file.documentId!)}
                       />
                     )}

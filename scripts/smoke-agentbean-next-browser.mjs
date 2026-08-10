@@ -413,8 +413,13 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     });
     checks.push(
       check('webui-channel-file-upload-readable', channelFilesResult.uploadReadable === true, `WebUI uploaded and downloaded ordinary attachment ${channelFilesResult.filename}`),
-      check('webui-channel-files-root-visible', true, 'WebUI opens the channel logical artifact board'),
-      check('webui-channel-files-legacy-surface-hidden', true, `WebUI keeps ordinary attachment ${channelFilesResult.filename} out of the channel logical artifact board`),
+      check(
+        'webui-channel-files-attachment-surface',
+        channelFilesResult.attachmentSurfaceVisible === true
+          && channelFilesResult.logicalBoardVisible === false
+          && channelFilesResult.ordinaryEntryVisible === true,
+        `WebUI opens attachment files surface and lists ordinary attachment ${channelFilesResult.filename}`,
+      ),
     );
 
     const channelResult = await exerciseWebUiChannelsBusinessSmoke({
@@ -4848,9 +4853,15 @@ export async function exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs }) 
 
 export async function exerciseChannelFilesBrowserSmoke({ page, filename, timeoutMs }) {
   await page.click('[data-smoke="channel-files-tab"]');
+  // 无项目投影的普通公共频道回落附件文件页；有输出包/集合/画像时才进逻辑产物板。
+  // 首轮投影拉取期间会短暂显示 loading，需等其消失后再判定表面，并等到附件行出现。
   await page.waitForFunction(
-    'Boolean(document.querySelector(\'[data-smoke="project-files-board"]\'))',
-    'channel logical artifact board to render',
+    `!document.querySelector('[data-smoke="files-project-surface-loading"]')
+      && Boolean(document.querySelector('[data-smoke="channel-files-view"]'))
+      && !Boolean(document.querySelector('[data-smoke="project-files-board"]'))
+      && Array.from(document.querySelectorAll('[data-smoke="channel-file-entry"]'))
+        .some((entry) => entry.dataset.filename === ${JSON.stringify(filename)})`,
+    'channel attachment files surface to list uploaded file',
     timeoutMs,
   );
   const result = await page.evaluateJson(`
@@ -4860,13 +4871,20 @@ export async function exerciseChannelFilesBrowserSmoke({ page, filename, timeout
         .some((entry) => entry.dataset.filename === filename);
       return {
         filename,
+        attachmentSurfaceVisible: Boolean(document.querySelector('[data-smoke="channel-files-view"]')),
         logicalBoardVisible: Boolean(document.querySelector('[data-smoke="project-files-board"]')),
         ordinaryEntryVisible,
       };
     })()
   `);
-  if (!result || result.filename !== filename || result.logicalBoardVisible !== true || result.ordinaryEntryVisible !== false) {
-    throw new Error('Channel logical artifact board contract failed');
+  // 本 smoke 只上传普通附件、不创建项目阶段/输出包，因此必须落在附件浏览面，
+  // 且上传文件应出现在 channel-file-entry 中（而不是被逻辑产物板吞掉）。
+  if (!result
+    || result.filename !== filename
+    || result.attachmentSurfaceVisible !== true
+    || result.logicalBoardVisible !== false
+    || result.ordinaryEntryVisible !== true) {
+    throw new Error('Channel attachment files surface contract failed');
   }
   return result;
 }

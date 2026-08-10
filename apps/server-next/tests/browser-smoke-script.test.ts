@@ -1407,7 +1407,7 @@ describe('AgentBean Next browser smoke script', () => {
     })).rejects.toThrow('Browser artifact row was not rendered');
   });
 
-  test('exercises the channel logical artifact board and keeps the ordinary file surface hidden', async () => {
+  test('exercises the ordinary attachment files surface when the channel has no project projection', async () => {
     const { exerciseChannelFilesBrowserSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const page = {
@@ -1419,7 +1419,12 @@ describe('AgentBean Next browser smoke script', () => {
       },
       async evaluateJson(expression: string) {
         calls.push(['evaluateJson', expression]);
-        return { filename: 'browser-smoke-artifact.md', logicalBoardVisible: true, ordinaryEntryVisible: false };
+        return {
+          filename: 'browser-smoke-artifact.md',
+          attachmentSurfaceVisible: true,
+          logicalBoardVisible: false,
+          ordinaryEntryVisible: true,
+        };
       },
     };
 
@@ -1427,9 +1432,21 @@ describe('AgentBean Next browser smoke script', () => {
       page,
       filename: 'browser-smoke-artifact.md',
       timeoutMs: 1000,
-    })).resolves.toMatchObject({ filename: 'browser-smoke-artifact.md', logicalBoardVisible: true, ordinaryEntryVisible: false });
+    })).resolves.toMatchObject({
+      filename: 'browser-smoke-artifact.md',
+      attachmentSurfaceVisible: true,
+      logicalBoardVisible: false,
+      ordinaryEntryVisible: true,
+    });
     expect(calls).toContainEqual(['click', '[data-smoke="channel-files-tab"]']);
     expect(calls.filter((call) => call[0] === 'waitForFunction')).toHaveLength(1);
+    const waitCall = calls.find((call) => call[0] === 'waitForFunction')?.[1] as {
+      expression: string;
+      description: string;
+    };
+    expect(waitCall.expression).toContain('channel-files-view');
+    expect(waitCall.expression).toContain('channel-file-entry');
+    expect(waitCall.description).toContain('attachment files surface');
     expect(calls.filter((call) => call[0] === 'evaluateJson')).toHaveLength(1);
   });
 
@@ -1461,8 +1478,9 @@ describe('AgentBean Next browser smoke script', () => {
         }
         return {
           filename: 'webui-channel-files-artifact-smoke.md',
-          logicalBoardVisible: true,
-          ordinaryEntryVisible: false,
+          attachmentSurfaceVisible: true,
+          logicalBoardVisible: false,
+          ordinaryEntryVisible: true,
         };
       },
     };
@@ -1473,8 +1491,9 @@ describe('AgentBean Next browser smoke script', () => {
       timeoutMs: 1000,
     })).resolves.toMatchObject({
       filename: 'webui-channel-files-artifact-smoke.md',
-      logicalBoardVisible: true,
-      ordinaryEntryVisible: false,
+      attachmentSurfaceVisible: true,
+      logicalBoardVisible: false,
+      ordinaryEntryVisible: true,
       uploadReadable: true,
     });
     expect(calls[0]?.[0]).toBe('setFileInputFiles');
