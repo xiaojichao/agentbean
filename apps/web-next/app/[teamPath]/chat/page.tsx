@@ -2897,7 +2897,6 @@ export default function ChatPage() {
           }}
           onViewAssetSource={() => {
             closeTaskDetail();
-            setChannelFilesView('artifacts');
             switchTab('files');
           }}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
