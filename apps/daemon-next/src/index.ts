@@ -63,6 +63,10 @@ import {
   materializeSnapshotInputs,
 } from './workspace-snapshot.js';
 import { materializeProjectChannelWorkspaceRevision } from './workspace-apply.js';
+import {
+  createWorkspaceRevisionReconciler,
+  isHardReconcileFailure,
+} from './workspace-revision-reconcile.js';
 
 export { createBuiltinScanProvider, scanBuiltinRuntimeAgents } from './scanner.js';
 export type { BuiltinScannerOptions } from './scanner.js';
@@ -77,6 +81,18 @@ export {
   materializeSnapshotInputs,
 } from './workspace-snapshot.js';
 export { materializeProjectChannelWorkspaceRevision } from './workspace-apply.js';
+export {
+  createWorkspaceRevisionReconciler,
+  listLocalWorkspaceChannels,
+  isHardReconcileFailure,
+  isTransportReconcileFailure,
+} from './workspace-revision-reconcile.js';
+export type {
+  ReconcileReason,
+  ReconcileRunStats,
+  WorkspaceChannelRef,
+  WorkspaceRevisionReconciler,
+} from './workspace-revision-reconcile.js';
 export type { DispatchAttachment, DownloadedAttachment } from './attachments.js';
 export { appendManagedOutputContext } from './managed-output-context.js';
 export {
@@ -516,10 +532,13 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
   };
   // #1084 fan-out 落地：拉取 revision 文件清单 → materialize 到本机 snapshots/<revisionId>/。
   // fire-and-forget 调用，失败 warn 不 throw（非阻塞，at-least-once 由重连 reconcile 兜底）。
-  const applyIncomingWorkspaceRevision = async (payload: WorkspaceRevisionCommittedPayload) => {
+  // 返回结果供 reconcile 熔断分类（传输失败计入 circuit）。
+  const applyIncomingWorkspaceRevision = async (
+    payload: WorkspaceRevisionCommittedPayload,
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
     if (!device.token || !serverUrl) {
       console.warn('daemon workspace-revision fan-out skipped: missing token or serverUrl (non-blocking)');
-      return;
+      return { ok: false, error: 'MISSING_TOKEN_OR_SERVER' };
     }
     const targetDir = prepareChannelWorkspaceRevisionSnapshot({
       agentBeanHome,
@@ -539,7 +558,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       console.warn(
         `daemon workspace-revision fan-out fetch ${payload.revisionId} failed (non-blocking): ${fetched.error}`,
       );
-      return;
+      return { ok: false, error: fetched.error };
     }
     const result = await materializeProjectChannelWorkspaceRevision({
       revision: {
@@ -565,65 +584,58 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       console.warn(
         `daemon workspace-revision fan-out materialize ${payload.revisionId} failed (non-blocking): ${result.error}${detail}`,
       );
+      return { ok: false, error: result.error };
     }
+    return { ok: true };
   };
-  // #1084 离线 reconcile：扫描本地已知 channel snapshots 目录，对每个拉 current revision，
-  // 落后则 apply。幂等：revisionId 比对 + materialize 冲突预检兜底。
-  const reconcileChannelWorkspaceRevisions = async () => {
-    if (!device.token || !serverUrl) return;
-    const workspacesRoot = join(agentBeanHome, 'workspaces');
-    let teamIds: string[];
-    try {
-      teamIds = readdirSync(workspacesRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name);
-    } catch {
-      return; // 目录不存在 = 无需 reconcile。
-    }
-    for (const teamId of teamIds) {
-      const channelsRoot = join(workspacesRoot, teamId, 'channels');
-      let channelIds: string[];
+  // #1084 离线 reconcile：扫描本地 channel snapshots，落后则 apply。
+  // 经 WorkspaceRevisionReconciler 限流：single-flight + 负缓存 + 熔断，
+  // 避免 reconnect 风暴把生产 API 打成 dial timeout（见 2026-08-10 事故）。
+  const workspaceRevisionReconciler = createWorkspaceRevisionReconciler({
+    workspacesRoot: join(agentBeanHome, 'workspaces'),
+    async fetchCurrent(ref) {
+      if (!device.token || !serverUrl) {
+        return { ok: false, error: 'MISSING_TOKEN_OR_SERVER', hardFailure: true };
+      }
+      const current = await fetchProjectChannelWorkspaceRevision({
+        serverUrl,
+        token: device.token,
+        teamId: ref.teamId,
+        channelId: ref.channelId,
+        fetch: fetchFn,
+      });
+      if (!current.ok) {
+        return {
+          ok: false,
+          error: current.error,
+          hardFailure: isHardReconcileFailure(current.error),
+        };
+      }
+      return { ok: true, revisionId: current.revisionId };
+    },
+    hasLocalRevision(ref, revisionId) {
+      const snapshotsDir = join(agentBeanHome, 'workspaces', ref.teamId, 'channels', ref.channelId, 'snapshots');
       try {
-        channelIds = readdirSync(channelsRoot, { withFileTypes: true })
+        return readdirSync(snapshotsDir, { withFileTypes: true })
           .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name);
+          .some((entry) => entry.name === revisionId);
       } catch {
-        continue;
+        return false;
       }
-      for (const channelId of channelIds) {
-        try {
-          const current = await fetchProjectChannelWorkspaceRevision({
-            serverUrl,
-            token: device.token,
-            teamId,
-            channelId,
-            fetch: fetchFn,
-          });
-          if (!current.ok) continue;
-          // 本地最新 snapshot revisionId 已是 current → 无需 apply。
-          const snapshotsDir = join(channelsRoot, channelId, 'snapshots');
-          let localRevisionIds: string[] = [];
-          try {
-            localRevisionIds = readdirSync(snapshotsDir, { withFileTypes: true })
-              .filter((entry) => entry.isDirectory())
-              .map((entry) => entry.name);
-          } catch {
-            // 无本地 snapshot 目录 = 首次，仍尝试 apply。
-          }
-          if (localRevisionIds.includes(current.revisionId)) continue;
-          await applyIncomingWorkspaceRevision({
-            teamId,
-            channelId,
-            workspaceId: '', // reconcile 路径不依赖 workspaceId
-            revisionId: current.revisionId,
-          });
-        } catch (error) {
-          console.warn(
-            `daemon workspace-revision reconcile ${teamId}/${channelId} threw (non-blocking): ${readErrorMessage(error)}`,
-          );
-        }
-      }
-    }
+    },
+    async applyRevision(ref) {
+      return applyIncomingWorkspaceRevision({
+        teamId: ref.teamId,
+        channelId: ref.channelId,
+        workspaceId: '', // reconcile 路径不依赖 workspaceId
+        revisionId: ref.revisionId,
+      });
+    },
+    sleep,
+  });
+  const scheduleWorkspaceRevisionReconcile = (reason: 'startup' | 'reconnect') => {
+    if (!device.token || !serverUrl) return;
+    workspaceRevisionReconciler.schedule(reason);
   };
   const localMemoryStores = new Map<string, Promise<LocalMemoryStore>>();
   const localMemoryObservationTails = new Map<string, Promise<void>>();
@@ -718,7 +730,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       // #1003：启动时恢复未完成的 Workspace publish（不以本地 pending 证明已发布）。
       void resumePendingWorkspacePublishes();
       // #1084：启动时 reconcile 本地 channel workspace snapshots（补齐离线期间 commit 的 revision）。
-      void reconcileChannelWorkspaceRevisions();
+      scheduleWorkspaceRevisionReconcile('startup');
       socket.onReconnect?.(async () => {
         try {
           const announcement = await announceDeviceSnapshot(socket, device, latestSnapshot.runtimes, latestSnapshot.agents, { onDeviceRemoved: input.onDeviceRemoved });
@@ -729,8 +741,8 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         }
         scheduleRecoverPersistedWorkspaceRuns(latestSnapshot.agents.map((agent) => agent.cwd));
         void resumePendingWorkspacePublishes();
-        // #1084：重连后 reconcile 离线期间 commit 的 revision。
-        void reconcileChannelWorkspaceRevisions();
+        // #1084：重连后 reconcile；single-flight 合并风暴，负缓存跳过已知 404 team。
+        scheduleWorkspaceRevisionReconcile('reconnect');
         await outbox.flush();
       });
 
