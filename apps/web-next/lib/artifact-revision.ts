@@ -1,9 +1,8 @@
 /**
- * #1062 讨论串「新版本已保存」活动卡的 meta 解析。
+ * #1062 「新版本已保存」活动卡的 meta 解析（历史消息兼容）。
  *
- * Server 在 save-artifact-version-revision 成功后 best-effort 追加 system 消息,
- * meta 快照只携带身份与 provenance(不复制 Markdown 全文)。卡片只是展示投影,
- * 不承载业务事实;Files/Task 的完整事实经 ProjectArtifactLibrary 读取。
+ * 现行策略：保存修订后不再向聊天流投影 system 消息；版本状态以 Files/Task 为准。
+ * 本解析器仍保留，用于识别并过滤历史落库的 artifact-version-revision 消息 meta。
  */
 
 export const ARTIFACT_VERSION_REVISION_META_KIND = 'artifact-version-revision';

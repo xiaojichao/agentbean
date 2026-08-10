@@ -354,6 +354,8 @@ export interface MessageRepository {
   softDelete(input: { messageId: ID; body: string; meta: MessageRecord['meta'] }): Promise<MessageRecord | null>;
   setTaskIdIfAbsent(input: { messageId: ID; taskId: ID }): Promise<{ message: MessageRecord; taskId: ID; inserted: boolean } | null>;
   listByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
+  /** 用户对话视图读取：在 LIMIT 前排除内部/噪音 system 消息。 */
+  listVisibleByChannel(channelId: ID, limit: number): Promise<MessageRecord[]>;
   listByThread(input: { channelId: ID; threadId: ID; limit: number }): Promise<MessageRecord[]>;
   search(input: { channelIds: ID[]; query: string; limit: number }): Promise<MessageRecord[]>;
   listThreadBefore(input: { channelId: ID; threadId: ID; beforeMessageId: ID; limit: number }): Promise<MessageRecord[]>;

@@ -88,13 +88,21 @@ export interface MessageSearchResultDto {
   messages: MessageDto[];
 }
 
+export const HIDDEN_SYSTEM_MESSAGE_KINDS = [
+  'task-created',
+  'management-status',
+  'artifact-version-revision',
+] as const;
+
 /**
  * 判断一条系统消息是否应从用户对话视图（频道主时间线、Thread、回复计数）中隐藏，
  * 且不应由服务端投递给前端。服务端在序列化边界、前端在渲染/计数处各自应用同一规则。
  *
  * ADR-0066：PI Manager 是内部编排运行时，不以成员/头像/聊天气泡/typing 出现。
  * 隐藏：task-created（已由 Task 卡片代表）、management-status（PI 运行时噪音）、
- * PI 协调输出（meta.coordination，由 channel-coordination-coordinator 落库）。
+ * PI 协调输出（meta.coordination，由 channel-coordination-coordinator 落库）、
+ * artifact-version-revision（文件包版本状态变化，真相在 Files/Task，不进聊天流；
+ * 含历史落库消息的防御过滤）。
  * 保留可见：management-question（PI 向用户提问，需回应）、management-delivery（交付物，需验收）。
  */
 export function isHiddenSystemMessage(input: {
@@ -104,7 +112,9 @@ export function isHiddenSystemMessage(input: {
   if (input.senderKind !== 'system') return false;
   const meta = input.meta ?? {};
   const kind = meta.kind;
-  if (kind === 'task-created' || kind === 'management-status') return true;
+  if (HIDDEN_SYSTEM_MESSAGE_KINDS.some((hiddenKind) => hiddenKind === kind)) {
+    return true;
+  }
   if (meta.coordination !== undefined) return true;
   return false;
 }

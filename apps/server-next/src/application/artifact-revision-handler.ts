@@ -399,16 +399,8 @@ export async function saveArtifactVersionRevisionCommand(
     return { kind: 'replayed', version: committed.version, receipt };
   }
 
-  // ---- 讨论串轻量活动投影(AC9):best-effort,失败不改写已提交事实 ----
-  await appendArtifactRevisionSystemMessage(deps, {
-    teamId,
-    channelId: input.channelId,
-    collection,
-    version,
-    saveResult,
-    revisedBy: input.userId,
-    createdAt: now,
-  });
+  // 不再向聊天流投影「保存了新版本」system 消息：文件包版本状态会频繁变化，
+  // 真相在 Files/Task 投影（project:artifacts-updated 已触发重取），聊天气泡只会刷屏。
 
   return {
     kind: 'applied',
@@ -448,67 +440,6 @@ function buildRevisionConflict(
     collectionRevision: collection.revision,
     draftPreserved: true,
   };
-}
-
-/**
- * AC9 讨论串投影:保存成功后追加 system 消息(meta 快照,不复制 Markdown 全文);
- * clientMessageId 由版本 id 派生,重入/replay 不重复发卡;best-effort。
- */
-async function appendArtifactRevisionSystemMessage(
-  deps: ArtifactRevisionHandlerDeps,
-  input: {
-    teamId: string;
-    channelId: string;
-    collection: ProjectArtifactCollectionRecord;
-    version: ProjectArtifactVersionRecord;
-    saveResult: ArtifactVersionRevisionSaveResultDto;
-    revisedBy: string;
-    createdAt: number;
-  },
-): Promise<void> {
-  try {
-    const clientMessageId = `artifact-version-revision:${input.version.id}`;
-    const existing = await deps.repositories.messages.getByClientMessageId({
-      teamId: input.teamId,
-      channelId: input.channelId,
-      clientMessageId,
-    });
-    if (existing) return;
-    const user = await deps.repositories.users.getById(input.revisedBy).catch(() => null);
-    const displayName = user?.displayName ?? user?.username ?? input.revisedBy;
-    const messageId = deps.ids.nextId();
-    await deps.repositories.messages.append({
-      id: messageId,
-      teamId: input.teamId,
-      channelId: input.channelId,
-      // system 消息 threadId 存根为自身(主线 root 自存根,主线上可见且可开讨论串)。
-      // 注:output-package 系统卡不同——#1111 起它归属触发消息的讨论串
-      // (resolveOriginThreadId,output-package-handler.ts),不做自存根。
-      threadId: messageId,
-      senderKind: 'system',
-      senderId: 'system',
-      body: `${displayName} 保存了《${input.collection.name}》新版本 v${input.version.versionNumber}`,
-      createdAt: input.createdAt,
-      meta: {
-        kind: 'artifact-version-revision',
-        clientMessageId,
-        collectionId: input.collection.id,
-        collectionName: input.collection.name,
-        versionId: input.version.id,
-        versionNumber: input.version.versionNumber,
-        baseVersionId: input.saveResult.baseVersionId,
-        sourceVersionId: input.saveResult.sourceVersionId,
-        ...(input.saveResult.basisReviewId ? { basisReviewId: input.saveResult.basisReviewId } : {}),
-        ...(input.saveResult.packageId ? { packageId: input.saveResult.packageId } : {}),
-        ...(input.saveResult.deliveryId ? { deliveryId: input.saveResult.deliveryId } : {}),
-        revisedBy: input.revisedBy,
-        revisedByName: displayName,
-        createdAt: input.createdAt,
-      },
-    });
-  } catch {
-    // 消息追加失败不影响已提交的版本事实。
-  }
 }
 
 function sha256(value: string): string {

@@ -32,6 +32,8 @@ import type {
 } from '../../application/repositories.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch, splitSearchTerms } from '../../../../../packages/domain/src/index.js';
 import {
+  HIDDEN_SYSTEM_MESSAGE_KINDS,
+  isHiddenSystemMessage,
   PACKAGE_REVIEW_AUTHORITY_BASIS_KINDS,
   type PackageReviewAuthorityBasisKind,
 } from '../../../../../packages/contracts/src/index.js';
@@ -1961,6 +1963,39 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
             return message;
           });
       },
+      async listVisibleByChannel(channelId, limit) {
+        const hiddenKindPlaceholders = HIDDEN_SYSTEM_MESSAGE_KINDS.map(() => '?').join(', ');
+        return teamDb
+          .prepare(`
+            SELECT * FROM (
+              SELECT *, rowid AS _message_rowid FROM messages
+              WHERE channel_id = ?
+              AND NOT (
+                sender_kind = 'system'
+                AND (
+                  COALESCE(
+                    json_extract(meta_json, '$.kind') IN (
+                      ${hiddenKindPlaceholders}
+                    ),
+                    0
+                  )
+                  OR json_type(meta_json, '$.coordination') IS NOT NULL
+                )
+              )
+              ORDER BY created_at DESC, _message_rowid DESC
+              LIMIT ?
+            )
+            ORDER BY created_at ASC, _message_rowid ASC
+          `)
+          .all(channelId, ...HIDDEN_SYSTEM_MESSAGE_KINDS, limit)
+          .map((row) => {
+            const message = mapMessage(row);
+            if (!message) {
+              throw new Error('SQLite visible message row could not be mapped');
+            }
+            return message;
+          });
+      },
       async listByThread(input) {
         return teamDb
           .prepare(`
@@ -1999,7 +2034,10 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           )
           .all(...input.channelIds, ...terms.map((term) => `%${escapeSqlLike(term)}%`))
           .map((row) => mapMessage(row))
-          .filter((message): message is NonNullable<typeof message> => message !== null);
+          .filter((message): message is NonNullable<typeof message> =>
+            message !== null
+            && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
+          );
         return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {

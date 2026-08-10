@@ -62,4 +62,67 @@ describe('PI 系统消息服务端过滤（ADR-0066）', () => {
     expect(ack.messages.filter((m) => m.meta?.kind === 'management-status').length).toBe(0);
     expect(ack.messages.filter((m) => m.meta?.coordination !== undefined).length).toBe(0);
   });
+
+  test('在 LIMIT 前过滤隐藏消息，避免历史窗口被噪音占满', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.messages.append({
+      id: 'visible-1', teamId: 'team-1', channelId: 'channel-1', threadId: 'visible-1',
+      senderKind: 'human', senderId: 'user-1', body: '较早可见 1', createdAt: 100,
+    });
+    await repositories.messages.append({
+      id: 'visible-2', teamId: 'team-1', channelId: 'channel-1', threadId: 'visible-2',
+      senderKind: 'human', senderId: 'user-1', body: '较早可见 2', createdAt: 200,
+    });
+    for (let index = 1; index <= 3; index += 1) {
+      await repositories.messages.append({
+        id: `hidden-${index}`, teamId: 'team-1', channelId: 'channel-1', threadId: `hidden-${index}`,
+        senderKind: 'system', senderId: 'system', body: `保存了新版本 ${index}`, createdAt: 200 + index,
+        meta: { kind: 'artifact-version-revision' },
+      });
+    }
+
+    const ack = await app.listChannelMessages({ channelId: 'channel-1', limit: 2 });
+    expect(ack).toMatchObject({ ok: true, messages: [{ id: 'visible-1' }, { id: 'visible-2' }] });
+  });
+
+  test('隐藏历史 root 时把既有回复提升为可达消息，并移除失效 thread 上下文', async () => {
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => 100 },
+      ids: { nextId: createIds(['user-1', 'team-1', 'channel-1']) },
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.messages.append({
+      id: 'revision-root', teamId: 'team-1', channelId: 'channel-1', threadId: 'revision-root',
+      senderKind: 'system', senderId: 'system', body: '保存了新版本', createdAt: 100,
+      meta: { kind: 'artifact-version-revision' },
+    });
+    await repositories.messages.append({
+      id: 'human-reply', teamId: 'team-1', channelId: 'channel-1', threadId: 'revision-root',
+      senderKind: 'human', senderId: 'user-1', body: '这条历史回复仍应可见', createdAt: 200,
+      meta: { parentMessageId: 'revision-root' },
+    });
+
+    const history = await app.listChannelMessages({ channelId: 'channel-1', limit: 10 });
+    expect(history).toMatchObject({ ok: true, messages: [{ id: 'human-reply', body: '这条历史回复仍应可见' }] });
+    if (!history.ok) throw new Error('expected listChannelMessages to succeed');
+    expect(history.messages[0]).not.toHaveProperty('threadId');
+    expect(history.messages[0]?.meta).not.toHaveProperty('parentMessageId');
+
+    const context = await app.getMessageContext({
+      userId: 'user-1', teamId: 'team-1', messageId: 'human-reply',
+    });
+    expect(context).toMatchObject({ ok: true, targetMessageId: 'human-reply', messages: [{ id: 'human-reply' }] });
+    expect(context).not.toHaveProperty('threadRootId');
+    await expect(app.getMessageContext({
+      userId: 'user-1', teamId: 'team-1', messageId: 'revision-root',
+    })).resolves.toMatchObject({ ok: false, error: 'NOT_FOUND' });
+  });
 });

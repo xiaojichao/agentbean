@@ -25,7 +25,7 @@ import type {
   PublishWorkspaceRevisionOutcome,
   WorkspacePublishStagingRecord,
 } from '../../application/repositories.js';
-import type { DeviceWorkspaceSnapshotDto } from '../../../../../packages/contracts/src/index.js';
+import { isHiddenSystemMessage, type DeviceWorkspaceSnapshotDto } from '../../../../../packages/contracts/src/index.js';
 import { DEFAULT_CHANNEL_NAME, rankMessageSearch } from '../../../../../packages/domain/src/index.js';
 import { createInMemoryManagementPersistence } from './management-repositories.js';
 import {
@@ -1349,6 +1349,15 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           .sort((left, right) => left.createdAt - right.createdAt)
           .slice(-limit);
       },
+      async listVisibleByChannel(channelId, limit) {
+        return Array.from(messages.values())
+          .filter((message) =>
+            message.channelId === channelId
+            && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
+          )
+          .sort((left, right) => left.createdAt - right.createdAt)
+          .slice(-limit);
+      },
       async listByThread(input) {
         return Array.from(messages.values())
           .filter((message) =>
@@ -1360,7 +1369,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
       },
       async search(input) {
         const channelIds = new Set(input.channelIds);
-        const pool = Array.from(messages.values()).filter((message) => channelIds.has(message.channelId));
+        const pool = Array.from(messages.values()).filter((message) =>
+          channelIds.has(message.channelId)
+          && !isHiddenSystemMessage({ senderKind: message.senderKind, meta: message.meta })
+        );
         return rankMessageSearch(pool, input.query, input.limit);
       },
       async listThreadBefore(input) {

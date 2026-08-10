@@ -7,6 +7,13 @@ describe('isHiddenSystemMessage', () => {
     expect(isHiddenSystemMessage({ senderKind: 'system', meta: { kind: 'management-status' } })).toBe(true);
   });
 
+  test('隐藏 artifact-version-revision（文件状态变化不进聊天流）', () => {
+    expect(isHiddenSystemMessage({
+      senderKind: 'system',
+      meta: { kind: 'artifact-version-revision', versionId: 'v-1' },
+    })).toBe(true);
+  });
+
   test('隐藏 PI 协调输出（meta.coordination）', () => {
     expect(isHiddenSystemMessage({ senderKind: 'system', meta: { coordination: { action: 'suggest' } } })).toBe(true);
     expect(isHiddenSystemMessage({ senderKind: 'system', meta: { coordination: {} } })).toBe(true);
