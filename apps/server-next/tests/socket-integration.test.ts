@@ -1083,6 +1083,90 @@ describe('server-next Socket.IO namespaces', () => {
     });
   });
 
+  test('queries a selected Stage delivery review workspace through authenticated Socket.IO', async () => {
+    const app = createInMemoryServerNext({
+      now: () => 1000,
+      ids: createIds([
+        'user-1', 'team-1', 'channel-1', 'task-1', 'project-profile-1', 'stage-1',
+      ]),
+    });
+    const { baseUrl, ioServer, httpServer } = await startSocketServer(app);
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => ioServer.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    });
+
+    const bootstrap = await connectClient(`${baseUrl}/web`);
+    const registerAck = await bootstrap.emitWithAck(WEB_EVENTS.auth.register, {
+      username: 'stage-review-owner',
+      password: 'secret',
+      teamName: 'Stage Review Team',
+    }) as { token: string };
+    bootstrap.disconnect();
+
+    const owner = await connectClient(`${baseUrl}/web`, {
+      auth: { token: registerAck.token },
+    });
+    cleanups.push(async () => owner.disconnect());
+
+    const taskAck = await owner.emitWithAck(WEB_EVENTS.task.create, {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      title: '审核发布保护阶段',
+    }) as { ok: boolean; task?: { id: string } };
+    expect(taskAck).toMatchObject({ ok: true, task: { id: 'task-1' } });
+
+    const stageAck = await owner.emitWithAck(WEB_EVENTS.project.createInitialStage, {
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      expectedRevision: 0,
+      idempotencyKey: 'stage-review-socket-1',
+      projectLeadId: 'user-1',
+      defaultReviewerIds: ['user-1'],
+      stage: {
+        name: '发布保护',
+        goal: '验证真实传输层返回审核工作区',
+        ownerId: 'user-1',
+        reviewerIds: ['user-1'],
+        acceptanceCriteria: ['审核工作区可读'],
+        taskId: 'task-1',
+      },
+    }) as { ok: boolean; overview?: { stages?: Array<{ id: string }> } };
+    expect(stageAck).toMatchObject({
+      ok: true,
+      overview: { stages: [{ id: 'stage-1' }] },
+    });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.task.stageDeliveryReviewWorkspace, {
+      schemaVersion: 1,
+      channelId: 'channel-1',
+      stageId: 'stage-1',
+      taskId: 'task-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      workspace: {
+        schemaVersion: 1,
+        channelId: 'channel-1',
+        stageId: 'stage-1',
+        taskId: 'task-1',
+      },
+    });
+
+    await expect(owner.emitWithAck(WEB_EVENTS.task.stageDeliveryReviewWorkspace, {
+      schemaVersion: 1,
+      channelId: 'channel-1',
+      stageId: 'stage-1',
+      taskId: 'task-1',
+      minimumConsistency: {
+        schemaVersion: 1,
+        entries: [{ streamKind: 'output-package', streamId: 'channel-1', revision: 1 }],
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'PROJECTION_NOT_READY',
+    });
+  });
+
   test('does not leak task:updated to subscribers of another team', async () => {
     const app = createInMemoryServerNext({
       now: () => 1000,
