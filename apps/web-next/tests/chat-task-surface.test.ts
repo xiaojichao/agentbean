@@ -66,7 +66,8 @@ describe('chat task surface', () => {
     expect(detailPanel).toContain('<TaskDagPanel');
     expect(detailPanel).toContain('const showTaskDag = Boolean(');
     expect(detailPanel).toContain('const showTaskDelivery = Boolean(');
-    expect(detailPanel).toContain('此任务未进入 Phase 2 协作。');
+    expect(detailPanel).toContain('尚未产生 Task DAG；阶段责任、交付与审核事实见下方。');
+    expect(detailPanel).toContain('w-[min(720px,46vw)]');
     expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");
     expect(detailPanel).toContain('仅显示当前可用的具名流程操作');
     expect(detailPanel).toContain('data-smoke="task-detail-readonly"');
@@ -100,6 +101,17 @@ describe('chat task surface', () => {
     expect(source).toContain('负责人 / 已有关联事实');
     expect(source).toContain('channelTaskHasProjectFacts(entry)');
     expect(source.match(/<ChannelTaskFactSummary/g)?.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('普通任务是辅助状态视图且默认使用紧凑列表，项目工作台承载阶段审核主路径', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+
+    expect(source).toContain("useState<TaskViewMode>('list')");
+    expect(source).toContain('项目工作台');
+    expect(source).toContain('阶段推进 · 交付审核 · final');
+    expect(source).toContain('辅助视图：普通任务状态 + 负责人');
+    expect(source).toContain('未进入阶段流程的任务');
+    expect(source).toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
   });
 
   test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {

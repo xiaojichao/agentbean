@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertCircle, Settings2 } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Clock3, PackageCheck, Settings2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type {
   ChannelProjectOverviewDto,
@@ -22,6 +22,27 @@ interface Participant {
   readonly name: string;
   readonly kind: 'human' | 'agent';
 }
+
+type ProjectStage = ChannelProjectOverviewDto['stages'][number];
+type ProjectLaneId = 'active' | 'review' | 'complete';
+
+interface ProjectProgressItem {
+  readonly key: string;
+  readonly lane: ProjectLaneId;
+  readonly stage?: ProjectStage;
+  readonly entry?: ChannelTaskWorkspaceEntryV1;
+}
+
+const PROJECT_LANES: readonly {
+  id: ProjectLaneId;
+  title: string;
+  description: string;
+  empty: string;
+}[] = [
+  { id: 'active', title: '进行中', description: '待触发、执行中与受阻阶段', empty: '暂无进行中的阶段' },
+  { id: 'review', title: '待审核', description: '已交付，等待成员给出审核结论', empty: '暂无待审核交付' },
+  { id: 'complete', title: '已完成', description: '已通过，可追溯 current 与 final', empty: '暂无已完成阶段' },
+];
 
 export function ChannelProjectProgress({
   overview,
@@ -88,57 +109,82 @@ export function ChannelProjectProgress({
   const visibleManagedWithoutStage = projectEntries.filter(
     (entry) => !stageTaskIds.has(entry.task.id) && matchesFilters(entry),
   );
-  const hasVisibleEntries = visibleStages.length > 0 || visibleManagedWithoutStage.length > 0;
+  const visibleItems: ProjectProgressItem[] = [
+    ...visibleStages.map((stage) => ({
+      key: `stage:${stage.id}`,
+      lane: projectLane(stage.aggregateStatus, stage.task.status),
+      stage,
+      entry: entriesByTaskId.get(stage.task.id),
+    })),
+    ...visibleManagedWithoutStage.map((entry) => ({
+      key: `task:${entry.task.id}`,
+      lane: projectLane(undefined, entry.task.status),
+      entry,
+    })),
+  ];
+  const hasVisibleEntries = visibleItems.length > 0;
 
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-neutral-50" data-smoke="channel-project-progress">
+    <section className="min-h-0 flex-1 overflow-y-auto bg-[#f7f6f2]" data-smoke="channel-project-progress">
       {stages.length > 0 || projectEntries.length > 0 ? (
-        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-white px-4 py-3">
-          <select
-            aria-label="项目任务创建者"
-            value={creatorFilter}
-            onChange={(event) => setCreatorFilter(event.target.value)}
-            className={filterClass}
-          >
-            <option value="all">全部创建者</option>
-            {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
-          </select>
-          <select
-            aria-label="项目任务责任焦点"
-            value={focusFilter}
-            onChange={(event) => setFocusFilter(event.target.value)}
-            className={filterClass}
-          >
-            <option value="all">全部责任焦点</option>
-            <option value="unassigned">尚未产生责任</option>
-            <option value="review_wait">等待审核</option>
-            {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
-          </select>
-          <select
-            aria-label="项目任务审核人"
-            value={reviewerFilter}
-            onChange={(event) => setReviewerFilter(event.target.value)}
-            className={filterClass}
-          >
-            <option value="all">全部审核事实</option>
-            {currentUserId ? <option value="pending-me">待我审核</option> : null}
-            {participants.filter((participant) => participant.kind === 'human').flatMap((participant) => [
-              <option key={`suggested:${participant.id}`} value={`suggested:${participant.id}`}>建议：{participant.name}</option>,
-              <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
-            ])}
-          </select>
-          <div className="flex-1" />
-          {archived || overview?.archived ? (
-            <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
-          ) : null}
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-          >
-            <Settings2 size={13} />
-            {archived || overview?.archived ? '查看项目设置' : '项目设置 / 阶段配置'}
-          </button>
+        <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold text-neutral-900">项目阶段与审核</h2>
+                <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  当前视图：阶段状态 + 审核动作
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-neutral-500">责任来自真实执行，审核与 final 分开记录；点击阶段进入交付工作台。</p>
+            </div>
+            {archived || overview?.archived ? (
+              <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
+            ) : null}
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              <Settings2 size={13} />
+              {archived || overview?.archived ? '查看项目设置' : '项目设置 / 阶段配置'}
+            </button>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <select
+              aria-label="项目任务创建者"
+              value={creatorFilter}
+              onChange={(event) => setCreatorFilter(event.target.value)}
+              className={filterClass}
+            >
+              <option value="all">全部创建者</option>
+              {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+            </select>
+            <select
+              aria-label="项目任务责任焦点"
+              value={focusFilter}
+              onChange={(event) => setFocusFilter(event.target.value)}
+              className={filterClass}
+            >
+              <option value="all">全部责任焦点</option>
+              <option value="unassigned">尚未产生责任</option>
+              <option value="review_wait">等待审核</option>
+              {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+            </select>
+            <select
+              aria-label="项目任务审核人"
+              value={reviewerFilter}
+              onChange={(event) => setReviewerFilter(event.target.value)}
+              className={filterClass}
+            >
+              <option value="all">全部审核事实</option>
+              {currentUserId ? <option value="pending-me">待我审核</option> : null}
+              {participants.filter((participant) => participant.kind === 'human').flatMap((participant) => [
+                <option key={`suggested:${participant.id}`} value={`suggested:${participant.id}`}>建议：{participant.name}</option>,
+                <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
+              ])}
+            </select>
+          </div>
         </div>
       ) : null}
 
@@ -153,90 +199,39 @@ export function ChannelProjectProgress({
           当前筛选下没有项目任务
         </div>
       ) : (
-        <div className="grid gap-4 p-4 xl:grid-cols-2">
-          {visibleStages.map((stage) => {
-            const entry = entriesByTaskId.get(stage.task.id);
+        <div className="grid min-w-[900px] grid-cols-3 items-start gap-3 p-4" data-smoke="channel-project-lanes">
+          {PROJECT_LANES.map((lane) => {
+            const laneItems = visibleItems.filter((item) => item.lane === lane.id);
             return (
-              <button
-                key={stage.id}
-                type="button"
-                aria-label={`打开阶段 ${stage.name}`}
-                aria-current={selectedStageId === stage.id ? 'true' : undefined}
-                data-smoke="channel-project-stage-card"
-                data-stage-id={stage.id}
-                data-task-id={stage.task.id}
-                onClick={() => onOpenStage(stage.id, stage.task.id)}
-                className={`border-2 bg-white p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 focus:ring-amber-400 ${
-                  selectedStageId === stage.id ? 'border-amber-500' : 'border-neutral-900 hover:border-amber-500'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-amber-700">{aggregateStatusLabel(stage.aggregateStatus)}</div>
-                    <h3 className="mt-1 text-base font-semibold text-neutral-900">{stage.name}</h3>
-                    <p className="mt-1 text-sm text-neutral-600">{stage.goal}</p>
+              <section key={lane.id} className="min-w-0 rounded-lg border border-neutral-200 bg-white/70" data-smoke={`channel-project-lane-${lane.id}`}>
+                <div className="border-b border-neutral-200 px-3 py-3">
+                  <div className="flex items-center gap-2">
+                    <ProjectLaneIcon lane={lane.id} />
+                    <h3 className="text-sm font-semibold text-neutral-900">{lane.title}</h3>
+                    <span className="ml-auto rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-neutral-600">{laneItems.length}</span>
                   </div>
-                  <span className="border border-neutral-200 bg-neutral-50 px-2 py-1 text-xs font-medium text-neutral-600">
-                    任务状态：{taskStatusText(stage.task.status)}
-                  </span>
+                  <p className="mt-1 text-[11px] leading-4 text-neutral-500">{lane.description}</p>
                 </div>
-
-                <div className="mt-3 grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
-                  <div>阶段负责人：{participantName(stage.ownerId, participants)}</div>
-                  <div>建议审核人：{stage.reviewerIds.map((id) => participantName(id, participants)).join('、') || '未绑定'}</div>
-                  <div>
-                    {stage.upstreamStageIds.length > 0
-                      ? `前置阶段：${stage.upstreamStageIds.map((id) => stageName(id, overview)).join('、')}`
-                      : '无前置阶段'}
-                  </div>
-                  <div>{stage.dependenciesSatisfied ? '依赖已满足' : '依赖未满足'}</div>
+                <div className="space-y-3 p-2.5">
+                  {laneItems.map((item) => (
+                    <ProjectWorkCard
+                      key={item.key}
+                      item={item}
+                      overview={overview}
+                      participants={participants}
+                      selectedStageId={selectedStageId}
+                      onOpenStage={onOpenStage}
+                    />
+                  ))}
+                  {laneItems.length === 0 ? (
+                    <div className="flex min-h-24 items-center justify-center rounded-md border border-dashed border-neutral-300 bg-white px-4 text-center text-xs text-neutral-400">
+                      {lane.empty}
+                    </div>
+                  ) : null}
                 </div>
-
-                {stage.missingRequiredInputs.length > 0 ? (
-                  <div className="mt-3 border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">
-                    缺少必需输入：{stage.missingRequiredInputs.map((input) => input.label || input.key).join('、')}
-                  </div>
-                ) : null}
-                {stage.blockingReasons.length > 0 ? (
-                  <div className="mt-2 flex items-start gap-1.5 border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">
-                    <AlertCircle size={13} className="mt-0.5 shrink-0" />
-                    <span>{stage.blockingReasons.map((reason) => blockingReasonLabel(reason.code)).join('；')}</span>
-                  </div>
-                ) : !stage.executionAllowed ? (
-                  <div className="mt-2 border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">当前阶段不可执行</div>
-                ) : null}
-
-                {entry ? (
-                  <ChannelTaskFactSummary
-                    entry={entry}
-                    reviewerLabel={reviewerLabel(entry, participants)}
-                    className="mt-3"
-                  />
-                ) : (
-                  <div className="mt-3 border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">
-                    项目推进事实尚未就绪
-                  </div>
-                )}
-              </button>
+              </section>
             );
           })}
-
-          {visibleManagedWithoutStage.map((entry) => (
-            <button
-              key={entry.task.id}
-              type="button"
-              aria-label={`打开受管任务 ${entry.task.title}`}
-              data-smoke="channel-managed-task-card"
-              data-task-id={entry.task.id}
-              onClick={() => onOpenStage(null, entry.task.id)}
-              className="border-2 border-neutral-900 bg-white p-4 text-left shadow-sm hover:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
-            >
-              <div className="text-xs font-medium text-violet-700">未绑定阶段的受管任务</div>
-              <h3 className="mt-1 text-base font-semibold text-neutral-900">{entry.task.title}</h3>
-              <div className="mt-1 text-xs text-neutral-500">任务状态：{taskStatusText(entry.task.status)}</div>
-              <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabel(entry, participants)} className="mt-3" />
-            </button>
-          ))}
         </div>
       )}
     </section>
@@ -257,29 +252,156 @@ export function ChannelProjectSetupPrompt({
   return (
     <section
       className={compact
-        ? 'mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-3 border border-amber-200 bg-amber-50 px-4 py-3'
-        : 'm-4 border border-amber-200 bg-gradient-to-br from-amber-50 to-white px-6 py-10 text-center'}
+        ? 'mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3'
+        : 'm-4 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 via-white to-white px-6 py-8'}
       data-smoke="channel-project-setup-prompt"
     >
       <div className={compact ? 'min-w-0 flex-1' : ''}>
-        <h2 className="text-sm font-semibold text-neutral-900">把频道工作组织成阶段推进</h2>
-        <p className={`text-xs leading-5 text-neutral-600 ${compact ? 'mt-0.5' : 'mx-auto mt-2 max-w-xl'}`}>
-          {ordinaryTaskCount > 0
-            ? `已有 ${ordinaryTaskCount} 个普通任务；配置首个阶段时可明确绑定任务、负责人、审核人与验收标准。`
-            : '配置首个阶段，明确任务、负责人、审核人与验收标准。'}
-          不会根据负责人、标签或状态自动改写历史任务。
-        </p>
+        <div className={compact ? '' : 'mx-auto max-w-2xl text-center'}>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">频道即项目空间</div>
+          <h2 className="mt-1 text-base font-semibold text-neutral-900">把频道工作组织成阶段推进</h2>
+          <p className={`text-xs leading-5 text-neutral-600 ${compact ? 'mt-0.5' : 'mt-2'}`}>
+            {ordinaryTaskCount > 0
+              ? `已有 ${ordinaryTaskCount} 个普通任务；配置首个阶段时可明确绑定任务、负责人、审核人与验收标准。`
+              : '配置首个阶段，明确任务、负责人、审核人与验收标准。'}
+            不会根据负责人、标签或状态自动改写历史任务。
+          </p>
+        </div>
+        {!compact ? (
+          <div className="mx-auto mt-6 grid max-w-3xl gap-3 text-left md:grid-cols-3">
+            <SetupStep number="1" title="绑定阶段任务" detail="从现有普通任务中显式选择，不猜测历史语义。" />
+            <SetupStep number="2" title="约定验收责任" detail="设置阶段负责人、建议审核人与验收标准。" />
+            <SetupStep number="3" title="从讨论串触发执行" detail="@智能体 后由 Server 回填责任、交付与审核事实。" />
+          </div>
+        ) : null}
       </div>
       <button
         type="button"
         onClick={onOpenSettings}
-        className={`${compact ? '' : 'mt-5'} inline-flex h-9 items-center gap-1.5 rounded-md bg-neutral-900 px-4 text-xs font-semibold text-white hover:bg-neutral-800`}
+        className={`${compact ? 'inline-flex' : 'mx-auto mt-6 flex w-fit'} h-9 items-center gap-1.5 rounded-md bg-neutral-900 px-4 text-xs font-semibold text-white hover:bg-neutral-800`}
       >
         <Settings2 size={14} />
         {archived ? '查看项目设置' : '配置首个项目阶段'}
       </button>
     </section>
   );
+}
+
+function ProjectWorkCard({
+  item,
+  overview,
+  participants,
+  selectedStageId,
+  onOpenStage,
+}: {
+  item: ProjectProgressItem;
+  overview: ChannelProjectOverviewDto | null;
+  participants: Participant[];
+  selectedStageId?: string | null;
+  onOpenStage: (stageId: string | null, taskId: string) => void;
+}) {
+  const { stage, entry } = item;
+  const task = stage?.task ?? entry?.task;
+  if (!task) return null;
+  const stageId = stage?.id ?? null;
+  const selected = Boolean(stage && selectedStageId === stage.id);
+  const actionLabel = item.lane === 'review'
+    ? '打开审核工作台'
+    : item.lane === 'complete'
+      ? '查看交付与 final'
+      : stage?.aggregateStatus === 'pending'
+        ? '交给智能体处理'
+        : '查看执行与输入';
+  return (
+    <button
+      type="button"
+      aria-label={stage ? `打开阶段 ${stage.name}` : `打开受管任务 ${task.title}`}
+      aria-current={selected ? 'true' : undefined}
+      data-smoke={stage ? 'channel-project-stage-card' : 'channel-managed-task-card'}
+      data-stage-id={stage?.id}
+      data-task-id={task.id}
+      onClick={() => onOpenStage(stageId, task.id)}
+      className={`w-full rounded-lg border bg-white p-3 text-left shadow-sm transition focus:outline-none focus:ring-2 focus:ring-amber-400 ${selected ? 'border-amber-500 ring-1 ring-amber-200' : 'border-neutral-300 hover:border-amber-400 hover:shadow-md'}`}
+    >
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className={`text-[11px] font-medium ${item.lane === 'review' ? 'text-amber-700' : item.lane === 'complete' ? 'text-emerald-700' : 'text-violet-700'}`}>
+            {stage ? `阶段任务 · ${aggregateStatusLabel(stage.aggregateStatus)}` : '未绑定阶段的受管任务'}
+          </div>
+          <h4 className="mt-1 text-sm font-semibold leading-5 text-neutral-900">{stage?.name ?? task.title}</h4>
+          {stage ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-600">{stage.goal}</p> : null}
+        </div>
+        <span className="shrink-0 rounded border border-neutral-200 bg-neutral-50 px-1.5 py-0.5 text-[10px] font-medium text-neutral-500">
+          任务状态：{taskStatusText(task.status)}
+        </span>
+      </div>
+
+      {stage ? (
+        <div className="mt-3 grid gap-1.5 text-[11px] leading-4 text-neutral-600">
+          <div><span className="text-neutral-400">阶段负责人</span>　{participantName(stage.ownerId, participants)}</div>
+          <div><span className="text-neutral-400">建议审核人</span>　{stage.reviewerIds.map((id) => participantName(id, participants)).join('、') || '未绑定'}</div>
+          <div><span className="text-neutral-400">输入与依赖</span>　{stage.upstreamStageIds.length > 0 ? stage.upstreamStageIds.map((id) => stageName(id, overview)).join('、') : '无前置阶段'} · {stage.dependenciesSatisfied ? '已满足' : '未满足'}</div>
+        </div>
+      ) : null}
+
+      {stage?.missingRequiredInputs.length ? (
+        <div className="mt-3 rounded border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">
+          缺少必需输入：{stage.missingRequiredInputs.map((input) => input.label || input.key).join('、')}
+        </div>
+      ) : null}
+      {stage?.blockingReasons.length ? (
+        <div className="mt-2 flex items-start gap-1.5 rounded border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" />
+          <span>{stage.blockingReasons.map((reason) => blockingReasonLabel(reason.code)).join('；')}</span>
+        </div>
+      ) : stage && !stage.executionAllowed ? (
+        <div className="mt-2 rounded border border-orange-200 bg-orange-50 px-2 py-1.5 text-xs text-orange-700">当前阶段不可执行</div>
+      ) : null}
+
+      {entry ? (
+        <ChannelTaskFactSummary
+          entry={entry}
+          reviewerLabel={reviewerLabel(entry, participants)}
+          className="mt-3"
+          showGovernance={false}
+          showStageBlockers={false}
+        />
+      ) : (
+        <div className="mt-3 rounded border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-xs text-neutral-500">项目推进事实尚未就绪</div>
+      )}
+      <div className="mt-3 flex items-center justify-between text-xs font-semibold text-neutral-700">
+        <span>{actionLabel}</span>
+        <ArrowRight size={13} />
+      </div>
+    </button>
+  );
+}
+
+function ProjectLaneIcon({ lane }: { lane: ProjectLaneId }) {
+  if (lane === 'review') return <PackageCheck size={15} className="text-amber-600" />;
+  if (lane === 'complete') return <CheckCircle2 size={15} className="text-emerald-600" />;
+  return <Clock3 size={15} className="text-violet-600" />;
+}
+
+function SetupStep({ number, title, detail }: { number: string; title: string; detail: string }) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center gap-2">
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-300 text-[10px] font-bold text-neutral-900">{number}</span>
+        <h3 className="text-xs font-semibold text-neutral-900">{title}</h3>
+      </div>
+      <p className="mt-2 text-[11px] leading-4 text-neutral-500">{detail}</p>
+    </div>
+  );
+}
+
+function projectLane(
+  aggregateStatus: ProjectStage['aggregateStatus'] | undefined,
+  taskStatus: ChannelTaskWorkspaceEntryV1['task']['status'],
+): ProjectLaneId {
+  if (aggregateStatus === 'in_review' || taskStatus === 'in_review') return 'review';
+  if (aggregateStatus === 'complete' || taskStatus === 'done' || taskStatus === 'closed') return 'complete';
+  return 'active';
 }
 
 function ProjectProgressState({

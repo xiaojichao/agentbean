@@ -98,7 +98,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
-  test('频道 Tasks browser smoke 覆盖无阶段普通任务、同视图深链保留与跨子视图详情清理', () => {
+  test('频道 Tasks browser smoke 覆盖无阶段启动引导、普通任务紧凑列表与跨子视图详情清理', () => {
     const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('export async function exerciseWebUiChannelNoProjectFactsSmoke');
     const end = source.indexOf('async function exerciseWebUiChannelTaskSubviewSmoke', start);
@@ -107,6 +107,9 @@ describe('AgentBean Next browser smoke script', () => {
     expect(start).toBeGreaterThan(-1);
     expect(smoke).toContain('plain-task-workbench-');
     expect(smoke).toContain('channel-project-setup-prompt');
+    expect(smoke).toContain('channel-plain-secondary-label');
+    expect(smoke).toContain('channel-plain-task-list');
+    expect(smoke).toContain("[title=\"列表\"]");
     expect(smoke).toContain('task-card-facts');
     expect(smoke).toContain('reselecting the active channel Tasks subview preserves the selected Task deep link');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
