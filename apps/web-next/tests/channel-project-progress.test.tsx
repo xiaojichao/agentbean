@@ -92,7 +92,7 @@ describe('频道项目推进工作区', () => {
     expect(screen.queryByRole('button', { name: /打开受管任务/ })).toBeNull();
   });
 
-  test('准确区分 loading、not_ready、无权限、错误和无阶段', () => {
+  test('准确区分 loading、not_ready、无权限和错误', () => {
     const props = {
       overview: null,
       workspace: null,
@@ -114,8 +114,27 @@ describe('频道项目推进工作区', () => {
     rerender(<ChannelProjectProgress {...props} state="error" errorMessage="读取失败" />);
     expect(screen.getByText('读取失败')).toBeTruthy();
 
-    rerender(<ChannelProjectProgress {...props} state="ready" />);
-    expect(screen.getByText('尚未配置项目阶段')).toBeTruthy();
+  });
+
+  test('无项目事实时用已有普通任务数量引导显式配置首个阶段', () => {
+    const onOpenSettings = vi.fn();
+    render(
+      <ChannelProjectProgress
+        overview={null}
+        workspace={plainWorkspace()}
+        participants={participants}
+        currentUserId="reviewer-1"
+        state="ready"
+        archived={false}
+        onOpenStage={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+
+    expect(screen.getByText('把频道工作组织成阶段推进')).toBeTruthy();
+    expect(screen.getByText(/已有 2 个普通任务/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '配置首个项目阶段' }));
+    expect(onOpenSettings).toHaveBeenCalledOnce();
   });
 
   test('归档频道只提供查看设置入口，不暴露运行态写操作', () => {
@@ -222,6 +241,27 @@ function workspace(options: { includeSecond?: boolean } = {}): ChannelTaskWorksp
   return {
     schemaVersion: 1, channelId: 'channel-1', entries, asOf: 2,
     audienceScope: 'team-1:channel-1:reviewer-1', consistencyToken: { schemaVersion: 1, entries: [] },
+  };
+}
+
+function plainWorkspace(): ChannelTaskWorkspaceV1 {
+  return {
+    schemaVersion: 1,
+    channelId: 'channel-1',
+    entries: ['plain-1', 'plain-2'].map((id) => ({
+      schemaVersion: 1,
+      task: taskDto(id, 'creator-1'),
+      governance: {
+        mode: 'plain' as const,
+        sources: [],
+        allowDirectStatusMutation: true,
+        allowDirectAssigneeMutation: true,
+        allowDirectDelete: true,
+      },
+      responsibilityFocus: { kind: 'none' as const, detail: '尚无协调事实' },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+      review: { reviewerIds: [] },
+    })),
   };
 }
 

@@ -14,6 +14,21 @@ export function channelTaskResponsibilityFocusFilterValue(
   return entry.responsibilityFocus.agentId ?? 'unassigned';
 }
 
+/**
+ * 普通 Task 只有在 Server 已经投影出真实的责任、交付或审核事实时才展示项目摘要。
+ * assignee、tag 和 TaskStatus 不能把历史普通任务推断成项目任务。
+ */
+export function channelTaskHasProjectFacts(entry: ChannelTaskWorkspaceEntryV1 | undefined): boolean {
+  if (!entry) return false;
+  return entry.governance.mode === 'managed'
+    || Boolean(entry.stage)
+    || entry.responsibilityFocus.kind !== 'none'
+    || entry.delivery.packageCount > 0
+    || entry.delivery.pendingDeliveryCount > 0
+    || entry.review.reviewerIds.length > 0
+    || Boolean(entry.review.latest);
+}
+
 export function ChannelTaskFactSummary({
   entry,
   reviewerLabel,
@@ -124,7 +139,9 @@ export function ChannelTaskCard({
 
       {task.description ? <div className="mt-2 line-clamp-3 text-xs leading-5 text-neutral-500">{task.description}</div> : null}
 
-      <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabel} className="mt-3" />
+      {channelTaskHasProjectFacts(entry) ? (
+        <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabel} className="mt-3" />
+      ) : null}
 
       <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-neutral-500">
         <span className="inline-flex items-center gap-1 border border-neutral-200 bg-neutral-50 px-1.5 py-0.5">

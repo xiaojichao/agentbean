@@ -39,7 +39,7 @@ import { TaskDagPanel } from '@/components/TaskDagPanel';
 import {
   ChannelTaskCard,
   ChannelTaskFactSummary,
-  channelTaskResponsibilityFocusFilterValue,
+  channelTaskHasProjectFacts,
 } from '@/components/ChannelTaskCard';
 import {
   ChannelProjectOverview,
@@ -47,7 +47,11 @@ import {
   type ProjectStageDraft,
   type ProjectStageEdgeDraft,
 } from '@/components/ChannelProjectOverview';
-import { ChannelProjectProgress, type ChannelProjectProgressState } from '@/components/ChannelProjectProgress';
+import {
+  ChannelProjectProgress,
+  ChannelProjectSetupPrompt,
+  type ChannelProjectProgressState,
+} from '@/components/ChannelProjectProgress';
 import { acceptChannelProjectOverview } from '@/lib/channel-project-overview';
 import {
   type PromoteArtifactDraft,
@@ -1399,12 +1403,10 @@ export default function ChatPage() {
   }, [router]);
 
   const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
-    if (view === 'plain') {
-      setTaskDetailMessageId(null);
-      setTaskDetailOnlyTaskId(null);
-    }
+    setTaskDetailMessageId(null);
+    setTaskDetailOnlyTaskId(null);
     navigateChannelTasksRoute(
-      channelTasksRouteParams(searchParams, { view }),
+      channelTasksRouteParams(searchParams, { view, stageId: null, taskId: null }),
       channelTasksHistoryMode('select_subview'),
     );
   }, [navigateChannelTasksRoute, searchParams]);
@@ -3652,13 +3654,26 @@ function ConversationTasks({
   );
 
   const hasProjectStages = (projectOverview?.stages.length ?? 0) > 0;
+  const hasManagedEntries = workspace?.entries.some(
+    (entry) => channelTaskEntrySubview(entry) === 'project',
+  ) ?? false;
+  const ordinaryTaskCount = workspace?.entries.filter(
+    (entry) => channelTaskEntrySubview(entry) === 'plain',
+  ).length ?? 0;
+  const hasProjectWork = hasProjectStages || hasManagedEntries;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
   const subview = requestedSubview
-    ?? (loadError || projectOverviewError ? 'project' : resolveChannelTasksSubview(undefined, hasProjectStages));
+    ?? ((loading && !workspace) || loadError || projectOverviewError
+      ? 'project'
+      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries));
   useEffect(() => {
-    if (projectOverview === undefined || projectOverviewError || requestedSubview) return;
-    onResolveDefaultSubview(resolveChannelTasksSubview(undefined, (projectOverview?.stages.length ?? 0) > 0));
-  }, [onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview]);
+    if (projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
+    onResolveDefaultSubview(resolveChannelTasksSubview(
+      undefined,
+      (projectOverview?.stages.length ?? 0) > 0,
+      workspace?.entries.some((entry) => channelTaskEntrySubview(entry) === 'project') ?? false,
+    ));
+  }, [loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
 
   const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, workspaceReadOnly
     ? {
@@ -3677,7 +3692,7 @@ function ConversationTasks({
     if (creatorFilter !== 'all' && task.creatorId !== creatorFilter) return false;
     if (
       assigneeFilter !== 'all'
-      && channelTaskResponsibilityFocusFilterValue(entry) !== assigneeFilter
+      && (task.assigneeId ?? 'unassigned') !== assigneeFilter
     ) return false;
     return true;
   });
@@ -3809,12 +3824,10 @@ function ConversationTasks({
 
   const creatorLabel = creatorFilter === 'all' ? '创建者' : participantName(creatorFilter, participants, currentUserId);
   const assigneeLabel = assigneeFilter === 'all'
-    ? '责任焦点'
+    ? '负责人'
     : assigneeFilter === 'unassigned'
-      ? '未产生责任'
-      : assigneeFilter === 'review_wait'
-        ? '等待审核'
-        : participantName(assigneeFilter, participants, currentUserId);
+      ? '未分配'
+      : participantName(assigneeFilter, participants, currentUserId);
   const projectProgressState: ChannelProjectProgressState = loadError?.kind
     ?? projectOverviewError?.kind
     ?? (projectOverview === undefined || (loading && !workspace)
@@ -3880,6 +3893,14 @@ function ConversationTasks({
         </div>
       ) : (
         <>
+      {!hasProjectWork && !workspaceReadOnly ? (
+        <ChannelProjectSetupPrompt
+          ordinaryTaskCount={ordinaryTaskCount}
+          archived={false}
+          onOpenSettings={() => setShowProjectSettings(true)}
+          compact
+        />
+      ) : null}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4">
         <div className="relative">
           <button onClick={() => { onToggleCreatorFilter(); if (showAssigneeFilter) onToggleAssigneeFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
@@ -3904,12 +3925,11 @@ function ConversationTasks({
           </button>
           {showAssigneeFilter && (
             <TaskFilterMenu
-              title="责任焦点"
+              title="负责人"
               value={assigneeFilter}
               options={[
-                { id: 'all', name: '全部责任焦点' },
-                { id: 'unassigned', name: '未产生责任' },
-                { id: 'review_wait', name: '等待审核' },
+                { id: 'all', name: '全部负责人' },
+                { id: 'unassigned', name: '未分配' },
                 ...participants,
               ]}
               onSelect={(id) => { onAssigneeFilterChange(id); onCloseFilters(); }}
@@ -4022,7 +4042,7 @@ function ConversationTasks({
                 <th className="pb-2 pr-4 font-medium">标题</th>
                 <th className="pb-2 pr-4 font-medium">状态</th>
                 <th className="pb-2 pr-4 font-medium">创建者</th>
-                <th className="pb-2 pr-4 font-medium">项目事实</th>
+                <th className="pb-2 pr-4 font-medium">负责人 / 已有关联事实</th>
                 <th className="pb-2 font-medium">操作</th>
               </tr>
             </thead>
@@ -4045,12 +4065,13 @@ function ConversationTasks({
                   </td>
                   <td className="py-2 pr-4 text-xs text-neutral-600">{participantName(task.creatorId, participants, currentUserId)}</td>
                   <td className="min-w-64 py-2 pr-4">
-                    <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabelForEntry(entry)} />
-                    {entry.governance.mode === 'plain' && task.assigneeId ? (
-                      <div className="mt-1 text-[11px] text-neutral-500">
-                        普通任务负责人：{participantName(task.assigneeId, participants, currentUserId)}
+                    {channelTaskHasProjectFacts(entry) ? (
+                      <ChannelTaskFactSummary entry={entry} reviewerLabel={reviewerLabelForEntry(entry)} />
+                    ) : (
+                      <div className="text-xs text-neutral-600" data-smoke="task-list-plain-assignee">
+                        负责人：{task.assigneeId ? participantName(task.assigneeId, participants, currentUserId) : '未分配'}
                       </div>
-                    ) : null}
+                    )}
                   </td>
                   <td className="py-2">
                     <div className="flex items-center gap-1">
@@ -4376,6 +4397,12 @@ function TaskDetailPanel({
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
   const workspaceTeamId = currentTeamId ?? message?.teamId ?? null;
   const detailChannelId = message?.channelId ?? task?.channelId ?? null;
+  const showTaskDag = Boolean(
+    stageId
+    || workspaceEntry?.stage
+    || workspaceEntry?.governance.mode === 'managed',
+  );
+  const showTaskDelivery = Boolean(stageId || channelTaskHasProjectFacts(workspaceEntry));
   const managedStatusOptions = readOnly
     ? []
     : workspaceEntry?.governance.mode === 'managed'
@@ -4389,7 +4416,7 @@ function TaskDetailPanel({
     : TASK_COLUMNS;
 
   useEffect(() => {
-    if (!detailTaskId) {
+    if (!detailTaskId || !showTaskDag) {
       setTaskDag(null);
       setTaskDagLoading(false);
       return;
@@ -4404,7 +4431,7 @@ function TaskDetailPanel({
       setTaskDagLoading(false);
     });
     return () => { active = false; };
-  }, [detailTaskId, task?.updatedAt]);
+  }, [detailTaskId, showTaskDag, task?.updatedAt]);
 
   useEffect(() => {
     if (!latestWorkspaceRun || !workspaceTeamId) {
@@ -4501,7 +4528,7 @@ function TaskDetailPanel({
         </section>
         )}
 
-        {detailTaskId && (
+        {detailTaskId && showTaskDag ? (
           <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-dag">
             {taskDagLoading
               ? <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-loading">正在读取 Task DAG…</div>
@@ -4509,9 +4536,9 @@ function TaskDetailPanel({
                 ? <TaskDagPanel dag={taskDag} teamPath={routeTeamPath} />
                 : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">此任务未进入 Phase 2 协作。</div>}
           </section>
-        )}
+        ) : null}
 
-        {detailTaskId && workspaceTeamId && detailChannelId && (
+        {detailTaskId && workspaceTeamId && detailChannelId && showTaskDelivery ? (
           <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
             {stageId ? (
               <StageDeliveryReviewWorkspace
@@ -4536,7 +4563,7 @@ function TaskDetailPanel({
               />
             )}
           </section>
-        )}
+        ) : null}
 
         <section className="border-b border-neutral-100 py-4">
           <div className="mb-2 flex items-center justify-between">

@@ -463,6 +463,11 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         true,
         `Created managed Phase 2 task "${taskResult.phase2Title}" through real Web/Agent sockets and rendered its Task DAG panel`,
       ),
+      check(
+        'webui-channel-tasks-no-project-facts',
+        taskResult.channelNoProjectFactsVerified === true,
+        'Verified a no-stage channel defaults to ordinary Tasks, hides empty project facts, guides explicit setup, and clears stale detail when switching subviews',
+      ),
     );
 
     // 始终创建 workspace run 数据供 project collaboration 使用；
@@ -1753,6 +1758,17 @@ export async function exerciseWebUiTaskBusinessSmoke({
   } finally {
     await phase2.close();
   }
+  if (webSocket) {
+    await exerciseWebUiChannelNoProjectFactsSmoke({
+      page,
+      root,
+      teamPath,
+      webSocket,
+      session,
+      suffix,
+      timeoutMs,
+    });
+  }
   await exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs });
   return {
     title,
@@ -1760,7 +1776,89 @@ export async function exerciseWebUiTaskBusinessSmoke({
     reordered: true,
     deletedTitle: secondaryTitle,
     phase2Title: phase2.title,
+    channelNoProjectFactsVerified: Boolean(webSocket),
   };
+}
+
+export async function exerciseWebUiChannelNoProjectFactsSmoke({
+  page,
+  root,
+  teamPath,
+  webSocket,
+  session,
+  suffix,
+  timeoutMs,
+}) {
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `plain-task-workbench-${suffix}`,
+    visibility: 'public',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) {
+    throw new Error(`Channel Tasks no-project smoke could not create its isolated channel: ${formatAck(channelAck)}`);
+  }
+
+  const titles = [`普通任务甲 ${suffix}`, `普通任务乙 ${suffix}`];
+  for (const title of titles) {
+    const taskAck = await emitAck(webSocket, WEB_EVENTS.task.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId,
+      title,
+    }, timeoutMs);
+    if (taskAck?.ok !== true || typeof taskAck?.task?.id !== 'string') {
+      throw new Error(`Channel Tasks no-project smoke could not create ordinary Task "${title}": ${formatAck(taskAck)}`);
+    }
+  }
+
+  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
+  await page.waitForFunction(
+    `
+    (() => {
+      const titles = ${JSON.stringify(titles)};
+      const cards = Array.from(document.querySelectorAll('[data-smoke="channel-task-card"]'));
+      const params = new URLSearchParams(window.location.search);
+      return params.get('tasksView') === 'plain'
+        && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null
+        && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null
+        && titles.every((title) => cards.some((card) => card.textContent?.includes(title)))
+        && document.querySelector('[data-smoke="task-card-facts"]') === null;
+    })()
+    `,
+    'no-stage channel defaults to ordinary Tasks, exposes setup guidance, and hides empty project facts',
+    timeoutMs,
+  );
+
+  const openedTask = await page.evaluateJson(`
+    (() => {
+      const title = ${JSON.stringify(titles[0])};
+      const card = Array.from(document.querySelectorAll('[data-smoke="channel-task-card"]'))
+        .find((candidate) => candidate.textContent?.includes(title));
+      const button = card?.querySelector('[data-smoke="task-card-open-detail"]');
+      if (!(button instanceof HTMLElement)) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!openedTask) throw new Error(`Could not open ordinary channel Task "${titles[0]}"`);
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="chat-task-detail"]') !== null
+      && new URLSearchParams(window.location.search).get('task')?.startsWith('task:') === true`,
+    'ordinary channel Task opens its task-only detail',
+    timeoutMs,
+  );
+
+  await page.click('[data-smoke="channel-tasks-view-project"]');
+  await page.waitForFunction(
+    `new URLSearchParams(window.location.search).get('tasksView') === 'project'
+      && !new URLSearchParams(window.location.search).has('task')
+      && document.querySelector('[data-smoke="chat-task-detail"]') === null
+      && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null`,
+    'switching to project progress clears stale ordinary Task detail and keeps explicit setup guidance',
+    timeoutMs,
+  );
 }
 
 async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs }) {

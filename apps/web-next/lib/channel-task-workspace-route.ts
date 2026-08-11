@@ -16,8 +16,9 @@ export function parseChannelTasksSubview(value: string | null): ChannelTasksSubv
 export function resolveChannelTasksSubview(
   requested: ChannelTasksSubview | undefined,
   hasProjectStages: boolean,
+  hasManagedEntries = false,
 ): ChannelTasksSubview {
-  return requested ?? (hasProjectStages ? 'project' : 'plain');
+  return requested ?? (hasProjectStages || hasManagedEntries ? 'project' : 'plain');
 }
 
 /**

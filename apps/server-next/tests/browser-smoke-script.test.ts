@@ -98,6 +98,20 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
+  test('频道 Tasks browser smoke 覆盖无阶段普通任务、显式配置引导与跨子视图详情清理', () => {
+    const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
+    const start = source.indexOf('export async function exerciseWebUiChannelNoProjectFactsSmoke');
+    const end = source.indexOf('async function exerciseWebUiChannelTaskSubviewSmoke', start);
+    const smoke = source.slice(start, end);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(smoke).toContain('plain-task-workbench-');
+    expect(smoke).toContain('channel-project-setup-prompt');
+    expect(smoke).toContain('task-card-facts');
+    expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
+    expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
+  });
+
   test('isolates daemon identity between WebUI business flows that can revoke a Device', async () => {
     const { webUiFlowSuffix } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const identities = ['channels', 'runs', 'devices', 'agents', 'admin']
@@ -825,6 +839,7 @@ describe('AgentBean Next browser smoke script', () => {
       reordered: true,
       deletedTitle: 'WebUI smoke task secondary task-smoke',
       phase2Title: 'WebUI Phase 2 DAG task-smoke',
+      channelNoProjectFactsVerified: false,
     });
     expect(calls).toContainEqual(['phase2Close', undefined]);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/tasks']);

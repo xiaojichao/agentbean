@@ -9,6 +9,7 @@ import type { ChannelTaskWorkspaceEntryV1 } from '@agentbean/contracts';
 
 import {
   ChannelTaskCard,
+  channelTaskHasProjectFacts,
   channelTaskResponsibilityFocusFilterValue,
 } from '../components/ChannelTaskCard';
 
@@ -87,7 +88,7 @@ describe('ChannelTaskCard', () => {
     expect(callbacks.onOpenDetail).toHaveBeenCalledOnce();
   });
 
-  test('普通任务保留状态迁移与删除入口', () => {
+  test('没有项目事实的普通任务不渲染空责任/交付摘要，并保留状态迁移与删除入口', () => {
     const plainEntry: ChannelTaskWorkspaceEntryV1 = {
       ...baseEntry,
       governance: {
@@ -99,10 +100,8 @@ describe('ChannelTaskCard', () => {
       review: { reviewerIds: [] },
     };
     const callbacks = renderCard(plainEntry);
-    expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
-    expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('尚无协调事实');
-    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('暂无交付包');
-    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('未绑定');
+    expect(channelTaskHasProjectFacts(plainEntry)).toBe(false);
+    expect(document.querySelector('[data-smoke="task-card-facts"]')).toBeNull();
     const select = document.querySelector('select')!;
     fireEvent.change(select, { target: { value: 'done' } });
     expect(callbacks.onMove).toHaveBeenCalledWith('done');
@@ -138,6 +137,7 @@ describe('ChannelTaskCard', () => {
 
     renderCard(plainEntry);
 
+    expect(channelTaskHasProjectFacts(plainEntry)).toBe(true);
     expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('交付包 2 个');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('已通过');
