@@ -74,6 +74,9 @@ export function ChannelTaskFactSummary({
             ? `交付包 ${delivery.packageCount} 个${delivery.focusReviewState ? ` · ${reviewStateLabel(delivery.focusReviewState)}` : ''}`
             : '暂无交付包'}
           {delivery.pendingDeliveryCount > 0 ? ` · ${delivery.pendingDeliveryCount} 批处理中` : ''}
+          {delivery.requiredForFinalCount > 0
+            ? ` · 最终版 ${delivery.finalizedCount}/${delivery.requiredForFinalCount}`
+            : ' · 最终版 0 个'}
         </span>
       </div>
       <div data-smoke="task-card-reviewer">

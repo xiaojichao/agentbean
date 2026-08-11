@@ -98,7 +98,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(cliSource).not.toContain('await runAgentBeanNextBrowserSmoke({');
   });
 
-  test('频道 Tasks browser smoke 覆盖无阶段普通任务、显式配置引导与跨子视图详情清理', () => {
+  test('频道 Tasks browser smoke 覆盖无阶段普通任务、同视图深链保留与跨子视图详情清理', () => {
     const source = readFileSync(new URL('../../../scripts/smoke-agentbean-next-browser.mjs', import.meta.url), 'utf8');
     const start = source.indexOf('export async function exerciseWebUiChannelNoProjectFactsSmoke');
     const end = source.indexOf('async function exerciseWebUiChannelTaskSubviewSmoke', start);
@@ -108,6 +108,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain('plain-task-workbench-');
     expect(smoke).toContain('channel-project-setup-prompt');
     expect(smoke).toContain('task-card-facts');
+    expect(smoke).toContain('reselecting the active channel Tasks subview preserves the selected Task deep link');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
   });

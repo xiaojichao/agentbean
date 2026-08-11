@@ -35,6 +35,7 @@ describe('频道项目推进工作区', () => {
     expect(card.textContent).toContain('Agent「执行 Agent」正在执行');
     expect(card.textContent).toContain('无前置阶段');
     expect(card.textContent).toContain('交付包 2 个');
+    expect(card.textContent).toContain('最终版 1/2');
     expect(card.textContent).toContain('实际审核人：审核人');
     fireEvent.click(card);
     expect(onOpenStage).toHaveBeenCalledWith('stage-1', 'task-1');
@@ -220,7 +221,13 @@ function workspace(options: { includeSecond?: boolean } = {}): ChannelTaskWorksp
     responsibilityFocus: {
       kind: 'execution_active', agentId: 'agent-1', agentName: '执行 Agent', detail: 'Agent「执行 Agent」正在执行',
     },
-    delivery: { packageCount: 2, pendingDeliveryCount: 0, focusReviewState: 'approved' },
+    delivery: {
+      packageCount: 2,
+      pendingDeliveryCount: 0,
+      requiredForFinalCount: 2,
+      finalizedCount: 1,
+      focusReviewState: 'approved',
+    },
     review: {
       reviewerIds: ['reviewer-1'],
       latest: {
@@ -234,7 +241,7 @@ function workspace(options: { includeSecond?: boolean } = {}): ChannelTaskWorksp
       task: taskDto('managed-2', 'creator-2'),
       stage: undefined,
       responsibilityFocus: { kind: 'none', detail: '尚未产生责任' },
-      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
       review: { reviewerIds: ['reviewer-1'] },
     });
   }
@@ -259,7 +266,7 @@ function plainWorkspace(): ChannelTaskWorkspaceV1 {
         allowDirectDelete: true,
       },
       responsibilityFocus: { kind: 'none' as const, detail: '尚无协调事实' },
-      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
       review: { reviewerIds: [] },
     })),
   };

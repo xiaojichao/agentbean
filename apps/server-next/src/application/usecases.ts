@@ -9382,6 +9382,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           delivery: {
             packageCount: overview.delivery.packages.length,
             pendingDeliveryCount: overview.delivery.pendingDeliveries.length,
+            requiredForFinalCount: overview.acceptanceContract.requiredReviewCoverage.requiredForFinalCount,
+            finalizedCount: overview.acceptanceContract.requiredReviewCoverage.finalizedCount,
             ...(overview.delivery.focusPackageId ? { focusPackageId: overview.delivery.focusPackageId } : {}),
             ...(focusPackage ? {
               focusMemberCount: focusPackage.memberCount,

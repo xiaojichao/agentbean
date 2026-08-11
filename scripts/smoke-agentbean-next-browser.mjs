@@ -1850,6 +1850,17 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     timeoutMs,
   );
 
+  const selectedTaskParam = await page.evaluateJson(
+    `new URLSearchParams(window.location.search).get('task')`,
+  );
+  await page.click('[data-smoke="channel-tasks-view-plain"]');
+  await page.waitForFunction(
+    `new URLSearchParams(window.location.search).get('task') === ${JSON.stringify(selectedTaskParam)}
+      && document.querySelector('[data-smoke="chat-task-detail"]') !== null`,
+    'reselecting the active channel Tasks subview preserves the selected Task deep link',
+    timeoutMs,
+  );
+
   await page.click('[data-smoke="channel-tasks-view-project"]');
   await page.waitForFunction(
     `new URLSearchParams(window.location.search).get('tasksView') === 'project'

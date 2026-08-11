@@ -84,7 +84,7 @@ function entry(options: { mode: 'plain' | 'managed'; withStage: boolean }): Chan
       allowDirectDelete: options.mode === 'plain',
     },
     responsibilityFocus: { kind: 'none', detail: '尚未产生责任' },
-    delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+    delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
     review: { reviewerIds: [] },
     ...(options.withStage ? {
       stage: {

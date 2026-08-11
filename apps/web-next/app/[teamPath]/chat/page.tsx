@@ -1403,13 +1403,14 @@ export default function ChatPage() {
   }, [router]);
 
   const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
+    if (view === tasksViewParam) return;
     setTaskDetailMessageId(null);
     setTaskDetailOnlyTaskId(null);
     navigateChannelTasksRoute(
       channelTasksRouteParams(searchParams, { view, stageId: null, taskId: null }),
       channelTasksHistoryMode('select_subview'),
     );
-  }, [navigateChannelTasksRoute, searchParams]);
+  }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
 
   const resolveDefaultTasksSubview = useCallback((view: ChannelTasksSubview) => {
     if (tasksViewParam) return;

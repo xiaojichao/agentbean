@@ -33,6 +33,7 @@ const baseEntry: ChannelTaskWorkspaceEntryV1 = {
   delivery: {
     packageCount: 1, pendingDeliveryCount: 1, focusPackageId: 'package-1',
     focusMemberCount: 2, focusReviewState: 'changes_requested',
+    requiredForFinalCount: 2, finalizedCount: 1,
   },
   review: { reviewerIds: ['reviewer-1'] },
 };
@@ -81,6 +82,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('Agent A');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('要求修改');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 1/2');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('建议审核人：审核员');
     expect(document.querySelector('select')).toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).toBeNull();
@@ -96,7 +98,7 @@ describe('ChannelTaskCard', () => {
         allowDirectAssigneeMutation: true, allowDirectDelete: true,
       },
       responsibilityFocus: { kind: 'none', detail: '尚无协调事实' },
-      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
       review: { reviewerIds: [] },
     };
     const callbacks = renderCard(plainEntry);
@@ -120,6 +122,8 @@ describe('ChannelTaskCard', () => {
       delivery: {
         packageCount: 2,
         pendingDeliveryCount: 1,
+        requiredForFinalCount: 2,
+        finalizedCount: 2,
         focusPackageId: 'package-2',
         focusReviewState: 'approved',
       },
@@ -142,6 +146,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('交付包 2 个');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('已通过');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 2/2');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('实际审核人：审核员');
     expect(document.querySelector('select')).not.toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).not.toBeNull();

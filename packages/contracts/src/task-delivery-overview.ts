@@ -151,6 +151,10 @@ export interface ChannelTaskWorkspaceEntryV1 {
   readonly delivery: {
     readonly packageCount: number;
     readonly pendingDeliveryCount: number;
+    /** 当前焦点交付包中必须具备 final 指针的成员数（Server 投影）。 */
+    readonly requiredForFinalCount: number;
+    /** 当前焦点交付包中已具备 final 指针的必需成员数（Server 投影）。 */
+    readonly finalizedCount: number;
     readonly focusPackageId?: ID;
     readonly focusMemberCount?: number;
     readonly focusReviewState?: OutputPackageSummaryDto['reviewState'];
