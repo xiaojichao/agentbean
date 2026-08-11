@@ -402,8 +402,13 @@ function projectLane(
   taskStatus: ChannelTaskWorkspaceEntryV1['task']['status'],
 ): ProjectLaneId {
   if (taskStatus === 'cancelled') return 'complete';
-  if (aggregateStatus === 'in_review' || taskStatus === 'in_review') return 'review';
-  if (aggregateStatus === 'complete' || taskStatus === 'done' || taskStatus === 'closed') return 'complete';
+  if (aggregateStatus) {
+    if (aggregateStatus === 'in_review') return 'review';
+    if (aggregateStatus === 'complete') return 'complete';
+    return 'active';
+  }
+  if (taskStatus === 'in_review') return 'review';
+  if (taskStatus === 'done' || taskStatus === 'closed') return 'complete';
   return 'active';
 }
 

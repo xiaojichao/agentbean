@@ -112,6 +112,8 @@ describe('chat task surface', () => {
     expect(source).toContain('辅助视图：普通任务状态 + 负责人');
     expect(source).toContain('未进入阶段流程的任务');
     expect(source).toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
+    expect(source).toContain('overflow-x-auto rounded-lg');
+    expect(source).toContain('min-w-[880px] w-full');
   });
 
   test('#1179 项目阶段配置只在独立设置面，并用 revision 保护与 createStage 追加阶段', () => {

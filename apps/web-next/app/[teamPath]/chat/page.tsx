@@ -4048,8 +4048,8 @@ function ConversationTasks({
             </div>
             <span className="text-xs text-neutral-400">{filteredTasks.length} 个任务</span>
           </div>
-          <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm" data-smoke="channel-plain-task-list">
-          <table className="w-full text-sm [&_td]:px-3 [&_th]:px-3">
+          <div className="overflow-x-auto rounded-lg border border-neutral-200 bg-white shadow-sm" data-smoke="channel-plain-task-list">
+          <table className="min-w-[880px] w-full text-sm [&_td]:px-3 [&_th]:px-3">
             <thead>
               <tr className="border-b border-neutral-200 text-left text-xs text-neutral-500">
                 <th className="pb-2 pr-4 font-medium">编号</th>

@@ -169,11 +169,18 @@ describe('频道项目推进工作区', () => {
       task: { ...baseOverview.stages[0]!.task, id: 'task-cancelled', status: 'cancelled' as const },
       aggregateStatus: 'in_review' as const,
     };
+    const dependencyBlockedStage = {
+      ...baseOverview.stages[0]!,
+      id: 'stage-dependency-blocked',
+      name: '等待前置交付',
+      task: { ...baseOverview.stages[0]!.task, id: 'task-dependency-blocked', status: 'done' as const },
+      aggregateStatus: 'active' as const,
+    };
     const baseWorkspace = workspace();
     const entry = baseWorkspace.entries[0]!;
     render(
       <ChannelProjectProgress
-        overview={{ ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage, cancelledStage] }}
+        overview={{ ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage, cancelledStage, dependencyBlockedStage] }}
         workspace={{
           ...baseWorkspace,
           entries: [
@@ -181,6 +188,7 @@ describe('频道项目推进工作区', () => {
             { ...entry, task: reviewStage.task, stage: reviewStage, delivery: { ...entry.delivery, focusReviewState: 'pending' } },
             { ...entry, task: completeStage.task, stage: completeStage },
             { ...entry, task: cancelledStage.task, stage: cancelledStage },
+            { ...entry, task: dependencyBlockedStage.task, stage: dependencyBlockedStage },
           ],
         }}
         participants={participants}
@@ -192,6 +200,7 @@ describe('频道项目推进工作区', () => {
     );
 
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
+    expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('等待前置交付');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('交付审核');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('打开审核工作台');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('发布完成');
