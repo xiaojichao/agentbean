@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { CircleDot, Package, ShieldCheck, Tag, Trash2, User } from 'lucide-react';
+import { ChevronDown, CircleDot, Package, ShieldCheck, Tag, Trash2, User } from 'lucide-react';
 import type { ChannelTaskWorkspaceEntryV1, TaskStatus } from '@agentbean/contracts';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import { TASK_STATUS_COLUMNS } from '@/lib/task-status';
@@ -33,10 +33,14 @@ export function ChannelTaskFactSummary({
   entry,
   reviewerLabel,
   className = '',
+  showGovernance = true,
+  showStageBlockers = true,
 }: {
   entry: ChannelTaskWorkspaceEntryV1;
   reviewerLabel: string;
   className?: string;
+  showGovernance?: boolean;
+  showStageBlockers?: boolean;
 }) {
   const { governance, responsibilityFocus, delivery, review, stage } = entry;
   const managed = governance.mode === 'managed';
@@ -45,17 +49,17 @@ export function ChannelTaskFactSummary({
       className={`${className} space-y-1.5 border-y border-neutral-100 py-2 text-[11px] text-neutral-600`}
       data-smoke="task-card-facts"
     >
-      <div className="flex flex-wrap items-center gap-1.5" data-smoke="task-card-governance">
+      {showGovernance ? <div className="flex flex-wrap items-center gap-1.5" data-smoke="task-card-governance">
         <span className={`border px-1 ${managed ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-neutral-200 bg-neutral-50 text-neutral-500'}`}>
           {managed ? '受管任务' : '普通任务'}
         </span>
         {stage ? <span className="truncate border border-sky-200 bg-sky-50 px-1 text-sky-700">阶段：{stage.name}</span> : null}
-      </div>
+      </div> : null}
       <div className="flex items-start gap-1.5" data-smoke="task-card-focus">
         <CircleDot size={11} className="mt-0.5 shrink-0 text-pink-500" />
         <span>责任焦点：{responsibilityFocus.detail}</span>
       </div>
-      {stage && (!stage.executionAllowed || stage.blockingReasons.length > 0 || stage.missingRequiredInputs.length > 0) ? (
+      {showStageBlockers && stage && (!stage.executionAllowed || stage.blockingReasons.length > 0 || stage.missingRequiredInputs.length > 0) ? (
         <div className="flex items-start gap-1.5 text-amber-700" data-smoke="task-card-blockers">
           <ShieldCheck size={11} className="mt-0.5 shrink-0" />
           <span>
@@ -114,7 +118,7 @@ export function ChannelTaskCard({
       draggable={governance.allowDirectStatusMutation}
       onDragStart={governance.allowDirectStatusMutation ? onDragStart : undefined}
       onDragEnd={governance.allowDirectStatusMutation ? onDragEnd : undefined}
-      className={`group border-2 border-neutral-900 bg-white p-3 shadow-sm ${governance.allowDirectStatusMutation ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      className={`group rounded-lg border border-neutral-300 bg-white p-3 shadow-sm transition hover:border-neutral-400 hover:shadow-md ${governance.allowDirectStatusMutation ? 'cursor-grab active:cursor-grabbing' : ''}`}
       data-smoke="channel-task-card"
       data-governance={governance.mode}
     >
@@ -166,9 +170,20 @@ export function ChannelTaskCard({
       </div>
 
       {governance.allowDirectStatusMutation ? (
-        <select value={task.status} onChange={(event) => onMove(event.target.value as TaskStatus)} className="mt-3 h-7 w-full border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-700">
-          {TASK_STATUS_COLUMNS.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}
-        </select>
+        <label className="mt-3 flex items-center justify-between border-t border-neutral-100 pt-2 text-[11px] text-neutral-400">
+          <span>普通任务状态</span>
+          <span className="relative inline-flex items-center">
+            <select
+              aria-label={`${task.title}状态`}
+              value={task.status}
+              onChange={(event) => onMove(event.target.value as TaskStatus)}
+              className="h-7 appearance-none rounded border border-neutral-200 bg-neutral-50 pl-2 pr-6 text-[11px] font-medium text-neutral-700 outline-none hover:border-neutral-300 focus:border-amber-500"
+            >
+              {TASK_STATUS_COLUMNS.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}
+            </select>
+            <ChevronDown size={11} className="pointer-events-none absolute right-2 text-neutral-400" />
+          </span>
+        </label>
       ) : (
         <div className="mt-3 border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-[11px] text-neutral-500" data-smoke="task-card-governed-status">
           状态由任务执行与验收流程推进

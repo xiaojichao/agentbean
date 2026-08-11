@@ -1818,12 +1818,17 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     `
     (() => {
       const titles = ${JSON.stringify(titles)};
-      const cards = Array.from(document.querySelectorAll('[data-smoke="channel-task-card"]'));
+      const plainWorkspace = document.querySelector('[data-smoke="channel-plain-task-workspace"]');
+      const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
       const params = new URLSearchParams(window.location.search);
       return params.get('tasksView') === 'plain'
         && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null
         && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null
-        && titles.every((title) => cards.some((card) => card.textContent?.includes(title)))
+        && document.querySelector('[data-smoke="channel-plain-secondary-label"]') !== null
+        && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
+        && taskList !== null
+        && titles.every((title) => taskList.textContent?.includes(title))
+        && plainWorkspace?.textContent?.includes('未进入阶段流程的任务') === true
         && document.querySelector('[data-smoke="task-card-facts"]') === null;
     })()
     `,
@@ -1834,9 +1839,9 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   const openedTask = await page.evaluateJson(`
     (() => {
       const title = ${JSON.stringify(titles[0])};
-      const card = Array.from(document.querySelectorAll('[data-smoke="channel-task-card"]'))
-        .find((candidate) => candidate.textContent?.includes(title));
-      const button = card?.querySelector('[data-smoke="task-card-open-detail"]');
+      const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
+      const button = Array.from(taskList?.querySelectorAll('button') ?? [])
+        .find((candidate) => candidate.textContent?.trim() === title);
       if (!(button instanceof HTMLElement)) return false;
       button.click();
       return true;
