@@ -167,7 +167,7 @@ describe('频道项目推进工作区', () => {
       id: 'stage-cancelled',
       name: '取消发布',
       task: { ...baseOverview.stages[0]!.task, id: 'task-cancelled', status: 'cancelled' as const },
-      aggregateStatus: 'complete' as const,
+      aggregateStatus: 'in_review' as const,
     };
     const baseWorkspace = workspace();
     const entry = baseWorkspace.entries[0]!;
