@@ -541,6 +541,19 @@ for (const variant of variants) {
       });
       expect(finalized.ok).toBe(true);
 
+      const channelWorkspace = await seedValue.app.queryChannelTaskWorkspace({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      expect(channelWorkspace.ok).toBe(true);
+      if (!channelWorkspace.ok) throw new Error(channelWorkspace.error);
+      expect(channelWorkspace.workspace.entries.find((entry) => entry.task.id === taskId)?.delivery).toMatchObject({
+        packageCount: 1,
+        requiredForFinalCount: 2,
+        finalizedCount: 1,
+      });
+
       const result = await seedValue.app.queryStageDeliveryReviewWorkspace({
         schemaVersion: 1,
         userId: seedValue.userId,

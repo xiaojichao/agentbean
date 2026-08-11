@@ -53,6 +53,10 @@ export function ChannelProjectProgress({
     () => workspace?.entries.filter((entry) => channelTaskEntrySubview(entry) === 'project') ?? [],
     [workspace],
   );
+  const ordinaryTaskCount = useMemo(
+    () => workspace?.entries.filter((entry) => channelTaskEntrySubview(entry) === 'plain').length ?? 0,
+    [workspace],
+  );
 
   if (state !== 'ready') {
     return <ProjectProgressState state={state} errorMessage={errorMessage} />;
@@ -88,59 +92,62 @@ export function ChannelProjectProgress({
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-neutral-50" data-smoke="channel-project-progress">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-white px-4 py-3">
-        <select
-          aria-label="项目任务创建者"
-          value={creatorFilter}
-          onChange={(event) => setCreatorFilter(event.target.value)}
-          className={filterClass}
-        >
-          <option value="all">全部创建者</option>
-          {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
-        </select>
-        <select
-          aria-label="项目任务责任焦点"
-          value={focusFilter}
-          onChange={(event) => setFocusFilter(event.target.value)}
-          className={filterClass}
-        >
-          <option value="all">全部责任焦点</option>
-          <option value="unassigned">尚未产生责任</option>
-          <option value="review_wait">等待审核</option>
-          {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
-        </select>
-        <select
-          aria-label="项目任务审核人"
-          value={reviewerFilter}
-          onChange={(event) => setReviewerFilter(event.target.value)}
-          className={filterClass}
-        >
-          <option value="all">全部审核事实</option>
-          {currentUserId ? <option value="pending-me">待我审核</option> : null}
-          {participants.filter((participant) => participant.kind === 'human').flatMap((participant) => [
-            <option key={`suggested:${participant.id}`} value={`suggested:${participant.id}`}>建议：{participant.name}</option>,
-            <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
-          ])}
-        </select>
-        <div className="flex-1" />
-        {archived || overview?.archived ? (
-          <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
-        ) : null}
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-        >
-          <Settings2 size={13} />
-          {archived || overview?.archived ? '查看项目设置' : '项目设置 / 阶段配置'}
-        </button>
-      </div>
+      {stages.length > 0 || projectEntries.length > 0 ? (
+        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-neutral-200 bg-white px-4 py-3">
+          <select
+            aria-label="项目任务创建者"
+            value={creatorFilter}
+            onChange={(event) => setCreatorFilter(event.target.value)}
+            className={filterClass}
+          >
+            <option value="all">全部创建者</option>
+            {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+          </select>
+          <select
+            aria-label="项目任务责任焦点"
+            value={focusFilter}
+            onChange={(event) => setFocusFilter(event.target.value)}
+            className={filterClass}
+          >
+            <option value="all">全部责任焦点</option>
+            <option value="unassigned">尚未产生责任</option>
+            <option value="review_wait">等待审核</option>
+            {participants.map((participant) => <option key={participant.id} value={participant.id}>{participant.name}</option>)}
+          </select>
+          <select
+            aria-label="项目任务审核人"
+            value={reviewerFilter}
+            onChange={(event) => setReviewerFilter(event.target.value)}
+            className={filterClass}
+          >
+            <option value="all">全部审核事实</option>
+            {currentUserId ? <option value="pending-me">待我审核</option> : null}
+            {participants.filter((participant) => participant.kind === 'human').flatMap((participant) => [
+              <option key={`suggested:${participant.id}`} value={`suggested:${participant.id}`}>建议：{participant.name}</option>,
+              <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
+            ])}
+          </select>
+          <div className="flex-1" />
+          {archived || overview?.archived ? (
+            <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
+          ) : null}
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            <Settings2 size={13} />
+            {archived || overview?.archived ? '查看项目设置' : '项目设置 / 阶段配置'}
+          </button>
+        </div>
+      ) : null}
 
       {stages.length === 0 && projectEntries.length === 0 ? (
-        <div className="m-4 border border-dashed border-neutral-300 bg-white px-6 py-12 text-center">
-          <div className="text-sm font-medium text-neutral-700">尚未配置项目阶段</div>
-          <div className="mt-1 text-xs text-neutral-500">普通任务仍可在“普通任务”子视图中管理。</div>
-        </div>
+        <ChannelProjectSetupPrompt
+          ordinaryTaskCount={ordinaryTaskCount}
+          archived={archived || Boolean(overview?.archived)}
+          onOpenSettings={onOpenSettings}
+        />
       ) : !hasVisibleEntries ? (
         <div className="m-4 border border-dashed border-neutral-300 bg-white px-6 py-12 text-center text-sm text-neutral-500">
           当前筛选下没有项目任务
@@ -232,6 +239,45 @@ export function ChannelProjectProgress({
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+export function ChannelProjectSetupPrompt({
+  ordinaryTaskCount,
+  archived,
+  onOpenSettings,
+  compact = false,
+}: {
+  ordinaryTaskCount: number;
+  archived: boolean;
+  onOpenSettings: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <section
+      className={compact
+        ? 'mx-4 mt-4 flex shrink-0 flex-wrap items-center gap-3 border border-amber-200 bg-amber-50 px-4 py-3'
+        : 'm-4 border border-amber-200 bg-gradient-to-br from-amber-50 to-white px-6 py-10 text-center'}
+      data-smoke="channel-project-setup-prompt"
+    >
+      <div className={compact ? 'min-w-0 flex-1' : ''}>
+        <h2 className="text-sm font-semibold text-neutral-900">把频道工作组织成阶段推进</h2>
+        <p className={`text-xs leading-5 text-neutral-600 ${compact ? 'mt-0.5' : 'mx-auto mt-2 max-w-xl'}`}>
+          {ordinaryTaskCount > 0
+            ? `已有 ${ordinaryTaskCount} 个普通任务；配置首个阶段时可明确绑定任务、负责人、审核人与验收标准。`
+            : '配置首个阶段，明确任务、负责人、审核人与验收标准。'}
+          不会根据负责人、标签或状态自动改写历史任务。
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onOpenSettings}
+        className={`${compact ? '' : 'mt-5'} inline-flex h-9 items-center gap-1.5 rounded-md bg-neutral-900 px-4 text-xs font-semibold text-white hover:bg-neutral-800`}
+      >
+        <Settings2 size={14} />
+        {archived ? '查看项目设置' : '配置首个项目阶段'}
+      </button>
     </section>
   );
 }

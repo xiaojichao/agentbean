@@ -64,6 +64,8 @@ describe('chat task surface', () => {
     expect(detailPanel).toContain('taskEvents().getDag(detailTaskId)');
     expect(detailPanel).toContain('acceptTaskDagSnapshot(current, result.dag)');
     expect(detailPanel).toContain('<TaskDagPanel');
+    expect(detailPanel).toContain('const showTaskDag = Boolean(');
+    expect(detailPanel).toContain('const showTaskDelivery = Boolean(');
     expect(detailPanel).toContain('此任务未进入 Phase 2 协作。');
     expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");
     expect(detailPanel).toContain('仅显示当前可用的具名流程操作');
@@ -90,15 +92,13 @@ describe('chat task surface', () => {
     expect(source).toContain('channelMembers={taskParticipants}');
   });
 
-  test('频道任务按责任焦点筛选，并让看板和列表共用 Server 事实摘要', () => {
+  test('普通任务按负责人筛选，只在已有 Server 事实时渲染项目摘要', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
-    expect(source).toContain('channelTaskResponsibilityFocusFilterValue(entry)');
-    expect(source).not.toContain("return task.assigneeId ?? 'unassigned'");
-    expect(source).toContain('全部责任焦点');
-    expect(source).toContain('未产生责任');
-    expect(source).toContain('channelTaskResponsibilityFocusFilterValue');
-    expect(source).toContain('等待审核');
+    expect(source).toContain("(task.assigneeId ?? 'unassigned') !== assigneeFilter");
+    expect(source).toContain('全部负责人');
+    expect(source).toContain('负责人 / 已有关联事实');
+    expect(source).toContain('channelTaskHasProjectFacts(entry)');
     expect(source.match(/<ChannelTaskFactSummary/g)?.length).toBeGreaterThanOrEqual(1);
   });
 

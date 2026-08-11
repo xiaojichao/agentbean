@@ -11,9 +11,10 @@ import {
 } from '../lib/channel-task-workspace-route';
 
 describe('频道 Tasks 路由与 Server 事实分流', () => {
-  test('有阶段时默认项目推进，无阶段时默认普通任务', () => {
+  test('有阶段或受管任务时默认项目推进，完全没有项目事实时默认普通任务', () => {
     expect(resolveChannelTasksSubview(undefined, true)).toBe('project');
     expect(resolveChannelTasksSubview(undefined, false)).toBe('plain');
+    expect(resolveChannelTasksSubview(undefined, false, true)).toBe('project');
     expect(resolveChannelTasksSubview('plain', true)).toBe('plain');
     expect(parseChannelTasksSubview('unknown')).toBeUndefined();
   });
@@ -83,7 +84,7 @@ function entry(options: { mode: 'plain' | 'managed'; withStage: boolean }): Chan
       allowDirectDelete: options.mode === 'plain',
     },
     responsibilityFocus: { kind: 'none', detail: '尚未产生责任' },
-    delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+    delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
     review: { reviewerIds: [] },
     ...(options.withStage ? {
       stage: {

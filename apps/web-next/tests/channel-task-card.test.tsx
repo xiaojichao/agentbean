@@ -9,6 +9,7 @@ import type { ChannelTaskWorkspaceEntryV1 } from '@agentbean/contracts';
 
 import {
   ChannelTaskCard,
+  channelTaskHasProjectFacts,
   channelTaskResponsibilityFocusFilterValue,
 } from '../components/ChannelTaskCard';
 
@@ -32,6 +33,7 @@ const baseEntry: ChannelTaskWorkspaceEntryV1 = {
   delivery: {
     packageCount: 1, pendingDeliveryCount: 1, focusPackageId: 'package-1',
     focusMemberCount: 2, focusReviewState: 'changes_requested',
+    requiredForFinalCount: 2, finalizedCount: 1,
   },
   review: { reviewerIds: ['reviewer-1'] },
 };
@@ -80,6 +82,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('Agent A');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('要求修改');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 1/2');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('建议审核人：审核员');
     expect(document.querySelector('select')).toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).toBeNull();
@@ -87,7 +90,7 @@ describe('ChannelTaskCard', () => {
     expect(callbacks.onOpenDetail).toHaveBeenCalledOnce();
   });
 
-  test('普通任务保留状态迁移与删除入口', () => {
+  test('没有项目事实的普通任务不渲染空责任/交付摘要，并保留状态迁移与删除入口', () => {
     const plainEntry: ChannelTaskWorkspaceEntryV1 = {
       ...baseEntry,
       governance: {
@@ -95,14 +98,12 @@ describe('ChannelTaskCard', () => {
         allowDirectAssigneeMutation: true, allowDirectDelete: true,
       },
       responsibilityFocus: { kind: 'none', detail: '尚无协调事实' },
-      delivery: { packageCount: 0, pendingDeliveryCount: 0 },
+      delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
       review: { reviewerIds: [] },
     };
     const callbacks = renderCard(plainEntry);
-    expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
-    expect(document.querySelector('[data-smoke="task-card-focus"]')?.textContent).toContain('尚无协调事实');
-    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('暂无交付包');
-    expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('未绑定');
+    expect(channelTaskHasProjectFacts(plainEntry)).toBe(false);
+    expect(document.querySelector('[data-smoke="task-card-facts"]')).toBeNull();
     const select = document.querySelector('select')!;
     fireEvent.change(select, { target: { value: 'done' } });
     expect(callbacks.onMove).toHaveBeenCalledWith('done');
@@ -121,6 +122,8 @@ describe('ChannelTaskCard', () => {
       delivery: {
         packageCount: 2,
         pendingDeliveryCount: 1,
+        requiredForFinalCount: 2,
+        finalizedCount: 2,
         focusPackageId: 'package-2',
         focusReviewState: 'approved',
       },
@@ -138,10 +141,12 @@ describe('ChannelTaskCard', () => {
 
     renderCard(plainEntry);
 
+    expect(channelTaskHasProjectFacts(plainEntry)).toBe(true);
     expect(document.querySelector('[data-smoke="task-card-governance"]')?.textContent).toContain('普通任务');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('交付包 2 个');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('已通过');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 2/2');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('实际审核人：审核员');
     expect(document.querySelector('select')).not.toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).not.toBeNull();
