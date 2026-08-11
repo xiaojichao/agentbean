@@ -1818,6 +1818,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     `
     (() => {
       const titles = ${JSON.stringify(titles)};
+      const plainWorkspace = document.querySelector('[data-smoke="channel-plain-task-workspace"]');
       const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
       const params = new URLSearchParams(window.location.search);
       return params.get('tasksView') === 'plain'
@@ -1827,7 +1828,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
         && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
         && taskList !== null
         && titles.every((title) => taskList.textContent?.includes(title))
-        && taskList.textContent?.includes('未进入阶段流程的任务') === true
+        && plainWorkspace?.textContent?.includes('未进入阶段流程的任务') === true
         && document.querySelector('[data-smoke="task-card-facts"]') === null;
     })()
     `,

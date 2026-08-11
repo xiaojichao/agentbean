@@ -146,7 +146,7 @@ describe('频道项目推进工作区', () => {
     expect(onOpenSettings).toHaveBeenCalledOnce();
   });
 
-  test('按阶段与任务事实投影到进行中、待审核、已完成三条业务泳道', () => {
+  test('按阶段与任务事实投影到三条业务泳道并区分完成与取消', () => {
     const baseOverview = overview();
     const reviewStage = {
       ...baseOverview.stages[0]!,
@@ -162,17 +162,25 @@ describe('频道项目推进工作区', () => {
       task: { ...baseOverview.stages[0]!.task, id: 'task-complete', status: 'done' as const },
       aggregateStatus: 'complete' as const,
     };
+    const cancelledStage = {
+      ...baseOverview.stages[0]!,
+      id: 'stage-cancelled',
+      name: '取消发布',
+      task: { ...baseOverview.stages[0]!.task, id: 'task-cancelled', status: 'cancelled' as const },
+      aggregateStatus: 'complete' as const,
+    };
     const baseWorkspace = workspace();
     const entry = baseWorkspace.entries[0]!;
     render(
       <ChannelProjectProgress
-        overview={{ ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage] }}
+        overview={{ ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage, cancelledStage] }}
         workspace={{
           ...baseWorkspace,
           entries: [
             entry,
             { ...entry, task: reviewStage.task, stage: reviewStage, delivery: { ...entry.delivery, focusReviewState: 'pending' } },
             { ...entry, task: completeStage.task, stage: completeStage },
+            { ...entry, task: cancelledStage.task, stage: cancelledStage },
           ],
         }}
         participants={participants}
@@ -188,6 +196,9 @@ describe('频道项目推进工作区', () => {
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('打开审核工作台');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('发布完成');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('查看交付与 final');
+    expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('取消发布');
+    expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('阶段任务 · 已取消');
+    expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('查看取消记录');
   });
 
   test('归档频道只提供查看设置入口，不暴露运行态写操作', () => {

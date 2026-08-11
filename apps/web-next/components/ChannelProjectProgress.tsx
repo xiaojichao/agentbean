@@ -41,7 +41,7 @@ const PROJECT_LANES: readonly {
 }[] = [
   { id: 'active', title: '进行中', description: '待触发、执行中与受阻阶段', empty: '暂无进行中的阶段' },
   { id: 'review', title: '待审核', description: '已交付，等待成员给出审核结论', empty: '暂无待审核交付' },
-  { id: 'complete', title: '已完成', description: '已通过，可追溯 current 与 final', empty: '暂无已完成阶段' },
+  { id: 'complete', title: '已结束', description: '已完成或已终止；交付与 final 以卡片事实为准', empty: '暂无已结束阶段' },
 ];
 
 export function ChannelProjectProgress({
@@ -305,13 +305,15 @@ function ProjectWorkCard({
   if (!task) return null;
   const stageId = stage?.id ?? null;
   const selected = Boolean(stage && selectedStageId === stage.id);
-  const actionLabel = item.lane === 'review'
-    ? '打开审核工作台'
-    : item.lane === 'complete'
-      ? '查看交付与 final'
-      : stage?.aggregateStatus === 'pending'
-        ? '交给智能体处理'
-        : '查看执行与输入';
+  const actionLabel = task.status === 'cancelled'
+    ? '查看取消记录'
+    : item.lane === 'review'
+      ? '打开审核工作台'
+      : item.lane === 'complete'
+        ? '查看交付与 final'
+        : stage?.aggregateStatus === 'pending'
+          ? '交给智能体处理'
+          : '查看执行与输入';
   return (
     <button
       type="button"
@@ -326,7 +328,7 @@ function ProjectWorkCard({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className={`text-[11px] font-medium ${item.lane === 'review' ? 'text-amber-700' : item.lane === 'complete' ? 'text-emerald-700' : 'text-violet-700'}`}>
-            {stage ? `阶段任务 · ${aggregateStatusLabel(stage.aggregateStatus)}` : '未绑定阶段的受管任务'}
+            {stage ? `阶段任务 · ${aggregateStatusLabel(stage.aggregateStatus, task.status)}` : '未绑定阶段的受管任务'}
           </div>
           <h4 className="mt-1 text-sm font-semibold leading-5 text-neutral-900">{stage?.name ?? task.title}</h4>
           {stage ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-neutral-600">{stage.goal}</p> : null}
@@ -438,7 +440,11 @@ function stageName(stageId: string, overview: ChannelProjectOverviewDto | null):
   return overview?.stages.find((stage) => stage.id === stageId)?.name ?? stageId;
 }
 
-function aggregateStatusLabel(status: ChannelProjectOverviewDto['stages'][number]['aggregateStatus']): string {
+function aggregateStatusLabel(
+  status: ChannelProjectOverviewDto['stages'][number]['aggregateStatus'],
+  taskStatus: ChannelTaskWorkspaceEntryV1['task']['status'],
+): string {
+  if (taskStatus === 'cancelled') return '已取消';
   if (status === 'pending') return '待开始';
   if (status === 'active') return '进行中';
   if (status === 'in_review') return '审核中';

@@ -109,6 +109,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain('channel-project-setup-prompt');
     expect(smoke).toContain('channel-plain-secondary-label');
     expect(smoke).toContain('channel-plain-task-list');
+    expect(smoke).toContain('channel-plain-task-workspace');
     expect(smoke).toContain("[title=\"列表\"]");
     expect(smoke).toContain('task-card-facts');
     expect(smoke).toContain('reselecting the active channel Tasks subview preserves the selected Task deep link');
