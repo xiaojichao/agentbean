@@ -112,6 +112,9 @@ describe('chat task surface', () => {
     expect(source).toContain('辅助视图：普通任务状态 + 负责人');
     expect(source).toContain('未进入阶段流程的任务');
     expect(source).toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
+    expect(source).toContain('items-stretch gap-1 overflow-x-auto border-b');
+    expect(source).toContain('min-w-44 shrink-0');
+    expect(source).toContain('min-w-40 shrink-0');
     expect(source).toContain('overflow-x-auto rounded-lg');
     expect(source).toContain('min-w-[880px] w-full');
   });

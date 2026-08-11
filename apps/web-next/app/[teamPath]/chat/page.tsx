@@ -3840,14 +3840,14 @@ function ConversationTasks({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
-      <div className="flex min-h-16 shrink-0 items-stretch gap-1 border-b border-neutral-200 bg-white px-4" role="tablist" aria-label="频道任务子视图">
+      <div className="flex min-h-16 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-neutral-200 bg-white px-4" role="tablist" aria-label="频道任务子视图">
         <button
           type="button"
           role="tab"
           aria-selected={subview === 'project'}
           data-smoke="channel-tasks-view-project"
           onClick={() => onSubviewChange('project')}
-          className={`relative flex min-w-44 flex-col items-start justify-center px-3 text-left transition ${subview === 'project' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
+          className={`relative flex min-w-44 shrink-0 flex-col items-start justify-center px-3 text-left transition ${subview === 'project' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
         >
           <span className="text-xs font-semibold">项目工作台</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">阶段推进 · 交付审核 · final</span>
@@ -3858,17 +3858,17 @@ function ConversationTasks({
           aria-selected={subview === 'plain'}
           data-smoke="channel-tasks-view-plain"
           onClick={() => onSubviewChange('plain')}
-          className={`relative flex min-w-40 flex-col items-start justify-center px-3 text-left transition ${subview === 'plain' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
+          className={`relative flex min-w-40 shrink-0 flex-col items-start justify-center px-3 text-left transition ${subview === 'plain' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
         >
           <span className="text-xs font-semibold">普通任务</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">辅助状态 · 负责人视图</span>
         </button>
-        <div className="flex-1" />
+        <div className="min-w-3 flex-1" />
         {subview === 'plain' ? (
           <button
             type="button"
             onClick={() => setShowProjectSettings(true)}
-            className="h-8 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+            className="h-8 shrink-0 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
           >
             {workspaceReadOnly ? '查看项目设置' : '项目设置 / 阶段配置'}
           </button>
