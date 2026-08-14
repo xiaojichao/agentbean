@@ -76,6 +76,10 @@ export function OutputPackagePreviewModal({
 }: OutputPackagePreviewModalProps) {
   const [collections, setCollections] = useState<ProjectArtifactCollectionDto[] | null>(null);
   const [availableActions, setAvailableActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
+  const [reviewPackageBasis, setReviewPackageBasis] = useState<{
+    packageId: string;
+    deliveryId: string;
+  } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
@@ -133,9 +137,14 @@ export function OutputPackagePreviewModal({
     setLoadError(null);
     if (packageResult.ok && packageResult.package) {
       setAvailableActions(packageResult.availableActions ?? []);
+      setReviewPackageBasis({
+        packageId: packageResult.package.packageId,
+        deliveryId: packageResult.package.deliveryId,
+      });
       setActionError(null);
     } else {
       setAvailableActions(null);
+      setReviewPackageBasis(null);
       setActionError(packageResult.message ?? '审核动作加载失败，请刷新后重试');
     }
     return libraryResult.library.collections;
@@ -228,9 +237,17 @@ export function OutputPackagePreviewModal({
     saveIntentRef.current = 'version';
     const base = active.current;
     const idempotencyKey = `pkg-preview-${saveIntent}:${active.collection.id}:${base.id}:${crypto.randomUUID()}`;
+    const packageBasis = saveIntent === 'version' ? null : reviewPackageBasis;
+    if (saveIntent !== 'version' && !packageBasis) {
+      return { ok: false, conflict: true, message: '审核包上下文已不可用，请刷新后重试' };
+    }
     const revisionBasis = {
       sourceVersionId: base.id,
       ...(activeActions?.latestReviewId ? { basisReviewId: activeActions.latestReviewId } : {}),
+      ...(packageBasis ? {
+        packageId: packageBasis.packageId,
+        deliveryId: packageBasis.deliveryId,
+      } : {}),
     };
     const result = saveIntent === 'version'
       ? await projectEvents().saveArtifactVersionRevision({
@@ -294,7 +311,8 @@ export function OutputPackagePreviewModal({
       };
     }
     return { ok: false, conflict: true, message: result.message ?? result.error ?? '保存失败' };
-  }, [active, activeActions?.latestReviewId, channelId, loadWorkspace, onSaved, packageMeta.packageId, reviewComment]);
+  }, [active, activeActions?.latestReviewId, channelId, loadWorkspace, onSaved, packageMeta.packageId,
+    reviewComment, reviewPackageBasis]);
 
   const submitCurrentReview = useCallback(async (decision: 'approved' | 'changes_requested') => {
     if (!active || !activeActions || reviewBusy) return;

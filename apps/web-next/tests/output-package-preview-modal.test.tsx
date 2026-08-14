@@ -129,7 +129,7 @@ beforeEach(() => {
   mocks.artifactCollections.mockResolvedValue({ ok: true, library: library() });
   mocks.getOutputPackage.mockResolvedValue({
     ok: true,
-    package: { packageId: packageMeta.packageId },
+    package: { packageId: packageMeta.packageId, deliveryId: 'delivery-1' },
     availableActions: [
       {
         collectionId: 'collection-1',
@@ -421,7 +421,11 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       saveRevision: {
         content: '# 通过的新版本',
         filename: '第1集剧本.md',
-        revisionBasis: { sourceVersionId: 'version-1' },
+        revisionBasis: {
+          sourceVersionId: 'version-1',
+          packageId: packageMeta.packageId,
+          deliveryId: 'delivery-1',
+        },
       },
     })));
     expect(mocks.saveArtifactVersionRevision).not.toHaveBeenCalled();
@@ -472,7 +476,14 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     await waitFor(() => expect(mocks.submitPackageReviewAndFinalize).toHaveBeenCalledWith(expect.objectContaining({
       versionId: 'version-1',
       expectedCollectionRevision: 4,
-      saveRevision: expect.objectContaining({ content: '# 最终稿' }),
+      saveRevision: expect.objectContaining({
+        content: '# 最终稿',
+        revisionBasis: {
+          sourceVersionId: 'version-1',
+          packageId: packageMeta.packageId,
+          deliveryId: 'delivery-1',
+        },
+      }),
     })));
     expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
   });
@@ -480,7 +491,7 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
   test('没有 Server 审核动作时不显示审核按钮，并明确提示动作不可用', async () => {
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
-      package: { packageId: packageMeta.packageId },
+      package: { packageId: packageMeta.packageId, deliveryId: 'delivery-1' },
       availableActions: [{
         collectionId: 'collection-1',
         versionId: 'version-1',
