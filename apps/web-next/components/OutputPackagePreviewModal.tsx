@@ -574,8 +574,14 @@ export function OutputPackagePreviewModal({
       batchIntentRef.current = null;
       setBatchPanelOpen(false);
       setBatchComment('');
-      await loadWorkspace();
       onSaved();
+      try {
+        await loadWorkspace();
+      } catch (error) {
+        setActionError(error instanceof Error
+          ? `批量审核已提交，但刷新失败：${error.message}`
+          : '批量审核已提交，但刷新失败，请手动刷新');
+      }
     } catch (error) {
       setActionError(error instanceof Error ? `批量审核提交失败：${error.message}` : '批量审核提交失败，请重试');
     } finally {

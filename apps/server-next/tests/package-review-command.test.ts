@@ -222,7 +222,13 @@ async function seedPackage(
 async function seedBatchPackage(
   repositories: ServerNextRepositories,
   seedValue: Seed,
-  opts?: { taskId?: string; suffix?: string; createdAt?: number },
+  opts?: {
+    taskId?: string;
+    suffix?: string;
+    createdAt?: number;
+    taskRevision?: number;
+    taskAttempt?: number;
+  },
 ): Promise<{
   packageId: string;
   deliveryId: string;
@@ -261,8 +267,8 @@ async function seedBatchPackage(
       agentId: seedValue.agentId,
       taskId,
       taskBinding: 'managed',
-      taskRevision: 1,
-      taskAttempt: 1,
+      taskRevision: opts?.taskRevision ?? 1,
+      taskAttempt: opts?.taskAttempt ?? 1,
       memberCount: 2,
       status: 'recorded',
       createdAt: opts?.createdAt ?? 500,
@@ -280,7 +286,7 @@ async function seedBatchPackage(
         id: target.artifactVersionId,
         artifactId: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
         taskId,
-        taskRevision: 1,
+        taskRevision: opts?.taskRevision ?? 1,
       },
     })),
     receipt: {
@@ -298,7 +304,15 @@ async function seedBatchPackage(
     },
   });
   if (formed.kind !== 'created') throw new Error(`batch package seed failed: ${formed.kind}`);
-  return { packageId, deliveryId, taskId, targets };
+  return {
+    packageId,
+    deliveryId,
+    taskId,
+    targets: formed.members.map(({ collectionId, artifactVersionId }) => ({
+      collectionId,
+      artifactVersionId,
+    })),
+  };
 }
 
 /** 构造第二个冻结同一既有 version 的 package，用于验证组合命令不能混用 provenance。 */
@@ -610,6 +624,50 @@ for (const variant of variants) {
       channelId: s.channelId,
     });
     expect(reviews.filter((review) => review.packageId === stale.packageId)).toHaveLength(0);
+  });
+
+  test('#1199:Task 当前 revision 大于 1 时仍可审核对应当前 delivery', async () => {
+    const s = await makeSeed();
+    const initial = await seedBatchPackage(s.repositories, s, { suffix: 'revision-1', createdAt: 500 });
+    await seedTask(s.repositories, s, initial.taskId, 'in_review');
+    await s.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+      const coordination = await repositories.coordination.coordinations.getByTaskId(initial.taskId);
+      if (!coordination) throw new Error('coordination seed missing');
+      const task = await repositories.tasks.updateAtRevision({
+        taskId: initial.taskId,
+        expectedRevision: 1,
+        nextRevision: 2,
+        reasonCode: 'TEST_NEXT_DELIVERY',
+        changes: { status: 'in_review', updatedAt: 550 },
+      });
+      if (!task) throw new Error('task revision advance failed');
+      const updated = await repositories.coordination.coordinations.update({
+        expectedTaskRevision: 1,
+        record: { ...coordination, taskRevision: 2, attempt: 1, updatedAt: 550 },
+      });
+      if (!updated) throw new Error('coordination revision advance failed');
+    });
+    const current = await seedBatchPackage(s.repositories, s, {
+      taskId: initial.taskId,
+      suffix: 'revision-2',
+      createdAt: 600,
+      taskRevision: 2,
+    });
+
+    const result = await s.app.submitPackageArtifactReviews({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: current.packageId,
+      deliveryId: current.deliveryId,
+      expectedPackageRevision: 1,
+      targets: current.targets,
+      decision: 'approved',
+      comment: '当前 revision 合法审核',
+      idempotencyKey: 'batch-current-task-revision-2',
+    });
+
+    expect(result).toMatchObject({ ok: true, reviews: [{ taskRevision: 2 }, { taskRevision: 2 }] });
   });
 
   test('AC2:普通成员无审核权,非团队用户 FORBIDDEN', async () => {

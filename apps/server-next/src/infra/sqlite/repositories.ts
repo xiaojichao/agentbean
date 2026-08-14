@@ -5812,7 +5812,8 @@ function createSqlitePackageReviewRepository(teamDb: SqliteDatabase): PackageRev
           `SELECT t.team_id, t.channel_id, t.revision, c.task_revision, c.attempt
            FROM tasks t
            JOIN task_coordinations c ON c.task_id = t.id AND c.team_id = t.team_id
-           WHERE t.id = ?`,
+             AND c.task_revision = t.revision
+           WHERE t.id = ? AND t.superseded_by_revision IS NULL`,
         ).get(fence.taskId);
         const currentPackage = teamDb.prepare(
           `SELECT package_id, delivery_id
