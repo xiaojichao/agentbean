@@ -308,6 +308,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     // #1062：版本修订 provenance 四列 + save-artifact-version-revision 命令 receipt
     // (0079 已被 #1063 占用,本票顺延 0080)。
     applyMigration(db, 'team/0080_artifact_version_revision.sql');
+    // #1199：PackageReview command registry 加入批量逐文件审核。
+    applyMigration(db, 'team/0083_package_batch_review.sql');
   }
   // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
   applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
@@ -316,8 +318,6 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'dispatches')) {
     applyMigration(db, 'team/0082_dispatch_heartbeat.sql');
   }
-  // #1199：PackageReview command registry 加入批量逐文件审核。
-  applyMigration(db, 'team/0083_package_batch_review.sql');
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
