@@ -535,6 +535,38 @@ for (const variant of variants) {
     expect((await s.repositories.tasks.getById(pkg.taskId))?.status).toBe('in_review');
   });
 
+  test('#1199:同幂等键并发请求只写入一批 review', async () => {
+    const s = await makeSeed();
+    const pkg = await seedBatchPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const input = {
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      deliveryId: pkg.deliveryId,
+      expectedPackageRevision: 1,
+      targets: pkg.targets,
+      decision: 'approved' as const,
+      comment: '并发幂等审核',
+      idempotencyKey: `batch-review-concurrent:${pkg.deliveryId}`,
+    };
+
+    const results = await Promise.all([
+      s.app.submitPackageArtifactReviews(input),
+      s.app.submitPackageArtifactReviews(input),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.map((result) => result.ok ? result.replayed : undefined).sort())
+      .toEqual([false, true]);
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews.filter((review) => review.packageId === pkg.packageId)).toHaveLength(pkg.targets.length);
+  });
+
   test('#1199:错 delivery、重复目标或任一目标无权限时整批零写入并返回明确原因', async () => {
     const s = await makeSeed();
     const pkg = await seedBatchPackage(s.repositories, s);

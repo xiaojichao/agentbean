@@ -2740,7 +2740,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
 
         const fence = input.lineageFence;
         const task = tasks.get(`${fence.taskId}#${fence.taskRevision}`);
-        const coordination = await taskCoordination.coordinations.getByTaskId(fence.taskId);
+        // memory transaction 从幂等门禁到落库不得让出事件循环；否则同 key 并发请求可同时越过门禁。
+        const coordination = taskCoordinationState.coordinations.get(fence.taskId);
         const currentPackage = Array.from(outputPackages.values())
           .filter((record) => record.teamId === fence.teamId
             && record.channelId === fence.channelId

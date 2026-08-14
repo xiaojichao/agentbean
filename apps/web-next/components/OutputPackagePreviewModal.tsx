@@ -588,6 +588,10 @@ export function OutputPackagePreviewModal({
           setActionError(`批量审核已提交，但刷新失败：${refresh.error}`);
         }
       } catch (error) {
+        setAvailableActions(null);
+        setReviewPackageBasis(null);
+        setSelectedVersionIds(new Set());
+        setBatchPanelOpen(false);
         setActionError(error instanceof Error
           ? `批量审核已提交，但刷新失败：${error.message}`
           : '批量审核已提交，但刷新失败，请手动刷新');

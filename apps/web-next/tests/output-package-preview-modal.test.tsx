@@ -406,6 +406,9 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       .toContain('批量审核已提交，但刷新失败：refresh timeout');
     expect(screen.queryByText(/批量审核提交失败/)).toBeNull();
     expect(onSaved).toHaveBeenCalledTimes(1);
+    const batchButton = document.querySelector<HTMLButtonElement>('[data-smoke="package-preview-batch-review"]');
+    expect(batchButton?.disabled).toBe(true);
+    expect(batchButton?.textContent).toContain('批量审核（0）');
   });
 
   test('#1199 成功 ack 后结构化刷新失败仍明确显示审核已提交', async () => {
