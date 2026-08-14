@@ -154,6 +154,10 @@ export function OutputPackagePreviewModal({
     if (!libraryResult.ok || !libraryResult.library) {
       const error = libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败';
       setLoadError(error);
+      setAvailableActions(null);
+      setReviewPackageBasis(null);
+      setSelectedVersionIds(new Set());
+      setBatchPanelOpen(false);
       return { collections: null, error };
     }
     setCollections(libraryResult.library.collections);
@@ -565,7 +569,7 @@ export function OutputPackagePreviewModal({
         idempotencyKey: batchIntentRef.current.idempotencyKey,
       });
       if (!result.ok || !result.reviews) {
-        const reasons = result.rejectedTargets?.map((failure) => {
+        const reasons = result.details?.rejectedTargets?.map((failure) => {
           const target = selectedBatchTargets.find(({ current }) => current.id === failure.artifactVersionId);
           const filename = target ? (target.current.artifact as unknown as Artifact).filename : '整批请求';
           return `${filename}：${batchFailureLabel(failure.reason)}`;

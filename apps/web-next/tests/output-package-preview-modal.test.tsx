@@ -354,6 +354,28 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect((screen.getByRole('button', { name: '确认通过' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test('#1199 从 details 展示逐目标拒绝原因', async () => {
+    mocks.submitPackageArtifactReviews.mockResolvedValueOnce({
+      ok: false,
+      error: 'CONFLICT',
+      message: 'Package batch review rejected',
+      details: {
+        rejectedTargets: [
+          { collectionId: 'collection-1', artifactVersionId: 'version-1', reason: 'version-not-current' },
+          { collectionId: 'collection-2', artifactVersionId: 'version-2', reason: 'actor-not-authorized' },
+        ],
+      },
+    });
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('第1集剧本.md：文件版本已不是 current');
+    expect(alert.textContent).toContain('角色表.md：无审核权限');
+  });
+
   test('#1199 ack 丢失后重试同一批量意图复用幂等键', async () => {
     mocks.submitPackageArtifactReviews.mockRejectedValueOnce(new Error('ack lost'));
     renderModal();
@@ -403,6 +425,24 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       .toContain('批量审核已提交，但刷新失败：package revision stale');
     expect(screen.queryByText(/^审核动作加载失败/)).toBeNull();
     expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  test('#1199 成功 ack 后产物库结构化刷新失败会禁用旧批量动作', async () => {
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    mocks.artifactCollections.mockResolvedValueOnce({
+      ok: false,
+      error: 'CONFLICT',
+      message: 'artifact library stale',
+    });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('批量审核已提交，但刷新失败：artifact library stale');
+    const batchButton = document.querySelector<HTMLButtonElement>('[data-smoke="package-preview-batch-review"]');
+    expect(batchButton?.disabled).toBe(true);
+    expect(batchButton?.textContent).toContain('批量审核（0）');
   });
 
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {

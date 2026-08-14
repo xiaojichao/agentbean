@@ -1100,7 +1100,9 @@ export interface ProjectEvents {
     ok: boolean;
     reviews?: readonly PackageReviewDto[];
     replayed?: boolean;
-    rejectedTargets?: readonly { collectionId?: string; artifactVersionId?: string; reason: string }[];
+    details?: {
+      rejectedTargets?: readonly { collectionId?: string; artifactVersionId?: string; reason: string }[];
+    };
     error?: string;
     message?: string;
   }>;
