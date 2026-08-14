@@ -1,6 +1,7 @@
 import type { ID, UnixMs } from './common.js';
 import { COMMAND_PROVENANCE_KINDS, type CommandProvenanceKind, type CommandProvenanceRefV1 } from './message-tracer.js';
 import type { ProjectArtifactReviewDecision } from './project.js';
+import type { ArtifactVersionRevisionSaveResultDto } from './artifact-revision.js';
 
 /**
  * PackageReview 命令合同(issue #1061,父规格 #1059 §5;ADR-0067 Command registry)。
@@ -159,6 +160,8 @@ export interface PackageReviewDto {
 /** 组合命令的结果引用:两个独立事实分别返回,UI 与审计可区分(AC5/AC9)。 */
 export interface PackageReviewFinalizeResultDto {
   readonly review: PackageReviewDto;
+  /** 编辑态“保存新版本后通过”时返回同一事务创建的新版本。 */
+  readonly revision?: ArtifactVersionRevisionSaveResultDto;
   readonly finalization: {
     readonly id: ID;
     readonly collectionId: ID;
@@ -209,13 +212,34 @@ export interface PackageReviewTargetV1 {
   readonly comment: string;
 }
 
+/**
+ * 浮窗编辑态的组合保存负载。`PackageReviewTargetV1.versionId` 是发起命令时的
+ * Server current/base；Server 创建新版本后，review 会绑定返回的 `revision.versionId`。
+ */
+export interface PackageReviewRevisionSaveV1 {
+  readonly content: string;
+  readonly filename?: string;
+  readonly revisionBasis: {
+    readonly sourceVersionId: ID;
+    readonly basisReviewId?: ID;
+    readonly packageId?: ID;
+    readonly deliveryId?: ID;
+  };
+}
+
 export interface PackageReviewCommandInputMapV1 {
   readonly 'submit-package-artifact-review': PackageReviewTargetV1 & {
+    /** 仅 approved 可用；与 review 在同一事务提交。 */
+    readonly saveRevision?: PackageReviewRevisionSaveV1;
+    /** saveRevision 的 collection fence。 */
+    readonly expectedCollectionRevision?: number;
     readonly idempotencyKey: string;
   };
   readonly 'submit-package-review-and-finalize': PackageReviewTargetV1 & {
     /** 集合 revision fence:并发 finalization/append 已推进 → conflict。 */
     readonly expectedCollectionRevision: number;
+    /** 保存新版本、审核通过、设置 final 在同一事务提交。 */
+    readonly saveRevision?: PackageReviewRevisionSaveV1;
     readonly idempotencyKey: string;
   };
   readonly 'submit-package-review-and-reject-delivery': PackageReviewTargetV1 & {
@@ -232,6 +256,7 @@ export interface PackageReviewCommandInputMapV1 {
 export interface PackageReviewCommandOutputMapV1 {
   readonly 'submit-package-artifact-review': {
     readonly review: PackageReviewDto;
+    readonly revision?: ArtifactVersionRevisionSaveResultDto;
   };
   readonly 'submit-package-review-and-finalize': PackageReviewFinalizeResultDto;
   readonly 'submit-package-review-and-reject-delivery': PackageReviewRejectDeliveryResultDto;
@@ -346,6 +371,38 @@ function assertTargetFields(value: Record<string, unknown>): void {
   if (value.comment !== undefined && !nonEmpty(value.comment)) throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
 }
 
+function assertRevisionSave(value: unknown): void {
+  assertExactKeys(value, ['content', 'filename', 'revisionBasis'], ['content', 'revisionBasis']);
+  if (typeof value.content !== 'string') throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+  if (value.filename !== undefined && !nonEmpty(value.filename)) throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+  const basis = value.revisionBasis as Record<string, unknown>;
+  assertExactKeys(basis,
+    ['sourceVersionId', 'basisReviewId', 'packageId', 'deliveryId'],
+    ['sourceVersionId']);
+  assertId(basis.sourceVersionId);
+  for (const key of ['basisReviewId', 'packageId', 'deliveryId'] as const) {
+    if (basis[key] !== undefined) assertId(basis[key]);
+  }
+}
+
+function assertRevisionSaveResult(value: unknown): void {
+  assertExactKeys(value,
+    ['commandName', 'versionId', 'collectionId', 'versionNumber', 'artifactId', 'baseVersionId',
+      'sourceVersionId', 'basisReviewId', 'packageId', 'deliveryId', 'collectionRevision',
+      'currentVersionId', 'finalVersionId', 'createdAt'],
+    ['commandName', 'versionId', 'collectionId', 'versionNumber', 'artifactId', 'baseVersionId',
+      'sourceVersionId', 'collectionRevision', 'currentVersionId', 'createdAt']);
+  if (value.commandName !== 'save-artifact-version-revision') throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+  for (const key of ['versionId', 'collectionId', 'artifactId', 'baseVersionId', 'sourceVersionId',
+    'currentVersionId'] as const) assertId(value[key]);
+  for (const key of ['basisReviewId', 'packageId', 'deliveryId', 'finalVersionId'] as const) {
+    if (value[key] !== undefined) assertId(value[key]);
+  }
+  assertInteger(value.versionNumber, 1);
+  assertInteger(value.collectionRevision, 1);
+  assertInteger(value.createdAt, 0);
+}
+
 function assertReviewDto(value: unknown): void {
   assertExactKeys(value,
     ['id', 'teamId', 'channelId', 'collectionId', 'versionId', 'packageId', 'deliveryId',
@@ -373,9 +430,10 @@ function assertReviewDto(value: unknown): void {
 }
 
 function assertFinalizeResult(value: unknown): void {
-  assertExactKeys(value, ['commandName', 'review', 'finalization', 'collection'],
+  assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection'],
     ['review', 'finalization', 'collection']);
   assertReviewDto(value.review);
+  if (value.revision !== undefined) assertRevisionSaveResult(value.revision);
   const finalization = value.finalization as Record<string, unknown>;
   assertExactKeys(finalization,
     ['id', 'collectionId', 'versionId', 'previousVersionId', 'basisReviewId', 'finalizedBy', 'createdAt'],
@@ -447,14 +505,15 @@ function assertReceipt(value: unknown): void {
 }
 
 function assertCommandOutput(value: unknown): void {
-  assertExactKeys(value, ['commandName', 'review', 'finalization', 'collection', 'task'],
+  assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection', 'task'],
     ['commandName']);
   const commandName = value.commandName;
   if (commandName === 'submit-package-artifact-review') {
-    assertExactKeys(value, ['commandName', 'review'], ['commandName', 'review']);
+    assertExactKeys(value, ['commandName', 'review', 'revision'], ['commandName', 'review']);
     assertReviewDto(value.review);
+    if (value.revision !== undefined) assertRevisionSaveResult(value.revision);
   } else if (commandName === 'submit-package-review-and-finalize') {
-    assertExactKeys(value, ['commandName', 'review', 'finalization', 'collection'],
+    assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection'],
       ['commandName', 'review', 'finalization', 'collection']);
     assertReviewDto(value.review);
     assertFinalizeResult(value);
@@ -499,18 +558,27 @@ export function parsePackageReviewCommandInputV1(
 ): PackageReviewCommandInputMapV1[PackageReviewCommandName] {
   if (commandName === 'submit-package-artifact-review') {
     assertExactKeys(value,
-      ['channelId', 'packageId', 'collectionId', 'versionId', 'decision', 'comment', 'idempotencyKey'],
+      ['channelId', 'packageId', 'collectionId', 'versionId', 'decision', 'comment',
+        'saveRevision', 'expectedCollectionRevision', 'idempotencyKey'],
       ['channelId', 'packageId', 'collectionId', 'versionId', 'decision', 'idempotencyKey']);
     assertTargetFields(value);
+    if (value.saveRevision !== undefined) {
+      if (value.decision !== 'approved') throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+      assertRevisionSave(value.saveRevision);
+      assertInteger(value.expectedCollectionRevision, 1);
+    } else if (value.expectedCollectionRevision !== undefined) {
+      throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+    }
     assertId(value.idempotencyKey);
   } else if (commandName === 'submit-package-review-and-finalize') {
     assertExactKeys(value,
       ['channelId', 'packageId', 'collectionId', 'versionId', 'decision', 'comment',
-        'expectedCollectionRevision', 'idempotencyKey'],
+        'expectedCollectionRevision', 'saveRevision', 'idempotencyKey'],
       ['channelId', 'packageId', 'collectionId', 'versionId', 'decision',
         'expectedCollectionRevision', 'idempotencyKey']);
     assertTargetFields(value);
     assertInteger(value.expectedCollectionRevision, 1);
+    if (value.saveRevision !== undefined) assertRevisionSave(value.saveRevision);
     assertId(value.idempotencyKey);
   } else if (commandName === 'submit-package-review-and-reject-delivery') {
     assertExactKeys(value,

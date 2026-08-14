@@ -14,6 +14,7 @@ import type { PackageReviewRepository } from './package-review-repositories.js';
 import type { ChannelProjectRepository } from './project-repositories.js';
 import type { OutputPackageRepository } from './output-package-repositories.js';
 import type { WorkspacePublishStagingRepository } from './repositories.js';
+import type { ArtifactRevisionRepository } from './artifact-revision-repositories.js';
 
 export interface TaskCoordinationTransactionRepositories {
   readonly tasks: TaskRepository;
@@ -42,6 +43,8 @@ export interface TaskCoordinationTransactionRepositories {
    * review 记录 + Task transition(AC6)。
    */
   readonly packageReviews: PackageReviewRepository;
+  /** #1197：组合保存并审核时，版本/current/receipt 与 review/final 共用本 UoW。 */
+  readonly artifactRevisions: ArtifactRevisionRepository;
   /**
    * #1066 archive gate：package 级待审核 delivery / 未收敛 projection / publish
    * staging 收口在归档事务内复验与迁移，随事务原子提交。

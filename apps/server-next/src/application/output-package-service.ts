@@ -13,6 +13,7 @@ import {
   type SubmitPackageReviewResult,
 } from './package-review-handler.js';
 import { bumpOutputPackageWatermark } from './output-package-consistency.js';
+import type { ArtifactContentStore } from './usecases.js';
 
 /**
  * OutputPackage 交付流水线深模块(#1059 epic;候选 01/02 深化第一刀)。
@@ -32,8 +33,10 @@ import { bumpOutputPackageWatermark } from './output-package-consistency.js';
 
 export interface OutputPackageServiceDeps {
   readonly repositories: ServerNextRepositories;
+  readonly artifactContentStore: ArtifactContentStore;
   readonly clock: { now(): UnixMs };
   readonly ids: { nextId(): ID };
+  readonly editingEnabled: boolean;
 }
 
 /** review 写命令除 commandName 外的字段(commandName 由各方法按协议固定注入)。 */
@@ -56,7 +59,13 @@ export interface OutputPackageService {
  */
 export function createOutputPackageService(deps: OutputPackageServiceDeps): OutputPackageService {
   const { repositories, clock, ids } = deps;
-  const handlerDeps = { repositories, clock, ids };
+  const handlerDeps = {
+    repositories,
+    artifactContentStore: deps.artifactContentStore,
+    clock,
+    ids,
+    editingEnabled: deps.editingEnabled,
+  };
 
   async function writeReview(
     commandName: SubmitPackageReviewCommandInput['commandName'],

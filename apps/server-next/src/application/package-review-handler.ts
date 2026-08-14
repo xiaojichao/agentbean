@@ -3,8 +3,12 @@ import { createHash } from 'node:crypto';
 import {
   PACKAGE_REVIEW_COMMAND_SCHEMA_VERSION,
   canonicalizePackageReviewCommand,
+  type ArtifactRevisionConflictDto,
+  type ArtifactRevisionRejectionReason,
+  type ArtifactVersionRevisionSaveResultDto,
   type PackageReviewCommandName,
   type PackageReviewRejectionReason,
+  type PackageReviewRevisionSaveV1,
 } from '../../../../packages/contracts/src/index.js';
 import {
   deriveAuthorityBasis,
@@ -13,6 +17,7 @@ import {
   evaluatePackageReviewAndRejectDelivery,
   evaluateRejectRevision,
   mapPackageReviewRejection,
+  type PackageArtifactReviewFacts,
 } from '../../../../packages/domain/src/index.js';
 import type { ServerNextRepositories } from './repositories.js';
 import type {
@@ -21,6 +26,10 @@ import type {
   PackageReviewTombstoneRecord,
 } from './package-review-repositories.js';
 import type { ProjectArtifactFinalizationRecord } from './project-repositories.js';
+import {
+  saveArtifactVersionRevisionCommand,
+} from './artifact-revision-handler.js';
+import type { ArtifactContentStore } from './usecases.js';
 import {
   activeCriteria,
   appendTaskEvent,
@@ -45,8 +54,10 @@ import {
 
 export interface PackageReviewHandlerDeps {
   readonly repositories: ServerNextRepositories;
+  readonly artifactContentStore: ArtifactContentStore;
   readonly clock: { now(): number };
   readonly ids: { nextId(): string };
+  readonly editingEnabled: boolean;
 }
 
 export interface SubmitPackageReviewCommandInput {
@@ -69,6 +80,8 @@ export interface SubmitPackageReviewCommandInput {
   readonly expectedTaskAttempt?: number;
   /** AC6 组合:退回理由(必填)。 */
   readonly rejectReason?: string;
+  /** #1197 编辑态：保存新版本后审核通过；与 review/finalization 同事务。 */
+  readonly saveRevision?: PackageReviewRevisionSaveV1;
 }
 
 export type SubmitPackageReviewResult =
@@ -80,10 +93,12 @@ export type SubmitPackageReviewResult =
     readonly finalization?: ProjectArtifactFinalizationRecord;
     /** AC6 组合成功时附加 Task transition 事实。 */
     readonly taskTransition?: { taskId: string; taskRevision: number; taskAttempt: number; status: string };
+    /** #1197 组合保存成功时附加新版本事实。 */
+    readonly revision?: ArtifactVersionRevisionSaveResultDto;
   }
   | { readonly kind: 'replayed'; readonly receipt: PackageReviewReceiptRecord }
-  | { readonly kind: 'conflict'; readonly reasonCode: string }
-  | { readonly kind: 'rejected'; readonly reasonCode: PackageReviewRejectionReason };
+  | { readonly kind: 'conflict'; readonly reasonCode: string; readonly revisionConflict?: ArtifactRevisionConflictDto }
+  | { readonly kind: 'rejected'; readonly reasonCode: PackageReviewRejectionReason | ArtifactRevisionRejectionReason };
 
 /**
  * 主入口:三个命令共用一条判定+写入骨架。try/catch 不抛——失败只返回
@@ -110,6 +125,7 @@ export async function submitPackageReviewCommand(
     ...(input.expectedTaskRevision !== undefined ? { expectedTaskRevision: input.expectedTaskRevision } : {}),
     ...(input.expectedTaskAttempt !== undefined ? { expectedTaskAttempt: input.expectedTaskAttempt } : {}),
     ...(input.rejectReason !== undefined ? { rejectReason: input.rejectReason } : {}),
+    ...(input.saveRevision !== undefined ? { saveRevision: input.saveRevision } : {}),
   };
   const commandHash = sha256(canonicalizePackageReviewCommand(
     input.commandName,
@@ -231,7 +247,14 @@ export async function submitPackageReviewCommand(
     if (decision.kind === 'rejected') {
       return { kind: 'rejected', reasonCode: mapPackageReviewRejection(decision.reasonCode) };
     }
-    return commitReview(deps, input, commandHash, { ...reviewBase, authorityBasis: decision.authorityBasis }, now);
+    const authorizedReview = { ...reviewBase, authorityBasis: decision.authorityBasis };
+    if (input.saveRevision) {
+      if (input.decision !== 'approved') {
+        return { kind: 'rejected', reasonCode: 'invalid-decision' };
+      }
+      return commitRevisionWithReview(deps, input, commandHash, authorizedReview, packageFacts, now, false);
+    }
+    return commitReview(deps, input, commandHash, authorizedReview, now);
   }
 
   if (input.commandName === 'submit-package-review-and-finalize') {
@@ -256,6 +279,9 @@ export async function submitPackageReviewCommand(
     }
     if (!collection || input.expectedCollectionRevision === undefined) {
       return { kind: 'rejected', reasonCode: 'collection-revision-stale' };
+    }
+    if (input.saveRevision) {
+      return commitRevisionWithReview(deps, input, commandHash, reviewBase, packageFacts, now, true);
     }
     const finalization: ProjectArtifactFinalizationRecord = {
       id: deps.ids.nextId(),
@@ -306,6 +332,173 @@ export async function submitPackageReviewCommand(
   }
   return commitReviewWithTaskReject(deps, input, commandHash, reviewBase, now, task.id, input.rejectReason,
     rejectTargetNodeKind);
+}
+
+/**
+ * #1197 编辑态组合提交：外层 UoW 包住 ArtifactRevision 仓储事务与 PackageReview
+ * 仓储事务；任一 fence/权限/落库失败都回滚版本、current、review 与 optional final。
+ */
+async function commitRevisionWithReview(
+  deps: PackageReviewHandlerDeps,
+  input: SubmitPackageReviewCommandInput,
+  commandHash: string,
+  reviewBase: PackageReviewRecord,
+  packageFacts: PackageArtifactReviewFacts,
+  now: number,
+  finalize: boolean,
+): Promise<SubmitPackageReviewResult> {
+  const { repositories, ids } = deps;
+  const revisionBasis = input.saveRevision!.revisionBasis;
+  if (revisionBasis.packageId !== reviewBase.packageId
+    || revisionBasis.deliveryId !== reviewBase.deliveryId) {
+    return { kind: 'rejected', reasonCode: 'revision-basis-mismatch' };
+  }
+  let materialized: ArtifactVersionRevisionSaveResultDto | undefined;
+  try {
+    const applied = await repositories.taskCoordinationUnitOfWork.run(async (repos) => {
+      const saved = await saveArtifactVersionRevisionCommand({
+        repositories: { ...repositories, artifactRevisions: repos.artifactRevisions },
+        artifactContentStore: deps.artifactContentStore,
+        clock: deps.clock,
+        ids,
+        editingEnabled: deps.editingEnabled,
+      }, {
+        teamId: input.teamId,
+        userId: input.userId,
+        channelId: input.channelId,
+        collectionId: input.collectionId,
+        baseVersionId: input.versionId,
+        content: input.saveRevision!.content,
+        ...(input.saveRevision!.filename !== undefined ? { filename: input.saveRevision!.filename } : {}),
+        expectedCollectionRevision: input.expectedCollectionRevision ?? -1,
+        revisionBasis: input.saveRevision!.revisionBasis,
+        idempotencyKey: input.idempotencyKey,
+      });
+      if (saved.kind === 'conflict') {
+        throw new PackageRevisionAbort('conflict', saved.reasonCode, saved.revisionConflict);
+      }
+      if (saved.kind === 'rejected') {
+        throw new PackageRevisionAbort('rejected', saved.reasonCode);
+      }
+      if (saved.kind === 'replayed') {
+        throw new PackageRevisionAbort('conflict', 'idempotency-conflict');
+      }
+      materialized = saved.saveResult;
+
+      const savedStage = saved.version.stageId
+        ? (await repos.channelProjects.listStages({ teamId: input.teamId, channelId: input.channelId }))
+          .find((candidate) => candidate.id === saved.version.stageId) ?? null
+        : null;
+      const savedAuthority = evaluatePackageArtifactReviewAuthority({
+        actorKind: 'human',
+        facts: {
+          ...packageFacts,
+          actorFacts: {
+            ...packageFacts.actorFacts,
+            stageReviewerIds: savedStage?.reviewerIds ?? [],
+          },
+          versionScope: {
+            collectionId: input.collectionId,
+            versionId: saved.version.id,
+            versionCollectionId: saved.version.collectionId,
+            currentVersionId: saved.collection.currentVersionId,
+          },
+        },
+        decision: input.decision,
+      });
+      if (savedAuthority.kind === 'rejected') {
+        throw new PackageRevisionAbort(
+          'rejected',
+          mapPackageReviewRejection(savedAuthority.reasonCode),
+        );
+      }
+      const review: PackageReviewRecord = {
+        ...reviewBase,
+        versionId: saved.version.id,
+        ...(saved.version.stageId ? { stageId: saved.version.stageId } : {}),
+        authorityBasis: savedAuthority.authorityBasis,
+      };
+      const finalization = finalize ? {
+        id: ids.nextId(),
+        teamId: input.teamId,
+        channelId: input.channelId,
+        collectionId: input.collectionId,
+        versionId: saved.version.id,
+        ...(saved.collection.finalVersionId ? { previousVersionId: saved.collection.finalVersionId } : {}),
+        basisReviewId: review.id,
+        actorKind: 'human' as const,
+        finalizedBy: input.userId,
+        createdAt: now,
+      } satisfies ProjectArtifactFinalizationRecord : undefined;
+      const receipt = buildReceipt(ids, input, commandHash, review, now, undefined, saved.saveResult);
+      const tombstone: PackageReviewTombstoneRecord = {
+        id: ids.nextId(),
+        teamId: input.teamId,
+        commandName: input.commandName,
+        idempotencyKey: input.idempotencyKey,
+        commandHash,
+        receiptId: receipt.receiptId,
+        outcome: 'applied',
+        resultAvailable: true,
+        createdAt: now,
+      };
+      const committed = await repos.packageReviews.recordPackageReview({
+        review,
+        mutation: {
+          teamId: input.teamId,
+          channelId: input.channelId,
+          idempotencyKey: input.idempotencyKey,
+          requestFingerprint: commandHash,
+          createdAt: now,
+        },
+        receipt,
+        tombstone,
+        ...(finalization ? {
+          finalization: {
+            finalization,
+            collectionId: input.collectionId,
+            expectedCollectionRevision: saved.collection.revision,
+            nextRevision: saved.collection.revision + 1,
+            updatedAt: now,
+          },
+        } : {}),
+      });
+      if (committed.kind === 'idempotency_conflict' || committed.kind === 'replayed') {
+        throw new PackageRevisionAbort('conflict', 'idempotency-conflict');
+      }
+      if (committed.kind === 'version_scope_conflict') {
+        throw new PackageRevisionAbort('rejected', 'version-not-in-collection');
+      }
+      if (committed.kind === 'finalization_conflict') {
+        throw new PackageRevisionAbort('conflict', 'collection-revision-stale');
+      }
+      return { review: committed.review, receipt, finalization, revision: saved.saveResult };
+    });
+    return {
+      kind: 'applied',
+      review: applied.review,
+      receipt: applied.receipt,
+      ...(applied.finalization ? { finalization: applied.finalization } : {}),
+      revision: applied.revision,
+    };
+  } catch (error) {
+    if (materialized) {
+      await deps.artifactContentStore.deleteContent?.({
+        teamId: input.teamId,
+        artifactId: materialized.artifactId,
+      }).catch(() => undefined);
+    }
+    if (error instanceof PackageRevisionAbort) {
+      return error.kind === 'rejected'
+        ? { kind: 'rejected', reasonCode: error.reasonCode as PackageReviewRejectionReason | ArtifactRevisionRejectionReason }
+        : {
+          kind: 'conflict',
+          reasonCode: error.reasonCode,
+          ...(error.revisionConflict ? { revisionConflict: error.revisionConflict } : {}),
+        };
+    }
+    return { kind: 'conflict', reasonCode: 'transaction-failed' };
+  }
 }
 
 /** AC1/AC9 提交:review 落库(AC9 时同事务写 finalization)。 */
@@ -457,6 +650,7 @@ function buildReceipt(
   review: PackageReviewRecord,
   now: number,
   taskTransition?: { taskId: string; taskStatusAfterReject: string },
+  revision?: ArtifactVersionRevisionSaveResultDto,
 ): PackageReviewReceiptRecord {
   return {
     receiptId: ids.nextId(),
@@ -466,7 +660,13 @@ function buildReceipt(
     idempotencyKey: input.idempotencyKey,
     commandHash,
     outcome: 'applied',
-    committedRevisions: [{ streamKind: 'project-artifact-review', streamId: review.id, revision: 1 }],
+    committedRevisions: [
+      ...(revision ? [
+        { streamKind: 'project-artifact-collection', streamId: revision.collectionId, revision: revision.collectionRevision },
+        { streamKind: 'project-artifact-version', streamId: revision.versionId, revision: revision.versionNumber },
+      ] : []),
+      { streamKind: 'project-artifact-review', streamId: review.id, revision: 1 },
+    ],
     eventRefs: [],
     commitTime: now,
     resultAvailable: true,
@@ -482,6 +682,7 @@ function buildReceipt(
         comment: review.comment, reviewedBy: review.reviewedBy, createdAt: review.createdAt,
       },
       ...(taskTransition ? { task: taskTransition } : {}),
+      ...(revision ? { revision } : {}),
     }),
     createdAt: now,
   };
@@ -584,6 +785,16 @@ async function applyTaskRejectInUnitOfWork(
 
 class PackageReviewAbort extends Error {
   constructor(public readonly reasonCode: string) {
+    super(reasonCode);
+  }
+}
+
+class PackageRevisionAbort extends Error {
+  constructor(
+    public readonly kind: 'conflict' | 'rejected',
+    public readonly reasonCode: string,
+    public readonly revisionConflict?: ArtifactRevisionConflictDto,
+  ) {
     super(reasonCode);
   }
 }

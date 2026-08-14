@@ -310,6 +310,7 @@ import {
   type StageDeliveryReviewWorkspaceV1,
 } from '../../../../packages/contracts/src/stage-delivery-review-workspace.js';
 import { type SubmitPackageReviewResult } from './package-review-handler.js';
+import type { PackageReviewRevisionSaveV1 } from '../../../../packages/contracts/src/package-review.js';
 
 /** #1061 三个 package review 命令的 socket 输入(teamId 由 socket 会话解析,userId 由 Server 注入)。 */
 export interface PackageReviewCommandSocketInput {
@@ -325,6 +326,7 @@ export interface PackageReviewCommandSocketInput {
   readonly expectedTaskRevision?: number;
   readonly expectedTaskAttempt?: number;
   readonly rejectReason?: string;
+  readonly saveRevision?: PackageReviewRevisionSaveV1;
 }
 import type {
   CancelPiProviderTestResult,
@@ -672,6 +674,7 @@ export interface ServerNextUseCases {
   /** #1061 对 package 成员版本提交审核(AC1),append-only。 */
   submitPackageArtifactReview(input: PackageReviewCommandSocketInput & { userId: string }): Promise<Ack<{
     review: PackageReviewDto;
+    revision?: ArtifactVersionRevisionSaveResultDto;
     replayed: boolean;
   }>>;
   /** #1061 "通过并设为最终版":一个事务写 review 与 finalization 两个独立事实(AC9)。 */
@@ -679,6 +682,7 @@ export interface ServerNextUseCases {
     review: PackageReviewDto;
     finalization: ProjectArtifactFinalizationDto;
     collection: ProjectArtifactCollectionDto;
+    revision?: ArtifactVersionRevisionSaveResultDto;
     replayed: boolean;
   }>>;
   /** #1061 审核(changes_requested/rejected)与退回 Task delivery 原子提交(AC6)。 */
@@ -1947,7 +1951,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   const { repositories, clock, ids } = input;
   // #1059 候选 01/02 深化：OutputPackage 交付流水线深模块（formation + review 核心写）。
   // 缺省内部构造；dev-server 可经 input.outputPackageService 显式注入（切片 2 transport 改绑用）。
-  const outputPackageService = input.outputPackageService ?? createOutputPackageService({ repositories, clock, ids });
+  const outputPackageService = input.outputPackageService ?? createOutputPackageService({
+    repositories,
+    artifactContentStore: input.artifactContentStore ?? dummyContentStore(),
+    clock,
+    ids,
+    editingEnabled: input.channelFileRollout?.markdownEditing ?? true,
+  });
   // #1064：Task-linked @Agent 请求的 eligibility 解析。dev-server 注入 broker
   // resolveCandidates；缺省用简单可见性兜底（未接线测试环境；fail closed 由复验链保证）。
   const resolveTaskLinkedEligibleAgentIds = input.resolveTaskLinkedEligibleAgentIds
@@ -8970,6 +8980,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         decision: reviewInput.decision,
         comment: reviewInput.comment,
         idempotencyKey: reviewInput.idempotencyKey,
+        ...(reviewInput.expectedCollectionRevision !== undefined
+          ? { expectedCollectionRevision: reviewInput.expectedCollectionRevision }
+          : {}),
+        ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
       return packageReviewCommandAck(repositories, result, 'review');
     },
@@ -8986,6 +9000,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         comment: reviewInput.comment,
         idempotencyKey: reviewInput.idempotencyKey,
         expectedCollectionRevision: reviewInput.expectedCollectionRevision,
+        ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
       return packageReviewCommandAck(repositories, result, 'finalize');
     },
@@ -17893,6 +17908,7 @@ async function computePackageMemberAvailableActions(
           collectionId: member.collectionId,
           versionId: member.versionId,
           versionCollectionId: version?.collectionId,
+          currentVersionId: collection?.currentVersionId,
         },
       },
       decision: 'approved',
@@ -17980,15 +17996,22 @@ const PACKAGE_REVIEW_CONFLICT_CODES: readonly string[] = [
   'package-out-of-scope',
   'review-required-before-reject',
   'idempotency-conflict',
+  'base-version-stale',
+  'revision-basis-stale',
 ];
 
 /** #1061 三个命令的成功 payload 按 mode 映射。 */
 export interface PackageReviewAckPayloadMap {
-  readonly review: { review: PackageReviewDto; replayed: boolean };
+  readonly review: {
+    review: PackageReviewDto;
+    revision?: ArtifactVersionRevisionSaveResultDto;
+    replayed: boolean;
+  };
   readonly finalize: {
     review: PackageReviewDto;
     finalization: ProjectArtifactFinalizationDto;
     collection: ProjectArtifactCollectionDto;
+    revision?: ArtifactVersionRevisionSaveResultDto;
     replayed: boolean;
   };
   readonly 'reject-delivery': {
@@ -18004,21 +18027,31 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
   mode: M,
 ): Promise<Ack<PackageReviewAckPayloadMap[M]>> {
   if (result.kind === 'conflict') {
-    return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`);
+    return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`,
+      result.revisionConflict ? { revisionConflict: result.revisionConflict } : undefined);
   }
   if (result.kind === 'rejected') {
     // #1061 AC10：stale revision / 幂等冲突是 conflict 语义,权限类是 FORBIDDEN。
     if (PACKAGE_REVIEW_CONFLICT_CODES.includes(result.reasonCode)) {
       return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`);
     }
-    if (result.reasonCode === 'invalid-decision' || result.reasonCode === 'reject-reason-required') {
+    if (result.reasonCode === 'invalid-decision'
+      || result.reasonCode === 'reject-reason-required'
+      || result.reasonCode === 'revision-editing-disabled'
+      || result.reasonCode === 'content-invalid'
+      || result.reasonCode === 'version-not-in-collection'
+      || result.reasonCode === 'not-markdown-version'
+      || result.reasonCode === 'revision-basis-mismatch'
+      || result.reasonCode === 'collection-not-found'
+      || result.reasonCode === 'channel-not-found'
+      || result.reasonCode === 'invalid-request') {
       return makeFailure('VALIDATION_ERROR', `Package review rejected: ${result.reasonCode}`);
     }
     return makeFailure('FORBIDDEN', `Package review rejected: ${result.reasonCode}`);
   }
   if (result.kind === 'replayed') {
     // 同 key replay:从首次 receipt 的完整 resultJson 恢复既有事实(AC10)。
-    let parsed: { review?: PackageReviewDto } = {};
+    let parsed: { review?: PackageReviewDto; revision?: ArtifactVersionRevisionSaveResultDto } = {};
     try {
       parsed = JSON.parse(result.receipt.resultJson ?? '{}') as { review?: PackageReviewDto };
     } catch {
@@ -18051,6 +18084,7 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
         review: parsed.review,
         finalization: projectArtifactFinalizationDto(finalization),
         collection: projection.collection,
+        ...(parsed.revision ? { revision: parsed.revision } : {}),
         replayed: true,
       });
     }
@@ -18075,7 +18109,11 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
         replayed: true,
       });
     }
-    return makeSuccess({ review: parsed.review, replayed: true });
+    return makeSuccess({
+      review: parsed.review,
+      ...(parsed.revision ? { revision: parsed.revision } : {}),
+      replayed: true,
+    });
   }
   if (mode === 'finalize' && result.finalization) {
     const collection = await repositories.channelProjects.getArtifactCollection({
@@ -18087,6 +18125,7 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
       review: projectArtifactReviewDto(result.review) as PackageReviewDto,
       finalization: projectArtifactFinalizationDto(result.finalization),
       collection: collection ?? { id: result.finalization.collectionId } as never,
+      ...(result.revision ? { revision: result.revision } : {}),
       replayed: false,
     } as never);
   }
@@ -18102,7 +18141,11 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
       replayed: false,
     });
   }
-  return makeSuccess({ review: projectArtifactReviewDto(result.review) as PackageReviewDto, replayed: false });
+  return makeSuccess({
+    review: projectArtifactReviewDto(result.review) as PackageReviewDto,
+    ...(result.revision ? { revision: result.revision } : {}),
+    replayed: false,
+  });
 }
 
 /**

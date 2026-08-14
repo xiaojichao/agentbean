@@ -115,6 +115,33 @@ describe('package-review contracts (#1061)', () => {
     });
   });
 
+  test('input 解析:保存新版本后通过携带显式 revision fence 与 basis', () => {
+    const combined = {
+      ...reviewInput,
+      expectedCollectionRevision: 2,
+      saveRevision: {
+        content: '# 修订稿',
+        filename: 'report.md',
+        revisionBasis: {
+          sourceVersionId: 'ver-1',
+          basisReviewId: 'review-old',
+          packageId: 'pkg-1',
+          deliveryId: 'delivery-1',
+        },
+      },
+    } as const;
+    expect(parsePackageReviewCommandInputV1('submit-package-artifact-review', combined)).toEqual(combined);
+    expect(parsePackageReviewCommandInputV1('submit-package-review-and-finalize', combined)).toEqual(combined);
+    expect(() => parsePackageReviewCommandInputV1('submit-package-artifact-review', {
+      ...combined,
+      decision: 'changes_requested',
+    })).toThrow(INVALID);
+    expect(() => parsePackageReviewCommandInputV1('submit-package-artifact-review', {
+      ...reviewInput,
+      saveRevision: combined.saveRevision,
+    })).toThrow(INVALID);
+  });
+
   test('input 拒绝:非法决策 / 缺失字段 / 非法拒绝理由', () => {
     expect(() => parsePackageReviewCommandInputV1('submit-package-artifact-review', {
       ...reviewInput,

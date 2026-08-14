@@ -8,6 +8,7 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import type { Artifact } from '@/lib/schema';
 import type {
+  PackageMemberAvailableActionsDto,
   ProjectArtifactCollectionDto,
   ProjectArtifactVersionDto,
 } from '@agentbean/contracts';
@@ -74,7 +75,13 @@ export function OutputPackagePreviewModal({
   onSaved,
 }: OutputPackagePreviewModalProps) {
   const [collections, setCollections] = useState<ProjectArtifactCollectionDto[] | null>(null);
+  const [availableActions, setAvailableActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
+  const [reviewPackageBasis, setReviewPackageBasis] = useState<{
+    packageId: string;
+    deliveryId: string;
+  } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [contentError, setContentError] = useState<string | null>(null);
@@ -86,8 +93,13 @@ export function OutputPackagePreviewModal({
   // 每次切换成员/保存成功后递增,重挂载编辑器(reset 内部草稿态)。
   const [editorEpoch, setEditorEpoch] = useState(0);
   const editorContainerRef = useRef<HTMLDivElement>(null);
-  const saveIntentRef = useRef<'version' | 'review'>('version');
+  const saveIntentRef = useRef<'version' | 'approve' | 'approve-final'>('version');
   const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>(EMPTY_EDITOR_STATE);
+  const [reviewPanel, setReviewPanel] = useState<'approve' | 'changes' | null>(null);
+  const [approvalMode, setApprovalMode] = useState<'current' | 'save'>('current');
+  const [reviewComment, setReviewComment] = useState('');
+  const [finalizeAfterApprove, setFinalizeAfterApprove] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
 
   const requestClose = useCallback(() => {
     if (!editorState.dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose();
@@ -102,22 +114,45 @@ export function OutputPackagePreviewModal({
     setHistoryOpen(false);
     setHistoryPreview(null);
     setHistoryError(null);
+    setReviewPanel(null);
+    setApprovalMode('current');
+    setReviewComment('');
+    setFinalizeAfterApprove(false);
   }, [activeCollectionId, editorState.dirty]);
 
-  const loadLibrary = useCallback(async () => {
-    const result = await projectEvents().artifactCollections(channelId);
-    if (!result.ok || !result.library) {
-      setLoadError(result.ok ? '产物库加载失败' : result.message ?? '产物库加载失败');
+  const loadWorkspace = useCallback(async () => {
+    const [libraryResult, packageResult] = await Promise.all([
+      projectEvents().artifactCollections(channelId),
+      projectEvents().getOutputPackage({
+        channelId,
+        packageId: packageMeta.packageId,
+        projection: { policy: 'current' },
+      }),
+    ]);
+    if (!libraryResult.ok || !libraryResult.library) {
+      setLoadError(libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败');
       return null;
     }
-    setCollections(result.library.collections);
+    setCollections(libraryResult.library.collections);
     setLoadError(null);
-    return result.library.collections;
-  }, [channelId]);
+    if (packageResult.ok && packageResult.package) {
+      setAvailableActions(packageResult.availableActions ?? []);
+      setReviewPackageBasis({
+        packageId: packageResult.package.packageId,
+        deliveryId: packageResult.package.deliveryId,
+      });
+      setActionError(null);
+    } else {
+      setAvailableActions(null);
+      setReviewPackageBasis(null);
+      setActionError(packageResult.message ?? '审核动作加载失败，请刷新后重试');
+    }
+    return libraryResult.library.collections;
+  }, [channelId, packageMeta.packageId]);
 
   useEffect(() => {
-    void loadLibrary();
-  }, [loadLibrary]);
+    void loadWorkspace();
+  }, [loadWorkspace]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -153,6 +188,11 @@ export function OutputPackagePreviewModal({
   const activeIsMarkdown = active
     ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
     : false;
+  const activeActions = active && availableActions
+    ? availableActions.find((entry) => (
+      entry.collectionId === active.collection.id && entry.versionId === active.current.id
+    )) ?? null
+    : null;
 
   // 加载当前成员内容(Server 最新修订,不信任本地缓存)。
   useEffect(() => {
@@ -193,30 +233,68 @@ export function OutputPackagePreviewModal({
   const saveCurrent = useCallback(async (nextContent: string, filename: string): Promise<MarkdownDocumentSaveResult> => {
     if (!active) return { ok: false, conflict: true, message: '未选择成员' };
     const saveIntent = saveIntentRef.current;
+    // 本次动作使用上面的局部快照；立即复位只为避免异常后污染下一次普通保存。
     saveIntentRef.current = 'version';
     const base = active.current;
-    const result = await projectEvents().saveArtifactVersionRevision({
-      channelId,
-      collectionId: active.collection.id,
-      baseVersionId: base.id,
-      content: nextContent,
-      filename,
-      expectedCollectionRevision: active.collection.revision,
-      revisionBasis: {
-        // 手动编辑语义:基于当前 current 版本修订,不带 package/delivery——
-        // domain 要求 packageId+deliveryId 成对且 source 必须是包冻结成员版本,
-        // 而 current 可能已前移;只传 sourceVersionId 才是合法且语义正确的 basis。
-        sourceVersionId: base.id,
-      },
-      // 每次保存动作为独立幂等键;同一 base+内容重复提交由 Server revision fence 去重。
-      idempotencyKey: `pkg-preview-edit:${active.collection.id}:${base.id}:${crypto.randomUUID()}`,
-    });
+    const idempotencyKey = `pkg-preview-${saveIntent}:${active.collection.id}:${base.id}:${crypto.randomUUID()}`;
+    const packageBasis = saveIntent === 'version' ? null : reviewPackageBasis;
+    if (saveIntent !== 'version' && !packageBasis) {
+      return { ok: false, conflict: true, message: '审核包上下文已不可用，请刷新后重试' };
+    }
+    const revisionBasis = {
+      sourceVersionId: base.id,
+      ...(activeActions?.latestReviewId ? { basisReviewId: activeActions.latestReviewId } : {}),
+      ...(packageBasis ? {
+        packageId: packageBasis.packageId,
+        deliveryId: packageBasis.deliveryId,
+      } : {}),
+    };
+    const result = saveIntent === 'version'
+      ? await projectEvents().saveArtifactVersionRevision({
+        channelId,
+        collectionId: active.collection.id,
+        baseVersionId: base.id,
+        content: nextContent,
+        filename,
+        expectedCollectionRevision: active.collection.revision,
+        revisionBasis,
+        idempotencyKey,
+      })
+      : saveIntent === 'approve-final'
+        ? await projectEvents().submitPackageReviewAndFinalize({
+          channelId,
+          packageId: packageMeta.packageId,
+          collectionId: active.collection.id,
+          versionId: base.id,
+          decision: 'approved',
+          comment: reviewComment.trim() || '通过保存后的新版本',
+          expectedCollectionRevision: active.collection.revision,
+          saveRevision: { content: nextContent, filename, revisionBasis },
+          idempotencyKey,
+        })
+        : await projectEvents().submitPackageArtifactReview({
+          channelId,
+          packageId: packageMeta.packageId,
+          collectionId: active.collection.id,
+          versionId: base.id,
+          decision: 'approved',
+          comment: reviewComment.trim() || '通过保存后的新版本',
+          expectedCollectionRevision: active.collection.revision,
+          saveRevision: { content: nextContent, filename, revisionBasis },
+          idempotencyKey,
+        });
     if (result.ok && result.revision) {
-      setSavedNotice(saveIntent === 'review'
-        ? `已保存并提交审核：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，新版本已进入待审核；当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新，final 未移动。`
-        : `已保存：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，当前包 ${shortPkg(packageMeta.packageId)} 的 current projection 已更新；final 未移动。`);
-      await loadLibrary();
+      setSavedNotice(saveIntent === 'version'
+        ? `已保存：Server 生成 ${active.collection.name} v${result.revision.versionNumber}，current 已更新；final 未移动。`
+        : saveIntent === 'approve-final'
+          ? `已保存并通过：Server v${result.revision.versionNumber} 已成为 current 与 final。`
+          : `已保存并通过：审核记录绑定 Server v${result.revision.versionNumber}，final 未移动。`);
+      await loadWorkspace();
       setEditorEpoch((n) => n + 1);
+      setReviewPanel(null);
+      setApprovalMode('current');
+      setReviewComment('');
+      setFinalizeAfterApprove(false);
       onSaved();
       return { ok: true, revisionId: result.revision.versionId };
     }
@@ -233,10 +311,70 @@ export function OutputPackagePreviewModal({
       };
     }
     return { ok: false, conflict: true, message: result.message ?? result.error ?? '保存失败' };
-  }, [active, channelId, packageMeta.packageId, loadLibrary, onSaved]);
+  }, [active, activeActions?.latestReviewId, channelId, loadWorkspace, onSaved, packageMeta.packageId,
+    reviewComment, reviewPackageBasis]);
+
+  const submitCurrentReview = useCallback(async (decision: 'approved' | 'changes_requested') => {
+    if (!active || !activeActions || reviewBusy) return;
+    const requiredAction = decision === 'approved' ? 'review-approved' : 'review-changes-requested';
+    if (!activeActions.actions.includes(requiredAction)) {
+      setActionError('该版本的审核动作已不可用，请刷新后重试');
+      return;
+    }
+    if (decision === 'changes_requested' && !reviewComment.trim()) {
+      setActionError('退回修改时请填写审核意见');
+      return;
+    }
+    if (decision === 'approved' && editorState.dirty
+      && !window.confirm(`当前有未保存草稿。将只审核 Server v${active.current.versionNumber}，草稿不会提交。继续吗？`)) {
+      return;
+    }
+    if (decision === 'approved' && finalizeAfterApprove
+      && !activeActions.actions.includes('review-and-finalize')) {
+      setActionError('“通过并设为最终版”动作已不可用，请刷新后重试');
+      return;
+    }
+    setReviewBusy(true);
+    setActionError(null);
+    try {
+      const common = {
+        channelId,
+        packageId: packageMeta.packageId,
+        collectionId: active.collection.id,
+        versionId: active.current.id,
+        decision,
+        comment: reviewComment.trim() || '通过当前 Server 版本',
+        idempotencyKey: `pkg-preview-review:${active.collection.id}:${active.current.id}:${crypto.randomUUID()}`,
+      };
+      const result = decision === 'approved' && finalizeAfterApprove
+        ? await projectEvents().submitPackageReviewAndFinalize({
+          ...common,
+          decision: 'approved',
+          expectedCollectionRevision: active.collection.revision,
+        })
+        : await projectEvents().submitPackageArtifactReview(common);
+      if (!result.ok || !result.review) {
+        setActionError(result.message ?? result.error ?? '审核提交失败');
+        return;
+      }
+      setSavedNotice(decision === 'changes_requested'
+        ? `已退回修改：审核记录绑定 Server v${active.current.versionNumber}。`
+        : finalizeAfterApprove
+          ? `已通过：Server v${active.current.versionNumber} 已设为 final。`
+          : `已通过：审核记录绑定 Server v${active.current.versionNumber}，final 未移动。`);
+      setReviewPanel(null);
+      setReviewComment('');
+      setFinalizeAfterApprove(false);
+      await loadWorkspace();
+      onSaved();
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [active, activeActions, channelId, editorState.dirty, finalizeAfterApprove, loadWorkspace,
+    onSaved, packageMeta.packageId, reviewBusy, reviewComment]);
 
   const loadLatest = useCallback(async () => {
-    const latestCollections = await loadLibrary();
+    const latestCollections = await loadWorkspace();
     const latestCollection = latestCollections?.find((collection) => collection.id === activeCollectionId);
     const latestVersion = latestCollection?.versions.find((version) => version.id === latestCollection.currentVersionId);
     const artifact = latestVersion?.artifact as unknown as Artifact | undefined;
@@ -254,7 +392,7 @@ export function OutputPackagePreviewModal({
       filename: artifact.filename,
       revisionId: latestVersion.id,
     };
-  }, [loadLibrary, activeCollectionId]);
+  }, [loadWorkspace, activeCollectionId]);
 
   const previewHistoryVersion = useCallback(async (version: ProjectArtifactVersionDto) => {
     const artifact = version.artifact as unknown as Artifact;
@@ -282,9 +420,14 @@ export function OutputPackagePreviewModal({
     }
   }, []);
 
-  const triggerEditorSave = useCallback((intent: 'version' | 'review') => {
+  const triggerEditorSave = useCallback((intent: 'version' | 'approve' | 'approve-final') => {
     saveIntentRef.current = intent;
     editorContainerRef.current?.querySelector<HTMLButtonElement>('[data-markdown-document-save]')?.click();
+  }, []);
+
+  const handleEditorStateChange = useCallback((next: MarkdownDocumentEditorState) => {
+    setEditorState(next);
+    if (next.dirty) setApprovalMode('save');
   }, []);
 
   return (
@@ -296,7 +439,7 @@ export function OutputPackagePreviewModal({
       onClick={(event) => { if (event.target === event.currentTarget) requestClose(); }}
     >
       <div
-        className="relative grid h-[min(740px,calc(100vh-32px))] w-[min(1120px,calc(100vw-32px))] grid-rows-[48px_minmax(0,1fr)_48px] overflow-hidden rounded-lg border border-white/80 bg-white shadow-2xl sm:h-[min(740px,calc(100vh-56px))] sm:w-[min(1120px,calc(100vw-56px))]"
+        className="relative grid h-[min(740px,calc(100vh-32px))] w-[min(1120px,calc(100vw-32px))] grid-rows-[48px_minmax(0,1fr)_56px] overflow-hidden rounded-lg border border-white/80 bg-white shadow-2xl sm:h-[min(740px,calc(100vh-56px))] sm:w-[min(1120px,calc(100vw-56px))]"
         data-smoke="output-package-preview-modal"
       >
         {/* header:原型顺序为包 + 当前文件标题，右侧展示 Server basis 与审核态。 */}
@@ -373,7 +516,7 @@ export function OutputPackagePreviewModal({
                 renderPreview={renderPreview}
                 presentation="package-preview"
                 simulateConflictMessage={`模拟冲突：假设 Server 已有 ${active.collection.name} v${active.current.versionNumber + 1}；你的草稿仍保留，请先查看最新版再手工合并。`}
-                onStateChange={setEditorState}
+                onStateChange={handleEditorStateChange}
               />
             )}
           </div>
@@ -467,15 +610,114 @@ export function OutputPackagePreviewModal({
           </section>
         )}
 
-        {/* footer:原型四入口；模拟冲突只演示客户端处理，不写入 Server。 */}
+        {reviewPanel && active && activeActions && (
+          <section
+            className="absolute bottom-14 right-3 z-10 w-[min(390px,calc(100%-24px))] rounded-lg border border-neutral-200 bg-white p-3 shadow-xl"
+            aria-label={reviewPanel === 'approve' ? '通过审核' : '退回修改'}
+            data-smoke="package-preview-review-panel"
+          >
+            <div className="flex items-center gap-2">
+              <h3 className="flex-1 text-sm font-semibold text-neutral-900">
+                {reviewPanel === 'approve' ? '通过当前文件版本' : '退回修改'}
+              </h3>
+              <button type="button" onClick={() => setReviewPanel(null)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100" title="关闭审核面板">
+                <X size={14} />
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-500">
+              审核对象：{(active.current.artifact as unknown as Artifact).filename} · Server v{active.current.versionNumber}
+            </p>
+            {reviewPanel === 'approve' && activeIsMarkdown && (
+              <fieldset className="mt-3 space-y-2 text-xs text-neutral-700">
+                <label className="flex items-start gap-2">
+                  <input
+                    type="radio"
+                    name="package-preview-approval-mode"
+                    checked={approvalMode === 'current'}
+                    onChange={() => setApprovalMode('current')}
+                  />
+                  <span>通过当前已保存的 Server v{active.current.versionNumber}</span>
+                </label>
+                <label className={`flex items-start gap-2 ${editorState.dirty ? '' : 'text-neutral-400'}`}>
+                  <input
+                    type="radio"
+                    name="package-preview-approval-mode"
+                    checked={approvalMode === 'save'}
+                    disabled={!editorState.dirty}
+                    onChange={() => setApprovalMode('save')}
+                  />
+                  <span>保存编辑稿为新版本，然后通过新版本</span>
+                </label>
+              </fieldset>
+            )}
+            <label className="mt-3 block text-xs font-medium text-neutral-700">
+              审核意见{reviewPanel === 'changes' ? '（必填）' : '（可选）'}
+              <textarea
+                value={reviewComment}
+                onChange={(event) => setReviewComment(event.target.value)}
+                rows={3}
+                placeholder={reviewPanel === 'changes' ? '说明需要修改的内容' : '补充通过依据'}
+                className="mt-1 w-full resize-none rounded-md border border-neutral-300 px-2.5 py-2 text-xs outline-none focus:border-sky-400"
+              />
+            </label>
+            {reviewPanel === 'approve' && activeActions.actions.includes('review-and-finalize') && (
+              <label className="mt-2 flex items-center gap-2 text-xs text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={finalizeAfterApprove}
+                  onChange={(event) => setFinalizeAfterApprove(event.target.checked)}
+                />
+                同时设为当前文档的最终版（不验收 Task）
+              </label>
+            )}
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => setReviewPanel(null)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50">
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={reviewBusy || (reviewPanel === 'changes' && !reviewComment.trim())
+                  || (reviewPanel === 'approve' && approvalMode === 'save' && editorState.saveDisabled)}
+                onClick={() => {
+                  if (reviewPanel === 'changes') {
+                    void submitCurrentReview('changes_requested');
+                    return;
+                  }
+                  if (approvalMode === 'save') {
+                    triggerEditorSave(finalizeAfterApprove ? 'approve-final' : 'approve');
+                    return;
+                  }
+                  void submitCurrentReview('approved');
+                }}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
+                  reviewPanel === 'changes' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {reviewBusy || editorState.saving
+                  ? '提交中…'
+                  : reviewPanel === 'changes' ? '确认退回修改' : '确认通过'}
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* footer:保存沿用版本编辑能力；审核按钮只消费 Server availableActions。 */}
         <footer className="flex min-w-0 items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50/80 px-3">
           <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-600">
-            <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${savedNotice ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
-              {savedNotice ? '已保存' : 'Server source of truth'}
+            <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${
+              actionError ? 'border-red-200 bg-red-50 text-red-700'
+                : savedNotice ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-sky-200 bg-sky-50 text-sky-700'
+            }`}>
+              {actionError ? '动作不可用' : savedNotice ? '已更新' : 'Server source of truth'}
             </span>
-            {savedNotice && (
+            {actionError ? (
+              <span className="truncate text-red-700" role="alert">{actionError}</span>
+            ) : savedNotice ? (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
-            )}
+            ) : availableActions && (!activeActions || activeActions.actions.length === 0) ? (
+              <span className="truncate text-neutral-500">当前版本没有可执行的审核动作</span>
+            ) : null}
           </div>
           {active ? (
             <div
@@ -517,16 +759,36 @@ export function OutputPackagePreviewModal({
                   >
                     {editorState.saving ? '保存中…' : '保存为 Server 新版本'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => triggerEditorSave('review')}
-                    disabled={editorState.saveDisabled}
-                    className="rounded-md border border-amber-500 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-500 disabled:cursor-not-allowed disabled:border-neutral-300 disabled:bg-neutral-300 disabled:text-white"
-                    data-smoke="package-preview-save-review"
-                  >
-                    {editorState.saving ? '提交中…' : '保存并提交审核'}
-                  </button>
                 </>
+              )}
+              {activeActions?.actions.includes('review-changes-requested') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    setReviewPanel('changes');
+                    setFinalizeAfterApprove(false);
+                  }}
+                  className="rounded-md border border-orange-300 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-800 hover:bg-orange-100"
+                  data-smoke="package-preview-request-changes"
+                >
+                  退回修改…
+                </button>
+              )}
+              {(activeActions?.actions.includes('review-approved')
+                || activeActions?.actions.includes('review-and-finalize')) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    setApprovalMode(editorState.dirty ? 'save' : 'current');
+                    setReviewPanel('approve');
+                  }}
+                  className="rounded-md border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                  data-smoke="package-preview-approve"
+                >
+                  通过
+                </button>
               )}
             </div>
           ) : null}
