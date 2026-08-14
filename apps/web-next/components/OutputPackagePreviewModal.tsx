@@ -8,10 +8,16 @@ import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import type { Artifact } from '@/lib/schema';
 import type {
+  OutputPackageDto,
   PackageMemberAvailableActionsDto,
   ProjectArtifactCollectionDto,
   ProjectArtifactVersionDto,
 } from '@agentbean/contracts';
+import type {
+  PackageReturnAgentChoice,
+  PackageReturnDecision,
+  PackageReturnHandoff,
+} from '@/lib/output-package-return-handoff';
 import {
   MarkdownDocumentEditor,
   type MarkdownDocumentEditorState,
@@ -64,6 +70,10 @@ export interface OutputPackagePreviewModalProps {
   onClose: () => void;
   /** 保存成功后通知父级(刷新卡片/library 投影)。 */
   onSaved: () => void;
+  /** 不可逆退回前按 Server root 拉回原讨论串上下文；失败时不得提交退回事实。 */
+  prepareReturnThread: (threadRootMessageId: string) => Promise<boolean>;
+  /** 原子退回成功后只把稳定 basis 与审核上下文交给父级预填原讨论串。 */
+  onReturnToThread: (handoff: PackageReturnHandoff) => void;
 }
 
 export function OutputPackagePreviewModal({
@@ -73,13 +83,15 @@ export function OutputPackagePreviewModal({
   renderPreview,
   onClose,
   onSaved,
+  prepareReturnThread,
+  onReturnToThread,
 }: OutputPackagePreviewModalProps) {
   const [collections, setCollections] = useState<ProjectArtifactCollectionDto[] | null>(null);
   const [availableActions, setAvailableActions] = useState<PackageMemberAvailableActionsDto[] | null>(null);
-  const [reviewPackageBasis, setReviewPackageBasis] = useState<{
-    packageId: string;
-    deliveryId: string;
-  } | null>(null);
+  const [reviewPackageBasis, setReviewPackageBasis] = useState<OutputPackageDto | null>(null);
+  const [reviewThreadRootMessageId, setReviewThreadRootMessageId] = useState<string | null>(
+    packageMeta.threadRootMessageId ?? null,
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
@@ -95,9 +107,11 @@ export function OutputPackagePreviewModal({
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const saveIntentRef = useRef<'version' | 'approve' | 'approve-final'>('version');
   const [editorState, setEditorState] = useState<MarkdownDocumentEditorState>(EMPTY_EDITOR_STATE);
-  const [reviewPanel, setReviewPanel] = useState<'approve' | 'changes' | null>(null);
+  const [reviewPanel, setReviewPanel] = useState<'approve' | 'return' | null>(null);
   const [approvalMode, setApprovalMode] = useState<'current' | 'save'>('current');
   const [reviewComment, setReviewComment] = useState('');
+  const [returnDecision, setReturnDecision] = useState<PackageReturnDecision>('changes_requested');
+  const [returnAgentChoice, setReturnAgentChoice] = useState<PackageReturnAgentChoice>('original');
   const [finalizeAfterApprove, setFinalizeAfterApprove] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
 
@@ -117,6 +131,8 @@ export function OutputPackagePreviewModal({
     setReviewPanel(null);
     setApprovalMode('current');
     setReviewComment('');
+    setReturnDecision('changes_requested');
+    setReturnAgentChoice('original');
     setFinalizeAfterApprove(false);
   }, [activeCollectionId, editorState.dirty]);
 
@@ -137,18 +153,17 @@ export function OutputPackagePreviewModal({
     setLoadError(null);
     if (packageResult.ok && packageResult.package) {
       setAvailableActions(packageResult.availableActions ?? []);
-      setReviewPackageBasis({
-        packageId: packageResult.package.packageId,
-        deliveryId: packageResult.package.deliveryId,
-      });
+      setReviewPackageBasis(packageResult.package);
+      setReviewThreadRootMessageId(packageResult.threadRootMessageId ?? packageMeta.threadRootMessageId ?? null);
       setActionError(null);
     } else {
       setAvailableActions(null);
       setReviewPackageBasis(null);
+      setReviewThreadRootMessageId(packageMeta.threadRootMessageId ?? null);
       setActionError(packageResult.message ?? '审核动作加载失败，请刷新后重试');
     }
     return libraryResult.library.collections;
-  }, [channelId, packageMeta.packageId]);
+  }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId]);
 
   useEffect(() => {
     void loadWorkspace();
@@ -193,6 +208,11 @@ export function OutputPackagePreviewModal({
       entry.collectionId === active.collection.id && entry.versionId === active.current.id
     )) ?? null
     : null;
+  const canRejectDelivery = activeActions?.actions.includes('review-and-reject-delivery') ?? false;
+  const canRequestChanges = canRejectDelivery
+    || (activeActions?.actions.includes('review-changes-requested') ?? false);
+  const canRejectVersion = canRejectDelivery
+    || (activeActions?.actions.includes('review-rejected') ?? false);
 
   // 加载当前成员内容(Server 最新修订,不信任本地缓存)。
   useEffect(() => {
@@ -314,22 +334,18 @@ export function OutputPackagePreviewModal({
   }, [active, activeActions?.latestReviewId, channelId, loadWorkspace, onSaved, packageMeta.packageId,
     reviewComment, reviewPackageBasis]);
 
-  const submitCurrentReview = useCallback(async (decision: 'approved' | 'changes_requested') => {
+  const submitCurrentReview = useCallback(async (decision: 'approved') => {
     if (!active || !activeActions || reviewBusy) return;
-    const requiredAction = decision === 'approved' ? 'review-approved' : 'review-changes-requested';
+    const requiredAction = 'review-approved';
     if (!activeActions.actions.includes(requiredAction)) {
       setActionError('该版本的审核动作已不可用，请刷新后重试');
       return;
     }
-    if (decision === 'changes_requested' && !reviewComment.trim()) {
-      setActionError('退回修改时请填写审核意见');
-      return;
-    }
-    if (decision === 'approved' && editorState.dirty
+    if (editorState.dirty
       && !window.confirm(`当前有未保存草稿。将只审核 Server v${active.current.versionNumber}，草稿不会提交。继续吗？`)) {
       return;
     }
-    if (decision === 'approved' && finalizeAfterApprove
+    if (finalizeAfterApprove
       && !activeActions.actions.includes('review-and-finalize')) {
       setActionError('“通过并设为最终版”动作已不可用，请刷新后重试');
       return;
@@ -346,7 +362,7 @@ export function OutputPackagePreviewModal({
         comment: reviewComment.trim() || '通过当前 Server 版本',
         idempotencyKey: `pkg-preview-review:${active.collection.id}:${active.current.id}:${crypto.randomUUID()}`,
       };
-      const result = decision === 'approved' && finalizeAfterApprove
+      const result = finalizeAfterApprove
         ? await projectEvents().submitPackageReviewAndFinalize({
           ...common,
           decision: 'approved',
@@ -357,11 +373,9 @@ export function OutputPackagePreviewModal({
         setActionError(result.message ?? result.error ?? '审核提交失败');
         return;
       }
-      setSavedNotice(decision === 'changes_requested'
-        ? `已退回修改：审核记录绑定 Server v${active.current.versionNumber}。`
-        : finalizeAfterApprove
-          ? `已通过：Server v${active.current.versionNumber} 已设为 final。`
-          : `已通过：审核记录绑定 Server v${active.current.versionNumber}，final 未移动。`);
+      setSavedNotice(finalizeAfterApprove
+        ? `已通过：Server v${active.current.versionNumber} 已设为 final。`
+        : `已通过：审核记录绑定 Server v${active.current.versionNumber}，final 未移动。`);
       setReviewPanel(null);
       setReviewComment('');
       setFinalizeAfterApprove(false);
@@ -372,6 +386,103 @@ export function OutputPackagePreviewModal({
     }
   }, [active, activeActions, channelId, editorState.dirty, finalizeAfterApprove, loadWorkspace,
     onSaved, packageMeta.packageId, reviewBusy, reviewComment]);
+
+  const submitCurrentReturn = useCallback(async () => {
+    if (!active || !activeActions || !reviewPackageBasis || reviewBusy) return;
+    const rejectDelivery = activeActions.actions.includes('review-and-reject-delivery');
+    const requiredReviewAction = returnDecision === 'rejected'
+      ? 'review-rejected'
+      : 'review-changes-requested';
+    if (!rejectDelivery && !activeActions.actions.includes(requiredReviewAction)) {
+      setActionError('当前版本的负面审核动作已不可用，请刷新后重试');
+      return;
+    }
+    const comment = reviewComment.trim();
+    if (!comment) {
+      setActionError('退回修改时请填写审核意见');
+      return;
+    }
+    if (rejectDelivery && reviewPackageBasis.taskRevision === undefined) {
+      setActionError('当前文件包没有可校验的 Task revision，无法安全退回');
+      return;
+    }
+    if (editorState.dirty
+      && !window.confirm(`当前有未保存草稿。退回只会审核 Server v${active.current.versionNumber}，草稿不会提交。继续吗？`)) {
+      return;
+    }
+    setReviewBusy(true);
+    setActionError(null);
+    try {
+      if (!rejectDelivery) {
+        const result = await projectEvents().submitPackageArtifactReview({
+          channelId,
+          packageId: reviewPackageBasis.packageId,
+          collectionId: active.collection.id,
+          versionId: active.current.id,
+          decision: returnDecision,
+          comment,
+          idempotencyKey: `pkg-preview-review:${active.collection.id}:${active.current.id}:${crypto.randomUUID()}`,
+        });
+        if (!result.ok || !result.review) {
+          setActionError(result.message ?? result.error ?? '文件审核提交失败');
+          return;
+        }
+        setSavedNotice(`已记录：Server v${active.current.versionNumber} ${returnDecision === 'rejected' ? '已拒绝' : '要求修改'}，Task delivery 未变更。`);
+        setReviewPanel(null);
+        setReviewComment('');
+        await loadWorkspace();
+        onSaved();
+        return;
+      }
+      if (!reviewThreadRootMessageId) {
+        setActionError('无法定位原讨论串，尚未退回 Task delivery');
+        return;
+      }
+      const threadReady = await prepareReturnThread(reviewThreadRootMessageId).catch(() => false);
+      if (!threadReady) {
+        setActionError('原讨论串上下文加载失败，尚未退回 Task delivery');
+        return;
+      }
+      const result = await projectEvents().submitPackageReviewAndRejectDelivery({
+        channelId,
+        packageId: reviewPackageBasis.packageId,
+        collectionId: active.collection.id,
+        versionId: active.current.id,
+        decision: returnDecision,
+        comment,
+        expectedTaskRevision: reviewPackageBasis.taskRevision,
+        expectedTaskAttempt: reviewPackageBasis.taskAttempt,
+        rejectReason: comment,
+        idempotencyKey: `pkg-preview-return:${active.collection.id}:${active.current.id}:${crypto.randomUUID()}`,
+      });
+      if (!result.ok || !result.review || !result.task) {
+        setActionError(result.message ?? result.error ?? '退回提交失败');
+        return;
+      }
+      onSaved();
+      onReturnToThread({
+        packageId: reviewPackageBasis.packageId,
+        threadRootMessageId: reviewThreadRootMessageId,
+        taskId: reviewPackageBasis.taskId,
+        ...(packageMeta.taskTitle ? { taskTitle: packageMeta.taskTitle } : {}),
+        originalAgentId: reviewPackageBasis.agentId,
+        ...(packageMeta.agentName ? { originalAgentName: packageMeta.agentName } : {}),
+        collectionId: active.collection.id,
+        versionId: active.current.id,
+        filename: (active.current.artifact as unknown as Artifact).filename,
+        versionNumber: active.current.versionNumber,
+        decision: returnDecision,
+        comment,
+        agentChoice: returnAgentChoice,
+        taskRevision: result.task.taskRevision,
+        taskAttempt: result.task.taskAttempt,
+      });
+    } finally {
+      setReviewBusy(false);
+    }
+  }, [active, activeActions, channelId, editorState.dirty, loadWorkspace, onReturnToThread, onSaved,
+    packageMeta.agentName, packageMeta.taskTitle, prepareReturnThread, returnAgentChoice, returnDecision,
+    reviewBusy, reviewComment, reviewPackageBasis, reviewThreadRootMessageId]);
 
   const loadLatest = useCallback(async () => {
     const latestCollections = await loadWorkspace();
@@ -650,13 +761,46 @@ export function OutputPackagePreviewModal({
                 </label>
               </fieldset>
             )}
+            {reviewPanel === 'return' && (
+              <fieldset className="mt-3 grid grid-cols-2 gap-2 text-xs text-neutral-700">
+                <legend className="sr-only">退回结论</legend>
+                <label className={`rounded-md border p-2 ${!canRequestChanges ? 'text-neutral-400 opacity-60' : ''} ${
+                  returnDecision === 'changes_requested' ? 'border-orange-300 bg-orange-50' : 'border-neutral-200'
+                }`}>
+                  <span className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="package-preview-return-decision"
+                      checked={returnDecision === 'changes_requested'}
+                      disabled={!canRequestChanges}
+                      onChange={() => setReturnDecision('changes_requested')}
+                    />
+                    <span><strong className="block">要求修改</strong>方向基本可用，基于当前版本继续改。</span>
+                  </span>
+                </label>
+                <label className={`rounded-md border p-2 ${!canRejectVersion ? 'text-neutral-400 opacity-60' : ''} ${
+                  returnDecision === 'rejected' ? 'border-rose-300 bg-rose-50' : 'border-neutral-200'
+                }`}>
+                  <span className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="package-preview-return-decision"
+                      checked={returnDecision === 'rejected'}
+                      disabled={!canRejectVersion}
+                      onChange={() => setReturnDecision('rejected')}
+                    />
+                    <span><strong className="block">拒绝</strong>当前版本不可作为正式输入，需要重做或大改。</span>
+                  </span>
+                </label>
+              </fieldset>
+            )}
             <label className="mt-3 block text-xs font-medium text-neutral-700">
-              审核意见{reviewPanel === 'changes' ? '（必填）' : '（可选）'}
+              审核意见{reviewPanel === 'return' ? '（必填）' : '（可选）'}
               <textarea
                 value={reviewComment}
                 onChange={(event) => setReviewComment(event.target.value)}
                 rows={3}
-                placeholder={reviewPanel === 'changes' ? '说明需要修改的内容' : '补充通过依据'}
+                placeholder={reviewPanel === 'return' ? '说明需要修改或重做的内容' : '补充通过依据'}
                 className="mt-1 w-full resize-none rounded-md border border-neutral-300 px-2.5 py-2 text-xs outline-none focus:border-sky-400"
               />
             </label>
@@ -670,17 +814,48 @@ export function OutputPackagePreviewModal({
                 同时设为当前文档的最终版（不验收 Task）
               </label>
             )}
+            {reviewPanel === 'return' && canRejectDelivery && (
+              <fieldset className="mt-3 grid grid-cols-2 gap-2 text-xs text-neutral-700">
+                <legend className="sr-only">下一步处理方式</legend>
+                <label className={`rounded-md border p-2 ${
+                  returnAgentChoice === 'original' ? 'border-sky-300 bg-sky-50' : 'border-neutral-200'
+                }`}>
+                  <span className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="package-preview-return-agent"
+                      checked={returnAgentChoice === 'original'}
+                      onChange={() => setReturnAgentChoice('original')}
+                    />
+                    <span><strong className="block">让原智能体修改</strong>回讨论串时预填原智能体。</span>
+                  </span>
+                </label>
+                <label className={`rounded-md border p-2 ${
+                  returnAgentChoice === 'select' ? 'border-violet-300 bg-violet-50' : 'border-neutral-200'
+                }`}>
+                  <span className="flex items-start gap-2">
+                    <input
+                      type="radio"
+                      name="package-preview-return-agent"
+                      checked={returnAgentChoice === 'select'}
+                      onChange={() => setReturnAgentChoice('select')}
+                    />
+                    <span><strong className="block">换一个智能体处理</strong>不指定具体智能体，回讨论串后选择。</span>
+                  </span>
+                </label>
+              </fieldset>
+            )}
             <div className="mt-3 flex justify-end gap-2">
               <button type="button" onClick={() => setReviewPanel(null)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50">
                 取消
               </button>
               <button
                 type="button"
-                disabled={reviewBusy || (reviewPanel === 'changes' && !reviewComment.trim())
+                disabled={reviewBusy || (reviewPanel === 'return' && !reviewComment.trim())
                   || (reviewPanel === 'approve' && approvalMode === 'save' && editorState.saveDisabled)}
                 onClick={() => {
-                  if (reviewPanel === 'changes') {
-                    void submitCurrentReview('changes_requested');
+                  if (reviewPanel === 'return') {
+                    void submitCurrentReturn();
                     return;
                   }
                   if (approvalMode === 'save') {
@@ -690,12 +865,14 @@ export function OutputPackagePreviewModal({
                   void submitCurrentReview('approved');
                 }}
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
-                  reviewPanel === 'changes' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                  reviewPanel === 'return' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
                 }`}
               >
                 {reviewBusy || editorState.saving
                   ? '提交中…'
-                  : reviewPanel === 'changes' ? '确认退回修改' : '确认通过'}
+                  : reviewPanel === 'return'
+                    ? canRejectDelivery ? '回讨论串继续' : '确认文件审核'
+                    : '确认通过'}
               </button>
             </div>
           </section>
@@ -761,12 +938,14 @@ export function OutputPackagePreviewModal({
                   </button>
                 </>
               )}
-              {activeActions?.actions.includes('review-changes-requested') && (
+              {(canRequestChanges || canRejectVersion) && (
                 <button
                   type="button"
                   onClick={() => {
                     setActionError(null);
-                    setReviewPanel('changes');
+                    setReviewPanel('return');
+                    setReturnDecision(canRequestChanges ? 'changes_requested' : 'rejected');
+                    setReturnAgentChoice('original');
                     setFinalizeAfterApprove(false);
                   }}
                   className="rounded-md border border-orange-300 bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-800 hover:bg-orange-100"

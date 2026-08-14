@@ -659,7 +659,7 @@ for (const variant of variants) {
 
     test('#1111 AC1:讨论串内触发的交付,卡片 threadId 归属该讨论串 root', async () => {
       seedValue = await seed(variant);
-      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      const { repositories, app, teamId, channelId, userId, agentId } = seedValue;
       // 主线 root(自存根)+ 讨论串内触发消息。
       await repositories.messages.append({
         id: 'root-1', teamId, channelId, threadId: 'root-1',
@@ -687,6 +687,12 @@ for (const variant of variants) {
       });
       expect(card).not.toBeNull();
       expect(card!.threadId).toBe('root-1');
+      expect(card!.meta?.threadRootMessageId).toBe('root-1');
+      const detail = await app.getOutputPackage({
+        userId, teamId, channelId, packageId: byPublish!.package.packageId,
+      });
+      expect(detail.ok).toBe(true);
+      if (detail.ok) expect(detail.threadRootMessageId).toBe('root-1');
       // 讨论串读取可见;且卡片不作为主线 root。
       const thread = await repositories.messages.listByThread({ channelId, threadId: 'root-1', limit: 50 });
       expect(thread.some((message) => message.id === card!.id)).toBe(true);
@@ -743,6 +749,7 @@ for (const variant of variants) {
       expect(inline).toBeDefined();
       expect(inline?.kind).toBe('output-package');
       expect(inline?.publishId).toBe('pub-inline');
+      expect(inline?.threadRootMessageId).toBe('msg-inline');
       expect(inline?.memberCount).toBe(1);
       const members = inline?.members as Array<{ filename: string }>;
       expect(members[0]?.filename).toBe('t6.md');

@@ -69,6 +69,7 @@ import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { loadAllPromotableArtifacts } from '@/lib/promotable-artifacts';
 import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
+import { buildPackageReturnComposerDraft } from '@/lib/output-package-return-handoff';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { acceptTaskDagSnapshot } from '@/lib/task-dag';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
@@ -3045,6 +3046,23 @@ export default function ChatPage() {
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
           onSaved={() => refreshProjectArtifactLibrary()}
+          prepareReturnThread={async (threadRootMessageId) => {
+            const context = await messageReactionEvents().context(threadRootMessageId).catch(() => null);
+            if (!context?.ok) return false;
+            if (context.messages) upsertMessages(context.messages.map(markContextLoadedMessage));
+            return (context.threadRootId ?? context.targetMessageId) === threadRootMessageId;
+          }}
+          onReturnToThread={(handoff) => {
+            const draft = buildPackageReturnComposerDraft(
+              handoff,
+              agents[handoff.originalAgentId]?.name,
+            );
+            setOpenPackagePreview(null);
+            openThread(handoff.threadRootMessageId);
+            setThreadInput(draft.text);
+            setThreadSelections([draft.selection]);
+            setTimeout(() => threadTextareaRef.current?.focus(), 0);
+          }}
         />
       )}
 

@@ -34,6 +34,26 @@ describe('chat 页阶段交接预填接线（#1178，源码扫描）', () => {
     expect(chatSource).toContain('onStageHandoff={onStageHandoff}');
   });
 
+  test('#1198 文件审核退回前从 Server 拉回原 Thread，成功后只写本地草稿与稳定选择', () => {
+    const prepareStart = chatSource.indexOf('prepareReturnThread={async (threadRootMessageId)');
+    expect(prepareStart).toBeGreaterThan(-1);
+    const prepareRegion = chatSource.slice(prepareStart, chatSource.indexOf('onReturnToThread={(handoff)', prepareStart));
+    expect(prepareRegion).toContain('messageReactionEvents().context(threadRootMessageId)');
+    expect(prepareRegion).toContain('upsertMessages(context.messages.map(markContextLoadedMessage))');
+    expect(prepareRegion).toContain('(context.threadRootId ?? context.targetMessageId) === threadRootMessageId');
+
+    const start = chatSource.indexOf('onReturnToThread={(handoff)');
+    expect(start).toBeGreaterThan(-1);
+    const region = chatSource.slice(start, chatSource.indexOf('\n        />', start));
+    expect(region).toContain('buildPackageReturnComposerDraft');
+    expect(region).toContain('openThread(handoff.threadRootMessageId)');
+    expect(region).toContain('setThreadInput(draft.text)');
+    expect(region).toContain('setThreadSelections([draft.selection])');
+    expect(region).toContain('threadTextareaRef.current?.focus');
+    expect(region).not.toContain('sendMessage(');
+    expect(region).not.toContain('message:send');
+  });
+
   test('打开 thread 保留 task-only 阶段详情深链，stage/chatTab/tasksView 参数不动（AC1）', () => {
     const start = chatSource.indexOf('const setThreadUrl');
     expect(start).toBeGreaterThan(-1);

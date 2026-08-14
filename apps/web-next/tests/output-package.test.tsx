@@ -14,6 +14,7 @@ describe('outputPackageFromMeta (#1060)', () => {
     const meta = outputPackageFromMeta({
       kind: 'output-package',
       packageId: 'pkg-1',
+      threadRootMessageId: 'root-message-1',
       taskId: 'task-1',
       taskTitle: '写剧本',
       agentId: 'agent-1',
@@ -29,6 +30,7 @@ describe('outputPackageFromMeta (#1060)', () => {
     });
     expect(meta).not.toBeNull();
     expect(meta?.packageId).toBe('pkg-1');
+    expect(meta?.threadRootMessageId).toBe('root-message-1');
     expect(meta?.taskTitle).toBe('写剧本');
     expect(meta?.members).toHaveLength(2);
     expect(meta?.members[0]).toEqual({ shortLabel: 'F1', filename: 'ep1.md', artifactVersionId: 'ver-1', collectionId: 'col-1' });
