@@ -1982,7 +1982,7 @@
               </div>
               <div class="review-field">
                 <label for="returnComment">审核意见</label>
-                <textarea id="returnComment">请保留小学生主动帮助的核心，但把结尾改得更自然，并减少说教感。</textarea>
+                <textarea id="returnComment" required>请保留小学生主动帮助的核心，但把结尾改得更自然，并减少说教感。</textarea>
               </div>
               <div class="review-option-grid">
                 <label class="review-option-card"><input type="radio" name="return-agent" checked> 让原智能体修改<br><span>回讨论串时预填 @剧本创作。</span></label>
@@ -2026,6 +2026,8 @@
     const defaultDiscussionWidth = 520;
     const approvePanel = document.getElementById('approvePanel');
     const returnPanel = document.getElementById('returnPanel');
+    let currentVersion = 4;
+    let savedSource = source.value;
 
     function escapeHtml(value) {
       return value
@@ -2090,6 +2092,12 @@
     function showReviewPanel(panel) {
       approvePanel.classList.toggle('active', panel === 'approve');
       returnPanel.classList.toggle('active', panel === 'return');
+    }
+
+    function saveNewVersion() {
+      currentVersion += 1;
+      savedSource = source.value;
+      return currentVersion;
     }
 
     function clampDiscussionWidth(width) {
@@ -2157,8 +2165,9 @@
     });
     source.addEventListener('input', renderMarkdown);
     document.getElementById('saveServer').addEventListener('click', () => {
-      serverState.innerHTML = '<span class="chip green">已保存</span><span>系统已生成 <strong>script.ep01 v5</strong>；PKG-042 当前包现在读取第1集剧本 v5，最终版和任务验收不自动改变。</span>';
-      showToast('已保存：系统生成 script.ep01 v5，并在讨论串记录轻量事件；任务仍待审核交付。');
+      const savedVersion = saveNewVersion();
+      serverState.innerHTML = '<span class="chip green">已保存</span><span>系统已生成 <strong>script.ep01 v' + savedVersion + '</strong>；PKG-042 当前包现在读取第1集剧本 v' + savedVersion + '，最终版和任务验收不自动改变。</span>';
+      showToast('已保存：系统生成 script.ep01 v' + savedVersion + '，并在讨论串记录轻量事件；任务仍待审核交付。');
     });
     document.getElementById('approveFile').addEventListener('click', () => {
       serverState.innerHTML = '<span class="chip green">通过确认</span><span>确认面板：通过当前已保存版本；若有未保存编辑，可选择先保存为新版本再通过，并可勾选同时设为最终版。</span>';
@@ -2176,16 +2185,29 @@
     document.getElementById('confirmApprove').addEventListener('click', () => {
       const approveMode = document.querySelector('input[name="approve-version"]:checked')?.value || '通过当前已保存版本';
       const finalChecked = document.querySelector('#approvePanel input[type="checkbox"]')?.checked;
-      serverState.innerHTML = '<span class="chip green">已通过</span><span>' + approveMode + '；系统写入当前文件版本的通过审核记录。' + (finalChecked ? '同时设为本文档最终版。' : '未移动最终版指针。') + '任务交付验收仍未自动完成。</span>';
+      const shouldSaveFirst = approveMode === '先保存为新版本再通过';
+      const hasUnsavedChanges = source.value !== savedSource;
+      const reviewedVersion = shouldSaveFirst ? saveNewVersion() : currentVersion;
+      const saveSummary = shouldSaveFirst ? '系统先保存编辑区内容为 script.ep01 v' + reviewedVersion + '，再' : '系统';
+      const draftSummary = !shouldSaveFirst && hasUnsavedChanges ? '编辑区未保存内容未纳入审核。' : '';
+      serverState.innerHTML = '<span class="chip green">已通过</span><span>' + saveSummary + '写入 script.ep01 v' + reviewedVersion + ' 的通过审核记录。' + draftSummary + (finalChecked ? '同时设为本文档最终版。' : '未移动最终版指针。') + '任务交付验收仍未自动完成。</span>';
       showReviewPanel(null);
-      showToast('已确认通过：文件审核已写入，任务验收仍是独立动作。');
+      showToast('已确认通过 script.ep01 v' + reviewedVersion + '：文件审核已写入，任务验收仍是独立动作。');
     });
     document.getElementById('confirmReturn').addEventListener('click', () => {
       const useOriginalAgent = document.querySelector('input[name="return-agent"]:checked')?.parentElement?.textContent.includes('原智能体');
       const returnKind = document.querySelector('input[name="return-kind"]:checked')?.value || '要求修改';
-      const comment = document.getElementById('returnComment').value.trim();
+      const returnComment = document.getElementById('returnComment');
+      const comment = returnComment.value.trim();
+      if (!comment) {
+        returnComment.setAttribute('aria-invalid', 'true');
+        returnComment.focus();
+        showToast('请先填写审核意见，再回讨论串继续。');
+        return;
+      }
+      returnComment.removeAttribute('aria-invalid');
       const agentPrefix = useOriginalAgent ? '@剧本创作 ' : '@请选择智能体 ';
-      threadComposer.value = agentPrefix + '请基于 @F1 第1集剧本.md v4 继续处理。审核结论：' + returnKind + '。审核意见：' + comment;
+      threadComposer.value = agentPrefix + '请基于 @F1 第1集剧本.md v' + currentVersion + ' 继续处理。审核结论：' + returnKind + '。审核意见：' + comment;
       setScreen('chat');
       closePreview();
       serverState.innerHTML = '<span class="chip amber">已准备退回</span><span>' + (useOriginalAgent ? '已预填原智能体 @剧本创作。' : '未指定具体智能体，等待用户选择。') + '审核意见已带入讨论串输入框；用户发送后才会继续执行。</span>';
