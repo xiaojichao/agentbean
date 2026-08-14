@@ -187,6 +187,7 @@ export async function submitPackageReviewCommand(
       collectionId: input.collectionId,
       versionId: input.versionId,
       versionCollectionId: version?.collectionId,
+      currentVersionId: collection?.currentVersionId,
     },
   };
 

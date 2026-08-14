@@ -9,7 +9,12 @@ import type {
   TaskLifecycleCommandInputMapV1,
 } from '../../../packages/contracts/src/index.js';
 import { createInMemoryRepositories } from '../src/infra/memory/repositories.js';
-import { applyTeamMigrations, createSqliteRepositories, type SqliteDatabase } from '../src/infra/sqlite/repositories.js';
+import {
+  applyGlobalMigrations,
+  applyTeamMigrations,
+  createSqliteRepositories,
+  type SqliteDatabase,
+} from '../src/infra/sqlite/repositories.js';
 
 type DatabaseWithClose = SqliteDatabase & { close(): void };
 type DatabaseConstructor = new (filename: string) => DatabaseWithClose;
@@ -32,10 +37,19 @@ function makeEnvelope(commandName: TaskLifecycleCommandEnvelopeV1['commandName']
 describe.each([
   ['memory', () => ({ repositories: createInMemoryRepositories(), close() {} })],
   ['sqlite', () => {
-    const db = new Database(':memory:');
-    db.exec('PRAGMA foreign_keys = ON;');
-    applyTeamMigrations(db);
-    return { repositories: createSqliteRepositories({ globalDb: db, teamDb: db }), close: () => db.close() };
+    const globalDb = new Database(':memory:');
+    const teamDb = new Database(':memory:');
+    globalDb.exec('PRAGMA foreign_keys = ON;');
+    teamDb.exec('PRAGMA foreign_keys = ON;');
+    applyGlobalMigrations(globalDb);
+    applyTeamMigrations(teamDb);
+    return {
+      repositories: createSqliteRepositories({ globalDb, teamDb }),
+      close: () => {
+        globalDb.close();
+        teamDb.close();
+      },
+    };
   }],
 ] as const)('Task Lifecycle Kernel (%s)', (_name, createFixture) => {
   test('transition-task-in-progress: root todo → in_progress', async () => {
@@ -204,6 +218,130 @@ describe.each([
     } finally { fixture.close(); }
   });
 
+  test('#1196: accept-subtask requires every package-backed current version to be approved', async () => {
+    const fixture = createFixture();
+    try {
+      const h = await createHarness(fixture.repositories);
+      await fixture.repositories.tasks.create({
+        id: 'subtask-package', teamId: 'team-1', title: 'Package-backed subtask',
+        description: 'deliver one reviewed file', status: 'in_review', creatorId: 'user-1',
+        channelId: 'channel-1', tags: [], sortOrder: 0, createdAt: 1, updatedAt: 1,
+      });
+      await fixture.repositories.taskCoordination.coordinations.create({
+        schemaVersion: 1,
+        taskId: 'subtask-package', teamId: 'team-1', taskRevision: 1,
+        managementRunId: 'run-1', rootTaskId: 'root-task', parentTaskId: 'root-task',
+        nodeKind: 'subtask', reviewPolicy: 'human', claimPolicy: 'open',
+        requiredCapabilities: [], maxAttempts: 1, attempt: 1,
+        humanAcceptanceAuthorityIds: ['worker-1'], createdAt: 1, updatedAt: 1,
+      });
+      await fixture.repositories.taskCoordination.claimLeases.create({
+        id: 'claim-subtask-package', teamId: 'team-1', taskId: 'subtask-package',
+        taskRevision: 1, taskAttempt: 1, agentId: 'agent-1', leaseTokenHash: 'claim-hash',
+        leaseFingerprint: 'claim-fingerprint', fencingToken: 1, status: 'active',
+        acquiredAt: 10, heartbeatAt: 10, expiresAt: 1_000,
+      });
+      await fixture.repositories.management.invocations.create({
+        schemaVersion: 1,
+        id: 'invocation-subtask-package', managementRunId: 'run-1',
+        intent: {
+          schemaVersion: 1, teamId: 'team-1', channelId: 'channel-1',
+          targetAgentId: 'agent-1', targetKind: 'custom', objective: 'deliver package',
+          taskContext: {
+            taskId: 'subtask-package', rootTaskId: 'root-task', taskRevision: 1,
+            taskAttempt: 1, claimLeaseId: 'claim-subtask-package',
+          },
+          acceptanceCriteria: [], dependencyResults: [], attachmentIds: [],
+        },
+        intentHash: 'intent-subtask-package', idempotencyKey: 'invocation-subtask-package', createdAt: 20,
+      });
+      await fixture.repositories.taskCoordination.deliveries.create({
+        schemaVersion: 1,
+        id: 'delivery-subtask-package', teamId: 'team-1', taskId: 'subtask-package',
+        taskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-subtask-package',
+        invocationId: 'invocation-subtask-package', summary: 'package delivered', claims: [],
+        evidenceRefs: [], idempotencyKey: 'delivery-subtask-package', createdAt: 30,
+      });
+      await fixture.repositories.artifacts.create({
+        id: 'artifact-subtask-package', teamId: 'team-1', channelId: 'channel-1',
+        uploaderId: 'agent-1', filename: 'report.md', mimeType: 'text/markdown',
+        sizeBytes: 12, pathKind: 'workspace', createdAt: 30,
+      });
+      const formed = await fixture.repositories.outputPackages.recordPackageFormation({
+        record: {
+          teamId: 'team-1', packageId: 'package-subtask', channelId: 'channel-1',
+          deliveryId: 'delivery-subtask-package', publishId: 'publish-subtask-package',
+          workspaceRevisionId: 'workspace-revision-subtask-package', agentId: 'agent-1',
+          taskId: 'subtask-package', taskBinding: 'managed', taskRevision: 1, taskAttempt: 1,
+          memberCount: 1, status: 'recorded', createdAt: 30,
+        },
+        members: [{
+          sequence: 1, shortLabel: 'F1', role: 'deliverable', requiredForFinal: true,
+          sourcePath: 'out/report.md', filename: 'report.md', sizeBytes: 12,
+          collection: {
+            mode: 'create', collectionId: 'collection-subtask-package',
+            name: 'out/report.md', kind: 'deliverable',
+          },
+          version: {
+            id: 'version-subtask-package', artifactId: 'artifact-subtask-package',
+            taskId: 'subtask-package', taskRevision: 1,
+          },
+        }],
+        receipt: {
+          receiptId: 'receipt-subtask-package', teamId: 'team-1',
+          commandName: 'record-agent-output-package', commandSchemaVersion: 1,
+          idempotencyKey: 'record-agent-output-package:channel-1:publish-subtask-package',
+          commandHash: 'package-subtask-hash', outcome: 'applied', committedRevisions: [],
+          eventRefs: [], commitTime: 30, resultAvailable: true, createdAt: 30,
+        },
+        tombstone: {
+          id: 'tombstone-subtask-package', teamId: 'team-1',
+          commandName: 'record-agent-output-package',
+          idempotencyKey: 'record-agent-output-package:channel-1:publish-subtask-package',
+          commandHash: 'package-subtask-hash', receiptId: 'receipt-subtask-package',
+          outcome: 'applied', resultAvailable: true, createdAt: 30,
+        },
+      });
+      expect(formed.kind).toBe('created');
+
+      const acceptance: TaskLifecycleCommandInputMapV1['accept-subtask']['acceptance'] = {
+        schemaVersion: 1, taskId: 'subtask-package', deliveryId: 'delivery-subtask-package',
+        expectedTaskRevision: 1, taskAttempt: 1, claimLeaseId: 'claim-subtask-package',
+        decision: 'accepted', criteriaResults: [], reason: '文件审核完成',
+        decidedBy: 'human', decidedAt: 40,
+      };
+      await expect(h.lifecycle.acceptSubtask(
+        makeEnvelope('accept-subtask'), { acceptance }, h.authority, 'human', 'team-1',
+      )).rejects.toMatchObject({ code: 'TASK_LIFECYCLE_REQUIRED_FILE_REVIEWS_INCOMPLETE' });
+      await expect(fixture.repositories.tasks.getById('subtask-package'))
+        .resolves.toMatchObject({ status: 'in_review' });
+      await expect(fixture.repositories.taskCoordination.acceptances.getCanonicalByDelivery('delivery-subtask-package'))
+        .resolves.toBeNull();
+
+      await fixture.repositories.channelProjects.appendArtifactReview({
+        review: {
+          id: 'review-subtask-package', teamId: 'team-1', channelId: 'channel-1',
+          collectionId: 'collection-subtask-package', versionId: 'version-subtask-package',
+          decision: 'approved', comment: '通过', authorityBasis: 'root-review-authority',
+          basis: [], reviewedBy: 'worker-1', createdAt: 50,
+        },
+        mutation: {
+          teamId: 'team-1', channelId: 'channel-1',
+          idempotencyKey: 'review-subtask-package', requestFingerprint: 'review-subtask-package',
+          kind: 'review', collectionId: 'collection-subtask-package',
+          versionId: 'version-subtask-package', reviewId: 'review-subtask-package', createdAt: 50,
+        },
+      });
+      await expect(h.lifecycle.acceptSubtask(
+        makeEnvelope('accept-subtask'), { acceptance }, h.authority, 'human', 'team-1',
+      )).resolves.toMatchObject({ result: { status: 'done' } });
+      await expect(fixture.repositories.tasks.getById('subtask-package'))
+        .resolves.toMatchObject({ status: 'done' });
+      await expect(fixture.repositories.taskCoordination.acceptances.getCanonicalByDelivery('delivery-subtask-package'))
+        .resolves.toMatchObject({ decision: 'accepted', canonical: true });
+    } finally { fixture.close(); }
+  });
+
   test('reject-root-delivery: human rejects in_review root → in_progress (new revision)', async () => {
     const fixture = createFixture();
     try {
@@ -247,6 +385,26 @@ async function createHarness(repositories: ServerNextRepositories) {
   let id = 0;
   const clock = { now: () => 100 };
   const ids = { nextId: () => id++ === 0 ? 'run-1' : `lc-${id}` };
+  await repositories.users.create({
+    id: 'user-1', username: 'owner', role: 'user', passwordHash: 'unused',
+    createdAt: 1, updatedAt: 1,
+  });
+  await repositories.teams.create({
+    id: 'team-1', name: 'Team', path: 'team', visibility: 'private',
+    ownerId: 'user-1', createdAt: 1,
+  });
+  await repositories.teams.addMember({
+    teamId: 'team-1', userId: 'user-1', username: 'owner', role: 'owner', joinedAt: 1,
+  });
+  await repositories.agents.upsert({
+    id: 'agent-1', primaryTeamId: 'team-1', visibleTeamIds: ['team-1'], name: 'Agent',
+    adapterKind: 'codex', category: 'executor-hosted', source: 'custom', status: 'online',
+  });
+  await repositories.channels.create({
+    id: 'channel-1', teamId: 'team-1', kind: 'channel', name: 'general',
+    visibility: 'public', createdBy: 'user-1', humanMemberIds: ['user-1'],
+    agentMemberIds: ['agent-1'], createdAt: 1,
+  });
   await repositories.tasks.create({
     id: 'root-task', teamId: 'team-1', title: 'Root', description: 'root objective',
     status: 'todo', creatorId: 'user-1', channelId: 'channel-1',

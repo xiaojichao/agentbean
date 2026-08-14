@@ -13,7 +13,11 @@
 import type { ID, UnixMs } from './common.js';
 import type { ConsistencyTokenV1 } from './system-activity.js';
 import type { TaskDto } from './task.js';
-import type { ProjectArtifactReviewDecision, ProjectStageDto } from './project.js';
+import type {
+  ProjectArtifactReviewDecision,
+  ProjectArtifactVersionReviewState,
+  ProjectStageDto,
+} from './project.js';
 import type { OutputPackageSummaryDto, OutputPackagePendingDeliveryDto } from './output-package.js';
 
 export const TASK_DELIVERY_OVERVIEW_SCHEMA_VERSION = 1;
@@ -59,6 +63,39 @@ export interface TaskAcceptanceContractV1 {
     readonly finalizedCount: number;
     readonly complete: boolean;
   };
+  /**
+   * 当前 delivery 焦点包中 requiredForFinal 成员的**当前 Server 版本**审核覆盖。
+   * 这与上面的 final 指针覆盖是两类事实：文件全部 approved 后才允许验收 Task，
+   * 但 approved 不会自动设置 final，也不会自动完成 Task。
+   */
+  readonly fileReviewCoverage: TaskDeliveryFileReviewCoverageV1;
+}
+
+export type TaskDeliveryFileReviewStateV1
+  = ProjectArtifactVersionReviewState | 'unavailable';
+
+export interface TaskDeliveryFileReviewCoverageItemV1 {
+  readonly collectionId: ID;
+  readonly currentVersionId?: ID;
+  readonly shortLabel: string;
+  readonly filename: string;
+  readonly reviewState: TaskDeliveryFileReviewStateV1;
+}
+
+export interface TaskDeliveryFileReviewCoverageV1 {
+  /** false 表示当前受管 delivery 的 package 投影缺失或不可读，必须 fail closed。 */
+  readonly available: boolean;
+  /** false 表示当前 delivery 没有需要逐文件审核的必需成员，门禁不适用。 */
+  readonly applicable: boolean;
+  readonly requiredCount: number;
+  readonly approvedCount: number;
+  readonly pendingCount: number;
+  readonly changesRequestedCount: number;
+  readonly rejectedCount: number;
+  readonly unavailableCount: number;
+  /** 无必需成员时为 true；有必需成员时只有全部 current 版本 approved 才为 true。 */
+  readonly complete: boolean;
+  readonly items: readonly TaskDeliveryFileReviewCoverageItemV1[];
 }
 
 /** 可审计执行链事件(AC4:Offer→acceptance→claim→execution→delivery→修改→review/final→交接)。 */
@@ -90,6 +127,7 @@ export const TASK_LEVEL_ACTIONS = [
   'open-task',
   'delegate-to-agent',
   'review-package',
+  'accept-delivery',
 ] as const;
 export type TaskLevelAction = (typeof TASK_LEVEL_ACTIONS)[number];
 
@@ -155,6 +193,10 @@ export interface ChannelTaskWorkspaceEntryV1 {
     readonly requiredForFinalCount: number;
     /** 当前焦点交付包中已具备 final 指针的必需成员数（Server 投影）。 */
     readonly finalizedCount: number;
+    /** 当前 delivery 必需文件的逐文件审核覆盖（不是 final 指针覆盖）。 */
+    readonly fileReviewRequiredCount: number;
+    readonly fileReviewApprovedCount: number;
+    readonly fileReviewComplete: boolean;
     readonly focusPackageId?: ID;
     readonly focusMemberCount?: number;
     readonly focusReviewState?: OutputPackageSummaryDto['reviewState'];

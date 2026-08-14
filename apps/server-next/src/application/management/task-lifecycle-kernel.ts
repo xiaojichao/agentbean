@@ -7,6 +7,7 @@ import type {
 } from '../../../../../packages/contracts/src/index.js';
 import {
   authorizeTaskLifecycleCommand,
+  deriveProjectArtifactVersionReviewState,
   evaluateCancellationPreconditions,
   evaluateClosurePreconditions,
   evaluateRejectRevision,
@@ -15,11 +16,13 @@ import {
   evaluateRootHumanReviewAuthority,
   evaluateSubtaskAcceptance,
   evaluateSubtaskHumanAcceptanceAuthority,
+  evaluateTaskDeliveryFileReviewGate,
   resolveOutputSlots,
   validateTaskLifecycleTransition,
   type SubtaskCascadeState,
 } from '../../../../../packages/domain/src/index.js';
 import type { TaskRecord } from '../repositories.js';
+import { findCurrentManagedOutputPackage } from '../output-package-current-delivery.js';
 import type {
   TaskCoordinationTransactionRepositories,
   TaskCoordinationUnitOfWork,
@@ -102,6 +105,65 @@ async function requireTask(repos: Tx, taskId: string): Promise<TaskRecord> {
 function assertRevision(actual: number, expected: number): void {
   const d = evaluateRevisionFencing(expected, actual);
   if (d.kind === 'rejected') conflict(d.reason ?? 'REVISION_FENCING_FAILED');
+}
+
+/**
+ * #1196：在 lifecycle 事务内基于当前 delivery 的 current 版本复验逐文件审核门禁。
+ * 没有必需文件的旧交付流程不受影响；只要当前包存在必需成员，就必须全部 approved。
+ */
+async function inspectCurrentDeliveryFileReviewGate(
+  repos: Tx,
+  input: {
+    teamId: string;
+    channelId?: string;
+    taskId: string;
+    taskRevision: number;
+    taskAttempt: number;
+    deliveryId?: string;
+  },
+) {
+  const channelId = input.channelId;
+  if (!channelId) return evaluateTaskDeliveryFileReviewGate({ requiredFiles: [] });
+  const currentPackage = await findCurrentManagedOutputPackage(repos.outputPackages, { ...input, channelId });
+  const focusRecord = currentPackage.record;
+  if (!focusRecord) {
+    if (currentPackage.hasManagedHistory) conflict('CURRENT_DELIVERY_PACKAGE_UNAVAILABLE');
+    return evaluateTaskDeliveryFileReviewGate({ requiredFiles: [] });
+  }
+  const projection = await repos.outputPackages.getPackageById({
+    teamId: input.teamId,
+    packageId: focusRecord.packageId,
+  });
+  if (!projection) conflict('CURRENT_DELIVERY_PACKAGE_UNAVAILABLE');
+  const requiredMembers = projection.members.filter((member) => member.requiredForFinal);
+  const [collections, reviews] = await Promise.all([
+    repos.channelProjects.listArtifactCollections({ teamId: input.teamId, channelId }),
+    repos.channelProjects.listArtifactReviews({ teamId: input.teamId, channelId }),
+  ]);
+  const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
+  return evaluateTaskDeliveryFileReviewGate({
+    requiredFiles: requiredMembers.map((member) => {
+      const currentVersionId = collectionById.get(member.collectionId)?.currentVersionId;
+      return {
+        collectionId: member.collectionId,
+        ...(currentVersionId ? { currentVersionId } : {}),
+        shortLabel: member.shortLabel,
+        filename: member.filename,
+        reviewState: currentVersionId
+          ? deriveProjectArtifactVersionReviewState(
+            reviews
+              .filter((review) => review.versionId === currentVersionId)
+              .map((review) => ({
+                id: review.id,
+                versionId: review.versionId,
+                decision: review.decision,
+                createdAt: review.createdAt,
+              })),
+          )
+          : 'unavailable',
+      };
+    }),
+  });
 }
 
 export interface TaskLifecycleAppliedEvent {
@@ -468,6 +530,15 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       if (!run) conflict('MANAGEMENT_RUN_NOT_FOUND');
       if (run.status !== 'in_review') conflict('MANAGEMENT_RUN_NOT_IN_REVIEW');
 
+      const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repos, {
+        teamId,
+        ...(task.channelId ? { channelId: task.channelId } : {}),
+        taskId: task.id,
+        taskRevision: task.revision,
+        taskAttempt: coord.attempt,
+      });
+      if (fileReviewGate.kind === 'rejected') conflict(fileReviewGate.reasonCode);
+
       const updated = await repos.tasks.update({ taskId: task.id, changes: { status: 'done', updatedAt: now } });
       if (!updated) conflict('TASK_NOT_FOUND');
       await appendTaskEvent(repos, {
@@ -604,6 +675,18 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
       });
       if (claim.status !== 'active' || currentClaim?.id !== claim.id) conflict('TASK_CLAIM_NOT_ACTIVE');
       if (await repos.coordination.acceptances.getCanonicalByDelivery(delivery.id)) conflict('TASK_ACCEPTANCE_ALREADY_DECIDED');
+
+      if (acceptance.decision === 'accepted') {
+        const fileReviewGate = await inspectCurrentDeliveryFileReviewGate(repos, {
+          teamId,
+          ...(task.channelId ? { channelId: task.channelId } : {}),
+          taskId: task.id,
+          taskRevision: task.revision,
+          taskAttempt: coord.attempt,
+          deliveryId: delivery.id,
+        });
+        if (fileReviewGate.kind === 'rejected') conflict(fileReviewGate.reasonCode);
+      }
 
       if (acceptance.decision === 'accepted' && authorityKind !== 'human') {
         // #1061 AC3：客观验收(criteria/evidence)只约束 PI authority(pi_driver);

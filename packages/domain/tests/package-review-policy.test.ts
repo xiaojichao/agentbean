@@ -88,6 +88,34 @@ describe('evaluatePackageArtifactReviewAuthority (#1061 AC1/AC2)', () => {
       facts: { ...ownerFacts, versionScope: { collectionId: 'col-9', versionId: 'ver-9' } },
       decision: 'approved',
     })).toEqual({ kind: 'rejected', reasonCode: 'version_not_in_package' });
+    // 成员集合人工/Agent 修订后的 current 版本可继续从原 package 入口审核。
+    expect(evaluatePackageArtifactReviewAuthority({
+      actorKind: 'human',
+      facts: {
+        ...ownerFacts,
+        versionScope: {
+          collectionId: 'col-1',
+          versionId: 'ver-2',
+          versionCollectionId: 'col-1',
+          currentVersionId: 'ver-2',
+        },
+      },
+      decision: 'approved',
+    })).toEqual({ kind: 'allowed', authorityBasis: 'team-owner' });
+    // 同集合的任意历史版本仍不能借 package 入口取得审核作用域。
+    expect(evaluatePackageArtifactReviewAuthority({
+      actorKind: 'human',
+      facts: {
+        ...ownerFacts,
+        versionScope: {
+          collectionId: 'col-1',
+          versionId: 'ver-history',
+          versionCollectionId: 'col-1',
+          currentVersionId: 'ver-2',
+        },
+      },
+      decision: 'approved',
+    })).toEqual({ kind: 'rejected', reasonCode: 'version_not_in_package' });
     // 版本属于 package 成员 collection 但不是交付版本(成员锚定的是 ver-1,传 ver-2)。
     expect(evaluatePackageArtifactReviewAuthority({
       actorKind: 'human',
