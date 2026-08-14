@@ -1143,6 +1143,26 @@ _Avoid_: Team API key、raw credential、Device credential。
 需要持续跟踪、交付审核或多 Agent 协作，并已通过 Promotion gate 形成明确根 Task 的复杂请求。普通聊天和 Simple agent request 不经过每消息协调，也不属于 Managed task。
 _Avoid_: Channel coordination decision、every chat、direct dispatch、background retry。
 
+## Output package
+
+一次 Agent 交付形成的冻结文件成员集合，用来展示来源、短编号、交付版本和批量操作入口。它不是文件夹，也不是审核对象；审核、最终版和后续引用最终落在包成员对应的文件版本或文件集合指针上。
+_Avoid_: Package review version、动态文件夹、后续新增文件自动进入旧包、用包状态替代成员审核。
+
+## Artifact version review
+
+人类对某个项目文件版本作出的通过、要求修改或拒绝决定。它是文件审核的最小权威事实，可以从文件包成员行、预览/编辑浮窗或文件版本历史触发；批量审核只是一组同源的文件版本审核记录。
+_Avoid_: 文件包整体审核、集合整体覆盖审核、Agent 自审、用 Task done 推导文件通过。
+
+## Task delivery acceptance
+
+合法验收人对当前 Task delivery 是否完成任务目标作出的接受或退回决定。它不同于文件版本审核和最终版设置：文件全部通过只满足交付内容门槛，Task 仍需验收后才进入 `done`；同一人可以同时拥有文件审核权和交付验收权，但两者不能互相推导。
+_Avoid_: 文件通过即任务完成、最终版即任务完成、PI 自动主观验收、通用状态更新。
+
+## Package batch review
+
+用户在文件包、文件页概览或预览/编辑浮窗左侧成员列表中对多个包成员一次性提交同类审核结论的便捷动作。它不产生独立 package-level review，而是在同一决策上下文中为每个目标文件版本追加审核记录；包含 Task 验收时还必须写入独立的 Task delivery acceptance。
+_Avoid_: 一条包审核覆盖全部成员、跳过不可审核成员、混合失败后部分静默成功、批量拒绝同时验收。
+
 ## User-delegated Server Worker
 
 旧称；PI driver 不拥有 Team 成员身份，其每次读取都通过 Server-authorized context 绑定并复验来源 requester 与当前 run 的权限。
