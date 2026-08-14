@@ -37,6 +37,7 @@ interface Seed {
   channelId: string;
   agentId: string;
   memberUserId: string;
+  deletedArtifactIds: string[];
   close: () => void;
 }
 
@@ -64,10 +65,23 @@ async function seed(variant: (typeof variants)[number]): Promise<Seed> {
   const { repositories, close } = variant.make();
   let now = 100;
   let id = 0;
+  const deletedArtifactIds: string[] = [];
   const app = createServerNextUseCases({
     repositories,
     clock: { now: () => ++now },
     ids: { nextId: () => `id-${++id}` },
+    artifactContentStore: {
+      async writeContent(input) {
+        return {
+          storagePath: `/artifacts/${input.artifactId}/${input.filename}`,
+          sizeBytes: input.content.byteLength,
+          sha256: `sha-${input.artifactId}`,
+        };
+      },
+      async deleteContent(input) {
+        deletedArtifactIds.push(input.artifactId);
+      },
+    },
   });
   const registered = await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
   if (!registered.ok) throw new Error(registered.error);
@@ -98,6 +112,7 @@ async function seed(variant: (typeof variants)[number]): Promise<Seed> {
     channelId: channel.channel.id,
     agentId,
     memberUserId: member.user.id,
+    deletedArtifactIds,
     close,
   };
 }
@@ -383,6 +398,165 @@ for (const variant of variants) {
       channelId: s.channelId,
     });
     expect(finalizations.find((f) => f.collectionId === pkg.collectionId)?.basisReviewId).toBe(result.review.id);
+  });
+
+  test('#1197:保存新版本后通过，current 与 review 指向同一个新 version', async () => {
+    const s = await makeSeed();
+    const pkg = await seedPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const result = await s.app.submitPackageArtifactReview({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'approved',
+      comment: '保存修订稿后通过',
+      expectedCollectionRevision: 1,
+      saveRevision: {
+        content: '# 修订稿',
+        filename: 'report.md',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: pkg.packageId,
+          deliveryId: pkg.deliveryId,
+        },
+      },
+      idempotencyKey: `save-review:${pkg.versionId}`,
+    });
+    expect(result).toMatchObject({ ok: true, revision: { baseVersionId: pkg.versionId } });
+    if (!result.ok || !result.revision) throw new Error(result.ok ? 'missing revision' : result.error);
+    expect(result.review.versionId).toBe(result.revision.versionId);
+    const collection = await s.repositories.channelProjects.getArtifactCollection({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: pkg.collectionId,
+    });
+    expect(collection).toMatchObject({
+      currentVersionId: result.revision.versionId,
+      revision: 2,
+    });
+    expect(collection?.finalVersionId).toBeUndefined();
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews).toEqual(expect.arrayContaining([
+      expect.objectContaining({ versionId: result.revision.versionId, decision: 'approved' }),
+    ]));
+    expect(reviews.some((review) => review.versionId === pkg.versionId)).toBe(false);
+
+    const replay = await s.app.submitPackageArtifactReview({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'approved',
+      comment: '保存修订稿后通过',
+      expectedCollectionRevision: 1,
+      saveRevision: {
+        content: '# 修订稿',
+        filename: 'report.md',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: pkg.packageId,
+          deliveryId: pkg.deliveryId,
+        },
+      },
+      idempotencyKey: `save-review:${pkg.versionId}`,
+    });
+    expect(replay).toMatchObject({
+      ok: true,
+      replayed: true,
+      revision: { versionId: result.revision.versionId },
+      review: { id: result.review.id },
+    });
+  });
+
+  test('#1197:保存、通过与定稿在同一事务，审核落在新 version', async () => {
+    const s = await makeSeed();
+    const pkg = await seedPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const result = await s.app.submitPackageReviewAndFinalize({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'approved',
+      comment: '修订稿通过并定稿',
+      expectedCollectionRevision: 1,
+      saveRevision: {
+        content: '# 最终修订稿',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: pkg.packageId,
+          deliveryId: pkg.deliveryId,
+        },
+      },
+      idempotencyKey: `save-finalize:${pkg.versionId}`,
+    });
+    expect(result).toMatchObject({ ok: true, collection: { revision: 3 } });
+    if (!result.ok || !result.revision) throw new Error(result.ok ? 'missing revision' : result.error);
+    expect(result.review.versionId).toBe(result.revision.versionId);
+    expect(result.finalization).toMatchObject({
+      versionId: result.revision.versionId,
+      basisReviewId: result.review.id,
+    });
+    expect(result.collection).toMatchObject({
+      currentVersionId: result.revision.versionId,
+      finalVersionId: result.revision.versionId,
+      revision: 3,
+    });
+  });
+
+  test('#1197:审核仓储失败时回滚新版本、current 与内容物化', async () => {
+    const s = await makeSeed();
+    const pkg = await seedPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    s.repositories.packageReviews.recordPackageReview = async () => ({ kind: 'finalization_conflict' });
+    const result = await s.app.submitPackageReviewAndFinalize({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'approved',
+      comment: '模拟提交失败',
+      expectedCollectionRevision: 1,
+      saveRevision: {
+        content: '# 不应保留',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: pkg.packageId,
+          deliveryId: pkg.deliveryId,
+        },
+      },
+      idempotencyKey: `save-rollback:${pkg.versionId}`,
+    });
+    expect(result).toMatchObject({ ok: false, error: 'CONFLICT' });
+    const collection = await s.repositories.channelProjects.getArtifactCollection({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: pkg.collectionId,
+    });
+    expect(collection).toMatchObject({ currentVersionId: pkg.versionId, revision: 1 });
+    const versions = await s.repositories.channelProjects.listArtifactVersions({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(versions.filter((version) => version.collectionId === pkg.collectionId)).toHaveLength(1);
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews).toHaveLength(0);
+    expect(s.deletedArtifactIds).toHaveLength(1);
   });
 
   test('AC7/AC8:final 只移动且有 approved review;revision fence 冲突', async () => {

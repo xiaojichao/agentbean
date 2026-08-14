@@ -629,6 +629,7 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
           promotion,
           lifecycle,
           packageReviews: repositories.packageReviews,
+          artifactRevisions: repositories.artifactRevisions,
           // #1066 archive gate：归档事务内复验 package 投影/待审核 delivery 并收口 staging。
           outputPackages: repositories.outputPackages,
           workspacePublishStagings: repositories.workspacePublishStagings,

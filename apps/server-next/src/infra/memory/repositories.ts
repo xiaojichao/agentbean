@@ -429,6 +429,10 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const artifactDecisionMutationsSnapshot = new Map(projectArtifactDecisionMutations);
         const artifactFinalizationsSnapshot = new Map(projectArtifactFinalizations);
         const artifactCollectionsSnapshot = new Map(projectArtifactCollections);
+        const artifactsSnapshot = new Map(artifacts);
+        const artifactVersionsSnapshot = new Map(projectArtifactVersions);
+        const artifactRevisionReceiptsSnapshot = new Map(artifactRevisionReceipts);
+        const artifactRevisionTombstonesSnapshot = new Map(artifactRevisionTombstones);
         const packageReviewReceiptsSnapshot = new Map(packageReviewReceipts);
         const packageReviewTombstonesSnapshot = new Map(packageReviewTombstones);
         try {
@@ -444,6 +448,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             promotion,
             lifecycle,
             packageReviews: repositories.packageReviews,
+            artifactRevisions: repositories.artifactRevisions,
             // #1066 archive gate：归档事务内复验 package 投影/待审核 delivery 并收口 staging。
             outputPackages: repositories.outputPackages,
             workspacePublishStagings: repositories.workspacePublishStagings,
@@ -470,6 +475,16 @@ export function createInMemoryRepositories(): ServerNextRepositories {
           projectArtifactCollections.clear();
           for (const [id, collection] of artifactCollectionsSnapshot) {
             projectArtifactCollections.set(id, collection);
+          }
+          artifacts.clear();
+          for (const [id, artifact] of artifactsSnapshot) artifacts.set(id, artifact);
+          projectArtifactVersions.clear();
+          for (const [id, version] of artifactVersionsSnapshot) projectArtifactVersions.set(id, version);
+          artifactRevisionReceipts.clear();
+          for (const [id, receipt] of artifactRevisionReceiptsSnapshot) artifactRevisionReceipts.set(id, receipt);
+          artifactRevisionTombstones.clear();
+          for (const [id, tombstone] of artifactRevisionTombstonesSnapshot) {
+            artifactRevisionTombstones.set(id, tombstone);
           }
           packageReviewReceipts.clear();
           for (const [id, receipt] of packageReviewReceiptsSnapshot) packageReviewReceipts.set(id, receipt);

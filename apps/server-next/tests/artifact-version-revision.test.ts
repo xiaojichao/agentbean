@@ -656,7 +656,7 @@ for (const variant of variants) {
       expect(rejected.availableActions[0]?.latestReviewId).toBe(reviewId);
     });
 
-    test('current projection 前移后为当前被拒版本下发修订动作，但 package authority 仍基于冻结成员', async () => {
+    test('current projection 前移后为当前版本下发审核与修订动作', async () => {
       const s = await makeSeed();
       const fixture = await seedPackage(s.repositories, s);
       const deliveredReviewId = await seedNegativeReview(s.repositories, s, fixture);
@@ -715,7 +715,8 @@ for (const variant of variants) {
         }),
       ]));
       const currentActions = detail.availableActions.find((entry) => entry.versionId === currentVersionId)?.actions ?? [];
-      expect(currentActions).not.toContain('review-approved');
+      expect(currentActions).toContain('review-approved');
+      expect(currentActions).toContain('review-changes-requested');
       expect(currentActions).not.toContain('set-final');
       const historicalActions = detail.availableActions
         .find((entry) => entry.versionId === fixture.versionId)?.actions ?? [];
