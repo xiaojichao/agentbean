@@ -205,6 +205,7 @@ import type {
 import {
   deriveAuthorityBasis,
   deriveProjectArtifactVersionReviewState,
+  evaluateTaskDeliveryFileReviewGate,
   evaluateArtifactReviewAuthority,
   evaluateArtifactPromotion,
   evaluatePackageArtifactReviewAuthority,
@@ -289,6 +290,7 @@ import {
 } from './output-package-consistency.js';
 import { createOutputPackageService, type OutputPackageService } from './output-package-service.js';
 import { readOutputPackageCardMeta } from './output-package-handler.js';
+import { findCurrentManagedOutputPackage } from './output-package-current-delivery.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
 import type {
   ChannelTaskWorkspaceV1,
@@ -9384,6 +9386,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             pendingDeliveryCount: overview.delivery.pendingDeliveries.length,
             requiredForFinalCount: overview.acceptanceContract.requiredReviewCoverage.requiredForFinalCount,
             finalizedCount: overview.acceptanceContract.requiredReviewCoverage.finalizedCount,
+            fileReviewRequiredCount: overview.acceptanceContract.fileReviewCoverage.requiredCount,
+            fileReviewApprovedCount: overview.acceptanceContract.fileReviewCoverage.approvedCount,
+            fileReviewComplete: overview.acceptanceContract.fileReviewCoverage.complete,
             ...(overview.delivery.focusPackageId ? { focusPackageId: overview.delivery.focusPackageId } : {}),
             ...(focusPackage ? {
               focusMemberCount: focusPackage.memberCount,
@@ -17059,12 +17064,26 @@ async function buildTaskDeliveryOverview(
     : null;
 
   // 当前 delivery/package(与 listOutputPackages 同一组 Server 事实,AC6)。
-  const packageRecords = await repositories.outputPackages.listPackagesByChannel({
+  const listedPackageRecords = await repositories.outputPackages.listPackagesByChannel({
     teamId,
     channelId,
     taskId,
     limit: 50,
   });
+  const currentManagedPackage = coordination
+    ? await findCurrentManagedOutputPackage(repositories.outputPackages, {
+      teamId,
+      channelId,
+      taskId,
+      taskRevision: coordination.taskRevision,
+      taskAttempt: coordination.attempt,
+    })
+    : null;
+  // 当前包即使落在历史分页之外，也必须进入本次详情投影，不能产生悬空 focusPackageId。
+  const packageRecords = currentManagedPackage?.record
+    && !listedPackageRecords.some((record) => record.packageId === currentManagedPackage.record!.packageId)
+    ? [currentManagedPackage.record, ...listedPackageRecords.slice(0, 49)]
+    : listedPackageRecords;
   const [packages, pendingDeliveries] = await Promise.all([
     summarizeOutputPackages(repositories, { teamId, channelId }, packageRecords),
     listPendingOutputDeliveries(repositories, { teamId, channelId, taskId }),
@@ -17106,19 +17125,27 @@ async function buildTaskDeliveryOverview(
       repositories.channelProjects.listArtifactCollections({ teamId, channelId }),
     ]);
 
-  // #1065 AC3：required review coverage——焦点交付包中 final 必需成员数 vs 已达 final 数。
+  // #1065 AC3：final 指针覆盖与 #1196 文件版本审核覆盖是两类独立事实。
   let requiredReviewCoverage: TaskAcceptanceContractV1['requiredReviewCoverage'] = {
     requiredForFinalCount: 0,
     finalizedCount: 0,
     complete: false,
   };
-  // 仓储契约按 createdAt/packageId 倒序返回；首项才是当前交付。
-  const focusRecord = packageRecords[0];
+  let fileReviewGate = evaluateTaskDeliveryFileReviewGate({ requiredFiles: [] });
+  let fileReviewProjectionAvailable = true;
+  // 仓储按 createdAt/packageId 倒序；受管 Task 只把当前 revision/attempt 的包作为当前 delivery。
+  const focusRecord = coordination
+    ? currentManagedPackage?.record ?? undefined
+    : packageRecords[0];
+  if (coordination && !focusRecord && currentManagedPackage?.hasManagedHistory) {
+    fileReviewProjectionAvailable = false;
+  }
   if (focusRecord) {
     const projection = await repositories.outputPackages.getPackageById({
       teamId,
       packageId: focusRecord.packageId,
     });
+    if (!projection) fileReviewProjectionAvailable = false;
     const requiredMembers = (projection?.members ?? []).filter((member) => member.requiredForFinal);
     const finalVersionIds = new Set(
       collections.map((collection) => collection.finalVersionId).filter((id): id is string => Boolean(id)),
@@ -17129,6 +17156,32 @@ async function buildTaskDeliveryOverview(
       finalizedCount,
       complete: requiredMembers.length > 0 && finalizedCount === requiredMembers.length,
     };
+    const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
+    fileReviewGate = evaluateTaskDeliveryFileReviewGate({
+      requiredFiles: requiredMembers.map((member) => {
+        const collection = collectionById.get(member.collectionId);
+        const currentVersionId = collection?.currentVersionId;
+        const reviewState = currentVersionId
+          ? deriveProjectArtifactVersionReviewState(
+            reviews
+              .filter((review) => review.versionId === currentVersionId)
+              .map((review) => ({
+                id: review.id,
+                versionId: review.versionId,
+                decision: review.decision,
+                createdAt: review.createdAt,
+              })),
+          )
+          : 'unavailable';
+        return {
+          collectionId: member.collectionId,
+          ...(currentVersionId ? { currentVersionId } : {}),
+          shortLabel: member.shortLabel,
+          filename: member.filename,
+          reviewState,
+        };
+      }),
+    });
   }
   const taskReviews = reviews.filter((review) => review.taskId === taskId);
   const taskFinalizations = finalizations.filter((fin) => taskReviews.some((review) => review.id === fin.basisReviewId));
@@ -17243,14 +17296,48 @@ async function buildTaskDeliveryOverview(
   );
 
   // Task 级可发现性动作(AC9:Server 计算,web 只渲染;command 提交仍完整复验)。
+  const acceptanceRun = task.status === 'in_review'
+    ? coordination
+      ? await repositories.management.runs.getById(coordination.managementRunId)
+      : await repositories.management.runs.getByRootTaskId(task.id)
+    : null;
+  const preboundAcceptanceAuthorityIds = coordination?.humanAcceptanceAuthorityIds ?? [];
+  const humanAcceptanceAuthorityIds = preboundAcceptanceAuthorityIds.length > 0
+    ? preboundAcceptanceAuthorityIds
+    : ((coordination?.nodeKind ?? 'root') === 'root' && acceptanceRun?.initiatedByUserId
+      ? [acceptanceRun.initiatedByUserId]
+      : []);
+  const fileReviewStateLabels = {
+    pending: '待审核',
+    changes_requested: '需要修改',
+    rejected: '已拒绝',
+    unavailable: '当前版本不可用',
+  } as const;
+  const fileReviewCoverage = fileReviewProjectionAvailable
+    ? fileReviewGate.coverage
+    : { ...fileReviewGate.coverage, available: false as const, applicable: true, complete: false };
+  const incompleteFileReviewReason = fileReviewGate.kind === 'rejected'
+    ? `还有文件未通过审核：${fileReviewGate.blockers.map((item) =>
+      `${item.filename}${fileReviewStateLabels[item.reviewState as keyof typeof fileReviewStateLabels] ?? '未通过'}`).join('，')}`
+    : undefined;
+  const acceptDeliveryAction: TaskLevelAvailableActionDto = task.status !== 'in_review'
+    ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前任务不在待验收状态' }
+    : !humanAcceptanceAuthorityIds.includes(input.userId)
+      ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '你不是当前交付的验收人' }
+      : !fileReviewProjectionAvailable
+        ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前交付文件包不可用，请刷新后重试' }
+        : fileReviewGate.kind === 'rejected'
+          ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
+          : { action: 'accept-delivery', label: '验收本次交付' };
   const availableActions: TaskLevelAvailableActionDto[] = [
     { action: 'open-task', label: '打开 Task' },
     packages.length > 0
       ? { action: 'delegate-to-agent', label: '交给 Agent 处理' }
       : { action: 'delegate-to-agent', label: '交给 Agent 处理', disabled: true, disabledReason: '暂无交付文件包' },
-    task.status === 'in_review' && packages.length > 0
-      ? { action: 'review-package', label: '审核交付包' }
-      : { action: 'review-package', label: '审核交付包', disabled: true, disabledReason: '当前无待审核交付' },
+    task.status === 'in_review' && focusRecord && fileReviewProjectionAvailable
+      ? { action: 'review-package', label: '审核交付文件' }
+      : { action: 'review-package', label: '审核交付文件', disabled: true, disabledReason: '当前无待审核交付' },
+    acceptDeliveryAction,
   ];
 
   const watermark = await repositories.systemActivity?.watermarks
@@ -17264,13 +17351,14 @@ async function buildTaskDeliveryOverview(
     acceptanceContract: {
       nodeKind: coordination?.nodeKind ?? 'root',
       reviewPolicy: coordination?.reviewPolicy ?? 'human',
-      humanAcceptanceAuthorityIds: coordination?.humanAcceptanceAuthorityIds ?? [],
-      requiresHumanAcceptance: (coordination?.humanAcceptanceAuthorityIds?.length ?? 0) > 0,
+      humanAcceptanceAuthorityIds,
+      requiresHumanAcceptance: humanAcceptanceAuthorityIds.length > 0,
       acceptanceCriteria: criteria.map((criterion) => criterion.description),
       taskRevision: coordination?.taskRevision ?? task.revision,
       attempt: coordination?.attempt ?? 1,
       maxAttempts: coordination?.maxAttempts ?? 1,
       requiredReviewCoverage,
+      fileReviewCoverage,
     },
     responsibilityFocus: focus,
     delivery: {

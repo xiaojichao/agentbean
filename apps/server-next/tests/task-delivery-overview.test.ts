@@ -68,6 +68,16 @@ async function seed(variant: (typeof variants)[number]): Promise<Seed> {
     repositories,
     clock: { now: () => ++now },
     ids: { nextId: () => `id-${++id}` },
+    artifactContentStore: {
+      async writeContent(input) {
+        return {
+          storagePath: `artifacts/${input.artifactId}/${input.filename}`,
+          sizeBytes: input.content.length,
+          sha256: `sha-${input.content.length}`,
+        };
+      },
+      deleteContent: async () => undefined,
+    },
   });
   const registered = await app.registerUser({ username: 'owner', password: 'secret', teamName: 'Team' });
   if (!registered.ok) throw new Error(registered.error);
@@ -167,6 +177,7 @@ async function seedTask(
     status?: 'todo' | 'in_progress' | 'in_review';
     preboundAuthorityIds?: string[];
     criteria?: string[];
+    bindManagementRun?: boolean;
   },
 ) {
   await seedValue.repositories.management.runs.create({
@@ -174,6 +185,7 @@ async function seedTask(
     id: `run-${taskId}`,
     teamId: seedValue.teamId,
     channelId: seedValue.channelId,
+    ...(opts?.bindManagementRun ? { rootTaskId: taskId } : {}),
     rootMessageId: `msg-${taskId}`,
     mode: 'managed',
     status: 'running',
@@ -364,6 +376,13 @@ for (const variant of variants) {
         taskRevision: 1,
         attempt: 1,
         maxAttempts: 3,
+        fileReviewCoverage: {
+          applicable: true,
+          requiredCount: 1,
+          approvedCount: 0,
+          pendingCount: 1,
+          complete: false,
+        },
       });
       expect(overview.delivery.packages).toHaveLength(1);
       expect(overview.delivery.focusPackageId).toBe(overview.delivery.packages[0]!.packageId);
@@ -371,6 +390,10 @@ for (const variant of variants) {
       expect(overview.availableActions.map((a) => a.action)).toContain('open-task');
       expect(overview.availableActions.find((a) => a.action === 'delegate-to-agent')?.disabled).toBeUndefined();
       expect(overview.availableActions.find((a) => a.action === 'review-package')?.disabled).toBe(true);
+      expect(overview.availableActions.find((a) => a.action === 'accept-delivery')).toMatchObject({
+        disabled: true,
+        disabledReason: '当前任务不在待验收状态',
+      });
       // 责任焦点:in_progress + 无 claim → 尚在等待(无 offer/claim 时不伪造 Agent 责任)。
       expect(overview.responsibilityFocus.kind).toBe('none');
       // 执行链:至少包含交付文件包事件。
@@ -482,6 +505,141 @@ for (const variant of variants) {
       const delegate = overview.availableActions.find((a) => a.action === 'delegate-to-agent')!;
       expect(delegate.disabled).toBe(true);
       expect(delegate.disabledReason).toBe('暂无交付文件包');
+    });
+
+    test('#1196:当前交付必需文件未全部 approved 时禁用并拒绝 Task 验收', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-file-review-gate';
+      await seedTask(seedValue, taskId, {
+        status: 'in_review',
+        preboundAuthorityIds: [seedValue.userId],
+        bindManagementRun: true,
+      });
+      const run = await seedValue.repositories.management.runs.getByRootTaskId(taskId);
+      if (!run) throw new Error('management run not found');
+      await seedValue.repositories.management.runs.update({ ...run, status: 'in_review', updatedAt: 30 });
+      await commitDelivery(seedValue, 'pub-file-review-gate', [
+        { path: 'docs/script.md', body: Buffer.from('script') },
+        { path: 'docs/storyboard.md', body: Buffer.from('storyboard') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+      const packageRecord = await seedValue.repositories.outputPackages.getPackageByPublishId({
+        teamId: seedValue.teamId,
+        publishId: 'pub-file-review-gate',
+      });
+      if (!packageRecord) throw new Error('package not found');
+      const firstMember = packageRecord.members[0]!;
+      const secondMember = packageRecord.members[1]!;
+
+      const firstReview = await seedValue.app.submitPackageArtifactReview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        packageId: packageRecord.package.packageId,
+        collectionId: firstMember.collectionId,
+        versionId: firstMember.artifactVersionId,
+        decision: 'approved',
+        comment: '剧本通过',
+        idempotencyKey: `approve:${firstMember.artifactVersionId}`,
+      });
+      expect(firstReview.ok).toBe(true);
+
+      const blockedOverview = await queryOverview(seedValue, taskId);
+      expect(blockedOverview.acceptanceContract.fileReviewCoverage).toMatchObject({
+        applicable: true,
+        requiredCount: 2,
+        approvedCount: 1,
+        pendingCount: 1,
+        complete: false,
+      });
+      expect(blockedOverview.availableActions.find((action) => action.action === 'accept-delivery')).toMatchObject({
+        disabled: true,
+        disabledReason: '还有文件未通过审核：storyboard.md待审核',
+      });
+      const blockedAcceptance = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        deliveryMessageId: 'msg-file-review-gate',
+      });
+      expect(blockedAcceptance).toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect((await seedValue.repositories.tasks.getById(taskId))?.status).toBe('in_review');
+
+      const secondReview = await seedValue.app.submitPackageArtifactReview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        packageId: packageRecord.package.packageId,
+        collectionId: secondMember.collectionId,
+        versionId: secondMember.artifactVersionId,
+        decision: 'approved',
+        comment: '分镜通过',
+        idempotencyKey: `approve:${secondMember.artifactVersionId}`,
+      });
+      expect(secondReview.ok).toBe(true);
+
+      // 旧交付版本即使已 approved，只要人工保存产生了新的 current，门禁必须重新等待新版本审核。
+      const firstCollection = await seedValue.repositories.channelProjects.getArtifactCollection({
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        collectionId: firstMember.collectionId,
+      });
+      if (!firstCollection) throw new Error('collection not found');
+      const revised = await seedValue.app.saveArtifactVersionRevision({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        collectionId: firstMember.collectionId,
+        baseVersionId: firstMember.artifactVersionId,
+        content: '# 人工修订剧本',
+        expectedCollectionRevision: firstCollection.revision,
+        revisionBasis: {
+          sourceVersionId: firstMember.artifactVersionId,
+          packageId: packageRecord.package.packageId,
+          deliveryId: packageRecord.package.deliveryId,
+        },
+        idempotencyKey: `revise:${firstMember.artifactVersionId}`,
+      });
+      expect(revised.ok).toBe(true);
+      if (!revised.ok) throw new Error(revised.error);
+      const revisedOverview = await queryOverview(seedValue, taskId);
+      expect(revisedOverview.acceptanceContract.fileReviewCoverage).toMatchObject({
+        requiredCount: 2,
+        approvedCount: 1,
+        pendingCount: 1,
+        complete: false,
+      });
+      expect(revisedOverview.acceptanceContract.fileReviewCoverage.items.find(
+        (item) => item.collectionId === firstMember.collectionId,
+      )).toMatchObject({ currentVersionId: revised.revision.versionId, reviewState: 'pending' });
+
+      const revisedReview = await seedValue.app.submitPackageArtifactReview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        packageId: packageRecord.package.packageId,
+        collectionId: firstMember.collectionId,
+        versionId: revised.revision.versionId,
+        decision: 'approved',
+        comment: '人工修订版通过',
+        idempotencyKey: `approve:${revised.revision.versionId}`,
+      });
+      expect(revisedReview.ok).toBe(true);
+
+      const readyOverview = await queryOverview(seedValue, taskId);
+      expect(readyOverview.acceptanceContract.fileReviewCoverage).toMatchObject({
+        requiredCount: 2,
+        approvedCount: 2,
+        complete: true,
+      });
+      expect(readyOverview.availableActions.find((action) => action.action === 'accept-delivery')?.disabled).toBeUndefined();
+      const accepted = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        deliveryMessageId: 'msg-file-review-gate',
+      });
+      expect(accepted).toMatchObject({ ok: true, task: { status: 'done' } });
     });
 
     test('AC7:minimumConsistency 未追上 → PROJECTION_NOT_READY', async () => {

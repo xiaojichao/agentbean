@@ -60,6 +60,8 @@ export interface PackageArtifactReviewFacts {
     readonly versionId: string;
     /** 目标版本实际所属 collection;null = 版本不存在。 */
     readonly versionCollectionId?: string;
+    /** package 成员 collection 的当前 Server 版本；允许包入口审核人工/Agent 修订后的 current。 */
+    readonly currentVersionId?: string;
   };
 }
 
@@ -89,7 +91,9 @@ export function evaluatePackageArtifactReviewAuthority(input: {
     return { kind: 'rejected', reasonCode: 'package_out_of_scope' };
   }
   const member = pkg.members.find((candidate) => candidate.collectionId === input.facts.versionScope.collectionId);
-  if (!member || member.artifactVersionId !== input.facts.versionScope.versionId) {
+  const isDeliveredVersion = member?.artifactVersionId === input.facts.versionScope.versionId;
+  const isCurrentVersion = input.facts.versionScope.currentVersionId === input.facts.versionScope.versionId;
+  if (!member || (!isDeliveredVersion && !isCurrentVersion)) {
     return { kind: 'rejected', reasonCode: 'version_not_in_package' };
   }
   if (input.facts.versionScope.versionCollectionId !== undefined

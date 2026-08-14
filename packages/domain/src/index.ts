@@ -41,6 +41,7 @@ export * from './task-coverage-policy.js';
 export * from './task-decomposition-policy.js';
 export * from './task-followup-binding.js';
 export * from './task-lifecycle-policy.js';
+export * from './task-delivery-acceptance-policy.js';
 export * from './task-review-policy.js';
 export * from './task-termination-policy.js';
 export * from './reliability-policy.js';
