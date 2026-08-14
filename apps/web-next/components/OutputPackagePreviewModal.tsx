@@ -152,8 +152,9 @@ export function OutputPackagePreviewModal({
       }),
     ]);
     if (!libraryResult.ok || !libraryResult.library) {
-      setLoadError(libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败');
-      return null;
+      const error = libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败';
+      setLoadError(error);
+      return { collections: null, error };
     }
     setCollections(libraryResult.library.collections);
     setLoadError(null);
@@ -177,12 +178,14 @@ export function OutputPackagePreviewModal({
       });
       setActionError(null);
     } else {
+      const error = packageResult.message ?? '审核动作加载失败，请刷新后重试';
       setAvailableActions(null);
       setReviewPackageBasis(null);
       setReviewThreadRootMessageId(packageMeta.threadRootMessageId ?? null);
-      setActionError(packageResult.message ?? '审核动作加载失败，请刷新后重试');
+      setActionError(error);
+      return { collections: libraryResult.library.collections, error };
     }
-    return libraryResult.library.collections;
+    return { collections: libraryResult.library.collections, error: null };
   }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId]);
 
   useEffect(() => {
@@ -576,7 +579,10 @@ export function OutputPackagePreviewModal({
       setBatchComment('');
       onSaved();
       try {
-        await loadWorkspace();
+        const refresh = await loadWorkspace();
+        if (refresh.error) {
+          setActionError(`批量审核已提交，但刷新失败：${refresh.error}`);
+        }
       } catch (error) {
         setActionError(error instanceof Error
           ? `批量审核已提交，但刷新失败：${error.message}`
@@ -591,7 +597,7 @@ export function OutputPackagePreviewModal({
     reviewPackageBasis, selectedBatchTargets]);
 
   const loadLatest = useCallback(async () => {
-    const latestCollections = await loadWorkspace();
+    const { collections: latestCollections } = await loadWorkspace();
     const latestCollection = latestCollections?.find((collection) => collection.id === activeCollectionId);
     const latestVersion = latestCollection?.versions.find((version) => version.id === latestCollection.currentVersionId);
     const artifact = latestVersion?.artifact as unknown as Artifact | undefined;

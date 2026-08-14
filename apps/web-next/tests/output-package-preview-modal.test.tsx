@@ -386,6 +386,25 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
+  test('#1199 成功 ack 后结构化刷新失败仍明确显示审核已提交', async () => {
+    const onSaved = vi.fn();
+    renderModal({ onSaved });
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    mocks.getOutputPackage.mockResolvedValueOnce({
+      ok: false,
+      error: 'CONFLICT',
+      message: 'package revision stale',
+    });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    expect(await screen.findByText(/已批量通过 2 个文件版本/)).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent)
+      .toContain('批量审核已提交，但刷新失败：package revision stale');
+    expect(screen.queryByText(/^审核动作加载失败/)).toBeNull();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
     const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
     mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
