@@ -49,8 +49,9 @@
     button { cursor: pointer; }
 
     .app {
+      --discussion-width: 42vw;
       display: grid;
-      grid-template-columns: 168px 210px minmax(340px, 1fr) minmax(520px, 42vw);
+      grid-template-columns: 168px 210px minmax(340px, 1fr) 8px minmax(420px, var(--discussion-width));
       grid-template-rows: minmax(0, 1fr);
       height: 100vh;
       min-width: 1280px;
@@ -634,18 +635,24 @@
       overflow: hidden;
       display: grid;
       grid-template-rows: 56px 1fr 72px;
-      border-left: 1px solid var(--line);
       background: #fff;
     }
-    .discussion::before {
-      content: "";
-      position: absolute;
-      left: -4px;
-      top: 0;
-      bottom: 0;
-      width: 7px;
+    .discussion-resizer {
+      position: relative;
+      z-index: 3;
+      min-width: 8px;
+      background: linear-gradient(to right, transparent 0, transparent 3px, var(--line) 3px, var(--line) 4px, transparent 4px);
       cursor: col-resize;
-      background: linear-gradient(to right, transparent, rgba(36,111,189,.12), transparent);
+      touch-action: none;
+    }
+    .discussion-resizer:hover,
+    .discussion-resizer:focus-visible {
+      outline: none;
+      background: linear-gradient(to right, transparent 0, rgba(36,111,189,.16) 1px, rgba(36,111,189,.32) 3px, var(--blue) 3px, var(--blue) 5px, rgba(36,111,189,.16) 7px, transparent 8px);
+    }
+    body.is-resizing-discussion {
+      cursor: col-resize;
+      user-select: none;
     }
     .thread-head {
       display: grid;
@@ -1088,7 +1095,7 @@
       width: min(1120px, calc(100vw - 56px));
       height: min(740px, calc(100vh - 56px));
       display: grid;
-      grid-template-rows: 48px 1fr 48px;
+      grid-template-rows: 48px minmax(0, 1fr) auto;
       border: 1px solid rgba(255,255,255,.8);
       border-radius: 8px;
       background: #fff;
@@ -1117,6 +1124,7 @@
       min-height: 0;
       display: grid;
       grid-template-columns: 230px minmax(320px, 1fr) minmax(320px, 1fr);
+      overflow: hidden;
     }
     .modal-files {
       border-right: 1px solid var(--line);
@@ -1164,6 +1172,7 @@
       border: 0;
       resize: none;
       outline: 0;
+      overflow: auto;
       padding: 14px;
       color: #22272e;
       font-family: var(--mono);
@@ -1187,13 +1196,13 @@
     .markdown-preview p { margin: 0 0 10px; }
     .markdown-preview ul { margin: 0 0 12px 18px; padding: 0; }
     .modal-foot {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      display: grid;
       gap: 12px;
+      max-height: 210px;
+      overflow: auto;
       border-top: 1px solid var(--line);
       background: #fbfcfd;
-      padding: 0 12px;
+      padding: 10px 12px;
     }
     .server-state {
       display: flex;
@@ -1207,6 +1216,92 @@
     .modal-actions {
       display: flex;
       align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .modal-review-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .modal-review-note {
+      border: 1px solid #efd58e;
+      border-radius: 8px;
+      background: #fffaf0;
+      color: #6b5b2d;
+      padding: 8px;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .modal-review-note strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #7d5a07;
+      font-size: 12px;
+    }
+    .review-panel-detail {
+      margin-top: 8px;
+      display: none;
+      border: 1px solid #d7dde5;
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      color: #4b5563;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .review-panel-detail.active { display: block; }
+    .review-panel-detail strong {
+      color: #111827;
+      font-size: 12px;
+    }
+    .review-option-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .review-option-card {
+      border: 1px solid #d7dde5;
+      border-radius: 8px;
+      background: #fbfcfd;
+      padding: 8px;
+      color: #4b5563;
+      line-height: 1.45;
+    }
+    .review-option-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #111827;
+      font-size: 12px;
+    }
+    .review-field {
+      margin-top: 8px;
+      display: grid;
+      gap: 5px;
+    }
+    .review-field label {
+      color: #374151;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .review-field textarea {
+      min-height: 58px;
+      resize: vertical;
+      border: 1px solid #d7dde5;
+      border-radius: 8px;
+      padding: 8px;
+      color: #22272e;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .review-panel-actions {
+      margin-top: 8px;
+      display: flex;
+      justify-content: flex-end;
+      flex-wrap: wrap;
       gap: 6px;
     }
     .toast {
@@ -1260,6 +1355,9 @@
       background: #fff6d9;
       color: #6f4d00;
     }
+    body.preview-open .switcher {
+      display: none;
+    }
 
     .screen { display: none; height: 100%; min-height: 0; }
     body[data-screen="chat"] .screen-chat,
@@ -1272,7 +1370,7 @@
     body[data-screen="files"] .message-list { display: none; }
 
     @media (max-width: 1260px) {
-      .app { grid-template-columns: 150px 190px minmax(460px, 1fr) 460px; }
+      .app { grid-template-columns: 150px 190px minmax(460px, 1fr) 8px minmax(420px, var(--discussion-width)); }
       .package-top { grid-template-columns: 1fr; }
       .package-actions { max-width: none; justify-content: flex-start; }
       .task-grid { grid-template-columns: 1fr; }
@@ -1349,7 +1447,7 @@
                 <ul>
                   <li>主聊天只承载话题入口，不承载连续跟帖。</li>
                   <li>点击话题后，右侧讨论串才是回复、文件引用和 @智能体 的操作容器。</li>
-                  <li>频道消息不是项目事实源；任务状态、版本、审核和 final 都必须由 Server 写入。</li>
+                  <li>频道消息不是项目事实源；任务状态、版本、审核和最终版都必须由系统写入。</li>
                 </ul>
               </div>
 
@@ -1358,9 +1456,9 @@
                 <div class="topic-card-main">
                   <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
                   <div class="topic-card-title">@某个智能体 基于 PKG-042 当前版本继续创作</div>
-                  <div class="topic-card-body">最新活动：讨论串里已引用 PKG-042 current projection，准备选择一个智能体继续执行。</div>
+                  <div class="topic-card-body">最新活动：讨论串里已引用 PKG-042 当前包，准备选择一个智能体继续执行。</div>
                   <div class="topic-card-meta">
-                    <span class="chip violet">PKG-042 current</span>
+                    <span class="chip violet">PKG-042 当前包</span>
                     <span class="chip blue">F1 v4</span>
                     <span class="chip">3 条回复</span>
                     <span class="chip amber">待处理</span>
@@ -1414,29 +1512,29 @@
                 <button class="select-button">创建者 ⌄</button>
                 <button class="select-button">责任焦点 ⌄</button>
                 <button class="select-button">建议审核人：我 ⌄</button>
-                <span class="chip amber">当前视图：任务状态 + 审核动作</span>
+                <span class="chip amber">当前视图：已有执行事实 + 合法动作</span>
               </div>
-              <button class="solid-button">+ 新建任务</button>
+              <button class="pill-button" data-screen-target="chat">回讨论串发起任务</button>
             </div>
             <div class="task-grid">
               <section class="task-column">
                 <div class="column-head"><span>进行中</span><span class="chip blue">3</span></div>
                 <div class="column-body">
                   <article class="task-card">
-                    <div class="task-type">阶段任务 · 未触发执行</div>
-                    <div class="task-title">下一步创作：等待在讨论串 @智能体</div>
+                    <div class="task-type">说明 · 首版不在任务页创建空任务</div>
+                    <div class="task-title">新的 Agent 任务从讨论串触发</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">未开始</span>
                       <span class="label">建议审核人</span><span class="value">未指定</span>
-                      <span class="label">输入</span><span class="value">等待引用 PKG-042 current / final</span>
-                      <span class="label">阻塞</span><span class="value">等待用户在讨论串提交指令</span>
+                      <span class="label">输入</span><span class="value">讨论串中的文件引用</span>
+                      <span class="label">触发</span><span class="value">@智能体 + 指令 + 文件引用</span>
                     </div>
                     <div class="mini-package">
-                      <strong>可作为下一步输入</strong>
-                      第1集剧本.md v4、角色表.md v3、分镜提示词.md v2。任务页只提供“交给智能体处理”入口，点击后跳到讨论串并预填引用。
+                      <strong>任务页不生成待办空壳</strong>
+                      用户在讨论串发送 @智能体 + 指令 + 文件引用后，Server 才创建 Task/Invocation；任务页只展示已经形成的执行事实。
                     </div>
                     <div class="inline-actions" style="margin-top:8px; justify-content:flex-start;">
-                      <button class="pill-button">交给智能体处理</button>
+                      <button class="pill-button" data-screen-target="chat">打开讨论串</button>
                     </div>
                   </article>
                   <article class="task-card">
@@ -1445,7 +1543,7 @@
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">未开始</span>
                       <span class="label">建议审核人</span><span class="value">未指定 · 任一成员可审核</span>
-                      <span class="label">输入</span><span class="value">@PKG-042 current 已插入</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 当前包已插入</span>
                       <span class="label">状态</span><span class="value">尚未创建 AgentInvocation</span>
                     </div>
                     <div class="mini-package">
@@ -1459,12 +1557,16 @@
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@镜头拆分（执行中）</span>
                       <span class="label">建议审核人</span><span class="value">未指定</span>
-                      <span class="label">输入</span><span class="value">@PKG-042 current</span>
+                      <span class="label">输入</span><span class="value">@PKG-042 当前包</span>
                       <span class="label">来源</span><span class="value">讨论串 @智能体 创建</span>
                     </div>
                     <div class="mini-package">
                       <strong>负责人是执行事实投影</strong>
                       Agent accepted/running 后，任务责任焦点显示为该智能体；进入待审核后焦点会转到审核。
+                    </div>
+                    <div class="inline-actions" style="margin-top:8px; justify-content:flex-start;">
+                      <button class="pill-button">查看执行进度</button>
+                      <button class="pill-button">打开讨论串</button>
                     </div>
                   </article>
                 </div>
@@ -1489,45 +1591,28 @@
                       F3 分镜提示词.md v2（Agent 初稿）
                     </div>
                     <div class="review-panel">
-                      <div class="review-panel-title">任一频道成员都可以审核；实际审核人以点击者为准</div>
-                      <p>审核动作只处理当前输出版本；接下来由哪个智能体继续执行，在讨论串里通过 @智能体 + @文件包 来决定。</p>
-                      <div class="review-action-group">
-                        <div class="review-action-label">审核结论</div>
-                        <div class="review-actions">
-                          <button class="solid-button blue">通过审核</button>
-                          <button class="pill-button">要求修改</button>
-                          <button class="danger-button">拒绝此版本</button>
-                        </div>
-                        <p class="review-action-help">通过审核：把当前版本标为可被后续引用，任务可进入已通过。要求修改：保留版本并回到讨论串填写修改意见。拒绝此版本：标为不可用，需要重新生成或重做。</p>
+                      <div class="review-panel-title">任务卡片只做状态摘要和入口，不直接审核文件</div>
+                      <p>文件审核覆盖：1 通过 / 1 待审核 / 1 要修改。交付验收：还有文件未通过审核，暂不可验收本次交付。</p>
+                      <div class="review-actions">
+                        <button class="pill-button" data-screen-target="files">查看交付文件</button>
+                        <button class="solid-button blue js-open-preview">审核交付文件</button>
+                        <button class="pill-button">打开讨论串</button>
                       </div>
-                      <div class="review-action-group">
-                        <div class="review-action-label">版本选择</div>
-                        <div class="review-actions">
-                          <button class="solid-button amber">通过并设为最终版</button>
-                        </div>
-                        <p class="review-action-help">待审核版本不能直接设 final；这里使用“通过并设为最终版”，一次写入 ArtifactReview 和 finalVersionId。</p>
-                      </div>
-                      <div class="review-action-group">
-                        <div class="review-action-label">继续协作</div>
-                        <div class="review-actions">
-                          <button class="pill-button">回到讨论串继续</button>
-                        </div>
-                        <p class="review-action-help">不改状态，只定位到当前话题输入框，继续用 @智能体 + @PKG-042 或 @F1 @F2 指定下一步。</p>
-                      </div>
+                      <p class="review-action-help">查看交付文件会切到文件页输出包概览；审核交付文件会打开预览/编辑浮窗，并选中第一个需要处理的文件版本。</p>
                     </div>
                     <div class="timeline">
                       <div><span class="dot blue"></span><span>19:28 Agent 交付 PKG-042，任务从进行中进入待审核。</span></div>
                       <div><span class="dot amber"></span><span>19:41 derrick 在预览浮窗修改 F1，Server 生成 script.ep01 v4。</span></div>
-                      <div><span class="dot"></span><span>下一步：在讨论串 @任意可见智能体，并引用 current / final 文件包作为输入。</span></div>
+                      <div><span class="dot"></span><span>下一步：在讨论串 @任意可见智能体，并引用当前版或最终版文件包作为输入。</span></div>
                     </div>
                     <div class="implementation-note">
                       <strong>实现备注</strong>
                       <ul>
-                        <li>审核结论写入 ArtifactReview，不等于 final。</li>
-                        <li>首版任一频道成员都可审核；实际审核人以点击审核按钮的人为准。</li>
-                        <li>待审核版本使用“通过并设为最终版”；已通过版本才显示“设为最终版”。</li>
+                        <li>任务状态是 Server 生命周期投影，不能拖拽或手动改状态。</li>
+                        <li>文件审核、最终版设置、任务交付验收是三类独立事实。</li>
+                        <li>待审核卡片不承载完整审核操作，逐文件审核必须进入预览/编辑浮窗。</li>
                         <li>负责人不在任务页下拉选择，由讨论串 invocation 执行事实投影。</li>
-                        <li>回到讨论串继续不改状态，只帮助用户用 @智能体 + @文件/文件包指定下一步。</li>
+                        <li>退回修改后不自动重跑 Agent，只预填讨论串让用户显式选择智能体。</li>
                       </ul>
                     </div>
                   </article>
@@ -1538,7 +1623,7 @@
                 <div class="column-head"><span>已完成</span><span class="chip green">1</span></div>
                 <div class="column-body">
                   <article class="task-card">
-                    <div class="task-type">阶段任务 · 已通过</div>
+                    <div class="task-type">阶段任务 · 已完成</div>
                     <div class="task-title">角色设定整理</div>
                     <div class="task-meta-grid">
                       <span class="label">负责人</span><span class="value">@剧本创作</span>
@@ -1547,7 +1632,7 @@
                       <span class="label">后续</span><span class="value">可被任意后续智能体引用</span>
                     </div>
                     <div class="timeline">
-                      <div><span class="dot green"></span><span>已通过并设为当前 final 指针；历史版本仍可追溯。</span></div>
+                      <div><span class="dot green"></span><span>文件版本已通过并设为最终版；本次交付已独立验收，任务已完成。</span></div>
                     </div>
                   </article>
                 </div>
@@ -1571,12 +1656,12 @@
                 <div class="collection-card active">
                   <div class="topic-card-meta"><span class="chip violet">输出包</span><span class="chip amber">最近活跃</span></div>
                   <div class="collection-card-title">PKG-042 剧本输出包</div>
-                  <div class="collection-card-meta">6 个文件 · 剧本阶段 · current projection<br>F1 v4 / F2 v3 / F3 v2 / IMG v1</div>
+                  <div class="collection-card-meta">6 个文件 · 剧本阶段 · 当前包<br>F1 v4 / F2 v3 / F3 v2 / IMG v1</div>
                 </div>
                 <div class="collection-card">
-                  <div class="topic-card-meta"><span class="chip blue">文件集合</span><span class="chip green">有 final</span></div>
+                  <div class="topic-card-meta"><span class="chip blue">文件集合</span><span class="chip green">有最终版</span></div>
                   <div class="collection-card-title">角色设定集合</div>
-                  <div class="collection-card-meta">2 个 Markdown · 已通过 · final v3</div>
+                  <div class="collection-card-meta">2 个 Markdown · 已通过 · 最终版 v3</div>
                 </div>
                 <div class="collection-card">
                   <div class="topic-card-meta"><span class="chip">等待上游</span></div>
@@ -1596,6 +1681,14 @@
                 </div>
               </aside>
               <div class="file-table-wrap">
+                <div class="identity-note" style="margin:0 0 10px;">
+                  文件页是文件包和文件的查看/使用空间，不是审核工作台。这里可以查看、预览、引用和看状态；逐文件审核在预览/编辑浮窗里完成。
+                </div>
+                <div class="inline-actions" style="justify-content:flex-start; margin-bottom:10px;">
+                  <button class="pill-button">多选引用</button>
+                  <button class="pill-button">引用最终版包</button>
+                  <button class="solid-button blue js-open-preview">审核待审文件</button>
+                </div>
                 <table>
                   <thead>
                     <tr>
@@ -1613,7 +1706,7 @@
                       <td><strong>第1集剧本.md</strong><div class="file-sub">collection: script.ep01</div></td>
                       <td><span class="chip blue">script</span><div class="file-sub">剧本创作</div></td>
                       <td>@剧本创作 + derrick 手改<div class="file-sub">wr_42 · msg_19</div></td>
-                      <td><span class="chip amber">v4 current</span><div class="file-sub">server revision rev_4</div></td>
+                      <td><span class="chip amber">v4 当前版</span><div class="file-sub">系统版本 rev_4</div></td>
                       <td><span class="chip">未设置</span></td>
                       <td><span class="chip amber">待审核</span></td>
                       <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">引用</button></div></td>
@@ -1622,8 +1715,8 @@
                       <td><strong>角色表.md</strong><div class="file-sub">collection: character.sheet</div></td>
                       <td><span class="chip violet">character</span><div class="file-sub">剧本创作</div></td>
                       <td>@剧本创作<div class="file-sub">wr_43 · Agent 修订</div></td>
-                      <td><span class="chip green">v3 current</span><div class="file-sub">server revision rev_3</div></td>
-                      <td><span class="chip green">v3 final</span></td>
+                      <td><span class="chip green">v3 当前版</span><div class="file-sub">系统版本 rev_3</div></td>
+                      <td><span class="chip green">v3 最终版</span></td>
                       <td><span class="chip green">已通过</span></td>
                       <td><div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div></td>
                     </tr>
@@ -1631,7 +1724,7 @@
                       <td><strong>分镜提示词.md</strong><div class="file-sub">collection: storyboard.prompt</div></td>
                       <td><span class="chip blue">prompt</span><div class="file-sub">剧本创作</div></td>
                       <td>@剧本创作<div class="file-sub">wr_42 · 初稿</div></td>
-                      <td><span class="chip amber">v2 current</span><div class="file-sub">server revision rev_2</div></td>
+                      <td><span class="chip amber">v2 当前版</span><div class="file-sub">系统版本 rev_2</div></td>
                       <td><span class="chip">未设置</span></td>
                       <td><span class="chip amber">要求修改</span></td>
                       <td><div class="row-actions"><button class="pill-button js-open-preview">预览/编辑</button><button class="pill-button">基于此修改</button></div></td>
@@ -1640,7 +1733,7 @@
                       <td><strong>场景参考图.png</strong><div class="file-sub">collection: visual.reference.ep01</div></td>
                       <td><span class="chip">image</span><div class="file-sub">剧本创作</div></td>
                       <td>@剧本创作<div class="file-sub">wr_42 · generated artifact</div></td>
-                      <td><span class="chip blue">v1 current</span></td>
+                      <td><span class="chip blue">v1 当前版</span></td>
                       <td><span class="chip">未设置</span></td>
                       <td><span class="chip green">可用</span></td>
                       <td><div class="row-actions"><button class="pill-button">查看</button><button class="pill-button">引用</button></div></td>
@@ -1648,24 +1741,24 @@
                   </tbody>
                 </table>
                 <div class="identity-note">
-                  这里的“最终版”不是标签或文件名，而是 Server 保存的 finalVersionId。@PKG 默认引用 current；引用 final 必须显式选择。
+                  这里的“最终版”不是标签或文件名，而是系统保存的最终版指针。@文件包默认引用当前版；引用最终版必须显式选择。
                 </div>
                 <div class="implementation-note">
                   <strong>表格字段说明</strong>
                   <ul>
                     <li>名称 = 文件名 + 长期文件 ID；类型 / 阶段 = 项目语义，不是文件来源。</li>
                     <li>来源 = Agent、人类修改、WorkspaceRun 和消息位置。</li>
-                    <li>当前版 = currentVersionId，代表最新 Server 修订；最终版 = finalVersionId，代表人工确认指针。</li>
+                    <li>当前版代表最新系统修订；最终版代表人工确认指针。</li>
                     <li>审核 = 当前版本是否可被后续引用；动作最终必须写回 Server 事实。</li>
                   </ul>
                 </div>
                 <div class="implementation-note">
                   <strong>整包引用规则</strong>
                   <ul>
-                    <li>整包引用当前版本时，读取包内每个文件各自的 currentVersionId。</li>
-                    <li>用户手动修改和 Agent 修订都以 Server 最新修订为准，不回退到聊天旧正文。</li>
-                    <li>引用最终版包要求包内所有文件都有 finalVersionId，不能静默混用 final + current。</li>
-                    <li>被拒绝或要求修改的 current 不能作为默认正式输入，只能显式用于基于此修改。</li>
+                    <li>整包引用当前版本时，读取包内每个文件各自的最新系统版本。</li>
+                    <li>用户手动修改和 Agent 修订都以系统最新修订为准，不回退到聊天旧正文。</li>
+                    <li>引用最终版包要求包内所有文件都有最终版，不能静默混用最终版和当前版。</li>
+                    <li>被拒绝或要求修改的当前版不能作为默认正式输入，只能显式用于基于此修改。</li>
                     <li>提交给后端时必须携带 artifactVersionId 或 artifactCollectionId，不能只传 F1/F2 或“第 3 个”。</li>
                   </ul>
                 </div>
@@ -1676,6 +1769,7 @@
       </section>
     </main>
 
+    <div class="discussion-resizer" id="discussionResizer" role="separator" aria-orientation="vertical" aria-label="调整讨论串宽度" tabindex="0"></div>
     <aside class="discussion">
       <div class="thread-head">
         <div class="thread-title">
@@ -1714,7 +1808,7 @@
                 </div>
                 <div class="package-actions">
                   <button class="pill-button js-open-preview">预览</button>
-                  <button class="pill-button js-open-preview">编辑</button>
+                  <button class="pill-button js-open-preview">审核交付文件</button>
                   <button class="pill-button">引用最终版包</button>
                   <button class="solid-button amber">引用当前包</button>
                 </div>
@@ -1725,7 +1819,7 @@
                   <span class="file-id">F1</span>
                   <div class="file-main">
                     <span class="file-name">第1集剧本.md</span>
-                    <span class="file-sub">collection: script.ep01 · current server v4 · 手动修改于 19:41</span>
+                    <span class="file-sub">collection: script.ep01 · 系统当前版 v4 · 手动修改于 19:41</span>
                   </div>
                   <span class="chip amber">待审核</span>
                   <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
@@ -1735,7 +1829,7 @@
                   <span class="file-id">F2</span>
                   <div class="file-main">
                     <span class="file-name">角色表.md</span>
-                    <span class="file-sub">collection: character.sheet · current server v3 · Agent 修订于 19:37</span>
+                    <span class="file-sub">collection: character.sheet · 系统当前版 v3 · Agent 修订于 19:37</span>
                   </div>
                   <span class="chip green">已通过</span>
                   <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">引用</button></div>
@@ -1745,17 +1839,17 @@
                   <span class="file-id">F3</span>
                   <div class="file-main">
                     <span class="file-name">分镜提示词.md</span>
-                    <span class="file-sub">collection: storyboard.prompt · current server v2 · Agent 初稿</span>
+                    <span class="file-sub">collection: storyboard.prompt · 系统当前版 v2 · Agent 初稿</span>
                   </div>
                   <span class="chip amber">要求修改</span>
                   <div class="row-actions"><button class="pill-button js-open-preview">预览</button><button class="pill-button">基于此修改</button></div>
                 </div>
               </div>
               <div class="package-foot">
-                <span><strong>多选引用</strong>会插入多个稳定文件 chip；<strong>引用当前包</strong>读取每个文件的 current，若 current 已拒绝/要求修改则先提示。</span>
+                <span><strong>多选引用</strong>会插入多个稳定文件 chip；<strong>引用当前包</strong>读取每个文件的当前版，若当前版已拒绝/要求修改则先提示。</span>
                 <div class="inline-actions">
                   <button class="pill-button">引用已选 2 个</button>
-                  <button class="pill-button">打开审核任务</button>
+                  <button class="pill-button js-open-preview">逐个预览审核</button>
                 </div>
               </div>
             </div>
@@ -1766,12 +1860,12 @@
           <div>
             <div class="message-head"><strong>derrick</strong><span class="you-badge">你</span><span class="time">19:43</span></div>
             <div class="message-body">我改了 F1 的结尾，保存后可以在这里 @任意可见智能体，并基于最新 Server 修订继续。</div>
-            <div class="request-banner">轻量事件：derrick 手动修改 F1 第1集剧本.md，Server 生成 v4；final 未自动移动。</div>
+            <div class="request-banner">轻量事件：derrick 手动修改 F1 第1集剧本.md，系统生成 v4；最终版未自动移动。</div>
             <div class="implementation-note">
               <strong>实现备注</strong>
               <ul>
                 <li>讨论串输入框的 @ 选择器需要同时支持成员、智能体、文件和文件包。</li>
-                <li>@文件包 默认引用 current projection；引用 final 必须显式选择。</li>
+                <li>@文件包默认引用当前包；引用最终版必须显式选择。</li>
                 <li>单个引用和多选引用都提交稳定 artifactVersionId 或 artifactCollectionId + versionPolicy。</li>
                 <li>手动编辑保存后生成新的 Server revision，更新 currentVersionId，并在讨论串留下轻量事件。</li>
               </ul>
@@ -1782,11 +1876,11 @@
       <div class="thread-foot">
         <div class="reference-strip">
           <span>引用中：</span>
-          <span class="chip violet">PKG-042 current</span>
+          <span class="chip violet">PKG-042 当前包</span>
           <span class="chip blue">F1 第1集剧本.md v4</span>
           <span class="chip blue">F2 角色表.md v3</span>
         </div>
-        <textarea>回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）。例如：@某个智能体 请基于 @PKG-042 或 @F1 @F2 继续处理。</textarea>
+        <textarea id="threadComposer">回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）。例如：@某个智能体 请基于 @PKG-042 或 @F1 @F2 继续处理。</textarea>
       </div>
     </aside>
   </div>
@@ -1803,22 +1897,22 @@
         <aside class="modal-files">
           <div class="modal-file active">
             <div class="file-name">F1 第1集剧本.md</div>
-            <div class="file-sub">current v4 · 手动修改 · 待审核</div>
+            <div class="file-sub">当前版 v4 · 手动修改 · 待审核</div>
           </div>
           <div class="modal-file">
             <div class="file-name">F2 角色表.md</div>
-            <div class="file-sub">current v3 · Agent 修订 · final</div>
+            <div class="file-sub">当前版 v3 · Agent 修订 · 最终版</div>
           </div>
           <div class="modal-file">
             <div class="file-name">F3 分镜提示词.md</div>
-            <div class="file-sub">current v2 · Agent 初稿 · 待审核</div>
+            <div class="file-sub">当前版 v2 · Agent 初稿 · 待审核</div>
           </div>
           <div class="modal-file">
             <div class="file-name">IMG 场景参考图.png</div>
             <div class="file-sub">v1 · generated artifact</div>
           </div>
           <div class="identity-note" style="margin-top:10px;">
-            保存后直接更新该文档的最新 Server 修订；后续引用当前包自动读取这个 current projection。是否同步到本地/Agent 工作区待文件同步架构确认。
+            文件审核只作用于当前预览的文件版本。保存新版本是内容版本动作；通过和退回修改是审核动作；设最终版在通过确认里勾选。
           </div>
         </aside>
         <section class="editor-pane">
@@ -1861,26 +1955,64 @@
       </div>
       <footer class="modal-foot">
         <div class="server-state" id="serverState">
-          <span class="chip blue">Server source of truth</span>
-          <span>当前编辑基于 <strong>script.ep01 v4</strong>；保存会生成 v5，并替换 current 指针，但不会自动移动 final。</span>
+          <span class="chip blue">系统记录</span>
+          <span>当前编辑基于 <strong>script.ep01 v4</strong>；保存会生成新版本，并替换当前版，但不会自动移动最终版，也不会完成任务验收。</span>
         </div>
-        <div class="modal-actions">
-          <button class="pill-button" id="simulateConflict">模拟冲突</button>
-          <button class="pill-button">查看版本历史</button>
-          <button class="solid-button blue" id="saveServer">保存为 Server 新版本</button>
-          <button class="solid-button amber">保存并提交审核</button>
+        <div class="modal-review-row">
+          <div class="modal-review-note">
+            <strong>审核当前文件版本</strong>
+            底部只保留 3 个主动作：保存新版本、通过、退回修改。点击“通过”或“退回修改...”会在这里展开对应面板。
+            <div class="review-panel-detail" id="approvePanel" aria-live="polite">
+              <strong>通过确认</strong>
+              <div class="review-option-grid">
+                <label class="review-option-card"><input type="radio" name="approve-version" value="通过当前已保存版本" checked> 通过当前已保存版本<br><span>审核系统里已经保存的 v4；编辑区未保存内容不纳入审核。</span></label>
+                <label class="review-option-card"><input type="radio" name="approve-version" value="先保存为新版本再通过"> 先保存为新版本再通过<br><span>先把编辑区内容保存成 v5，再审核通过 v5。</span></label>
+              </div>
+              <label class="review-option-card" style="display:block; margin-top:8px;"><input type="checkbox"> 同时设为本文档最终版<br><span>只移动第1集剧本这个文件集合的最终版指针，不代表整个文件包或任务完成。</span></label>
+              <div class="review-panel-actions">
+                <button class="pill-button" data-review-close>取消</button>
+                <button class="solid-button green" id="confirmApprove">确认通过</button>
+              </div>
+            </div>
+            <div class="review-panel-detail" id="returnPanel" aria-live="polite">
+              <strong>退回修改</strong>
+              <div class="review-option-grid">
+                <label class="review-option-card"><input type="radio" name="return-kind" value="要求修改" checked> 要求修改<br><span>方向基本可用，基于当前版本继续改。</span></label>
+                <label class="review-option-card"><input type="radio" name="return-kind" value="拒绝"> 拒绝<br><span>当前版本不可作为正式输入，需要重做或大改。</span></label>
+              </div>
+              <div class="review-field">
+                <label for="returnComment">审核意见</label>
+                <textarea id="returnComment" required>请保留小学生主动帮助的核心，但把结尾改得更自然，并减少说教感。</textarea>
+              </div>
+              <div class="review-option-grid">
+                <label class="review-option-card"><input type="radio" name="return-agent" checked> 让原智能体修改<br><span>回讨论串时预填 @剧本创作。</span></label>
+                <label class="review-option-card"><input type="radio" name="return-agent"> 换一个智能体处理<br><span>回讨论串时不填具体智能体，留给用户重新选择。</span></label>
+              </div>
+              <div class="review-panel-actions">
+                <button class="pill-button" data-review-close>取消</button>
+                <button class="solid-button blue" id="confirmReturn">回讨论串继续</button>
+              </div>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <button class="pill-button" id="simulateConflict">模拟冲突</button>
+            <button class="pill-button">查看版本历史</button>
+            <button class="solid-button blue" id="saveServer">保存新版本</button>
+            <button class="solid-button green" id="approveFile">通过</button>
+            <button class="pill-button" id="returnFile">退回修改...</button>
+          </div>
         </div>
       </footer>
     </section>
   </div>
 
-  <div class="toast" id="toast">已保存：Server 生成 script.ep01 v5，当前包 PKG-042 的 current projection 已更新。</div>
+  <div class="toast" id="toast">已保存：系统生成 script.ep01 v5，当前包 PKG-042 的当前版本已更新。</div>
 
   <nav class="switcher" aria-label="原型状态切换">
     <button data-screen-target="chat" class="active">聊天：话题内文件包</button>
     <button class="js-open-preview">预览 / 编辑浮窗</button>
     <button data-screen-target="task">任务：审核流转</button>
-    <button data-screen-target="files">文件：版本与 final</button>
+    <button data-screen-target="files">文件：版本与最终版</button>
   </nav>
 
   <script>
@@ -1888,6 +2020,14 @@
     const preview = document.getElementById('markdownPreview');
     const toast = document.getElementById('toast');
     const serverState = document.getElementById('serverState');
+    const threadComposer = document.getElementById('threadComposer');
+    const app = document.querySelector('.app');
+    const discussionResizer = document.getElementById('discussionResizer');
+    const defaultDiscussionWidth = 520;
+    const approvePanel = document.getElementById('approvePanel');
+    const returnPanel = document.getElementById('returnPanel');
+    let currentVersion = 4;
+    let savedSource = source.value;
 
     function escapeHtml(value) {
       return value
@@ -1949,6 +2089,55 @@
       window.setTimeout(() => toast.classList.remove('show'), 2800);
     }
 
+    function showReviewPanel(panel) {
+      approvePanel.classList.toggle('active', panel === 'approve');
+      returnPanel.classList.toggle('active', panel === 'return');
+    }
+
+    function saveNewVersion() {
+      currentVersion += 1;
+      savedSource = source.value;
+      return currentVersion;
+    }
+
+    function clampDiscussionWidth(width) {
+      const maxWidth = Math.max(420, window.innerWidth - 720);
+      return Math.min(Math.max(width, 420), maxWidth);
+    }
+
+    function getDiscussionWidth() {
+      const value = getComputedStyle(app).getPropertyValue('--discussion-width').trim();
+      if (value.endsWith('px')) return Number.parseFloat(value);
+      return Math.round(window.innerWidth * 0.42);
+    }
+
+    function setDiscussionWidth(width) {
+      app.style.setProperty('--discussion-width', clampDiscussionWidth(width) + 'px');
+    }
+
+    function startDiscussionResize(event) {
+      event.preventDefault();
+      document.body.classList.add('is-resizing-discussion');
+
+      function move(moveEvent) {
+        const point = moveEvent.touches ? moveEvent.touches[0] : moveEvent;
+        setDiscussionWidth(window.innerWidth - point.clientX - 4);
+      }
+
+      function stop() {
+        document.body.classList.remove('is-resizing-discussion');
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', stop);
+        window.removeEventListener('touchmove', move);
+        window.removeEventListener('touchend', stop);
+      }
+
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', stop);
+      window.addEventListener('touchmove', move, { passive: false });
+      window.addEventListener('touchend', stop);
+    }
+
     document.querySelectorAll('[data-screen-target]').forEach((button) => {
       button.addEventListener('click', () => setScreen(button.dataset.screenTarget));
     });
@@ -1961,14 +2150,73 @@
     document.querySelector('.preview-overlay').addEventListener('click', (event) => {
       if (event.target.classList.contains('preview-overlay')) closePreview();
     });
+    discussionResizer.addEventListener('mousedown', startDiscussionResize);
+    discussionResizer.addEventListener('touchstart', startDiscussionResize, { passive: false });
+    discussionResizer.addEventListener('dblclick', () => setDiscussionWidth(defaultDiscussionWidth));
+    discussionResizer.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setDiscussionWidth(getDiscussionWidth() + 32);
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        setDiscussionWidth(getDiscussionWidth() - 32);
+      }
+    });
     source.addEventListener('input', renderMarkdown);
     document.getElementById('saveServer').addEventListener('click', () => {
-      serverState.innerHTML = '<span class="chip green">已保存</span><span>Server 已生成 <strong>script.ep01 v5</strong>；PKG-042 当前包现在读取 F1=v5，final 不自动移动。</span>';
-      showToast('已保存：Server 生成 script.ep01 v5，并在讨论串记录轻量事件。');
+      const savedVersion = saveNewVersion();
+      serverState.innerHTML = '<span class="chip green">已保存</span><span>系统已生成 <strong>script.ep01 v' + savedVersion + '</strong>；PKG-042 当前包现在读取第1集剧本 v' + savedVersion + '，最终版和任务验收不自动改变。</span>';
+      showToast('已保存：系统生成 script.ep01 v' + savedVersion + '，并在讨论串记录轻量事件；任务仍待审核交付。');
+    });
+    document.getElementById('approveFile').addEventListener('click', () => {
+      serverState.innerHTML = '<span class="chip green">通过确认</span><span>确认面板：通过当前已保存版本；若有未保存编辑，可选择先保存为新版本再通过，并可勾选同时设为最终版。</span>';
+      showReviewPanel('approve');
+      showToast('通过是审核动作：只批准当前文件版本；设最终版是确认面板里的可选项。');
+    });
+    document.getElementById('returnFile').addEventListener('click', () => {
+      serverState.innerHTML = '<span class="chip amber">退回面板</span><span>选择要求修改或拒绝，填写意见，再回讨论串选择原智能体或其他智能体继续。</span>';
+      showReviewPanel('return');
+      showToast('退回修改会带着意见回讨论串，不会自动重跑智能体。');
+    });
+    document.querySelectorAll('[data-review-close]').forEach((button) => {
+      button.addEventListener('click', () => showReviewPanel(null));
+    });
+    document.getElementById('confirmApprove').addEventListener('click', () => {
+      const approveMode = document.querySelector('input[name="approve-version"]:checked')?.value || '通过当前已保存版本';
+      const finalChecked = document.querySelector('#approvePanel input[type="checkbox"]')?.checked;
+      const shouldSaveFirst = approveMode === '先保存为新版本再通过';
+      const hasUnsavedChanges = source.value !== savedSource;
+      const reviewedVersion = shouldSaveFirst ? saveNewVersion() : currentVersion;
+      const saveSummary = shouldSaveFirst ? '系统先保存编辑区内容为 script.ep01 v' + reviewedVersion + '，再' : '系统';
+      const draftSummary = !shouldSaveFirst && hasUnsavedChanges ? '编辑区未保存内容未纳入审核。' : '';
+      serverState.innerHTML = '<span class="chip green">已通过</span><span>' + saveSummary + '写入 script.ep01 v' + reviewedVersion + ' 的通过审核记录。' + draftSummary + (finalChecked ? '同时设为本文档最终版。' : '未移动最终版指针。') + '任务交付验收仍未自动完成。</span>';
+      showReviewPanel(null);
+      showToast('已确认通过 script.ep01 v' + reviewedVersion + '：文件审核已写入，任务验收仍是独立动作。');
+    });
+    document.getElementById('confirmReturn').addEventListener('click', () => {
+      const useOriginalAgent = document.querySelector('input[name="return-agent"]:checked')?.parentElement?.textContent.includes('原智能体');
+      const returnKind = document.querySelector('input[name="return-kind"]:checked')?.value || '要求修改';
+      const returnComment = document.getElementById('returnComment');
+      const comment = returnComment.value.trim();
+      if (!comment) {
+        returnComment.setAttribute('aria-invalid', 'true');
+        returnComment.focus();
+        showToast('请先填写审核意见，再回讨论串继续。');
+        return;
+      }
+      returnComment.removeAttribute('aria-invalid');
+      const agentPrefix = useOriginalAgent ? '@剧本创作 ' : '@请选择智能体 ';
+      threadComposer.value = agentPrefix + '请基于 @F1 第1集剧本.md v' + currentVersion + ' 继续处理。审核结论：' + returnKind + '。审核意见：' + comment;
+      setScreen('chat');
+      closePreview();
+      serverState.innerHTML = '<span class="chip amber">已准备退回</span><span>' + (useOriginalAgent ? '已预填原智能体 @剧本创作。' : '未指定具体智能体，等待用户选择。') + '审核意见已带入讨论串输入框；用户发送后才会继续执行。</span>';
+      showReviewPanel(null);
+      showToast('已回到讨论串继续：退回不会自动重跑智能体。');
     });
     document.getElementById('simulateConflict').addEventListener('click', () => {
-      serverState.innerHTML = '<span class="chip red">冲突</span><span>Server 已有 <strong>script.ep01 v6</strong>；请先查看最新版，确认后再保存为 v7。</span>';
-      showToast('检测到冲突：当前草稿不是最新 Server 修订。');
+      serverState.innerHTML = '<span class="chip red">冲突</span><span>系统已有 <strong>script.ep01 v6</strong>；请先查看最新版，确认后再保存为 v7。</span>';
+      showToast('检测到冲突：当前草稿不是最新系统版本。');
     });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') closePreview();
