@@ -17,6 +17,7 @@ import {
   evaluatePackageReviewAndRejectDelivery,
   evaluateRejectRevision,
   mapPackageReviewRejection,
+  type PackageArtifactReviewFacts,
 } from '../../../../packages/domain/src/index.js';
 import type { ServerNextRepositories } from './repositories.js';
 import type {
@@ -251,7 +252,7 @@ export async function submitPackageReviewCommand(
       if (input.decision !== 'approved') {
         return { kind: 'rejected', reasonCode: 'invalid-decision' };
       }
-      return commitRevisionWithReview(deps, input, commandHash, authorizedReview, now, false);
+      return commitRevisionWithReview(deps, input, commandHash, authorizedReview, packageFacts, now, false);
     }
     return commitReview(deps, input, commandHash, authorizedReview, now);
   }
@@ -280,7 +281,7 @@ export async function submitPackageReviewCommand(
       return { kind: 'rejected', reasonCode: 'collection-revision-stale' };
     }
     if (input.saveRevision) {
-      return commitRevisionWithReview(deps, input, commandHash, reviewBase, now, true);
+      return commitRevisionWithReview(deps, input, commandHash, reviewBase, packageFacts, now, true);
     }
     const finalization: ProjectArtifactFinalizationRecord = {
       id: deps.ids.nextId(),
@@ -342,10 +343,16 @@ async function commitRevisionWithReview(
   input: SubmitPackageReviewCommandInput,
   commandHash: string,
   reviewBase: PackageReviewRecord,
+  packageFacts: PackageArtifactReviewFacts,
   now: number,
   finalize: boolean,
 ): Promise<SubmitPackageReviewResult> {
   const { repositories, ids } = deps;
+  const revisionBasis = input.saveRevision!.revisionBasis;
+  if (revisionBasis.packageId !== reviewBase.packageId
+    || revisionBasis.deliveryId !== reviewBase.deliveryId) {
+    return { kind: 'rejected', reasonCode: 'revision-basis-mismatch' };
+  }
   let materialized: ArtifactVersionRevisionSaveResultDto | undefined;
   try {
     const applied = await repositories.taskCoordinationUnitOfWork.run(async (repos) => {
@@ -378,10 +385,38 @@ async function commitRevisionWithReview(
       }
       materialized = saved.saveResult;
 
+      const savedStage = saved.version.stageId
+        ? (await repos.channelProjects.listStages({ teamId: input.teamId, channelId: input.channelId }))
+          .find((candidate) => candidate.id === saved.version.stageId) ?? null
+        : null;
+      const savedAuthority = evaluatePackageArtifactReviewAuthority({
+        actorKind: 'human',
+        facts: {
+          ...packageFacts,
+          actorFacts: {
+            ...packageFacts.actorFacts,
+            stageReviewerIds: savedStage?.reviewerIds ?? [],
+          },
+          versionScope: {
+            collectionId: input.collectionId,
+            versionId: saved.version.id,
+            versionCollectionId: saved.version.collectionId,
+            currentVersionId: saved.collection.currentVersionId,
+          },
+        },
+        decision: input.decision,
+      });
+      if (savedAuthority.kind === 'rejected') {
+        throw new PackageRevisionAbort(
+          'rejected',
+          mapPackageReviewRejection(savedAuthority.reasonCode),
+        );
+      }
       const review: PackageReviewRecord = {
         ...reviewBase,
         versionId: saved.version.id,
         ...(saved.version.stageId ? { stageId: saved.version.stageId } : {}),
+        authorityBasis: savedAuthority.authorityBasis,
       };
       const finalization = finalize ? {
         id: ids.nextId(),

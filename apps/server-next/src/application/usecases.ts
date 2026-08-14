@@ -18035,7 +18035,16 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
     if (PACKAGE_REVIEW_CONFLICT_CODES.includes(result.reasonCode)) {
       return makeFailure('CONFLICT', `Package review conflict: ${result.reasonCode}`);
     }
-    if (result.reasonCode === 'invalid-decision' || result.reasonCode === 'reject-reason-required') {
+    if (result.reasonCode === 'invalid-decision'
+      || result.reasonCode === 'reject-reason-required'
+      || result.reasonCode === 'revision-editing-disabled'
+      || result.reasonCode === 'content-invalid'
+      || result.reasonCode === 'version-not-in-collection'
+      || result.reasonCode === 'not-markdown-version'
+      || result.reasonCode === 'revision-basis-mismatch'
+      || result.reasonCode === 'collection-not-found'
+      || result.reasonCode === 'channel-not-found'
+      || result.reasonCode === 'invalid-request') {
       return makeFailure('VALIDATION_ERROR', `Package review rejected: ${result.reasonCode}`);
     }
     return makeFailure('FORBIDDEN', `Package review rejected: ${result.reasonCode}`);

@@ -131,7 +131,7 @@ interface PackageFixture {
 async function seedPackage(
   repositories: ServerNextRepositories,
   seedValue: Seed,
-  opts?: { taskId?: string; taskRevision?: number; taskAttempt?: number },
+  opts?: { taskId?: string; taskRevision?: number; taskAttempt?: number; stageId?: string },
 ): Promise<PackageFixture> {
   const taskId = opts?.taskId ?? `task-${seedValue.channelId}`;
   // version 的 artifact FK 需要先有 artifact 行。
@@ -173,7 +173,13 @@ async function seedPackage(
       filename: 'report.md',
       sizeBytes: 12,
       collection: { mode: 'create', collectionId: `col-${seedValue.channelId}-1`, name: 'out/report.md', kind: 'deliverable' },
-      version: { id: `ver-${seedValue.channelId}-1`, artifactId: `art-${seedValue.channelId}-1`, taskId, taskRevision: 1 },
+      version: {
+        id: `ver-${seedValue.channelId}-1`,
+        artifactId: `art-${seedValue.channelId}-1`,
+        ...(opts?.stageId ? { stageId: opts.stageId } : {}),
+        taskId,
+        taskRevision: 1,
+      },
     }],
     receipt: {
       receiptId: `rcpt-${seedValue.channelId}-1`,
@@ -211,6 +217,81 @@ async function seedPackage(
     taskRevision: opts?.taskRevision ?? 1,
     taskAttempt: opts?.taskAttempt ?? 1,
   };
+}
+
+/** 构造第二个冻结同一既有 version 的 package，用于验证组合命令不能混用 provenance。 */
+async function seedPackageReusingVersion(
+  repositories: ServerNextRepositories,
+  seedValue: Seed,
+  source: PackageFixture,
+): Promise<{ packageId: string; deliveryId: string }> {
+  const packageId = `pkg-${seedValue.channelId}-reuse`;
+  const deliveryId = `del-${seedValue.channelId}-reuse`;
+  const result = await repositories.outputPackages.recordPackageFormation({
+    record: {
+      teamId: seedValue.teamId,
+      packageId,
+      channelId: seedValue.channelId,
+      deliveryId,
+      publishId: `pub-${seedValue.channelId}-reuse`,
+      workspaceRevisionId: `rev-${seedValue.channelId}-reuse`,
+      agentId: seedValue.agentId,
+      taskId: source.taskId,
+      taskBinding: 'managed',
+      taskRevision: source.taskRevision,
+      taskAttempt: source.taskAttempt,
+      memberCount: 1,
+      status: 'recorded',
+      createdAt: 501,
+    },
+    members: [{
+      sequence: 1,
+      shortLabel: 'F1',
+      role: 'deliverable',
+      requiredForFinal: true,
+      sourcePath: 'out/report.md',
+      filename: 'report.md',
+      sizeBytes: 12,
+      collection: {
+        mode: 'reuse',
+        collectionId: source.collectionId,
+        expectedVersionId: source.versionId,
+      },
+      version: {
+        id: source.versionId,
+        artifactId: `art-${seedValue.channelId}-1`,
+        taskId: source.taskId,
+        taskRevision: source.taskRevision,
+      },
+    }],
+    receipt: {
+      receiptId: `rcpt-${seedValue.channelId}-reuse`,
+      teamId: seedValue.teamId,
+      commandName: 'record-agent-output-package',
+      commandSchemaVersion: 1,
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:reuse`,
+      commandHash: 'reuse',
+      outcome: 'applied',
+      committedRevisions: [],
+      eventRefs: [],
+      commitTime: 501,
+      resultAvailable: true,
+      createdAt: 501,
+    },
+    tombstone: {
+      id: `tomb-${seedValue.channelId}-reuse`,
+      teamId: seedValue.teamId,
+      commandName: 'record-agent-output-package',
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:reuse`,
+      commandHash: 'reuse',
+      receiptId: `rcpt-${seedValue.channelId}-reuse`,
+      outcome: 'applied',
+      resultAvailable: true,
+      createdAt: 501,
+    },
+  });
+  if (result.kind !== 'created') throw new Error(`reused package seed failed: ${result.kind}`);
+  return { packageId, deliveryId };
 }
 
 async function seedTask(
@@ -551,6 +632,216 @@ for (const variant of variants) {
       channelId: s.channelId,
     });
     expect(versions.filter((version) => version.collectionId === pkg.collectionId)).toHaveLength(1);
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews).toHaveLength(0);
+    expect(s.deletedArtifactIds).toHaveLength(1);
+  });
+
+  test('#1197:组合审核拒绝使用另一个 package 的修订 provenance', async () => {
+    const s = await makeSeed();
+    const pkg = await seedPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const other = await seedPackageReusingVersion(s.repositories, s, pkg);
+
+    const result = await s.app.submitPackageArtifactReview({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'approved',
+      comment: '不应混用另一个包的修订依据',
+      expectedCollectionRevision: 1,
+      saveRevision: {
+        content: '# 错误 provenance',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: other.packageId,
+          deliveryId: other.deliveryId,
+        },
+      },
+      idempotencyKey: `save-review-cross-package:${pkg.versionId}`,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'VALIDATION_ERROR' });
+    const collection = await s.repositories.channelProjects.getArtifactCollection({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: pkg.collectionId,
+    });
+    expect(collection).toMatchObject({ currentVersionId: pkg.versionId, revision: 1, versionCount: 1 });
+    expect(s.deletedArtifactIds).toHaveLength(0);
+  });
+
+  test('#1197:组合保存后按新版本真实 Stage 重新校验审核权限', async () => {
+    const s = await makeSeed();
+    const sourceTaskId = `task-source-stage-${s.channelId}`;
+    const currentTaskId = `task-current-stage-${s.channelId}`;
+    await seedTask(s.repositories, s, sourceTaskId, 'in_review');
+    await seedTask(s.repositories, s, currentTaskId, 'in_review');
+
+    const profile = {
+      id: `profile-stage-auth-${s.channelId}`,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      projectLeadId: s.userId,
+      defaultReviewerIds: [s.userId],
+      revision: 1,
+      createdBy: s.userId,
+      createdAt: 300,
+      updatedAt: 300,
+    };
+    const sourceStage = {
+      id: `stage-source-${s.channelId}`,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      taskId: sourceTaskId,
+      taskRevision: 1,
+      name: '来源阶段',
+      goal: '提供修订来源',
+      ownerId: s.userId,
+      reviewerIds: [s.userId],
+      acceptanceCriteria: ['来源完整'],
+      createdAt: 300,
+      updatedAt: 300,
+    };
+    const currentStage = {
+      id: `stage-current-${s.channelId}`,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      taskId: currentTaskId,
+      taskRevision: 1,
+      name: '当前阶段',
+      goal: '审核当前版本',
+      ownerId: s.userId,
+      reviewerIds: [s.memberUserId],
+      acceptanceCriteria: ['当前版本可审核'],
+      createdAt: 301,
+      updatedAt: 301,
+    };
+    expect(await s.repositories.channelProjects.createInitialStage({
+      expectedRevision: 0,
+      profile,
+      stage: sourceStage,
+      mutation: {
+        teamId: s.teamId,
+        channelId: s.channelId,
+        idempotencyKey: `stage-source:${s.channelId}`,
+        requestFingerprint: 'stage-source',
+        profileId: profile.id,
+        stageId: sourceStage.id,
+        resultRevision: 1,
+        resultOverview: {} as never,
+        createdAt: 300,
+      },
+    })).toMatchObject({ kind: 'created' });
+    expect(await s.repositories.channelProjects.createStage({
+      expectedRevision: 1,
+      nextRevision: 2,
+      updatedAt: 301,
+      stage: currentStage,
+      mutation: {
+        teamId: s.teamId,
+        channelId: s.channelId,
+        idempotencyKey: `stage-current:${s.channelId}`,
+        requestFingerprint: 'stage-current',
+        profileId: profile.id,
+        stageId: currentStage.id,
+        resultRevision: 2,
+        resultOverview: {} as never,
+        createdAt: 301,
+      },
+    })).toMatchObject({ kind: 'created' });
+
+    const pkg = await seedPackage(s.repositories, s, { taskId: sourceTaskId, stageId: sourceStage.id });
+    const currentArtifactId = `art-current-stage-${s.channelId}`;
+    const currentVersionId = `ver-current-stage-${s.channelId}`;
+    await s.repositories.artifacts.create({
+      id: currentArtifactId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      uploaderId: s.userId,
+      filename: 'report-current.md',
+      mimeType: 'text/markdown',
+      sizeBytes: 16,
+      pathKind: 'upload',
+      createdAt: 600,
+    });
+    const collection = await s.repositories.channelProjects.getArtifactCollection({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: pkg.collectionId,
+    });
+    if (!collection) throw new Error('missing collection');
+    expect(await s.repositories.channelProjects.promoteArtifact({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      expectedCollectionRevision: collection.revision,
+      createsCollection: false,
+      collection: {
+        ...collection,
+        revision: collection.revision + 1,
+        currentVersionId,
+        versionCount: collection.versionCount + 1,
+        updatedAt: 600,
+      },
+      version: {
+        id: currentVersionId,
+        teamId: s.teamId,
+        channelId: s.channelId,
+        collectionId: pkg.collectionId,
+        versionNumber: 2,
+        artifactId: currentArtifactId,
+        stageId: currentStage.id,
+        taskId: currentTaskId,
+        taskRevision: 1,
+        lineage: [],
+        promotedBy: s.userId,
+        createdAt: 600,
+      },
+      mutation: {
+        teamId: s.teamId,
+        channelId: s.channelId,
+        idempotencyKey: `promote-current-stage:${s.channelId}`,
+        requestFingerprint: 'promote-current-stage',
+        collectionId: pkg.collectionId,
+        versionId: currentVersionId,
+        createdAt: 600,
+      },
+    })).toMatchObject({ kind: 'created' });
+
+    const result = await s.app.submitPackageArtifactReview({
+      userId: s.memberUserId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: currentVersionId,
+      decision: 'approved',
+      comment: '只能审核当前阶段，不能审核来源阶段',
+      expectedCollectionRevision: 2,
+      saveRevision: {
+        content: '# 跨 Stage 修订',
+        revisionBasis: {
+          sourceVersionId: pkg.versionId,
+          packageId: pkg.packageId,
+          deliveryId: pkg.deliveryId,
+        },
+      },
+      idempotencyKey: `save-review-cross-stage:${currentVersionId}`,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    const unchanged = await s.repositories.channelProjects.getArtifactCollection({
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: pkg.collectionId,
+    });
+    expect(unchanged).toMatchObject({ currentVersionId, revision: 2, versionCount: 2 });
     const reviews = await s.repositories.channelProjects.listArtifactReviews({
       teamId: s.teamId,
       channelId: s.channelId,
