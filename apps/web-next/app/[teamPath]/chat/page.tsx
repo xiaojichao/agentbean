@@ -69,6 +69,7 @@ import { artifactVersionRevisionFromMeta } from '@/lib/artifact-revision';
 import { loadAllPromotableArtifacts } from '@/lib/promotable-artifacts';
 import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
+import { buildPackageReturnComposerDraft } from '@/lib/output-package-return-handoff';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
 import { acceptTaskDagSnapshot } from '@/lib/task-dag';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
@@ -3045,6 +3046,35 @@ export default function ChatPage() {
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
           onSaved={() => refreshProjectArtifactLibrary()}
+          onReturnToThread={(handoff) => {
+            const packageMessage = messages.find((message) => {
+              const meta = outputPackageFromMeta(message.meta) ?? inlineOutputPackageFromMeta(message.meta);
+              return meta?.packageId === handoff.packageId;
+            });
+            const taskMessage = messages.find((message) => metaTaskId(message) === handoff.taskId);
+            const sourceMessage = packageMessage ?? taskMessage;
+            const targetMessageId = openPackagePreview.packageMeta.threadRootMessageId
+              ?? (sourceMessage ? parentMessageId(sourceMessage, messagesById) ?? sourceMessage.id : null)
+              ?? threadRootId;
+            const draft = buildPackageReturnComposerDraft(
+              handoff,
+              agents[handoff.originalAgentId]?.name,
+            );
+            setOpenPackagePreview(null);
+            if (targetMessageId) {
+              openThread(targetMessageId);
+              setThreadInput(draft.text);
+              setThreadSelections([draft.selection]);
+              setTimeout(() => threadTextareaRef.current?.focus(), 0);
+              return;
+            }
+            // 遗留 package 元数据或消息分页暂时无法定位 root 时，保留草稿与稳定引用，
+            // 不发送也不创建执行事实；用户仍可在主 composer 选择正确讨论上下文。
+            switchTab('chat');
+            setInput(draft.text);
+            setProjectReferenceSelections([draft.selection]);
+            setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
         />
       )}
 

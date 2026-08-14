@@ -18,6 +18,8 @@ export interface OutputPackageMemberMeta {
 export interface OutputPackageMeta {
   readonly kind: 'output-package';
   readonly packageId: string;
+  /** Server 从 delivery provenance 解析出的原讨论串 root；审核退回时优先使用。 */
+  readonly threadRootMessageId?: string;
   readonly taskId?: string;
   readonly taskTitle?: string;
   readonly agentId?: string;
@@ -54,6 +56,7 @@ export function outputPackageFromMeta(meta: Record<string, unknown> | null | und
   return {
     kind: 'output-package',
     packageId,
+    ...(asString(meta.threadRootMessageId) ? { threadRootMessageId: asString(meta.threadRootMessageId) } : {}),
     ...(asString(meta.taskId) ? { taskId: asString(meta.taskId) } : {}),
     ...(asString(meta.taskTitle) ? { taskTitle: asString(meta.taskTitle) } : {}),
     ...(asString(meta.agentId) ? { agentId: asString(meta.agentId) } : {}),

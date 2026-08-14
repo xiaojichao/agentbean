@@ -977,6 +977,54 @@ for (const variant of variants) {
     expect(reviews.find((r) => r.versionId === pkg.versionId)?.decision).toBe('changes_requested');
   });
 
+  test('#1198:拒绝版本与退回 delivery 原子提交，保留 lineage、阻断默认输入且不创建 invocation', async () => {
+    const s = await makeSeed();
+    const taskId = `task-return-thread-${s.channelId}`;
+    const pkg = await seedPackage(s.repositories, s, { taskId });
+    await seedTask(s.repositories, s, taskId, 'in_review');
+    await expect(s.repositories.management.invocations.listByRun(`run-${taskId}`)).resolves.toEqual([]);
+
+    const result = await s.app.submitPackageReviewAndRejectDelivery({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      collectionId: pkg.collectionId,
+      versionId: pkg.versionId,
+      decision: 'rejected',
+      comment: '方向错误，需要重做',
+      idempotencyKey: `return-thread:${pkg.versionId}`,
+      expectedTaskRevision: pkg.taskRevision,
+      expectedTaskAttempt: pkg.taskAttempt,
+      rejectReason: '方向错误，需要重做',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      review: {
+        packageId: pkg.packageId,
+        deliveryId: pkg.deliveryId,
+        taskId,
+        taskRevision: 1,
+        taskAttempt: 1,
+        versionId: pkg.versionId,
+        decision: 'rejected',
+      },
+      task: { taskId, taskRevision: 1, taskAttempt: 2, status: 'todo' },
+    });
+    const projection = await s.app.getOutputPackage({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      projection: { policy: 'current' },
+    });
+    expect(projection.ok).toBe(true);
+    if (!projection.ok) throw new Error(projection.error);
+    expect(projection.projection?.status).toBe('not_ready');
+    await expect(s.repositories.management.invocations.listByRun(`run-${taskId}`)).resolves.toEqual([]);
+  });
+
   test('AC6 守卫:approved 不能组合退回;非 in_review Task 拒绝', async () => {
     const s = await makeSeed();
     const taskId = `task-guard-${s.channelId}`;

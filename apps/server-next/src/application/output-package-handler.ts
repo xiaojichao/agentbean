@@ -551,6 +551,7 @@ async function appendOutputPackageSystemMessage(
         kind: 'output-package',
         packageId: input.packageId,
         clientMessageId,
+        ...(input.threadId ? { threadRootMessageId: input.threadId } : {}),
         ...(task ? { taskId: task.id, taskTitle: task.title } : { taskId: input.plan.taskId }),
         ...(agent ? { agentId: agent.id, agentName: agent.name } : { agentId: input.plan.agentId }),
         memberCount: input.memberFacts.length,
@@ -586,13 +587,21 @@ export async function readOutputPackageCardMeta(
       publishId: input.publishId,
     });
     if (!byPublish) return null;
-    const [agent, task] = await Promise.all([
+    const [agent, task, packageCard, provenanceThreadRootMessageId] = await Promise.all([
       repositories.agents.getById(byPublish.package.agentId).catch(() => null),
       repositories.tasks.getById(byPublish.package.taskId).catch(() => null),
+      repositories.messages.getByClientMessageId({
+        teamId: input.teamId,
+        channelId: byPublish.package.channelId,
+        clientMessageId: `output-package:${byPublish.package.packageId}`,
+      }).catch(() => null),
+      resolveOriginThreadId(repositories, input.teamId, byPublish.package.workspaceRunId),
     ]);
+    const threadRootMessageId = packageCard?.threadId ?? provenanceThreadRootMessageId;
     return {
       kind: 'output-package',
       packageId: byPublish.package.packageId,
+      ...(threadRootMessageId ? { threadRootMessageId } : {}),
       ...(task ? { taskId: task.id, taskTitle: task.title } : { taskId: byPublish.package.taskId }),
       ...(agent ? { agentId: agent.id, agentName: agent.name } : { agentId: byPublish.package.agentId }),
       memberCount: byPublish.members.length,

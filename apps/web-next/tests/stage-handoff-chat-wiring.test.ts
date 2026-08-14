@@ -34,6 +34,21 @@ describe('chat 页阶段交接预填接线（#1178，源码扫描）', () => {
     expect(chatSource).toContain('onStageHandoff={onStageHandoff}');
   });
 
+  test('#1198 文件审核退回优先回原 Thread，只写本地草稿与稳定选择', () => {
+    const start = chatSource.indexOf('onReturnToThread={(handoff)');
+    expect(start).toBeGreaterThan(-1);
+    const region = chatSource.slice(start, chatSource.indexOf('\n        />', start));
+    expect(region).toContain('packageMeta.threadRootMessageId');
+    expect(region).toContain('parentMessageId(sourceMessage, messagesById)');
+    expect(region).toContain('buildPackageReturnComposerDraft');
+    expect(region).toContain('openThread(targetMessageId)');
+    expect(region).toContain('setThreadInput(draft.text)');
+    expect(region).toContain('setThreadSelections([draft.selection])');
+    expect(region).toContain('threadTextareaRef.current?.focus');
+    expect(region).not.toContain('sendMessage(');
+    expect(region).not.toContain('message:send');
+  });
+
   test('打开 thread 保留 task-only 阶段详情深链，stage/chatTab/tasksView 参数不动（AC1）', () => {
     const start = chatSource.indexOf('const setThreadUrl');
     expect(start).toBeGreaterThan(-1);

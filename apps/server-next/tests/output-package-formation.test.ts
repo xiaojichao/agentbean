@@ -687,6 +687,7 @@ for (const variant of variants) {
       });
       expect(card).not.toBeNull();
       expect(card!.threadId).toBe('root-1');
+      expect(card!.meta?.threadRootMessageId).toBe('root-1');
       // 讨论串读取可见;且卡片不作为主线 root。
       const thread = await repositories.messages.listByThread({ channelId, threadId: 'root-1', limit: 50 });
       expect(thread.some((message) => message.id === card!.id)).toBe(true);
@@ -743,6 +744,7 @@ for (const variant of variants) {
       expect(inline).toBeDefined();
       expect(inline?.kind).toBe('output-package');
       expect(inline?.publishId).toBe('pub-inline');
+      expect(inline?.threadRootMessageId).toBe('msg-inline');
       expect(inline?.memberCount).toBe(1);
       const members = inline?.members as Array<{ filename: string }>;
       expect(members[0]?.filename).toBe('t6.md');
