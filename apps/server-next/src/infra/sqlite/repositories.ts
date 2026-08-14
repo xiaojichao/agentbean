@@ -5807,6 +5807,33 @@ function createSqlitePackageReviewRepository(teamDb: SqliteDatabase): PackageRev
         ).get(input.mutation.teamId, input.mutation.channelId, input.mutation.idempotencyKey);
         if (existingMutation) return { kind: 'idempotency_conflict' as const };
 
+        const fence = input.lineageFence;
+        const taskLineage = teamDb.prepare(
+          `SELECT t.team_id, t.channel_id, t.revision, c.task_revision, c.attempt
+           FROM tasks t
+           JOIN task_coordinations c ON c.task_id = t.id AND c.team_id = t.team_id
+           WHERE t.id = ?`,
+        ).get(fence.taskId);
+        const currentPackage = teamDb.prepare(
+          `SELECT package_id, delivery_id
+           FROM output_packages
+           WHERE team_id = ? AND channel_id = ? AND task_id = ? AND task_binding = 'managed'
+             AND task_revision = ? AND task_attempt = ?
+           ORDER BY created_at DESC, package_id DESC
+           LIMIT 1`,
+        ).get(fence.teamId, fence.channelId, fence.taskId, fence.taskRevision, fence.taskAttempt);
+        if (!taskLineage
+          || sqliteText(taskLineage, 'team_id') !== fence.teamId
+          || sqliteNullableText(taskLineage, 'channel_id') !== fence.channelId
+          || sqliteNumber(taskLineage, 'revision') !== fence.taskRevision
+          || sqliteNumber(taskLineage, 'task_revision') !== fence.taskRevision
+          || sqliteNumber(taskLineage, 'attempt') !== fence.taskAttempt
+          || !currentPackage
+          || sqliteText(currentPackage, 'package_id') !== fence.packageId
+          || sqliteText(currentPackage, 'delivery_id') !== fence.deliveryId) {
+          return { kind: 'delivery_revision_conflict' as const };
+        }
+
         // 在任何 INSERT 前验证整批 version/stage 作用域。
         for (const review of input.reviews) {
           const version = teamDb.prepare(

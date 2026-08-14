@@ -2738,6 +2738,28 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
         if (projectArtifactDecisionMutations.has(mutationKey)) return { kind: 'idempotency_conflict' };
 
+        const fence = input.lineageFence;
+        const task = tasks.get(`${fence.taskId}#${fence.taskRevision}`);
+        const coordination = await taskCoordination.coordinations.getByTaskId(fence.taskId);
+        const currentPackage = Array.from(outputPackages.values())
+          .filter((record) => record.teamId === fence.teamId
+            && record.channelId === fence.channelId
+            && record.taskId === fence.taskId
+            && record.taskBinding === 'managed'
+            && record.taskRevision === fence.taskRevision
+            && record.taskAttempt === fence.taskAttempt)
+          .sort((left, right) => right.createdAt - left.createdAt || right.packageId.localeCompare(left.packageId))[0];
+        if (!task || task.supersededByRevision !== null
+          || task.teamId !== fence.teamId || task.channelId !== fence.channelId
+          || task.revision !== fence.taskRevision
+          || !coordination || coordination.teamId !== fence.teamId
+          || coordination.taskRevision !== fence.taskRevision
+          || coordination.attempt !== fence.taskAttempt
+          || currentPackage?.packageId !== fence.packageId
+          || currentPackage.deliveryId !== fence.deliveryId) {
+          return { kind: 'delivery_revision_conflict' };
+        }
+
         // 先校验整批，确保 memory 实现与 SQLite 事务同样不会留下部分记录。
         for (const review of input.reviews) {
           const version = projectArtifactVersions.get(review.versionId);

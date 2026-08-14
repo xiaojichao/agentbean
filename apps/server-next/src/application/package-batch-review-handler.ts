@@ -15,6 +15,7 @@ import type {
   PackageReviewRecord,
   PackageReviewTombstoneRecord,
 } from './package-review-repositories.js';
+import { findCurrentManagedOutputPackage } from './output-package-current-delivery.js';
 
 export interface SubmitPackageBatchReviewCommandInput {
   readonly teamId: string;
@@ -85,6 +86,30 @@ export async function submitPackageBatchReviewCommand(
   if (packageProjection.package.channelId !== input.channelId) return reject('package-out-of-scope');
   if (!(await repositories.teams.isMember(input.teamId, input.userId))) return reject('actor-not-authorized');
 
+  const task = await repositories.tasks.getById(packageProjection.package.taskId);
+  const coordination = task
+    ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
+    : null;
+  const packageTaskRevision = packageProjection.package.taskRevision ?? 1;
+  if (!task || task.teamId !== input.teamId || task.channelId !== input.channelId
+    || !coordination || coordination.teamId !== input.teamId
+    || task.revision !== packageTaskRevision
+    || coordination.taskRevision !== task.revision
+    || coordination.attempt !== packageProjection.package.taskAttempt) {
+    return reject('delivery-revision-stale');
+  }
+  const currentPackage = await findCurrentManagedOutputPackage(repositories.outputPackages, {
+    teamId: input.teamId,
+    channelId: input.channelId,
+    taskId: task.id,
+    taskRevision: task.revision,
+    taskAttempt: coordination.attempt,
+  });
+  if (currentPackage.record?.packageId !== input.packageId
+    || currentPackage.record.deliveryId !== input.deliveryId) {
+    return reject('delivery-revision-stale');
+  }
+
   const [collections, versions, stages, profile, teamRole] = await Promise.all([
     repositories.channelProjects.listArtifactCollections({ teamId: input.teamId, channelId: input.channelId }),
     repositories.channelProjects.listArtifactVersions({ teamId: input.teamId, channelId: input.channelId }),
@@ -140,7 +165,6 @@ export async function submitPackageBatchReviewCommand(
   }
 
   const now = deps.clock.now();
-  const packageTaskRevision = packageProjection.package.taskRevision ?? 1;
   const reviews: PackageReviewRecord[] = decision.targets.map((target) => {
     const version = versions.find((candidate) => candidate.id === target.artifactVersionId)!;
     return {
@@ -193,6 +217,15 @@ export async function submitPackageBatchReviewCommand(
   };
   const committed = await repositories.packageReviews.recordPackageReviews({
     reviews,
+    lineageFence: {
+      teamId: input.teamId,
+      channelId: input.channelId,
+      taskId: task.id,
+      taskRevision: task.revision,
+      taskAttempt: coordination.attempt,
+      packageId: input.packageId,
+      deliveryId: input.deliveryId,
+    },
     mutation: {
       teamId: input.teamId,
       channelId: input.channelId,
@@ -204,6 +237,7 @@ export async function submitPackageBatchReviewCommand(
     tombstone,
   });
   if (committed.kind === 'idempotency_conflict') return { kind: 'conflict', reasonCode: 'idempotency-conflict' };
+  if (committed.kind === 'delivery_revision_conflict') return reject('delivery-revision-stale');
   if (committed.kind === 'version_scope_conflict') {
     return reject('version-not-in-collection');
   }

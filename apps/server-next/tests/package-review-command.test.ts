@@ -219,20 +219,25 @@ async function seedPackage(
   };
 }
 
-async function seedBatchPackage(repositories: ServerNextRepositories, seedValue: Seed): Promise<{
+async function seedBatchPackage(
+  repositories: ServerNextRepositories,
+  seedValue: Seed,
+  opts?: { taskId?: string; suffix?: string; createdAt?: number },
+): Promise<{
   packageId: string;
   deliveryId: string;
   taskId: string;
   targets: readonly { collectionId: string; artifactVersionId: string }[];
 }> {
-  const taskId = `task-${seedValue.channelId}-batch`;
+  const suffix = opts?.suffix ?? 'batch';
+  const taskId = opts?.taskId ?? `task-${seedValue.channelId}-batch`;
   const targets = [1, 2].map((index) => ({
-    collectionId: `col-${seedValue.channelId}-batch-${index}`,
-    artifactVersionId: `ver-${seedValue.channelId}-batch-${index}`,
+    collectionId: `col-${seedValue.channelId}-${suffix}-${index}`,
+    artifactVersionId: `ver-${seedValue.channelId}-${suffix}-${index}`,
   }));
   for (const [index, target] of targets.entries()) {
     await repositories.artifacts.create({
-      id: `art-${seedValue.channelId}-batch-${index + 1}`,
+      id: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
       teamId: seedValue.teamId,
       channelId: seedValue.channelId,
       uploaderId: seedValue.userId,
@@ -243,16 +248,16 @@ async function seedBatchPackage(repositories: ServerNextRepositories, seedValue:
       createdAt: 400 + index,
     });
   }
-  const packageId = `pkg-${seedValue.channelId}-batch`;
-  const deliveryId = `del-${seedValue.channelId}-batch`;
+  const packageId = `pkg-${seedValue.channelId}-${suffix}`;
+  const deliveryId = `del-${seedValue.channelId}-${suffix}`;
   const formed = await repositories.outputPackages.recordPackageFormation({
     record: {
       teamId: seedValue.teamId,
       packageId,
       channelId: seedValue.channelId,
       deliveryId,
-      publishId: `pub-${seedValue.channelId}-batch`,
-      workspaceRevisionId: `rev-${seedValue.channelId}-batch`,
+      publishId: `pub-${seedValue.channelId}-${suffix}`,
+      workspaceRevisionId: `rev-${seedValue.channelId}-${suffix}`,
       agentId: seedValue.agentId,
       taskId,
       taskBinding: 'managed',
@@ -260,7 +265,7 @@ async function seedBatchPackage(repositories: ServerNextRepositories, seedValue:
       taskAttempt: 1,
       memberCount: 2,
       status: 'recorded',
-      createdAt: 500,
+      createdAt: opts?.createdAt ?? 500,
     },
     members: targets.map((target, index) => ({
       sequence: index + 1,
@@ -273,23 +278,23 @@ async function seedBatchPackage(repositories: ServerNextRepositories, seedValue:
       collection: { mode: 'create' as const, collectionId: target.collectionId, name: `out/report-${index + 1}.md`, kind: 'deliverable' as const },
       version: {
         id: target.artifactVersionId,
-        artifactId: `art-${seedValue.channelId}-batch-${index + 1}`,
+        artifactId: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
         taskId,
         taskRevision: 1,
       },
     })),
     receipt: {
-      receiptId: `rcpt-${seedValue.channelId}-batch`, teamId: seedValue.teamId,
+      receiptId: `rcpt-${seedValue.channelId}-${suffix}`, teamId: seedValue.teamId,
       commandName: 'record-agent-output-package', commandSchemaVersion: 1,
-      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:batch`, commandHash: 'batch',
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:${suffix}`, commandHash: suffix,
       outcome: 'applied', committedRevisions: [], eventRefs: [], commitTime: 500,
       resultAvailable: true, createdAt: 500,
     },
     tombstone: {
-      id: `tomb-${seedValue.channelId}-batch`, teamId: seedValue.teamId,
+      id: `tomb-${seedValue.channelId}-${suffix}`, teamId: seedValue.teamId,
       commandName: 'record-agent-output-package',
-      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:batch`, commandHash: 'batch',
-      receiptId: `rcpt-${seedValue.channelId}-batch`, outcome: 'applied', resultAvailable: true, createdAt: 500,
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:${suffix}`, commandHash: suffix,
+      receiptId: `rcpt-${seedValue.channelId}-${suffix}`, outcome: 'applied', resultAvailable: true, createdAt: opts?.createdAt ?? 500,
     },
   });
   if (formed.kind !== 'created') throw new Error(`batch package seed failed: ${formed.kind}`);
@@ -519,6 +524,7 @@ for (const variant of variants) {
   test('#1199:错 delivery、重复目标或任一目标无权限时整批零写入并返回明确原因', async () => {
     const s = await makeSeed();
     const pkg = await seedBatchPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
     const common = {
       teamId: s.teamId,
       channelId: s.channelId,
@@ -568,6 +574,42 @@ for (const variant of variants) {
     });
     const reviews = await s.repositories.channelProjects.listArtifactReviews({ teamId: s.teamId, channelId: s.channelId });
     expect(reviews.filter((review) => review.packageId === pkg.packageId)).toHaveLength(0);
+  });
+
+  test('#1199:同一 Task 后续 delivery 已产生时旧包整批失败且零写入', async () => {
+    const s = await makeSeed();
+    const stale = await seedBatchPackage(s.repositories, s, { suffix: 'old', createdAt: 500 });
+    await seedTask(s.repositories, s, stale.taskId, 'in_review');
+    const current = await seedBatchPackage(s.repositories, s, {
+      taskId: stale.taskId,
+      suffix: 'current',
+      createdAt: 600,
+    });
+
+    const result = await s.app.submitPackageArtifactReviews({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: stale.packageId,
+      deliveryId: stale.deliveryId,
+      expectedPackageRevision: 1,
+      targets: stale.targets,
+      decision: 'approved',
+      comment: '旧交付不应再审核',
+      idempotencyKey: 'batch-stale-task-delivery',
+    });
+
+    expect(current.deliveryId).not.toBe(stale.deliveryId);
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      details: { rejectedTargets: [{ reason: 'delivery-revision-stale' }] },
+    });
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews.filter((review) => review.packageId === stale.packageId)).toHaveLength(0);
   });
 
   test('AC2:普通成员无审核权,非团队用户 FORBIDDEN', async () => {

@@ -119,6 +119,7 @@ export function OutputPackagePreviewModal({
   const [batchDecision, setBatchDecision] = useState<'approved' | 'changes_requested' | 'rejected'>('approved');
   const [batchComment, setBatchComment] = useState('');
   const [batchBusy, setBatchBusy] = useState(false);
+  const batchIntentRef = useRef<{ signature: string; idempotencyKey: string } | null>(null);
 
   const requestClose = useCallback(() => {
     if (!editorState.dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose();
@@ -531,18 +532,34 @@ export function OutputPackagePreviewModal({
     setBatchBusy(true);
     setActionError(null);
     try {
+      const targets = selectedBatchTargets.map(({ collection, current }) => ({
+        collectionId: collection.id,
+        artifactVersionId: current.id,
+      }));
+      const comment = batchComment.trim() || '批量通过当前 Server 版本';
+      const signature = JSON.stringify({
+        packageId: reviewPackageBasis.packageId,
+        deliveryId: reviewPackageBasis.deliveryId,
+        expectedPackageRevision: reviewPackageBasis.revision,
+        targets,
+        decision: batchDecision,
+        comment,
+      });
+      if (batchIntentRef.current?.signature !== signature) {
+        batchIntentRef.current = {
+          signature,
+          idempotencyKey: `pkg-preview-batch-review:${reviewPackageBasis.deliveryId}:${crypto.randomUUID()}`,
+        };
+      }
       const result = await projectEvents().submitPackageArtifactReviews({
         channelId,
         packageId: reviewPackageBasis.packageId,
         deliveryId: reviewPackageBasis.deliveryId,
         expectedPackageRevision: reviewPackageBasis.revision,
-        targets: selectedBatchTargets.map(({ collection, current }) => ({
-          collectionId: collection.id,
-          artifactVersionId: current.id,
-        })),
+        targets,
         decision: batchDecision,
-        comment: batchComment.trim() || '批量通过当前 Server 版本',
-        idempotencyKey: `pkg-preview-batch-review:${reviewPackageBasis.deliveryId}:${crypto.randomUUID()}`,
+        comment,
+        idempotencyKey: batchIntentRef.current.idempotencyKey,
       });
       if (!result.ok || !result.reviews) {
         const reasons = result.rejectedTargets?.map((failure) => {
@@ -554,6 +571,7 @@ export function OutputPackagePreviewModal({
         return;
       }
       setSavedNotice(`已批量${batchDecisionLabel(batchDecision)} ${result.reviews.length} 个文件版本；Task 状态未自动变更。`);
+      batchIntentRef.current = null;
       setBatchPanelOpen(false);
       setBatchComment('');
       await loadWorkspace();

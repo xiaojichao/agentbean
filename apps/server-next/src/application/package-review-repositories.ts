@@ -103,6 +103,16 @@ export type RecordPackageReviewResult =
 
 export interface RecordPackageReviewsInput {
   readonly reviews: readonly PackageReviewRecord[];
+  /** #1199 持久事务内复核当前 Task delivery lineage，关闭 handler 预检后的竞态窗口。 */
+  readonly lineageFence: {
+    readonly teamId: ID;
+    readonly channelId: ID;
+    readonly taskId: ID;
+    readonly taskRevision: number;
+    readonly taskAttempt: number;
+    readonly packageId: ID;
+    readonly deliveryId: ID;
+  };
   readonly mutation: RecordPackageReviewInput['mutation'];
   readonly receipt: PackageReviewReceiptRecord;
   readonly tombstone: PackageReviewTombstoneRecord;
@@ -113,6 +123,7 @@ export type RecordPackageReviewsResult =
   | { readonly kind: 'replayed'; readonly reviews: readonly PackageReviewRecord[] }
   | { readonly kind: 'idempotency_conflict' }
   | { readonly kind: 'version_scope_conflict' }
+  | { readonly kind: 'delivery_revision_conflict' }
   /** #1199 持久事务内复核 current fence，防止预检与 INSERT 之间发生版本漂移。 */
   | { readonly kind: 'current_version_conflict'; readonly collectionId: ID; readonly versionId: ID };
 

@@ -354,6 +354,21 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect((screen.getByRole('button', { name: '确认通过' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test('#1199 ack 丢失后重试同一批量意图复用幂等键', async () => {
+    mocks.submitPackageArtifactReviews.mockRejectedValueOnce(new Error('ack lost'));
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('ack lost');
+
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+    await waitFor(() => expect(mocks.submitPackageArtifactReviews).toHaveBeenCalledTimes(2));
+    expect(mocks.submitPackageArtifactReviews.mock.calls[1]?.[0].idempotencyKey)
+      .toBe(mocks.submitPackageArtifactReviews.mock.calls[0]?.[0].idempotencyKey);
+    expect(await screen.findByText(/已批量通过 2 个文件版本/)).toBeTruthy();
+  });
+
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
     const imageVersion = version('version-1', 'collection-1', '分镜.png', 4);
     mocks.artifactCollections.mockResolvedValue({ ok: true, library: library(imageVersion) });
