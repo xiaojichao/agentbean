@@ -5,6 +5,7 @@ import { buildPackageReturnComposerDraft, type PackageReturnHandoff } from '../l
 function handoff(overrides: Partial<PackageReturnHandoff> = {}): PackageReturnHandoff {
   return {
     packageId: 'package-1',
+    threadRootMessageId: 'message-root-1',
     taskId: 'task-1',
     taskTitle: '完善第一集剧本',
     originalAgentId: 'agent-1',

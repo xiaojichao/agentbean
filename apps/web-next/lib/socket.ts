@@ -1043,6 +1043,8 @@ export interface ProjectEvents {
   }): Promise<{
     ok: boolean;
     package?: OutputPackageDto;
+    /** Server 从 package 卡片/provenance 解析的原讨论串 root。 */
+    threadRootMessageId?: string;
     /** #1061 AC11:Server 按当前用户计算的可执行动作(web 只渲染 Server 给的动作)。 */
     availableActions?: PackageMemberAvailableActionsDto[];
     /** #1063 请求携带 projection 时返回解析结果块。 */

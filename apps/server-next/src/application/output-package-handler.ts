@@ -510,6 +510,26 @@ async function resolveOriginThreadId(
   }
 }
 
+/**
+ * Files/Task 详情也必须能从 package 事实反查原讨论串，不能依赖 Web 当前只保留的
+ * 最近消息窗口。优先读取既有 package 卡片的 threadId；卡片不存在时回退 delivery
+ * provenance。该查询只读且失败关闭，由调用方决定是否允许不可逆退回。
+ */
+export async function resolveOutputPackageThreadRootMessageId(
+  repositories: ServerNextRepositories,
+  input: { teamId: ID; channelId: ID; packageId: ID; workspaceRunId?: ID },
+): Promise<ID | undefined> {
+  const [packageCard, provenanceThreadRootMessageId] = await Promise.all([
+    repositories.messages.getByClientMessageId({
+      teamId: input.teamId,
+      channelId: input.channelId,
+      clientMessageId: `output-package:${input.packageId}`,
+    }).catch(() => null),
+    resolveOriginThreadId(repositories, input.teamId, input.workspaceRunId),
+  ]);
+  return packageCard?.threadId ?? provenanceThreadRootMessageId;
+}
+
 async function appendOutputPackageSystemMessage(
   repositories: ServerNextRepositories,
   ids: { nextId(): ID },
@@ -587,17 +607,16 @@ export async function readOutputPackageCardMeta(
       publishId: input.publishId,
     });
     if (!byPublish) return null;
-    const [agent, task, packageCard, provenanceThreadRootMessageId] = await Promise.all([
+    const [agent, task, threadRootMessageId] = await Promise.all([
       repositories.agents.getById(byPublish.package.agentId).catch(() => null),
       repositories.tasks.getById(byPublish.package.taskId).catch(() => null),
-      repositories.messages.getByClientMessageId({
+      resolveOutputPackageThreadRootMessageId(repositories, {
         teamId: input.teamId,
         channelId: byPublish.package.channelId,
-        clientMessageId: `output-package:${byPublish.package.packageId}`,
-      }).catch(() => null),
-      resolveOriginThreadId(repositories, input.teamId, byPublish.package.workspaceRunId),
+        packageId: byPublish.package.packageId,
+        ...(byPublish.package.workspaceRunId ? { workspaceRunId: byPublish.package.workspaceRunId } : {}),
+      }),
     ]);
-    const threadRootMessageId = packageCard?.threadId ?? provenanceThreadRootMessageId;
     return {
       kind: 'output-package',
       packageId: byPublish.package.packageId,

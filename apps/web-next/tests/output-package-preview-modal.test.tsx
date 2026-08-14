@@ -121,6 +121,7 @@ function renderModal(options: {
   initialVersionId?: string;
   onClose?: () => void;
   onSaved?: () => void;
+  prepareReturnThread?: (threadRootMessageId: string) => Promise<boolean>;
   onReturnToThread?: () => void;
 } = {}) {
   return render(
@@ -131,6 +132,7 @@ function renderModal(options: {
       renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
       onClose={options.onClose ?? vi.fn()}
       onSaved={options.onSaved ?? vi.fn()}
+      prepareReturnThread={options.prepareReturnThread ?? vi.fn().mockResolvedValue(true)}
       onReturnToThread={options.onReturnToThread ?? vi.fn()}
     />,
   );
@@ -141,6 +143,7 @@ beforeEach(() => {
   mocks.artifactCollections.mockResolvedValue({ ok: true, library: library() });
   mocks.getOutputPackage.mockResolvedValue({
     ok: true,
+    threadRootMessageId: 'thread-root-1',
     package: {
       schemaVersion: 1,
       packageId: packageMeta.packageId,
@@ -486,7 +489,8 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
 
   test('要求修改原子退回 delivery，并把原智能体、稳定版本与新 attempt 上抛给讨论串预填', async () => {
     const onReturnToThread = vi.fn();
-    renderModal({ onReturnToThread });
+    const prepareReturnThread = vi.fn().mockResolvedValue(true);
+    renderModal({ onReturnToThread, prepareReturnThread });
     await screen.findByRole('textbox', { name: 'Markdown 源文' });
     fireEvent.click(screen.getByRole('button', { name: '退回修改…' }));
     expect((await screen.findByRole('radio', { name: /要求修改/ }) as HTMLInputElement).checked).toBe(true);
@@ -504,8 +508,13 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       expectedTaskRevision: 7,
       expectedTaskAttempt: 2,
     })));
+    expect(prepareReturnThread).toHaveBeenCalledWith('thread-root-1');
+    expect(prepareReturnThread.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.submitPackageReviewAndRejectDelivery.mock.invocationCallOrder[0]!,
+    );
     expect(onReturnToThread).toHaveBeenCalledWith(expect.objectContaining({
       packageId: packageMeta.packageId,
+      threadRootMessageId: 'thread-root-1',
       taskId: 'task-1',
       originalAgentId: 'agent-1',
       originalAgentName: '剧本创作',
@@ -541,6 +550,59 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
       decision: 'rejected',
       agentChoice: 'select',
     }));
+  });
+
+  test('原讨论串上下文加载失败时不提交不可逆的 delivery 退回', async () => {
+    const prepareReturnThread = vi.fn().mockResolvedValue(false);
+    renderModal({ prepareReturnThread });
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '退回修改…' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '审核意见（必填）' }), {
+      target: { value: '需要补充依据' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '回讨论串继续' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('原讨论串上下文加载失败，尚未退回 Task delivery');
+    expect(mocks.submitPackageReviewAndRejectDelivery).not.toHaveBeenCalled();
+  });
+
+  test('没有 delivery 退回动作时保留负面文件审核入口，且不改变 Task', async () => {
+    const packageResult = await mocks.getOutputPackage();
+    mocks.getOutputPackage.mockResolvedValue({
+      ...packageResult,
+      availableActions: [{
+        collectionId: 'collection-1',
+        versionId: 'version-1',
+        reviewState: 'pending',
+        isFinalVersion: false,
+        collectionRevision: 4,
+        actions: ['review-changes-requested', 'review-rejected'],
+      }],
+    });
+    const prepareReturnThread = vi.fn().mockResolvedValue(true);
+    const onReturnToThread = vi.fn();
+    renderModal({ prepareReturnThread, onReturnToThread });
+
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '退回修改…' }));
+    expect(screen.queryByRole('radio', { name: /让原智能体修改/ })).toBeNull();
+    fireEvent.click(screen.getByRole('radio', { name: /拒绝/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: '审核意见（必填）' }), {
+      target: { value: '当前版本不可用' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '确认文件审核' }));
+
+    await waitFor(() => expect(mocks.submitPackageArtifactReview).toHaveBeenCalledWith(expect.objectContaining({
+      packageId: packageMeta.packageId,
+      collectionId: 'collection-1',
+      versionId: 'version-1',
+      decision: 'rejected',
+      comment: '当前版本不可用',
+    })));
+    expect(mocks.submitPackageReviewAndRejectDelivery).not.toHaveBeenCalled();
+    expect(prepareReturnThread).not.toHaveBeenCalled();
+    expect(onReturnToThread).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Task delivery 未变更/)).toBeTruthy();
   });
 
   test('保存新版本、通过与设为 final 走一个 finalize 组合请求', async () => {

@@ -289,7 +289,10 @@ import {
   OUTPUT_PACKAGE_WATERMARK_STREAM_KIND,
 } from './output-package-consistency.js';
 import { createOutputPackageService, type OutputPackageService } from './output-package-service.js';
-import { readOutputPackageCardMeta } from './output-package-handler.js';
+import {
+  readOutputPackageCardMeta,
+  resolveOutputPackageThreadRootMessageId,
+} from './output-package-handler.js';
 import { findCurrentManagedOutputPackage } from './output-package-current-delivery.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
 import type {
@@ -723,6 +726,7 @@ export interface ServerNextUseCases {
     },
   ): Promise<Ack<{
     package: OutputPackageDto;
+    threadRootMessageId?: string;
     projection?: OutputPackageProjectionResultV1;
     asOf: number;
     audienceScope: string;
@@ -9160,9 +9164,16 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         packageProjection: result,
         projectionMembers: projection?.members,
       });
+      const threadRootMessageId = await resolveOutputPackageThreadRootMessageId(repositories, {
+        teamId: result.package.teamId,
+        channelId: result.package.channelId,
+        packageId: result.package.packageId,
+        ...(result.package.workspaceRunId ? { workspaceRunId: result.package.workspaceRunId } : {}),
+      });
       const asOf = clock.now();
       return makeSuccess({
         package: toOutputPackageDto(result.package, result.members),
+        ...(threadRootMessageId ? { threadRootMessageId } : {}),
         availableActions,
         ...(projection ? { projection } : {}),
         asOf,

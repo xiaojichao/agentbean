@@ -7,6 +7,7 @@ export type PackageReturnAgentChoice = 'original' | 'select';
 
 export interface PackageReturnHandoff {
   readonly packageId: string;
+  readonly threadRootMessageId: string;
   readonly taskId: string;
   readonly taskTitle?: string;
   readonly originalAgentId: string;
