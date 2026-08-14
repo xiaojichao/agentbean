@@ -15,7 +15,6 @@ export async function findCurrentManagedOutputPackage(
     taskId: string;
     taskRevision: number;
     taskAttempt: number;
-    deliveryId?: string;
   },
 ): Promise<{ record: OutputPackageRecord | null; hasManagedHistory: boolean }> {
   const limit = 50;
@@ -33,8 +32,7 @@ export async function findCurrentManagedOutputPackage(
       if (record.taskBinding !== 'managed') continue;
       hasManagedHistory = true;
       if (record.taskRevision === input.taskRevision
-        && record.taskAttempt === input.taskAttempt
-        && (input.deliveryId === undefined || record.deliveryId === input.deliveryId)) {
+        && record.taskAttempt === input.taskAttempt) {
         return { record, hasManagedHistory };
       }
     }

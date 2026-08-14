@@ -119,7 +119,6 @@ async function inspectCurrentDeliveryFileReviewGate(
     taskId: string;
     taskRevision: number;
     taskAttempt: number;
-    deliveryId?: string;
   },
 ) {
   const channelId = input.channelId;
@@ -683,7 +682,6 @@ export function createTaskLifecycleKernel(deps: TaskLifecycleKernelDependencies)
           taskId: task.id,
           taskRevision: task.revision,
           taskAttempt: coord.attempt,
-          deliveryId: delivery.id,
         });
         if (fileReviewGate.kind === 'rejected') conflict(fileReviewGate.reasonCode);
       }

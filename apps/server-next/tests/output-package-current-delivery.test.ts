@@ -37,7 +37,7 @@ function repository(records: readonly OutputPackageRecord[]): OutputPackageRepos
 }
 
 describe('findCurrentManagedOutputPackage', () => {
-  test('分页越过前 50 条历史包后仍能找到当前 revision/attempt/delivery', async () => {
+  test('分页越过前 50 条历史包后仍能找到当前 revision/attempt', async () => {
     const records = Array.from({ length: 55 }, (_, index) => record(index, {
       taskRevision: index === 52 ? 3 : 1,
       taskAttempt: index === 52 ? 2 : 1,
@@ -49,7 +49,6 @@ describe('findCurrentManagedOutputPackage', () => {
       taskId: 'task-1',
       taskRevision: 3,
       taskAttempt: 2,
-      deliveryId: 'delivery-current',
     })).resolves.toMatchObject({ record: { packageId: 'package-52' }, hasManagedHistory: true });
   });
 

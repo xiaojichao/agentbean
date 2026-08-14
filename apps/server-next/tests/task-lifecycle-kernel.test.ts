@@ -270,7 +270,8 @@ describe.each([
       const formed = await fixture.repositories.outputPackages.recordPackageFormation({
         record: {
           teamId: 'team-1', packageId: 'package-subtask', channelId: 'channel-1',
-          deliveryId: 'delivery-subtask-package', publishId: 'publish-subtask-package',
+          // coordination delivery 与 OutputPackage delivery 是独立事实，不能依赖 ID 相等关联。
+          deliveryId: 'output-package-delivery-subtask', publishId: 'publish-subtask-package',
           workspaceRevisionId: 'workspace-revision-subtask-package', agentId: 'agent-1',
           taskId: 'subtask-package', taskBinding: 'managed', taskRevision: 1, taskAttempt: 1,
           memberCount: 1, status: 'recorded', createdAt: 30,
