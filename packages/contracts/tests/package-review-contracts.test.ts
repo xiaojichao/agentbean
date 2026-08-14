@@ -34,9 +34,10 @@ const reviewInput = {
 } as const;
 
 describe('package-review contracts (#1061)', () => {
-  test('注册表冻结:3 个命令、6 个动作、6 种 authority basis', () => {
+  test('注册表冻结:4 个命令、6 个动作、6 种 authority basis', () => {
     expect(PACKAGE_REVIEW_COMMAND_NAMES).toEqual([
       'submit-package-artifact-review',
+      'submit-package-artifact-reviews',
       'submit-package-review-and-finalize',
       'submit-package-review-and-reject-delivery',
     ]);
@@ -60,6 +61,7 @@ describe('package-review contracts (#1061)', () => {
 
   test('socket 事件名与 WEB_EVENTS 对齐', () => {
     expect(WEB_EVENTS.project.submitPackageArtifactReview).toBe('project:submit-package-artifact-review');
+    expect(WEB_EVENTS.project.submitPackageArtifactReviews).toBe('project:submit-package-artifact-reviews');
     expect(WEB_EVENTS.project.submitPackageReviewAndFinalize).toBe('project:submit-package-review-and-finalize');
     expect(WEB_EVENTS.project.submitPackageReviewAndRejectDelivery)
       .toBe('project:submit-package-review-and-reject-delivery');
@@ -94,7 +96,7 @@ describe('package-review contracts (#1061)', () => {
     })).toThrow(INVALID);
   });
 
-  test('input 解析:三个命令各自 exact-key', () => {
+  test('input 解析:单文件与批量命令各自 exact-key', () => {
     expect(parsePackageReviewCommandInputV1('submit-package-artifact-review', reviewInput)).toEqual(reviewInput);
     expect(parsePackageReviewCommandInputV1('submit-package-review-and-finalize', {
       ...reviewInput,
@@ -113,6 +115,24 @@ describe('package-review contracts (#1061)', () => {
       expectedTaskAttempt: 1,
       rejectReason: '需要修改',
     });
+    const batch = {
+      channelId: 'ch-1',
+      packageId: 'pkg-1',
+      deliveryId: 'delivery-1',
+      expectedPackageRevision: 1,
+      targets: [
+        { collectionId: 'col-1', artifactVersionId: 'ver-1' },
+        { collectionId: 'col-2', artifactVersionId: 'ver-2' },
+      ],
+      decision: 'approved',
+      comment: '整批通过',
+      idempotencyKey: 'batch-1',
+    } as const;
+    expect(parsePackageReviewCommandInputV1('submit-package-artifact-reviews', batch)).toEqual(batch);
+    expect(() => parsePackageReviewCommandInputV1('submit-package-artifact-reviews', {
+      ...batch,
+      targets: [],
+    })).toThrow(INVALID);
   });
 
   test('input 解析:保存新版本后通过携带显式 revision fence 与 basis', () => {
@@ -285,5 +305,33 @@ describe('package-review contracts (#1061)', () => {
       ...rejected,
       rejectedReason: 'unknown-code',
     })).toThrow(INVALID);
+  });
+
+  test('response 解析:批量成功保留 N 条 review，失败保留逐目标原因', () => {
+    const review = {
+      id: 'rev-1', teamId: 'team-1', channelId: 'ch-1', collectionId: 'col-1', versionId: 'ver-1',
+      packageId: 'pkg-1', deliveryId: 'delivery-1', taskId: 'task-1', taskRevision: 1, taskAttempt: 1,
+      decision: 'approved' as const, comment: '整批通过', authorityBasis: 'team-owner' as const,
+      reviewedBy: 'user-1', createdAt: 1_000,
+    };
+    const applied: PackageReviewCommandResponseV1 = {
+      schemaVersion: 1,
+      commandName: 'submit-package-artifact-reviews',
+      outcome: 'applied',
+      retryDirective: 'none',
+      stableCode: 'PACKAGE_REVIEWS_RECORDED',
+      result: { commandName: 'submit-package-artifact-reviews', reviews: [review, { ...review, id: 'rev-2', collectionId: 'col-2', versionId: 'ver-2' }] },
+    };
+    expect(parsePackageReviewCommandResponseV1(applied)).toEqual(applied);
+    const rejected: PackageReviewCommandResponseV1 = {
+      schemaVersion: 1,
+      commandName: 'submit-package-artifact-reviews',
+      outcome: 'rejected',
+      retryDirective: 'reread_then_new_command',
+      stableCode: 'PACKAGE_BATCH_REVIEW_REJECTED',
+      rejectedReason: 'version-not-current',
+      rejectedTargets: [{ collectionId: 'col-2', artifactVersionId: 'ver-2', reason: 'version-not-current' }],
+    };
+    expect(parsePackageReviewCommandResponseV1(rejected)).toEqual(rejected);
   });
 });

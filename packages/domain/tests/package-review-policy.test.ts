@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   evaluatePackageArtifactReviewAuthority,
+  evaluatePackageBatchArtifactReview,
   evaluatePackageReviewAndFinalize,
   evaluatePackageReviewAndRejectDelivery,
   evaluateRootHumanReviewAuthority,
@@ -8,6 +9,32 @@ import {
   mapPackageReviewRejection,
   type PackageArtifactReviewFacts,
 } from '../src/package-review-policy.js';
+
+const ownerActorFacts = {
+  userId: 'user-owner', teamRole: 'owner' as const, projectLeadId: 'user-lead', stageReviewerIds: [] as string[],
+};
+
+function batchInput() {
+  return {
+    actorKind: 'human' as const,
+    teamId: 'team-1',
+    channelId: 'ch-1',
+    package: {
+      id: 'pkg-1', teamId: 'team-1', channelId: 'ch-1', deliveryId: 'delivery-1', revision: 1,
+      members: [
+        { collectionId: 'col-1', artifactVersionId: 'delivered-1' },
+        { collectionId: 'col-2', artifactVersionId: 'delivered-2' },
+      ],
+    },
+    deliveryId: 'delivery-1',
+    expectedPackageRevision: 1,
+    decision: 'approved' as const,
+    targets: [
+      { collectionId: 'col-1', artifactVersionId: 'current-1', versionCollectionId: 'col-1', currentVersionId: 'current-1', actorFacts: ownerActorFacts },
+      { collectionId: 'col-2', artifactVersionId: 'current-2', versionCollectionId: 'col-2', currentVersionId: 'current-2', actorFacts: ownerActorFacts },
+    ],
+  };
+}
 
 const ownerFacts: PackageArtifactReviewFacts = {
   teamId: 'team-1',
@@ -182,6 +209,46 @@ describe('authority token (#1061 AC3/AC4)', () => {
       actorId: 'user-requester',
       preboundAuthorityIds: [],
     })).toEqual({ kind: 'rejected', reasonCode: 'actor_not_authorized' });
+  });
+});
+
+describe('evaluatePackageBatchArtifactReview (#1199)', () => {
+  test('全部目标为当前版本且逐目标 authority 成立时返回 N 个写入计划', () => {
+    const result = evaluatePackageBatchArtifactReview(batchInput());
+    expect(result.kind).toBe('allowed');
+    if (result.kind === 'allowed') {
+      expect(result.targets).toHaveLength(2);
+      expect(result.targets.map((target) => target.authorityBasis)).toEqual(['team-owner', 'team-owner']);
+    }
+  });
+
+  test('任一 stale、无权限或重复目标时整批 rejected 并逐项列出原因', () => {
+    const base = batchInput();
+    const result = evaluatePackageBatchArtifactReview({
+      ...base,
+      targets: [
+        { ...base.targets[0]!, currentVersionId: 'newer-1' },
+        { ...base.targets[1]!, actorFacts: { ...ownerActorFacts, teamRole: 'member' as const } },
+        base.targets[1]!,
+      ],
+    });
+    expect(result).toEqual({
+      kind: 'rejected',
+      failures: [
+        { collectionId: 'col-1', artifactVersionId: 'current-1', reasonCode: 'version_not_current' },
+        { collectionId: 'col-2', artifactVersionId: 'current-2', reasonCode: 'actor_not_authorized' },
+        { collectionId: 'col-2', artifactVersionId: 'current-2', reasonCode: 'duplicate_target' },
+      ],
+    });
+  });
+
+  test('delivery 与 package revision fence 漂移时 fail closed', () => {
+    expect(evaluatePackageBatchArtifactReview({ ...batchInput(), deliveryId: 'delivery-old' })).toEqual({
+      kind: 'rejected', failures: [{ reasonCode: 'delivery_revision_stale' }],
+    });
+    expect(evaluatePackageBatchArtifactReview({ ...batchInput(), expectedPackageRevision: 2 })).toEqual({
+      kind: 'rejected', failures: [{ reasonCode: 'package_revision_stale' }],
+    });
   });
 });
 

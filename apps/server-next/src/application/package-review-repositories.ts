@@ -101,6 +101,21 @@ export type RecordPackageReviewResult =
   /** AC9:并发 finalization/append 已推进集合 revision。 */
   | { readonly kind: 'finalization_conflict' };
 
+export interface RecordPackageReviewsInput {
+  readonly reviews: readonly PackageReviewRecord[];
+  readonly mutation: RecordPackageReviewInput['mutation'];
+  readonly receipt: PackageReviewReceiptRecord;
+  readonly tombstone: PackageReviewTombstoneRecord;
+}
+
+export type RecordPackageReviewsResult =
+  | { readonly kind: 'created'; readonly reviews: readonly PackageReviewRecord[] }
+  | { readonly kind: 'replayed'; readonly reviews: readonly PackageReviewRecord[] }
+  | { readonly kind: 'idempotency_conflict' }
+  | { readonly kind: 'version_scope_conflict' }
+  /** #1199 持久事务内复核 current fence，防止预检与 INSERT 之间发生版本漂移。 */
+  | { readonly kind: 'current_version_conflict'; readonly collectionId: ID; readonly versionId: ID };
+
 export interface PackageReviewRepository {
   /**
    * 单事务写入 review 记录 + 幂等 mutation + command receipt/tombstone。
@@ -108,6 +123,8 @@ export interface PackageReviewRepository {
    * (repository 侧通过同一 UoW 或事务回调拼接,见实现)。
    */
   recordPackageReview(input: RecordPackageReviewInput): Promise<RecordPackageReviewResult>;
+  /** #1199 单事务写入 N 条逐文件 review 与一份命令 receipt；任何目标失败均零写入。 */
+  recordPackageReviews(input: RecordPackageReviewsInput): Promise<RecordPackageReviewsResult>;
   receipts: {
     getByIdempotencyKey(input: {
       teamId: ID;

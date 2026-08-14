@@ -12,6 +12,11 @@ import {
   type SubmitPackageReviewCommandInput,
   type SubmitPackageReviewResult,
 } from './package-review-handler.js';
+import {
+  submitPackageBatchReviewCommand,
+  type SubmitPackageBatchReviewCommandInput,
+  type SubmitPackageBatchReviewResult,
+} from './package-batch-review-handler.js';
 import { bumpOutputPackageWatermark } from './output-package-consistency.js';
 import type { ArtifactContentStore } from './usecases.js';
 
@@ -47,6 +52,8 @@ export interface OutputPackageService {
   formPackage(input: AttemptOutputPackageFormationInput): Promise<AttemptOutputPackageFormationResult>;
   /** submit-package-artifact-review 核心:append-only review 写入 + 水位推进。 */
   submitReview(input: ReviewWriteInput): Promise<SubmitPackageReviewResult>;
+  /** #1199 显式目标集合的全有或全无逐文件审核。 */
+  submitBatchReview(input: SubmitPackageBatchReviewCommandInput): Promise<SubmitPackageBatchReviewResult>;
   /** submit-package-review-and-finalize 核心:通过并设为最终版(同事务两事实)+ 水位推进。 */
   finalize(input: ReviewWriteInput): Promise<SubmitPackageReviewResult>;
   /** submit-package-review-and-reject-delivery 核心:审核+退回 Task delivery(原子)+ 水位推进。 */
@@ -85,6 +92,13 @@ export function createOutputPackageService(deps: OutputPackageServiceDeps): Outp
     },
     submitReview(input) {
       return writeReview('submit-package-artifact-review', input);
+    },
+    async submitBatchReview(input) {
+      const result = await submitPackageBatchReviewCommand({ repositories, clock, ids }, input);
+      if (result.kind === 'applied') {
+        await bumpOutputPackageWatermark(repositories, input.channelId, clock.now());
+      }
+      return result;
     },
     finalize(input) {
       return writeReview('submit-package-review-and-finalize', input);

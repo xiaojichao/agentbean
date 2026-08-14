@@ -313,7 +313,8 @@ import {
   type StageDeliveryReviewWorkspaceV1,
 } from '../../../../packages/contracts/src/stage-delivery-review-workspace.js';
 import { type SubmitPackageReviewResult } from './package-review-handler.js';
-import type { PackageReviewRevisionSaveV1 } from '../../../../packages/contracts/src/package-review.js';
+import { type SubmitPackageBatchReviewResult } from './package-batch-review-handler.js';
+import type { PackageReviewBatchFailureV1, PackageReviewBatchTargetV1, PackageReviewRevisionSaveV1 } from '../../../../packages/contracts/src/package-review.js';
 
 /** #1061 三个 package review 命令的 socket 输入(teamId 由 socket 会话解析,userId 由 Server 注入)。 */
 export interface PackageReviewCommandSocketInput {
@@ -330,6 +331,18 @@ export interface PackageReviewCommandSocketInput {
   readonly expectedTaskAttempt?: number;
   readonly rejectReason?: string;
   readonly saveRevision?: PackageReviewRevisionSaveV1;
+}
+
+export interface PackageBatchReviewCommandSocketInput {
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly packageId: string;
+  readonly deliveryId: string;
+  readonly expectedPackageRevision: number;
+  readonly targets: readonly PackageReviewBatchTargetV1[];
+  readonly decision: 'approved' | 'changes_requested' | 'rejected';
+  readonly comment: string;
+  readonly idempotencyKey: string;
 }
 import type {
   CancelPiProviderTestResult,
@@ -678,6 +691,11 @@ export interface ServerNextUseCases {
   submitPackageArtifactReview(input: PackageReviewCommandSocketInput & { userId: string }): Promise<Ack<{
     review: PackageReviewDto;
     revision?: ArtifactVersionRevisionSaveResultDto;
+    replayed: boolean;
+  }>>;
+  /** #1199 N 个显式 current 版本的原子逐文件审核。 */
+  submitPackageArtifactReviews(input: PackageBatchReviewCommandSocketInput & { userId: string }): Promise<Ack<{
+    reviews: readonly PackageReviewDto[];
     replayed: boolean;
   }>>;
   /** #1061 "通过并设为最终版":一个事务写 review 与 finalization 两个独立事实(AC9)。 */
@@ -8990,6 +9008,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(reviewInput.saveRevision ? { saveRevision: reviewInput.saveRevision } : {}),
       });
       return packageReviewCommandAck(repositories, result, 'review');
+    },
+
+    async submitPackageArtifactReviews(reviewInput) {
+      const result = await outputPackageService.submitBatchReview({
+        teamId: reviewInput.teamId,
+        userId: reviewInput.userId,
+        channelId: reviewInput.channelId,
+        packageId: reviewInput.packageId,
+        deliveryId: reviewInput.deliveryId,
+        expectedPackageRevision: reviewInput.expectedPackageRevision,
+        targets: reviewInput.targets,
+        decision: reviewInput.decision,
+        comment: reviewInput.comment,
+        idempotencyKey: reviewInput.idempotencyKey,
+      });
+      return packageBatchReviewCommandAck(result);
     },
 
     async submitPackageReviewAndFinalize(reviewInput) {
@@ -18155,6 +18189,39 @@ async function packageReviewCommandAck<M extends keyof PackageReviewAckPayloadMa
   return makeSuccess({
     review: projectArtifactReviewDto(result.review) as PackageReviewDto,
     ...(result.revision ? { revision: result.revision } : {}),
+    replayed: false,
+  });
+}
+
+function packageBatchReviewCommandAck(
+  result: SubmitPackageBatchReviewResult,
+): Ack<{ reviews: readonly PackageReviewDto[]; replayed: boolean }> {
+  if (result.kind === 'conflict') {
+    return makeFailure('CONFLICT', `Package batch review conflict: ${result.reasonCode}`);
+  }
+  if (result.kind === 'rejected') {
+    const conflictReasons = new Set([
+      'delivery-revision-stale', 'package-revision-stale', 'version-not-current',
+      'duplicate-target', 'version-not-in-package', 'version-not-in-collection',
+    ]);
+    const code = result.failures.some((failure) => conflictReasons.has(failure.reason))
+      ? 'CONFLICT'
+      : result.reasonCode === 'actor-not-authorized' ? 'FORBIDDEN' : 'VALIDATION_ERROR';
+    return makeFailure(code, `Package batch review rejected: ${result.reasonCode}`, {
+      rejectedTargets: result.failures satisfies readonly PackageReviewBatchFailureV1[],
+    });
+  }
+  if (result.kind === 'replayed') {
+    try {
+      const parsed = JSON.parse(result.receipt.resultJson ?? '{}') as { reviews?: PackageReviewDto[] };
+      if (parsed.reviews?.length) return makeSuccess({ reviews: parsed.reviews, replayed: true });
+    } catch {
+      // receipt 已治理压缩或损坏时不伪造成功结果。
+    }
+    return makeFailure('CONFLICT', 'Recorded package batch review result is no longer available');
+  }
+  return makeSuccess({
+    reviews: result.reviews.map((review) => projectArtifactReviewDto(review) as PackageReviewDto),
     replayed: false,
   });
 }

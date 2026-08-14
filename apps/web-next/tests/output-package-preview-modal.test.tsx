@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   getOutputPackage: vi.fn(),
   saveArtifactVersionRevision: vi.fn(),
   submitPackageArtifactReview: vi.fn(),
+  submitPackageArtifactReviews: vi.fn(),
   submitPackageReviewAndFinalize: vi.fn(),
   submitPackageReviewAndRejectDelivery: vi.fn(),
 }));
@@ -24,6 +25,7 @@ vi.mock('@/lib/socket', () => ({
     getOutputPackage: mocks.getOutputPackage,
     saveArtifactVersionRevision: mocks.saveArtifactVersionRevision,
     submitPackageArtifactReview: mocks.submitPackageArtifactReview,
+    submitPackageArtifactReviews: mocks.submitPackageArtifactReviews,
     submitPackageReviewAndFinalize: mocks.submitPackageReviewAndFinalize,
     submitPackageReviewAndRejectDelivery: mocks.submitPackageReviewAndRejectDelivery,
   }),
@@ -219,6 +221,15 @@ beforeEach(() => {
       },
     } : {}),
   }));
+  mocks.submitPackageArtifactReviews.mockImplementation(async (input) => ({
+    ok: true,
+    reviews: input.targets.map((target: { artifactVersionId: string }, index: number) => ({
+      id: `batch-review-${index + 1}`,
+      versionId: target.artifactVersionId,
+      decision: input.decision,
+    })),
+    replayed: false,
+  }));
   mocks.submitPackageReviewAndFinalize.mockImplementation(async (input) => ({
     ok: true,
     review: { id: 'review-final', versionId: input.saveRevision ? 'server-version-5' : input.versionId, decision: 'approved' },
@@ -288,6 +299,59 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 角色表.md')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /F1 第1集剧本\.md/ }));
     expect(await screen.findByText('预览 / 编辑：PKG-04200000 · 第1集剧本.md')).toBeTruthy();
+  });
+
+  test('#1199 批量确认面板列出显式 current 版本并提交统一意见，不触发 Task 验收', async () => {
+    const onSaved = vi.fn();
+    renderModal({ onSaved });
+
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    expect(await screen.findByRole('region', { name: '批量审核文件版本' })).toBeTruthy();
+    expect(screen.getByText('第1集剧本.md')).toBeTruthy();
+    expect(screen.getByText('Server v4')).toBeTruthy();
+    expect(screen.getByText('角色表.md')).toBeTruthy();
+    expect(screen.getByText('Server v3')).toBeTruthy();
+    expect(screen.getByText('批量通过不会自动验收 Task。', { exact: false })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: '全部要求修改' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '统一意见（必填）' }), { target: { value: '统一补充来源说明' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认要求修改' }));
+    await waitFor(() => expect(mocks.submitPackageArtifactReviews).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'channel-1',
+      packageId: packageMeta.packageId,
+      deliveryId: 'delivery-1',
+      expectedPackageRevision: 1,
+      targets: [
+        { collectionId: 'collection-1', artifactVersionId: 'version-1' },
+        { collectionId: 'collection-2', artifactVersionId: 'version-2' },
+      ],
+      decision: 'changes_requested',
+      comment: '统一补充来源说明',
+    })));
+    expect(await screen.findByText(/已批量要求修改 2 个文件版本；Task 状态未自动变更/)).toBeTruthy();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  test('#1199 取消选择后 payload 不包含未选中成员', async () => {
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 角色表.md 当前版本参与批量审核' }));
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（1）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+    await waitFor(() => expect(mocks.submitPackageArtifactReviews).toHaveBeenCalledWith(expect.objectContaining({
+      targets: [{ collectionId: 'collection-1', artifactVersionId: 'version-1' }],
+    })));
+  });
+
+  test('#1199 socket 断连时退出 busy 并显示失败原因', async () => {
+    mocks.submitPackageArtifactReviews.mockRejectedValueOnce(new Error('socket timeout'));
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '批量审核（2）…' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('批量审核提交失败：socket timeout');
+    expect((screen.getByRole('button', { name: '确认通过' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   test('非 Markdown 成员仍可查看版本历史，但不显示编辑和保存动作', async () => {
