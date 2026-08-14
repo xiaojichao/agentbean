@@ -17,6 +17,17 @@ export type PackageReviewCommandSocketPayload = {
   saveRevision?: PackageReviewRevisionSaveV1;
 };
 
+export type PackageBatchReviewCommandSocketPayload = {
+  channelId: string;
+  packageId: string;
+  deliveryId: string;
+  expectedPackageRevision: number;
+  targets: readonly { collectionId: string; artifactVersionId: string }[];
+  decision: PackageReviewDto['decision'];
+  comment: string;
+  idempotencyKey: string;
+};
+
 export type { PackageMemberAvailableActionsDto, PackageReviewAction };
 import { io, type Socket } from 'socket.io-client';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
@@ -1084,6 +1095,17 @@ export interface ProjectEvents {
     message?: string;
     revisionConflict?: ArtifactRevisionConflictDto;
   }>;
+  /** #1199 全有或全无的批量逐文件审核。 */
+  submitPackageArtifactReviews(payload: PackageBatchReviewCommandSocketPayload): Promise<{
+    ok: boolean;
+    reviews?: readonly PackageReviewDto[];
+    replayed?: boolean;
+    details?: {
+      rejectedTargets?: readonly { collectionId?: string; artifactVersionId?: string; reason: string }[];
+    };
+    error?: string;
+    message?: string;
+  }>;
   /** #1061 AC9:"通过并设为最终版"(一个事务两个独立事实)。 */
   submitPackageReviewAndFinalize(payload: Omit<PackageReviewCommandSocketPayload, 'userId' | 'teamId'>): Promise<{
     ok: boolean;
@@ -1219,6 +1241,9 @@ export function projectEvents(socket: Socket = getWebSocket()): ProjectEvents {
     },
     submitPackageArtifactReview(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageArtifactReview, payload);
+    },
+    submitPackageArtifactReviews(payload) {
+      return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageArtifactReviews, payload);
     },
     submitPackageReviewAndFinalize(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.project.submitPackageReviewAndFinalize, payload);

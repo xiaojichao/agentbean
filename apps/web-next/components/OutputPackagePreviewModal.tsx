@@ -114,6 +114,12 @@ export function OutputPackagePreviewModal({
   const [returnAgentChoice, setReturnAgentChoice] = useState<PackageReturnAgentChoice>('original');
   const [finalizeAfterApprove, setFinalizeAfterApprove] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [selectedVersionIds, setSelectedVersionIds] = useState<Set<string>>(new Set());
+  const [batchPanelOpen, setBatchPanelOpen] = useState(false);
+  const [batchDecision, setBatchDecision] = useState<'approved' | 'changes_requested' | 'rejected'>('approved');
+  const [batchComment, setBatchComment] = useState('');
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchIntentRef = useRef<{ signature: string; idempotencyKey: string } | null>(null);
 
   const requestClose = useCallback(() => {
     if (!editorState.dirty || window.confirm('有未保存的修改，确定关闭吗？')) onClose();
@@ -146,8 +152,13 @@ export function OutputPackagePreviewModal({
       }),
     ]);
     if (!libraryResult.ok || !libraryResult.library) {
-      setLoadError(libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败');
-      return null;
+      const error = libraryResult.ok ? '产物库加载失败' : libraryResult.message ?? '产物库加载失败';
+      setLoadError(error);
+      setAvailableActions(null);
+      setReviewPackageBasis(null);
+      setSelectedVersionIds(new Set());
+      setBatchPanelOpen(false);
+      return { collections: null, error };
     }
     setCollections(libraryResult.library.collections);
     setLoadError(null);
@@ -155,14 +166,30 @@ export function OutputPackagePreviewModal({
       setAvailableActions(packageResult.availableActions ?? []);
       setReviewPackageBasis(packageResult.package);
       setReviewThreadRootMessageId(packageResult.threadRootMessageId ?? packageMeta.threadRootMessageId ?? null);
+      const currentReviewableVersionIds = packageMeta.members.flatMap((member) => {
+        const collection = libraryResult.library!.collections.find((candidate) => candidate.id === member.collectionId);
+        const currentVersionId = collection?.currentVersionId;
+        const actions = packageResult.availableActions?.find((entry) => (
+          entry.collectionId === member.collectionId && entry.versionId === currentVersionId
+        ));
+        return currentVersionId && actions?.actions.some((action) => action.startsWith('review-'))
+          ? [currentVersionId]
+          : [];
+      });
+      setSelectedVersionIds((selected) => {
+        const stillCurrent = currentReviewableVersionIds.filter((versionId) => selected.has(versionId));
+        return new Set(stillCurrent.length > 0 ? stillCurrent : currentReviewableVersionIds);
+      });
       setActionError(null);
     } else {
+      const error = packageResult.message ?? '审核动作加载失败，请刷新后重试';
       setAvailableActions(null);
       setReviewPackageBasis(null);
       setReviewThreadRootMessageId(packageMeta.threadRootMessageId ?? null);
-      setActionError(packageResult.message ?? '审核动作加载失败，请刷新后重试');
+      setActionError(error);
+      return { collections: libraryResult.library.collections, error };
     }
-    return libraryResult.library.collections;
+    return { collections: libraryResult.library.collections, error: null };
   }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId]);
 
   useEffect(() => {
@@ -213,6 +240,12 @@ export function OutputPackagePreviewModal({
     || (activeActions?.actions.includes('review-changes-requested') ?? false);
   const canRejectVersion = canRejectDelivery
     || (activeActions?.actions.includes('review-rejected') ?? false);
+  const currentPackageTargets = packageMeta.members.flatMap((member) => {
+    const collection = collections?.find((candidate) => candidate.id === member.collectionId);
+    const current = collection?.versions.find((version) => version.id === collection.currentVersionId);
+    return collection && current ? [{ member, collection, current }] : [];
+  });
+  const selectedBatchTargets = currentPackageTargets.filter(({ current }) => selectedVersionIds.has(current.id));
 
   // 加载当前成员内容(Server 最新修订,不信任本地缓存)。
   useEffect(() => {
@@ -484,8 +517,95 @@ export function OutputPackagePreviewModal({
     packageMeta.agentName, packageMeta.taskTitle, prepareReturnThread, returnAgentChoice, returnDecision,
     reviewBusy, reviewComment, reviewPackageBasis, reviewThreadRootMessageId]);
 
+  const submitBatchReview = useCallback(async () => {
+    if (!reviewPackageBasis || selectedBatchTargets.length === 0 || batchBusy) return;
+    if (batchDecision !== 'approved' && !batchComment.trim()) {
+      setActionError(batchDecision === 'rejected' ? '全部拒绝时请填写统一意见' : '全部要求修改时请填写统一意见');
+      return;
+    }
+    const requiredAction = batchDecision === 'approved'
+      ? 'review-approved'
+      : batchDecision === 'changes_requested' ? 'review-changes-requested' : 'review-rejected';
+    const unavailable = selectedBatchTargets.some(({ collection, current }) => {
+      const actions = availableActions?.find((entry) => (
+        entry.collectionId === collection.id && entry.versionId === current.id
+      ));
+      return !actions?.actions.includes(requiredAction);
+    });
+    if (unavailable) {
+      setActionError('选中版本中存在已不可执行的审核动作，请刷新后重试');
+      return;
+    }
+    setBatchBusy(true);
+    setActionError(null);
+    try {
+      const targets = selectedBatchTargets.map(({ collection, current }) => ({
+        collectionId: collection.id,
+        artifactVersionId: current.id,
+      }));
+      const comment = batchComment.trim() || '批量通过当前 Server 版本';
+      const signature = JSON.stringify({
+        packageId: reviewPackageBasis.packageId,
+        deliveryId: reviewPackageBasis.deliveryId,
+        expectedPackageRevision: reviewPackageBasis.revision,
+        targets,
+        decision: batchDecision,
+        comment,
+      });
+      if (batchIntentRef.current?.signature !== signature) {
+        batchIntentRef.current = {
+          signature,
+          idempotencyKey: `pkg-preview-batch-review:${reviewPackageBasis.deliveryId}:${crypto.randomUUID()}`,
+        };
+      }
+      const result = await projectEvents().submitPackageArtifactReviews({
+        channelId,
+        packageId: reviewPackageBasis.packageId,
+        deliveryId: reviewPackageBasis.deliveryId,
+        expectedPackageRevision: reviewPackageBasis.revision,
+        targets,
+        decision: batchDecision,
+        comment,
+        idempotencyKey: batchIntentRef.current.idempotencyKey,
+      });
+      if (!result.ok || !result.reviews) {
+        const reasons = result.details?.rejectedTargets?.map((failure) => {
+          const target = selectedBatchTargets.find(({ current }) => current.id === failure.artifactVersionId);
+          const filename = target ? (target.current.artifact as unknown as Artifact).filename : '整批请求';
+          return `${filename}：${batchFailureLabel(failure.reason)}`;
+        });
+        setActionError(reasons?.length ? reasons.join('；') : result.message ?? result.error ?? '批量审核提交失败');
+        return;
+      }
+      setSavedNotice(`已批量${batchDecisionLabel(batchDecision)} ${result.reviews.length} 个文件版本；Task 状态未自动变更。`);
+      batchIntentRef.current = null;
+      setBatchPanelOpen(false);
+      setBatchComment('');
+      onSaved();
+      try {
+        const refresh = await loadWorkspace();
+        if (refresh.error) {
+          setActionError(`批量审核已提交，但刷新失败：${refresh.error}`);
+        }
+      } catch (error) {
+        setAvailableActions(null);
+        setReviewPackageBasis(null);
+        setSelectedVersionIds(new Set());
+        setBatchPanelOpen(false);
+        setActionError(error instanceof Error
+          ? `批量审核已提交，但刷新失败：${error.message}`
+          : '批量审核已提交，但刷新失败，请手动刷新');
+      }
+    } catch (error) {
+      setActionError(error instanceof Error ? `批量审核提交失败：${error.message}` : '批量审核提交失败，请重试');
+    } finally {
+      setBatchBusy(false);
+    }
+  }, [availableActions, batchBusy, batchComment, batchDecision, channelId, loadWorkspace, onSaved,
+    reviewPackageBasis, selectedBatchTargets]);
+
   const loadLatest = useCallback(async () => {
-    const latestCollections = await loadWorkspace();
+    const { collections: latestCollections } = await loadWorkspace();
     const latestCollection = latestCollections?.find((collection) => collection.id === activeCollectionId);
     const latestVersion = latestCollection?.versions.find((version) => version.id === latestCollection.currentVersionId);
     const artifact = latestVersion?.artifact as unknown as Artifact | undefined;
@@ -583,24 +703,41 @@ export function OutputPackagePreviewModal({
               const current = info?.versions.find((v) => v.id === info.currentVersionId);
               const isActive = member.collectionId === activeCollectionId;
               return (
-                <button
-                  key={member.artifactVersionId}
-                  type="button"
-                  onClick={() => selectMember(member.collectionId)}
-                  data-smoke="package-preview-member"
-                  className={`mb-2 block w-full rounded-lg border px-2 py-2 text-left ${
-                    isActive ? 'border-sky-200 bg-sky-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
-                  }`}
-                >
-                  <span className="block truncate text-xs font-semibold text-neutral-800">
-                    {member.shortLabel} {member.filename}
-                  </span>
-                  <span className="mt-0.5 block truncate text-[10px] text-neutral-500">
-                    {current && info
-                      ? packageMemberSummary(info, current)
-                      : info ? '读取中…' : '集合不可用'}
-                  </span>
-                </button>
+                <div key={member.artifactVersionId} className={`mb-2 flex rounded-lg border ${
+                  isActive ? 'border-sky-200 bg-sky-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
+                }`}>
+                  <label className="flex shrink-0 items-start px-2 pt-2.5" title="加入批量审核">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(current && selectedVersionIds.has(current.id))}
+                      disabled={!current}
+                      onChange={(event) => {
+                        if (!current) return;
+                        setSelectedVersionIds((selected) => {
+                          const next = new Set(selected);
+                          if (event.target.checked) next.add(current.id); else next.delete(current.id);
+                          return next;
+                        });
+                      }}
+                      aria-label={`选择 ${member.filename} 当前版本参与批量审核`}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => selectMember(member.collectionId)}
+                    data-smoke="package-preview-member"
+                    className="min-w-0 flex-1 px-1 pb-2 pr-2 pt-2 text-left"
+                  >
+                    <span className="block truncate text-xs font-semibold text-neutral-800">
+                      {member.shortLabel} {member.filename}
+                    </span>
+                    <span className="mt-0.5 block truncate text-[10px] text-neutral-500">
+                      {current && info
+                        ? packageMemberSummary(info, current)
+                        : info ? '读取中…' : '集合不可用'}
+                    </span>
+                  </button>
+                </div>
               );
             })}
           </aside>
@@ -878,6 +1015,64 @@ export function OutputPackagePreviewModal({
           </section>
         )}
 
+        {batchPanelOpen && (
+          <section
+            className="absolute bottom-14 right-3 z-20 w-[min(460px,calc(100%-24px))] rounded-lg border border-neutral-200 bg-white p-3 shadow-xl"
+            aria-label="批量审核文件版本"
+            data-smoke="package-preview-batch-review-panel"
+          >
+            <div className="flex items-center gap-2">
+              <h3 className="flex-1 text-sm font-semibold text-neutral-900">批量逐文件审核</h3>
+              <button type="button" onClick={() => setBatchPanelOpen(false)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100" title="关闭批量审核面板">
+                <X size={14} />
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-neutral-500">将为以下 {selectedBatchTargets.length} 个 Server current 版本分别写入审核记录：</p>
+            <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto rounded border border-neutral-200 bg-neutral-50 p-2 text-[11px] text-neutral-700">
+              {selectedBatchTargets.map(({ current }) => (
+                <li key={current.id} className="flex justify-between gap-2">
+                  <span className="truncate">{(current.artifact as unknown as Artifact).filename}</span>
+                  <span className="shrink-0 text-neutral-500">Server v{current.versionNumber}</span>
+                </li>
+              ))}
+            </ul>
+            <fieldset className="mt-3 flex flex-wrap gap-3 text-xs text-neutral-700">
+              {([
+                ['approved', '全部通过'],
+                ['changes_requested', '全部要求修改'],
+                ['rejected', '全部拒绝'],
+              ] as const).map(([decision, label]) => (
+                <label key={decision} className="flex items-center gap-1.5">
+                  <input type="radio" name="package-batch-review-decision" checked={batchDecision === decision} onChange={() => setBatchDecision(decision)} />
+                  {label}
+                </label>
+              ))}
+            </fieldset>
+            <label className="mt-3 block text-xs font-medium text-neutral-700">
+              统一意见{batchDecision === 'approved' ? '（可选）' : '（必填）'}
+              <textarea
+                value={batchComment}
+                onChange={(event) => setBatchComment(event.target.value)}
+                rows={3}
+                placeholder={batchDecision === 'approved' ? '补充批量通过依据' : '说明需要修改或拒绝的原因'}
+                className="mt-1 w-full resize-none rounded-md border border-neutral-300 px-2.5 py-2 text-xs outline-none focus:border-sky-400"
+              />
+            </label>
+            <p className="mt-2 text-[10px] text-neutral-500">任一版本过期、无权限、重复或不属于当前交付时，整批不会写入。批量通过不会自动验收 Task。</p>
+            <div className="mt-3 flex justify-end gap-2">
+              <button type="button" onClick={() => setBatchPanelOpen(false)} className="rounded-md border border-neutral-300 px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50">取消</button>
+              <button
+                type="button"
+                disabled={batchBusy || selectedBatchTargets.length === 0 || (batchDecision !== 'approved' && !batchComment.trim())}
+                onClick={() => void submitBatchReview()}
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
+              >
+                {batchBusy ? '提交中…' : `确认${batchDecisionLabel(batchDecision)}`}
+              </button>
+            </div>
+          </section>
+        )}
+
         {/* footer:保存沿用版本编辑能力；审核按钮只消费 Server availableActions。 */}
         <footer className="flex min-w-0 items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50/80 px-3">
           <div className="flex min-w-0 items-center gap-2 text-xs text-neutral-600">
@@ -901,6 +1096,19 @@ export function OutputPackagePreviewModal({
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
               data-smoke="package-preview-actions"
             >
+              <button
+                type="button"
+                disabled={selectedBatchTargets.length === 0 || batchBusy}
+                onClick={() => {
+                  setActionError(null);
+                  setReviewPanel(null);
+                  setBatchPanelOpen(true);
+                }}
+                className="rounded-md border border-neutral-400 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                data-smoke="package-preview-batch-review"
+              >
+                批量审核（{selectedBatchTargets.length}）…
+              </button>
               {activeIsMarkdown && (
                 <button
                   type="button"
@@ -979,6 +1187,25 @@ export function OutputPackagePreviewModal({
 
 function shortPkg(packageId: string): string {
   return `PKG-${packageId.slice(0, 8)}`;
+}
+
+function batchDecisionLabel(decision: 'approved' | 'changes_requested' | 'rejected'): string {
+  if (decision === 'approved') return '通过';
+  if (decision === 'changes_requested') return '要求修改';
+  return '拒绝';
+}
+
+function batchFailureLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    'delivery-revision-stale': '当前交付已变化',
+    'package-revision-stale': '输出包 revision 已变化',
+    'version-not-current': '文件版本已不是 current',
+    'duplicate-target': '目标重复',
+    'version-not-in-package': '不属于当前输出包',
+    'version-not-in-collection': '文件版本与集合不匹配',
+    'actor-not-authorized': '无审核权限',
+  };
+  return labels[reason] ?? reason;
 }
 
 function reviewStateChipClass(reviewState: ProjectArtifactVersionDto['reviewState']): string {

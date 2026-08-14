@@ -30,6 +30,7 @@ import type { ArtifactVersionRevisionSaveResultDto } from './artifact-revision.j
 /** 冻结的具名 command 集合。未登记 command 必须被 Server 拒绝(ADR-0067)。 */
 export const PACKAGE_REVIEW_COMMAND_NAMES = [
   'submit-package-artifact-review',
+  'submit-package-artifact-reviews',
   'submit-package-review-and-finalize',
   'submit-package-review-and-reject-delivery',
 ] as const;
@@ -74,6 +75,12 @@ export const PACKAGE_REVIEW_REJECTION_REASONS = [
   /** version 不是 package 冻结成员,或不属于声明的 collection。 */
   'version-not-in-package',
   'version-not-in-collection',
+  /** 批量审核的 delivery/package revision fence 或目标集合校验失败。 */
+  'delivery-revision-stale',
+  'package-revision-stale',
+  'batch-targets-required',
+  'duplicate-target',
+  'version-not-current',
   /** 集合 revision fence:并发 finalization/append 已推进。 */
   'collection-revision-stale',
   /** Task revision fence:退回/验收时 Task 已漂移。 */
@@ -212,6 +219,19 @@ export interface PackageReviewTargetV1 {
   readonly comment: string;
 }
 
+/** #1199 批量审核显式目标；每个目标仍对应一条独立文件版本审核事实。 */
+export interface PackageReviewBatchTargetV1 {
+  readonly collectionId: ID;
+  readonly artifactVersionId: ID;
+}
+
+/** #1199 全有或全无失败明细；global fence 失败时目标字段可空。 */
+export interface PackageReviewBatchFailureV1 {
+  readonly collectionId?: ID;
+  readonly artifactVersionId?: ID;
+  readonly reason: PackageReviewRejectionReason;
+}
+
 /**
  * 浮窗编辑态的组合保存负载。`PackageReviewTargetV1.versionId` 是发起命令时的
  * Server current/base；Server 创建新版本后，review 会绑定返回的 `revision.versionId`。
@@ -233,6 +253,16 @@ export interface PackageReviewCommandInputMapV1 {
     readonly saveRevision?: PackageReviewRevisionSaveV1;
     /** saveRevision 的 collection fence。 */
     readonly expectedCollectionRevision?: number;
+    readonly idempotencyKey: string;
+  };
+  readonly 'submit-package-artifact-reviews': {
+    readonly channelId: ID;
+    readonly packageId: ID;
+    readonly deliveryId: ID;
+    readonly expectedPackageRevision: number;
+    readonly targets: readonly PackageReviewBatchTargetV1[];
+    readonly decision: ProjectArtifactReviewDecision;
+    readonly comment: string;
     readonly idempotencyKey: string;
   };
   readonly 'submit-package-review-and-finalize': PackageReviewTargetV1 & {
@@ -258,12 +288,16 @@ export interface PackageReviewCommandOutputMapV1 {
     readonly review: PackageReviewDto;
     readonly revision?: ArtifactVersionRevisionSaveResultDto;
   };
+  readonly 'submit-package-artifact-reviews': {
+    readonly reviews: readonly PackageReviewDto[];
+  };
   readonly 'submit-package-review-and-finalize': PackageReviewFinalizeResultDto;
   readonly 'submit-package-review-and-reject-delivery': PackageReviewRejectDeliveryResultDto;
 }
 
 export type PackageReviewCommandOutputUnionV1 =
   | ({ readonly commandName: 'submit-package-artifact-review' } & PackageReviewCommandOutputMapV1['submit-package-artifact-review'])
+  | ({ readonly commandName: 'submit-package-artifact-reviews' } & PackageReviewCommandOutputMapV1['submit-package-artifact-reviews'])
   | ({ readonly commandName: 'submit-package-review-and-finalize' } & PackageReviewCommandOutputMapV1['submit-package-review-and-finalize'])
   | ({ readonly commandName: 'submit-package-review-and-reject-delivery' } & PackageReviewCommandOutputMapV1['submit-package-review-and-reject-delivery']);
 
@@ -311,6 +345,8 @@ export interface PackageReviewCommandResponseV1 {
   readonly conflictReason?: string;
   /** rejected:结构化拒绝码(PACKAGE_REVIEW_REJECTION_REASONS)。 */
   readonly rejectedReason?: string;
+  /** #1199 批量命令逐目标失败明细；任何一项失败时整批无副作用。 */
+  readonly rejectedTargets?: readonly PackageReviewBatchFailureV1[];
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +465,15 @@ function assertReviewDto(value: unknown): void {
   assertInteger(value.createdAt, 0);
 }
 
+function assertBatchFailure(value: unknown): void {
+  assertExactKeys(value, ['collectionId', 'artifactVersionId', 'reason'], ['reason']);
+  if (value.collectionId !== undefined) assertId(value.collectionId);
+  if (value.artifactVersionId !== undefined) assertId(value.artifactVersionId);
+  if (!PACKAGE_REVIEW_REJECTION_REASONS.includes(value.reason as PackageReviewRejectionReason)) {
+    throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+  }
+}
+
 function assertFinalizeResult(value: unknown): void {
   assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection'],
     ['review', 'finalization', 'collection']);
@@ -505,13 +550,19 @@ function assertReceipt(value: unknown): void {
 }
 
 function assertCommandOutput(value: unknown): void {
-  assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection', 'task'],
+  assertExactKeys(value, ['commandName', 'review', 'reviews', 'revision', 'finalization', 'collection', 'task'],
     ['commandName']);
   const commandName = value.commandName;
   if (commandName === 'submit-package-artifact-review') {
     assertExactKeys(value, ['commandName', 'review', 'revision'], ['commandName', 'review']);
     assertReviewDto(value.review);
     if (value.revision !== undefined) assertRevisionSaveResult(value.revision);
+  } else if (commandName === 'submit-package-artifact-reviews') {
+    assertExactKeys(value, ['commandName', 'reviews'], ['commandName', 'reviews']);
+    if (!Array.isArray(value.reviews) || value.reviews.length === 0) {
+      throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+    }
+    value.reviews.forEach(assertReviewDto);
   } else if (commandName === 'submit-package-review-and-finalize') {
     assertExactKeys(value, ['commandName', 'review', 'revision', 'finalization', 'collection'],
       ['commandName', 'review', 'finalization', 'collection']);
@@ -570,6 +621,24 @@ export function parsePackageReviewCommandInputV1(
       throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
     }
     assertId(value.idempotencyKey);
+  } else if (commandName === 'submit-package-artifact-reviews') {
+    assertExactKeys(value,
+      ['channelId', 'packageId', 'deliveryId', 'expectedPackageRevision', 'targets', 'decision', 'comment',
+        'idempotencyKey'],
+      ['channelId', 'packageId', 'deliveryId', 'expectedPackageRevision', 'targets', 'decision', 'idempotencyKey']);
+    assertId(value.channelId);
+    assertId(value.packageId);
+    assertId(value.deliveryId);
+    assertInteger(value.expectedPackageRevision, 1);
+    if (!Array.isArray(value.targets) || value.targets.length === 0) throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+    value.targets.forEach((target) => {
+      assertExactKeys(target, ['collectionId', 'artifactVersionId'], ['collectionId', 'artifactVersionId']);
+      assertId(target.collectionId);
+      assertId(target.artifactVersionId);
+    });
+    assertDecision(value.decision);
+    if (value.comment !== undefined && !nonEmpty(value.comment)) throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+    assertId(value.idempotencyKey);
   } else if (commandName === 'submit-package-review-and-finalize') {
     assertExactKeys(value,
       ['channelId', 'packageId', 'collectionId', 'versionId', 'decision', 'comment',
@@ -600,7 +669,7 @@ export function parsePackageReviewCommandInputV1(
 export function parsePackageReviewCommandResponseV1(value: unknown): PackageReviewCommandResponseV1 {
   assertExactKeys(value,
     ['schemaVersion', 'commandName', 'outcome', 'retryDirective', 'stableCode', 'receipt', 'result',
-      'conflictReason', 'rejectedReason'],
+      'conflictReason', 'rejectedReason', 'rejectedTargets'],
     ['schemaVersion', 'commandName', 'outcome', 'retryDirective', 'stableCode']);
   if (value.schemaVersion !== 1) throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
   if (!PACKAGE_REVIEW_COMMAND_NAMES.includes(value.commandName as PackageReviewCommandName)) {
@@ -630,6 +699,12 @@ export function parsePackageReviewCommandResponseV1(value: unknown): PackageRevi
       || !PACKAGE_REVIEW_REJECTION_REASONS.includes(value.rejectedReason as PackageReviewRejectionReason))) {
     // 结构化拒绝码必须来自冻结枚举:客户端不得自造 reason。
     throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+  }
+  if (value.rejectedTargets !== undefined) {
+    if (!Array.isArray(value.rejectedTargets) || value.rejectedTargets.length === 0) {
+      throw new Error(PACKAGE_REVIEW_PAYLOAD_INVALID);
+    }
+    value.rejectedTargets.forEach(assertBatchFailure);
   }
   return structuredClone(value) as unknown as PackageReviewCommandResponseV1;
 }

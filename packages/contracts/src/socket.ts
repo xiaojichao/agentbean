@@ -249,6 +249,8 @@ export const WEB_EVENTS = {
     getOutputPackage: 'project:get-output-package',
     /** #1061 对 package 成员版本提交审核(approved/changes_requested/rejected)。 */
     submitPackageArtifactReview: 'project:submit-package-artifact-review',
+    /** #1199 对显式成员版本集合执行全有或全无的逐文件审核。 */
+    submitPackageArtifactReviews: 'project:submit-package-artifact-reviews',
     /** #1061 "通过并设为最终版":一个事务写 review 与 finalization 两个独立事实。 */
     submitPackageReviewAndFinalize: 'project:submit-package-review-and-finalize',
     /** #1061 审核(changes_requested/rejected)与退回 Task delivery 原子提交。 */

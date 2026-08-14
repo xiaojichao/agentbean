@@ -110,6 +110,8 @@ import type {
   PackageReviewTombstoneRecord,
   RecordPackageReviewInput,
   RecordPackageReviewResult,
+  RecordPackageReviewsInput,
+  RecordPackageReviewsResult,
 } from '../../application/package-review-repositories.js';
 import type {
   ArtifactRevisionReceiptRecord,
@@ -306,6 +308,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     // #1062：版本修订 provenance 四列 + save-artifact-version-revision 命令 receipt
     // (0079 已被 #1063 占用,本票顺延 0080)。
     applyMigration(db, 'team/0080_artifact_version_revision.sql');
+    // #1199：PackageReview command registry 加入批量逐文件审核。
+    applyMigration(db, 'team/0083_package_batch_review.sql');
   }
   // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
   applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');
@@ -5769,6 +5773,144 @@ function createSqlitePackageReviewRepository(teamDb: SqliteDatabase): PackageRev
           }
         }
         return { kind: 'created' as const, review: input.review };
+      });
+      return result.immediate ? result.immediate() : result();
+    },
+    async recordPackageReviews(input: RecordPackageReviewsInput): Promise<RecordPackageReviewsResult> {
+      if (input.reviews.length === 0) return { kind: 'version_scope_conflict' };
+      const first = input.reviews[0]!;
+      const result = teamDb.transaction(() => {
+        const existingReceiptRow = teamDb.prepare(
+          `SELECT * FROM package_review_command_receipts WHERE team_id = ? AND idempotency_key = ?`,
+        ).get(input.receipt.teamId, input.receipt.idempotencyKey);
+        if (existingReceiptRow) {
+          const existingReceipt = mapPackageReviewReceiptRecord(existingReceiptRow);
+          if (existingReceipt.commandHash !== input.receipt.commandHash) {
+            return { kind: 'idempotency_conflict' as const };
+          }
+          try {
+            const ids = (JSON.parse(existingReceipt.resultJson ?? '{}') as { reviews?: { id: string }[] })
+              .reviews?.map((review) => review.id) ?? [];
+            const reviews = ids.map((id) => mapProjectArtifactReview(teamDb.prepare(
+              `SELECT * FROM project_artifact_reviews WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(id, first.teamId, first.channelId))).filter((review) => review !== null);
+            return reviews.length === ids.length && reviews.length > 0
+              ? { kind: 'replayed' as const, reviews: reviews as PackageReviewRecord[] }
+              : { kind: 'idempotency_conflict' as const };
+          } catch {
+            return { kind: 'idempotency_conflict' as const };
+          }
+        }
+        const existingMutation = teamDb.prepare(
+          `SELECT 1 FROM project_artifact_decision_mutations
+           WHERE team_id = ? AND channel_id = ? AND idempotency_key = ?`,
+        ).get(input.mutation.teamId, input.mutation.channelId, input.mutation.idempotencyKey);
+        if (existingMutation) return { kind: 'idempotency_conflict' as const };
+
+        const fence = input.lineageFence;
+        const taskLineage = teamDb.prepare(
+          `SELECT t.team_id, t.channel_id, t.revision, c.task_revision, c.attempt
+           FROM tasks t
+           JOIN task_coordinations c ON c.task_id = t.id AND c.team_id = t.team_id
+             AND c.task_revision = t.revision
+           WHERE t.id = ? AND t.superseded_by_revision IS NULL`,
+        ).get(fence.taskId);
+        const currentPackage = teamDb.prepare(
+          `SELECT package_id, delivery_id
+           FROM output_packages
+           WHERE team_id = ? AND channel_id = ? AND task_id = ? AND task_binding = 'managed'
+             AND task_revision = ? AND task_attempt = ?
+           ORDER BY created_at DESC, package_id DESC
+           LIMIT 1`,
+        ).get(fence.teamId, fence.channelId, fence.taskId, fence.taskRevision, fence.taskAttempt);
+        if (!taskLineage
+          || sqliteText(taskLineage, 'team_id') !== fence.teamId
+          || sqliteNullableText(taskLineage, 'channel_id') !== fence.channelId
+          || sqliteNumber(taskLineage, 'revision') !== fence.taskRevision
+          || sqliteNumber(taskLineage, 'task_revision') !== fence.taskRevision
+          || sqliteNumber(taskLineage, 'attempt') !== fence.taskAttempt
+          || !currentPackage
+          || sqliteText(currentPackage, 'package_id') !== fence.packageId
+          || sqliteText(currentPackage, 'delivery_id') !== fence.deliveryId) {
+          return { kind: 'delivery_revision_conflict' as const };
+        }
+
+        // 在任何 INSERT 前验证整批 version/stage 作用域。
+        for (const review of input.reviews) {
+          const version = teamDb.prepare(
+            `SELECT v.stage_id, c.current_version_id
+             FROM project_artifact_versions v
+             JOIN project_artifact_collections c
+               ON c.id = v.collection_id AND c.team_id = v.team_id AND c.channel_id = v.channel_id
+             WHERE v.id = ? AND v.collection_id = ? AND v.team_id = ? AND v.channel_id = ?`,
+          ).get(review.versionId, review.collectionId, review.teamId, review.channelId);
+          if (!version || sqliteNullableText(version, 'stage_id') !== (review.stageId ?? undefined)) {
+            return { kind: 'version_scope_conflict' as const };
+          }
+          if (review.stageId !== undefined) {
+            const stage = teamDb.prepare(
+              `SELECT 1 FROM project_stages WHERE id = ? AND team_id = ? AND channel_id = ?`,
+            ).get(review.stageId, review.teamId, review.channelId);
+            if (!stage) return { kind: 'version_scope_conflict' as const };
+          }
+          if (sqliteText(version, 'current_version_id') !== review.versionId) {
+            return {
+              kind: 'current_version_conflict' as const,
+              collectionId: review.collectionId,
+              versionId: review.versionId,
+            };
+          }
+        }
+
+        const insertReview = teamDb.prepare(
+          `INSERT INTO project_artifact_reviews (
+            id, team_id, channel_id, collection_id, version_id, stage_id,
+            package_id, delivery_id, task_id, task_revision, task_attempt,
+            authority_basis, decision, comment, basis_json, reviewed_by, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        );
+        for (const review of input.reviews) {
+          insertReview.run(
+            review.id, review.teamId, review.channelId, review.collectionId, review.versionId,
+            review.stageId ?? null, review.packageId, review.deliveryId, review.taskId,
+            review.taskRevision, review.taskAttempt, review.authorityBasis, review.decision,
+            review.comment, JSON.stringify(review.basis), review.reviewedBy, review.createdAt,
+          );
+        }
+        teamDb.prepare(
+          `INSERT INTO project_artifact_decision_mutations (
+            team_id, channel_id, idempotency_key, request_fingerprint, kind,
+            collection_id, version_id, review_id, finalization_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.mutation.teamId, input.mutation.channelId, input.mutation.idempotencyKey,
+          input.mutation.requestFingerprint, 'review', first.collectionId, first.versionId,
+          first.id, null, input.mutation.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO package_review_command_receipts (
+            receipt_id, team_id, command_name, command_schema_version, idempotency_key,
+            command_hash, outcome, committed_revisions_json, event_refs_json,
+            result_available, result_json, commit_time, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.receipt.receiptId, input.receipt.teamId, input.receipt.commandName,
+          input.receipt.commandSchemaVersion, input.receipt.idempotencyKey, input.receipt.commandHash,
+          input.receipt.outcome, JSON.stringify(input.receipt.committedRevisions),
+          JSON.stringify(input.receipt.eventRefs), input.receipt.resultAvailable ? 1 : 0,
+          input.receipt.resultJson ?? null, input.receipt.commitTime, input.receipt.createdAt,
+        );
+        teamDb.prepare(
+          `INSERT INTO package_review_idempotency_tombstones (
+            id, team_id, command_name, idempotency_key, command_hash, receipt_id,
+            outcome, result_available, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          input.tombstone.id, input.tombstone.teamId, input.tombstone.commandName,
+          input.tombstone.idempotencyKey, input.tombstone.commandHash, input.tombstone.receiptId,
+          input.tombstone.outcome, input.tombstone.resultAvailable ? 1 : 0, input.tombstone.createdAt,
+        );
+        return { kind: 'created' as const, reviews: input.reviews };
       });
       return result.immediate ? result.immediate() : result();
     },

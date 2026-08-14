@@ -2716,6 +2716,97 @@ export function createInMemoryRepositories(): ServerNextRepositories {
         }
         return { kind: 'created', review: input.review };
       },
+      async recordPackageReviews(input) {
+        if (input.reviews.length === 0) return { kind: 'version_scope_conflict' };
+        const receiptKey = `${input.receipt.teamId}:${input.receipt.idempotencyKey}`;
+        const existingReceipt = packageReviewReceipts.get(receiptKey);
+        if (existingReceipt) {
+          if (existingReceipt.commandHash !== input.receipt.commandHash) {
+            return { kind: 'idempotency_conflict' };
+          }
+          try {
+            const ids = (JSON.parse(existingReceipt.resultJson ?? '{}') as { reviews?: { id: string }[] })
+              .reviews?.map((review) => review.id) ?? [];
+            const reviews = ids.map((id) => projectArtifactReviews.get(id)).filter((review) => review !== undefined);
+            return reviews.length === ids.length && reviews.length > 0
+              ? { kind: 'replayed', reviews: reviews as import('../../application/package-review-repositories.js').PackageReviewRecord[] }
+              : { kind: 'idempotency_conflict' };
+          } catch {
+            return { kind: 'idempotency_conflict' };
+          }
+        }
+        const mutationKey = `${input.mutation.teamId}:${input.mutation.channelId}:${input.mutation.idempotencyKey}`;
+        if (projectArtifactDecisionMutations.has(mutationKey)) return { kind: 'idempotency_conflict' };
+
+        const fence = input.lineageFence;
+        const task = tasks.get(`${fence.taskId}#${fence.taskRevision}`);
+        // memory transaction 从幂等门禁到落库不得让出事件循环；否则同 key 并发请求可同时越过门禁。
+        const coordination = taskCoordinationState.coordinations.get(fence.taskId);
+        const currentPackage = Array.from(outputPackages.values())
+          .filter((record) => record.teamId === fence.teamId
+            && record.channelId === fence.channelId
+            && record.taskId === fence.taskId
+            && record.taskBinding === 'managed'
+            && record.taskRevision === fence.taskRevision
+            && record.taskAttempt === fence.taskAttempt)
+          .sort((left, right) => right.createdAt - left.createdAt || right.packageId.localeCompare(left.packageId))[0];
+        if (!task || task.supersededByRevision !== null
+          || task.teamId !== fence.teamId || task.channelId !== fence.channelId
+          || task.revision !== fence.taskRevision
+          || !coordination || coordination.teamId !== fence.teamId
+          || coordination.taskRevision !== fence.taskRevision
+          || coordination.attempt !== fence.taskAttempt
+          || currentPackage?.packageId !== fence.packageId
+          || currentPackage.deliveryId !== fence.deliveryId) {
+          return { kind: 'delivery_revision_conflict' };
+        }
+
+        // 先校验整批，确保 memory 实现与 SQLite 事务同样不会留下部分记录。
+        for (const review of input.reviews) {
+          const version = projectArtifactVersions.get(review.versionId);
+          if (!version
+            || version.teamId !== review.teamId
+            || version.channelId !== review.channelId
+            || version.collectionId !== review.collectionId
+            || (review.stageId ?? undefined) !== (version.stageId ?? undefined)) {
+            return { kind: 'version_scope_conflict' };
+          }
+          if (review.stageId !== undefined) {
+            const stage = projectStages.get(review.stageId);
+            if (!stage || stage.teamId !== review.teamId || stage.channelId !== review.channelId) {
+              return { kind: 'version_scope_conflict' };
+            }
+          }
+          const collection = projectArtifactCollections.get(review.collectionId);
+          if (!collection || collection.currentVersionId !== review.versionId) {
+            return {
+              kind: 'current_version_conflict',
+              collectionId: review.collectionId,
+              versionId: review.versionId,
+            };
+          }
+        }
+
+        for (const review of input.reviews) projectArtifactReviews.set(review.id, review);
+        const first = input.reviews[0]!;
+        projectArtifactDecisionMutations.set(mutationKey, {
+          teamId: input.mutation.teamId,
+          channelId: input.mutation.channelId,
+          idempotencyKey: input.mutation.idempotencyKey,
+          requestFingerprint: input.mutation.requestFingerprint,
+          kind: 'review',
+          collectionId: first.collectionId,
+          versionId: first.versionId,
+          reviewId: first.id,
+          createdAt: input.mutation.createdAt,
+        });
+        packageReviewReceipts.set(receiptKey, input.receipt);
+        packageReviewTombstones.set(
+          `${input.tombstone.teamId}:${input.tombstone.idempotencyKey}`,
+          input.tombstone,
+        );
+        return { kind: 'created', reviews: input.reviews };
+      },
       receipts: {
         async getByIdempotencyKey(input) {
           return packageReviewReceipts.get(`${input.teamId}:${input.idempotencyKey}`) ?? null;

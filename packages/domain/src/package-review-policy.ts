@@ -65,6 +65,106 @@ export interface PackageArtifactReviewFacts {
   };
 }
 
+export interface PackageBatchReviewTargetFacts {
+  readonly collectionId: string;
+  readonly artifactVersionId: string;
+  readonly versionCollectionId?: string;
+  readonly currentVersionId?: string;
+  readonly actorFacts: ProjectArtifactAuthorityFacts;
+}
+
+export type PackageBatchReviewFailureReason = PackageReviewRejection
+  | 'delivery_revision_stale'
+  | 'package_revision_stale'
+  | 'batch_targets_required'
+  | 'duplicate_target'
+  | 'version_not_current';
+
+export interface PackageBatchReviewFailure {
+  readonly collectionId?: string;
+  readonly artifactVersionId?: string;
+  readonly reasonCode: PackageBatchReviewFailureReason;
+}
+
+export type PackageBatchArtifactReviewDecision =
+  | { readonly kind: 'allowed'; readonly targets: readonly (PackageBatchReviewTargetFacts & {
+    readonly authorityBasis: PackageReviewAuthorityBasisKind;
+  })[] }
+  | { readonly kind: 'rejected'; readonly failures: readonly PackageBatchReviewFailure[] };
+
+/**
+ * #1199 批量审核策略：只接受当前 delivery/package revision 下显式列出的 current 版本。
+ * 对全部目标完成作用域、stale 与逐 Stage authority 校验后才允许持久层一次性写入。
+ */
+export function evaluatePackageBatchArtifactReview(input: {
+  readonly actorKind: PackageReviewActorKind;
+  readonly teamId: string;
+  readonly channelId: string;
+  readonly package: {
+    readonly id: string;
+    readonly teamId: string;
+    readonly channelId: string;
+    readonly deliveryId: string;
+    readonly revision: number;
+    readonly members: readonly { readonly collectionId: string; readonly artifactVersionId: string }[];
+  } | null;
+  readonly deliveryId: string;
+  readonly expectedPackageRevision: number;
+  readonly decision: unknown;
+  readonly targets: readonly PackageBatchReviewTargetFacts[];
+}): PackageBatchArtifactReviewDecision {
+  if (input.actorKind !== 'human') {
+    return { kind: 'rejected', failures: [{ reasonCode: 'actor_not_human' }] };
+  }
+  if (!isPackageArtifactReviewDecision(input.decision)) {
+    return { kind: 'rejected', failures: [{ reasonCode: 'invalid_decision' }] };
+  }
+  if (!input.package) return { kind: 'rejected', failures: [{ reasonCode: 'package_not_found' }] };
+  if (input.package.teamId !== input.teamId || input.package.channelId !== input.channelId) {
+    return { kind: 'rejected', failures: [{ reasonCode: 'package_out_of_scope' }] };
+  }
+  if (input.package.deliveryId !== input.deliveryId) {
+    return { kind: 'rejected', failures: [{ reasonCode: 'delivery_revision_stale' }] };
+  }
+  if (input.package.revision !== input.expectedPackageRevision) {
+    return { kind: 'rejected', failures: [{ reasonCode: 'package_revision_stale' }] };
+  }
+  if (input.targets.length === 0) {
+    return { kind: 'rejected', failures: [{ reasonCode: 'batch_targets_required' }] };
+  }
+
+  const seenVersions = new Set<string>();
+  const failures: PackageBatchReviewFailure[] = [];
+  const allowed: (PackageBatchReviewTargetFacts & { authorityBasis: PackageReviewAuthorityBasisKind })[] = [];
+  for (const target of input.targets) {
+    const identity = { collectionId: target.collectionId, artifactVersionId: target.artifactVersionId };
+    if (seenVersions.has(target.artifactVersionId)) {
+      failures.push({ ...identity, reasonCode: 'duplicate_target' });
+      continue;
+    }
+    seenVersions.add(target.artifactVersionId);
+    const member = input.package.members.find((candidate) => candidate.collectionId === target.collectionId);
+    if (!member) {
+      failures.push({ ...identity, reasonCode: 'version_not_in_package' });
+      continue;
+    }
+    if (target.versionCollectionId !== target.collectionId) {
+      failures.push({ ...identity, reasonCode: 'version_not_in_collection' });
+      continue;
+    }
+    if (target.currentVersionId !== target.artifactVersionId) {
+      failures.push({ ...identity, reasonCode: 'version_not_current' });
+      continue;
+    }
+    if (!hasProjectArtifactDecisionAuthority(target.actorFacts)) {
+      failures.push({ ...identity, reasonCode: 'actor_not_authorized' });
+      continue;
+    }
+    allowed.push({ ...target, authorityBasis: deriveAuthorityBasis(target.actorFacts) });
+  }
+  return failures.length > 0 ? { kind: 'rejected', failures } : { kind: 'allowed', targets: allowed };
+}
+
 export function isPackageArtifactReviewDecision(value: unknown): value is ProjectArtifactReviewDecision {
   return value === 'approved' || value === 'rejected' || value === 'changes_requested';
 }
@@ -296,4 +396,15 @@ export function mapPackageReviewRejection(
     review_required_before_reject: 'review-required-before-reject',
   };
   return map[reasonCode] ?? 'invalid-request';
+}
+
+export function mapPackageBatchReviewRejection(reasonCode: PackageBatchReviewFailureReason): PackageReviewRejectionReason {
+  const batchMap: Partial<Record<PackageBatchReviewFailureReason, PackageReviewRejectionReason>> = {
+    delivery_revision_stale: 'delivery-revision-stale',
+    package_revision_stale: 'package-revision-stale',
+    batch_targets_required: 'batch-targets-required',
+    duplicate_target: 'duplicate-target',
+    version_not_current: 'version-not-current',
+  };
+  return batchMap[reasonCode] ?? mapPackageReviewRejection(reasonCode as PackageReviewRejection);
 }

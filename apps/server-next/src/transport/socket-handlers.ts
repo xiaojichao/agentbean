@@ -572,6 +572,11 @@ export function registerWebSocketHandlers(
       authenticatedUser: options.authenticatedUser,
       requireAuthenticatedUser: true,
     });
+  bind(socket, WEB_EVENTS.project.submitPackageArtifactReviews, app, 'submitPackageArtifactReviews',
+    (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
+      authenticatedUser: options.authenticatedUser,
+      requireAuthenticatedUser: true,
+    });
   bind(socket, WEB_EVENTS.project.submitPackageReviewAndFinalize, app, 'submitPackageReviewAndFinalize',
     (payload, result) => options.afterProjectArtifactMutation?.(payload, result), {
       authenticatedUser: options.authenticatedUser,

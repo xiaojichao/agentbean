@@ -217,8 +217,9 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.project.promoteArtifact,
       WEB_EVENTS.project.submitArtifactReview,
       WEB_EVENTS.project.setArtifactFinalVersion,
-      // #1061 package review 三个命令(人类审核/组合验收/最终化)。
+      // #1061/#1199 package review 命令(单文件/批量审核/组合验收/最终化)。
       WEB_EVENTS.project.submitPackageArtifactReview,
+      WEB_EVENTS.project.submitPackageArtifactReviews,
       WEB_EVENTS.project.submitPackageReviewAndFinalize,
       WEB_EVENTS.project.submitPackageReviewAndRejectDelivery,
       // #1062 基于明确版本保存 Markdown 修订。

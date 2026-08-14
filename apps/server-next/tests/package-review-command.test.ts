@@ -219,6 +219,102 @@ async function seedPackage(
   };
 }
 
+async function seedBatchPackage(
+  repositories: ServerNextRepositories,
+  seedValue: Seed,
+  opts?: {
+    taskId?: string;
+    suffix?: string;
+    createdAt?: number;
+    taskRevision?: number;
+    taskAttempt?: number;
+  },
+): Promise<{
+  packageId: string;
+  deliveryId: string;
+  taskId: string;
+  targets: readonly { collectionId: string; artifactVersionId: string }[];
+}> {
+  const suffix = opts?.suffix ?? 'batch';
+  const taskId = opts?.taskId ?? `task-${seedValue.channelId}-batch`;
+  const targets = [1, 2].map((index) => ({
+    collectionId: `col-${seedValue.channelId}-${suffix}-${index}`,
+    artifactVersionId: `ver-${seedValue.channelId}-${suffix}-${index}`,
+  }));
+  for (const [index, target] of targets.entries()) {
+    await repositories.artifacts.create({
+      id: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
+      teamId: seedValue.teamId,
+      channelId: seedValue.channelId,
+      uploaderId: seedValue.userId,
+      filename: `report-${index + 1}.md`,
+      mimeType: 'text/markdown',
+      sizeBytes: 12,
+      pathKind: 'workspace',
+      createdAt: 400 + index,
+    });
+  }
+  const packageId = `pkg-${seedValue.channelId}-${suffix}`;
+  const deliveryId = `del-${seedValue.channelId}-${suffix}`;
+  const formed = await repositories.outputPackages.recordPackageFormation({
+    record: {
+      teamId: seedValue.teamId,
+      packageId,
+      channelId: seedValue.channelId,
+      deliveryId,
+      publishId: `pub-${seedValue.channelId}-${suffix}`,
+      workspaceRevisionId: `rev-${seedValue.channelId}-${suffix}`,
+      agentId: seedValue.agentId,
+      taskId,
+      taskBinding: 'managed',
+      taskRevision: opts?.taskRevision ?? 1,
+      taskAttempt: opts?.taskAttempt ?? 1,
+      memberCount: 2,
+      status: 'recorded',
+      createdAt: opts?.createdAt ?? 500,
+    },
+    members: targets.map((target, index) => ({
+      sequence: index + 1,
+      shortLabel: `F${index + 1}`,
+      role: 'deliverable' as const,
+      requiredForFinal: true,
+      sourcePath: `out/report-${index + 1}.md`,
+      filename: `report-${index + 1}.md`,
+      sizeBytes: 12,
+      collection: { mode: 'create' as const, collectionId: target.collectionId, name: `out/report-${index + 1}.md`, kind: 'deliverable' as const },
+      version: {
+        id: target.artifactVersionId,
+        artifactId: `art-${seedValue.channelId}-${suffix}-${index + 1}`,
+        taskId,
+        taskRevision: opts?.taskRevision ?? 1,
+      },
+    })),
+    receipt: {
+      receiptId: `rcpt-${seedValue.channelId}-${suffix}`, teamId: seedValue.teamId,
+      commandName: 'record-agent-output-package', commandSchemaVersion: 1,
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:${suffix}`, commandHash: suffix,
+      outcome: 'applied', committedRevisions: [], eventRefs: [], commitTime: 500,
+      resultAvailable: true, createdAt: 500,
+    },
+    tombstone: {
+      id: `tomb-${seedValue.channelId}-${suffix}`, teamId: seedValue.teamId,
+      commandName: 'record-agent-output-package',
+      idempotencyKey: `record-agent-output-package:${seedValue.channelId}:${suffix}`, commandHash: suffix,
+      receiptId: `rcpt-${seedValue.channelId}-${suffix}`, outcome: 'applied', resultAvailable: true, createdAt: opts?.createdAt ?? 500,
+    },
+  });
+  if (formed.kind !== 'created') throw new Error(`batch package seed failed: ${formed.kind}`);
+  return {
+    packageId,
+    deliveryId,
+    taskId,
+    targets: formed.members.map(({ collectionId, artifactVersionId }) => ({
+      collectionId,
+      artifactVersionId,
+    })),
+  };
+}
+
 /** 构造第二个冻结同一既有 version 的 package，用于验证组合命令不能混用 provenance。 */
 async function seedPackageReusingVersion(
   repositories: ServerNextRepositories,
@@ -410,6 +506,200 @@ for (const variant of variants) {
       channelId: s.channelId,
     });
     expect(reviews.filter((r) => r.versionId === pkg.versionId)).toHaveLength(2);
+  });
+
+  test('#1199:N 个显式目标产生 N 条 review，未选中版本不写入，重试幂等且不推进 Task', async () => {
+    const s = await makeSeed();
+    const pkg = await seedBatchPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const key = `batch-review:${pkg.deliveryId}`;
+    const input = {
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      deliveryId: pkg.deliveryId,
+      expectedPackageRevision: 1,
+      targets: [pkg.targets[0]!],
+      decision: 'approved' as const,
+      comment: '选中版本通过',
+      idempotencyKey: key,
+    };
+    const first = await s.app.submitPackageArtifactReviews(input);
+    expect(first).toMatchObject({ ok: true, reviews: [{ versionId: pkg.targets[0]!.artifactVersionId }], replayed: false });
+    const replay = await s.app.submitPackageArtifactReviews(input);
+    expect(replay).toMatchObject({ ok: true, reviews: [{ versionId: pkg.targets[0]!.artifactVersionId }], replayed: true });
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({ teamId: s.teamId, channelId: s.channelId });
+    expect(reviews.filter((review) => review.packageId === pkg.packageId)).toHaveLength(1);
+    expect(reviews.some((review) => review.versionId === pkg.targets[1]!.artifactVersionId)).toBe(false);
+    expect((await s.repositories.tasks.getById(pkg.taskId))?.status).toBe('in_review');
+  });
+
+  test('#1199:同幂等键并发请求只写入一批 review', async () => {
+    const s = await makeSeed();
+    const pkg = await seedBatchPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const input = {
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      deliveryId: pkg.deliveryId,
+      expectedPackageRevision: 1,
+      targets: pkg.targets,
+      decision: 'approved' as const,
+      comment: '并发幂等审核',
+      idempotencyKey: `batch-review-concurrent:${pkg.deliveryId}`,
+    };
+
+    const results = await Promise.all([
+      s.app.submitPackageArtifactReviews(input),
+      s.app.submitPackageArtifactReviews(input),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.map((result) => result.ok ? result.replayed : undefined).sort())
+      .toEqual([false, true]);
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews.filter((review) => review.packageId === pkg.packageId)).toHaveLength(pkg.targets.length);
+  });
+
+  test('#1199:错 delivery、重复目标或任一目标无权限时整批零写入并返回明确原因', async () => {
+    const s = await makeSeed();
+    const pkg = await seedBatchPackage(s.repositories, s);
+    await seedTask(s.repositories, s, pkg.taskId, 'in_review');
+    const common = {
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: pkg.packageId,
+      expectedPackageRevision: 1,
+      decision: 'changes_requested' as const,
+      comment: '需要统一修改',
+    };
+    const wrongDelivery = await s.app.submitPackageArtifactReviews({
+      ...common, userId: s.userId, deliveryId: 'delivery-old', targets: pkg.targets, idempotencyKey: 'batch-wrong-delivery',
+    });
+    expect(wrongDelivery).toMatchObject({ ok: false, error: 'CONFLICT', details: { rejectedTargets: [{ reason: 'delivery-revision-stale' }] } });
+    const duplicate = await s.app.submitPackageArtifactReviews({
+      ...common, userId: s.userId, deliveryId: pkg.deliveryId,
+      targets: [pkg.targets[0]!, pkg.targets[0]!, pkg.targets[1]!], idempotencyKey: 'batch-duplicate',
+    });
+    expect(duplicate).toMatchObject({ ok: false, error: 'CONFLICT', details: { rejectedTargets: [expect.objectContaining({ reason: 'duplicate-target' })] } });
+    const unauthorized = await s.app.submitPackageArtifactReviews({
+      ...common, userId: s.memberUserId, deliveryId: pkg.deliveryId, targets: pkg.targets, idempotencyKey: 'batch-unauthorized',
+    });
+    expect(unauthorized).toMatchObject({ ok: false, error: 'FORBIDDEN' });
+    const staleTarget = pkg.targets[0]!;
+    const newer = await s.app.saveArtifactVersionRevision({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      collectionId: staleTarget.collectionId,
+      baseVersionId: staleTarget.artifactVersionId,
+      content: '# newer',
+      filename: 'report-1.md',
+      expectedCollectionRevision: 1,
+      revisionBasis: {
+        sourceVersionId: staleTarget.artifactVersionId,
+        packageId: pkg.packageId,
+        deliveryId: pkg.deliveryId,
+      },
+      idempotencyKey: 'batch-save-newer',
+    });
+    expect(newer).toMatchObject({ ok: true, revision: { collectionId: staleTarget.collectionId } });
+    const stale = await s.app.submitPackageArtifactReviews({
+      ...common, userId: s.userId, deliveryId: pkg.deliveryId,
+      targets: [staleTarget, pkg.targets[1]!], idempotencyKey: 'batch-stale',
+    });
+    expect(stale).toMatchObject({
+      ok: false, error: 'CONFLICT',
+      details: { rejectedTargets: [expect.objectContaining({ artifactVersionId: staleTarget.artifactVersionId, reason: 'version-not-current' })] },
+    });
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({ teamId: s.teamId, channelId: s.channelId });
+    expect(reviews.filter((review) => review.packageId === pkg.packageId)).toHaveLength(0);
+  });
+
+  test('#1199:同一 Task 后续 delivery 已产生时旧包整批失败且零写入', async () => {
+    const s = await makeSeed();
+    const stale = await seedBatchPackage(s.repositories, s, { suffix: 'old', createdAt: 500 });
+    await seedTask(s.repositories, s, stale.taskId, 'in_review');
+    const current = await seedBatchPackage(s.repositories, s, {
+      taskId: stale.taskId,
+      suffix: 'current',
+      createdAt: 600,
+    });
+
+    const result = await s.app.submitPackageArtifactReviews({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: stale.packageId,
+      deliveryId: stale.deliveryId,
+      expectedPackageRevision: 1,
+      targets: stale.targets,
+      decision: 'approved',
+      comment: '旧交付不应再审核',
+      idempotencyKey: 'batch-stale-task-delivery',
+    });
+
+    expect(current.deliveryId).not.toBe(stale.deliveryId);
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'CONFLICT',
+      details: { rejectedTargets: [{ reason: 'delivery-revision-stale' }] },
+    });
+    const reviews = await s.repositories.channelProjects.listArtifactReviews({
+      teamId: s.teamId,
+      channelId: s.channelId,
+    });
+    expect(reviews.filter((review) => review.packageId === stale.packageId)).toHaveLength(0);
+  });
+
+  test('#1199:Task 当前 revision 大于 1 时仍可审核对应当前 delivery', async () => {
+    const s = await makeSeed();
+    const initial = await seedBatchPackage(s.repositories, s, { suffix: 'revision-1', createdAt: 500 });
+    await seedTask(s.repositories, s, initial.taskId, 'in_review');
+    await s.repositories.taskCoordinationUnitOfWork.run(async (repositories) => {
+      const coordination = await repositories.coordination.coordinations.getByTaskId(initial.taskId);
+      if (!coordination) throw new Error('coordination seed missing');
+      const task = await repositories.tasks.updateAtRevision({
+        taskId: initial.taskId,
+        expectedRevision: 1,
+        nextRevision: 2,
+        reasonCode: 'TEST_NEXT_DELIVERY',
+        changes: { status: 'in_review', updatedAt: 550 },
+      });
+      if (!task) throw new Error('task revision advance failed');
+      const updated = await repositories.coordination.coordinations.update({
+        expectedTaskRevision: 1,
+        record: { ...coordination, taskRevision: 2, attempt: 1, updatedAt: 550 },
+      });
+      if (!updated) throw new Error('coordination revision advance failed');
+    });
+    const current = await seedBatchPackage(s.repositories, s, {
+      taskId: initial.taskId,
+      suffix: 'revision-2',
+      createdAt: 600,
+      taskRevision: 2,
+    });
+
+    const result = await s.app.submitPackageArtifactReviews({
+      userId: s.userId,
+      teamId: s.teamId,
+      channelId: s.channelId,
+      packageId: current.packageId,
+      deliveryId: current.deliveryId,
+      expectedPackageRevision: 1,
+      targets: current.targets,
+      decision: 'approved',
+      comment: '当前 revision 合法审核',
+      idempotencyKey: 'batch-current-task-revision-2',
+    });
+
+    expect(result).toMatchObject({ ok: true, reviews: [{ taskRevision: 2 }, { taskRevision: 2 }] });
   });
 
   test('AC2:普通成员无审核权,非团队用户 FORBIDDEN', async () => {
