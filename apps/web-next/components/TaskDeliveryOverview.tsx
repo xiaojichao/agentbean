@@ -1,11 +1,15 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { CircleDot, History, ListChecks, ShieldCheck, Target } from 'lucide-react';
 import type {
   TaskDeliveryOverviewV1,
   TaskLevelAvailableActionDto,
 } from '@agentbean/contracts';
+import {
+  mutationErrorCopy,
+  submitDeliveryMutation,
+} from '@/lib/package-review-actions';
 import { projectEvents, taskEvents } from '@/lib/socket';
 // #1065 AC11：与 Chat 卡片/Files 列表共享同一组文本标签。
 import { reviewStateLabel, timelineKindLabel } from '@/lib/delivery-labels';
@@ -42,6 +46,30 @@ export function TaskDeliveryOverview({
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [acceptanceOpen, setAcceptanceOpen] = useState(false);
+  const [accepting, setAccepting] = useState(false);
+  const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const acceptanceTitleId = useId();
+  const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
+
+  const closeAcceptance = useCallback(() => {
+    setAcceptanceOpen(false);
+    setAcceptanceError(null);
+    const trigger = acceptanceTriggerRef.current;
+    queueMicrotask(() => {
+      if (trigger?.isConnected) trigger.focus();
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!acceptanceOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !accepting) closeAcceptance();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [acceptanceOpen, accepting, closeAcceptance]);
 
   useEffect(() => {
     let alive = true;
@@ -86,7 +114,7 @@ export function TaskDeliveryOverview({
       stopArtifacts();
       stopTasks();
     };
-  }, [teamId, channelId, taskId]);
+  }, [teamId, channelId, taskId, refreshNonce]);
 
   if (loading) {
     return <div className="text-center text-[11px] text-neutral-400" data-smoke="task-delivery-loading">正在读取交付视图…</div>;
@@ -100,7 +128,94 @@ export function TaskDeliveryOverview({
   }
   if (!overview) return null;
 
-  return <TaskDeliveryOverviewContent overview={overview} onAction={onAction} />;
+  const handleAction = (action: TaskLevelAvailableActionDto) => {
+    if (action.action !== 'accept-delivery') {
+      onAction?.(action);
+      return;
+    }
+    if (action.disabled) return;
+    acceptanceTriggerRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    setAcceptanceError(null);
+    setAcceptanceOpen(true);
+  };
+
+  const confirmAcceptance = async () => {
+    if (accepting) return;
+    setAccepting(true);
+    setAcceptanceError(null);
+    try {
+      const result = await submitDeliveryMutation({
+        taskId,
+        expectedTaskRevision: overview.acceptanceContract.taskRevision,
+        kind: 'accept-delivery',
+      }, { comment: '', rejectReason: '' });
+      if (!result.ok) {
+        setAcceptanceError(mutationErrorCopy(result));
+        return;
+      }
+      closeAcceptance();
+      setRefreshNonce((current) => current + 1);
+    } catch (acceptError) {
+      setAcceptanceError(acceptError instanceof Error ? acceptError.message : '验收失败，请稍后重试');
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  return (
+    <>
+      <TaskDeliveryOverviewContent overview={overview} onAction={handleAction} />
+      {acceptanceOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !accepting) {
+              closeAcceptance();
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={acceptanceTitleId}
+            className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-4 shadow-xl"
+            data-smoke="task-delivery-acceptance-dialog"
+          >
+            <h2 id={acceptanceTitleId} className="text-sm font-semibold text-neutral-900">验收本次交付</h2>
+            <p className="mt-2 text-xs leading-5 text-neutral-600">
+              确认后，Server 会再次校验验收权限、Task revision 与逐文件审核覆盖；校验通过后 Task 才进入完成态。
+            </p>
+            {acceptanceError ? (
+              <div className="mt-3 rounded-md border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700" role="alert">
+                {acceptanceError}
+              </div>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={accepting}
+                onClick={closeAcceptance}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={accepting}
+                onClick={() => { void confirmAcceptance(); }}
+                className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+              >
+                {accepting ? '提交中…' : '确认验收'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 /** 已加载投影的纯展示层，供阶段审核工作区复用而不产生第二次 Query。 */

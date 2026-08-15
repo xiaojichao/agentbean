@@ -176,6 +176,33 @@ describe('阶段交付审核 mutation 闭环 (#1177)', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).toBeNull());
   });
 
+  test('Task 投影里的验收快捷动作复用阶段验收对话框', async () => {
+    mocks.query.mockResolvedValue({
+      ok: true,
+      workspace: workspaceFixture({
+        reviewState: 'approved',
+        taskInReview: true,
+        taskAcceptAction: true,
+      }),
+    });
+    render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        currentUserId="reviewer-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="stage-review-mutation-dialog"]')).not.toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+  });
+
   test('非预绑定验收人看不到 Task delivery 验收按钮', async () => {
     mocks.query.mockResolvedValue({
       ok: true,
@@ -266,6 +293,7 @@ function workspaceFixture(options: {
   >;
   taskInReview?: boolean;
   nodeKind?: 'root' | 'subtask';
+  taskAcceptAction?: boolean;
 } = {}): StageDeliveryReviewWorkspaceV1 {
   const reviewState = options.reviewState ?? 'approved';
   const availableActions = options.availableActions ?? [];
@@ -339,7 +367,12 @@ function workspaceFixture(options: {
         memberCount: 1, reviewState, status: 'recorded' as const, createdAt: 10,
       }], pendingDeliveries: [], focusPackageId: 'package-1',
     },
-    availableActions: [{ action: 'open-task' as const, label: '打开 Task' }],
+    availableActions: [
+      { action: 'open-task' as const, label: '打开 Task' },
+      ...(options.taskAcceptAction
+        ? [{ action: 'accept-delivery' as const, label: '验收本次交付' }]
+        : []),
+    ],
     timeline: [{ id: 'review-1', kind: 'review' as const, at: 20, actorKind: 'human' as const, summary: '审核通过' }],
     asOf: options.asOf ?? 100,
     audienceScope: 'team-1:channel-1:reviewer-1',

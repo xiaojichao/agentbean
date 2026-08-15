@@ -459,6 +459,10 @@ export function StageDeliveryReviewWorkspace({
       <TaskDeliveryOverviewContent
         overview={workspace.taskOverview}
         onAction={(action) => {
+          if (action.action === 'accept-delivery' && !action.disabled) {
+            openDeliveryDialog('accept-delivery');
+            return;
+          }
           // #1178：阶段上下文的「交给智能体处理」携带焦点包引用与绑定 Thread 上抛
           // （父级做本地预填）；父级未接 onStageHandoff 时保持原 action 直通。
           if (action.action === 'delegate-to-agent' && onStageHandoff) {

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   onUpdated: vi.fn(),
   onArtifactsUpdated: vi.fn(),
   onSnapshot: vi.fn(),
+  acceptRootDelivery: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -26,7 +27,10 @@ vi.mock('@/lib/socket', () => ({
     onUpdated: mocks.onUpdated,
     onArtifactsUpdated: mocks.onArtifactsUpdated,
   }),
-  taskEvents: () => ({ onSnapshot: mocks.onSnapshot }),
+  taskEvents: () => ({
+    onSnapshot: mocks.onSnapshot,
+    acceptRootDelivery: mocks.acceptRootDelivery,
+  }),
 }));
 
 import { TaskDeliveryOverview } from '../components/TaskDeliveryOverview';
@@ -172,6 +176,56 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     const reviewButton = document.querySelector('[data-smoke="task-action-review-package"]')!;
     fireEvent.click(reviewButton);
     expect(onAction).toHaveBeenCalledWith({ action: 'review-package', label: '审核交付包' });
+  });
+
+  test('验收动作先确认，再以投影 revision 提交具名 command 并刷新投影', async () => {
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    });
+    mocks.acceptRootDelivery.mockResolvedValue({ ok: true });
+    render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+
+    fireEvent.click(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"] button:last-child')!);
+    await vi.waitFor(() => expect(mocks.acceptRootDelivery).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      expectedTaskRevision: 1,
+    }));
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+  });
+
+  test('Server 禁用的验收动作不会打开确认对话框', async () => {
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{
+          action: 'accept-delivery',
+          label: '验收本次交付',
+          disabled: true,
+          disabledReason: '还有文件未通过审核',
+        }],
+      },
+    });
+    render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
   });
 
   test('加载与错误态有文本反馈', async () => {
