@@ -587,6 +587,8 @@ for (const variant of variants) {
         pendingCount: 1,
         complete: false,
       });
+      // #1211：包摘要必须覆盖所有 current 成员；只通过一个文件不能把整包标成已通过。
+      expect(blockedOverview.delivery.packages[0]?.reviewState).toBe('pending');
       expect(blockedOverview.availableActions.find((action) => action.action === 'accept-delivery')).toMatchObject({
         disabled: true,
         disabledReason: '还有文件未通过审核：storyboard.md待审核',
@@ -612,6 +614,8 @@ for (const variant of variants) {
         idempotencyKey: `approve:${secondMember.artifactVersionId}`,
       });
       expect(secondReview.ok).toBe(true);
+      const approvedOverview = await queryOverview(seedValue, taskId);
+      expect(approvedOverview.delivery.packages[0]?.reviewState).toBe('approved');
 
       // 旧交付版本即使已 approved，只要人工保存产生了新的 current，门禁必须重新等待新版本审核。
       const firstCollection = await seedValue.repositories.channelProjects.getArtifactCollection({
@@ -647,6 +651,7 @@ for (const variant of variants) {
       expect(revisedOverview.acceptanceContract.fileReviewCoverage.items.find(
         (item) => item.collectionId === firstMember.collectionId,
       )).toMatchObject({ currentVersionId: revised.revision.versionId, reviewState: 'pending' });
+      expect(revisedOverview.delivery.packages[0]?.reviewState).toBe('pending');
 
       const revisedReview = await seedValue.app.submitPackageArtifactReview({
         userId: seedValue.userId,
@@ -667,6 +672,7 @@ for (const variant of variants) {
         approvedCount: 2,
         complete: true,
       });
+      expect(readyOverview.delivery.packages[0]?.reviewState).toBe('approved');
       expect(readyOverview.availableActions.find((action) => action.action === 'accept-delivery')?.disabled).toBeUndefined();
       const accepted = await seedValue.app.acceptRootDelivery({
         userId: seedValue.userId,

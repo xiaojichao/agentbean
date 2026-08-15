@@ -337,6 +337,15 @@ for (const variant of variants) {
       if (!currentProjection.ok) throw new Error(currentProjection.error);
       expect(currentProjection.projection?.status).toBe('ready');
       expect(currentProjection.projection?.members[0]?.versionId).toBe(revisedVersionId);
+      const packageListAfterRevision = await seedValue.app.listOutputPackages({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+      });
+      if (!packageListAfterRevision.ok) throw new Error(packageListAfterRevision.error);
+      // #1211：Files 的包摘要跟随成员 collection 的 current projection，不能沿用旧交付版本的 approved。
+      expect(packageListAfterRevision.packages.find((pkg) => pkg.packageId === packageId)?.reviewState)
+        .toBe('pending');
       const libraryAfter = await seedValue.app.listProjectArtifactCollections({
         userId: seedValue.userId, teamId: seedValue.teamId, channelId: seedValue.channelId,
       });

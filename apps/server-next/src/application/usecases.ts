@@ -17218,22 +17218,27 @@ function projectArtifactReviewDto(record: ProjectArtifactReviewRecord): ProjectA
 
 // #1060 OutputPackage DTO 映射:record → 冻结的不可变投影(创建后成员/版本永不改写)。
 /**
- * #1061 AC11：聚合 package 成员 reviewState——任一 rejected → rejected;任一
- * changes_requested → changes_requested;全部 approved → approved;否则 pending。
+ * #1061 AC11 / #1211：聚合 package current projection 的 reviewState——任一
+ * rejected → rejected;任一 changes_requested → changes_requested;全部 current
+ * 版本都有 review 且 approved → approved;否则 fail closed 为 pending。
  */
 function aggregatePackageReviewState(
+  memberVersionIds: readonly string[],
   memberReviews: readonly { versionId: string; decision: ProjectArtifactReviewDecision }[],
 ): ProjectArtifactVersionReviewState {
-  if (memberReviews.length === 0) return 'pending';
-  // 每个成员取最新一条 review(与 #824 的 deriveProjectArtifactVersionReviewState 一致)。
+  if (memberVersionIds.length === 0) return 'pending';
+  const memberVersionIdSet = new Set(memberVersionIds);
+  // 每个 current 成员取最新一条 review(与 #824 的 deriveProjectArtifactVersionReviewState 一致)。
   const latestByVersion = new Map<string, ProjectArtifactReviewDecision>();
   for (const review of memberReviews) {
+    if (!memberVersionIdSet.has(review.versionId)) continue;
     latestByVersion.set(review.versionId, review.decision);
   }
   const latest = [...latestByVersion.values()];
   if (latest.some((decision) => decision === 'rejected')) return 'rejected';
   if (latest.some((decision) => decision === 'changes_requested')) return 'changes_requested';
-  if (latest.every((decision) => decision === 'approved')) return 'approved';
+  if (latestByVersion.size === memberVersionIdSet.size
+    && latest.every((decision) => decision === 'approved')) return 'approved';
   return 'pending';
 }
 
@@ -17295,19 +17300,41 @@ async function summarizeOutputPackages(
   input: { teamId: ID; channelId: ID },
   records: readonly OutputPackageRecord[],
 ): Promise<OutputPackageSummaryDto[]> {
-  const allReviews = await repositories.channelProjects.listArtifactReviews({
-    teamId: input.teamId,
-    channelId: input.channelId,
-  });
+  const [allReviews, collections] = await Promise.all([
+    repositories.channelProjects.listArtifactReviews({
+      teamId: input.teamId,
+      channelId: input.channelId,
+    }),
+    repositories.channelProjects.listArtifactCollections({
+      teamId: input.teamId,
+      channelId: input.channelId,
+    }),
+  ]);
+  const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
   const summaries = [];
   for (const record of records) {
     const projection = await repositories.outputPackages.getPackageById({
       teamId: input.teamId,
       packageId: record.packageId,
     });
-    const memberReviews = (projection?.members ?? []).flatMap((member) =>
-      allReviews.filter((review) => review.versionId === member.artifactVersionId));
-    summaries.push(toOutputPackageSummaryDto(record, aggregatePackageReviewState(memberReviews)));
+    // OutputPackage 的成员集合冻结，但 Files/Task/Chat 展示的是每个成员集合的 current
+    // projection。人工修订推进 current 后，旧 delivered 版本的通过事实不能继续把包标成已通过。
+    const currentMemberVersionIds = (projection?.members ?? []).flatMap((member) => {
+      const currentVersionId = collectionById.get(member.collectionId)?.currentVersionId;
+      return currentVersionId ? [currentVersionId] : [];
+    });
+    const currentMemberVersionIdSet = new Set(currentMemberVersionIds);
+    const currentMemberReviews = allReviews.filter((review) =>
+      currentMemberVersionIdSet.has(review.versionId));
+    const projectionComplete = projection
+      ? currentMemberVersionIds.length === projection.members.length
+      : false;
+    summaries.push(toOutputPackageSummaryDto(
+      record,
+      projectionComplete
+        ? aggregatePackageReviewState(currentMemberVersionIds, currentMemberReviews)
+        : 'pending',
+    ));
   }
   return summaries;
 }
