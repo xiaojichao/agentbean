@@ -611,6 +611,27 @@ for (const variant of variants) {
       }));
     });
 
+    test('#1217:已有 coordination 的 Task 不得误入 direct 交付验收', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-coordinated-delivery';
+      await seedTask(seedValue, taskId, {
+        status: 'in_review',
+        preboundAuthorityIds: [seedValue.userId],
+      });
+      await commitDelivery(seedValue, 'pub-coordinated-delivery', [
+        { path: 'docs/coordinated.md', body: Buffer.from('coordinated delivery') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+
+      const accepted = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      });
+      expect(accepted).toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect((await seedValue.repositories.tasks.getById(taskId))?.status).toBe('in_review');
+    });
+
     test('#1200:终态 root Task 投影 Server continuation basis，非终态不提供创建动作', async () => {
       const seedValue = await seed(variant);
       cleanups.push(seedValue.close);

@@ -10450,6 +10450,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           if (currentTask.revision !== expectedTaskRevision) {
             return makeFailure('CONFLICT', 'TASK_REVISION_CONFLICT');
           }
+          const [currentCoordination, currentManagementRun, projectStages] = await Promise.all([
+            transaction.coordination.coordinations.getByTaskId(task.id),
+            transaction.management.runs.getByRootTaskId(task.id),
+            transaction.channelProjects.listStages({
+              teamId: taskInput.teamId,
+              channelId,
+            }),
+          ]);
+          if (
+            currentCoordination
+            || currentManagementRun
+            || projectStages.some((stage) => stage.taskId === task.id)
+          ) {
+            return makeFailure(
+              'CONFLICT',
+              'Managed Task delivery must use its authoritative lifecycle acceptance path',
+            );
+          }
           const packageRecords = await transaction.outputPackages.listPackagesByChannel({
             teamId: taskInput.teamId,
             channelId,
