@@ -14752,6 +14752,17 @@ async function buildDispatchRequest(
   const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
     ? originMessage.meta.taskId
     : undefined;
+  const directTaskCandidate = directTaskId
+    ? await repositories.tasks.getById(directTaskId)
+    : null;
+  const directTask = directTaskCandidate
+    && directTaskCandidate.teamId === dispatch.teamId
+    && (!directTaskCandidate.channelId || directTaskCandidate.channelId === dispatch.channelId)
+    ? directTaskCandidate
+    : null;
+  const directTaskCoordination = directTask
+    ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
+    : null;
 
   return {
     id: dispatch.id,
@@ -14762,8 +14773,8 @@ async function buildDispatchRequest(
     agentId: dispatch.agentId,
     deviceId: agent.deviceId,
     requestId: dispatch.requestId,
-    ...(directTaskId
-      ? { taskId: directTaskId, taskAttempt: 1, workspaceRunId: dispatch.id }
+    ...(directTask
+      ? { taskId: directTask.id, taskAttempt: directTaskCoordination?.attempt ?? 1, workspaceRunId: dispatch.id }
       : {}),
     ...(managementAttempt ? { managementInvocationId: managementAttempt.invocationId } : {}),
     ...(managementInvocation ? { managementContext: {

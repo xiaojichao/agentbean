@@ -25,6 +25,19 @@ describe('0085_direct_agent_task_lineage migration', () => {
         task_revision INTEGER,
         PRIMARY KEY (team_id, package_id)
       );
+      CREATE TABLE output_package_members (
+        team_id TEXT NOT NULL,
+        package_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        artifact_version_id TEXT NOT NULL
+      );
+      CREATE TABLE project_artifact_versions (
+        id TEXT PRIMARY KEY,
+        team_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        task_revision INTEGER NOT NULL
+      );
       CREATE TABLE workspace_publish_stagings (
         team_id TEXT NOT NULL,
         publish_id TEXT NOT NULL,
@@ -49,6 +62,7 @@ describe('0085_direct_agent_task_lineage migration', () => {
         id TEXT NOT NULL,
         team_id TEXT NOT NULL,
         channel_id TEXT,
+        title TEXT NOT NULL,
         revision INTEGER NOT NULL,
         superseded_by_revision INTEGER,
         PRIMARY KEY (id, team_id, revision)
@@ -74,9 +88,9 @@ describe('0085_direct_agent_task_lineage migration', () => {
       `).run(dispatchId, `message-${input.suffix}`);
       if (input.createTask !== false) {
         db.prepare(`
-          INSERT INTO tasks (id, team_id, channel_id, revision, superseded_by_revision)
-          VALUES (?, 'team-1', 'channel-1', 3, NULL)
-        `).run(input.taskId);
+          INSERT INTO tasks (id, team_id, channel_id, title, revision, superseded_by_revision)
+          VALUES (?, 'team-1', 'channel-1', ?, 3, NULL)
+        `).run(input.taskId, `任务 ${input.suffix}`);
       }
       db.prepare(`
         INSERT INTO workspace_publish_stagings (
@@ -105,6 +119,27 @@ describe('0085_direct_agent_task_lineage migration', () => {
     insertCase({ suffix: 'missing-task', taskId: 'task-missing', createTask: false });
     insertCase({ suffix: 'wrong-run', taskId: 'task-wrong-run', workspaceRunId: 'other-run' });
     insertCase({ suffix: 'managed', taskId: 'task-managed', packageBinding: 'managed' });
+    db.exec(`
+      INSERT INTO project_artifact_versions (
+        id, team_id, channel_id, task_id, task_revision
+      ) VALUES
+        ('version-exact', 'team-1', 'channel-1', 'dispatch-exact', 1),
+        ('version-reused', 'team-1', 'channel-1', 'task-stable', 7);
+      INSERT INTO output_package_members (
+        team_id, package_id, channel_id, artifact_version_id
+      ) VALUES
+        ('team-1', 'package-exact', 'channel-1', 'version-exact'),
+        ('team-1', 'package-exact', 'channel-1', 'version-reused');
+      INSERT INTO messages (id, team_id, channel_id, meta_json) VALUES
+        (
+          'message-system-card', 'team-1', 'channel-1',
+          '{"kind":"output-package","packageId":"package-exact","taskId":"dispatch-exact"}'
+        ),
+        (
+          'message-inline-card', 'team-1', 'channel-1',
+          '{"kind":"agent-result","outputPackageCard":{"kind":"output-package","packageId":"package-exact","taskId":"dispatch-exact"}}'
+        );
+    `);
 
     db.exec(readFileSync(migrationPath, 'utf8'));
 
@@ -126,6 +161,25 @@ describe('0085_direct_agent_task_lineage migration', () => {
       taskId: 'task-exact', taskBinding: 'managed', taskRevision: 3,
     });
     expect(readStagingTaskId('exact')).toBe('task-exact');
+    expect(db.prepare(`
+      SELECT task_id AS taskId, task_revision AS taskRevision
+      FROM project_artifact_versions WHERE id = 'version-exact'
+    `).get()).toEqual({ taskId: 'task-exact', taskRevision: 3 });
+    expect(db.prepare(`
+      SELECT task_id AS taskId, task_revision AS taskRevision
+      FROM project_artifact_versions WHERE id = 'version-reused'
+    `).get()).toEqual({ taskId: 'task-stable', taskRevision: 7 });
+    const readMessageMeta = (messageId: string) => {
+      const row = db.prepare('SELECT meta_json AS metaJson FROM messages WHERE id = ?')
+        .get(messageId) as { metaJson: string };
+      return JSON.parse(row.metaJson) as Record<string, unknown>;
+    };
+    expect(readMessageMeta('message-system-card')).toMatchObject({
+      taskId: 'task-exact', taskTitle: '任务 exact',
+    });
+    expect(readMessageMeta('message-inline-card')).toMatchObject({
+      outputPackageCard: { taskId: 'task-exact', taskTitle: '任务 exact' },
+    });
 
     expect(readPackage('missing-task')).toEqual({
       taskId: 'dispatch-missing-task', taskBinding: 'unmanaged', taskRevision: null,
