@@ -133,7 +133,11 @@ export function TaskDeliveryOverview({
     };
   }, [teamId, channelId, taskId, refreshNonce]);
 
-  if (loading) {
+  const overviewMatchesCurrentTask = overview?.taskId === taskId
+    && overview.channelId === channelId;
+
+  if (!channelId) return null;
+  if (loading || (overview && !overviewMatchesCurrentTask)) {
     return <div className="text-center text-[11px] text-neutral-400" data-smoke="task-delivery-loading">正在读取交付视图…</div>;
   }
   if (error) {
@@ -151,6 +155,7 @@ export function TaskDeliveryOverview({
       return;
     }
     if (action.disabled) return;
+    if (overview.taskId !== taskId || overview.channelId !== channelId) return;
     acceptanceTriggerRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;

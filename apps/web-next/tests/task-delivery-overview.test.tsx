@@ -264,6 +264,8 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
 
     rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="task-delivery-loading"]')).not.toBeNull();
     await vi.waitFor(() => {
       expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
     });
