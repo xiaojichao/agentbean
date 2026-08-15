@@ -1,6 +1,6 @@
 {
   "name": "@agentbean/daemon-next",
-  "version": "0.3.53",
+  "version": "0.3.54",
   "private": false,
   "type": "module",
   "main": "./dist/apps/daemon-next/src/index.js",
