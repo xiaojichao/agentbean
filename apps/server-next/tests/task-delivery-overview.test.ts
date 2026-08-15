@@ -174,7 +174,7 @@ async function seedTask(
   seedValue: Seed,
   taskId: string,
   opts?: {
-    status?: 'todo' | 'in_progress' | 'in_review';
+    status?: 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled' | 'closed';
     preboundAuthorityIds?: string[];
     criteria?: string[];
     bindManagementRun?: boolean;
@@ -505,6 +505,41 @@ for (const variant of variants) {
       const delegate = overview.availableActions.find((a) => a.action === 'delegate-to-agent')!;
       expect(delegate.disabled).toBe(true);
       expect(delegate.disabledReason).toBe('暂无交付文件包');
+    });
+
+    test('#1200:终态 root Task 投影 Server continuation basis，非终态不提供创建动作', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-continuation-action-1';
+      await seedTask(seedValue, taskId, { status: 'done', bindManagementRun: true });
+      await commitDelivery(seedValue, 'pub-continuation-action', [
+        { path: 'docs/continuation.md', body: Buffer.from('current version') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+
+      const overview = await queryOverview(seedValue, taskId);
+      const continuation = overview.availableActions.find((action) => action.action === 'create-continuation');
+      expect(continuation).toMatchObject({
+        action: 'create-continuation',
+        continuationBasis: {
+          schemaVersion: 1,
+          sourceTaskId: taskId,
+          sourceTaskRevision: 1,
+          channelId: seedValue.channelId,
+          rootMessageId: `msg-${taskId}`,
+        },
+      });
+      expect(continuation?.disabled).toBeUndefined();
+      expect(continuation?.continuationBasis?.sourceVersionIds).toHaveLength(1);
+
+      await seedTask(seedValue, 'task-continuation-nonterminal', {
+        status: 'in_review',
+        bindManagementRun: true,
+      });
+      const nonTerminal = await queryOverview(seedValue, 'task-continuation-nonterminal');
+      expect(nonTerminal.availableActions.find((action) => action.action === 'create-continuation')).toMatchObject({
+        disabled: true,
+        disabledReason: '仅终态根任务可创建后续任务',
+      });
     });
 
     test('#1196:当前交付必需文件未全部 approved 时禁用并拒绝 Task 验收', async () => {

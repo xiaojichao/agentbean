@@ -45,6 +45,7 @@ function makeEnvelope(overrides?: Partial<PromotionGateCommandEnvelopeV1>): Prom
 }
 
 type PromoteInput = PromotionGateCommandInputMapV1['promote-to-task'];
+type ContinuationInput = PromotionGateCommandInputMapV1['create-task-continuation'];
 
 function objective(
   overrides?: Partial<PromotionObjectiveSnapshotV1>,
@@ -139,6 +140,75 @@ function makeHandler(repositories: ServerNextRepositories) {
     clock: { now: () => (tick += 100) },
     ids: { nextId },
   });
+}
+
+function makeContinuationHandler(
+  repositories: ServerNextRepositories,
+  currentVersionIds: readonly string[] | null = ['version-1'],
+) {
+  return createPromotionGateHandler({
+    teamId: 'team-1',
+    requesterId: 'user-1',
+    unitOfWork: repositories.taskCoordinationUnitOfWork,
+    clock: { now: () => (tick += 100) },
+    ids: { nextId },
+    resolveContinuationVersionIdsInTransaction: async () => currentVersionIds,
+  });
+}
+
+async function seedTerminalTaskContinuation(
+  repositories: ServerNextRepositories,
+  status: 'done' | 'cancelled' | 'closed' | 'in_progress' = 'done',
+): Promise<{
+  handler: ReturnType<typeof makeContinuationHandler>;
+  input: ContinuationInput;
+  sourceTaskId: string;
+}> {
+  const rootMessageId = 'continuation-root-message';
+  await seedRootMessage(repositories, rootMessageId);
+  const handler = makeContinuationHandler(repositories);
+  const promoted = await handler.promoteToTask(
+    makeEnvelope({ idempotencyKey: 'seed-continuation-root' }),
+    makeInput({
+      rootMessageId,
+      freshnessBasis: {
+        schemaVersion: 1,
+        sourceLineage: { kind: 'message', id: rootMessageId },
+      },
+    }),
+  );
+  const sourceTaskId = promoted.result!.rootTaskId;
+  const sourceTask = await repositories.tasks.updateAtRevision({
+    taskId: sourceTaskId,
+    expectedRevision: 1,
+    nextRevision: 2,
+    reasonCode: 'test-terminal-transition',
+    changes: { status, updatedAt: tick += 100 },
+  });
+  if (!sourceTask) throw new Error('TEST_SOURCE_TASK_MISSING');
+  await repositories.messages.append({
+    id: 'continuation-source-message',
+    teamId: 'team-1',
+    channelId: 'channel-1',
+    threadId: rootMessageId,
+    senderKind: 'human',
+    senderId: 'user-1',
+    body: '请基于当前交付继续完善移动端适配',
+    createdAt: tick += 100,
+  });
+  return {
+    handler,
+    sourceTaskId,
+    input: {
+      channelId: 'channel-1',
+      rootMessageId,
+      sourceMessageId: 'continuation-source-message',
+      sourceTaskId,
+      sourceTaskRevision: sourceTask.revision,
+      sourceVersionIds: ['version-1'],
+      objectiveSnapshot: objective({ objective: '请基于当前交付继续完善移动端适配' }),
+    },
+  };
 }
 
 describe('#922 Promotion gate handler', () => {
@@ -676,5 +746,95 @@ describe('#922 Promotion gate handler', () => {
 
     expect(response.outcome).toBe('freshness_hold');
     expect(response.freshnessReason).toBe('source-revision-advanced');
+  });
+
+  test('终态 root Task + 已发送 thread 消息 → 创建全新 root Task，并固化来源依据', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const seeded = await seedTerminalTaskContinuation(repositories);
+    const envelope = makeEnvelope({
+      commandName: 'create-task-continuation',
+      idempotencyKey: 'continuation-create',
+    });
+
+    const response = await seeded.handler.createTaskContinuation(envelope, seeded.input);
+
+    expect(response.outcome).toBe('applied');
+    expect(response.stableCode).toBe('TASK_CONTINUATION_CREATED');
+    expect(response.result?.rootTaskId).not.toBe(seeded.sourceTaskId);
+    const sourceTask = await repositories.tasks.getById(seeded.sourceTaskId);
+    const continuationTask = await repositories.tasks.getById(response.result!.rootTaskId);
+    expect(sourceTask?.status).toBe('done');
+    expect(continuationTask?.status).toBe('todo');
+    expect(continuationTask?.revision).toBe(1);
+
+    await repositories.taskCoordinationUnitOfWork.run(async (repos) => {
+      const relation = await repos.promotion.sourceRelations.getByLineageKey(
+        'team-1:message:continuation-source-message',
+      );
+      expect(relation).toMatchObject({
+        relationKind: 'task-continuation',
+        sourceTaskId: seeded.sourceTaskId,
+        sourceTaskRevision: seeded.input.sourceTaskRevision,
+        sourceVersionIdsJson: JSON.stringify(['version-1']),
+      });
+    });
+
+    const replayed = await seeded.handler.createTaskContinuation(envelope, seeded.input);
+    expect(replayed.outcome).toBe('replayed');
+    expect(replayed.result?.rootTaskId).toBe(response.result?.rootTaskId);
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(2);
+  });
+
+  test('非终态、过期 revision 或过期版本依据均 fail closed，且不创建后续 Task', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const seeded = await seedTerminalTaskContinuation(repositories, 'in_progress');
+    const envelope = makeEnvelope({
+      commandName: 'create-task-continuation',
+      idempotencyKey: 'continuation-invalid',
+    });
+
+    const nonTerminal = await seeded.handler.createTaskContinuation(envelope, seeded.input);
+    expect(nonTerminal.outcome).toBe('rejected');
+    expect(nonTerminal.stableCode).toBe('TASK_CONTINUATION_SOURCE_INVALID');
+
+    const terminalTask = await repositories.tasks.updateAtRevision({
+      taskId: seeded.sourceTaskId,
+      expectedRevision: seeded.input.sourceTaskRevision,
+      nextRevision: seeded.input.sourceTaskRevision + 1,
+      reasonCode: 'test-terminal-transition',
+      changes: { status: 'done', updatedAt: tick += 100 },
+    });
+    expect(terminalTask).not.toBeNull();
+    const staleRevision = await seeded.handler.createTaskContinuation(
+      makeEnvelope({ commandName: 'create-task-continuation', idempotencyKey: 'continuation-stale-revision' }),
+      seeded.input,
+    );
+    expect(staleRevision.outcome).toBe('freshness_hold');
+    expect(staleRevision.stableCode).toBe('TASK_CONTINUATION_SOURCE_STALE');
+
+    const staleVersions = await seeded.handler.createTaskContinuation(
+      makeEnvelope({ commandName: 'create-task-continuation', idempotencyKey: 'continuation-stale-versions' }),
+      {
+        ...seeded.input,
+        sourceTaskRevision: terminalTask!.revision,
+        sourceVersionIds: ['version-old'],
+      },
+    );
+    expect(staleVersions.outcome).toBe('freshness_hold');
+    expect(staleVersions.stableCode).toBe('TASK_CONTINUATION_VERSIONS_STALE');
+
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(1);
   });
 });

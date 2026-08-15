@@ -30,6 +30,10 @@ export type PackageBatchReviewCommandSocketPayload = {
 
 export type { PackageMemberAvailableActionsDto, PackageReviewAction };
 import { io, type Socket } from 'socket.io-client';
+import type {
+  PromotionGateCommandInputMapV1,
+  PromotionGateCommandResponseV1,
+} from '@agentbean/contracts';
 import type { ChannelDocumentDto, ChannelDocumentRevisionsResultDto, ChannelDocumentResultDto, MessageDto, PublishChannelDocumentResultDto } from '@agentbean/contracts';
 import type { AgentSnapshot, DiscoveredAgent, RuntimeInfo, TeamSummary, ChannelSummary, AgentMetricsSummary, InviteInfo, UserInfo, DeviceInfo, ChatMessage, AgentWorkspaceRun, TeamWorkspaceRun, Artifact, WorkspaceRunDetail, WorkspaceArtifact, WorkspaceRunLogResponse, WorkspaceRunStatus } from './schema.js';
 import {
@@ -919,6 +923,10 @@ export interface TaskEvents {
   reorder(id: string, sortOrder: number): Promise<{ ok: boolean; error?: string }>;
   cancel(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
   close(id: string, reason: string): Promise<{ ok: boolean; task?: any; error?: string }>;
+  createContinuation(
+    payload: PromotionGateCommandInputMapV1['create-task-continuation'],
+    idempotencyKey: string,
+  ): Promise<{ ok: boolean; response?: PromotionGateCommandResponseV1; error?: string }>;
   /** #995 根交付人审 accept。 */
   acceptRootDelivery(payload: {
     taskId: string;
@@ -947,6 +955,17 @@ export function taskEvents(socket: Socket = getWebSocket()): TaskEvents {
     reorder(id, sortOrder) { return emitWithTimeout(socket, WEB_EVENTS.task.reorder, { taskId: id, sortOrder }); },
     cancel(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.cancel, { taskId: id, reason }); },
     close(id, reason) { return emitWithTimeout(socket, WEB_EVENTS.task.close, { taskId: id, reason }); },
+    createContinuation(payload, idempotencyKey) {
+      return emitWithTimeout(socket, WEB_EVENTS.promotion.command, {
+        envelope: {
+          schemaVersion: 1,
+          commandName: 'create-task-continuation',
+          commandSchemaVersion: 1,
+          idempotencyKey,
+        },
+        payload,
+      });
+    },
     acceptRootDelivery(payload) {
       return emitWithTimeout(socket, WEB_EVENTS.task.acceptRootDelivery, payload);
     },

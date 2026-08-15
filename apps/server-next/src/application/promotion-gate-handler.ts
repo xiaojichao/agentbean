@@ -10,6 +10,7 @@ import type {
   PromotionGateCommandOutputUnionV1,
   PromotionObjectiveSnapshotV1,
   PromotionTriggerKind,
+  PromotionGateCommandName,
 } from '../../../../packages/contracts/src/index.js';
 import { canonicalizePromotionGateCommand } from '../../../../packages/contracts/src/index.js';
 import type {
@@ -48,6 +49,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const STABLE_CODE_APPLIED = 'PROMOTION_APPLIED';
+const STABLE_CODE_CONTINUATION_CREATED = 'TASK_CONTINUATION_CREATED';
 const STABLE_CODE_REPLAYED = 'PROMOTION_REPLAYED';
 const STABLE_CODE_CONFLICT = 'PROMOTION_CONFLICT';
 const STABLE_CODE_FRESHNESS_HOLD = 'PROMOTION_FRESHNESS_HOLD';
@@ -59,6 +61,10 @@ const STABLE_CODE_CHANNEL_NOT_FOUND = 'PROMOTION_CHANNEL_NOT_FOUND';
 const STABLE_CODE_CHANNEL_FORBIDDEN = 'PROMOTION_CHANNEL_FORBIDDEN';
 const STABLE_CODE_CHANNEL_ARCHIVED = 'PROMOTION_CHANNEL_ARCHIVED';
 const STABLE_CODE_SCHEMA_UNSUPPORTED = 'PROMOTION_COMMAND_SCHEMA_UNSUPPORTED';
+const STABLE_CODE_CONTINUATION_SOURCE_INVALID = 'TASK_CONTINUATION_SOURCE_INVALID';
+const STABLE_CODE_CONTINUATION_SOURCE_STALE = 'TASK_CONTINUATION_SOURCE_STALE';
+const STABLE_CODE_CONTINUATION_THREAD_MISMATCH = 'TASK_CONTINUATION_THREAD_MISMATCH';
+const STABLE_CODE_CONTINUATION_VERSIONS_STALE = 'TASK_CONTINUATION_VERSIONS_STALE';
 
 // ---------------------------------------------------------------------------
 // Dependencies
@@ -101,12 +107,26 @@ export interface PromotionGateHandlerDependencies {
     readonly rootMessageId: ID;
     readonly now: UnixMs;
   }) => Promise<void>;
+  /**
+   * create-task-continuation 提交时在同一 UoW 内重算当前稳定版本；缺失即 fail closed。
+   * 返回 null 表示当前 delivery/version 投影不可用。
+   */
+  readonly resolveContinuationVersionIdsInTransaction?: (input: {
+    readonly repositories: TaskCoordinationTransactionRepositories;
+    readonly sourceTaskId: ID;
+    readonly sourceTaskRevision: number;
+    readonly channelId: ID;
+  }) => Promise<readonly ID[] | null>;
 }
 
 export interface PromotionGateHandler {
   promoteToTask(
     envelope: PromotionGateCommandEnvelopeV1,
     input: PromotionGateCommandInputMapV1['promote-to-task'],
+  ): Promise<PromotionGateCommandResponseV1>;
+  createTaskContinuation(
+    envelope: PromotionGateCommandEnvelopeV1,
+    input: PromotionGateCommandInputMapV1['create-task-continuation'],
   ): Promise<PromotionGateCommandResponseV1>;
 }
 
@@ -139,13 +159,14 @@ function buildReceiptProjection(record: PromotionCommandReceiptRecord): Promotio
 }
 
 function buildResult(
+  commandName: PromotionGateCommandName,
   rootTaskId: ID,
   managementRunId: ID,
   sourceRelationId: ID,
   disposition: 'created' | 'existing',
 ): PromotionGateCommandOutputUnionV1 {
   return {
-    commandName: 'promote-to-task',
+    commandName,
     rootTaskId,
     managementRunId,
     sourceRelationId,
@@ -281,6 +302,59 @@ async function resolveSourceFreshness(
   return { ...base, sourceChanged: false };
 }
 
+type TaskContinuationInput = PromotionGateCommandInputMapV1['create-task-continuation'];
+
+type ContinuationValidation =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly stableCode: string };
+
+function sameIds(left: readonly ID[], right: readonly ID[]): boolean {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+async function validateTaskContinuation(
+  repos: TaskCoordinationTransactionRepositories,
+  dependencies: PromotionGateHandlerDependencies,
+  input: TaskContinuationInput,
+): Promise<ContinuationValidation> {
+  const sourceTask = await repos.tasks.getById(input.sourceTaskId);
+  if (!sourceTask || sourceTask.teamId !== dependencies.teamId
+    || sourceTask.channelId !== input.channelId
+    || !['done', 'cancelled', 'closed'].includes(sourceTask.status)) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_SOURCE_INVALID };
+  }
+  if (sourceTask.revision !== input.sourceTaskRevision) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_SOURCE_STALE };
+  }
+  const coordination = await repos.coordination.coordinations.getByTaskId(sourceTask.id);
+  if (!coordination || coordination.nodeKind !== 'root' || coordination.rootTaskId !== sourceTask.id) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_SOURCE_INVALID };
+  }
+  const run = await repos.management.runs.getById(coordination.managementRunId);
+  if (!run || run.rootTaskId !== sourceTask.id || run.rootMessageId !== input.rootMessageId) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_THREAD_MISMATCH };
+  }
+  const sourceMessage = await repos.messages.getById(input.sourceMessageId);
+  if (!sourceMessage || sourceMessage.teamId !== dependencies.teamId
+    || sourceMessage.channelId !== input.channelId
+    || sourceMessage.threadId !== input.rootMessageId
+    || sourceMessage.senderKind !== 'human'
+    || sourceMessage.senderId !== dependencies.requesterId
+    || isDeletedMessage(sourceMessage)) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_THREAD_MISMATCH };
+  }
+  const currentVersionIds = await dependencies.resolveContinuationVersionIdsInTransaction?.({
+    repositories: repos,
+    sourceTaskId: input.sourceTaskId,
+    sourceTaskRevision: input.sourceTaskRevision,
+    channelId: input.channelId,
+  });
+  if (!currentVersionIds || !sameIds(currentVersionIds, input.sourceVersionIds)) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_VERSIONS_STALE };
+  }
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -290,10 +364,14 @@ export function createPromotionGateHandler(
 ): PromotionGateHandler {
   const { teamId, requesterId, unitOfWork, clock, ids } = dependencies;
 
-  return {
-    async promoteToTask(envelope, input) {
+  async function handlePromotion(
+    envelope: PromotionGateCommandEnvelopeV1,
+    input: PromotionGateCommandInputMapV1['promote-to-task'],
+    continuationInput?: TaskContinuationInput,
+  ): Promise<PromotionGateCommandResponseV1> {
+      const commandName = envelope.commandName;
       const commandHash = sha256Hex(
-        canonicalizePromotionGateCommand('promote-to-task', envelope.commandSchemaVersion, input),
+        canonicalizePromotionGateCommand(commandName, envelope.commandSchemaVersion, continuationInput ?? input),
       );
 
       return unitOfWork.run(async (repos) => {
@@ -303,7 +381,7 @@ export function createPromotionGateHandler(
         if (envelope.commandSchemaVersion !== 1) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_SCHEMA_UNSUPPORTED,
@@ -324,7 +402,7 @@ export function createPromotionGateHandler(
               : undefined;
             return {
               schemaVersion: 1,
-              commandName: 'promote-to-task',
+              commandName,
               outcome: 'replayed',
               retryDirective: 'none',
               stableCode: STABLE_CODE_REPLAYED,
@@ -335,7 +413,7 @@ export function createPromotionGateHandler(
           // idempotency conflict：同 key 异 canonical hash，无副作用。
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'conflict',
             retryDirective: 'reread_then_new_command',
             stableCode: STABLE_CODE_CONFLICT,
@@ -356,7 +434,7 @@ export function createPromotionGateHandler(
         if ('denied' in triggerAuthorization) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_REJECTED,
@@ -370,13 +448,34 @@ export function createPromotionGateHandler(
         if (!channelAccess.ok) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: channelAccess.stableCode,
           };
         }
         const authorization = { allowed: true as const };
+
+        // continuation 必须在授权后、同一事务里复验终态 root、原 thread human message 与稳定文件版本。
+        if (continuationInput) {
+          const continuation = await validateTaskContinuation(repos, dependencies, continuationInput);
+          if (!continuation.ok) {
+            return {
+              schemaVersion: 1,
+              commandName,
+              outcome: continuation.stableCode === STABLE_CODE_CONTINUATION_SOURCE_STALE
+                || continuation.stableCode === STABLE_CODE_CONTINUATION_VERSIONS_STALE
+                ? 'freshness_hold'
+                : 'rejected',
+              retryDirective: 'user_action',
+              stableCode: continuation.stableCode,
+              ...(continuation.stableCode === STABLE_CODE_CONTINUATION_SOURCE_STALE
+                || continuation.stableCode === STABLE_CODE_CONTINUATION_VERSIONS_STALE
+                ? { freshnessReason: continuation.stableCode }
+                : {}),
+            };
+          }
+        }
 
         // -------------------------------------------------------------------
         // 3. Freshness（#894 §5）：事务内读取真实来源状态
@@ -417,7 +516,7 @@ export function createPromotionGateHandler(
         if (classification.outcome === 'rejected') {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_REJECTED,
@@ -426,7 +525,7 @@ export function createPromotionGateHandler(
         if (classification.outcome === 'freshness_hold') {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'freshness_hold',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_FRESHNESS_HOLD,
@@ -436,7 +535,7 @@ export function createPromotionGateHandler(
         if (classification.outcome === 'conflict') {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'conflict',
             retryDirective: 'reread_then_new_command',
             stableCode: STABLE_CODE_CONFLICT,
@@ -452,6 +551,7 @@ export function createPromotionGateHandler(
           }
           const now = clock.now();
           const result = buildResult(
+            commandName,
             existingRelation.taskId,
             existingRelation.managementRunId,
             existingRelation.id,
@@ -473,7 +573,7 @@ export function createPromotionGateHandler(
           const receipt: PromotionCommandReceiptRecord = {
             receiptId,
             teamId,
-            commandName: 'promote-to-task',
+            commandName,
             commandSchemaVersion: envelope.commandSchemaVersion,
             idempotencyKey: envelope.idempotencyKey,
             commandHash,
@@ -488,7 +588,7 @@ export function createPromotionGateHandler(
           const tombstone: PromotionIdempotencyTombstoneRecord = {
             id: ids.nextId(),
             teamId,
-            commandName: 'promote-to-task',
+            commandName,
             idempotencyKey: envelope.idempotencyKey,
             commandHash,
             receiptId,
@@ -500,7 +600,7 @@ export function createPromotionGateHandler(
           await repos.promotion.receipts.createTombstone(tombstone);
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'replayed',
             retryDirective: 'none',
             stableCode: STABLE_CODE_REPLAYED,
@@ -514,7 +614,7 @@ export function createPromotionGateHandler(
         if (!resolvedRoot.ok) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: resolvedRoot.stableCode,
@@ -525,7 +625,7 @@ export function createPromotionGateHandler(
         if (!rootMessage) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_ROOT_MESSAGE_NOT_FOUND,
@@ -534,7 +634,7 @@ export function createPromotionGateHandler(
         if (rootMessage.teamId !== teamId || rootMessage.channelId !== input.channelId) {
           return {
             schemaVersion: 1,
-            commandName: 'promote-to-task',
+            commandName,
             outcome: 'rejected',
             retryDirective: 'user_action',
             stableCode: STABLE_CODE_ROOT_MESSAGE_SCOPE_MISMATCH,
@@ -562,7 +662,7 @@ export function createPromotionGateHandler(
         });
 
         // ManagementRun reservation（防重复 run 创建）
-        const requestKey = `promote-to-task:${envelope.idempotencyKey}`;
+        const requestKey = `${commandName}:${envelope.idempotencyKey}`;
         await repos.management.reservations.create({
           id: ids.nextId(),
           teamId,
@@ -636,6 +736,12 @@ export function createPromotionGateHandler(
             ...(envelope.causationRef ? { causationRef: envelope.causationRef } : {}),
             ...(envelope.sourceRefs ? { sourceRefs: envelope.sourceRefs } : {}),
           }),
+          relationKind: continuationInput ? 'task-continuation' : null,
+          sourceTaskId: continuationInput?.sourceTaskId ?? null,
+          sourceTaskRevision: continuationInput?.sourceTaskRevision ?? null,
+          sourceVersionIdsJson: continuationInput
+            ? JSON.stringify(continuationInput.sourceVersionIds)
+            : null,
           claimState: 'awaiting-driver',
           createdAt: now,
         };
@@ -684,7 +790,7 @@ export function createPromotionGateHandler(
           sequence: eventRecord.event.sequence,
         }];
 
-        const result = buildResult(taskId, managementRunId, sourceRelationId, 'created');
+        const result = buildResult(commandName, taskId, managementRunId, sourceRelationId, 'created');
         const receiptId = ids.nextId();
         await repos.promotion.outbox.create({
           id: ids.nextId(),
@@ -723,7 +829,7 @@ export function createPromotionGateHandler(
         const receipt: PromotionCommandReceiptRecord = {
           receiptId,
           teamId,
-          commandName: 'promote-to-task',
+          commandName,
           commandSchemaVersion: envelope.commandSchemaVersion,
           idempotencyKey: envelope.idempotencyKey,
           commandHash,
@@ -738,7 +844,7 @@ export function createPromotionGateHandler(
         const tombstone: PromotionIdempotencyTombstoneRecord = {
           id: ids.nextId(),
           teamId,
-          commandName: 'promote-to-task',
+          commandName,
           idempotencyKey: envelope.idempotencyKey,
           commandHash,
           receiptId,
@@ -751,14 +857,33 @@ export function createPromotionGateHandler(
 
         return {
           schemaVersion: 1,
-          commandName: 'promote-to-task',
+          commandName,
           outcome: 'applied',
           retryDirective: 'none',
-          stableCode: STABLE_CODE_APPLIED,
+          stableCode: continuationInput ? STABLE_CODE_CONTINUATION_CREATED : STABLE_CODE_APPLIED,
           receipt: buildReceiptProjection(receipt),
           result,
         };
       });
+  }
+
+  return {
+    promoteToTask(envelope, input) {
+      if (envelope.commandName !== 'promote-to-task') throw new Error('PROMOTION_COMMAND_MISMATCH');
+      return handlePromotion(envelope, input);
+    },
+    createTaskContinuation(envelope, input) {
+      if (envelope.commandName !== 'create-task-continuation') throw new Error('PROMOTION_COMMAND_MISMATCH');
+      return handlePromotion(envelope, {
+        triggerKind: 'human-structured',
+        channelId: input.channelId,
+        rootMessageId: input.rootMessageId,
+        objectiveSnapshot: input.objectiveSnapshot,
+        freshnessBasis: {
+          schemaVersion: 1,
+          sourceLineage: { kind: 'message', id: input.sourceMessageId },
+        },
+      }, input);
     },
   };
 }

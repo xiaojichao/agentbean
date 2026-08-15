@@ -333,6 +333,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.dispatch.cancelChannel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.dag,
+      WEB_EVENTS.promotion.command,
       WEB_EVENTS.task.create,
       WEB_EVENTS.task.update,
       WEB_EVENTS.task.delete,

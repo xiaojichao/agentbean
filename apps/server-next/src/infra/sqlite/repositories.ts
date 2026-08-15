@@ -318,6 +318,8 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
   if (sqliteTableExists(db, 'dispatches')) {
     applyMigration(db, 'team/0082_dispatch_heartbeat.sql');
   }
+  // #1200：终态 root Task 后续关系 provenance + continuation command receipt。
+  applyMigration(db, 'team/0084_task_continuation.sql', { disableForeignKeys: true });
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {

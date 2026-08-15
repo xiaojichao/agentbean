@@ -128,14 +128,27 @@ export const TASK_LEVEL_ACTIONS = [
   'delegate-to-agent',
   'review-package',
   'accept-delivery',
+  'create-continuation',
 ] as const;
 export type TaskLevelAction = (typeof TASK_LEVEL_ACTIONS)[number];
+
+/** 终态 root Task 创建后续 Task 时由 Server 投影、提交时完整复验的稳定来源依据。 */
+export interface TaskContinuationBasisV1 {
+  readonly schemaVersion: 1;
+  readonly sourceTaskId: ID;
+  readonly sourceTaskRevision: number;
+  readonly sourceVersionIds: readonly ID[];
+  readonly channelId: ID;
+  readonly rootMessageId: ID;
+}
 
 export interface TaskLevelAvailableActionDto {
   readonly action: TaskLevelAction;
   readonly label: string;
   readonly disabled?: boolean;
   readonly disabledReason?: string;
+  /** 仅 create-continuation 可用态携带；客户端不得自行拼装或从目录结构推断。 */
+  readonly continuationBasis?: TaskContinuationBasisV1;
 }
 
 export interface TaskDeliveryOverviewV1 {

@@ -34,6 +34,7 @@ import {
   type OutputPackagePendingDeliveryDto,
   type OutputPackageSummaryDto,
   type TaskDagViewDto,
+  type TaskContinuationBasisV1,
 } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import { TaskDagPanel } from '@/components/TaskDagPanel';
@@ -357,6 +358,17 @@ export default function TasksPage() {
     });
     router.push(`/${np}/${routeKind}/${selectedTask.channelId}?thread=${encodeURIComponent(`${selectedTask.channelId}:${threadRoot.id}`)}&compose=${encodeURIComponent(compose)}`);
   };
+  const handleCreateContinuation = (basis?: TaskContinuationBasisV1) => {
+    if (!basis || !selectedTask?.channelId || basis.sourceTaskId !== selectedTask.id
+      || basis.channelId !== selectedTask.channelId) return;
+    const routeKind = dms.some((dm) => dm.id === selectedTask.channelId) ? 'dm' : 'channel';
+    // #1200：只把 Server continuation basis 与文本放进一次性本地 compose；发送前不创建事实。
+    const compose = JSON.stringify({
+      text: `请继续任务「${selectedTask.title}」：`,
+      continuationBasis: basis,
+    });
+    router.push(`/${np}/${routeKind}/${selectedTask.channelId}?thread=${encodeURIComponent(`${selectedTask.channelId}:${basis.rootMessageId}`)}&compose=${encodeURIComponent(compose)}`);
+  };
 
   useEffect(() => {
     if (!selectedTask) {
@@ -662,6 +674,7 @@ export default function TasksPage() {
           }}
           onPackages={handleTaskPackages}
           onDelegateToAgent={handleDelegateToAgent}
+          onCreateContinuation={handleCreateContinuation}
           delegatePackageId={delegatePackage?.packageId ?? null}
         />
       )}
@@ -1091,6 +1104,7 @@ function TaskThreadPanel({
   onViewInChannel,
   onPackages,
   onDelegateToAgent,
+  onCreateContinuation,
   delegatePackageId,
 }: {
   task: Task;
@@ -1123,6 +1137,7 @@ function TaskThreadPanel({
   /** #1064：交付包投影回调（「交给 Agent 处理」按钮据此预填最近交付包）。 */
   onPackages?: (packages: OutputPackageSummaryDto[]) => void;
   onDelegateToAgent: () => void;
+  onCreateContinuation: (basis?: TaskContinuationBasisV1) => void;
   delegatePackageId: string | null;
 }) {
   // #1065 AC9：可发现性动作的导航(「审核交付包」→ 频道 Files 视图)。
@@ -1186,11 +1201,13 @@ function TaskThreadPanel({
               taskId={task.id}
               onAction={(action) => {
                 // #1065 AC9：可发现性动作只是入口;实际 command 提交时 Server 仍完整复验。
-                if (action === 'delegate-to-agent') {
+                if (action.action === 'delegate-to-agent') {
                   onDelegateToAgent();
-                } else if (action === 'review-package') {
+                } else if (action.action === 'review-package') {
                   // 审核面在频道 Files 视图(交付包列表/成员审核按钮)。
                   router.push(`/${teamPath}/channel/${task.channelId}?chatTab=files`);
+                } else if (action.action === 'create-continuation') {
+                  onCreateContinuation(action.continuationBasis);
                 }
               }}
             />

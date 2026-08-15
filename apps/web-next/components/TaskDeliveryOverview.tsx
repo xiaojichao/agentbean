@@ -4,7 +4,6 @@ import React, { useEffect, useState } from 'react';
 import { CircleDot, History, ListChecks, ShieldCheck, Target } from 'lucide-react';
 import type {
   TaskDeliveryOverviewV1,
-  TaskLevelAction,
   TaskLevelAvailableActionDto,
 } from '@agentbean/contracts';
 import { projectEvents, taskEvents } from '@/lib/socket';
@@ -38,7 +37,7 @@ export function TaskDeliveryOverview({
   channelId?: string;
   taskId: string;
   /** #1065 AC9：可发现性动作的导航回调(delegate/review-package 由父级处理)。 */
-  onAction?: (action: TaskLevelAction) => void;
+  onAction?: (action: TaskLevelAvailableActionDto) => void;
 }) {
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,7 +109,7 @@ export function TaskDeliveryOverviewContent({
   onAction,
 }: {
   overview: TaskDeliveryOverviewV1;
-  onAction?: (action: TaskLevelAction) => void;
+  onAction?: (action: TaskLevelAvailableActionDto) => void;
 }) {
   const focus = overview.responsibilityFocus;
   return (
@@ -209,7 +208,7 @@ export function TaskDeliveryOverviewContent({
             key={action.action}
             type="button"
             disabled={Boolean(action.disabled)}
-            onClick={() => onAction?.(action.action)}
+            onClick={() => onAction?.(action)}
             title={action.disabledReason}
             className="rounded-md border border-neutral-300 bg-white px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
             data-smoke={`task-action-${action.action}`}

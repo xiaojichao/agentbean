@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDagViewDto, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -453,6 +453,13 @@ export default function ChatPage() {
   // #1064：线程 composer 的项目引用选择（Task 页预填导航写入；与主 composer 的
   // projectReferenceSelections 同型，发送时随 threadId 一起冻结为消息 ProjectReferenceSet）。
   const [threadSelections, setThreadSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
+  // #1200：仅由 Server availableAction/一次性 compose 写入；普通 thread composer 保持 null。
+  const [threadContinuationBasis, setThreadContinuationBasis] = useState<TaskContinuationBasisV1 | null>(null);
+  const [pendingThreadContinuation, setPendingThreadContinuation] = useState<{
+    sourceMessageId: string;
+    clientMessageId: string;
+    objective: string;
+  } | null>(null);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
@@ -1525,6 +1532,8 @@ export default function ChatPage() {
     setThreadRootId(null);
     setThreadInput('');
     setThreadSelections([]);
+    setThreadContinuationBasis(null);
+    setPendingThreadContinuation(null);
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1618,14 +1627,26 @@ export default function ChatPage() {
     });
   }, [activeChannel, threadParam]);
 
+  useEffect(() => {
+    if (!threadContinuationBasis) return;
+    if (threadContinuationBasis.channelId === activeChannel
+      && threadContinuationBasis.rootMessageId === threadRootId) return;
+    setThreadContinuationBasis(null);
+    setPendingThreadContinuation(null);
+  }, [activeChannel, threadContinuationBasis, threadRootId]);
+
   // #1064 AC1/AC2：Task 页「交给 Agent 处理」预填导航。compose 参数只携带 text +
   // selections，落笔均为本地 state——未发送不创建 Message/Offer/claim/Invocation/负责人事实。
   // 填充一次后立即从 URL 移除（history.replaceState），刷新/回退不会重复填充。
   useEffect(() => {
     if (!activeChannel || !composeParam || !threadRootId) return;
-    let parsed: { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+    let parsed: {
+      text?: string;
+      selections?: ProjectReferenceSelectionRequestDto[];
+      continuationBasis?: TaskContinuationBasisV1;
+    };
     try {
-      parsed = JSON.parse(composeParam) as { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+      parsed = JSON.parse(composeParam) as typeof parsed;
     } catch {
       return;
     }
@@ -1634,6 +1655,11 @@ export default function ChatPage() {
     }
     if (Array.isArray(parsed.selections) && parsed.selections.length > 0) {
       setThreadSelections(parsed.selections);
+    }
+    if (parsed.continuationBasis?.schemaVersion === 1
+      && parsed.continuationBasis.channelId === activeChannel
+      && parsed.continuationBasis.rootMessageId === threadRootId) {
+      setThreadContinuationBasis(parsed.continuationBasis);
     }
     requestAnimationFrame(() => threadTextareaRef.current?.focus());
     const params = new URLSearchParams(searchParams.toString());
@@ -1835,13 +1861,71 @@ export default function ChatPage() {
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
     const mentions = extractMentions(body, visibleMentionMembers);
-    const clientMessageId = createClientMessageId('chat-thread');
+    const clientMessageId = pendingThreadContinuation?.clientMessageId ?? createClientMessageId('chat-thread');
+    const createContinuation = async (sourceMessageId: string, objective: string) => {
+      const basis = threadContinuationBasis;
+      if (!basis) return true;
+      const continuation = await taskEvents().createContinuation({
+        channelId: basis.channelId,
+        rootMessageId: basis.rootMessageId,
+        sourceMessageId,
+        sourceTaskId: basis.sourceTaskId,
+        sourceTaskRevision: basis.sourceTaskRevision,
+        sourceVersionIds: basis.sourceVersionIds,
+        objectiveSnapshot: {
+          schemaVersion: 1,
+          objective,
+          scope: `task-continuation:${basis.sourceTaskId}`,
+          riskLevel: 'low',
+          dataSnapshot: JSON.stringify({ sourceVersionIds: basis.sourceVersionIds }),
+        },
+      }, `task-continuation:${clientMessageId}`);
+      const accepted = continuation.ok
+        && continuation.response
+        && ['applied', 'replayed'].includes(continuation.response.outcome);
+      if (!accepted) {
+        setPendingThreadContinuation({ sourceMessageId, clientMessageId, objective });
+        appendMessage({
+          id: `local-continuation-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: `后续任务未创建：${continuation.response?.stableCode ?? continuation.error ?? '请重试'}`,
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+        return false;
+      }
+      setPendingThreadContinuation(null);
+      setThreadContinuationBasis(null);
+      void loadTasks();
+      return true;
+    };
+    if (pendingThreadContinuation && threadContinuationBasis) {
+      void createContinuation(
+        pendingThreadContinuation.sourceMessageId,
+        pendingThreadContinuation.objective,
+      ).then((created) => {
+        if (!created) return;
+        setThreadInput('');
+        setThreadSelections([]);
+        threadAttachments.forEach(revokeComposerPreview);
+        setThreadAttachments([]);
+      });
+      return;
+    }
     // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
     // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
     // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, async (res?: SendMessageAck) => {
       if (res?.ok) {
         appendAckMessage(res);
+        if (threadContinuationBasis) {
+          const sourceMessageId = res.message && typeof res.message === 'object'
+            ? res.message.id
+            : undefined;
+          if (!sourceMessageId || !(await createContinuation(sourceMessageId, body))) return;
+        }
         setThreadInput('');
         setThreadSelections([]);
         threadAttachments.forEach(revokeComposerPreview);
@@ -2899,7 +2983,7 @@ export default function ChatPage() {
           onDeliveryAction={(action) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
             // task-only(无关联消息)回落到主 composer;审核面在 Files 逻辑产物视图。
-            if (action === 'delegate-to-agent') {
+            if (action.action === 'delegate-to-agent') {
               if (taskDetailMessage) {
                 openThread(taskDetailMessage.id);
                 setThreadInput('@');
@@ -2910,14 +2994,20 @@ export default function ChatPage() {
                 setInput('@');
                 setTimeout(() => textareaRef.current?.focus(), 0);
               }
-            } else if (action === 'review-package') {
+            } else if (action.action === 'review-package') {
               // #1177：阶段详情工作区内已可完成审核闭环；保留详情，不再跳转到 Files。
               const packageSection = document.querySelector<HTMLElement>('[data-smoke="stage-review-package"]')
                 ?? document.querySelector<HTMLElement>('[data-smoke="stage-delivery-review-workspace"]');
               packageSection?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            } else if (action === 'open-task') {
+            } else if (action.action === 'open-task') {
               closeTaskDetail();
               switchTab('tasks');
+            } else if (action.action === 'create-continuation' && action.continuationBasis) {
+              closeTaskDetail();
+              openThread(action.continuationBasis.rootMessageId);
+              setThreadContinuationBasis(action.continuationBasis);
+              setThreadInput(`请继续任务「${taskDetailTask?.title ?? '当前任务'}」：`);
+              setTimeout(() => threadTextareaRef.current?.focus(), 0);
             }
           }}
           onStageHandoff={(handoff) => {
@@ -4402,7 +4492,7 @@ function TaskDetailPanel({
   onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
-  onDeliveryAction?: (action: TaskLevelAction) => void;
+  onDeliveryAction?: (action: TaskLevelAvailableActionDto) => void;
   /** #1178：阶段工作区交接入口（交给智能体处理/要求修改后继续）的本地预填导航。 */
   onStageHandoff?: (action: StageHandoffAction) => void;
 }) {

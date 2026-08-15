@@ -9,7 +9,7 @@ import type {
   StageDeliveryReviewMemberV1,
   StageDeliveryReviewVersionIdentityV1,
   StageDeliveryReviewWorkspaceV1,
-  TaskLevelAction,
+  TaskLevelAvailableActionDto,
 } from '@agentbean/contracts';
 
 import { TaskDeliveryOverviewContent } from '@/components/TaskDeliveryOverview';
@@ -65,7 +65,7 @@ export interface StageDeliveryReviewWorkspaceProps {
   readonly onViewAssetSource?: (packageId: string) => void;
   /** Task 与 Files/讨论串共用同一文件包预览审核弹窗。 */
   readonly onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
-  readonly onAction?: (action: TaskLevelAction) => void;
+  readonly onAction?: (action: TaskLevelAvailableActionDto) => void;
   /** #1178：阶段交接入口（交给智能体处理/要求修改后继续）携带焦点包引用与绑定 Thread 上抛。 */
   readonly onStageHandoff?: (action: StageHandoffAction) => void;
   /** 审核/验收成功后通知父级刷新 Tasks 列表等；工作区自身会重读 Server projection。 */
@@ -461,7 +461,7 @@ export function StageDeliveryReviewWorkspace({
         onAction={(action) => {
           // #1178：阶段上下文的「交给智能体处理」携带焦点包引用与绑定 Thread 上抛
           // （父级做本地预填）；父级未接 onStageHandoff 时保持原 action 直通。
-          if (action === 'delegate-to-agent' && onStageHandoff) {
+          if (action.action === 'delegate-to-agent' && onStageHandoff) {
             const selection = delegateHandoffSelection();
             onStageHandoff({
               action: 'delegate-to-agent',

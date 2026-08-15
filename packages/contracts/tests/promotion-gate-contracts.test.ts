@@ -9,6 +9,7 @@ import {
   parsePromotionGateInputV1,
   parsePromotionObjectiveSnapshotV1,
   parsePromotionFreshnessBasisV1,
+  parseTaskContinuationPromotionInputV1,
   type PromotionCommandReceiptV1,
   type PromotionGateCommandEnvelopeV1,
   type PromotionGateCommandResponseV1,
@@ -58,8 +59,11 @@ const receipt: PromotionCommandReceiptV1 = {
 
 describe('promotion-gate capabilities', () => {
   test('freezes the Promotion command family (human trigger only; #922 scope)', () => {
-    expect(PROMOTION_GATE_COMMAND_NAMES).toEqual(['promote-to-task']);
-    expect(PROMOTION_GATE_COMMAND_NAMES).toHaveLength(1);
+    expect(PROMOTION_GATE_COMMAND_NAMES).toEqual([
+      'promote-to-task',
+      'create-task-continuation',
+    ]);
+    expect(PROMOTION_GATE_COMMAND_NAMES).toHaveLength(2);
   });
 });
 
@@ -137,6 +141,42 @@ describe('parsePromotionGateInputV1', () => {
   test('rejects invalid triggerKind (NL/@Agent/DM/Thread are NOT triggers, #894 §1)', () => {
     expect(() => parsePromotionGateInputV1({ ...promoteInput, triggerKind: 'natural-language' })).toThrow(INVALID);
     expect(() => parsePromotionGateInputV1({ ...promoteInput, triggerKind: 'mention' })).toThrow(INVALID);
+  });
+});
+
+describe('parseTaskContinuationPromotionInputV1', () => {
+  const continuationInput = {
+    channelId: 'ch-1',
+    rootMessageId: 'root-msg-1',
+    sourceMessageId: 'source-msg-1',
+    sourceTaskId: 'task-1',
+    sourceTaskRevision: 3,
+    sourceVersionIds: ['version-1', 'version-2'],
+    objectiveSnapshot: {
+      schemaVersion: 1,
+      objective: '继续完善交付结果',
+      scope: 'ch-1',
+      riskLevel: 'low',
+    },
+  };
+
+  test('严格解析终态 Task 的后续任务依据', () => {
+    expect(parseTaskContinuationPromotionInputV1(continuationInput)).toEqual(continuationInput);
+  });
+
+  test('拒绝非正整数 revision、无序或重复的版本 ID', () => {
+    expect(() => parseTaskContinuationPromotionInputV1({
+      ...continuationInput,
+      sourceTaskRevision: 0,
+    })).toThrow(INVALID);
+    expect(() => parseTaskContinuationPromotionInputV1({
+      ...continuationInput,
+      sourceVersionIds: ['version-2', 'version-1'],
+    })).toThrow(INVALID);
+    expect(() => parseTaskContinuationPromotionInputV1({
+      ...continuationInput,
+      sourceVersionIds: ['version-1', 'version-1'],
+    })).toThrow(INVALID);
   });
 });
 

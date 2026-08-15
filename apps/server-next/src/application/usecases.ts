@@ -259,13 +259,17 @@ import { createPiProviderService, getEmergencyStopActive } from './pi-provider-s
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createPromotionModesService } from './promotion-modes-service.js';
+import { createPromotionGateHandler } from './promotion-gate-handler.js';
 import {
+  parsePromotionGateCommandEnvelopeV1,
+  parseTaskContinuationPromotionInputV1,
   parseAgentOrchestrationEscalationCommandV1,
   parsePromotionProposalActionV1,
   parseSemanticPromotionEvaluateCommandV1,
   parseSemanticPromotionRolloutStateV1,
   parseTeamPromotionPolicyApplicationV1,
   parseTeamPromotionPolicyV1,
+  type PromotionGateCommandResponseV1,
 } from '../../../../packages/contracts/src/index.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import { createCapabilitySummarizer } from './capability-summarizer.js';
@@ -520,6 +524,13 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }>;
+  /** #1200：仅暴露显式 create-task-continuation；普通消息和 @Agent 不路由到 Promotion gate。 */
+  dispatchPromotionGateCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1 } | { ok: false; error: string }>;
   /**
    * #929 System activity command 派发（audience-scoped projection / attention / change-feed ack）。
    * authority（userId/teamId）由 socket session 注入。
@@ -2124,6 +2135,73 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       authority: { actorId: input.userId, teamId: input.teamId },
     });
     return { ok: true, response };
+  }
+
+  async function dispatchPromotionGateCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1 } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    const stopped = await assertTeamPiCommandsAllowed(input.teamId);
+    if (stopped) return { ok: false, error: stopped.error };
+    let envelope;
+    let payload;
+    try {
+      envelope = parsePromotionGateCommandEnvelopeV1(input.envelope);
+      if (envelope.commandName !== 'create-task-continuation') {
+        return { ok: false, error: 'PROMOTION_COMMAND_NOT_WIRED' };
+      }
+      payload = parseTaskContinuationPromotionInputV1(input.payload);
+    } catch {
+      return { ok: false, error: 'PROMOTION_GATE_PAYLOAD_INVALID' };
+    }
+    const handler = createPromotionGateHandler({
+      teamId: input.teamId,
+      requesterId: input.userId,
+      unitOfWork: repositories.taskCoordinationUnitOfWork,
+      clock,
+      ids,
+      async resolveContinuationVersionIdsInTransaction({
+        repositories: transaction,
+        sourceTaskId,
+        sourceTaskRevision,
+        channelId,
+      }) {
+        const coordination = await transaction.coordination.coordinations.getByTaskId(sourceTaskId);
+        if (!coordination || coordination.taskRevision !== sourceTaskRevision) return null;
+        const current = await findCurrentManagedOutputPackage(transaction.outputPackages, {
+          teamId: input.teamId,
+          channelId,
+          taskId: sourceTaskId,
+          taskRevision: sourceTaskRevision,
+          taskAttempt: coordination.attempt,
+        });
+        if (!current.record) return current.hasManagedHistory ? null : [];
+        const projection = await transaction.outputPackages.getPackageById({
+          teamId: input.teamId,
+          packageId: current.record.packageId,
+        });
+        if (!projection) return null;
+        const requiredMembers = projection.members.filter((member) => member.requiredForFinal);
+        const collections = await transaction.channelProjects.listArtifactCollections({
+          teamId: input.teamId,
+          channelId,
+        });
+        const collectionById = new Map(collections.map((collection) => [collection.id, collection] as const));
+        const versionIds = requiredMembers.map((member) => collectionById.get(member.collectionId)?.currentVersionId);
+        if (versionIds.some((id) => !id)) return null;
+        return [...new Set(versionIds as string[])].sort();
+      },
+    });
+    try {
+      return { ok: true, response: await handler.createTaskContinuation(envelope, payload) };
+    } catch {
+      return { ok: false, error: 'TASK_CONTINUATION_FAILED' };
+    }
   }
 
   /**
@@ -5399,6 +5477,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     dispatchMessageTracerCommand,
+    dispatchPromotionGateCommand,
     dispatchSystemActivityCommand,
     dispatchSystemActivityQuery,
     dispatchTaskRemediationCommand,
@@ -17389,6 +17468,36 @@ async function buildTaskDeliveryOverview(
         : fileReviewGate.kind === 'rejected'
           ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
           : { action: 'accept-delivery', label: '验收本次交付' };
+  const terminalRoot = ['done', 'cancelled', 'closed'].includes(task.status)
+    && coordination?.nodeKind === 'root';
+  const continuationRun = terminalRoot
+    ? coordination
+      ? await repositories.management.runs.getById(coordination.managementRunId)
+      : await repositories.management.runs.getByRootTaskId(task.id)
+    : null;
+  const continuationVersionIds = [...new Set(fileReviewCoverage.items
+    .map((item) => item.currentVersionId)
+    .filter((id): id is string => Boolean(id)))].sort();
+  const continuationAction: TaskLevelAvailableActionDto = !terminalRoot
+    ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '仅终态根任务可创建后续任务' }
+    : !continuationRun?.rootMessageId
+      ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '原讨论串不可用' }
+      : !fileReviewProjectionAvailable
+        ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '当前文件版本不可用，请刷新后重试' }
+        : fileReviewCoverage.items.some((item) => !item.currentVersionId)
+          ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '当前文件版本不完整，请刷新后重试' }
+          : {
+              action: 'create-continuation',
+              label: '创建后续任务',
+              continuationBasis: {
+                schemaVersion: 1,
+                sourceTaskId: task.id,
+                sourceTaskRevision: task.revision,
+                sourceVersionIds: continuationVersionIds,
+                channelId,
+                rootMessageId: continuationRun.rootMessageId,
+              },
+            };
   const availableActions: TaskLevelAvailableActionDto[] = [
     { action: 'open-task', label: '打开 Task' },
     packages.length > 0
@@ -17398,6 +17507,7 @@ async function buildTaskDeliveryOverview(
       ? { action: 'review-package', label: '审核交付文件' }
       : { action: 'review-package', label: '审核交付文件', disabled: true, disabledReason: '当前无待审核交付' },
     acceptDeliveryAction,
+    continuationAction,
   ];
 
   const watermark = await repositories.systemActivity?.watermarks
