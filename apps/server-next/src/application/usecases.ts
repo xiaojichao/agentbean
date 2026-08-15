@@ -9469,6 +9469,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         coordination,
         hasManagementRun: managementRun?.rootTaskId === parsed.taskId,
         hasProjectStage: true,
+        hasAgentDelivery: false,
       });
       const taskOverview = await buildTaskDeliveryOverview(repositories, {
         teamId,
@@ -9579,6 +9580,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           coordination,
           hasManagementRun: managementRun?.rootTaskId === task.id,
           hasProjectStage: Boolean(stageRecord),
+          hasAgentDelivery: false,
         });
         const overview = await buildTaskDeliveryOverview(repositories, {
           teamId,
@@ -10435,7 +10437,116 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
       if (!managementRun) {
-        return makeFailure('CONFLICT', 'Only managed root tasks support root-delivery accept');
+        if (!task.channelId) {
+          return makeFailure('CONFLICT', 'Task has no Agent delivery to accept');
+        }
+        const channelId = task.channelId;
+        const expectedTaskRevision = taskInput.expectedTaskRevision ?? task.revision;
+        return repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+          const currentTask = await transaction.tasks.getById(task.id);
+          if (!currentTask || currentTask.teamId !== taskInput.teamId || currentTask.channelId !== channelId) {
+            return makeFailure('NOT_FOUND', 'Task not found');
+          }
+          if (currentTask.revision !== expectedTaskRevision) {
+            return makeFailure('CONFLICT', 'TASK_REVISION_CONFLICT');
+          }
+          const packageRecords = await transaction.outputPackages.listPackagesByChannel({
+            teamId: taskInput.teamId,
+            channelId,
+            taskId: task.id,
+            limit: 50,
+          });
+          const focusPackage = packageRecords[0];
+          if (!focusPackage) {
+            return makeFailure('CONFLICT', 'Task has no Agent delivery to accept');
+          }
+          const acceptanceMessageId = `task-delivery-acceptance:${task.id}:${expectedTaskRevision}:${focusPackage.packageId}`;
+          const existingAcceptance = await transaction.messages.getById(acceptanceMessageId);
+          if (existingAcceptance) {
+            return currentTask.status === 'done'
+              ? makeSuccess({ task: currentTask })
+              : makeFailure('CONFLICT', 'Task delivery acceptance audit is inconsistent');
+          }
+          if (currentTask.status !== 'in_review') {
+            return makeFailure('CONFLICT', 'Task is not ready for human completion');
+          }
+          if (currentTask.creatorId !== taskInput.userId) {
+            return makeFailure('FORBIDDEN', 'Only the Task creator can accept this Agent delivery');
+          }
+          const projection = await transaction.outputPackages.getPackageById({
+            teamId: taskInput.teamId,
+            packageId: focusPackage.packageId,
+          });
+          if (!projection) {
+            return makeFailure('CONFLICT', 'Current Agent delivery package is unavailable');
+          }
+          const [reviews, collections] = await Promise.all([
+            transaction.channelProjects.listArtifactReviews({
+              teamId: taskInput.teamId,
+              channelId,
+            }),
+            transaction.channelProjects.listArtifactCollections({
+              teamId: taskInput.teamId,
+              channelId,
+            }),
+          ]);
+          const collectionById = new Map(collections.map((collection) => [collection.id, collection]));
+          const fileReviewGate = evaluateTaskDeliveryFileReviewGate({
+            requiredFiles: projection.members
+              .filter((member) => member.requiredForFinal)
+              .map((member) => {
+                const currentVersionId = collectionById.get(member.collectionId)?.currentVersionId;
+                const reviewState = currentVersionId
+                  ? deriveProjectArtifactVersionReviewState(
+                      reviews
+                        .filter((review) => review.versionId === currentVersionId)
+                        .map((review) => ({
+                          id: review.id,
+                          versionId: review.versionId,
+                          decision: review.decision,
+                          createdAt: review.createdAt,
+                        })),
+                    )
+                  : 'unavailable';
+                return {
+                  collectionId: member.collectionId,
+                  ...(currentVersionId ? { currentVersionId } : {}),
+                  shortLabel: member.shortLabel,
+                  filename: member.filename,
+                  reviewState,
+                };
+              }),
+          });
+          if (fileReviewGate.kind === 'rejected') {
+            return makeFailure('CONFLICT', fileReviewGate.reasonCode);
+          }
+          const now = clock.now();
+          const updated = await transaction.tasks.update({
+            taskId: currentTask.id,
+            changes: { status: 'done', updatedAt: now },
+          });
+          if (!updated) return makeFailure('NOT_FOUND', 'Task not found');
+          await transaction.messages.append({
+            id: acceptanceMessageId,
+            teamId: updated.teamId,
+            channelId,
+            senderKind: 'system',
+            senderId: 'system',
+            body: `任务「${updated.title}」的本次交付已验收`,
+            createdAt: now,
+            meta: {
+              kind: 'task-delivery-accepted',
+              taskId: updated.id,
+              taskTitle: updated.title,
+              acceptedBy: taskInput.userId,
+              packageId: focusPackage.packageId,
+              taskRevision: expectedTaskRevision,
+              previousStatus: currentTask.status,
+              status: updated.status,
+            },
+          });
+          return makeSuccess({ task: updated });
+        });
       }
       if (managementRun.status !== 'in_review' && managementRun.status !== 'completed') {
         return makeFailure('CONFLICT', 'Managed Task is not ready for human completion');
@@ -17373,11 +17484,13 @@ function projectTaskGovernance(input: {
   coordination: TaskCoordinationRecord | null;
   hasManagementRun: boolean;
   hasProjectStage: boolean;
+  hasAgentDelivery: boolean;
 }): TaskGovernanceV1 {
   const sources: TaskGovernanceV1['sources'][number][] = [];
   if (input.hasManagementRun) sources.push('management_run');
   if (input.coordination) sources.push('task_coordination');
   if (input.hasProjectStage) sources.push('project_stage');
+  if (input.hasAgentDelivery) sources.push('agent_delivery');
   const managed = sources.length > 0;
   return {
     mode: managed ? 'managed' : 'plain',
@@ -17490,10 +17603,11 @@ async function buildTaskDeliveryOverview(
       stage = overview?.stages.find((candidate) => candidate.task.id === taskId);
     }
   }
-  const governance = input.preloaded?.governance ?? projectTaskGovernance({
+  const governance = projectTaskGovernance({
     coordination,
     hasManagementRun: managementRun?.rootTaskId === task.id,
     hasProjectStage: hasPersistedProjectStage,
+    hasAgentDelivery: packages.length > 0 || pendingDeliveries.length > 0,
   });
 
   // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
@@ -17693,6 +17807,8 @@ async function buildTaskDeliveryOverview(
     ? preboundAcceptanceAuthorityIds
     : ((coordination?.nodeKind ?? 'root') === 'root' && acceptanceRun?.initiatedByUserId
       ? [acceptanceRun.initiatedByUserId]
+      : governance.sources.includes('agent_delivery')
+        ? [task.creatorId]
       : []);
   const fileReviewStateLabels = {
     pending: '待审核',
@@ -18925,12 +19041,33 @@ async function taskHasManagedGovernance(
   repositories: ServerNextRepositories,
   task: TaskRecord,
 ): Promise<boolean> {
-  const [coordination, managementRun, stageBound] = await Promise.all([
+  const [coordination, managementRun, stageBound, agentDeliveryPackages, pendingDeliveries] = await Promise.all([
     repositories.taskCoordination.coordinations.getByTaskId(task.id),
     repositories.management.runs.getByRootTaskId(task.id),
     taskIsBoundToProjectStage(repositories, task),
+    task.channelId
+      ? repositories.outputPackages.listPackagesByChannel({
+          teamId: task.teamId,
+          channelId: task.channelId,
+          taskId: task.id,
+          limit: 1,
+        })
+      : Promise.resolve([]),
+    task.channelId
+      ? repositories.workspacePublishStagings.listCommittedByChannel({
+          teamId: task.teamId,
+          channelId: task.channelId,
+          taskId: task.id,
+        })
+      : Promise.resolve([]),
   ]);
-  return Boolean(coordination || managementRun || stageBound);
+  return Boolean(
+    coordination
+    || managementRun
+    || stageBound
+    || agentDeliveryPackages.length > 0
+    || pendingDeliveries.length > 0,
+  );
 }
 
 /**

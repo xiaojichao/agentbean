@@ -154,7 +154,7 @@ export interface TaskLevelAvailableActionDto {
 /** Task 治理身份与直接修改许可（Server 投影，Web 不从 assignee/package/status 推断）。 */
 export interface TaskGovernanceV1 {
   readonly mode: 'plain' | 'managed';
-  readonly sources: readonly ('management_run' | 'task_coordination' | 'project_stage')[];
+  readonly sources: readonly ('management_run' | 'task_coordination' | 'project_stage' | 'agent_delivery')[];
   readonly nodeKind?: 'root' | 'subtask';
   readonly allowDirectStatusMutation: boolean;
   readonly allowDirectAssigneeMutation: boolean;
@@ -198,7 +198,7 @@ export interface QueryTaskDeliveryOverviewInputV1 {
 }
 
 /**
- * 频道任务卡片投影。受管状态只由 Server 的 management / coordination / ProjectStage 事实判定，
+ * 频道任务卡片投影。受管状态只由 Server 的 management / coordination / ProjectStage / Agent 交付事实判定，
  * Web 不根据 assignee、tag 或 task status 猜测。
  */
 export interface ChannelTaskWorkspaceEntryV1 {
