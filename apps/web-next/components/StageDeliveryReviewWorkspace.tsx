@@ -64,7 +64,7 @@ export interface StageDeliveryReviewWorkspaceProps {
   readonly onOpenThread?: (rootMessageId: string) => void;
   readonly onViewAssetSource?: (packageId: string) => void;
   /** Task 与 Files/讨论串共用同一文件包预览审核弹窗。 */
-  readonly onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string) => void;
+  readonly onOpenPackagePreview?: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
   readonly onAction?: (action: TaskLevelAction) => void;
   /** #1178：阶段交接入口（交给智能体处理/要求修改后继续）携带焦点包引用与绑定 Thread 上抛。 */
   readonly onStageHandoff?: (action: StageHandoffAction) => void;
@@ -243,9 +243,9 @@ export function StageDeliveryReviewWorkspace({
   }
 
   const focusPackage = workspace.focusPackage;
-  const hasPackageReviewActions = focusPackage?.members.some(
+  const hasPackageReviewActions = !workspace.archived && (focusPackage?.members.some(
     (member) => (member.availableActions?.actions.length ?? 0) > 0,
-  ) ?? false;
+  ) ?? false);
   const packageMeta: OutputPackageMeta | undefined = focusPackage ? {
     kind: 'output-package',
     packageId: focusPackage.package.packageId,
@@ -405,9 +405,9 @@ export function StageDeliveryReviewWorkspace({
                 key={member.collectionId}
                 member={member}
                 participantName={participantName}
-                canReview={(member.availableActions?.actions.length ?? 0) > 0}
+                canReview={!workspace.archived && (member.availableActions?.actions.length ?? 0) > 0}
                 onOpenPreview={packageMeta && onOpenPackagePreview
-                  ? () => onOpenPackagePreview(packageMeta, member.artifactVersionId)
+                  ? () => onOpenPackagePreview(packageMeta, member.artifactVersionId, workspace.archived)
                   : undefined}
               />
             ))}

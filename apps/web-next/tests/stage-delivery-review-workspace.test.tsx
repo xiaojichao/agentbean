@@ -86,7 +86,7 @@ describe('阶段交付审核工作区', () => {
       threadRootMessageId: 'message-root-1',
       taskId: 'task-1',
       memberCount: 1,
-    }), 'version-1');
+    }), 'version-1', false);
     fireEvent.click(screen.getByRole('button', { name: '审核交付文件' }));
     expect(onOpenPackagePreview).toHaveBeenLastCalledWith(expect.objectContaining({ packageId: 'package-1' }));
     expect(document.querySelector('[data-smoke="package-review-action"]')).toBeNull();
@@ -222,6 +222,7 @@ describe('阶段交付审核 mutation 闭环 (#1177)', () => {
   });
 
   test('归档频道不展示 package mutation 按钮', async () => {
+    const onOpenPackagePreview = vi.fn();
     mocks.query.mockResolvedValue({
       ok: true,
       workspace: workspaceFixture({
@@ -231,11 +232,20 @@ describe('阶段交付审核 mutation 闭环 (#1177)', () => {
       }),
     });
     render(
-      <StageDeliveryReviewWorkspace teamId="team-1" channelId="channel-1" stageId="stage-1" taskId="task-1" />,
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        onOpenPackagePreview={onOpenPackagePreview}
+      />,
     );
     await vi.waitFor(() => expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).not.toBeNull());
     expect(document.querySelectorAll('[data-smoke="package-review-action"]')).toHaveLength(0);
     expect(document.querySelector('[data-smoke="stage-delivery-acceptance"]')).toBeNull();
+    expect((screen.getByRole('button', { name: '审核交付文件' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '预览此文件' }));
+    expect(onOpenPackagePreview).toHaveBeenCalledWith(expect.objectContaining({ packageId: 'package-1' }), 'version-1', true);
   });
 });
 

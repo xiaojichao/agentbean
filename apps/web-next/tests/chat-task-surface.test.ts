@@ -10,7 +10,7 @@ describe('chat task surface', () => {
     expect(source).not.toContain('function ChatTaskCard');
   });
 
-  test('普通任务从整枚徽标打开状态菜单，受管任务由 Server 治理投影关闭入口', () => {
+  test('普通任务从整枚徽标打开完整状态菜单，受管任务只保留取消与关闭', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function ChatTaskBadge');
     const end = source.indexOf('function taskBadgeIcon', start);
@@ -22,8 +22,9 @@ describe('chat task surface', () => {
     expect(badge).not.toContain('onOpenDetail');
     expect(badge).not.toContain('rounded-l-full');
     expect(badge).not.toContain('rounded-r-full');
-    expect(source).toContain('taskStatusMutable={Boolean(task && channelTaskWorkspace?.entries.find');
-    expect(source).toContain('onStatus={taskStatusMutable ? onTaskStatus : undefined}');
+    expect(source).toContain('taskStatusOptions={task');
+    expect(source).toContain("if (entry.governance.mode === 'managed') return ['cancelled', 'closed'];");
+    expect(badge).toContain('TASK_COLUMNS.filter((status) => statusOptions.includes(status.id))');
   });
 
   test('聊天、Activity 与消息搜索共用 chat-view 投影，TaskDetail 从原始消息恢复状态历史', () => {

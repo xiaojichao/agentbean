@@ -121,6 +121,7 @@ function library(
 
 function renderModal(options: {
   initialVersionId?: string;
+  readOnly?: boolean;
   onClose?: () => void;
   onSaved?: () => void;
   prepareReturnThread?: (threadRootMessageId: string) => Promise<boolean>;
@@ -131,6 +132,7 @@ function renderModal(options: {
       packageMeta={packageMeta}
       channelId="channel-1"
       {...(options.initialVersionId ? { initialVersionId: options.initialVersionId } : {})}
+      {...(options.readOnly ? { readOnly: true } : {})}
       renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
       onClose={options.onClose ?? vi.fn()}
       onSaved={options.onSaved ?? vi.fn()}
@@ -822,6 +824,16 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('button', { name: '通过' })).toBeNull();
     expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
     expect(screen.getByText('当前版本没有可执行的审核动作')).toBeTruthy();
+  });
+
+  test('归档频道统一预览保持只读，不暴露编辑、审核或最终化动作', async () => {
+    renderModal({ readOnly: true });
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' }) as HTMLTextAreaElement;
+    expect(editor.disabled).toBe(true);
+    expect(screen.getByText('归档频道只读，仅可预览历史版本')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '通过' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
+    expect((screen.getByRole('button', { name: '保存为 Server 新版本' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test('组合保存遇到 stale fence 时保留脏稿并提示查看最新版', async () => {

@@ -408,12 +408,8 @@ export default function TasksPage() {
       return;
     }
     const workspaceEntry = workspaceEntriesByTaskId[task.id];
-    const governance = workspaceEntry?.governance;
-    const namedManagedTransition = status === 'cancelled'
-      || status === 'closed'
-      || (governance?.nodeKind === 'root'
-        && task.status === 'in_review'
-        && (status === 'done' || status === 'in_progress'));
+    const namedManagedTransition = !['done', 'cancelled', 'closed'].includes(task.status)
+      && (status === 'cancelled' || status === 'closed');
     if (!allowsDirectTaskMutation(task, workspaceEntry) && !namedManagedTransition) {
       setStatusMenuFor(null);
       return;
@@ -431,28 +427,6 @@ export default function TasksPage() {
       if (res.ok && res.task) {
         setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
       } else if (!res.ok) {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
-      }
-      return;
-    }
-    // #995：in_review 的 accept/reject 必须走具名 root-delivery command，禁止 task:update 旁路
-    if (task.status === 'in_review' && status === 'done') {
-      const res = await taskEvents().acceptRootDelivery({ taskId: task.id });
-      if (res.ok && res.task) {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
-      } else {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
-      }
-      return;
-    }
-    if (task.status === 'in_review' && status === 'in_progress') {
-      const res = await taskEvents().rejectRootDelivery({
-        taskId: task.id,
-        reason: '用户退回修改',
-      });
-      if (res.ok && res.task) {
-        setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as Task : item));
-      } else {
         setTasks((prev) => prev.map((item) => item.id === task.id ? task : item));
       }
       return;
@@ -996,10 +970,13 @@ function StatusButton({ task, workspaceEntry, open, compact, onOpen, onMove }: {
   const status = STATUS_BY_ID[task.status];
   const managed = workspaceEntry?.governance.mode === 'managed';
   const governancePending = Boolean(task.channelId) && !workspaceEntry;
+  const terminal = ['done', 'cancelled', 'closed'].includes(task.status);
   const options = governancePending
     ? []
     : managed
-    ? []
+    ? terminal
+      ? []
+      : STATUS_COLUMNS.filter((column) => column.id === 'cancelled' || column.id === 'closed')
     : STATUS_COLUMNS;
   return (
     <div className={`relative inline-block ${compact ? '' : 'mt-3'}`} onClick={(event) => event.stopPropagation()}>

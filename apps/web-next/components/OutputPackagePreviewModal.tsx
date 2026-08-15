@@ -66,6 +66,8 @@ export interface OutputPackagePreviewModalProps {
   channelId: string;
   /** 成员行「预览」进入时聚焦的成员(交付冻结版本 id)。 */
   initialVersionId?: string;
+  /** 归档频道等只读来源仍可预览，但不暴露编辑、审核或最终化动作。 */
+  readOnly?: boolean;
   renderPreview: (content: string) => ReactNode;
   onClose: () => void;
   /** 保存成功后通知父级(刷新卡片/library 投影)。 */
@@ -80,6 +82,7 @@ export function OutputPackagePreviewModal({
   packageMeta,
   channelId,
   initialVersionId,
+  readOnly = false,
   renderPreview,
   onClose,
   onSaved,
@@ -163,13 +166,14 @@ export function OutputPackagePreviewModal({
     setCollections(libraryResult.library.collections);
     setLoadError(null);
     if (packageResult.ok && packageResult.package) {
-      setAvailableActions(packageResult.availableActions ?? []);
+      const projectedActions = readOnly ? [] : packageResult.availableActions ?? [];
+      setAvailableActions(projectedActions);
       setReviewPackageBasis(packageResult.package);
       setReviewThreadRootMessageId(packageResult.threadRootMessageId ?? packageMeta.threadRootMessageId ?? null);
       const currentReviewableVersionIds = packageMeta.members.flatMap((member) => {
         const collection = libraryResult.library!.collections.find((candidate) => candidate.id === member.collectionId);
         const currentVersionId = collection?.currentVersionId;
-        const actions = packageResult.availableActions?.find((entry) => (
+        const actions = projectedActions.find((entry) => (
           entry.collectionId === member.collectionId && entry.versionId === currentVersionId
         ));
         return currentVersionId && actions?.actions.some((action) => action.startsWith('review-'))
@@ -190,7 +194,7 @@ export function OutputPackagePreviewModal({
       return { collections: libraryResult.library.collections, error };
     }
     return { collections: libraryResult.library.collections, error: null };
-  }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId]);
+  }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId, readOnly]);
 
   useEffect(() => {
     void loadWorkspace();
@@ -754,6 +758,8 @@ export function OutputPackagePreviewModal({
                 key={`${active.current.id}:${editorEpoch}`}
                 filename={(active.current.artifact as unknown as Artifact).filename}
                 initialContent={content}
+                readOnly={readOnly}
+                {...(readOnly ? { readOnlyReason: '归档频道只读' } : {})}
                 onSave={saveCurrent}
                 onLoadLatest={loadLatest}
                 renderPreview={renderPreview}
@@ -1083,6 +1089,8 @@ export function OutputPackagePreviewModal({
               <span className="truncate text-red-700" role="alert">{actionError}</span>
             ) : savedNotice ? (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
+            ) : readOnly ? (
+              <span className="truncate text-neutral-500">归档频道只读，仅可预览历史版本</span>
             ) : availableActions && (!activeActions || activeActions.actions.length === 0) ? (
               <span className="truncate text-neutral-500">当前版本没有可执行的审核动作</span>
             ) : null}

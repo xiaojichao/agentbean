@@ -14,13 +14,17 @@ describe('standalone task governance surface', () => {
     expect(source).not.toMatch(/function TaskCard[\s\S]*?taskEvents\(\)\.channelWorkspace/);
   });
 
-  test('受管任务禁用拖拽、排序、删除和状态菜单', () => {
+  test('受管任务禁用自由 mutation，但保留取消与关闭具名生命周期命令', () => {
     expect(source).toContain("data-governance={managed ? 'managed' : directMutationAllowed ? 'plain' : 'loading'}");
     expect(source).toContain('draggable={directMutationAllowed}');
     expect(source).toContain('allowsDirectTaskMutation(task, workspaceEntriesByTaskId[task.id])');
     expect(source).toContain('allowsDirectTaskMutation(task, workspaceEntriesByTaskId[taskId])');
     expect(source).toContain("workspaceEntry?.governance.mode === 'plain'");
-    expect(source).toMatch(/: managed\s+\? \[\]/);
+    expect(source).toContain("column.id === 'cancelled' || column.id === 'closed'");
+    expect(source).toContain('taskEvents().cancel(task.id, reason)');
+    expect(source).toContain('taskEvents().close(task.id, reason)');
+    expect(source).not.toContain('taskEvents().acceptRootDelivery');
+    expect(source).not.toContain('taskEvents().rejectRootDelivery');
   });
 
   test('不再提供常驻新建任务入口，提示从频道讨论串形成执行事实', () => {
