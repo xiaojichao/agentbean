@@ -469,6 +469,12 @@ describe('AgentBean Next browser smoke script', () => {
       ['click', '[data-smoke="package-preview-review-submit"]'],
       ['click', '[data-smoke="files-row-preview-edit"]'],
     ]));
+    expect(calls).toContainEqual([
+      'waitForFunction',
+      expect.objectContaining({
+        description: 'channel task tab to render for project review Task "task-review-1"',
+      }),
+    ]);
   });
 
   test('exercises WebUI chat send and refresh restore', async () => {
