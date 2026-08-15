@@ -85,9 +85,10 @@ describe('Task 页「交给 Agent 处理」预填导航（#1064）', () => {
     );
     // 清空只发生在 res.ok 分支内。
     const successStart = sendThread.indexOf('if (res?.ok)');
+    const failureStart = sendThread.indexOf('id: `local-thread-error-', successStart);
     const okRegion = sendThread.slice(
       successStart,
-      sendThread.indexOf('appendMessage({', successStart),
+      failureStart,
     );
     expect(okRegion).toContain('setThreadInput(');
     expect(okRegion).toContain('setThreadSelections([])');

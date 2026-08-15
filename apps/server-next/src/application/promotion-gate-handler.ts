@@ -334,6 +334,12 @@ async function validateTaskContinuation(
   if (!run || run.rootTaskId !== sourceTask.id || run.rootMessageId !== input.rootMessageId) {
     return { ok: false, stableCode: STABLE_CODE_CONTINUATION_THREAD_MISMATCH };
   }
+  const rootMessage = await repos.messages.getById(input.rootMessageId);
+  if (!rootMessage || rootMessage.teamId !== dependencies.teamId
+    || rootMessage.channelId !== input.channelId
+    || isDeletedMessage(rootMessage)) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_THREAD_MISMATCH };
+  }
   const sourceMessage = await repos.messages.getById(input.sourceMessageId);
   if (!sourceMessage || sourceMessage.teamId !== dependencies.teamId
     || sourceMessage.channelId !== input.channelId

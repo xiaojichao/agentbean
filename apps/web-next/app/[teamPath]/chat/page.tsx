@@ -460,6 +460,7 @@ export default function ChatPage() {
     clientMessageId: string;
     objective: string;
   } | null>(null);
+  const [threadContinuationSubmitting, setThreadContinuationSubmitting] = useState(false);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
@@ -484,6 +485,8 @@ export default function ChatPage() {
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   // #1064：线程 composer 焦点（Task 页「交给 Agent 处理」预填后移焦）。
   const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // React state 不能阻止同一事件循环内的双击/连续回车；ref 是两阶段提交的同步互斥锁。
+  const threadContinuationSubmittingRef = useRef(false);
   const dmsRef = useRef(dms);
   const activeChannelRef = useRef(activeChannel);
   activeChannelRef.current = activeChannel;
@@ -1857,6 +1860,17 @@ export default function ChatPage() {
       || hasUploadingAttachments(threadAttachments)
       || hasFailedAttachments(threadAttachments)
     ) return;
+    const continuationOperation = Boolean(threadContinuationBasis || pendingThreadContinuation);
+    if (continuationOperation) {
+      if (threadContinuationSubmittingRef.current) return;
+      threadContinuationSubmittingRef.current = true;
+      setThreadContinuationSubmitting(true);
+    }
+    const releaseContinuationLock = () => {
+      if (!continuationOperation) return;
+      threadContinuationSubmittingRef.current = false;
+      setThreadContinuationSubmitting(false);
+    };
     const channelId = activeChannel;
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
@@ -1865,32 +1879,73 @@ export default function ChatPage() {
     const createContinuation = async (sourceMessageId: string, objective: string) => {
       const basis = threadContinuationBasis;
       if (!basis) return true;
-      const continuation = await taskEvents().createContinuation({
-        channelId: basis.channelId,
-        rootMessageId: basis.rootMessageId,
-        sourceMessageId,
-        sourceTaskId: basis.sourceTaskId,
-        sourceTaskRevision: basis.sourceTaskRevision,
-        sourceVersionIds: basis.sourceVersionIds,
-        objectiveSnapshot: {
-          schemaVersion: 1,
-          objective,
-          scope: `task-continuation:${basis.sourceTaskId}`,
-          riskLevel: 'low',
-          dataSnapshot: JSON.stringify({ sourceVersionIds: basis.sourceVersionIds }),
-        },
-      }, `task-continuation:${clientMessageId}`);
+      let continuation: Awaited<ReturnType<ReturnType<typeof taskEvents>['createContinuation']>>;
+      let transportUncertain = false;
+      try {
+        continuation = await taskEvents().createContinuation({
+          channelId: basis.channelId,
+          rootMessageId: basis.rootMessageId,
+          sourceMessageId,
+          sourceTaskId: basis.sourceTaskId,
+          sourceTaskRevision: basis.sourceTaskRevision,
+          sourceVersionIds: basis.sourceVersionIds,
+          objectiveSnapshot: {
+            schemaVersion: 1,
+            objective,
+            scope: `task-continuation:${basis.sourceTaskId}`,
+            riskLevel: 'low',
+            dataSnapshot: JSON.stringify({ sourceVersionIds: basis.sourceVersionIds }),
+          },
+        }, `task-continuation:${clientMessageId}`);
+      } catch {
+        transportUncertain = true;
+        continuation = { ok: false, error: 'NETWORK_UNCERTAIN' };
+      }
       const accepted = continuation.ok
         && continuation.response
         && ['applied', 'replayed'].includes(continuation.response.outcome);
       if (!accepted) {
-        setPendingThreadContinuation({ sourceMessageId, clientMessageId, objective });
+        const retrySameKey = transportUncertain
+          || continuation.response?.retryDirective === 'same_key';
+        let retryHint = '请再次点击发送重试';
+        if (retrySameKey) {
+          setPendingThreadContinuation({ sourceMessageId, clientMessageId, objective });
+        } else {
+          const refreshed = await projectEvents().queryTaskDeliveryOverview({
+            channelId: basis.channelId,
+            taskId: basis.sourceTaskId,
+          }).catch(() => null);
+          const refreshedAction = refreshed?.ok && refreshed.overview
+            ? refreshed.overview.availableActions.find((action) =>
+                action.action === 'create-continuation' && !action.disabled && action.continuationBasis)
+            : undefined;
+          if (refreshedAction?.continuationBasis) {
+            setThreadContinuationBasis(refreshedAction.continuationBasis);
+            setPendingThreadContinuation({
+              sourceMessageId,
+              clientMessageId: createClientMessageId('task-continuation-retry'),
+              objective,
+            });
+            retryHint = '依据已刷新，请再次点击发送';
+          } else {
+            setPendingThreadContinuation(null);
+            setThreadContinuationBasis(null);
+            setThreadInput('');
+            setThreadSelections([]);
+            threadAttachments.forEach(revokeComposerPreview);
+            setThreadAttachments([]);
+            retryHint = '请返回 Task 重新发起';
+          }
+          void loadTasks();
+        }
         appendMessage({
           id: `local-continuation-error-${Date.now()}`,
           channelId,
           senderKind: 'system',
           senderId: null,
-          body: `后续任务未创建：${continuation.response?.stableCode ?? continuation.error ?? '请重试'}`,
+          body: retrySameKey
+            ? `后续任务状态不确定：${continuation.response?.stableCode ?? continuation.error ?? '请再次点击发送重试'}`
+            : `后续任务未创建：${continuation.response?.stableCode ?? continuation.error ?? '依据已变化'}；${retryHint}`,
           createdAt: Date.now(),
           metaJson: JSON.stringify({ kind: 'send-fail' }),
         });
@@ -1911,36 +1966,58 @@ export default function ChatPage() {
         setThreadSelections([]);
         threadAttachments.forEach(revokeComposerPreview);
         setThreadAttachments([]);
-      });
+      }).finally(releaseContinuationLock);
       return;
     }
     // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
     // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
     // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
     getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, async (res?: SendMessageAck) => {
-      if (res?.ok) {
-        appendAckMessage(res);
-        if (threadContinuationBasis) {
-          const sourceMessageId = res.message && typeof res.message === 'object'
-            ? res.message.id
-            : undefined;
-          if (!sourceMessageId || !(await createContinuation(sourceMessageId, body))) return;
+      try {
+        if (res?.ok) {
+          appendAckMessage(res);
+          if (threadContinuationBasis) {
+            const sourceMessageId = res.message && typeof res.message === 'object'
+              ? res.message.id
+              : undefined;
+            if (!sourceMessageId) {
+              setPendingThreadContinuation(null);
+              setThreadContinuationBasis(null);
+              setThreadInput('');
+              setThreadSelections([]);
+              threadAttachments.forEach(revokeComposerPreview);
+              setThreadAttachments([]);
+              appendMessage({
+                id: `local-continuation-error-${Date.now()}`,
+                channelId,
+                senderKind: 'system',
+                senderId: null,
+                body: '消息已发送，但回执缺少消息 ID；请返回 Task 重新发起后续任务',
+                createdAt: Date.now(),
+                metaJson: JSON.stringify({ kind: 'send-fail' }),
+              });
+              return;
+            }
+            if (!(await createContinuation(sourceMessageId, body))) return;
+          }
+          setThreadInput('');
+          setThreadSelections([]);
+          threadAttachments.forEach(revokeComposerPreview);
+          setThreadAttachments([]);
+          return;
         }
-        setThreadInput('');
-        setThreadSelections([]);
-        threadAttachments.forEach(revokeComposerPreview);
-        setThreadAttachments([]);
-        return;
+        appendMessage({
+          id: `local-thread-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: messageSendFailureText(res),
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+      } finally {
+        releaseContinuationLock();
       }
-      appendMessage({
-        id: `local-thread-error-${Date.now()}`,
-        channelId,
-        senderKind: 'system',
-        senderId: null,
-        body: messageSendFailureText(res),
-        createdAt: Date.now(),
-        metaJson: JSON.stringify({ kind: 'send-fail' }),
-      });
     });
   };
 
@@ -3080,6 +3157,7 @@ export default function ChatPage() {
               threadTextareaRef.current?.focus();
             }}
             uploading={uploading}
+            submitting={threadContinuationSubmitting}
             imageInputRef={threadImageInputRef}
             fileInputRef={threadFileInputRef}
             threadTextareaRef={threadTextareaRef}
@@ -4935,6 +5013,7 @@ function ThreadPanel({
   onRemoveSelection,
   onAddSelection,
   uploading,
+  submitting,
   imageInputRef,
   fileInputRef,
   threadTextareaRef,
@@ -4996,6 +5075,7 @@ function ThreadPanel({
   /** 原型收敛:讨论串内文件包卡片的引用入口(整包/单选/多选)加入线程 composer。 */
   onAddSelection: (selection: ProjectReferenceSelectionRequestDto) => void;
   uploading: boolean;
+  submitting: boolean;
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   /** #1064：线程 composer 焦点（ChatPage 持有，预填导航后移焦）。 */
@@ -5318,6 +5398,7 @@ function ThreadPanel({
             value={input}
             onChange={handleThreadInputChange}
             onKeyDown={handleThreadInputKeyDown}
+            disabled={submitting}
             rows={2}
             placeholder="回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）"
             data-smoke="thread-message-input"
@@ -5355,14 +5436,14 @@ function ThreadPanel({
             <div className="flex items-center gap-1">
               <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-              <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
+              <button onClick={() => imageInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
                 <Image size={16} />
               </button>
-              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
                 <Paperclip size={16} />
               </button>
             </div>
-            <button onClick={onSend} disabled={uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0 && selections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
+            <button onClick={onSend} disabled={submitting || uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0 && selections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
               <Send size={14} />
             </button>
           </div>

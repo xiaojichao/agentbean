@@ -837,4 +837,31 @@ describe('#922 Promotion gate handler', () => {
     });
     expect(tasks).toHaveLength(1);
   });
+
+  test('原讨论串根消息已删除时 fail closed，不创建后续 Task', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const seeded = await seedTerminalTaskContinuation(repositories);
+    const rootMessage = await repositories.messages.getById(seeded.input.rootMessageId);
+    expect(rootMessage).not.toBeNull();
+    await repositories.messages.softDelete({
+      messageId: seeded.input.rootMessageId,
+      body: '消息已删除',
+      meta: { ...(rootMessage!.meta ?? {}), deletedAt: tick += 100, deletedBy: 'user-1' },
+    });
+
+    const response = await seeded.handler.createTaskContinuation(
+      makeEnvelope({ commandName: 'create-task-continuation', idempotencyKey: 'continuation-deleted-root' }),
+      seeded.input,
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('TASK_CONTINUATION_THREAD_MISMATCH');
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(1);
+  });
 });
