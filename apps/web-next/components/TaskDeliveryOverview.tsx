@@ -43,12 +43,15 @@ export function TaskDeliveryOverview({
   channelId,
   taskId,
   onAction,
+  onOverviewChange,
 }: {
   teamId: string;
   channelId?: string;
   taskId: string;
   /** #1065 AC9：可发现性动作的导航回调(delegate/review-package 由父级处理)。 */
   onAction?: (action: TaskLevelAvailableActionDto) => void;
+  /** 将同一份 Server 投影交给父级收敛受管 Task 的通用状态入口。 */
+  onOverviewChange?: (overview: TaskDeliveryOverviewV1 | null) => void;
 }) {
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,7 @@ export function TaskDeliveryOverview({
   const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
   const acceptanceGenerationRef = useRef(0);
   const acceptanceIdentityRef = useRef({ channelId, taskId });
+  const onOverviewChangeRef = useRef(onOverviewChange);
   const currentAcceptance = frozenAcceptance?.target.taskId === taskId
     && frozenAcceptance.channelId === channelId
     ? frozenAcceptance
@@ -77,8 +81,14 @@ export function TaskDeliveryOverview({
   }, []);
 
   useLayoutEffect(() => {
+    onOverviewChangeRef.current = onOverviewChange;
+  }, [onOverviewChange]);
+
+  useLayoutEffect(() => {
     acceptanceIdentityRef.current = { channelId, taskId };
     acceptanceGenerationRef.current += 1;
+    setOverview(null);
+    onOverviewChangeRef.current?.(null);
     setFrozenAcceptance(null);
     setAccepting(false);
     setAcceptanceError(null);
@@ -100,26 +110,35 @@ export function TaskDeliveryOverview({
     setLoading(true);
     setError(null);
     if (!channelId) {
+      setOverview(null);
+      onOverviewChangeRef.current?.(null);
       setLoading(false);
       return () => { alive = false; };
     }
     const project = projectEvents();
     const load = (showLoading: boolean) => {
       const currentRequestId = ++requestId;
+      // 治理事实可能因 Project/Task 更新改变；刷新期间先让父级 fail closed，不能保留旧许可。
+      onOverviewChangeRef.current?.(null);
       if (showLoading) setLoading(true);
       return project.queryTaskDeliveryOverview({ channelId, taskId })
       .then((result) => {
         if (!alive || currentRequestId !== requestId) return;
         if (result.ok && result.overview) {
           setOverview(result.overview);
+          onOverviewChangeRef.current?.(result.overview);
           setError(null);
         } else {
+          setOverview(null);
+          onOverviewChangeRef.current?.(null);
           setError(result.message ?? '交付视图暂不可用');
         }
         setLoading(false);
       })
       .catch(() => {
         if (!alive || currentRequestId !== requestId) return;
+        setOverview(null);
+        onOverviewChangeRef.current?.(null);
         setError('交付视图暂不可用');
         setLoading(false);
       });

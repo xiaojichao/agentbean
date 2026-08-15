@@ -69,6 +69,12 @@ describe('chat task surface', () => {
     expect(detailPanel).toContain('<TaskDagPanel');
     expect(detailPanel).toContain('const showTaskDag = Boolean(');
     expect(detailPanel).toContain('const showTaskDelivery = Boolean(');
+    expect(detailPanel).toContain('onOverviewChange={setTaskDeliveryOverview}');
+    expect(detailPanel).toContain("taskDeliveryOverview?.governance?.mode === 'managed'");
+    expect(detailPanel).toContain('const managedTask =');
+    expect(detailPanel).toContain('const taskGovernancePending = Boolean(');
+    expect(detailPanel).toContain('!taskDeliveryOverview?.governance');
+    expect(detailPanel).toContain('正在读取 Server 任务治理状态');
     expect(detailPanel).toContain('尚未产生 Task DAG；阶段责任、交付与审核事实见下方。');
     expect(detailPanel).toContain('w-[min(720px,46vw)]');
     expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");

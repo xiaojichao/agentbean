@@ -307,6 +307,7 @@ import type {
   ChannelTaskWorkspaceV1,
   TaskAcceptanceContractV1,
   TaskDeliveryOverviewV1,
+  TaskGovernanceV1,
   TaskLevelAvailableActionDto,
   TaskResponsibilityFocusV1,
   TaskTimelineEventV1,
@@ -9461,6 +9462,14 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return makeFailure('NOT_FOUND', 'Stage delivery review workspace not found');
       }
       const coordination = await repositories.taskCoordination.coordinations.getByTaskId(parsed.taskId);
+      const managementRun = coordination
+        ? await repositories.management.runs.getById(coordination.managementRunId)
+        : await repositories.management.runs.getByRootTaskId(parsed.taskId);
+      const governance = projectTaskGovernance({
+        coordination,
+        hasManagementRun: managementRun?.rootTaskId === parsed.taskId,
+        hasProjectStage: true,
+      });
       const taskOverview = await buildTaskDeliveryOverview(repositories, {
         teamId,
         channelId: parsed.channelId,
@@ -9472,7 +9481,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         ...(input.resolveProjectStageCandidates
           ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
           : {}),
-        preloaded: { task, coordination, stage },
+        preloaded: { task, coordination, managementRun, governance, stage },
       });
       if (!taskOverview) {
         return makeFailure('NOT_FOUND', 'Stage delivery review workspace not found');
@@ -9496,9 +9505,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (taskOverview.delivery.focusPackageId && !packageWorkspace) {
         return makeFailure('NOT_FOUND', 'Current output package is unavailable');
       }
-      const managementRun = coordination
-        ? await repositories.management.runs.getById(coordination.managementRunId)
-        : null;
       const blockers: StageDeliveryReviewBlockerV1[] = [
         ...stage.blockingReasons.map((reason) => ({ source: 'stage' as const, ...reason })),
         ...(packageWorkspace?.blockers ?? []),
@@ -9558,16 +9564,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const stageRecordsByTaskId = new Map(
         projectStages.map((stage) => [stage.taskId, stage] as const),
       );
-      const governanceFacts = await Promise.all(
-        tasks.map((task) => Promise.all([
-          repositories.taskCoordination.coordinations.getByTaskId(task.id),
-          repositories.management.runs.getByRootTaskId(task.id),
-        ])),
-      );
+      const governanceFacts = await Promise.all(tasks.map(async (task) => {
+        const coordination = await repositories.taskCoordination.coordinations.getByTaskId(task.id);
+        const managementRun = coordination
+          ? await repositories.management.runs.getById(coordination.managementRunId)
+          : await repositories.management.runs.getByRootTaskId(task.id);
+        return [coordination, managementRun] as const;
+      }));
       const entries = await Promise.all(tasks.map(async (task, index) => {
         const [coordination = null, managementRun = null] = governanceFacts[index] ?? [];
         const stage = stagesByTaskId.get(task.id);
         const stageRecord = stageRecordsByTaskId.get(task.id);
+        const governance = projectTaskGovernance({
+          coordination,
+          hasManagementRun: managementRun?.rootTaskId === task.id,
+          hasProjectStage: Boolean(stageRecord),
+        });
         const overview = await buildTaskDeliveryOverview(repositories, {
           teamId,
           channelId,
@@ -9579,15 +9591,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ...(input.resolveProjectStageCandidates
             ? { resolveProjectStageCandidates: input.resolveProjectStageCandidates }
             : {}),
-          preloaded: { task, coordination, stage },
+          preloaded: { task, coordination, managementRun, governance, stage },
           sharedChannelFacts: { reviews, finalizations, versions, collections },
         });
         if (!overview) return null;
-        const sources: Array<'management_run' | 'task_coordination' | 'project_stage'> = [];
-        if (managementRun) sources.push('management_run');
-        if (coordination) sources.push('task_coordination');
-        if (stageRecord) sources.push('project_stage');
-        const managed = sources.length > 0;
         const taskReviews = reviews
           .filter((review) => review.taskId === task.id)
           .sort((left, right) => right.createdAt - left.createdAt);
@@ -9598,16 +9605,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return {
           schemaVersion: 1 as const,
           task: overview.task,
-          governance: {
-            mode: managed ? 'managed' as const : 'plain' as const,
-            sources,
-            ...(coordination
-              ? { nodeKind: coordination.nodeKind }
-              : managementRun ? { nodeKind: 'root' as const } : {}),
-            allowDirectStatusMutation: !managed,
-            allowDirectAssigneeMutation: !managed,
-            allowDirectDelete: !managed,
-          },
+          governance: overview.governance ?? governance,
           responsibilityFocus: overview.responsibilityFocus,
           ...(stage ? { stage } : {}),
           delivery: {
@@ -17371,6 +17369,28 @@ async function listPendingOutputDeliveries(
 // #1065 AC3/AC4：Task 交付聚合视图(单一 Server 投影,web 只渲染)。
 // ---------------------------------------------------------------------------
 
+function projectTaskGovernance(input: {
+  coordination: TaskCoordinationRecord | null;
+  hasManagementRun: boolean;
+  hasProjectStage: boolean;
+}): TaskGovernanceV1 {
+  const sources: TaskGovernanceV1['sources'][number][] = [];
+  if (input.hasManagementRun) sources.push('management_run');
+  if (input.coordination) sources.push('task_coordination');
+  if (input.hasProjectStage) sources.push('project_stage');
+  const managed = sources.length > 0;
+  return {
+    mode: managed ? 'managed' : 'plain',
+    sources,
+    ...(input.coordination ? { nodeKind: input.coordination.nodeKind } : input.hasManagementRun
+      ? { nodeKind: 'root' as const }
+      : {}),
+    allowDirectStatusMutation: !managed,
+    allowDirectAssigneeMutation: !managed,
+    allowDirectDelete: !managed,
+  };
+}
+
 async function buildTaskDeliveryOverview(
   repositories: ServerNextRepositories,
   input: {
@@ -17387,6 +17407,8 @@ async function buildTaskDeliveryOverview(
     preloaded?: {
       task: TaskRecord;
       coordination: TaskCoordinationRecord | null;
+      managementRun: Awaited<ReturnType<ServerNextRepositories['management']['runs']['getByRootTaskId']>>;
+      governance: TaskGovernanceV1;
       stage?: ProjectStageDto;
     };
     /** 频道级审核事实由批量查询一次读取；单 Task 查询仍按原路径加载。 */
@@ -17406,6 +17428,15 @@ async function buildTaskDeliveryOverview(
   const coordination = input.preloaded
     ? input.preloaded.coordination
     : await repositories.taskCoordination.coordinations.getByTaskId(taskId);
+  const managementRun = input.preloaded
+    ? input.preloaded.managementRun
+    : coordination
+      ? await repositories.management.runs.getById(coordination.managementRunId)
+      : await repositories.management.runs.getByRootTaskId(task.id);
+  const hasPersistedProjectStage = input.preloaded
+    ? input.preloaded.governance.sources.includes('project_stage')
+    : (await repositories.channelProjects.listStages({ teamId, channelId }))
+        .some((stageRecord) => stageRecord.taskId === taskId);
   const [criteria, offers] = await Promise.all([
     coordination ? repositories.taskCoordination.criteria.list(taskId) : Promise.resolve([]),
     repositories.taskCoordination.offers.listByTask(taskId),
@@ -17459,6 +17490,11 @@ async function buildTaskDeliveryOverview(
       stage = overview?.stages.find((candidate) => candidate.task.id === taskId);
     }
   }
+  const governance = input.preloaded?.governance ?? projectTaskGovernance({
+    coordination,
+    hasManagementRun: managementRun?.rootTaskId === task.id,
+    hasProjectStage: hasPersistedProjectStage,
+  });
 
   // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
   const deliveriesPromise = coordination
@@ -17651,11 +17687,7 @@ async function buildTaskDeliveryOverview(
   );
 
   // Task 级可发现性动作(AC9:Server 计算,web 只渲染;command 提交仍完整复验)。
-  const acceptanceRun = task.status === 'in_review'
-    ? coordination
-      ? await repositories.management.runs.getById(coordination.managementRunId)
-      : await repositories.management.runs.getByRootTaskId(task.id)
-    : null;
+  const acceptanceRun = task.status === 'in_review' ? managementRun : null;
   const preboundAcceptanceAuthorityIds = coordination?.humanAcceptanceAuthorityIds ?? [];
   const humanAcceptanceAuthorityIds = preboundAcceptanceAuthorityIds.length > 0
     ? preboundAcceptanceAuthorityIds
@@ -17686,11 +17718,7 @@ async function buildTaskDeliveryOverview(
           : { action: 'accept-delivery', label: '验收本次交付' };
   const terminalRoot = ['done', 'cancelled', 'closed'].includes(task.status)
     && coordination?.nodeKind === 'root';
-  const continuationRun = terminalRoot
-    ? coordination
-      ? await repositories.management.runs.getById(coordination.managementRunId)
-      : await repositories.management.runs.getByRootTaskId(task.id)
-    : null;
+  const continuationRun = terminalRoot ? managementRun : null;
   const continuationVersionIds = [...new Set(fileReviewCoverage.items
     .map((item) => item.currentVersionId)
     .filter((id): id is string => Boolean(id)))].sort();
@@ -17733,6 +17761,7 @@ async function buildTaskDeliveryOverview(
     taskId,
     channelId,
     task: toTaskDto(task),
+    governance,
     ...(stage ? { stage } : {}),
     acceptanceContract: {
       nodeKind: coordination?.nodeKind ?? 'root',

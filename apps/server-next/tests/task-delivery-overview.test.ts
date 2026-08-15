@@ -367,6 +367,11 @@ for (const variant of variants) {
       expect(overview.schemaVersion).toBe(1);
       expect(overview.task.id).toBe(taskId);
       expect(overview.task.status).toBe('in_progress');
+      expect(overview.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['task_coordination'],
+        allowDirectStatusMutation: false,
+      });
       expect(overview.acceptanceContract).toMatchObject({
         nodeKind: 'root',
         reviewPolicy: 'human',
@@ -999,6 +1004,9 @@ for (const variant of variants) {
         allowDirectAssigneeMutation: true, allowDirectDelete: true,
       });
       expect(plain.responsibilityFocus.kind).toBe('none');
+      expect((await queryOverview(seedValue, plainTaskId)).governance).toMatchObject({
+        mode: 'plain', sources: [], allowDirectStatusMutation: true,
+      });
     });
 
     test('频道任务工作区在 Stage 灰度关闭后仍保留已持久化的治理约束', async () => {
@@ -1081,6 +1089,20 @@ for (const variant of variants) {
       });
       expect(entry.review.reviewerIds).toEqual([seedValue.userId]);
       expect(entry.stage).toBeUndefined();
+      const detail = await rollbackApp.queryTaskDeliveryOverview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        taskId,
+      });
+      expect(detail.ok).toBe(true);
+      if (!detail.ok) throw new Error(detail.error);
+      expect(detail.overview.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['project_stage'],
+        allowDirectStatusMutation: false,
+      });
+      expect(detail.overview.stage).toBeUndefined();
     });
   });
 }

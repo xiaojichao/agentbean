@@ -51,6 +51,14 @@ const overviewFixture: TaskDeliveryOverviewV1 = {
     id: 'task-1', teamId: 'team-1', title: '交付文档', description: '', status: 'in_review',
     creatorId: 'u-1', tags: [], sortOrder: 0, createdAt: 100, updatedAt: 200,
   },
+  governance: {
+    mode: 'managed',
+    sources: ['task_coordination'],
+    nodeKind: 'root',
+    allowDirectStatusMutation: false,
+    allowDirectAssigneeMutation: false,
+    allowDirectDelete: false,
+  },
   acceptanceContract: {
     nodeKind: 'root',
     reviewPolicy: 'human',
@@ -111,6 +119,71 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
     taskRefresh?.([{ id: 'task-1', channelId: 'ch-1' }]);
     await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(3));
+  });
+
+  test('把当前 Server 投影同步给父级，并在切换 Task 时先清空旧投影', async () => {
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture })
+      .mockResolvedValueOnce({
+        ok: true,
+        overview: {
+          ...overviewFixture,
+          taskId: 'task-2',
+          channelId: 'ch-2',
+          task: { ...overviewFixture.task, id: 'task-2' },
+        },
+      });
+    const onOverviewChange = vi.fn();
+    const { rerender } = render(
+      <TaskDeliveryOverview
+        teamId="team-1"
+        channelId="ch-1"
+        taskId="task-1"
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+    await vi.waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(overviewFixture));
+
+    rerender(
+      <TaskDeliveryOverview
+        teamId="team-1"
+        channelId="ch-2"
+        taskId="task-2"
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+    expect(onOverviewChange).toHaveBeenLastCalledWith(null);
+    await vi.waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskId: 'task-2',
+      channelId: 'ch-2',
+    })));
+  });
+
+  test('实时刷新开始时先清空父级旧治理投影', async () => {
+    let refreshProjection: (() => void) | undefined;
+    let resolveRefresh!: (value: { ok: true; overview: TaskDeliveryOverviewV1 }) => void;
+    mocks.onUpdated.mockImplementation((_channelId, handler) => {
+      refreshProjection = handler;
+      return () => {};
+    });
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture })
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve; }));
+    const onOverviewChange = vi.fn();
+    render(
+      <TaskDeliveryOverview
+        teamId="team-1"
+        channelId="ch-1"
+        taskId="task-1"
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+    await vi.waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(overviewFixture));
+
+    refreshProjection?.();
+    expect(onOverviewChange).toHaveBeenLastCalledWith(null);
+    await act(async () => { resolveRefresh({ ok: true, overview: overviewFixture }); });
+    expect(onOverviewChange).toHaveBeenLastCalledWith(overviewFixture);
   });
 
   test('渲染责任焦点/验收约定/当前交付/availableActions/执行链(文本标签)', async () => {
