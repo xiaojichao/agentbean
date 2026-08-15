@@ -8,6 +8,7 @@ import type {
   MessageTracerCommandName,
   MessageTracerCommandResponseV1,
   ReadCandidateTokenV1,
+  TaskContinuationSourceMarkerV1,
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import {
@@ -18,7 +19,10 @@ import {
   parseMessageTracerCommandEnvelopeV1,
   parseMessageTracerInputV1,
 } from '../../../../packages/contracts/src/index.js';
-import type { ChannelCoordinationUnitOfWork } from './channel-coordination-unit-of-work.js';
+import type {
+  ChannelCoordinationTransactionRepositories,
+  ChannelCoordinationUnitOfWork,
+} from './channel-coordination-unit-of-work.js';
 import type { CommandReceiptRecord } from './message-tracer-repositories.js';
 import type { MessageRecord } from './repositories.js';
 
@@ -115,6 +119,14 @@ export interface SendMessageCommandHandlerDeps {
   readonly readCandidateMaxAgeMs?: number;
   /** UoW 提交后的投递钩子（C-send 默认 no-op；C-wire 接真实 socket emit）。 */
   readonly deliverOutbox?: () => void | Promise<void>;
+  /** continuation source 必须在写 Message 的同一 UoW 内按提交点事实复验。 */
+  readonly validateTaskContinuationSource?: (input: {
+    readonly repositories: ChannelCoordinationTransactionRepositories;
+    readonly teamId: ID;
+    readonly channelId: ID;
+    readonly threadId?: ID;
+    readonly marker: TaskContinuationSourceMarkerV1;
+  }) => Promise<boolean>;
 }
 
 export interface SendMessageCommandInput {
@@ -151,6 +163,19 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
         }
         // conflict：同 key 异 hash，无副作用。
         return conflictResponse('send-message', 'idempotency_conflict');
+      }
+
+      if (input.taskContinuationSource) {
+        const valid = await deps.validateTaskContinuationSource?.({
+          repositories: tx,
+          teamId,
+          channelId: input.channelId,
+          threadId: input.threadId,
+          marker: input.taskContinuationSource,
+        }) ?? false;
+        if (!valid) {
+          return rejectedResponse('send-message', 'TASK_CONTINUATION_SOURCE_INVALID', 'reread_then_new_command');
+        }
       }
 
       // 4. freshness 校验（send 携带 Freshness basis）。

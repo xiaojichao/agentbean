@@ -612,13 +612,15 @@ export function createSqliteRepositories(input: CreateSqliteRepositoriesInput): 
     agentMemoryProjectionUnitOfWork: agentMemoryProjection.unitOfWork,
     channelCoordination,
     channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
-      management.unitOfWork.run(() => operation({
+      management.unitOfWork.run((managementRepositories) => operation({
         messages: repositories.messages,
         artifacts: repositories.artifacts,
         jobs: channelCoordination.jobs,
         decisions: channelCoordination.decisions,
         tasks: repositories.tasks,
         channels: repositories.channels,
+        management: managementRepositories,
+        taskCoordination,
         projectReferenceSets,
         inbox: messageTracer.inbox,
         commandReceipts: messageTracer.commandReceipts,

@@ -3239,7 +3239,13 @@ describe('server-next first-slice use cases', () => {
           },
         },
       },
-    })).resolves.toEqual({ ok: false, error: 'TASK_CONTINUATION_SOURCE_INVALID' });
+    })).resolves.toMatchObject({
+      ok: true,
+      response: {
+        outcome: 'rejected',
+        stableCode: 'TASK_CONTINUATION_SOURCE_INVALID',
+      },
+    });
     const tracerContinuation = await tracerApp.sendMessage({
       userId: 'user-1',
       teamId: 'team-1',

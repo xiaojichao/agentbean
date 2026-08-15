@@ -29,6 +29,7 @@ function setup(): Harness {
     ids: { nextId: () => `id-${++counter}` },
     clock: { now: () => NOW },
     sessionSecret: SESSION_SECRET,
+    validateTaskContinuationSource: async () => true,
     deliverOutbox: () => { delivered += 1; },
   });
   return { repos, handle, get delivered() { return delivered; } } as Harness;
@@ -129,6 +130,33 @@ describe('send-message command handler', () => {
     await expect(repos.messages.getById(messageId)).resolves.toMatchObject({
       meta: { taskContinuationSource: marker },
     });
+  });
+
+  test('rejected：continuation source 在消息事务内复验失败时不写 Message', async () => {
+    const repos = createInMemoryRepositories();
+    const handle = createSendMessageCommandHandler({
+      unitOfWork: repos.channelCoordinationUnitOfWork,
+      ids: { nextId: () => 'message-id' },
+      clock: { now: () => NOW },
+      sessionSecret: SESSION_SECRET,
+      validateTaskContinuationSource: async () => false,
+    });
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1'], agentMemberIds: [] });
+
+    const res = await handle({
+      envelope: envelope('k-invalid-continuation-source'),
+      payload: sendPayload({
+        taskContinuationSource: { schemaVersion: 1, sourceTaskId: 'task-1', sourceTaskRevision: 2 },
+      }),
+      senderId: 'user-1',
+      teamId: 'team-1',
+    });
+
+    expect(res).toMatchObject({
+      outcome: 'rejected',
+      stableCode: 'TASK_CONTINUATION_SOURCE_INVALID',
+    });
+    await expect(repos.messages.getById('message-id')).resolves.toBeNull();
   });
 
   test('replay：同 key+hash 返回首次 receipt，不重复写 Message/Inbox/outbox', async () => {

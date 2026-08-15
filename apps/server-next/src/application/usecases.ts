@@ -21,7 +21,6 @@ import {
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
 import {
   parseMessageTracerCommandEnvelopeV1,
-  parseMessageTracerInputV1,
   type MessageTracerCommandResponseV1,
   type TaskContinuationSourceMarkerV1,
 } from '../../../../packages/contracts/src/index.js';
@@ -2080,6 +2079,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ids,
           clock,
           sessionSecret,
+          validateTaskContinuationSource: ({
+            repositories: transaction,
+            teamId,
+            channelId,
+            threadId,
+            marker,
+          }) => validateTaskContinuationSourceMarker(transaction, { teamId, channelId, threadId }, marker),
           deliverOutbox: deliverMessageTracerOutbox,
         }),
         checkInbox: createCheckInboxCommandHandler({
@@ -2130,17 +2136,6 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     let commandName: ReturnType<typeof parseMessageTracerCommandEnvelopeV1>['commandName'];
     try {
       commandName = parseMessageTracerCommandEnvelopeV1(input.envelope).commandName;
-      if (commandName === 'send-message') {
-        const payload = parseMessageTracerInputV1('send-message', input.payload);
-        if (payload.taskContinuationSource
-          && !(await validateTaskContinuationSourceMarker(repositories, {
-            teamId: input.teamId,
-            channelId: payload.channelId,
-            threadId: payload.threadId,
-          }, payload.taskContinuationSource))) {
-          return { ok: false, error: 'TASK_CONTINUATION_SOURCE_INVALID' };
-        }
-      }
     } catch {
       return { ok: false, error: 'MESSAGE_TRACER_PAYLOAD_INVALID' };
     }
@@ -2835,7 +2830,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     }
     // freshness_hold / conflict / rejected → failure ack（映射到已知错误码）
-    const errorCode = response.outcome === 'conflict' || response.outcome === 'freshness_hold'
+    const errorCode = response.stableCode === 'TASK_CONTINUATION_SOURCE_INVALID'
+      ? 'VALIDATION_ERROR'
+      : response.outcome === 'conflict' || response.outcome === 'freshness_hold'
       ? 'CONFLICT'
       : response.outcome === 'rejected' ? 'BAD_REQUEST' : 'INTERNAL_ERROR';
     return makeFailure(errorCode, response.stableCode);
@@ -14994,7 +14991,7 @@ function parseTaskContinuationSourceMarker(meta: MessageMetaDto | undefined):
 }
 
 async function validateTaskContinuationSourceMarker(
-  repositories: ServerNextRepositories,
+  repositories: Pick<ServerNextRepositories, 'tasks' | 'messages' | 'taskCoordination' | 'management'>,
   input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'threadId'>,
   marker: TaskContinuationSourceMarkerV1,
 ): Promise<boolean> {
