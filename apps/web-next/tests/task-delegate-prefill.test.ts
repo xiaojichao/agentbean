@@ -84,7 +84,11 @@ describe('Task 页「交给 Agent 处理」预填导航（#1064）', () => {
       chatSource.indexOf('const messages = activeChannel'),
     );
     // 清空只发生在 res.ok 分支内。
-    const okRegion = sendThread.slice(0, sendThread.indexOf('appendMessage({'));
+    const successStart = sendThread.indexOf('if (res?.ok)');
+    const okRegion = sendThread.slice(
+      successStart,
+      sendThread.indexOf('appendMessage({', successStart),
+    );
     expect(okRegion).toContain('setThreadInput(');
     expect(okRegion).toContain('setThreadSelections([])');
     // emit 回调之外（乐观清空区）不再有清空调用——失败时草稿与引用保留。
