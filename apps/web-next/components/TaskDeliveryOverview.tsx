@@ -32,6 +32,11 @@ function formatTime(at: number): string {
   return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
+type FrozenDeliveryAcceptance = {
+  readonly channelId?: string;
+  readonly target: DeliveryMutationTarget;
+};
+
 export function TaskDeliveryOverview({
   teamId,
   channelId,
@@ -47,16 +52,20 @@ export function TaskDeliveryOverview({
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [acceptanceTarget, setAcceptanceTarget] = useState<DeliveryMutationTarget | null>(null);
+  const [frozenAcceptance, setFrozenAcceptance] = useState<FrozenDeliveryAcceptance | null>(null);
   const [accepting, setAccepting] = useState(false);
   const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const acceptanceTitleId = useId();
   const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
-  const acceptanceOpen = acceptanceTarget !== null;
+  const currentAcceptance = frozenAcceptance?.target.taskId === taskId
+    && frozenAcceptance.channelId === channelId
+    ? frozenAcceptance
+    : null;
+  const acceptanceOpen = currentAcceptance !== null;
 
   const closeAcceptance = useCallback(() => {
-    setAcceptanceTarget(null);
+    setFrozenAcceptance(null);
     setAcceptanceError(null);
     const trigger = acceptanceTriggerRef.current;
     queueMicrotask(() => {
@@ -65,7 +74,7 @@ export function TaskDeliveryOverview({
   }, []);
 
   useEffect(() => {
-    setAcceptanceTarget(null);
+    setFrozenAcceptance(null);
     setAcceptanceError(null);
     acceptanceTriggerRef.current = null;
   }, [channelId, taskId]);
@@ -146,19 +155,22 @@ export function TaskDeliveryOverview({
       ? document.activeElement
       : null;
     setAcceptanceError(null);
-    setAcceptanceTarget({
-      taskId,
-      expectedTaskRevision: overview.acceptanceContract.taskRevision,
-      kind: 'accept-delivery',
+    setFrozenAcceptance({
+      channelId,
+      target: {
+        taskId,
+        expectedTaskRevision: overview.acceptanceContract.taskRevision,
+        kind: 'accept-delivery',
+      },
     });
   };
 
   const confirmAcceptance = async () => {
-    if (accepting || !acceptanceTarget) return;
+    if (accepting || !currentAcceptance) return;
     setAccepting(true);
     setAcceptanceError(null);
     try {
-      const result = await submitDeliveryMutation(acceptanceTarget, { comment: '', rejectReason: '' });
+      const result = await submitDeliveryMutation(currentAcceptance.target, { comment: '', rejectReason: '' });
       if (!result.ok) {
         setAcceptanceError(mutationErrorCopy(result));
         return;
