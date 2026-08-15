@@ -272,6 +272,24 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
   });
 
+  test('切换 Task 后新投影读取失败时显示错误而不是永久加载', async () => {
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture })
+      .mockResolvedValueOnce({ ok: false, error: 'PROJECTION_NOT_READY', message: '新 Task 交付视图不可用' });
+    const { rerender } = render(
+      <TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-overview"]')).not.toBeNull();
+    });
+
+    rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-error"]')?.textContent)
+        .toContain('新 Task 交付视图不可用');
+    });
+  });
+
   test('加载与错误态有文本反馈', async () => {
     mocks.queryTaskDeliveryOverview.mockReturnValue(new Promise(() => undefined));
     render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);

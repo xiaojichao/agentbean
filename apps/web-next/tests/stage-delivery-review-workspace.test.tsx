@@ -141,6 +141,36 @@ describe('阶段交付审核工作区', () => {
     expect(screen.queryByText('旧阶段投影')).toBeNull();
     expect(screen.getByText('新阶段投影')).toBeTruthy();
   });
+
+  test('切换阶段 Task 时同步隐藏旧工作区，避免创建混合验收目标', async () => {
+    mocks.query.mockResolvedValue({ ok: true, workspace: workspaceFixture({ taskAcceptAction: true }) });
+    const { rerender } = render(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-1"
+        stageId="stage-1"
+        taskId="task-1"
+        currentUserId="reviewer-1"
+      />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).not.toBeNull();
+    });
+
+    rerender(
+      <StageDeliveryReviewWorkspace
+        teamId="team-1"
+        channelId="channel-2"
+        stageId="stage-2"
+        taskId="task-2"
+        currentUserId="reviewer-1"
+      />,
+    );
+    expect(document.querySelector('[data-smoke="stage-delivery-review-workspace"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="stage-delivery-loading"]')).not.toBeNull();
+    expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+  });
 });
 
 describe('阶段交付审核 mutation 闭环 (#1177)', () => {

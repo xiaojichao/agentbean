@@ -137,7 +137,7 @@ export function TaskDeliveryOverview({
     && overview.channelId === channelId;
 
   if (!channelId) return null;
-  if (loading || (overview && !overviewMatchesCurrentTask)) {
+  if (loading) {
     return <div className="text-center text-[11px] text-neutral-400" data-smoke="task-delivery-loading">正在读取交付视图…</div>;
   }
   if (error) {
@@ -146,6 +146,9 @@ export function TaskDeliveryOverview({
         {error}
       </div>
     );
+  }
+  if (overview && !overviewMatchesCurrentTask) {
+    return <div className="text-center text-[11px] text-neutral-400" data-smoke="task-delivery-loading">正在读取交付视图…</div>;
   }
   if (!overview) return null;
 

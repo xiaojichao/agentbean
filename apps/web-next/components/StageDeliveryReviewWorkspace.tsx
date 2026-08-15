@@ -193,7 +193,13 @@ export function StageDeliveryReviewWorkspace({
   }, []);
 
   const openDeliveryDialog = useCallback((kind: 'accept-delivery' | 'reject-delivery') => {
-    if (!workspace || workspace.archived) return;
+    if (
+      !workspace
+      || workspace.archived
+      || workspace.channelId !== channelId
+      || workspace.stageId !== stageId
+      || workspace.taskId !== taskId
+    ) return;
     const expectedTaskRevision = workspace.taskOverview.acceptanceContract.taskRevision;
     const lockKey = mutationLockKey({ kind: 'delivery', taskId, action: kind });
     const focusSelector = `[data-smoke="stage-delivery-action"][data-action="${kind}"]`;
@@ -205,7 +211,7 @@ export function StageDeliveryReviewWorkspace({
       target: { taskId, expectedTaskRevision, kind },
       lockKey,
     });
-  }, [taskId, workspace]);
+  }, [channelId, stageId, taskId, workspace]);
 
   const confirmMutation = useCallback(async () => {
     if (!pendingDialog || submitting) return;
@@ -240,6 +246,13 @@ export function StageDeliveryReviewWorkspace({
   }
   if (!workspace) {
     return <StageDeliveryReviewState state="error" errorMessage="阶段交付审核工作区未返回可用投影" />;
+  }
+  if (
+    workspace.channelId !== channelId
+    || workspace.stageId !== stageId
+    || workspace.taskId !== taskId
+  ) {
+    return <StageDeliveryReviewState state="loading" errorMessage={null} />;
   }
 
   const focusPackage = workspace.focusPackage;
