@@ -2305,13 +2305,21 @@ export default function ChatPage() {
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
   // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
   const continueWithAgentFromCard = useCallback((packageId: string, taskTitle?: string) => {
-    setInput(taskTitle ? `请基于交付文件包继续处理任务「${taskTitle}」：` : '请基于交付文件包继续处理：');
-    setProjectReferenceSelections((current) => [
+    const text = taskTitle ? `请基于交付文件包继续处理任务「${taskTitle}」：` : '请基于交付文件包继续处理：';
+    const addDeliveredPackage = (current: ProjectReferenceSelectionRequestDto[]) => [
       ...current.filter((item) => item.kind !== 'package_projection' || item.packageId !== packageId),
-      { kind: 'package_projection', packageId, policy: 'delivered' },
-    ]);
+      { kind: 'package_projection' as const, packageId, policy: 'delivered' as const },
+    ];
+    if (threadRootId) {
+      setThreadInput(text);
+      setThreadSelections(addDeliveredPackage);
+      threadTextareaRef.current?.focus();
+      return;
+    }
+    setInput(text);
+    setProjectReferenceSelections(addDeliveredPackage);
     textareaRef.current?.focus();
-  }, [setProjectReferenceSelections]);
+  }, [threadRootId]);
 
   // 原型对齐:打开文件包预览/编辑浮窗。
   const openPackagePreviewModal = useCallback((

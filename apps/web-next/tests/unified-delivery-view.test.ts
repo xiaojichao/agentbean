@@ -23,15 +23,22 @@ describe('贯通 Chat/Task/Files 一致交付视图（#1065）', () => {
     expect(chatSource).toContain('onContinueWithAgent={continueWithAgentFromCard}');
   });
 
-  test('「继续 @Agent」回调只写本地 composer state（input + selections + 焦点），不触发发送', () => {
+  test('「继续 @Agent」在线程打开时写 thread composer，否则回退主 composer，且不触发发送', () => {
     const start = chatSource.indexOf('const continueWithAgentFromCard');
     expect(start).toBeGreaterThan(-1);
-    const region = chatSource.slice(start, chatSource.indexOf('}, [setProjectReferenceSelections]);', start));
-    // 预填 delivered 整包引用 + 说明文本 + 移焦。
+    const region = chatSource.slice(start, chatSource.indexOf('}, [threadRootId]);', start));
+    // 线程已打开时，预填必须落进线程 composer，避免主输入框发送后丢失 thread lineage。
+    expect(region).toContain('if (threadRootId)');
+    expect(region).toContain('setThreadInput(text)');
+    expect(region).toContain('setThreadSelections(addDeliveredPackage)');
+    expect(region).toContain('threadTextareaRef.current?.focus()');
+    // 无线程时保留主 composer 行为。
+    expect(region).toContain('setInput(text)');
+    expect(region).toContain('setProjectReferenceSelections(addDeliveredPackage)');
+    expect(region).toContain('textareaRef.current?.focus()');
+    // 两个 composer 都使用 delivered 整包引用。
     expect(region).toContain("kind: 'package_projection'");
     expect(region).toContain("policy: 'delivered'");
-    expect(region).toContain('setInput(');
-    expect(region).toContain('textareaRef.current?.focus()');
     // 预填段不得出现网络发送。
     expect(region).not.toContain('emit(');
     expect(region).not.toContain('sendMessage');
