@@ -2909,6 +2909,12 @@ export async function exerciseWebUiProjectCollaborationSmoke({
   const root = normalizeBaseUrlOrThrow(baseUrl);
   const teamPath = session.team.path ?? session.team.id;
   await page.navigate(new URL(`/${teamPath}/channel/${reviewScope.channelId}`, root).toString());
+  await page.waitForFunction(
+    `Array.from(document.querySelectorAll('button'))
+      .some((candidate) => candidate.textContent?.trim() === '任务')`,
+    `channel task tab to render for project review Task "${reviewTask.id}"`,
+    timeoutMs,
+  );
   const openedTasksTab = await page.evaluateJson(`
     (() => {
       const button = Array.from(document.querySelectorAll('button'))
@@ -2918,7 +2924,7 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       return true;
     })()
   `);
-  if (!openedTasksTab) throw new Error(`Could not open channel task view for project Task "${taskTitle}"`);
+  if (!openedTasksTab) throw new Error(`Could not open channel task view for project Task "${reviewTask.id}"`);
   await page.waitForFunction(
     `(() => { const text = document.querySelector('[data-smoke="channel-project-progress"]')?.textContent ?? ''; return text.includes(${JSON.stringify(reviewStageName)}); })()`,
     `project Stage "${reviewStageName}" to render from the Server projection`,

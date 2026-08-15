@@ -193,7 +193,13 @@ export function StageDeliveryReviewWorkspace({
   }, []);
 
   const openDeliveryDialog = useCallback((kind: 'accept-delivery' | 'reject-delivery') => {
-    if (!workspace || workspace.archived) return;
+    if (
+      !workspace
+      || workspace.archived
+      || workspace.channelId !== channelId
+      || workspace.stageId !== stageId
+      || workspace.taskId !== taskId
+    ) return;
     const expectedTaskRevision = workspace.taskOverview.acceptanceContract.taskRevision;
     const lockKey = mutationLockKey({ kind: 'delivery', taskId, action: kind });
     const focusSelector = `[data-smoke="stage-delivery-action"][data-action="${kind}"]`;
@@ -205,7 +211,7 @@ export function StageDeliveryReviewWorkspace({
       target: { taskId, expectedTaskRevision, kind },
       lockKey,
     });
-  }, [taskId, workspace]);
+  }, [channelId, stageId, taskId, workspace]);
 
   const confirmMutation = useCallback(async () => {
     if (!pendingDialog || submitting) return;
@@ -240,6 +246,13 @@ export function StageDeliveryReviewWorkspace({
   }
   if (!workspace) {
     return <StageDeliveryReviewState state="error" errorMessage="阶段交付审核工作区未返回可用投影" />;
+  }
+  if (
+    workspace.channelId !== channelId
+    || workspace.stageId !== stageId
+    || workspace.taskId !== taskId
+  ) {
+    return <StageDeliveryReviewState state="loading" errorMessage={null} />;
   }
 
   const focusPackage = workspace.focusPackage;
@@ -459,6 +472,10 @@ export function StageDeliveryReviewWorkspace({
       <TaskDeliveryOverviewContent
         overview={workspace.taskOverview}
         onAction={(action) => {
+          if (action.action === 'accept-delivery' && !action.disabled) {
+            openDeliveryDialog('accept-delivery');
+            return;
+          }
           // #1178：阶段上下文的「交给智能体处理」携带焦点包引用与绑定 Thread 上抛
           // （父级做本地预填）；父级未接 onStageHandoff 时保持原 action 直通。
           if (action.action === 'delegate-to-agent' && onStageHandoff) {

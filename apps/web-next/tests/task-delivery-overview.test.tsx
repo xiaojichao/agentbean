@@ -8,7 +8,7 @@
  * 文本标签齐全(不只依赖颜色/图标,AC11);加载/错误态有文本反馈。
  */
 import React from 'react';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   onUpdated: vi.fn(),
   onArtifactsUpdated: vi.fn(),
   onSnapshot: vi.fn(),
+  acceptRootDelivery: vi.fn(),
 }));
 
 vi.mock('@/lib/socket', () => ({
@@ -26,7 +27,10 @@ vi.mock('@/lib/socket', () => ({
     onUpdated: mocks.onUpdated,
     onArtifactsUpdated: mocks.onArtifactsUpdated,
   }),
-  taskEvents: () => ({ onSnapshot: mocks.onSnapshot }),
+  taskEvents: () => ({
+    onSnapshot: mocks.onSnapshot,
+    acceptRootDelivery: mocks.acceptRootDelivery,
+  }),
 }));
 
 import { TaskDeliveryOverview } from '../components/TaskDeliveryOverview';
@@ -172,6 +176,168 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     const reviewButton = document.querySelector('[data-smoke="task-action-review-package"]')!;
     fireEvent.click(reviewButton);
     expect(onAction).toHaveBeenCalledWith({ action: 'review-package', label: '审核交付包' });
+  });
+
+  test('验收动作先确认，再以投影 revision 提交具名 command 并刷新投影', async () => {
+    let refreshProjection: (() => void) | undefined;
+    mocks.onArtifactsUpdated.mockImplementation((_channelId, handler) => {
+      refreshProjection = handler;
+      return () => {};
+    });
+    mocks.queryTaskDeliveryOverview.mockResolvedValueOnce({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    }).mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        acceptanceContract: {
+          ...overviewFixture.acceptanceContract,
+          taskRevision: 2,
+        },
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    });
+    mocks.acceptRootDelivery.mockResolvedValue({ ok: true });
+    render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+
+    refreshProjection?.();
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"] button:last-child')!);
+    await vi.waitFor(() => expect(mocks.acceptRootDelivery).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      expectedTaskRevision: 1,
+    }));
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(3));
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+  });
+
+  test('Server 禁用的验收动作不会打开确认对话框', async () => {
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{
+          action: 'accept-delivery',
+          label: '验收本次交付',
+          disabled: true,
+          disabledReason: '还有文件未通过审核',
+        }],
+      },
+    });
+    render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+  });
+
+  test('切换 Task 身份时清除已冻结的验收目标', async () => {
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    });
+    const { rerender } = render(
+      <TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+
+    rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="task-delivery-loading"]')).not.toBeNull();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+    });
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['成功', { ok: true }],
+    ['失败', { ok: false, error: 'CONFLICT', message: '旧 Task 验收失败' }],
+  ])('切换 Task 后忽略旧验收请求的%s回调', async (_resultKind, result) => {
+    let resolveAcceptance!: (value: typeof result) => void;
+    mocks.acceptRootDelivery.mockReturnValue(new Promise((resolve) => {
+      resolveAcceptance = resolve;
+    }));
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({
+        ok: true,
+        overview: {
+          ...overviewFixture,
+          availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+        },
+      })
+      .mockResolvedValue({
+        ok: true,
+        overview: {
+          ...overviewFixture,
+          taskId: 'task-2',
+          channelId: 'ch-2',
+          task: { ...overviewFixture.task, id: 'task-2' },
+          availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+        },
+      });
+    const { rerender } = render(
+      <TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    fireEvent.click(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"] button:last-child')!);
+    await vi.waitFor(() => expect(mocks.acceptRootDelivery).toHaveBeenCalledTimes(1));
+
+    rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+
+    await act(async () => { resolveAcceptance(result); });
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-smoke="task-delivery-acceptance-dialog"] button:last-child')?.disabled)
+      .toBe(false);
+  });
+
+  test('切换 Task 后新投影读取失败时显示错误而不是永久加载', async () => {
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture })
+      .mockResolvedValueOnce({ ok: false, error: 'PROJECTION_NOT_READY', message: '新 Task 交付视图不可用' });
+    const { rerender } = render(
+      <TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-overview"]')).not.toBeNull();
+    });
+
+    rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-error"]')?.textContent)
+        .toContain('新 Task 交付视图不可用');
+    });
   });
 
   test('加载与错误态有文本反馈', async () => {
