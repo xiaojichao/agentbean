@@ -22,6 +22,8 @@ describe('#1200 终态 Task 后续任务前端链路', () => {
     expect(continuationIndex).toBeGreaterThan(sourceMessageIndex);
     expect(chatSource).toContain('setPendingThreadContinuation({ sourceMessageId, clientMessageId, objective })');
     expect(chatSource).toContain('if (pendingThreadContinuation && threadContinuationBasis)');
+    expect(chatSource).toContain('taskContinuationSource: {');
+    expect(chatSource).toContain('sourceTaskRevision: threadContinuationBasis.sourceTaskRevision');
   });
 
   test('两阶段提交使用同步锁，消息与 continuation 完成前不可重复触发', () => {

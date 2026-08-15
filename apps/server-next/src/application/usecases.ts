@@ -2142,7 +2142,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     payload: unknown;
     userId: string;
     teamId: string;
-  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1 } | { ok: false; error: string }> {
+  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1; task?: TaskDto } | { ok: false; error: string }> {
     if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
       return { ok: false, error: 'FORBIDDEN' };
     }
@@ -2198,7 +2198,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       },
     });
     try {
-      return { ok: true, response: await handler.createTaskContinuation(envelope, payload) };
+      const response = await handler.createTaskContinuation(envelope, payload);
+      const task = response.result?.rootTaskId
+        ? await repositories.tasks.getById(response.result.rootTaskId)
+        : null;
+      return {
+        ok: true,
+        response,
+        ...(task && task.teamId === input.teamId ? { task: toTaskDto(task) } : {}),
+      };
     } catch {
       return { ok: false, error: 'TASK_CONTINUATION_FAILED' };
     }
@@ -2848,6 +2856,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
     }
+    const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+    if (continuationSource.kind === 'invalid'
+      || (continuationSource.kind === 'valid'
+        && !(await validateTaskContinuationSourceMarker(repositories, messageInput, continuationSource.marker)))) {
+      return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+    }
+    const suppressContinuationRouting = continuationSource.kind === 'valid';
     const frozen = await resolveAndFreezeSelections(repositories, {
       userId: messageInput.userId,
       teamId: messageInput.teamId,
@@ -2867,23 +2882,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       channel,
       visibleAgents,
     });
-    const contextOwner = messageInput.threadId
+    const contextOwner = messageInput.threadId && !suppressContinuationRouting
       ? await resolveRoutingContextAgentId(repositories, {
           teamId: messageInput.teamId,
           channel,
           threadId: messageInput.threadId,
         })
       : undefined;
-    const route = routeMessageForChannel({
-      channel,
-      visibleAgents,
-      teamId: messageInput.teamId,
-      body: messageInput.body,
-      mentions,
-      contextOwner,
-      connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-      dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-    });
+    const route: RouteResult = suppressContinuationRouting
+      ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+      : routeMessageForChannel({
+          channel,
+          visibleAgents,
+          teamId: messageInput.teamId,
+          body: messageInput.body,
+          mentions,
+          contextOwner,
+          connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+          dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+        });
     const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
       userId: messageInput.userId,
       teamId: messageInput.teamId,
@@ -2916,16 +2933,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (shouldCreateTask && reservedRun.rootTaskId) taskId = reservedRun.rootTaskId;
       }
     }
-    let management: ManagementRoutingResult = await managementRouter.route({
-      userId: messageInput.userId,
-      teamId: messageInput.teamId,
-      channelId: messageInput.channelId,
-      rootMessageId: messageId,
-      ...(taskId ? { rootTaskId: taskId } : {}),
-      ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-      body: messageInput.body,
-      ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-    });
+    let management: ManagementRoutingResult = suppressContinuationRouting
+      ? { kind: 'direct', mode: 'direct' }
+      : await managementRouter.route({
+          userId: messageInput.userId,
+          teamId: messageInput.teamId,
+          channelId: messageInput.channelId,
+          rootMessageId: messageId,
+          ...(taskId ? { rootTaskId: taskId } : {}),
+          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          body: messageInput.body,
+          ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+        });
     if (management.kind === 'unavailable') {
       return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
     }
@@ -2951,6 +2970,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
             ...(taskId ? { taskId } : {}),
             ...(mentions.length ? { mentions } : {}),
+            ...(continuationSource.kind === 'valid'
+              ? { taskContinuationSource: continuationSource.marker }
+              : {}),
             projectReferenceRequestFingerprint: referenceFingerprint,
             routeReason: toRouteReason(route),
           },
@@ -5525,6 +5547,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
       const referenceFingerprint = projectReferenceRequestFingerprint(messageInput);
+      const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+      if (continuationSource.kind === 'invalid'
+        || (continuationSource.kind === 'valid'
+          && !(await validateTaskContinuationSourceMarker(repositories, messageInput, continuationSource.marker)))) {
+        return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+      }
+      const suppressContinuationRouting = continuationSource.kind === 'valid';
 
       const clientIdempotencyKey = messageInput.clientMessageId
         ? `client:${messageInput.teamId}:${messageInput.clientMessageId}`
@@ -5597,7 +5626,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           } | null = null;
           // 只对显式 @Agent 触发 task-linked；纯 @人类 提及回到既有 dispatch 路径（AC9）。
           const agentMentions = mentions.filter((mention) => mention.kind === 'agent');
-          if (messageInput.threadId
+          if (!suppressContinuationRouting
+            && messageInput.threadId
             && agentMentions.length > 0
             && (messageInput.selections?.length ?? 0) > 0
             && frozen.selections.length > 0) {
@@ -5655,6 +5685,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
               ...(messageInput.asTask === true ? { asTask: true } : {}),
               ...(mentions.length ? { mentions } : {}),
+              ...(continuationSource.kind === 'valid'
+                ? { taskContinuationSource: continuationSource.marker }
+                : {}),
               projectReferenceRequestFingerprint: referenceFingerprint,
             },
           });
@@ -5678,7 +5711,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             repositories.teamPiAuthorityMigrations,
             messageInput.teamId,
           );
-          if (!legacyFenced) {
+          if (!legacyFenced && !suppressContinuationRouting) {
             await transaction.jobs.create({
               id: ids.nextId(),
               teamId: messageInput.teamId,
@@ -5738,23 +5771,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       // Replay: return already-created dispatches/tasks without re-executing side effects.
       if (outcome.kind === 'replay') {
-        const contextOwner = messageInput.threadId
+        const contextOwner = messageInput.threadId && !suppressContinuationRouting
           ? await resolveRoutingContextAgentId(repositories, {
               teamId: messageInput.teamId,
               channel,
               threadId: messageInput.threadId,
             })
           : undefined;
-        const route = routeMessageForChannel({
-          channel,
-          visibleAgents,
-          teamId: messageInput.teamId,
-          body: messageInput.body,
-          mentions,
-          contextOwner,
-          connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-          dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-        });
+        const route: RouteResult = suppressContinuationRouting
+          ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+          : routeMessageForChannel({
+              channel,
+              visibleAgents,
+              teamId: messageInput.teamId,
+              body: messageInput.body,
+              mentions,
+              contextOwner,
+              connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+              dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+            });
         const message = outcome.artifacts.length > 0
           ? {
             ...outcome.message,
@@ -5787,23 +5822,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // Immediate execution bridge (until Coordinator owns full dispatch lifecycle):
       // hard-constrained paths (@mention / DM / thread owner) and asTask management still
       // run synchronously. Unmentioned root messages stay job-only (ADR 0061).
-      const contextOwner = messageInput.threadId
+      const contextOwner = messageInput.threadId && !suppressContinuationRouting
         ? await resolveRoutingContextAgentId(repositories, {
             teamId: messageInput.teamId,
             channel,
             threadId: messageInput.threadId,
           })
         : undefined;
-      const route = routeMessageForChannel({
-        channel,
-        visibleAgents,
-        teamId: messageInput.teamId,
-        body: messageInput.body,
-        mentions,
-        contextOwner,
-        connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-        dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-      });
+      const route: RouteResult = suppressContinuationRouting
+        ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+        : routeMessageForChannel({
+            channel,
+            visibleAgents,
+            teamId: messageInput.teamId,
+            body: messageInput.body,
+            mentions,
+            contextOwner,
+            connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+            dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+          });
       const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
         body: messageInput.body,
         route,
@@ -5826,16 +5863,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           taskId = reservedRun.rootTaskId;
         }
       }
-      let management: ManagementRoutingResult = await managementRouter.route({
-        userId: messageInput.userId,
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
-        rootMessageId: outcome.message.id,
-        ...(taskId ? { rootTaskId: taskId } : {}),
-        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-        body: messageInput.body,
-        ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-      });
+      let management: ManagementRoutingResult = suppressContinuationRouting
+        ? { kind: 'direct', mode: 'direct' }
+        : await managementRouter.route({
+            userId: messageInput.userId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            rootMessageId: outcome.message.id,
+            ...(taskId ? { rootTaskId: taskId } : {}),
+            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+            body: messageInput.body,
+            ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+          });
       if (management.kind === 'unavailable') {
         return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
       }
@@ -14873,6 +14912,65 @@ function sanitizeMessageMentions(input: {
 
 function renderCoalescedDispatchPrompt(messages: MessageRecord[]): string {
   return messages.map((message) => message.body).join('\n\n');
+}
+
+type TaskContinuationSourceMarker = {
+  readonly schemaVersion: 1;
+  readonly sourceTaskId: string;
+  readonly sourceTaskRevision: number;
+};
+
+function parseTaskContinuationSourceMarker(meta: MessageMetaDto | undefined):
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'valid'; readonly marker: TaskContinuationSourceMarker } {
+  if (!meta || !Object.prototype.hasOwnProperty.call(meta, 'taskContinuationSource')) {
+    return { kind: 'absent' };
+  }
+  const value = meta.taskContinuationSource;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'invalid' };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !['schemaVersion', 'sourceTaskId', 'sourceTaskRevision'].includes(key))
+    || record.schemaVersion !== 1
+    || typeof record.sourceTaskId !== 'string'
+    || record.sourceTaskId.trim().length === 0
+    || !Number.isSafeInteger(record.sourceTaskRevision)
+    || Number(record.sourceTaskRevision) < 1) {
+    return { kind: 'invalid' };
+  }
+  return {
+    kind: 'valid',
+    marker: {
+      schemaVersion: 1,
+      sourceTaskId: record.sourceTaskId,
+      sourceTaskRevision: Number(record.sourceTaskRevision),
+    },
+  };
+}
+
+async function validateTaskContinuationSourceMarker(
+  repositories: ServerNextRepositories,
+  input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'threadId'>,
+  marker: TaskContinuationSourceMarker,
+): Promise<boolean> {
+  if (!input.threadId) return false;
+  const [task, rootMessage, coordination] = await Promise.all([
+    repositories.tasks.getById(marker.sourceTaskId),
+    repositories.messages.getById(input.threadId),
+    repositories.taskCoordination.coordinations.getByTaskId(marker.sourceTaskId),
+  ]);
+  if (!task || task.teamId !== input.teamId || task.channelId !== input.channelId
+    || task.revision !== marker.sourceTaskRevision
+    || !['done', 'cancelled', 'closed'].includes(task.status)
+    || !rootMessage || rootMessage.teamId !== input.teamId
+    || rootMessage.channelId !== input.channelId || isDeletedMessage(rootMessage)
+    || !coordination || coordination.teamId !== input.teamId
+    || coordination.taskRevision !== marker.sourceTaskRevision) {
+    return false;
+  }
+  const run = await repositories.management.runs.getById(coordination.managementRunId);
+  return Boolean(run && run.teamId === input.teamId && run.channelId === input.channelId
+    && run.rootTaskId === marker.sourceTaskId && run.rootMessageId === input.threadId);
 }
 
 function routeMessageForChannel(input: {

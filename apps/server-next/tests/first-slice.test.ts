@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { MESSAGE_BATCH_QUIET_WINDOW_MS } from '../../../packages/contracts/src/index';
 import { createInMemoryRepositories, createInMemoryServerNext, createServerNextUseCases } from '../src/index';
+import { createPromotionGateHandler } from '../src/application/promotion-gate-handler';
 
 const migrationPath = (...parts: string[]) =>
   join(fileURLToPath(new URL('../src/infra/sqlite/migrations', import.meta.url)), ...parts);
@@ -3057,6 +3058,168 @@ describe('server-next first-slice use cases', () => {
       message: { id: 'message-4', threadId: 'message-1' },
       dispatches: [{ id: 'dispatch-2', agentId: 'agent-1', messageId: 'message-4' }],
       route: { kind: 'dispatch', agentId: 'agent-1' },
+    });
+  });
+
+  test('task continuation source message suppresses old Agent routing and promotion returns the new Task', async () => {
+    let now = 1_000;
+    let promotionId = 0;
+    const repositories = createInMemoryRepositories();
+    const app = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: {
+        nextId: createIds([
+          'user-1', 'team-1', 'channel-1',
+          ...Array.from({ length: 30 }, (_, index) => `app-id-${index + 1}`),
+        ]),
+      },
+      messageIngestionMode: 'durable',
+    });
+    await app.registerUser({ username: 'shaw', password: 'secret', teamName: 'AgentBean' });
+    await repositories.messages.append({
+      id: 'continuation-root-message',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: '原始任务',
+      createdAt: now,
+    });
+    const promotion = createPromotionGateHandler({
+      teamId: 'team-1',
+      requesterId: 'user-1',
+      unitOfWork: repositories.taskCoordinationUnitOfWork,
+      clock: { now: () => ++now },
+      ids: { nextId: () => `promotion-id-${++promotionId}` },
+    });
+    const promoted = await promotion.promoteToTask({
+      schemaVersion: 1,
+      commandName: 'promote-to-task',
+      commandSchemaVersion: 1,
+      idempotencyKey: 'seed-continuation-task',
+    }, {
+      triggerKind: 'human-structured',
+      channelId: 'channel-1',
+      rootMessageId: 'continuation-root-message',
+      objectiveSnapshot: {
+        schemaVersion: 1,
+        objective: '完成原始任务',
+        scope: 'team-1:channel-1',
+        riskLevel: 'low',
+      },
+      freshnessBasis: {
+        schemaVersion: 1,
+        sourceLineage: { kind: 'message', id: 'continuation-root-message' },
+      },
+    });
+    expect(promoted.outcome).toBe('applied');
+    const sourceTaskId = promoted.result!.rootTaskId;
+    const sourceTask = await repositories.tasks.updateAtRevision({
+      taskId: sourceTaskId,
+      expectedRevision: 1,
+      nextRevision: 2,
+      reasonCode: 'test-terminal-transition',
+      changes: { status: 'done', updatedAt: ++now },
+    });
+    const coordination = await repositories.taskCoordination.coordinations.getByTaskId(sourceTaskId);
+    expect(sourceTask).not.toBeNull();
+    expect(coordination).not.toBeNull();
+    await repositories.taskCoordination.coordinations.update({
+      record: { ...coordination!, taskRevision: sourceTask!.revision, updatedAt: ++now },
+      expectedTaskRevision: coordination!.taskRevision,
+    });
+    await app.registerAgent({
+      id: 'agent-1',
+      primaryTeamId: 'team-1',
+      visibleTeamIds: ['team-1'],
+      channelIds: ['channel-1'],
+      name: 'Codex-Agent',
+      adapterKind: 'codex',
+      category: 'agentos-hosted',
+      source: 'scanned',
+      status: 'online',
+      deviceId: 'device-1',
+      lastSeenAt: now,
+    });
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'invalid-continuation-source-message',
+      threadId: 'continuation-root-message',
+      body: '@Codex-Agent 伪造过期来源',
+      meta: {
+        taskContinuationSource: {
+          schemaVersion: 1,
+          sourceTaskId,
+          sourceTaskRevision: sourceTask!.revision - 1,
+        },
+      },
+    })).resolves.toMatchObject({
+      ok: false,
+      error: 'VALIDATION_ERROR',
+      message: 'TASK_CONTINUATION_SOURCE_INVALID',
+    });
+    expect(await repositories.messages.getById('invalid-continuation-source-message')).toBeNull();
+
+    await expect(app.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'continuation-source-message',
+      clientMessageId: 'continuation-source-client',
+      threadId: 'continuation-root-message',
+      body: '@Codex-Agent 请继续完善',
+      meta: {
+        mentions: [{ id: 'agent-1', kind: 'agent', name: 'Codex-Agent', start: 0, end: 12 }],
+        taskContinuationSource: {
+          schemaVersion: 1,
+          sourceTaskId,
+          sourceTaskRevision: sourceTask!.revision,
+        },
+      },
+    })).resolves.toMatchObject({
+      ok: true,
+      message: {
+        id: 'continuation-source-message',
+        meta: { taskContinuationSource: { sourceTaskId, sourceTaskRevision: sourceTask!.revision } },
+      },
+      dispatches: [],
+      route: { kind: 'no-dispatch', reason: 'task-continuation-source' },
+      management: { kind: 'direct', mode: 'direct' },
+    });
+    expect(await repositories.channelCoordination.jobs.getByMessageId('continuation-source-message')).toBeNull();
+
+    const continuation = await app.dispatchPromotionGateCommand({
+      userId: 'user-1',
+      teamId: 'team-1',
+      envelope: {
+        schemaVersion: 1,
+        commandName: 'create-task-continuation',
+        commandSchemaVersion: 1,
+        idempotencyKey: 'create-continuation-task',
+      },
+      payload: {
+        channelId: 'channel-1',
+        rootMessageId: 'continuation-root-message',
+        sourceMessageId: 'continuation-source-message',
+        sourceTaskId,
+        sourceTaskRevision: sourceTask!.revision,
+        sourceVersionIds: [],
+        objectiveSnapshot: {
+          schemaVersion: 1,
+          objective: '@Codex-Agent 请继续完善',
+          scope: 'team-1:channel-1',
+          riskLevel: 'low',
+        },
+      },
+    });
+    expect(continuation).toMatchObject({
+      ok: true,
+      response: { outcome: 'applied', result: { commandName: 'create-task-continuation' } },
+      task: { id: continuation.ok ? continuation.response.result?.rootTaskId : undefined, status: 'todo' },
     });
   });
 

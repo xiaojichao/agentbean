@@ -1972,7 +1972,19 @@ export default function ChatPage() {
     // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
     // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
     // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, async (res?: SendMessageAck) => {
+    const messageMeta = {
+      ...(mentions.length ? { mentions } : {}),
+      ...(threadContinuationBasis
+        ? {
+            taskContinuationSource: {
+              schemaVersion: 1,
+              sourceTaskId: threadContinuationBasis.sourceTaskId,
+              sourceTaskRevision: threadContinuationBasis.sourceTaskRevision,
+            },
+          }
+        : {}),
+    };
+    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(Object.keys(messageMeta).length ? { meta: messageMeta } : {}) }, async (res?: SendMessageAck) => {
       try {
         if (res?.ok) {
           appendAckMessage(res);
