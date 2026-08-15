@@ -1089,6 +1089,20 @@ for (const variant of variants) {
       });
       expect(entry.review.reviewerIds).toEqual([seedValue.userId]);
       expect(entry.stage).toBeUndefined();
+      const detail = await rollbackApp.queryTaskDeliveryOverview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        taskId,
+      });
+      expect(detail.ok).toBe(true);
+      if (!detail.ok) throw new Error(detail.error);
+      expect(detail.overview.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['project_stage'],
+        allowDirectStatusMutation: false,
+      });
+      expect(detail.overview.stage).toBeUndefined();
     });
   });
 }

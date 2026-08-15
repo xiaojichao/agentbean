@@ -17433,6 +17433,10 @@ async function buildTaskDeliveryOverview(
     : coordination
       ? await repositories.management.runs.getById(coordination.managementRunId)
       : await repositories.management.runs.getByRootTaskId(task.id);
+  const hasPersistedProjectStage = input.preloaded
+    ? input.preloaded.governance.sources.includes('project_stage')
+    : (await repositories.channelProjects.listStages({ teamId, channelId }))
+        .some((stageRecord) => stageRecord.taskId === taskId);
   const [criteria, offers] = await Promise.all([
     coordination ? repositories.taskCoordination.criteria.list(taskId) : Promise.resolve([]),
     repositories.taskCoordination.offers.listByTask(taskId),
@@ -17489,7 +17493,7 @@ async function buildTaskDeliveryOverview(
   const governance = input.preloaded?.governance ?? projectTaskGovernance({
     coordination,
     hasManagementRun: managementRun?.rootTaskId === task.id,
-    hasProjectStage: Boolean(stage),
+    hasProjectStage: hasPersistedProjectStage,
   });
 
   // 执行链原料(AC4:offer/claim/delivery/人工修改/review/final/交接)。
