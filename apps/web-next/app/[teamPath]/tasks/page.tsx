@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Bookmark,
@@ -17,7 +17,6 @@ import {
   MessageSquare,
   MoreHorizontal,
   Paperclip,
-  Plus,
   Search,
   Send,
   Smile,
@@ -119,12 +118,6 @@ export default function TasksPage() {
   const [collapsedColumns, setCollapsedColumns] = useState<Set<TaskStatus>>(() => new Set(STATUS_COLUMNS.filter((column) => column.collapsedByDefault).map((column) => column.id)));
   const [dragId, setDragId] = useState<string | null>(null);
   const [statusMenuFor, setStatusMenuFor] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
-  const [createTitle, setCreateTitle] = useState('');
-  const [createDescription, setCreateDescription] = useState('');
-  const [createChannelId, setCreateChannelId] = useState('');
-  const [createTags, setCreateTags] = useState('');
-  const [creating, setCreating] = useState(false);
   const [humans, setHumans] = useState<Participant[]>([]);
   const [threadInput, setThreadInput] = useState('');
   const [threadAttachments, setThreadAttachments] = useState<Artifact[]>([]);
@@ -284,15 +277,6 @@ export default function TasksPage() {
     name: `#${channel.name}${channel.archivedAt ? '（已归档）' : ''}`,
     icon: <Hash size={13} className="text-neutral-400" />,
   })), [channels]);
-
-  // #1066 AC6：选中频道全部归档时，任务创建等写动作不可用并给文本原因。
-  const allSelectedArchived = useMemo(() => {
-    if (selectedChannels.size === 0) return false;
-    return [...selectedChannels].every((channelId) => {
-      const channel = channels.find((c) => c.id === channelId);
-      return Boolean(channel?.archivedAt);
-    });
-  }, [selectedChannels, channels]);
 
   const creatorOptions = useMemo<FilterOption[]>(() => [
     { id: ME_FILTER, name: '我创建的', icon: <User size={13} className="text-emerald-600" /> },
@@ -508,31 +492,6 @@ export default function TasksPage() {
     if (selectedTask?.id === taskId) closeThread();
   };
 
-  const handleCreate = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!createTitle.trim()) return;
-    setCreating(true);
-    try {
-      const tags = createTags.split(',').map((tag) => tag.trim()).filter(Boolean);
-      const res = await taskEvents().create({
-        title: createTitle.trim(),
-        description: createDescription.trim() || undefined,
-        status: 'todo',
-        channelId: createChannelId || undefined,
-        tags,
-      });
-      if (res.ok && res.task) {
-        setTasks((prev) => [res.task as Task, ...prev]);
-        setCreateTitle('');
-        setCreateDescription('');
-        setCreateTags('');
-        setShowCreate(false);
-      }
-    } finally {
-      setCreating(false);
-    }
-  };
-
   const sendThreadMessage = () => {
     if ((!threadInput.trim() && threadAttachments.length === 0) || !selectedTask?.channelId || !threadParentId) return;
     const channelId = selectedTask.channelId;
@@ -596,16 +555,7 @@ export default function TasksPage() {
               <p className="truncate text-xs text-neutral-400">{channelTaskCount} 个频道任务</p>
             </div>
           </div>
-          <button
-            data-smoke="tasks-create-open"
-            onClick={() => setShowCreate((value) => !value)}
-            disabled={allSelectedArchived}
-            title={allSelectedArchived ? '所选频道已归档，任务只读' : undefined}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Plus size={13} />
-            新建任务
-          </button>
+          <p className="text-xs text-neutral-500">通过频道讨论串发送 @Agent、指令与文件引用来创建执行事实。</p>
         </header>
 
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-neutral-200 px-4">
@@ -651,30 +601,6 @@ export default function TasksPage() {
             </button>
           </div>
         </div>
-
-        {showCreate && (
-          <form data-smoke="tasks-create-form" onSubmit={handleCreate} className="grid shrink-0 grid-cols-[minmax(160px,1fr)_minmax(180px,1.4fr)_150px_minmax(120px,0.8fr)_auto] items-end gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-3">
-            <Field label="标题">
-              <input data-smoke="tasks-create-title" value={createTitle} onChange={(e) => setCreateTitle(e.target.value)} autoFocus placeholder="任务标题" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
-            </Field>
-            <Field label="描述">
-              <input data-smoke="tasks-create-description" value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} placeholder="补充说明" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
-            </Field>
-            <Field label="频道">
-              <select data-smoke="tasks-create-channel" value={createChannelId} onChange={(e) => setCreateChannelId(e.target.value)} className="h-9 w-full rounded-md border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-neutral-500">
-                <option value="">无频道</option>
-                {channels.map((channel) => <option key={channel.id} value={channel.id}>#{channel.name}</option>)}
-              </select>
-            </Field>
-            <Field label="标签">
-              <input data-smoke="tasks-create-tags" value={createTags} onChange={(e) => setCreateTags(e.target.value)} placeholder="聊天, 设计" className="h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-neutral-500" />
-            </Field>
-            <div className="flex items-center gap-1">
-              <button data-smoke="tasks-create-submit" type="submit" disabled={!createTitle.trim() || creating} className="h-9 rounded-md bg-neutral-900 px-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50">{creating ? '创建中' : '创建'}</button>
-              <button type="button" onClick={() => setShowCreate(false)} className="flex h-9 w-9 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-200" title="取消"><X size={15} /></button>
-            </div>
-          </form>
-        )}
 
         {view === 'board' ? (
           <TaskBoard
@@ -1073,13 +999,7 @@ function StatusButton({ task, workspaceEntry, open, compact, onOpen, onMove }: {
   const options = governancePending
     ? []
     : managed
-    ? STATUS_COLUMNS.filter((column) => (
-        column.id === 'cancelled'
-        || column.id === 'closed'
-        || (workspaceEntry.governance.nodeKind === 'root'
-          && task.status === 'in_review'
-          && (column.id === 'done' || column.id === 'in_progress'))
-      ) && column.id !== task.status)
+    ? []
     : STATUS_COLUMNS;
   return (
     <div className={`relative inline-block ${compact ? '' : 'mt-3'}`} onClick={(event) => event.stopPropagation()}>
@@ -1618,15 +1538,6 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
         ? <MarkdownMessage body={content} />
         : <pre className="whitespace-pre-wrap break-words text-sm leading-6 text-neutral-700">{content}</pre>}
     />
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <label className="min-w-0">
-      <span className="mb-1 block text-xs font-medium text-neutral-500">{label}</span>
-      {children}
-    </label>
   );
 }
 

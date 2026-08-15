@@ -308,12 +308,12 @@ function ProjectWorkCard({
   const actionLabel = task.status === 'cancelled'
     ? '查看取消记录'
     : item.lane === 'review'
-      ? '打开审核工作台'
+      ? '查看交付文件与审核'
       : item.lane === 'complete'
         ? '查看交付与 final'
         : stage?.aggregateStatus === 'pending'
           ? '交给智能体处理'
-          : '查看执行与输入';
+          : '查看执行进度';
   return (
     <button
       type="button"

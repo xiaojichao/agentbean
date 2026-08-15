@@ -41,7 +41,7 @@ describe('频道项目推进工作区', () => {
     expect(document.querySelector('[data-smoke="channel-project-lanes"]')).toBeTruthy();
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('暂无待审核交付');
-    expect(card.textContent).toContain('查看执行与输入');
+    expect(card.textContent).toContain('查看执行进度');
     fireEvent.click(card);
     expect(onOpenStage).toHaveBeenCalledWith('stage-1', 'task-1');
   });
@@ -202,7 +202,7 @@ describe('频道项目推进工作区', () => {
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('等待前置交付');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('交付审核');
-    expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('打开审核工作台');
+    expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('查看交付文件与审核');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('发布完成');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('查看交付与 final');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('取消发布');

@@ -2597,6 +2597,7 @@ export default function ChatPage() {
                           msg={msg}
                           groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}
                           task={task}
+                          taskStatusMutable={Boolean(task && channelTaskWorkspace?.entries.find((entry) => entry.task.id === task.id)?.governance.allowDirectStatusMutation)}
                           taskNumber={task ? taskNumbers.get(task.id) : undefined}
                           taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
                           taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
@@ -2892,6 +2893,7 @@ export default function ChatPage() {
             closeTaskDetail();
             switchTab('files');
           }}
+          onOpenPackagePreview={openPackagePreviewModal}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
           onDeliveryAction={(action) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
@@ -2994,6 +2996,7 @@ export default function ChatPage() {
             pinnedIds={pinnedIds}
             reactionEmojis={reactionEmojis}
             tasks={tasks}
+            taskWorkspaceEntries={channelTaskWorkspace?.entries ?? []}
             taskNumbers={taskNumbers}
             activeDmAgent={activeDmAgent}
             channelMembers={channelMembers}
@@ -4369,6 +4372,7 @@ function TaskDetailPanel({
   onViewInChannel,
   onOpenThread,
   onViewAssetSource,
+  onOpenPackagePreview,
   onTaskStatus,
   onDeliveryAction,
   onStageHandoff,
@@ -4393,6 +4397,7 @@ function TaskDetailPanel({
   onViewInChannel: () => void;
   onOpenThread: (rootMessageId?: string) => void;
   onViewAssetSource: (packageId: string) => void;
+  onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAction) => void;
@@ -4436,16 +4441,8 @@ function TaskDetailPanel({
     || workspaceEntry?.governance.mode === 'managed',
   );
   const showTaskDelivery = Boolean(stageId || channelTaskHasProjectFacts(workspaceEntry));
-  const managedStatusOptions = readOnly
+  const managedStatusOptions = readOnly || workspaceEntry?.governance.mode === 'managed'
     ? []
-    : workspaceEntry?.governance.mode === 'managed'
-    ? TASK_COLUMNS.filter((column) => (
-        column.id === 'cancelled'
-        || column.id === 'closed'
-        || (workspaceEntry.governance.nodeKind === 'root'
-          && taskStatus === 'in_review'
-          && (column.id === 'done' || column.id === 'in_progress'))
-      ) && column.id !== taskStatus)
     : TASK_COLUMNS;
 
   useEffect(() => {
@@ -4588,6 +4585,7 @@ function TaskDetailPanel({
                 participantName={(id) => participantName(id, channelMembers)}
                 onOpenThread={onOpenThread}
                 onViewAssetSource={onViewAssetSource}
+                onOpenPackagePreview={onOpenPackagePreview}
                 onAction={onDeliveryAction}
                 onStageHandoff={onStageHandoff}
               />
@@ -4848,6 +4846,7 @@ function ThreadPanel({
   pinnedIds,
   reactionEmojis,
   tasks,
+  taskWorkspaceEntries,
   taskNumbers,
   activeDmAgent,
   channelMembers,
@@ -4909,6 +4908,7 @@ function ThreadPanel({
   pinnedIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
+  taskWorkspaceEntries: readonly ChannelTaskWorkspaceEntryV1[];
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
   channelMembers: ChannelMemberEntry[];
@@ -5082,6 +5082,7 @@ function ThreadPanel({
         key={msg.id}
         msg={msg}
         task={task}
+        taskStatusMutable={Boolean(task && taskWorkspaceEntries.find((entry) => entry.task.id === task.id)?.governance.allowDirectStatusMutation)}
         taskNumber={task ? taskNumbers.get(task.id) : undefined}
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
@@ -5505,6 +5506,7 @@ function ChatBubble({
   msg,
   groupedWithPrevious = false,
   task,
+  taskStatusMutable = false,
   taskNumber,
   taskAssigneeName,
   taskMenuOpen = false,
@@ -5548,6 +5550,7 @@ function ChatBubble({
   msg: ChatMessage;
   groupedWithPrevious?: boolean;
   task?: TaskItem | null;
+  taskStatusMutable?: boolean;
   taskNumber?: number;
   taskAssigneeName?: string;
   taskMenuOpen?: boolean;
@@ -5954,7 +5957,7 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
-                onStatus={onTaskStatus}
+                onStatus={taskStatusMutable ? onTaskStatus : undefined}
               />
             )}
             {showReplyCount && replyCount > 0 && (
@@ -5974,7 +5977,7 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
-                onStatus={onTaskStatus}
+                onStatus={taskStatusMutable ? onTaskStatus : undefined}
               />
             )}
             {showInlineReplyBadge && (

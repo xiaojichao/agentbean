@@ -459,12 +459,15 @@ describe('AgentBean Next browser smoke script', () => {
       'setInputValue',
     ]));
     expect(calls).toEqual(expect.arrayContaining([
-      ['click', '[data-smoke="package-review-action"][data-action="review-and-finalize"]'],
+      ['click', '[data-smoke="stage-review-open-package-preview"]'],
+      ['click', '[data-smoke="package-preview-approve"]'],
       ['setInputValue', {
-        selector: '[data-smoke="stage-review-comment"]',
+        selector: '[data-smoke="package-preview-review-panel"] textarea',
         value: '真实浏览器 smoke 审核并最终化',
       }],
-      ['click', '[data-smoke="stage-review-mutation-confirm"]'],
+      ['click', '[data-smoke="package-preview-review-panel"] input[type="checkbox"]'],
+      ['click', '[data-smoke="package-preview-review-submit"]'],
+      ['click', '[data-smoke="files-row-preview-edit"]'],
     ]));
   });
 
@@ -794,7 +797,7 @@ describe('AgentBean Next browser smoke script', () => {
     expect(matrix).toContain('Release B 后旧页面 alias 返回 404');
   });
 
-  test('exercises WebUI task create, reorder, delete, status update, and refresh restore', async () => {
+  test('seeds ordinary Task facts and exercises reorder, delete, status update, and refresh restore', async () => {
     const { exerciseWebUiTaskBusinessSmoke } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: Array<[string, unknown]> = [];
     const page = {
@@ -830,6 +833,9 @@ describe('AgentBean Next browser smoke script', () => {
       },
       suffix: 'task-smoke',
       timeoutMs: 1000,
+      ordinaryTaskSeeder: async ({ channelId, tasks }: { channelId: string; tasks: Array<{ title: string; description: string }> }) => {
+        calls.push(['ordinaryTaskSeeder', { channelId, tasks }]);
+      },
       phase2TaskSeeder: async () => ({
         title: 'WebUI Phase 2 DAG task-smoke',
         close: async () => {
@@ -848,40 +854,26 @@ describe('AgentBean Next browser smoke script', () => {
     });
     expect(calls).toContainEqual(['phase2Close', undefined]);
     expect(calls).toContainEqual(['navigate', 'http://127.0.0.1:4100/team-one/tasks']);
-    expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-open"]']);
     expect(calls).toContainEqual([
-      'setInputValue',
-      { selector: '[data-smoke="tasks-create-title"]', value: 'WebUI smoke task task-smoke' },
+      'ordinaryTaskSeeder',
+      {
+        channelId: 'channel-1',
+        tasks: [
+          { title: 'WebUI smoke task task-smoke', description: 'Created by WebUI smoke task-smoke' },
+          { title: 'WebUI smoke task secondary task-smoke', description: 'Created by WebUI smoke task-smoke secondary' },
+        ],
+      },
     ]);
-    expect(calls).toContainEqual([
-      'setInputValue',
-      { selector: '[data-smoke="tasks-create-title"]', value: 'WebUI smoke task secondary task-smoke' },
-    ]);
-    expect(calls).toContainEqual([
-      'setInputValue',
-      { selector: '[data-smoke="tasks-create-channel"]', value: 'channel-1' },
-    ]);
-    expect(calls).toContainEqual(['click', '[data-smoke="tasks-create-submit"]']);
     expect(calls).toContainEqual(['click', '[data-smoke="task-status-option-in_progress"]']);
     expect(calls).toContainEqual(['reload', undefined]);
     const waitForFunctionCalls = calls.filter(
       (call): call is ['waitForFunction', { expression: string; description: string }] => call[0] === 'waitForFunction',
     );
-    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('tasks-create-form'))).toBe(true);
+    expect(waitForFunctionCalls.some((call) => call[1].expression.includes('tasks-create-open'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('WebUI smoke task task-smoke'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('WebUI smoke task secondary task-smoke'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('taskSortOrder'))).toBe(true);
     expect(waitForFunctionCalls.some((call) => call[1].expression.includes('in_progress'))).toBe(true);
-    const channelWaitIndex = calls.findIndex(
-      (call) => call[0] === 'waitForFunction'
-        && (call[1] as { expression: string }).expression.includes("option.value === \"channel-1\""),
-    );
-    const channelSetIndex = calls.findIndex(
-      (call) => call[0] === 'setInputValue'
-        && (call[1] as { selector: string }).selector === '[data-smoke="tasks-create-channel"]',
-    );
-    expect(channelWaitIndex).toBeGreaterThan(-1);
-    expect(channelSetIndex).toBeGreaterThan(channelWaitIndex);
     const evaluateJsonCalls = calls.filter((call): call is ['evaluateJson', string] => call[0] === 'evaluateJson');
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-reorder-top'))).toBe(true);
     expect(evaluateJsonCalls.some((call) => call[1].includes('task-delete'))).toBe(true);

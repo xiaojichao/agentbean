@@ -369,18 +369,13 @@ export function OutputPackagePreviewModal({
 
   const submitCurrentReview = useCallback(async (decision: 'approved') => {
     if (!active || !activeActions || reviewBusy) return;
-    const requiredAction = 'review-approved';
+    const requiredAction = finalizeAfterApprove ? 'review-and-finalize' : 'review-approved';
     if (!activeActions.actions.includes(requiredAction)) {
       setActionError('该版本的审核动作已不可用，请刷新后重试');
       return;
     }
     if (editorState.dirty
       && !window.confirm(`当前有未保存草稿。将只审核 Server v${active.current.versionNumber}，草稿不会提交。继续吗？`)) {
-      return;
-    }
-    if (finalizeAfterApprove
-      && !activeActions.actions.includes('review-and-finalize')) {
-      setActionError('“通过并设为最终版”动作已不可用，请刷新后重试');
       return;
     }
     setReviewBusy(true);
@@ -1004,6 +999,7 @@ export function OutputPackagePreviewModal({
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
                   reviewPanel === 'return' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
                 }`}
+                data-smoke="package-preview-review-submit"
               >
                 {reviewBusy || editorState.saving
                   ? '提交中…'

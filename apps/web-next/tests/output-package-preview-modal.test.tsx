@@ -786,6 +786,24 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
   });
 
+  test('Server 仅开放原子通过并最终化时仍可从统一预览完成动作', async () => {
+    const detail = await mocks.getOutputPackage();
+    detail.availableActions[0].actions = ['review-and-finalize'];
+    mocks.getOutputPackage.mockResolvedValue(detail);
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: '同时设为当前文档的最终版（不验收 Task）' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    await waitFor(() => expect(mocks.submitPackageReviewAndFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      versionId: 'version-1',
+      expectedCollectionRevision: 4,
+    })));
+    expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
+    expect(await screen.findByText(/已设为 final/)).toBeTruthy();
+  });
+
   test('没有 Server 审核动作时不显示审核按钮，并明确提示动作不可用', async () => {
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,

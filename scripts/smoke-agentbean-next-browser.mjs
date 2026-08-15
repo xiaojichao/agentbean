@@ -1664,6 +1664,7 @@ export async function exerciseWebUiTaskBusinessSmoke({
   suffix,
   timeoutMs,
   phase2TaskSeeder = seedPhase2BrowserTask,
+  ordinaryTaskSeeder = seedWebUiOrdinaryTaskFacts,
 }) {
   assertSession(session);
   const root = normalizeBaseUrlOrThrow(baseUrl);
@@ -1674,15 +1675,23 @@ export async function exerciseWebUiTaskBusinessSmoke({
   const targetStatus = 'in_progress';
   const channelId = session.channel?.id;
   if (!channelId) throw new Error('WebUI task smoke needs a default channel in the seeded session');
+  await ordinaryTaskSeeder({
+    webSocket,
+    session,
+    channelId,
+    tasks: [
+      { title, description },
+      { title: secondaryTitle, description: `${description} secondary` },
+    ],
+    timeoutMs,
+  });
   await page.navigate(new URL(`/${teamPath}/tasks`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="tasks-create-open"]') !== null`,
-    'tasks page exposes the create task control',
+    `document.querySelector('[data-smoke="tasks-create-open"]') === null`,
+    'tasks page keeps Agent-managed creation in the channel conversation',
     timeoutMs,
   );
-  await createWebUiTask({ page, title, description, channelId, timeoutMs });
   await waitForWebUiTaskCard({ page, title, status: 'todo', timeoutMs });
-  await createWebUiTask({ page, title: secondaryTitle, description: `${description} secondary`, channelId, timeoutMs });
   await waitForWebUiTaskCard({ page, title: secondaryTitle, status: 'todo', timeoutMs });
 
   await clickWebUiTaskAction({ page, title, selector: '[data-smoke="task-reorder-top"]', description: 'move task to top' });
@@ -1778,6 +1787,23 @@ export async function exerciseWebUiTaskBusinessSmoke({
     phase2Title: phase2.title,
     channelNoProjectFactsVerified: Boolean(webSocket),
   };
+}
+
+async function seedWebUiOrdinaryTaskFacts({ webSocket, session, channelId, tasks, timeoutMs }) {
+  if (!webSocket) throw new Error('WebUI task smoke needs a Socket client to seed ordinary Task facts');
+  for (const task of tasks) {
+    const taskAck = await emitAck(webSocket, WEB_EVENTS.task.create, {
+      userId: session.user.id,
+      teamId: session.team.id,
+      channelId,
+      title: task.title,
+      description: task.description,
+      tags: ['smoke', 'webui'],
+    }, timeoutMs);
+    if (taskAck?.ok !== true || typeof taskAck?.task?.id !== 'string') {
+      throw new Error(`WebUI task smoke could not seed ordinary Task "${task.title}": ${formatAck(taskAck)}`);
+    }
+  }
 }
 
 export async function exerciseWebUiChannelNoProjectFactsSmoke({
@@ -2060,25 +2086,6 @@ async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, s
     daemon.socket.disconnect?.();
     throw error;
   }
-}
-
-async function createWebUiTask({ page, title, description, channelId, timeoutMs }) {
-  await page.click('[data-smoke="tasks-create-open"]');
-  await page.waitForFunction(
-    `document.querySelector('[data-smoke="tasks-create-form"]') !== null`,
-    'tasks create form opens',
-    timeoutMs,
-  );
-  await page.waitForFunction(
-    `Array.from(document.querySelector('[data-smoke="tasks-create-channel"]')?.options ?? []).some((option) => option.value === ${JSON.stringify(channelId)})`,
-    `tasks create channel "${channelId}" to become selectable`,
-    timeoutMs,
-  );
-  await page.setInputValue('[data-smoke="tasks-create-title"]', title);
-  await page.setInputValue('[data-smoke="tasks-create-description"]', description);
-  await page.setInputValue('[data-smoke="tasks-create-channel"]', channelId);
-  await page.setInputValue('[data-smoke="tasks-create-tags"]', 'smoke, webui');
-  await page.click('[data-smoke="tasks-create-submit"]');
 }
 
 async function waitForWebUiTaskCard({ page, title, status, timeoutMs }) {
@@ -2933,41 +2940,58 @@ export async function exerciseWebUiProjectCollaborationSmoke({
     (() => {
       const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
       const text = workspace?.textContent ?? '';
-      const finalize = document.querySelector('[data-smoke="package-review-action"][data-action="review-and-finalize"]');
+      const preview = document.querySelector('[data-smoke="stage-review-open-package-preview"]');
       return text.includes(${JSON.stringify(deliveryReview.packageId)})
         && text.includes(${JSON.stringify(deliveryReview.versionId)})
-        && Boolean(finalize);
+        && Boolean(preview instanceof HTMLButtonElement && !preview.disabled)
+        && !document.querySelector('[data-smoke="package-review-action"]');
     })()
     `,
-    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and review-and-finalize`,
+    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and shared preview entry`,
     timeoutMs,
   );
 
-  // #1177：在 Tasks 阶段详情工作区完成「通过并设为最终版」与「验收交付」。
-  await page.click('[data-smoke="package-review-action"][data-action="review-and-finalize"]');
+  // #1200：Task 不再直接修改文件审核事实；Task/Files/Thread 共用同一个预览审核弹窗。
+  await page.click('[data-smoke="stage-review-open-package-preview"]');
   await page.waitForFunction(
-    `Boolean(document.querySelector('[data-smoke="stage-review-mutation-dialog"]'))`,
-    'stage review mutation dialog to open',
+    `Boolean(document.querySelector('[data-smoke="output-package-preview-modal"]') && document.querySelector('[data-smoke="package-preview-approve"]'))`,
+    'shared package preview modal to open from Task',
     timeoutMs,
   );
-  await page.setInputValue('[data-smoke="stage-review-comment"]', '真实浏览器 smoke 审核并最终化');
-  await page.click('[data-smoke="stage-review-mutation-confirm"]');
+  await page.click('[data-smoke="package-preview-approve"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="package-preview-review-panel"]'))`,
+    'package preview approval panel to open',
+    timeoutMs,
+  );
+  await page.setInputValue('[data-smoke="package-preview-review-panel"] textarea', '真实浏览器 smoke 审核并最终化');
+  await page.click('[data-smoke="package-preview-review-panel"] input[type="checkbox"]');
+  await page.click('[data-smoke="package-preview-review-submit"]');
   await page.waitForFunction(
     `
     (() => {
-      const dialog = document.querySelector('[data-smoke="stage-review-mutation-dialog"]');
-      const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
-      const text = workspace?.textContent ?? '';
-      // 锚定提交前不存在的事实：刚写入的审核意见进入记录、最终化行取代「尚无最终化事实」，
-      // 防止谓词面对未刷新的旧投影提前成立（按钮文案本就含「通过/最终」）。
-      return !dialog
-        && text.includes('真实浏览器 smoke 审核并最终化')
-        && !text.includes('尚无最终化事实');
+      const saved = document.querySelector('[data-smoke="package-preview-saved"]')?.textContent ?? '';
+      return saved.includes('已设为 final');
     })()
     `,
-    `stage review workspace to project the new review record and finalization after UI finalize`,
+    `shared package preview to project the review and finalization result`,
     timeoutMs,
   );
+
+  await page.click('[data-smoke="output-package-preview-modal"] header button[title="关闭"]');
+  await page.click('[data-smoke="channel-files-tab"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="project-files-board"]') && document.querySelector('[data-smoke="files-row-preview-edit"]'))`,
+    'Files to render the reviewed package row',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="files-row-preview-edit"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="output-package-preview-modal"]'))`,
+    'the same package preview modal to open from Files',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="output-package-preview-modal"] header button[title="关闭"]');
 
   const hasAccept = await page.evaluateJson(`
     (() => {
