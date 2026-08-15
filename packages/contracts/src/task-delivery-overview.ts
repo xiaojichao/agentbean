@@ -166,7 +166,11 @@ export interface TaskDeliveryOverviewV1 {
   readonly taskId: ID;
   readonly channelId: ID;
   readonly task: TaskDto;
-  readonly governance: TaskGovernanceV1;
+  /**
+   * V1 滚动发布兼容：旧 Server 响应可能缺失；Web 必须把缺失视为未知并 fail closed。
+   * 新 Server 始终投影该字段。
+   */
+  readonly governance?: TaskGovernanceV1;
   /** 阶段绑定存在时携带(目标/依赖/executionAllowed)。 */
   readonly stage?: ProjectStageDto;
   readonly acceptanceContract: TaskAcceptanceContractV1;

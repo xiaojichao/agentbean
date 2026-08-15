@@ -4660,13 +4660,15 @@ function TaskDetailPanel({
   const managedTask = Boolean(
     stageId
     || workspaceEntry?.governance.mode === 'managed'
-    || taskDeliveryOverview?.governance.mode === 'managed',
+    || taskDeliveryOverview?.governance?.mode === 'managed',
   );
-  const taskGovernancePending = Boolean(detailTaskId && detailChannelId && !stageId && !taskDeliveryOverview);
+  const taskGovernancePending = Boolean(
+    detailTaskId && detailChannelId && !stageId && !taskDeliveryOverview?.governance,
+  );
   const showTaskDelivery = Boolean(
     stageId
     || channelTaskHasProjectFacts(workspaceEntry)
-    || taskDeliveryOverview?.governance.mode === 'managed',
+    || taskDeliveryOverview?.governance?.mode === 'managed',
   );
   const managedStatusOptions = readOnly || taskGovernancePending
     ? []

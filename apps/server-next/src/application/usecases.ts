@@ -9605,7 +9605,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         return {
           schemaVersion: 1 as const,
           task: overview.task,
-          governance: overview.governance,
+          governance: overview.governance ?? governance,
           responsibilityFocus: overview.responsibilityFocus,
           ...(stage ? { stage } : {}),
           delivery: {

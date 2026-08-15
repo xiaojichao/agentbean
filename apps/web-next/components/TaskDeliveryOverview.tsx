@@ -118,6 +118,8 @@ export function TaskDeliveryOverview({
     const project = projectEvents();
     const load = (showLoading: boolean) => {
       const currentRequestId = ++requestId;
+      // 治理事实可能因 Project/Task 更新改变；刷新期间先让父级 fail closed，不能保留旧许可。
+      onOverviewChangeRef.current?.(null);
       if (showLoading) setLoading(true);
       return project.queryTaskDeliveryOverview({ channelId, taskId })
       .then((result) => {
