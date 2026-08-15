@@ -195,6 +195,13 @@ async function seedTerminalTaskContinuation(
     senderId: 'user-1',
     body: '请基于当前交付继续完善移动端适配',
     createdAt: tick += 100,
+    meta: {
+      taskContinuationSource: {
+        schemaVersion: 1,
+        sourceTaskId,
+        sourceTaskRevision: sourceTask.revision,
+      },
+    },
   });
   return {
     handler,
@@ -819,10 +826,28 @@ describe('#922 Promotion gate handler', () => {
     expect(staleRevision.outcome).toBe('freshness_hold');
     expect(staleRevision.stableCode).toBe('TASK_CONTINUATION_SOURCE_STALE');
 
+    await repositories.messages.append({
+      id: 'continuation-source-message-current',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      threadId: seeded.input.rootMessageId,
+      senderKind: 'human',
+      senderId: 'user-1',
+      body: '请按当前 revision 继续',
+      createdAt: tick += 100,
+      meta: {
+        taskContinuationSource: {
+          schemaVersion: 1,
+          sourceTaskId: seeded.sourceTaskId,
+          sourceTaskRevision: terminalTask!.revision,
+        },
+      },
+    });
     const staleVersions = await seeded.handler.createTaskContinuation(
       makeEnvelope({ commandName: 'create-task-continuation', idempotencyKey: 'continuation-stale-versions' }),
       {
         ...seeded.input,
+        sourceMessageId: 'continuation-source-message-current',
         sourceTaskRevision: terminalTask!.revision,
         sourceVersionIds: ['version-old'],
       },
@@ -830,6 +855,30 @@ describe('#922 Promotion gate handler', () => {
     expect(staleVersions.outcome).toBe('freshness_hold');
     expect(staleVersions.stableCode).toBe('TASK_CONTINUATION_VERSIONS_STALE');
 
+    const tasks = await repositories.tasks.list({
+      teamId: 'team-1',
+      channelIds: ['channel-1'],
+      includeGlobal: true,
+    });
+    expect(tasks).toHaveLength(1);
+  });
+
+  test('普通 thread human 消息未携带 Server 固化来源标记时 fail closed', async () => {
+    resetCounters();
+    const repositories = createInMemoryRepositories();
+    const seeded = await seedTerminalTaskContinuation(repositories);
+    await repositories.messages.updateMeta({
+      messageId: seeded.input.sourceMessageId,
+      meta: {},
+    });
+
+    const response = await seeded.handler.createTaskContinuation(
+      makeEnvelope({ commandName: 'create-task-continuation', idempotencyKey: 'continuation-unmarked-source' }),
+      seeded.input,
+    );
+
+    expect(response.outcome).toBe('rejected');
+    expect(response.stableCode).toBe('TASK_CONTINUATION_SOURCE_INVALID');
     const tasks = await repositories.tasks.list({
       teamId: 'team-1',
       channelIds: ['channel-1'],

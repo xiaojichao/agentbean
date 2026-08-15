@@ -208,6 +208,18 @@ function isDeletedMessage(message: { readonly meta?: Record<string, unknown> }):
   return Boolean(message.meta?.deletedAt);
 }
 
+function matchesTaskContinuationSourceMarker(
+  message: { readonly meta?: Record<string, unknown> },
+  input: TaskContinuationInput,
+): boolean {
+  const marker = message.meta?.taskContinuationSource;
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) return false;
+  const record = marker as Record<string, unknown>;
+  return record.schemaVersion === 1
+    && record.sourceTaskId === input.sourceTaskId
+    && record.sourceTaskRevision === input.sourceTaskRevision;
+}
+
 type ChannelAccessDecision =
   | { readonly ok: true }
   | { readonly ok: false; readonly stableCode: string };
@@ -348,6 +360,9 @@ async function validateTaskContinuation(
     || sourceMessage.senderId !== dependencies.requesterId
     || isDeletedMessage(sourceMessage)) {
     return { ok: false, stableCode: STABLE_CODE_CONTINUATION_THREAD_MISMATCH };
+  }
+  if (!matchesTaskContinuationSourceMarker(sourceMessage, input)) {
+    return { ok: false, stableCode: STABLE_CODE_CONTINUATION_SOURCE_INVALID };
   }
   const currentVersionIds = await dependencies.resolveContinuationVersionIdsInTransaction?.({
     repositories: repos,

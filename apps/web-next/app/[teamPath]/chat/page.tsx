@@ -487,6 +487,8 @@ export default function ChatPage() {
   const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
   // React state 不能阻止同一事件循环内的双击/连续回车；ref 是两阶段提交的同步互斥锁。
   const threadContinuationSubmittingRef = useRef(false);
+  // 第一阶段 ack 超时结果不确定时复用同一 message 幂等键，避免解锁重试产生第二条来源消息。
+  const threadContinuationSourceClientMessageIdRef = useRef<string | null>(null);
   const dmsRef = useRef(dms);
   const activeChannelRef = useRef(activeChannel);
   activeChannelRef.current = activeChannel;
@@ -1537,6 +1539,7 @@ export default function ChatPage() {
     setThreadSelections([]);
     setThreadContinuationBasis(null);
     setPendingThreadContinuation(null);
+    threadContinuationSourceClientMessageIdRef.current = null;
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1636,6 +1639,7 @@ export default function ChatPage() {
       && threadContinuationBasis.rootMessageId === threadRootId) return;
     setThreadContinuationBasis(null);
     setPendingThreadContinuation(null);
+    threadContinuationSourceClientMessageIdRef.current = null;
   }, [activeChannel, threadContinuationBasis, threadRootId]);
 
   // #1064 AC1/AC2：Task 页「交给 Agent 处理」预填导航。compose 参数只携带 text +
@@ -1662,6 +1666,7 @@ export default function ChatPage() {
     if (parsed.continuationBasis?.schemaVersion === 1
       && parsed.continuationBasis.channelId === activeChannel
       && parsed.continuationBasis.rootMessageId === threadRootId) {
+      threadContinuationSourceClientMessageIdRef.current = null;
       setThreadContinuationBasis(parsed.continuationBasis);
     }
     requestAnimationFrame(() => threadTextareaRef.current?.focus());
@@ -1875,7 +1880,12 @@ export default function ChatPage() {
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
     const mentions = extractMentions(body, visibleMentionMembers);
-    const clientMessageId = pendingThreadContinuation?.clientMessageId ?? createClientMessageId('chat-thread');
+    const continuationSourceSend = Boolean(threadContinuationBasis && !pendingThreadContinuation);
+    const clientMessageId = pendingThreadContinuation?.clientMessageId
+      ?? (continuationSourceSend
+        ? threadContinuationSourceClientMessageIdRef.current ?? createClientMessageId('chat-thread')
+        : createClientMessageId('chat-thread'));
+    if (continuationSourceSend) threadContinuationSourceClientMessageIdRef.current = clientMessageId;
     const createContinuation = async (sourceMessageId: string, objective: string) => {
       const basis = threadContinuationBasis;
       if (!basis) return true;
@@ -1984,9 +1994,10 @@ export default function ChatPage() {
           }
         : {}),
     };
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(Object.keys(messageMeta).length ? { meta: messageMeta } : {}) }, async (res?: SendMessageAck) => {
-      try {
+    void emitWithTimeout(getWebSocket(), WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(Object.keys(messageMeta).length ? { meta: messageMeta } : {}) })
+      .then(async (res?: SendMessageAck) => {
         if (res?.ok) {
+          threadContinuationSourceClientMessageIdRef.current = null;
           appendAckMessage(res);
           if (threadContinuationBasis) {
             const sourceMessageId = res.message && typeof res.message === 'object'
@@ -2018,6 +2029,7 @@ export default function ChatPage() {
           setThreadAttachments([]);
           return;
         }
+        if (res?.error !== 'timeout') threadContinuationSourceClientMessageIdRef.current = null;
         appendMessage({
           id: `local-thread-error-${Date.now()}`,
           channelId,
@@ -2027,10 +2039,19 @@ export default function ChatPage() {
           createdAt: Date.now(),
           metaJson: JSON.stringify({ kind: 'send-fail' }),
         });
-      } finally {
-        releaseContinuationLock();
-      }
-    });
+      })
+      .catch(() => {
+        appendMessage({
+          id: `local-thread-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: '消息发送状态不确定，请再次点击发送重试',
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+      })
+      .finally(releaseContinuationLock);
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
@@ -3094,6 +3115,7 @@ export default function ChatPage() {
             } else if (action.action === 'create-continuation' && action.continuationBasis) {
               closeTaskDetail();
               openThread(action.continuationBasis.rootMessageId);
+              threadContinuationSourceClientMessageIdRef.current = null;
               setThreadContinuationBasis(action.continuationBasis);
               setThreadInput(`请继续任务「${taskDetailTask?.title ?? '当前任务'}」：`);
               setTimeout(() => threadTextareaRef.current?.focus(), 0);

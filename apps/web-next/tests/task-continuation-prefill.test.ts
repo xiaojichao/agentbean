@@ -34,6 +34,13 @@ describe('#1200 终态 Task 后续任务前端链路', () => {
     expect(chatSource).toContain('disabled={submitting || uploading');
   });
 
+  test('来源消息发送超时会解锁，并复用同一 message 幂等键安全重试', () => {
+    expect(chatSource).toContain('threadContinuationSourceClientMessageIdRef.current ?? createClientMessageId');
+    expect(chatSource).toContain('void emitWithTimeout(getWebSocket(), WEB_EVENTS.message.send');
+    expect(chatSource).toContain("if (res?.error !== 'timeout') threadContinuationSourceClientMessageIdRef.current = null");
+    expect(chatSource).toContain('.finally(releaseContinuationLock)');
+  });
+
   test('仅不确定响应复用原 key，业务拒绝重读 Server basis 后使用新 key', () => {
     expect(chatSource).toContain('const retrySameKey = transportUncertain');
     expect(chatSource).toContain("continuation.response?.retryDirective === 'same_key'");
