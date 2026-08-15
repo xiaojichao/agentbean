@@ -246,6 +246,30 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
   });
 
+  test('切换 Task 身份时清除已冻结的验收目标', async () => {
+    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    });
+    const { rerender } = render(
+      <TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />,
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-action-accept-delivery"]')).not.toBeNull();
+    });
+    fireEvent.click(document.querySelector('[data-smoke="task-action-accept-delivery"]')!);
+    expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
+
+    rerender(<TaskDeliveryOverview teamId="team-1" channelId="ch-2" taskId="task-2" />);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
+    });
+    expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
+  });
+
   test('加载与错误态有文本反馈', async () => {
     mocks.queryTaskDeliveryOverview.mockReturnValue(new Promise(() => undefined));
     render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);

@@ -65,6 +65,12 @@ export function TaskDeliveryOverview({
   }, []);
 
   useEffect(() => {
+    setAcceptanceTarget(null);
+    setAcceptanceError(null);
+    acceptanceTriggerRef.current = null;
+  }, [channelId, taskId]);
+
+  useEffect(() => {
     if (!acceptanceOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !accepting) closeAcceptance();
