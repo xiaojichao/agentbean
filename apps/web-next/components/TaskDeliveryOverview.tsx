@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { CircleDot, History, ListChecks, ShieldCheck, Target } from 'lucide-react';
 import type {
   TaskDeliveryOverviewV1,
@@ -61,13 +61,6 @@ export function TaskDeliveryOverview({
   const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
   const acceptanceGenerationRef = useRef(0);
   const acceptanceIdentityRef = useRef({ channelId, taskId });
-  if (
-    acceptanceIdentityRef.current.channelId !== channelId
-    || acceptanceIdentityRef.current.taskId !== taskId
-  ) {
-    acceptanceIdentityRef.current = { channelId, taskId };
-    acceptanceGenerationRef.current += 1;
-  }
   const currentAcceptance = frozenAcceptance?.target.taskId === taskId
     && frozenAcceptance.channelId === channelId
     ? frozenAcceptance
@@ -83,7 +76,9 @@ export function TaskDeliveryOverview({
     });
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    acceptanceIdentityRef.current = { channelId, taskId };
+    acceptanceGenerationRef.current += 1;
     setFrozenAcceptance(null);
     setAccepting(false);
     setAcceptanceError(null);
