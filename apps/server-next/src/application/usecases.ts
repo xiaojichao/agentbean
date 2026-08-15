@@ -11,7 +11,7 @@ import type {
   DeviceWorkspaceSnapshotInputSetItemDto,
 } from '../../../../packages/contracts/src/project-channel-workspace.js';
 import { hashPassword, isLegacyHash, verifyLegacySha256, verifyPassword } from './password.js';
-import { isHiddenSystemMessage, formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDescriptorDto, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type WorkspacePublishStagingDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
+import { isHiddenSystemMessage, formalKindToStorageKind, makeFailure, makeSuccess, parseAgentCollaborationProposalV1, projectArtifactFinalizationConfirmationText, type ActiveMemoryAttributionDto, type Ack, type AdapterKind, type AgentArtifactSourceRootConfigDto, type AgentCollaborationProposalV1, type AgentDescriptorDto, type AgentDto, type AgentCategory, type DispatchMemoryContextItemDto, type AgentInvocationResultDto, type AgentMetricsSummary, type ArtifactDto, type ArtifactPreviewDto, type ArtifactSourceRootDto, type ChannelArchivePreflightDto, type ChannelArchiveConfirmationDto, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelDocumentResourceBindingDto, type ChannelDocumentSourceDto, type ChannelDto, type ChannelMembersDto, type ChannelFileEntryDto, type ChannelFileSourceDto, type ChannelFilesResultDto, type ChannelFileDirectoryDto, type ArtifactRole, type DeviceDetailDto, type DeviceDto, type DeviceInviteAckDto, type DeviceInviteCredentialsDto, type DeviceInviteDto, type DispatchAttachmentDto, type DispatchDto, type DispatchHistoryMessageDto, type DispatchOutcome, type DispatchReasonCode, type DispatchRequestDto, type DmChannelDto, type HumanMemberDto, type ID, type JoinLinkDto, type MemoryContentKind, type MemoryGovernanceSnapshotDto, type MemoryKind, type MemoryRedactionLevel, type MemoryScopeType, type MessageDto, type MessageMetaDto, type RouteReason, type RuntimeDto, type ScanRequestCustomAgent, type SetAgentTeamVisibilityInput, type SkillDto, type TaskDagViewDto, type TaskDto, type TaskStatus, type TeamDto, type UnixMs, type UserDto, type UserRole, type WorkspaceRunDto, type WorkspaceRunStatus, type ProjectChannelWorkspaceDto, type ProjectChannelWorkspaceFileDto, type ProjectChannelWorkspaceRevisionDto, type ArchiveExportManifestDto, type WorkspacePublishStagingDto, type FormalMemoryDto, type FormalMemoryListDto, type FormalMemoryDetailDto, type FormalMemoryKind, type FormalMemoryScopeType, type SystemKnowledgeDto, type SystemKnowledgeDetailDto, type SystemKnowledgeListDto, type UserMemoryDto, type UserMemoryDetailDto, type UserMemoryListDto, type GetChannelDocumentInput, type ListChannelDocumentsInput, type ListChannelDocumentRevisionsInput, type DeriveChannelDocumentInput, type SaveChannelDocumentInput, type RestoreChannelDocumentInput, type PublishChannelDocumentInput, type PublishChannelDocumentResultDto, type ChannelDocumentResultDto, type ChannelDocumentRevisionsResultDto } from '../../../../packages/contracts/src/index.js';
 import { planMentionMigration } from './mention-migration.js';
 import {
   createAckReadCandidateCommandHandler,
@@ -1793,6 +1793,9 @@ export interface ReceiveDispatchResultInput {
   dispatchId: string;
   agentId: string;
   body: string;
+  outcome?: DispatchOutcome;
+  reasonCode?: DispatchReasonCode | string;
+  reasonText?: string;
   artifactIds?: string[];
   artifacts?: ReceiveDispatchArtifactInput[];
   workspaceRun?: ReceiveDispatchWorkspaceRunInput;
@@ -11711,7 +11714,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
 
       const now = clock.now();
-      const resultSucceeded = isSuccessfulDispatchResult(resultInput.workspaceRun);
+      const completion = resolveDispatchCompletion(resultInput);
+      const resultSucceeded = completion.resultSucceeded;
       if ((resultInput.artifacts ?? []).some((artifact) =>
         artifact.sourceRoot && !isValidArtifactSourceRoot(artifact.sourceRoot))) {
         return makeFailure('VALIDATION_ERROR', 'Invalid artifact source root');
@@ -11761,14 +11765,29 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       const completed = managedAttempt
         ? await invocationGateway.completeAttempt({
             dispatchId: resultInput.dispatchId,
-            status: resultSucceeded ? 'succeeded' : 'failed',
-            ...(resultSucceeded ? {} : { error: workspaceRunFailureError(resultInput.workspaceRun) }),
+            status: completion.terminal,
+            ...(resultSucceeded ? {} : { error: completion.error }),
             actorKind: 'agent',
             actorId: resultInput.agentId,
           })
         : resultSucceeded
           ? await repositories.dispatches.markSucceeded({ dispatchId: resultInput.dispatchId, completedAt: now })
-          : await repositories.dispatches.markFailed({ dispatchId: resultInput.dispatchId, error: workspaceRunFailureError(resultInput.workspaceRun), completedAt: now });
+          : completion.terminal === 'timed_out'
+            ? await repositories.dispatches.markTimedOut({
+              dispatchId: resultInput.dispatchId,
+              error: completion.error ?? 'EXECUTION_LIMIT',
+              completedAt: now,
+            })
+            : completion.terminal === 'cancelled'
+              ? await repositories.dispatches.markCancelled({
+                dispatchId: resultInput.dispatchId,
+                completedAt: now,
+              })
+              : await repositories.dispatches.markFailed({
+                dispatchId: resultInput.dispatchId,
+                error: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun),
+                completedAt: now,
+              });
       if (!completed) {
         return makeFailure('NOT_FOUND', 'Dispatch not found');
       }
@@ -12007,15 +12026,15 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           resultFingerprint: dispatchResultFingerprint({ ...resultInput, collaborationProposals }),
           ...(projectDocumentInputSetResult ? { projectDocumentInputSetResult } : {}),
           startedAt: managedAttempt.startedAt, completedAt: now,
-          ...(!resultSucceeded ? { error: workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
+          ...(!resultSucceeded ? { error: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}) };
         await recordManagedDispatchTerminal(repositories, clock, ids, managementKernel, taskCoordinationKernel, collaborationService, {
           dispatchId: completed.dispatch.id,
-          status: resultSucceeded ? 'succeeded' : 'failed',
+          status: completion.terminal,
           artifactIds: artifacts.map((artifact) => artifact.id),
           result: invocationResult,
           ...(message ? { deliveryMessageId: message.id } : {}),
           actorId: resultInput.agentId,
-          ...(!resultSucceeded ? { errorCode: workspaceRunFailureError(resultInput.workspaceRun) } : {}),
+          ...(!resultSucceeded ? { errorCode: completion.error ?? workspaceRunFailureError(resultInput.workspaceRun) } : {}),
         });
       }
       await markAgentOnlineIfIdle(repositories, {
@@ -15744,6 +15763,36 @@ function isCompletableDispatchStatus(status: DispatchDto['status']): boolean {
 
 function isSuccessfulDispatchResult(workspaceRun: ReceiveDispatchWorkspaceRunInput | undefined): boolean {
   return workspaceRun?.status === undefined || workspaceRun.status === 'succeeded';
+}
+
+function resolveDispatchCompletion(input: ReceiveDispatchResultInput): {
+  resultSucceeded: boolean;
+  terminal: 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
+  error?: string;
+} {
+  if (input.outcome === 'stopped' || input.workspaceRun?.status === 'cancelled') {
+    const code = input.reasonCode
+      ?? (input.workspaceRun?.exitCode === 124 ? 'EXECUTION_LIMIT' : 'USER_CANCELLED');
+    if (code === 'EXECUTION_LIMIT') {
+      return { resultSucceeded: false, terminal: 'timed_out', error: 'EXECUTION_LIMIT' };
+    }
+    return { resultSucceeded: false, terminal: 'cancelled', error: 'USER_CANCELLED' };
+  }
+  if (input.outcome === 'failed' || input.workspaceRun?.status === 'failed') {
+    return {
+      resultSucceeded: false,
+      terminal: 'failed',
+      error: input.reasonCode ?? workspaceRunFailureError(input.workspaceRun),
+    };
+  }
+  if (input.outcome === 'succeeded' || isSuccessfulDispatchResult(input.workspaceRun)) {
+    return { resultSucceeded: true, terminal: 'succeeded' };
+  }
+  return {
+    resultSucceeded: false,
+    terminal: 'failed',
+    error: workspaceRunFailureError(input.workspaceRun),
+  };
 }
 
 function workspaceRunFailureError(workspaceRun: ReceiveDispatchWorkspaceRunInput | undefined): string {

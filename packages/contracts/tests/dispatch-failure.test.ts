@@ -72,6 +72,21 @@ describe('classifyDispatchFailure', () => {
   test('maps workspace-run codes without dumping raw detail', () => {
     expect(classifyDispatchFailure({ errorCode: 'WORKSPACE_RUN_FAILED' }).summary).toContain('执行失败');
     expect(classifyDispatchFailure({ errorCode: 'WORKSPACE_RUN_CANCELLED' }).category).toBe('workspace_run_cancelled');
+    expect(classifyDispatchFailure({ errorCode: 'USER_CANCELLED' }).summary).toBe('执行已被取消');
+  });
+
+  test('execution limit is a stop, not a generic agent failure', () => {
+    expect(classifyDispatchFailure({
+      status: 'timed_out',
+      errorCode: 'EXECUTION_LIMIT',
+    })).toMatchObject({
+      category: 'dispatch_timeout',
+      summary: '已达执行上限，系统已停止等待',
+    });
+    expect(formatDispatchFailureSummary({
+      status: 'failed',
+      errorCode: 'EXECUTION_LIMIT',
+    })).not.toBe('Agent 处理失败');
   });
 
   test('classifies daemon disconnection by error code (offline vs unresponsive)', () => {
