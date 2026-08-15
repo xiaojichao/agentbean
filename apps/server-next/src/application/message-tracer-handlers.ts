@@ -195,6 +195,9 @@ export function createSendMessageCommandHandler(deps: SendMessageCommandHandlerD
           mentions: input.mentions ? [...input.mentions] : undefined,
           attachments: input.attachmentIds ? [...input.attachmentIds] : undefined,
           clientMessageId: input.clientMessageId,
+          taskContinuationSource: input.taskContinuationSource
+            ? { ...input.taskContinuationSource }
+            : undefined,
         },
       };
       await tx.messages.append(message);

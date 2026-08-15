@@ -3164,7 +3164,7 @@ describe('server-next first-slice use cases', () => {
     });
     expect(await repositories.messages.getById('invalid-continuation-source-message')).toBeNull();
 
-    await expect(app.sendMessage({
+    const continuationMessageInput = {
       userId: 'user-1',
       teamId: 'team-1',
       channelId: 'channel-1',
@@ -3173,14 +3173,16 @@ describe('server-next first-slice use cases', () => {
       threadId: 'continuation-root-message',
       body: '@Codex-Agent 请继续完善',
       meta: {
-        mentions: [{ id: 'agent-1', kind: 'agent', name: 'Codex-Agent', start: 0, end: 12 }],
+        mentions: [{ id: 'agent-1', kind: 'agent' as const, name: 'Codex-Agent', start: 0, end: 12 }],
         taskContinuationSource: {
-          schemaVersion: 1,
+          schemaVersion: 1 as const,
           sourceTaskId,
           sourceTaskRevision: sourceTask!.revision,
         },
       },
-    })).resolves.toMatchObject({
+    };
+    const firstContinuationMessage = await app.sendMessage(continuationMessageInput);
+    expect(firstContinuationMessage).toMatchObject({
       ok: true,
       message: {
         id: 'continuation-source-message',
@@ -3190,7 +3192,77 @@ describe('server-next first-slice use cases', () => {
       route: { kind: 'no-dispatch', reason: 'task-continuation-source' },
       management: { kind: 'direct', mode: 'direct' },
     });
+    const replayedContinuationMessage = await app.sendMessage(continuationMessageInput);
+    expect(replayedContinuationMessage).toMatchObject({
+      ok: true,
+      message: { id: 'continuation-source-message' },
+      dispatches: [],
+      route: { kind: 'no-dispatch', reason: 'task-continuation-source' },
+    });
+    const persistedContinuationMessages = (await repositories.messages.listVisibleByChannel('channel-1', 20))
+      .filter((message) => message.meta?.clientMessageId === 'continuation-source-client');
+    expect(persistedContinuationMessages).toHaveLength(1);
     expect(await repositories.channelCoordination.jobs.getByMessageId('continuation-source-message')).toBeNull();
+
+    const tracerApp = createServerNextUseCases({
+      repositories,
+      clock: { now: () => now },
+      ids: { nextId: () => `tracer-id-${++promotionId}` },
+      messageIngestionMode: 'message-tracer',
+    });
+    await expect(tracerApp.dispatchMessageTracerCommand({
+      userId: 'user-1',
+      teamId: 'team-1',
+      envelope: {
+        schemaVersion: 1,
+        commandName: 'send-message',
+        commandSchemaVersion: 1,
+        idempotencyKey: 'invalid-tracer-continuation-source',
+      },
+      payload: {
+        channelId: 'channel-1',
+        threadId: 'continuation-root-message',
+        senderKind: 'human',
+        body: '伪造 tracer continuation source',
+        taskContinuationSource: {
+          schemaVersion: 1,
+          sourceTaskId,
+          sourceTaskRevision: sourceTask!.revision - 1,
+        },
+        freshnessBasis: {
+          schemaVersion: 1,
+          target: {
+            schemaVersion: 1,
+            kind: 'thread',
+            channelId: 'channel-1',
+            threadId: 'continuation-root-message',
+          },
+        },
+      },
+    })).resolves.toEqual({ ok: false, error: 'TASK_CONTINUATION_SOURCE_INVALID' });
+    const tracerContinuation = await tracerApp.sendMessage({
+      userId: 'user-1',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      clientMessageId: 'tracer-continuation-source-client',
+      threadId: 'continuation-root-message',
+      body: '@Codex-Agent 通过 tracer 继续完善',
+      meta: {
+        mentions: [{ id: 'agent-1', kind: 'agent', name: 'Codex-Agent', start: 0, end: 12 }],
+        taskContinuationSource: {
+          schemaVersion: 1,
+          sourceTaskId,
+          sourceTaskRevision: sourceTask!.revision,
+        },
+      },
+    });
+    expect(tracerContinuation).toMatchObject({
+      ok: true,
+      message: {
+        meta: { taskContinuationSource: { sourceTaskId, sourceTaskRevision: sourceTask!.revision } },
+      },
+      dispatches: [],
+    });
 
     const continuation = await app.dispatchPromotionGateCommand({
       userId: 'user-1',

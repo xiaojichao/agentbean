@@ -19,7 +19,12 @@ import {
   createSendMessageCommandHandler,
 } from './message-tracer-handlers.js';
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
-import { parseMessageTracerCommandEnvelopeV1, type MessageTracerCommandResponseV1 } from '../../../../packages/contracts/src/index.js';
+import {
+  parseMessageTracerCommandEnvelopeV1,
+  parseMessageTracerInputV1,
+  type MessageTracerCommandResponseV1,
+  type TaskContinuationSourceMarkerV1,
+} from '../../../../packages/contracts/src/index.js';
 import type {
   SystemActivityCommandResponseV1,
   SystemActivityQueryName,
@@ -2125,6 +2130,17 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     let commandName: ReturnType<typeof parseMessageTracerCommandEnvelopeV1>['commandName'];
     try {
       commandName = parseMessageTracerCommandEnvelopeV1(input.envelope).commandName;
+      if (commandName === 'send-message') {
+        const payload = parseMessageTracerInputV1('send-message', input.payload);
+        if (payload.taskContinuationSource
+          && !(await validateTaskContinuationSourceMarker(repositories, {
+            teamId: input.teamId,
+            channelId: payload.channelId,
+            threadId: payload.threadId,
+          }, payload.taskContinuationSource))) {
+          return { ok: false, error: 'TASK_CONTINUATION_SOURCE_INVALID' };
+        }
+      }
     } catch {
       return { ok: false, error: 'MESSAGE_TRACER_PAYLOAD_INVALID' };
     }
@@ -2751,6 +2767,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // #921 slice D：mode='message-tracer' 时，sendMessage 路由到 message-tracer handler（cutover 路由层）。
   // 翻译 SendMessageInput → command envelope + payload → dispatch → 翻译回 SendMessageResult。
   async function sendMessageViaMessageTracer(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
+    const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+    if (continuationSource.kind === 'invalid') {
+      return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+    }
     const threadId = messageInput.threadId;
     const result = await dispatchMessageTracerCommand({
       envelope: {
@@ -2767,6 +2787,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         mentions: messageInput.meta?.mentions,
         attachmentIds: messageInput.artifactIds ?? messageInput.meta?.attachments,
         clientMessageId: messageInput.clientMessageId,
+        ...(continuationSource.kind === 'valid'
+          ? { taskContinuationSource: continuationSource.marker }
+          : {}),
         freshnessBasis: {
           schemaVersion: 1,
           target: {
@@ -2780,7 +2803,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       userId: messageInput.userId,
       teamId: messageInput.teamId,
     });
-    if (!result.ok) return makeFailure('INTERNAL_ERROR', `Message tracer: ${result.error}`);
+    if (!result.ok) {
+      return result.error === 'TASK_CONTINUATION_SOURCE_INVALID'
+        ? makeFailure('VALIDATION_ERROR', result.error)
+        : makeFailure('INTERNAL_ERROR', `Message tracer: ${result.error}`);
+    }
     const response = result.response;
     // applied → fetch message → SendMessageResult（dispatches 为空：message-tracer 不建 coordination job）
     if (response.outcome === 'applied' && response.result?.commandName === 'send-message') {
@@ -5581,17 +5608,41 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const existingByClientKey = clientIdempotencyKey
             ? await transaction.jobs.getByIdempotencyKey(clientIdempotencyKey)
             : null;
+          const existingMessageByClientId = messageInput.clientMessageId
+            ? await transaction.messages.getByClientMessageId({
+                teamId: messageInput.teamId,
+                channelId: messageInput.channelId,
+                clientMessageId: messageInput.clientMessageId,
+              })
+            : null;
+          const existingMessageByExplicitId = messageInput.messageId
+            ? await transaction.messages.getById(messageInput.messageId)
+            : null;
           if (existingByMessageId && existingByClientKey && existingByMessageId.id !== existingByClientKey.id) {
             return { kind: 'conflict' as const };
           }
           const existingJob = existingByMessageId ?? existingByClientKey;
-          if (existingJob) {
-            const existingMessage = await transaction.messages.getById(existingJob.messageId);
-            if (!existingMessage) throw new Error('Coordination job references a missing message');
+          const existingMessageByJob = existingJob
+            ? await transaction.messages.getById(existingJob.messageId)
+            : null;
+          if (existingJob && !existingMessageByJob) {
+            throw new Error('Coordination job references a missing message');
+          }
+          const existingMessageIds = new Set([
+            existingMessageByJob?.id,
+            existingMessageByClientId?.id,
+            existingMessageByExplicitId?.id,
+          ].filter((id): id is string => Boolean(id)));
+          if (existingMessageIds.size > 1) return { kind: 'conflict' as const };
+          const existingMessage = existingMessageByJob
+            ?? existingMessageByClientId
+            ?? existingMessageByExplicitId;
+          if (existingMessage) {
             const sameRequest = existingMessage.teamId === messageInput.teamId
               && existingMessage.channelId === messageInput.channelId
               && existingMessage.senderId === messageInput.userId
               && existingMessage.body === messageInput.body
+              && (!messageInput.messageId || existingMessage.id === messageInput.messageId)
               && projectReferenceRequestFingerprintMatches(existingMessage.meta?.projectReferenceRequestFingerprint, messageInput)
               && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
             if (!sameRequest) return { kind: 'conflict' as const };
@@ -14914,16 +14965,10 @@ function renderCoalescedDispatchPrompt(messages: MessageRecord[]): string {
   return messages.map((message) => message.body).join('\n\n');
 }
 
-type TaskContinuationSourceMarker = {
-  readonly schemaVersion: 1;
-  readonly sourceTaskId: string;
-  readonly sourceTaskRevision: number;
-};
-
 function parseTaskContinuationSourceMarker(meta: MessageMetaDto | undefined):
   | { readonly kind: 'absent' }
   | { readonly kind: 'invalid' }
-  | { readonly kind: 'valid'; readonly marker: TaskContinuationSourceMarker } {
+  | { readonly kind: 'valid'; readonly marker: TaskContinuationSourceMarkerV1 } {
   if (!meta || !Object.prototype.hasOwnProperty.call(meta, 'taskContinuationSource')) {
     return { kind: 'absent' };
   }
@@ -14951,7 +14996,7 @@ function parseTaskContinuationSourceMarker(meta: MessageMetaDto | undefined):
 async function validateTaskContinuationSourceMarker(
   repositories: ServerNextRepositories,
   input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'threadId'>,
-  marker: TaskContinuationSourceMarker,
+  marker: TaskContinuationSourceMarkerV1,
 ): Promise<boolean> {
   if (!input.threadId) return false;
   const [task, rootMessage, coordination] = await Promise.all([

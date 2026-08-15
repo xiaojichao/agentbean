@@ -112,6 +112,25 @@ describe('send-message command handler', () => {
     expect(await repos.channelCoordination.jobs.listByChannel('channel-1', 10)).toHaveLength(0);
   });
 
+  test('applied：持久化已经进入 command hash 的 continuation source marker', async () => {
+    const { repos, handle } = setup();
+    await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1'], agentMemberIds: [] });
+    const marker = { schemaVersion: 1 as const, sourceTaskId: 'task-1', sourceTaskRevision: 2 };
+
+    const res = await handle({
+      envelope: envelope('k-continuation-source'),
+      payload: sendPayload({ taskContinuationSource: marker }),
+      senderId: 'user-1',
+      teamId: 'team-1',
+    });
+
+    expect(res.outcome).toBe('applied');
+    const messageId = res.result?.commandName === 'send-message' ? res.result.messageId : '';
+    await expect(repos.messages.getById(messageId)).resolves.toMatchObject({
+      meta: { taskContinuationSource: marker },
+    });
+  });
+
   test('replay：同 key+hash 返回首次 receipt，不重复写 Message/Inbox/outbox', async () => {
     const { repos, handle } = setup();
     await seedChannel(repos, { id: 'channel-1', kind: 'channel', humanMemberIds: ['user-1', 'user-2'], agentMemberIds: [] });
