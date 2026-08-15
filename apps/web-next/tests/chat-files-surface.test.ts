@@ -120,4 +120,12 @@ describe('chat files surface', () => {
     // listDocuments 仍可服务于附件行 documentId 映射，但不驱动顶栏列表。
     expect(source).toContain('channelEvents().listDocuments(activeChannel)');
   });
+
+  test('Task、Files 与讨论串复用同一个文件包预览审核弹窗', () => {
+    expect(source).toContain('onOpenPackagePreview={openPackagePreviewModal}');
+    expect(source).toMatch(/<StageDeliveryReviewWorkspace[\s\S]*?onOpenPackagePreview=\{onOpenPackagePreview\}/);
+    expect(source).toMatch(/<ProjectFilesBoard[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
+    expect(source).toMatch(/<ThreadPanel[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
+    expect(source).toContain('openPackagePreview.readOnly || activeChannelObj?.archivedAt');
+  });
 });

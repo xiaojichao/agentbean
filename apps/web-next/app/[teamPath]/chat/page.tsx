@@ -423,6 +423,7 @@ export default function ChatPage() {
     packageMeta: OutputPackageMeta;
     channelId: string;
     initialVersionId?: string;
+    readOnly?: boolean;
   } | null>(null);
   const channelFilesRequestRevisionRef = useRef(0);
   const outputPackageProjectionRequestRef = useRef(0);
@@ -2119,14 +2120,19 @@ export default function ChatPage() {
   }, [setProjectReferenceSelections]);
 
   // 原型对齐:打开文件包预览/编辑浮窗。
-  const openPackagePreviewModal = useCallback((packageMeta: OutputPackageMeta, versionId?: string) => {
+  const openPackagePreviewModal = useCallback((
+    packageMeta: OutputPackageMeta,
+    versionId?: string,
+    readOnly = Boolean(activeChannelObj?.archivedAt),
+  ) => {
     if (!activeChannel) return;
     setOpenPackagePreview({
       packageMeta,
       channelId: activeChannel,
       ...(versionId ? { initialVersionId: versionId } : {}),
+      ...(readOnly ? { readOnly: true } : {}),
     });
-  }, [activeChannel]);
+  }, [activeChannel, activeChannelObj?.archivedAt]);
 
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
@@ -2194,11 +2200,8 @@ export default function ChatPage() {
     }
     const workspaceEntry = channelTaskWorkspace?.entries.find((entry) => entry.task.id === task.id);
     const managed = workspaceEntry?.governance.mode === 'managed';
-    const namedManagedTransition = status === 'cancelled'
-      || status === 'closed'
-      || (workspaceEntry?.governance.nodeKind === 'root'
-        && task.status === 'in_review'
-        && (status === 'done' || status === 'in_progress'));
+    const namedManagedTransition = !['done', 'cancelled', 'closed'].includes(task.status)
+      && (status === 'cancelled' || status === 'closed');
     if (managed && !namedManagedTransition) {
       setChatTaskMenuTarget(null);
       return;
@@ -2212,11 +2215,7 @@ export default function ChatPage() {
         ? await taskEvents().cancel(task.id, '用户取消')
         : status === 'closed'
           ? await taskEvents().close(task.id, '管理员关闭')
-          : managed && task.status === 'in_review' && status === 'done'
-            ? await taskEvents().acceptRootDelivery({ taskId: task.id })
-            : managed && task.status === 'in_review' && status === 'in_progress'
-              ? await taskEvents().rejectRootDelivery({ taskId: task.id, reason: '用户退回修改' })
-              : await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
+        : await taskEvents().update({ id: task.id, status, sortOrder: maxSort + 1 });
       if (res.ok && res.task) {
         setTasks((prev) => prev.map((item) => item.id === task.id ? res.task as TaskItem : item));
       } else {
@@ -2597,6 +2596,9 @@ export default function ChatPage() {
                           msg={msg}
                           groupedWithPrevious={!showDateDivider && isMessageGroupContinuation(previousMessage, msg)}
                           task={task}
+                          taskStatusOptions={task
+                            ? chatTaskStatusOptions(task, channelTaskWorkspace?.entries.find((entry) => entry.task.id === task.id))
+                            : []}
                           taskNumber={task ? taskNumbers.get(task.id) : undefined}
                           taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
                           taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'main' && chatTaskMenuTarget.messageId === msg.id : false}
@@ -2892,6 +2894,7 @@ export default function ChatPage() {
             closeTaskDetail();
             switchTab('files');
           }}
+          onOpenPackagePreview={openPackagePreviewModal}
           onTaskStatus={(status) => { if (taskDetailTask) updateTaskStatus(taskDetailTask, status); }}
           onDeliveryAction={(action) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
@@ -2994,6 +2997,7 @@ export default function ChatPage() {
             pinnedIds={pinnedIds}
             reactionEmojis={reactionEmojis}
             tasks={tasks}
+            taskWorkspaceEntries={channelTaskWorkspace?.entries ?? []}
             taskNumbers={taskNumbers}
             activeDmAgent={activeDmAgent}
             channelMembers={channelMembers}
@@ -3043,6 +3047,7 @@ export default function ChatPage() {
           packageMeta={openPackagePreview.packageMeta}
           channelId={openPackagePreview.channelId}
           {...(openPackagePreview.initialVersionId ? { initialVersionId: openPackagePreview.initialVersionId } : {})}
+          {...(openPackagePreview.readOnly || activeChannelObj?.archivedAt ? { readOnly: true } : {})}
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
           onSaved={() => refreshProjectArtifactLibrary()}
@@ -4369,6 +4374,7 @@ function TaskDetailPanel({
   onViewInChannel,
   onOpenThread,
   onViewAssetSource,
+  onOpenPackagePreview,
   onTaskStatus,
   onDeliveryAction,
   onStageHandoff,
@@ -4393,6 +4399,7 @@ function TaskDetailPanel({
   onViewInChannel: () => void;
   onOpenThread: (rootMessageId?: string) => void;
   onViewAssetSource: (packageId: string) => void;
+  onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
   onDeliveryAction?: (action: TaskLevelAction) => void;
@@ -4436,16 +4443,12 @@ function TaskDetailPanel({
     || workspaceEntry?.governance.mode === 'managed',
   );
   const showTaskDelivery = Boolean(stageId || channelTaskHasProjectFacts(workspaceEntry));
-  const managedStatusOptions = readOnly
-    ? []
-    : workspaceEntry?.governance.mode === 'managed'
-    ? TASK_COLUMNS.filter((column) => (
-        column.id === 'cancelled'
-        || column.id === 'closed'
-        || (workspaceEntry.governance.nodeKind === 'root'
-          && taskStatus === 'in_review'
-          && (column.id === 'done' || column.id === 'in_progress'))
-      ) && column.id !== taskStatus)
+  const managedStatusOptions = readOnly || workspaceEntry?.governance.mode === 'managed'
+    ? readOnly || ['done', 'cancelled', 'closed'].includes(taskStatus)
+      ? []
+      : TASK_COLUMNS.filter((column) => (
+          column.id === 'cancelled' || column.id === 'closed'
+        ) && column.id !== taskStatus)
     : TASK_COLUMNS;
 
   useEffect(() => {
@@ -4588,6 +4591,7 @@ function TaskDetailPanel({
                 participantName={(id) => participantName(id, channelMembers)}
                 onOpenThread={onOpenThread}
                 onViewAssetSource={onViewAssetSource}
+                onOpenPackagePreview={onOpenPackagePreview}
                 onAction={onDeliveryAction}
                 onStageHandoff={onStageHandoff}
               />
@@ -4848,6 +4852,7 @@ function ThreadPanel({
   pinnedIds,
   reactionEmojis,
   tasks,
+  taskWorkspaceEntries,
   taskNumbers,
   activeDmAgent,
   channelMembers,
@@ -4909,6 +4914,7 @@ function ThreadPanel({
   pinnedIds: Set<string>;
   reactionEmojis: ReactionEmojiMap;
   tasks: TaskItem[];
+  taskWorkspaceEntries: readonly ChannelTaskWorkspaceEntryV1[];
   taskNumbers: Map<string, number>;
   activeDmAgent?: AgentSnapshot;
   channelMembers: ChannelMemberEntry[];
@@ -5082,6 +5088,9 @@ function ThreadPanel({
         key={msg.id}
         msg={msg}
         task={task}
+        taskStatusOptions={task
+          ? chatTaskStatusOptions(task, taskWorkspaceEntries.find((entry) => entry.task.id === task.id))
+          : []}
         taskNumber={task ? taskNumbers.get(task.id) : undefined}
         taskAssigneeName={taskAssigneeLabel(msg, task, agents, activeDmAgent, channelMembers)}
         taskMenuOpen={task ? chatTaskMenuTarget?.surface === 'thread' && chatTaskMenuTarget.messageId === msg.id : false}
@@ -5505,6 +5514,7 @@ function ChatBubble({
   msg,
   groupedWithPrevious = false,
   task,
+  taskStatusOptions = [],
   taskNumber,
   taskAssigneeName,
   taskMenuOpen = false,
@@ -5548,6 +5558,7 @@ function ChatBubble({
   msg: ChatMessage;
   groupedWithPrevious?: boolean;
   task?: TaskItem | null;
+  taskStatusOptions?: readonly TaskStatus[];
   taskNumber?: number;
   taskAssigneeName?: string;
   taskMenuOpen?: boolean;
@@ -5954,7 +5965,8 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
-                onStatus={onTaskStatus}
+                statusOptions={taskStatusOptions}
+                onStatus={taskStatusOptions.length > 0 ? onTaskStatus : undefined}
               />
             )}
             {showReplyCount && replyCount > 0 && (
@@ -5974,7 +5986,8 @@ function ChatBubble({
                 assigneeName={taskAssigneeName ?? (agent?.name ?? speaker)}
                 open={taskMenuOpen}
                 onOpen={onTaskMenu}
-                onStatus={onTaskStatus}
+                statusOptions={taskStatusOptions}
+                onStatus={taskStatusOptions.length > 0 ? onTaskStatus : undefined}
               />
             )}
             {showInlineReplyBadge && (
@@ -6052,6 +6065,7 @@ function ChatTaskBadge({
   assigneeName,
   open,
   onOpen,
+  statusOptions,
   onStatus,
 }: {
   task?: TaskItem | null;
@@ -6059,6 +6073,7 @@ function ChatTaskBadge({
   assigneeName: string;
   open: boolean;
   onOpen?: (open: boolean) => void;
+  statusOptions: readonly TaskStatus[];
   onStatus?: (status: TaskStatus) => void;
 }) {
   const column = TASK_COLUMNS.find((item) => item.id === task?.status) ?? TASK_COLUMNS[0]!;
@@ -6080,7 +6095,7 @@ function ChatTaskBadge({
       </button>
       {open && canChange && (
         <div className={`absolute left-0 top-6 ${TASK_STATUS_MENU_PANEL_CLASS}`} style={TASK_STATUS_MENU_PANEL_STYLE}>
-          {TASK_COLUMNS.map((status) => (
+          {TASK_COLUMNS.filter((status) => statusOptions.includes(status.id)).map((status) => (
             <button
               key={status.id}
               onClick={(event) => {
@@ -6098,6 +6113,14 @@ function ChatTaskBadge({
       )}
     </span>
   );
+}
+
+function chatTaskStatusOptions(task: TaskItem, entry?: ChannelTaskWorkspaceEntryV1): readonly TaskStatus[] {
+  if (!entry) return [];
+  if (['done', 'cancelled', 'closed'].includes(task.status)) return [];
+  if (entry.governance.allowDirectStatusMutation) return TASK_COLUMNS.map((column) => column.id);
+  if (entry.governance.mode === 'managed') return ['cancelled', 'closed'];
+  return [];
 }
 
 function taskBadgeIcon(status: TaskStatus): ReactNode {

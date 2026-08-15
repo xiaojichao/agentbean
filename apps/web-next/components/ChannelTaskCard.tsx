@@ -81,6 +81,9 @@ export function ChannelTaskFactSummary({
           {delivery.requiredForFinalCount > 0
             ? ` · 最终版 ${delivery.finalizedCount}/${delivery.requiredForFinalCount}`
             : ' · 最终版 0 个'}
+          {delivery.fileReviewRequiredCount > 0
+            ? ` · 文件审核 ${delivery.fileReviewApprovedCount}/${delivery.fileReviewRequiredCount}${delivery.fileReviewComplete ? '（已齐）' : '（待补齐）'}`
+            : ' · 文件审核 0 个'}
         </span>
       </div>
       <div data-smoke="task-card-reviewer">

@@ -34,6 +34,7 @@ const baseEntry: ChannelTaskWorkspaceEntryV1 = {
     packageCount: 1, pendingDeliveryCount: 1, focusPackageId: 'package-1',
     focusMemberCount: 2, focusReviewState: 'changes_requested',
     requiredForFinalCount: 2, finalizedCount: 1,
+    fileReviewRequiredCount: 2, fileReviewApprovedCount: 1, fileReviewComplete: false,
   },
   review: { reviewerIds: ['reviewer-1'] },
 };
@@ -83,6 +84,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('要求修改');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 1/2');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('文件审核 1/2（待补齐）');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('建议审核人：审核员');
     expect(document.querySelector('select')).toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).toBeNull();
@@ -98,7 +100,10 @@ describe('ChannelTaskCard', () => {
         allowDirectAssigneeMutation: true, allowDirectDelete: true,
       },
       responsibilityFocus: { kind: 'none', detail: '尚无协调事实' },
-      delivery: { packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0 },
+      delivery: {
+        packageCount: 0, pendingDeliveryCount: 0, requiredForFinalCount: 0, finalizedCount: 0,
+        fileReviewRequiredCount: 0, fileReviewApprovedCount: 0, fileReviewComplete: true,
+      },
       review: { reviewerIds: [] },
     };
     const callbacks = renderCard(plainEntry);
@@ -124,6 +129,9 @@ describe('ChannelTaskCard', () => {
         pendingDeliveryCount: 1,
         requiredForFinalCount: 2,
         finalizedCount: 2,
+        fileReviewRequiredCount: 2,
+        fileReviewApprovedCount: 2,
+        fileReviewComplete: true,
         focusPackageId: 'package-2',
         focusReviewState: 'approved',
       },
@@ -147,6 +155,7 @@ describe('ChannelTaskCard', () => {
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('已通过');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('1 批处理中');
     expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('最终版 2/2');
+    expect(document.querySelector('[data-smoke="task-card-delivery"]')?.textContent).toContain('文件审核 2/2（已齐）');
     expect(document.querySelector('[data-smoke="task-card-reviewer"]')?.textContent).toContain('实际审核人：审核员');
     expect(document.querySelector('select')).not.toBeNull();
     expect(document.querySelector('button[title="删除任务"]')).not.toBeNull();

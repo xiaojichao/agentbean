@@ -66,6 +66,8 @@ export interface OutputPackagePreviewModalProps {
   channelId: string;
   /** 成员行「预览」进入时聚焦的成员(交付冻结版本 id)。 */
   initialVersionId?: string;
+  /** 归档频道等只读来源仍可预览，但不暴露编辑、审核或最终化动作。 */
+  readOnly?: boolean;
   renderPreview: (content: string) => ReactNode;
   onClose: () => void;
   /** 保存成功后通知父级(刷新卡片/library 投影)。 */
@@ -80,6 +82,7 @@ export function OutputPackagePreviewModal({
   packageMeta,
   channelId,
   initialVersionId,
+  readOnly = false,
   renderPreview,
   onClose,
   onSaved,
@@ -163,13 +166,14 @@ export function OutputPackagePreviewModal({
     setCollections(libraryResult.library.collections);
     setLoadError(null);
     if (packageResult.ok && packageResult.package) {
-      setAvailableActions(packageResult.availableActions ?? []);
+      const projectedActions = readOnly ? [] : packageResult.availableActions ?? [];
+      setAvailableActions(projectedActions);
       setReviewPackageBasis(packageResult.package);
       setReviewThreadRootMessageId(packageResult.threadRootMessageId ?? packageMeta.threadRootMessageId ?? null);
       const currentReviewableVersionIds = packageMeta.members.flatMap((member) => {
         const collection = libraryResult.library!.collections.find((candidate) => candidate.id === member.collectionId);
         const currentVersionId = collection?.currentVersionId;
-        const actions = packageResult.availableActions?.find((entry) => (
+        const actions = projectedActions.find((entry) => (
           entry.collectionId === member.collectionId && entry.versionId === currentVersionId
         ));
         return currentVersionId && actions?.actions.some((action) => action.startsWith('review-'))
@@ -190,11 +194,18 @@ export function OutputPackagePreviewModal({
       return { collections: libraryResult.library.collections, error };
     }
     return { collections: libraryResult.library.collections, error: null };
-  }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId]);
+  }, [channelId, packageMeta.packageId, packageMeta.threadRootMessageId, readOnly]);
 
   useEffect(() => {
     void loadWorkspace();
   }, [loadWorkspace]);
+
+  useEffect(() => {
+    if (!readOnly) return;
+    setReviewPanel(null);
+    setBatchPanelOpen(false);
+    setSelectedVersionIds(new Set());
+  }, [readOnly]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -230,7 +241,7 @@ export function OutputPackagePreviewModal({
   const activeIsMarkdown = active
     ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
     : false;
-  const activeActions = active && availableActions
+  const activeActions = active && availableActions && !readOnly
     ? availableActions.find((entry) => (
       entry.collectionId === active.collection.id && entry.versionId === active.current.id
     )) ?? null
@@ -369,18 +380,13 @@ export function OutputPackagePreviewModal({
 
   const submitCurrentReview = useCallback(async (decision: 'approved') => {
     if (!active || !activeActions || reviewBusy) return;
-    const requiredAction = 'review-approved';
+    const requiredAction = finalizeAfterApprove ? 'review-and-finalize' : 'review-approved';
     if (!activeActions.actions.includes(requiredAction)) {
       setActionError('该版本的审核动作已不可用，请刷新后重试');
       return;
     }
     if (editorState.dirty
       && !window.confirm(`当前有未保存草稿。将只审核 Server v${active.current.versionNumber}，草稿不会提交。继续吗？`)) {
-      return;
-    }
-    if (finalizeAfterApprove
-      && !activeActions.actions.includes('review-and-finalize')) {
-      setActionError('“通过并设为最终版”动作已不可用，请刷新后重试');
       return;
     }
     setReviewBusy(true);
@@ -518,7 +524,7 @@ export function OutputPackagePreviewModal({
     reviewBusy, reviewComment, reviewPackageBasis, reviewThreadRootMessageId]);
 
   const submitBatchReview = useCallback(async () => {
-    if (!reviewPackageBasis || selectedBatchTargets.length === 0 || batchBusy) return;
+    if (readOnly || !reviewPackageBasis || selectedBatchTargets.length === 0 || batchBusy) return;
     if (batchDecision !== 'approved' && !batchComment.trim()) {
       setActionError(batchDecision === 'rejected' ? '全部拒绝时请填写统一意见' : '全部要求修改时请填写统一意见');
       return;
@@ -602,7 +608,7 @@ export function OutputPackagePreviewModal({
       setBatchBusy(false);
     }
   }, [availableActions, batchBusy, batchComment, batchDecision, channelId, loadWorkspace, onSaved,
-    reviewPackageBasis, selectedBatchTargets]);
+    readOnly, reviewPackageBasis, selectedBatchTargets]);
 
   const loadLatest = useCallback(async () => {
     const { collections: latestCollections } = await loadWorkspace();
@@ -706,7 +712,7 @@ export function OutputPackagePreviewModal({
                 <div key={member.artifactVersionId} className={`mb-2 flex rounded-lg border ${
                   isActive ? 'border-sky-200 bg-sky-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
                 }`}>
-                  <label className="flex shrink-0 items-start px-2 pt-2.5" title="加入批量审核">
+                  {!readOnly && <label className="flex shrink-0 items-start px-2 pt-2.5" title="加入批量审核">
                     <input
                       type="checkbox"
                       checked={Boolean(current && selectedVersionIds.has(current.id))}
@@ -721,7 +727,7 @@ export function OutputPackagePreviewModal({
                       }}
                       aria-label={`选择 ${member.filename} 当前版本参与批量审核`}
                     />
-                  </label>
+                  </label>}
                   <button
                     type="button"
                     onClick={() => selectMember(member.collectionId)}
@@ -759,6 +765,8 @@ export function OutputPackagePreviewModal({
                 key={`${active.current.id}:${editorEpoch}`}
                 filename={(active.current.artifact as unknown as Artifact).filename}
                 initialContent={content}
+                readOnly={readOnly}
+                {...(readOnly ? { readOnlyReason: '归档频道只读' } : {})}
                 onSave={saveCurrent}
                 onLoadLatest={loadLatest}
                 renderPreview={renderPreview}
@@ -1004,6 +1012,7 @@ export function OutputPackagePreviewModal({
                 className={`rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
                   reviewPanel === 'return' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-emerald-600 hover:bg-emerald-700'
                 }`}
+                data-smoke="package-preview-review-submit"
               >
                 {reviewBusy || editorState.saving
                   ? '提交中…'
@@ -1015,7 +1024,7 @@ export function OutputPackagePreviewModal({
           </section>
         )}
 
-        {batchPanelOpen && (
+        {batchPanelOpen && !readOnly && (
           <section
             className="absolute bottom-14 right-3 z-20 w-[min(460px,calc(100%-24px))] rounded-lg border border-neutral-200 bg-white p-3 shadow-xl"
             aria-label="批量审核文件版本"
@@ -1087,6 +1096,8 @@ export function OutputPackagePreviewModal({
               <span className="truncate text-red-700" role="alert">{actionError}</span>
             ) : savedNotice ? (
               <span className="truncate text-emerald-700" data-smoke="package-preview-saved">{savedNotice}</span>
+            ) : readOnly ? (
+              <span className="truncate text-neutral-500">归档频道只读，仅可预览历史版本</span>
             ) : availableActions && (!activeActions || activeActions.actions.length === 0) ? (
               <span className="truncate text-neutral-500">当前版本没有可执行的审核动作</span>
             ) : null}
@@ -1096,7 +1107,7 @@ export function OutputPackagePreviewModal({
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
               data-smoke="package-preview-actions"
             >
-              <button
+              {!readOnly && <button
                 type="button"
                 disabled={selectedBatchTargets.length === 0 || batchBusy}
                 onClick={() => {
@@ -1108,7 +1119,7 @@ export function OutputPackagePreviewModal({
                 data-smoke="package-preview-batch-review"
               >
                 批量审核（{selectedBatchTargets.length}）…
-              </button>
+              </button>}
               {activeIsMarkdown && (
                 <button
                   type="button"

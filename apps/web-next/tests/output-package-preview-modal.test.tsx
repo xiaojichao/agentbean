@@ -121,6 +121,7 @@ function library(
 
 function renderModal(options: {
   initialVersionId?: string;
+  readOnly?: boolean;
   onClose?: () => void;
   onSaved?: () => void;
   prepareReturnThread?: (threadRootMessageId: string) => Promise<boolean>;
@@ -131,6 +132,7 @@ function renderModal(options: {
       packageMeta={packageMeta}
       channelId="channel-1"
       {...(options.initialVersionId ? { initialVersionId: options.initialVersionId } : {})}
+      {...(options.readOnly ? { readOnly: true } : {})}
       renderPreview={(content) => <div data-testid="rendered-markdown">{content}</div>}
       onClose={options.onClose ?? vi.fn()}
       onSaved={options.onSaved ?? vi.fn()}
@@ -786,6 +788,24 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
   });
 
+  test('Server 仅开放原子通过并最终化时仍可从统一预览完成动作', async () => {
+    const detail = await mocks.getOutputPackage();
+    detail.availableActions[0].actions = ['review-and-finalize'];
+    mocks.getOutputPackage.mockResolvedValue(detail);
+    renderModal();
+    await screen.findByRole('textbox', { name: 'Markdown 源文' });
+    fireEvent.click(screen.getByRole('button', { name: '通过' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: '同时设为当前文档的最终版（不验收 Task）' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认通过' }));
+
+    await waitFor(() => expect(mocks.submitPackageReviewAndFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      versionId: 'version-1',
+      expectedCollectionRevision: 4,
+    })));
+    expect(mocks.submitPackageArtifactReview).not.toHaveBeenCalled();
+    expect(await screen.findByText(/已设为 final/)).toBeTruthy();
+  });
+
   test('没有 Server 审核动作时不显示审核按钮，并明确提示动作不可用', async () => {
     mocks.getOutputPackage.mockResolvedValue({
       ok: true,
@@ -804,6 +824,18 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.queryByRole('button', { name: '通过' })).toBeNull();
     expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
     expect(screen.getByText('当前版本没有可执行的审核动作')).toBeTruthy();
+  });
+
+  test('归档频道统一预览保持只读，不暴露编辑、审核或最终化动作', async () => {
+    renderModal({ readOnly: true });
+    const editor = await screen.findByRole('textbox', { name: 'Markdown 源文' }) as HTMLTextAreaElement;
+    expect(editor.disabled).toBe(true);
+    expect(screen.getByText('归档频道只读，仅可预览历史版本')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '通过' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /参与批量审核/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /批量审核/ })).toBeNull();
+    expect((screen.getByRole('button', { name: '保存为 Server 新版本' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   test('组合保存遇到 stale fence 时保留脏稿并提示查看最新版', async () => {

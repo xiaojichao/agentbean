@@ -14,19 +14,22 @@ describe('standalone task governance surface', () => {
     expect(source).not.toMatch(/function TaskCard[\s\S]*?taskEvents\(\)\.channelWorkspace/);
   });
 
-  test('受管任务禁用拖拽、排序和删除，只暴露具名 lifecycle 路径', () => {
+  test('受管任务禁用自由 mutation，但保留取消与关闭具名生命周期命令', () => {
     expect(source).toContain("data-governance={managed ? 'managed' : directMutationAllowed ? 'plain' : 'loading'}");
     expect(source).toContain('draggable={directMutationAllowed}');
     expect(source).toContain('allowsDirectTaskMutation(task, workspaceEntriesByTaskId[task.id])');
     expect(source).toContain('allowsDirectTaskMutation(task, workspaceEntriesByTaskId[taskId])');
     expect(source).toContain("workspaceEntry?.governance.mode === 'plain'");
-    expect(source).toContain("status === 'cancelled'");
-    expect(source).toContain('taskEvents().acceptRootDelivery');
-    expect(source).toContain('taskEvents().rejectRootDelivery');
+    expect(source).toContain("column.id === 'cancelled' || column.id === 'closed'");
+    expect(source).toContain('taskEvents().cancel(task.id, reason)');
+    expect(source).toContain('taskEvents().close(task.id, reason)');
+    expect(source).not.toContain('taskEvents().acceptRootDelivery');
+    expect(source).not.toContain('taskEvents().rejectRootDelivery');
   });
 
-  test('新建任务不再直接选择负责人', () => {
-    expect(source).not.toContain('createAssigneeId');
-    expect(source).not.toContain('assigneeId: createAssigneeId');
+  test('不再提供常驻新建任务入口，提示从频道讨论串形成执行事实', () => {
+    expect(source).not.toContain('tasks-create-open');
+    expect(source).not.toContain('tasks-create-form');
+    expect(source).toContain('通过频道讨论串发送 @Agent、指令与文件引用来创建执行事实');
   });
 });
