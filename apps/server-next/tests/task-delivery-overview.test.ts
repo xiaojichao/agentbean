@@ -369,7 +369,7 @@ for (const variant of variants) {
       expect(overview.task.status).toBe('in_progress');
       expect(overview.governance).toMatchObject({
         mode: 'managed',
-        sources: ['task_coordination'],
+        sources: ['task_coordination', 'agent_delivery'],
         allowDirectStatusMutation: false,
       });
       expect(overview.acceptanceContract).toMatchObject({
@@ -510,6 +510,204 @@ for (const variant of variants) {
       const delegate = overview.availableActions.find((a) => a.action === 'delegate-to-agent')!;
       expect(delegate.disabled).toBe(true);
       expect(delegate.disabledReason).toBe('暂无交付文件包');
+    });
+
+    test('#1217:direct Agent Task 由交付事实进入受管治理并通过具名命令验收', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-direct-agent-delivery';
+      await seedValue.repositories.tasks.create({
+        id: taskId,
+        teamId: seedValue.teamId,
+        title: 'direct agent delivery',
+        status: 'in_review',
+        creatorId: seedValue.userId,
+        assigneeId: seedValue.agentId,
+        channelId: seedValue.channelId,
+        tags: [],
+        sortOrder: 0,
+        createdAt: 10,
+        updatedAt: 10,
+      });
+      await commitDelivery(seedValue, 'pub-direct-agent-delivery', [
+        { path: 'docs/direct.md', body: Buffer.from('direct delivery') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+      const packageRecord = await seedValue.repositories.outputPackages.getPackageByPublishId({
+        teamId: seedValue.teamId,
+        publishId: 'pub-direct-agent-delivery',
+      });
+      if (!packageRecord) throw new Error('package not found');
+      const member = packageRecord.members[0]!;
+
+      const pendingOverview = await queryOverview(seedValue, taskId);
+      expect(pendingOverview.governance).toMatchObject({
+        mode: 'managed',
+        sources: ['agent_delivery'],
+        allowDirectStatusMutation: false,
+        allowDirectAssigneeMutation: false,
+        allowDirectDelete: false,
+      });
+      expect(pendingOverview.acceptanceContract).toMatchObject({
+        humanAcceptanceAuthorityIds: [seedValue.userId],
+        requiresHumanAcceptance: true,
+      });
+      expect(pendingOverview.availableActions.find((action) => action.action === 'accept-delivery')).toMatchObject({
+        disabled: true,
+        disabledReason: '还有文件未通过审核：direct.md待审核',
+      });
+
+      const reviewed = await seedValue.app.submitPackageArtifactReview({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        packageId: packageRecord.package.packageId,
+        collectionId: member.collectionId,
+        versionId: member.artifactVersionId,
+        decision: 'approved',
+        comment: 'direct 交付通过',
+        idempotencyKey: `approve:${member.artifactVersionId}`,
+      });
+      expect(reviewed.ok).toBe(true);
+
+      const readyOverview = await queryOverview(seedValue, taskId);
+      expect(readyOverview.availableActions.find((action) => action.action === 'accept-delivery')?.disabled).toBeUndefined();
+      await seedValue.repositories.channels.update({
+        channelId: seedValue.channelId,
+        changes: { visibility: 'private', humanMemberIds: [] },
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      await seedValue.repositories.channels.update({
+        channelId: seedValue.channelId,
+        changes: { humanMemberIds: [seedValue.userId] },
+      });
+      const pendingRevisionId = await currentWorkspaceRevision(seedValue);
+      await seedValue.repositories.workspacePublishStagings.create({
+        publishId: 'pub-direct-pending',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        baselineRevisionId: pendingRevisionId,
+        status: 'committed',
+        files: [],
+        createdBy: seedValue.userId,
+        createdAt: 900,
+        updatedAt: 901,
+        committedRevisionId: pendingRevisionId,
+        provenance: {
+          agentId: seedValue.agentId,
+          taskId,
+          taskAttempt: 2,
+        },
+      });
+      expect((await queryOverview(seedValue, taskId)).availableActions.find(
+        (action) => action.action === 'accept-delivery',
+      )).toMatchObject({
+        disabled: true,
+        disabledReason: '新交付仍在处理中，请刷新后重试',
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      await seedValue.repositories.workspacePublishStagings.delete({
+        teamId: seedValue.teamId,
+        publishId: 'pub-direct-pending',
+      });
+      const genericCompletion = await seedValue.app.updateTask({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        status: 'done',
+      });
+      expect(genericCompletion).toMatchObject({ ok: false, error: 'CONFLICT' });
+      await expect(seedValue.app.reorderTask({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        sortOrder: 999,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      await expect(seedValue.app.deleteTask({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      const staleAcceptance = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        expectedTaskRevision: 2,
+      });
+      expect(staleAcceptance).toMatchObject({ ok: false, error: 'CONFLICT' });
+
+      const accepted = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      });
+      expect(accepted).toMatchObject({ ok: true, task: { status: 'done' } });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: true, task: { status: 'done' } });
+      await seedValue.repositories.channels.archive({
+        channelId: seedValue.channelId,
+        timestamp: 1_000,
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      const messages = await seedValue.repositories.messages.listByChannel(seedValue.channelId, 50);
+      const acceptanceMessages = messages.filter((message) => message.meta?.kind === 'task-delivery-accepted');
+      expect(acceptanceMessages).toHaveLength(1);
+      expect(acceptanceMessages).toContainEqual(expect.objectContaining({
+        senderKind: 'system',
+        meta: expect.objectContaining({
+          kind: 'task-delivery-accepted',
+          taskId,
+          acceptedBy: seedValue.userId,
+          packageId: packageRecord.package.packageId,
+        }),
+      }));
+    });
+
+    test('#1217:已有 coordination 的 Task 不得误入 direct 交付验收', async () => {
+      const seedValue = await seed(variant);
+      cleanups.push(seedValue.close);
+      const taskId = 'task-coordinated-delivery';
+      await seedTask(seedValue, taskId, {
+        status: 'in_review',
+      });
+      const coordination = await seedValue.repositories.taskCoordination.coordinations.getByTaskId(taskId);
+      if (!coordination) throw new Error('coordination not found');
+      await seedValue.repositories.taskCoordination.coordinations.update({
+        record: { ...coordination, nodeKind: 'subtask' },
+        expectedTaskRevision: coordination.taskRevision,
+      });
+      await commitDelivery(seedValue, 'pub-coordinated-delivery', [
+        { path: 'docs/coordinated.md', body: Buffer.from('coordinated delivery') },
+      ], { agentId: seedValue.agentId, taskId, taskAttempt: 1 });
+
+      const overview = await queryOverview(seedValue, taskId);
+      expect(overview.acceptanceContract.humanAcceptanceAuthorityIds).toEqual([]);
+      expect(overview.availableActions.find((action) => action.action === 'accept-delivery')).toMatchObject({
+        disabled: true,
+        disabledReason: '你不是当前交付的验收人',
+      });
+
+      const accepted = await seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      });
+      expect(accepted).toMatchObject({ ok: false, error: 'CONFLICT' });
+      expect((await seedValue.repositories.tasks.getById(taskId))?.status).toBe('in_review');
     });
 
     test('#1200:终态 root Task 投影 Server continuation basis，非终态不提供创建动作', async () => {
