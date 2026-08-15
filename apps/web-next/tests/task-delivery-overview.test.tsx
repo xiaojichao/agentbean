@@ -179,10 +179,25 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
   });
 
   test('验收动作先确认，再以投影 revision 提交具名 command 并刷新投影', async () => {
-    mocks.queryTaskDeliveryOverview.mockResolvedValue({
+    let refreshProjection: (() => void) | undefined;
+    mocks.onArtifactsUpdated.mockImplementation((_channelId, handler) => {
+      refreshProjection = handler;
+      return () => {};
+    });
+    mocks.queryTaskDeliveryOverview.mockResolvedValueOnce({
       ok: true,
       overview: {
         ...overviewFixture,
+        availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
+      },
+    }).mockResolvedValue({
+      ok: true,
+      overview: {
+        ...overviewFixture,
+        acceptanceContract: {
+          ...overviewFixture.acceptanceContract,
+          taskRevision: 2,
+        },
         availableActions: [{ action: 'accept-delivery', label: '验收本次交付' }],
       },
     });
@@ -196,12 +211,15 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).not.toBeNull();
     expect(mocks.acceptRootDelivery).not.toHaveBeenCalled();
 
+    refreshProjection?.();
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
+
     fireEvent.click(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"] button:last-child')!);
     await vi.waitFor(() => expect(mocks.acceptRootDelivery).toHaveBeenCalledWith({
       taskId: 'task-1',
       expectedTaskRevision: 1,
     }));
-    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(3));
     expect(document.querySelector('[data-smoke="task-delivery-acceptance-dialog"]')).toBeNull();
   });
 

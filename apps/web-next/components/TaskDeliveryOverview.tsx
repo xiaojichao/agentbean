@@ -9,6 +9,7 @@ import type {
 import {
   mutationErrorCopy,
   submitDeliveryMutation,
+  type DeliveryMutationTarget,
 } from '@/lib/package-review-actions';
 import { projectEvents, taskEvents } from '@/lib/socket';
 // #1065 AC11：与 Chat 卡片/Files 列表共享同一组文本标签。
@@ -46,15 +47,16 @@ export function TaskDeliveryOverview({
   const [overview, setOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [acceptanceOpen, setAcceptanceOpen] = useState(false);
+  const [acceptanceTarget, setAcceptanceTarget] = useState<DeliveryMutationTarget | null>(null);
   const [accepting, setAccepting] = useState(false);
   const [acceptanceError, setAcceptanceError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const acceptanceTitleId = useId();
   const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
+  const acceptanceOpen = acceptanceTarget !== null;
 
   const closeAcceptance = useCallback(() => {
-    setAcceptanceOpen(false);
+    setAcceptanceTarget(null);
     setAcceptanceError(null);
     const trigger = acceptanceTriggerRef.current;
     queueMicrotask(() => {
@@ -138,19 +140,19 @@ export function TaskDeliveryOverview({
       ? document.activeElement
       : null;
     setAcceptanceError(null);
-    setAcceptanceOpen(true);
+    setAcceptanceTarget({
+      taskId,
+      expectedTaskRevision: overview.acceptanceContract.taskRevision,
+      kind: 'accept-delivery',
+    });
   };
 
   const confirmAcceptance = async () => {
-    if (accepting) return;
+    if (accepting || !acceptanceTarget) return;
     setAccepting(true);
     setAcceptanceError(null);
     try {
-      const result = await submitDeliveryMutation({
-        taskId,
-        expectedTaskRevision: overview.acceptanceContract.taskRevision,
-        kind: 'accept-delivery',
-      }, { comment: '', rejectReason: '' });
+      const result = await submitDeliveryMutation(acceptanceTarget, { comment: '', rejectReason: '' });
       if (!result.ok) {
         setAcceptanceError(mutationErrorCopy(result));
         return;
