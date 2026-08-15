@@ -24,8 +24,11 @@ describe('chat thread mentions', () => {
   test('every channel message send carries an idempotency key', () => {
     const chatSource = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const taskSource = readFileSync(new URL('../app/[teamPath]/tasks/page.tsx', import.meta.url), 'utf8');
-    const chatSends = chatSource.match(/getWebSocket\(\)\.emit\(WEB_EVENTS\.message\.send,[^\n]+/g) ?? [];
-    const taskSends = taskSource.match(/getWebSocket\(\)\.emit\(WEB_EVENTS\.message\.send,[^\n]+/g) ?? [];
+    const messageSendCallsites = (source: string) => source.match(
+      /(?:getWebSocket\(\)\.emit\(WEB_EVENTS\.message\.send|emitWithTimeout\(getWebSocket\(\), WEB_EVENTS\.message\.send),[^\n]+/g,
+    ) ?? [];
+    const chatSends = messageSendCallsites(chatSource);
+    const taskSends = messageSendCallsites(taskSource);
 
     expect(chatSends).toHaveLength(2);
     expect(taskSends).toHaveLength(1);
