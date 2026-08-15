@@ -712,7 +712,7 @@ export function OutputPackagePreviewModal({
                 <div key={member.artifactVersionId} className={`mb-2 flex rounded-lg border ${
                   isActive ? 'border-sky-200 bg-sky-50' : 'border-neutral-200 bg-white hover:border-neutral-300'
                 }`}>
-                  <label className="flex shrink-0 items-start px-2 pt-2.5" title="加入批量审核">
+                  {!readOnly && <label className="flex shrink-0 items-start px-2 pt-2.5" title="加入批量审核">
                     <input
                       type="checkbox"
                       checked={Boolean(current && selectedVersionIds.has(current.id))}
@@ -727,7 +727,7 @@ export function OutputPackagePreviewModal({
                       }}
                       aria-label={`选择 ${member.filename} 当前版本参与批量审核`}
                     />
-                  </label>
+                  </label>}
                   <button
                     type="button"
                     onClick={() => selectMember(member.collectionId)}
@@ -1107,7 +1107,7 @@ export function OutputPackagePreviewModal({
               className="flex min-w-0 max-w-full items-center gap-1.5 overflow-x-auto [&>*]:shrink-0"
               data-smoke="package-preview-actions"
             >
-              <button
+              {!readOnly && <button
                 type="button"
                 disabled={selectedBatchTargets.length === 0 || batchBusy}
                 onClick={() => {
@@ -1119,7 +1119,7 @@ export function OutputPackagePreviewModal({
                 data-smoke="package-preview-batch-review"
               >
                 批量审核（{selectedBatchTargets.length}）…
-              </button>
+              </button>}
               {activeIsMarkdown && (
                 <button
                   type="button"

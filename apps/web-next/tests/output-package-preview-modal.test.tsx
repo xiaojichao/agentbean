@@ -833,6 +833,8 @@ describe('OutputPackagePreviewModal 原型收敛', () => {
     expect(screen.getByText('归档频道只读，仅可预览历史版本')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '通过' })).toBeNull();
     expect(screen.queryByRole('button', { name: '退回修改…' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /参与批量审核/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /批量审核/ })).toBeNull();
     expect((screen.getByRole('button', { name: '保存为 Server 新版本' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
