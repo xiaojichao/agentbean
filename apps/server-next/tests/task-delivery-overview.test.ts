@@ -584,6 +584,33 @@ for (const variant of variants) {
         channelId: seedValue.channelId,
         changes: { humanMemberIds: [seedValue.userId] },
       });
+      const pendingRevisionId = await currentWorkspaceRevision(seedValue);
+      await seedValue.repositories.workspacePublishStagings.create({
+        publishId: 'pub-direct-pending',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        baselineRevisionId: pendingRevisionId,
+        status: 'committed',
+        files: [],
+        createdBy: seedValue.userId,
+        createdAt: 900,
+        updatedAt: 901,
+        committedRevisionId: pendingRevisionId,
+        provenance: {
+          agentId: seedValue.agentId,
+          taskId,
+          taskAttempt: 2,
+        },
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      await seedValue.repositories.workspacePublishStagings.delete({
+        teamId: seedValue.teamId,
+        publishId: 'pub-direct-pending',
+      });
       const genericCompletion = await seedValue.app.updateTask({
         userId: seedValue.userId,
         teamId: seedValue.teamId,
@@ -591,6 +618,17 @@ for (const variant of variants) {
         status: 'done',
       });
       expect(genericCompletion).toMatchObject({ ok: false, error: 'CONFLICT' });
+      await expect(seedValue.app.reorderTask({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+        sortOrder: 999,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
+      await expect(seedValue.app.deleteTask({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
       const staleAcceptance = await seedValue.app.acceptRootDelivery({
         userId: seedValue.userId,
         teamId: seedValue.teamId,

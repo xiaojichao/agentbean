@@ -303,6 +303,7 @@ import {
 } from './output-package-handler.js';
 import { findCurrentManagedOutputPackage } from './output-package-current-delivery.js';
 import { ensureUserCanViewChannel } from './channel-access.js';
+import type { TaskCoordinationTransactionRepositories } from './task-coordination-unit-of-work.js';
 import type {
   ChannelTaskWorkspaceV1,
   TaskAcceptanceContractV1,
@@ -10270,51 +10271,66 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       if (title !== undefined && !title) {
         return makeFailure('VALIDATION_ERROR', 'Task title is required');
       }
-      // #995：绑定 management run 的 root Task 禁止用 task:update 完成/退回。
-      if (taskInput.status !== undefined && taskInput.status !== task.status) {
-        const managementRun = await repositories.management.runs.getByRootTaskId(task.id);
-        if (managementRun && taskInput.status === 'done') {
-          return makeFailure(
-            'CONFLICT',
-            'Managed root completion must use accept-root-delivery (task:accept-root-delivery)',
-          );
+      const mutation = await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        const currentTask = await transaction.tasks.getById(task.id);
+        if (!currentTask || currentTask.teamId !== taskInput.teamId) {
+          return makeFailure('NOT_FOUND', 'Task not found');
         }
-        if (managementRun && task.status === 'in_review' && taskInput.status === 'in_progress') {
-          return makeFailure(
-            'CONFLICT',
-            'Managed root rework must use reject-root-delivery (task:reject-root-delivery)',
-          );
+        if (
+          hasOwn(taskInput, 'channelId')
+          && nextChannelId !== currentTask.channelId
+          && await taskIsBoundToProjectStage(transaction, currentTask)
+        ) {
+          return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot change channels');
         }
-      }
-      const protectedMutation = (
-        (taskInput.status !== undefined && taskInput.status !== task.status)
-        || (hasOwn(taskInput, 'assigneeId') && nextAssigneeId !== (task.assigneeId ?? undefined))
-        || (hasOwn(taskInput, 'channelId') && nextChannelId !== (task.channelId ?? undefined))
-        || (taskInput.sortOrder !== undefined && taskInput.sortOrder !== task.sortOrder)
-      );
-      if (protectedMutation && await taskHasManagedGovernance(repositories, task)) {
-        return makeFailure(
-          'CONFLICT',
-          'Managed task workflow fields must use named lifecycle commands',
+        // #995：绑定 management run 的 root Task 禁止用 task:update 完成/退回。
+        if (taskInput.status !== undefined && taskInput.status !== currentTask.status) {
+          const managementRun = await transaction.management.runs.getByRootTaskId(currentTask.id);
+          if (managementRun && taskInput.status === 'done') {
+            return makeFailure(
+              'CONFLICT',
+              'Managed root completion must use accept-root-delivery (task:accept-root-delivery)',
+            );
+          }
+          if (managementRun && currentTask.status === 'in_review' && taskInput.status === 'in_progress') {
+            return makeFailure(
+              'CONFLICT',
+              'Managed root rework must use reject-root-delivery (task:reject-root-delivery)',
+            );
+          }
+        }
+        const protectedMutation = (
+          (taskInput.status !== undefined && taskInput.status !== currentTask.status)
+          || (hasOwn(taskInput, 'assigneeId') && nextAssigneeId !== (currentTask.assigneeId ?? undefined))
+          || (hasOwn(taskInput, 'channelId') && nextChannelId !== (currentTask.channelId ?? undefined))
+          || (taskInput.sortOrder !== undefined && taskInput.sortOrder !== currentTask.sortOrder)
         );
-      }
-      const updated = await repositories.tasks.update({
-        taskId: task.id,
-        changes: {
-          ...(title !== undefined ? { title } : {}),
-          ...(hasOwn(taskInput, 'description') ? { description: normalizeOptionalText(taskInput.description ?? undefined) } : {}),
-          ...(taskInput.status !== undefined ? { status: taskInput.status } : {}),
-          ...(hasOwn(taskInput, 'assigneeId') ? { assigneeId: nextAssigneeId } : {}),
-          ...(hasOwn(taskInput, 'channelId') ? { channelId: nextChannelId } : {}),
-          ...(taskInput.tags !== undefined ? { tags: normalizeTags(taskInput.tags) } : {}),
-          ...(taskInput.sortOrder !== undefined ? { sortOrder: taskInput.sortOrder } : {}),
-          updatedAt: clock.now(),
-        },
+        if (protectedMutation && await taskHasManagedGovernance(transaction, currentTask)) {
+          return makeFailure(
+            'CONFLICT',
+            'Managed task workflow fields must use named lifecycle commands',
+          );
+        }
+        const updated = await transaction.tasks.update({
+          taskId: currentTask.id,
+          changes: {
+            ...(title !== undefined ? { title } : {}),
+            ...(hasOwn(taskInput, 'description') ? { description: normalizeOptionalText(taskInput.description ?? undefined) } : {}),
+            ...(taskInput.status !== undefined ? { status: taskInput.status } : {}),
+            ...(hasOwn(taskInput, 'assigneeId') ? { assigneeId: nextAssigneeId } : {}),
+            ...(hasOwn(taskInput, 'channelId') ? { channelId: nextChannelId } : {}),
+            ...(taskInput.tags !== undefined ? { tags: normalizeTags(taskInput.tags) } : {}),
+            ...(taskInput.sortOrder !== undefined ? { sortOrder: taskInput.sortOrder } : {}),
+            updatedAt: clock.now(),
+          },
+        });
+        return updated
+          ? makeSuccess({ task: updated, previousStatus: currentTask.status })
+          : makeFailure('NOT_FOUND', 'Task not found');
       });
-      if (!updated) {
-        return makeFailure('NOT_FOUND', 'Task not found');
-      }
-      const statusMessage = taskInput.status !== undefined && taskInput.status !== task.status && updated.channelId
+      if (!mutation.ok) return mutation;
+      const updated = mutation.task;
+      const statusMessage = taskInput.status !== undefined && taskInput.status !== mutation.previousStatus && updated.channelId
         ? await repositories.messages.append({
             id: ids.nextId(),
             teamId: updated.teamId,
@@ -10327,7 +10343,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               kind: 'task-status-updated',
               taskId: updated.id,
               taskTitle: updated.title,
-              previousStatus: task.status,
+              previousStatus: mutation.previousStatus,
               status: updated.status,
             },
           })
@@ -10357,16 +10373,24 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           return makeFailure('CONFLICT', 'Archived channels are read-only');
         }
       }
-      if (await taskIsBoundToProjectStage(repositories, task)) {
-        return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
-      }
-      if (await taskHasManagedGovernance(repositories, task)) {
-        return makeFailure('CONFLICT', 'Managed tasks cannot be deleted; use cancel-task or close-task');
-      }
-      const deleted = await repositories.tasks.delete({ taskId: task.id });
-      if (!deleted) {
-        return makeFailure('NOT_FOUND', 'Task not found');
-      }
+      const mutation = await repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        const currentTask = await transaction.tasks.getById(task.id);
+        if (!currentTask || currentTask.teamId !== taskInput.teamId) {
+          return makeFailure('NOT_FOUND', 'Task not found');
+        }
+        if (await taskIsBoundToProjectStage(transaction, currentTask)) {
+          return makeFailure('CONFLICT', 'Task is bound to a Project Stage and cannot be deleted');
+        }
+        if (await taskHasManagedGovernance(transaction, currentTask)) {
+          return makeFailure('CONFLICT', 'Managed tasks cannot be deleted; use cancel-task or close-task');
+        }
+        const deleted = await transaction.tasks.delete({ taskId: currentTask.id });
+        return deleted
+          ? makeSuccess({ task: deleted })
+          : makeFailure('NOT_FOUND', 'Task not found');
+      });
+      if (!mutation.ok) return mutation;
+      const deleted = mutation.task;
       await invalidateSourcesAfterDeletion({
         teamId: taskInput.teamId, sourceKind: 'task', sourceIds: [task.id], actorId: taskInput.userId,
       });
@@ -10481,12 +10505,22 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               'Managed Task delivery must use its authoritative lifecycle acceptance path',
             );
           }
-          const packageRecords = await transaction.outputPackages.listPackagesByChannel({
-            teamId: taskInput.teamId,
-            channelId,
-            taskId: task.id,
-            limit: 50,
-          });
+          const [packageRecords, pendingDeliveries] = await Promise.all([
+            transaction.outputPackages.listPackagesByChannel({
+              teamId: taskInput.teamId,
+              channelId,
+              taskId: task.id,
+              limit: 50,
+            }),
+            listPendingOutputDeliveries(transaction, {
+              teamId: taskInput.teamId,
+              channelId,
+              taskId: task.id,
+            }),
+          ]);
+          if (pendingDeliveries.length > 0) {
+            return makeFailure('CONFLICT', 'Task delivery is still being projected; refresh and retry');
+          }
           const focusPackage = packageRecords[0];
           if (!focusPackage) {
             return makeFailure('CONFLICT', 'Task has no Agent delivery to accept');
@@ -10710,20 +10744,28 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           return makeFailure('CONFLICT', 'Archived channels are read-only');
         }
       }
-      if (taskInput.sortOrder !== task.sortOrder && await taskHasManagedGovernance(repositories, task)) {
-        return makeFailure('CONFLICT', 'Managed tasks cannot be reordered directly');
-      }
-      const updated = await repositories.tasks.update({
-        taskId: task.id,
-        changes: {
-          sortOrder: taskInput.sortOrder,
-          updatedAt: clock.now(),
-        },
+      return repositories.taskCoordinationUnitOfWork.run(async (transaction) => {
+        const currentTask = await transaction.tasks.getById(task.id);
+        if (!currentTask || currentTask.teamId !== taskInput.teamId) {
+          return makeFailure('NOT_FOUND', 'Task not found');
+        }
+        if (
+          taskInput.sortOrder !== currentTask.sortOrder
+          && await taskHasManagedGovernance(transaction, currentTask)
+        ) {
+          return makeFailure('CONFLICT', 'Managed tasks cannot be reordered directly');
+        }
+        const updated = await transaction.tasks.update({
+          taskId: currentTask.id,
+          changes: {
+            sortOrder: taskInput.sortOrder,
+            updatedAt: clock.now(),
+          },
+        });
+        return updated
+          ? makeSuccess({ task: updated })
+          : makeFailure('NOT_FOUND', 'Task not found');
       });
-      if (!updated) {
-        return makeFailure('NOT_FOUND', 'Task not found');
-      }
-      return makeSuccess({ task: updated });
     },
 
     async uploadArtifact(artifactInput) {
@@ -19057,7 +19099,7 @@ async function projectStageCandidateAgentIds(
 }
 
 async function taskIsBoundToProjectStage(
-  repositories: ServerNextRepositories,
+  repositories: ServerNextRepositories | TaskCoordinationTransactionRepositories,
   task: TaskRecord,
 ): Promise<boolean> {
   if (!task.channelId) return false;
@@ -19069,11 +19111,14 @@ async function taskIsBoundToProjectStage(
 }
 
 async function taskHasManagedGovernance(
-  repositories: ServerNextRepositories,
+  repositories: ServerNextRepositories | TaskCoordinationTransactionRepositories,
   task: TaskRecord,
 ): Promise<boolean> {
+  const coordinationRepositories = 'taskCoordination' in repositories
+    ? repositories.taskCoordination
+    : repositories.coordination;
   const [coordination, managementRun, stageBound, agentDeliveryPackages, pendingDeliveries] = await Promise.all([
-    repositories.taskCoordination.coordinations.getByTaskId(task.id),
+    coordinationRepositories.coordinations.getByTaskId(task.id),
     repositories.management.runs.getByRootTaskId(task.id),
     taskIsBoundToProjectStage(repositories, task),
     task.channelId
