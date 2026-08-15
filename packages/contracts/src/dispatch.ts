@@ -24,6 +24,17 @@ export type DispatchStatus =
   | 'cancelled'
   | 'timed_out';
 
+/** Daemon 对一次 invocation 的终态判定。超时/取消是 stopped，不是 failed。 */
+export type DispatchOutcome = 'succeeded' | 'failed' | 'stopped';
+
+export type DispatchReasonCode =
+  | 'ADAPTER_EXIT'
+  | 'USER_CANCELLED'
+  | 'EXECUTION_LIMIT';
+
+export const EXECUTION_LIMIT_REASON_TEXT = '已达执行上限，系统已停止等待';
+export const USER_CANCELLED_REASON_TEXT = '执行已被取消';
+
 export interface DispatchAttachmentDto {
   id: ID;
   name: string;
@@ -144,6 +155,16 @@ export interface DispatchDto {
   error?: string;
   /** 最后一次 dispatch:progress 心跳时间；用于失联判定（null 表示尚无心跳，回退 updatedAt）。 */
   lastHeartbeatAt?: UnixMs;
+}
+
+/**
+ * daemon → server 的终态回报扩展。旧 daemon 可不带这些字段，
+ * Server 回退到 workspaceRun.status。
+ */
+export interface DispatchTerminalReportV1 {
+  readonly outcome: DispatchOutcome;
+  readonly reasonCode?: DispatchReasonCode | string;
+  readonly reasonText?: string;
 }
 
 export interface DispatchHistoryItemDto extends DispatchDto {

@@ -33,8 +33,8 @@ export interface ClassifiedDispatchFailure {
 }
 
 export interface ClassifyDispatchFailureInput {
-  readonly status?: 'failed' | 'timed_out' | string;
-  /** DispatchDto.error codes such as DISPATCH_TIMEOUT / WORKSPACE_RUN_FAILED. */
+  readonly status?: 'failed' | 'timed_out' | 'cancelled' | string;
+  /** DispatchDto.error codes such as DISPATCH_TIMEOUT / WORKSPACE_RUN_FAILED / EXECUTION_LIMIT. */
   readonly errorCode?: string;
   /**
    * Agent reply body, workspace log excerpt, or codex exit detail.
@@ -178,6 +178,13 @@ export function classifyDispatchFailure(
       guidance: '请检查设备在线状态（agentbean device status）后重试。',
     };
   }
+  if (errorCode === 'EXECUTION_LIMIT') {
+    return {
+      category: 'dispatch_timeout',
+      summary: '已达执行上限，系统已停止等待',
+      guidance: '可缩小任务后重试，或在设备上提高 AGENTBEAN_EXEC_TIMEOUT_MS 后再试。',
+    };
+  }
   if (status === 'timed_out' || errorCode === 'DISPATCH_TIMEOUT') {
     return {
       category: 'dispatch_timeout',
@@ -185,10 +192,10 @@ export function classifyDispatchFailure(
       guidance: '可点重试；若频繁超时，请检查设备在线状态、模型响应速度或缩小任务范围。',
     };
   }
-  if (errorCode === 'WORKSPACE_RUN_CANCELLED') {
+  if (errorCode === 'WORKSPACE_RUN_CANCELLED' || errorCode === 'USER_CANCELLED' || status === 'cancelled') {
     return {
       category: 'workspace_run_cancelled',
-      summary: 'Agent 执行已被取消',
+      summary: '执行已被取消',
     };
   }
 

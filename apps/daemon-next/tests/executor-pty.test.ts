@@ -209,7 +209,7 @@ describe('daemon-next codex PTY executor', () => {
       expect(output.workspaceRun?.exitCode).toBe(1);
     });
 
-    test('reports a codex timeout as a failed run (AGENTBEAN_CODEX_TIMEOUT_MS overrides the 15min default)', async () => {
+    test('reports a codex execution-limit stop only when AGENTBEAN_CODEX_TIMEOUT_MS is set', async () => {
       const prev = process.env.AGENTBEAN_CODEX_TIMEOUT_MS;
       process.env.AGENTBEAN_CODEX_TIMEOUT_MS = '30';
       try {
@@ -229,8 +229,10 @@ describe('daemon-next codex PTY executor', () => {
           customAgent: { adapterKind: 'codex', command: 'codex', args: [], cwd },
         });
         if (typeof output !== 'object') throw new Error('expected structured result');
-        expect(output.body).toContain('超时');
-        expect(output.workspaceRun?.status).toBe('failed');
+        expect(output.body).toBe('已达执行上限，系统已停止等待');
+        expect(output.outcome).toBe('stopped');
+        expect(output.reasonCode).toBe('EXECUTION_LIMIT');
+        expect(output.workspaceRun?.status).toBe('cancelled');
         expect(output.workspaceRun?.cwd).toBe(cwd);
       } finally {
         if (prev === undefined) delete process.env.AGENTBEAN_CODEX_TIMEOUT_MS;

@@ -29,6 +29,38 @@ describe('managed Dispatch lifecycle bridge', () => {
     await expect(harness.repositories.tasks.getById('task-1')).resolves.toMatchObject({ status: 'in_review' });
   });
 
+  test('execution-limit stop is timed_out with EXECUTION_LIMIT, not WORKSPACE_RUN_FAILED', async () => {
+    const harness = await createHarness(false);
+    await harness.repositories.dispatches.create({
+      id: 'limit-dispatch',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      status: 'running',
+      requestId: 'limit-1',
+      prompt: '总结新闻',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const result = await harness.usecases.receiveDispatchResult({
+      dispatchId: 'limit-dispatch',
+      agentId: 'agent-1',
+      body: '已达执行上限，系统已停止等待',
+      outcome: 'stopped',
+      reasonCode: 'EXECUTION_LIMIT',
+      reasonText: '已达执行上限，系统已停止等待',
+      workspaceRun: { status: 'cancelled', exitCode: 124, startedAt: 1, completedAt: 2 },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      dispatch: { status: 'timed_out', error: 'EXECUTION_LIMIT' },
+    });
+    expect(result.ok && 'message' in result ? result.message?.body : undefined)
+      .toBe('已达执行上限，系统已停止等待');
+  });
+
   test('reclaims manifest results independently, preserves OCC conflicts, and replays idempotently', async () => {
     const harness = await createHarness(true);
     await seedProjectDocumentInputSet(harness.repositories);

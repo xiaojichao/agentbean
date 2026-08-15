@@ -1,7 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
-import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
+import { AGENT_EVENTS, parseDeviceWorkspaceSnapshot, USER_CANCELLED_REASON_TEXT, type AgentArtifactSourceRootConfigDto, type AgentCategory, type AgentDescriptorDto, type ArtifactPathKind, type ArtifactRole, type ArtifactSourceRootDto, type DeviceWorkspaceSnapshotDto, type DispatchCustomAgentDto, type DispatchHistoryMessageDto, type DispatchManagementContextDto, type DispatchMemoryContextItemDto, type ProjectDocumentInputSetResultProposalV1, type ProjectDocumentInputSetV1, type ProjectReferenceSetDto, type SkippedArtifactDiagnostic, type WorkspaceRevisionCommittedPayload, type WorkspaceRunStatus } from '../../../packages/contracts/src/index.js';
 import type { DispatchAttachment } from './attachments.js';
 import { downloadAttachments } from './attachments.js';
 import {
@@ -298,6 +298,10 @@ export interface DaemonDispatchArtifactResult {
 
 export interface DaemonDispatchResult {
   body: string;
+  /** 终态：成功 / Agent 自己失败 / 系统或用户停手。缺省时 Server 回退 workspaceRun.status。 */
+  outcome?: import('../../../packages/contracts/src/index.js').DispatchOutcome;
+  reasonCode?: import('../../../packages/contracts/src/index.js').DispatchReasonCode | string;
+  reasonText?: string;
   artifactIds?: string[];
   artifacts?: DaemonDispatchArtifactResult[];
   workspaceRun?: DaemonWorkspaceRunResult;
@@ -377,6 +381,8 @@ export interface DispatchRequestPayload {
   taskId?: string;
   taskAttempt?: number;
   workspaceRunId?: string;
+  /** Daemon 本地取消信号，不进 socket 载荷。 */
+  abortSignal?: AbortSignal;
   prompt: string;
   history?: DispatchHistoryMessageDto[];
   attachments?: DispatchAttachment[];
@@ -707,6 +713,18 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
       await applyCredentialsUpdate(initialAnnouncement.credentials);
       const cancelledDispatchIds = new Set<string>();
+      const dispatchAbortControllers = new Map<string, AbortController>();
+      const reportUserCancelled = (dispatchId: string, agentId: string) => {
+        outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.result, {
+          dispatchId,
+          agentId,
+          body: USER_CANCELLED_REASON_TEXT,
+          outcome: 'stopped',
+          reasonCode: 'USER_CANCELLED',
+          reasonText: USER_CANCELLED_REASON_TEXT,
+          workspaceRun: { status: 'cancelled', exitCode: 124 },
+        });
+      };
       const dispatchExecutionTails = new Map<string, Promise<void>>();
       const outbox: DispatchOutbox = createDispatchOutbox(socket, {
         onWarn: (message) => console.warn(message),
@@ -903,7 +921,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
       });
 
       socket.on(AGENT_EVENTS.dispatch.cancel, async (payload) => {
-        cancelledDispatchIds.add(readDispatchCancel(payload).dispatchId);
+        const dispatchId = readDispatchCancel(payload).dispatchId;
+        cancelledDispatchIds.add(dispatchId);
+        dispatchAbortControllers.get(dispatchId)?.abort();
       });
 
       socket.on(AGENT_EVENTS.dispatch.request, async (payload) => {
@@ -921,9 +941,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
         });
         dispatchExecutionTails.set(executionSerialKey, executionTail);
         await previousExecution;
-        let request = incomingRequest;
+        const abortController = new AbortController();
+        dispatchAbortControllers.set(incomingRequest.id, abortController);
+        let request: DispatchRequestPayload = { ...incomingRequest, abortSignal: abortController.signal };
         try {
           if (cancelledDispatchIds.delete(request.id)) {
+            reportUserCancelled(request.id, request.agentId);
             return;
           }
           if (request.claimRequired) {
@@ -935,10 +958,12 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
               () => cancelledDispatchIds.has(wake.id),
             );
             if (!accepted) {
-              cancelledDispatchIds.delete(wake.id);
+              if (cancelledDispatchIds.delete(wake.id)) {
+                reportUserCancelled(wake.id, wake.agentId);
+              }
               return;
             }
-            request = accepted;
+            request = { ...accepted, abortSignal: abortController.signal };
           }
           if (request.customAgent?.envRef && !request.customAgent.env) {
             if (!envResolver) {
@@ -947,6 +972,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             const env = await envResolver(request.customAgent.envRef);
             request.customAgent = { ...request.customAgent, env };
             if (cancelledDispatchIds.delete(request.id)) {
+              reportUserCancelled(request.id, request.agentId);
               return;
             }
           }
@@ -1094,6 +1120,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             };
           }
           if (cancelledDispatchIds.delete(request.id)) {
+            reportUserCancelled(request.id, request.agentId);
             return;
           }
           request = await prepareDispatchRuntimeMemory({
@@ -1101,7 +1128,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             profileId: device.profileId,
           });
           const result = normalizeDispatchResult(await runExecutorWithHeartbeat(socket, request.id, request.agentId, () => executor(request)));
-          if (cancelledDispatchIds.delete(request.id)) {
+          // 取消在执行中会 abort 子进程并得到 stopped；该结果必须上报。
+          // 仅当取消发生在已有真实成败之后、且结果不是 stopped 时，才丢弃迟到回报。
+          if (cancelledDispatchIds.delete(request.id) && result.outcome !== 'stopped') {
             return;
           }
 
@@ -1460,6 +1489,9 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             dispatchId: request.id,
             agentId: request.agentId,
             body: result.body,
+            ...(result.outcome ? { outcome: result.outcome } : {}),
+            ...(result.reasonCode ? { reasonCode: result.reasonCode } : {}),
+            ...(result.reasonText ? { reasonText: result.reasonText } : {}),
             ...(artifactIds.length > 0 ? { artifactIds } : {}),
             ...(artifacts.length > 0 ? { artifacts } : {}),
             ...(reportedWorkspaceRun ? { workspaceRun: reportedWorkspaceRun } : {}),
@@ -1491,6 +1523,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           scheduleOutcomeObservation(request, result);
         } catch (error) {
           if (cancelledDispatchIds.delete(request.id)) {
+            reportUserCancelled(request.id, request.agentId);
             return;
           }
           outbox.sendOrEnqueue(AGENT_EVENTS.dispatch.error, {
@@ -1499,6 +1532,7 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
             error: readErrorMessage(error),
           });
         } finally {
+          dispatchAbortControllers.delete(incomingRequest.id);
           activeDispatchCount -= 1;
           // cancel suppresses a late result, but only the executor actually returning makes
           // it safe to start another request for the same Agent.

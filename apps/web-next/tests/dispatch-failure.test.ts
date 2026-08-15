@@ -30,6 +30,13 @@ describe('formatChannelDispatchFailureHint', () => {
   test('maps DISPATCH_TIMEOUT error code', () => {
     expect(formatChannelDispatchFailureHint({ errorCode: 'DISPATCH_TIMEOUT' })).toContain('超时');
   });
+
+  test('execution limit is a stop, not 兜底「Agent 处理失败」', () => {
+    expect(formatChannelDispatchFailureHint({
+      status: 'timed_out',
+      errorCode: 'EXECUTION_LIMIT',
+    })).toBe('已达执行上限，系统已停止等待');
+  });
 });
 
 describe('buildFailedDispatchHintInput (production pipe mapping, H2)', () => {

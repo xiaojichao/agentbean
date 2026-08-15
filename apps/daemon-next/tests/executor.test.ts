@@ -426,10 +426,13 @@ describe('daemon-next command executor', () => {
     const result = await running;
     expect(typeof result).toBe('object');
     if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
-    expect(result.body).toContain('Agent 处理超时');
+    expect(result.body).toBe('已达执行上限，系统已停止等待');
     expect(result.body).not.toContain('Codex');
+    expect(result.body).not.toContain('exited with code');
+    expect(result.outcome).toBe('stopped');
+    expect(result.reasonCode).toBe('EXECUTION_LIMIT');
     expect(result.workspaceRun).toMatchObject({
-      status: 'failed',
+      status: 'cancelled',
       exitCode: 124,
       startedAt: 5000,
       completedAt: 5530,
@@ -442,9 +445,7 @@ describe('daemon-next command executor', () => {
   });
 
   test('AGENTBEAN_EXEC_TIMEOUT_MS env overrides the pipe-executor timeout without an explicit timeoutMs', async () => {
-    // Hermes / claude-code / gemini run on the pipe spine; their ceiling must be tunable via env
-    // (mirrors the codex PTY path's AGENTBEAN_CODEX_TIMEOUT_MS). Without this knob the 5→15min
-    // default can't be raised at runtime, and slow-but-working agents get clipped.
+    // 显式 AGENTBEAN_EXEC_TIMEOUT_MS 仍可启用可选墙钟（测试 / 排障）；产品默认是 0（不杀）。
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
     const pidFile = join(cwd, 'child.pid');
     const scriptPath = join(cwd, 'stubborn.mjs');
@@ -482,8 +483,10 @@ describe('daemon-next command executor', () => {
       const result = await running;
       expect(typeof result).toBe('object');
       if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
-      expect(result.body).toContain('400ms');
-      expect(result.workspaceRun?.status).toBe('failed');
+      expect(result.outcome).toBe('stopped');
+      expect(result.reasonCode).toBe('EXECUTION_LIMIT');
+      expect(result.body).toBe('已达执行上限，系统已停止等待');
+      expect(result.workspaceRun?.status).toBe('cancelled');
     } finally {
       delete process.env.AGENTBEAN_EXEC_TIMEOUT_MS;
     }
@@ -519,10 +522,62 @@ describe('daemon-next command executor', () => {
     });
     expect(typeof result).toBe('object');
     if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
-    expect(result.body).toMatch(/Agent 处理超时|未在时限内完成/);
+    expect(result.body).toBe('已达执行上限，系统已停止等待');
     expect(result.body).not.toMatch(/Codex/i);
+    expect(result.body).not.toContain('exited with code');
+    expect(result.outcome).toBe('stopped');
+    expect(result.reasonCode).toBe('EXECUTION_LIMIT');
     expect(result.workspaceRun?.startedAt).toBe(1_000);
-    expect(result.workspaceRun?.status).toBe('failed');
+    expect(result.workspaceRun?.status).toBe('cancelled');
+  });
+
+  test('abortSignal kills the child and reports stopped / user cancelled, not exit 1', async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agentbean-next-executor-')));
+    const pidFile = join(cwd, 'child.pid');
+    const scriptPath = join(cwd, 'hang.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        `import { writeFileSync } from 'node:fs';`,
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        `setInterval(() => {}, 1000);`,
+      ].join('\n'),
+    );
+    const abort = new AbortController();
+    const executor = createCommandExecutor({
+      timeoutMs: 30_000,
+      killGraceMs: 20,
+      clock: createClock([1_000, 1_050]),
+    });
+    const running = executor({
+      id: 'dispatch-abort',
+      teamId: 'team-1',
+      channelId: 'channel-1',
+      messageId: 'message-1',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+      prompt: 'hello',
+      abortSignal: abort.signal,
+      customAgent: {
+        adapterKind: 'hermes',
+        command: process.execPath,
+        args: [scriptPath],
+        cwd,
+      },
+    });
+    await waitForFile(pidFile);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    abort.abort();
+    const result = await running;
+    expect(typeof result).toBe('object');
+    if (typeof result === 'string') throw new Error('expected DaemonDispatchResult');
+    expect(result.outcome).toBe('stopped');
+    expect(result.reasonCode).toBe('USER_CANCELLED');
+    expect(result.body).toBe('执行已被取消');
+    expect(result.body).not.toContain('exited with code');
+    expect(result.workspaceRun?.status).toBe('cancelled');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(isProcessAlive(pid)).toBe(false);
   });
 
   test('terminates a custom agent command whose output exceeds the accumulated byte cap', async () => {
@@ -1212,22 +1267,12 @@ describe('daemon-next command executor', () => {
     expect(output.workspaceRun?.exitCode).toBe(1);
   });
 
-  test('resolveExecTimeoutMs honours env > options > 15min default for the pipe spine', () => {
-    // Non-codex agents (Hermes, claude-code, gemini, …) run on the pipe spine. Their timeout must
-    // (a) default to 15min — codex parity, since real coding tasks run 4-5+min and the old 5min
-    //     ceiling clipped slow-but-working agents, and
-    // (b) be overridable via AGENTBEAN_EXEC_TIMEOUT_MS (operator tuning without a release),
-    // mirroring the codex PTY path's AGENTBEAN_CODEX_TIMEOUT_MS contract.
-    const FIFTEEN_MIN = 15 * 60 * 1000;
-    // No env, no option → 15min default (was 5min).
-    expect(resolveExecTimeoutMs({ env: '' })).toBe(FIFTEEN_MIN);
-    // Invalid / non-positive env is ignored → default still applies.
-    expect(resolveExecTimeoutMs({ env: 'garbage' })).toBe(FIFTEEN_MIN);
-    expect(resolveExecTimeoutMs({ env: '0' })).toBe(FIFTEEN_MIN);
-    expect(resolveExecTimeoutMs({ env: '-100' })).toBe(FIFTEEN_MIN);
-    // Explicit option is respected when env is absent.
+  test('resolveExecTimeoutMs defaults to no wall-clock kill; env/option only if > 0', () => {
+    expect(resolveExecTimeoutMs({ env: '' })).toBe(0);
+    expect(resolveExecTimeoutMs({ env: 'garbage' })).toBe(0);
+    expect(resolveExecTimeoutMs({ env: '0' })).toBe(0);
+    expect(resolveExecTimeoutMs({ env: '-100' })).toBe(0);
     expect(resolveExecTimeoutMs({ env: '', timeoutMs: 7000 })).toBe(7000);
-    // Env wins over the option.
     expect(resolveExecTimeoutMs({ env: '30000', timeoutMs: 7000 })).toBe(30000);
   });
 });

@@ -1,5 +1,9 @@
 import { spawn } from 'node:child_process';
-import type { AdapterKind } from '../../../packages/contracts/src/index.js';
+import type { AdapterKind, DispatchReasonCode } from '../../../packages/contracts/src/index.js';
+import {
+  EXECUTION_LIMIT_REASON_TEXT,
+  USER_CANCELLED_REASON_TEXT,
+} from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload, StubExecutor } from './index.js';
 import {
   adapterNeedsCodingRuntimeSecrets,
@@ -38,25 +42,18 @@ export interface CommandExecutorOptions {
 // artifacts.
 
 /**
- * Default ceiling for non-codex agents (Hermes, claude-code, gemini, kimi-cli, …) that run on the
- * pipe spine. Raised from 5min to 15min for codex PTY parity: real coding-agent tasks run 4-5+
- * minutes, and the old 5min ceiling clipped slow-but-working agents (manifesting as a spurious
- * "Codex 未在时限内完成" because the generic timeout text matches CODEX_TIMEOUT_RE). codex keeps
- * its own 15min in PTY_ADAPTERS; this brings the pipe spine to the same headroom.
- *
- * Overridable at runtime via AGENTBEAN_EXEC_TIMEOUT_MS (mirrors the codex PTY path's
- * AGENTBEAN_CODEX_TIMEOUT_MS), so operators can tune without a daemon release.
- */
-const DEFAULT_EXEC_TIMEOUT_MS = 15 * 60 * 1000;
-
-/**
- * Resolve the pipe-spine executor timeout with precedence: env > option > 15min default.
- * Pure (env injected for tests). Mirrors executor-pty.ts AGENTBEAN_CODEX_TIMEOUT_MS resolution.
+ * 默认不按墙钟杀 Agent。跑得久不是失败；只有进程自己退出或用户取消才收场。
+ * 若运维显式设置 AGENTBEAN_EXEC_TIMEOUT_MS / createCommandExecutor({ timeoutMs }) > 0，
+ * 才启用可选上限（测试与排障用），到期报 stopped 而不是 failed。
  */
 export function resolveExecTimeoutMs(options: { timeoutMs?: number; env?: string } = {}): number {
   const envTimeout = Number.parseInt((options.env ?? process.env.AGENTBEAN_EXEC_TIMEOUT_MS) ?? '', 10);
   if (Number.isFinite(envTimeout) && envTimeout > 0) return envTimeout;
-  return options.timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS;
+  const optionTimeout = options.timeoutMs;
+  if (typeof optionTimeout === 'number' && Number.isFinite(optionTimeout) && optionTimeout > 0) {
+    return optionTimeout;
+  }
+  return 0;
 }
 
 export function createCommandExecutor(options: CommandExecutorOptions = {}): StubExecutor {
@@ -176,6 +173,7 @@ async function runCustomAgentCommand(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let killTimer: NodeJS.Timeout | undefined;
+    let timer: NodeJS.Timeout | undefined;
     let finished = false;
     let timedOut = false;
 
@@ -202,14 +200,13 @@ async function runCustomAgentCommand(
     const finishResult = (result: DaemonDispatchResult, opts?: { preserveKillTimer?: boolean }) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (!opts?.preserveKillTimer && killTimer) clearTimeout(killTimer);
       resolve(result);
     };
 
-    // SIGTERM first, then escalate to SIGKILL after a grace period so a child that traps/ignores
-    // SIGTERM cannot run forever (which would also let stdout/stderr grow unbounded in memory).
-    const timer = setTimeout(() => {
+    // 停手（执行上限或用户取消）不是 Agent 失败：杀进程，报 stopped，禁止拼 exit 1。
+    const stopChild = (reasonCode: DispatchReasonCode, reasonText: string) => {
       if (finished) return;
       timedOut = true;
       try {
@@ -227,20 +224,14 @@ async function runCustomAgentCommand(
       if (typeof killTimer.unref === 'function') {
         killTimer.unref();
       }
-      // Prefer partial adapter reply when the agent already printed something; otherwise a clear,
-      // adapter-agnostic Chinese timeout (must NOT say "Codex" — Hermes/openclaw/claude-code share
-      // this path). Technical breadcrumb stays in workspace-run log for support.
-      const partialReply = argvMode && adapter.extractReply
-        ? adapter.extractReply(stdout, null, stderr)
-        : stdout.trim();
-      const timeoutBody = partialReply
-        ? `${partialReply}\n\nAgent 处理超时，未在时限内完成（${options.timeoutMs}ms）`
-        : `Agent 处理超时，未在时限内完成（${options.timeoutMs}ms）`;
       finishResult({
-        body: timeoutBody,
+        body: reasonText,
+        outcome: 'stopped',
+        reasonCode,
+        reasonText,
         artifacts: [logArtifact()],
         workspaceRun: {
-          status: 'failed',
+          status: 'cancelled',
           cwd: customAgent.cwd,
           command,
           // 124 is the conventional "timeout" exit code (GNU timeout / systemd conventions).
@@ -250,9 +241,25 @@ async function runCustomAgentCommand(
           logExcerpt: buildLogExcerpt(stdout, stderr),
         },
       }, { preserveKillTimer: true });
-    }, options.timeoutMs);
-    if (typeof timer.unref === 'function') {
+    };
+
+    // 默认不设墙钟。只有显式 timeoutMs > 0（测试 / 运维 env）才启用可选上限。
+    timer = options.timeoutMs > 0
+      ? setTimeout(() => {
+        stopChild('EXECUTION_LIMIT', EXECUTION_LIMIT_REASON_TEXT);
+      }, options.timeoutMs)
+      : undefined;
+    if (timer && typeof timer.unref === 'function') {
       timer.unref();
+    }
+    if (request.abortSignal) {
+      if (request.abortSignal.aborted) {
+        stopChild('USER_CANCELLED', USER_CANCELLED_REASON_TEXT);
+      } else {
+        request.abortSignal.addEventListener('abort', () => {
+          stopChild('USER_CANCELLED', USER_CANCELLED_REASON_TEXT);
+        }, { once: true });
+      }
     }
 
     const appendOutput = (kind: 'stdout' | 'stderr', chunk: string) => {
@@ -299,14 +306,20 @@ async function runCustomAgentCommand(
       if (finished || timedOut) return;
       const completedAt = options.clock.now();
       const exitCode = code ?? 1;
+      const succeeded = code === 0;
       const body = argvMode && adapter.extractReply
         ? adapter.extractReply(stdout, code ?? null, stderr)
-        : code === 0 ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`;
+        : succeeded ? stdout.trimEnd() : `custom agent command exited with code ${exitCode}`;
       finishResult({
         body,
+        outcome: succeeded ? 'succeeded' : 'failed',
+        ...(succeeded ? {} : {
+          reasonCode: 'ADAPTER_EXIT',
+          reasonText: body,
+        }),
         artifacts: [logArtifact()],
         workspaceRun: {
-          status: code === 0 ? 'succeeded' : 'failed',
+          status: succeeded ? 'succeeded' : 'failed',
           cwd: customAgent.cwd,
           command,
           exitCode,

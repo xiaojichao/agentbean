@@ -16,7 +16,11 @@ import { createRequire } from 'node:module';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { AdapterKind } from '../../../packages/contracts/src/index.js';
+import type { AdapterKind, DispatchReasonCode } from '../../../packages/contracts/src/index.js';
+import {
+  EXECUTION_LIMIT_REASON_TEXT,
+  USER_CANCELLED_REASON_TEXT,
+} from '../../../packages/contracts/src/index.js';
 import type { DaemonDispatchResult, DispatchRequestPayload } from './index.js';
 import {
   adapterNeedsCodingRuntimeSecrets,
@@ -313,6 +317,7 @@ export async function runPtyAgentCommand(
     let bytes = 0;
     let finished = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let timer: NodeJS.Timeout | undefined;
 
     let pty: PtyProcess;
     try {
@@ -333,23 +338,41 @@ export async function runPtyAgentCommand(
       return;
     }
 
-    // codex timeout is overridable via env (matches the legacy adapter) and also lets tests use a
-    // short timeout instead of waiting the 15min default.
+    // 默认不按墙钟杀 Codex。显式 AGENTBEAN_CODEX_TIMEOUT_MS / spec.timeoutMs / options.timeoutMs > 0 才启用。
     const envTimeout = Number.parseInt(process.env.AGENTBEAN_CODEX_TIMEOUT_MS ?? '', 10);
-    const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : (spec.timeoutMs ?? options.timeoutMs);
-    const timer = setTimeout(() => {
+    const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
+      ? envTimeout
+      : (typeof spec.timeoutMs === 'number' && spec.timeoutMs > 0
+        ? spec.timeoutMs
+        : (options.timeoutMs > 0 ? options.timeoutMs : 0));
+    const stopPty = (reasonCode: DispatchReasonCode, reasonText: string) => {
       if (finished) return;
       finished = true;
+      if (timer) clearTimeout(timer);
       try { pty.kill('SIGTERM'); } catch { /* already exited */ }
       killTimer = setTimeout(() => { try { pty.kill('SIGKILL'); } catch { /* ignore */ } }, options.killGraceMs);
       if (typeof killTimer.unref === 'function') killTimer.unref();
       // Clean up the temp output dir on timeout — onExit short-circuits on `finished` and would
       // otherwise skip its own rmSync, leaking /tmp/agentbean-codex-* on every timeout.
       try { rmSync(dirname(outputPath), { recursive: true, force: true }); } catch { /* ignore */ }
-      resolve(ptyFailure(request, cwd, persistedCommand, startedAt, options.clock.now(),
-        `codex 超时（${timeoutMs}ms）`, output));
-    }, timeoutMs);
-    if (typeof timer.unref === 'function') timer.unref();
+      resolve(ptyStopped(request, cwd, persistedCommand, startedAt, options.clock.now(),
+        reasonCode, reasonText, output));
+    };
+    timer = timeoutMs > 0
+      ? setTimeout(() => {
+        stopPty('EXECUTION_LIMIT', EXECUTION_LIMIT_REASON_TEXT);
+      }, timeoutMs)
+      : undefined;
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    if (request.abortSignal) {
+      if (request.abortSignal.aborted) {
+        stopPty('USER_CANCELLED', USER_CANCELLED_REASON_TEXT);
+      } else {
+        request.abortSignal.addEventListener('abort', () => {
+          stopPty('USER_CANCELLED', USER_CANCELLED_REASON_TEXT);
+        }, { once: true });
+      }
+    }
 
     pty.onData((data) => {
       output += data;
@@ -363,7 +386,7 @@ export async function runPtyAgentCommand(
     pty.onExit(({ exitCode }) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
       const completedAt = options.clock.now();
       // Read the reply file BEFORE cleaning up the temp dir it lives in.
@@ -376,6 +399,8 @@ export async function runPtyAgentCommand(
 
       resolve({
         body,
+        outcome: exitCode === 0 ? 'succeeded' : 'failed',
+        ...(exitCode === 0 ? {} : { reasonCode: 'ADAPTER_EXIT', reasonText: body }),
         artifacts: [logArtifact(request.id, output)],
         workspaceRun: {
           status: exitCode === 0 ? 'succeeded' : 'failed',
@@ -413,12 +438,43 @@ function ptyFailure(
 ): DaemonDispatchResult {
   return {
     body,
+    outcome: 'failed',
+    reasonCode: 'ADAPTER_EXIT',
+    reasonText: body,
     artifacts: output ? [logArtifact(request.id, output)] : [],
     workspaceRun: {
       status: 'failed',
       cwd,
       command,
       exitCode: 1,
+      startedAt,
+      completedAt,
+      logExcerpt: buildLogExcerpt(output, ''),
+    },
+  };
+}
+
+function ptyStopped(
+  request: DispatchRequestPayload,
+  cwd: string | undefined,
+  command: string,
+  startedAt: number,
+  completedAt: number,
+  reasonCode: DispatchReasonCode,
+  reasonText: string,
+  output: string,
+): DaemonDispatchResult {
+  return {
+    body: reasonText,
+    outcome: 'stopped',
+    reasonCode,
+    reasonText,
+    artifacts: output ? [logArtifact(request.id, output)] : [],
+    workspaceRun: {
+      status: 'cancelled',
+      cwd,
+      command,
+      exitCode: 124,
       startedAt,
       completedAt,
       logExcerpt: buildLogExcerpt(output, ''),
@@ -434,6 +490,5 @@ export const PTY_ADAPTERS: Partial<Record<AdapterKind, PtyAdapterSpec>> = {
     renderPayload: renderCodexPayload,
     extractReply: extractCodexReply,
     redactCommandArgs: redactCodexArgs,
-    timeoutMs: 900_000,
   },
 };
