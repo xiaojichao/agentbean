@@ -10450,7 +10450,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           if (currentTask.revision !== expectedTaskRevision) {
             return makeFailure('CONFLICT', 'TASK_REVISION_CONFLICT');
           }
-          const [currentCoordination, currentManagementRun, projectStages] = await Promise.all([
+          const [currentChannel, currentCoordination, currentManagementRun, projectStages] = await Promise.all([
+            transaction.channels.getById(channelId),
             transaction.coordination.coordinations.getByTaskId(task.id),
             transaction.management.runs.getByRootTaskId(task.id),
             transaction.channelProjects.listStages({
@@ -10458,6 +10459,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               channelId,
             }),
           ]);
+          if (!currentChannel || currentChannel.teamId !== taskInput.teamId) {
+            return makeFailure('NOT_FOUND', 'Channel not found');
+          }
+          if (
+            currentChannel.visibility === 'private'
+            && !currentChannel.humanMemberIds.includes(taskInput.userId)
+          ) {
+            return makeFailure('FORBIDDEN', 'User cannot view channel');
+          }
+          if (currentChannel.archivedAt != null) {
+            return makeFailure('CONFLICT', 'Archived channels are read-only');
+          }
           if (
             currentCoordination
             || currentManagementRun

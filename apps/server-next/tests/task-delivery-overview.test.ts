@@ -571,6 +571,19 @@ for (const variant of variants) {
 
       const readyOverview = await queryOverview(seedValue, taskId);
       expect(readyOverview.availableActions.find((action) => action.action === 'accept-delivery')?.disabled).toBeUndefined();
+      await seedValue.repositories.channels.update({
+        channelId: seedValue.channelId,
+        changes: { visibility: 'private', humanMemberIds: [] },
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'FORBIDDEN' });
+      await seedValue.repositories.channels.update({
+        channelId: seedValue.channelId,
+        changes: { humanMemberIds: [seedValue.userId] },
+      });
       const genericCompletion = await seedValue.app.updateTask({
         userId: seedValue.userId,
         teamId: seedValue.teamId,
@@ -597,6 +610,15 @@ for (const variant of variants) {
         teamId: seedValue.teamId,
         taskId,
       })).resolves.toMatchObject({ ok: true, task: { status: 'done' } });
+      await seedValue.repositories.channels.archive({
+        channelId: seedValue.channelId,
+        timestamp: 1_000,
+      });
+      await expect(seedValue.app.acceptRootDelivery({
+        userId: seedValue.userId,
+        teamId: seedValue.teamId,
+        taskId,
+      })).resolves.toMatchObject({ ok: false, error: 'CONFLICT' });
       const messages = await seedValue.repositories.messages.listByChannel(seedValue.channelId, 50);
       const acceptanceMessages = messages.filter((message) => message.meta?.kind === 'task-delivery-accepted');
       expect(acceptanceMessages).toHaveLength(1);
