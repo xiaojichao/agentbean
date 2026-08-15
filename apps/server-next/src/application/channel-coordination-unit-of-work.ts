@@ -6,8 +6,10 @@ import type {
   UnixMs,
 } from '../../../../packages/contracts/src/index.js';
 import type { ArtifactRepository, ChannelRepository, MessageRepository, TaskRepository } from './repositories.js';
+import type { ManagementRepositories } from './management-repositories.js';
 import type { ProjectReferenceSetRepository } from './project-repositories.js';
 import type { MessageInboxRepository, CommandReceiptRepository, MessageTracerOutboxRepository } from './message-tracer-repositories.js';
+import type { TaskCoordinationRepositories } from './task-coordination-repositories.js';
 
 export interface ChannelCoordinationJobRepository {
   create(input: ChannelCoordinationJobRecord): Promise<ChannelCoordinationJobRecord>;
@@ -64,6 +66,8 @@ export interface ChannelCoordinationTransactionRepositories extends ChannelCoord
   readonly artifacts: ArtifactRepository;
   readonly tasks: TaskRepository;
   readonly channels: ChannelRepository;
+  readonly management: ManagementRepositories;
+  readonly taskCoordination: TaskCoordinationRepositories;
   readonly projectReferenceSets: ProjectReferenceSetRepository;
   /**
    * #921 Message tracer 持久化：inbox 投影、Read boundary、receipt 与 tombstone。

@@ -333,6 +333,7 @@ describe('server-next socket handlers', () => {
       WEB_EVENTS.dispatch.cancelChannel,
       WEB_EVENTS.task.list,
       WEB_EVENTS.task.dag,
+      WEB_EVENTS.promotion.command,
       WEB_EVENTS.task.create,
       WEB_EVENTS.task.update,
       WEB_EVENTS.task.delete,
@@ -885,6 +886,45 @@ describe('server-next socket handlers', () => {
         dispatchClaimDeviceIds: [],
       },
       taskAck,
+    );
+  });
+
+  test('notifies task subscribers when promotion command returns a newly created task', async () => {
+    const socket = new FakeSocket();
+    const promotionAck = {
+      ok: true as const,
+      response: {
+        schemaVersion: 1 as const,
+        commandName: 'create-task-continuation' as const,
+        outcome: 'applied' as const,
+        retryDirective: 'none' as const,
+        stableCode: 'TASK_CONTINUATION_APPLIED',
+      },
+      task: { id: 'task-continuation-1', teamId: 'team-1', channelId: 'channel-1', status: 'todo' },
+    };
+    const app = {
+      dispatchPromotionGateCommand: vi.fn(async () => promotionAck),
+    } as unknown as ServerNextUseCases;
+    const afterTaskMutation = vi.fn();
+    registerWebSocketHandlers(socket, app, {
+      afterTaskMutation,
+      authenticatedUser: async () => ({
+        hasToken: true,
+        userId: 'user-1',
+        currentTeamId: 'team-1',
+        currentDeviceId: null,
+      }),
+    });
+
+    await socket.trigger(WEB_EVENTS.promotion.command, {
+      teamId: 'team-1',
+      envelope: { commandName: 'create-task-continuation' },
+      payload: { channelId: 'channel-1' },
+    });
+
+    expect(afterTaskMutation).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-1', teamId: 'team-1' }),
+      promotionAck,
     );
   });
 

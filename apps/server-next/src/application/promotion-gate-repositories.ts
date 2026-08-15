@@ -46,6 +46,12 @@ export interface PromotionSourceRelationRecord {
   readonly dataSnapshotJson: string | null;
   /** causationRef / sourceRefs 的 JSON。 */
   readonly provenanceJson: string;
+  /** root-to-root 后续关系；普通 promotion 为 null，旧行迁移后保持 null。 */
+  readonly relationKind: 'task-continuation' | null;
+  readonly sourceTaskId: ID | null;
+  readonly sourceTaskRevision: number | null;
+  /** canonical JSON string[]；普通 promotion 为 null。 */
+  readonly sourceVersionIdsJson: string | null;
   /** 编排权归属声明；PI driver（ManagerLease）由后续 worker acquire 填充。 */
   readonly claimState: 'awaiting-driver';
   readonly createdAt: UnixMs;

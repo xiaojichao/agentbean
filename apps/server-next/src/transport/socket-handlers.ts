@@ -1041,6 +1041,10 @@ export function registerWebSocketHandlers(
   bind(socket, WEB_EVENTS.task.dag, app, 'getTaskDag', undefined, { authenticatedUser: options.authenticatedUser });
   const afterTaskMutation = (payload: unknown, result: unknown) =>
     options.afterTaskMutation?.(payload, result);
+  bind(socket, WEB_EVENTS.promotion.command, app, 'dispatchPromotionGateCommand', afterTaskMutation, {
+    authenticatedUser: options.authenticatedUser,
+    requireAuthenticatedUser: true,
+  });
   bind(socket, WEB_EVENTS.task.create, app, 'createTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.update, app, 'updateTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });
   bind(socket, WEB_EVENTS.task.delete, app, 'deleteTask', afterTaskMutation, { authenticatedUser: options.authenticatedUser });

@@ -134,6 +134,27 @@ describe('parseMessageTracerInputV1', () => {
   test('parses send-message input', () => {
     expect(parseMessageTracerInputV1('send-message', sendMessageInput)).toEqual(sendMessageInput);
   });
+  test('parses an exact task continuation source marker', () => {
+    const input = {
+      ...sendMessageInput,
+      taskContinuationSource: {
+        schemaVersion: 1,
+        sourceTaskId: 'task-1',
+        sourceTaskRevision: 2,
+      },
+    } as const;
+    expect(parseMessageTracerInputV1('send-message', input)).toEqual(input);
+  });
+  test('rejects an invalid task continuation source marker', () => {
+    expect(() => parseMessageTracerInputV1('send-message', {
+      ...sendMessageInput,
+      taskContinuationSource: { schemaVersion: 1, sourceTaskId: 'task-1', sourceTaskRevision: 0 },
+    })).toThrow(INVALID);
+    expect(() => parseMessageTracerInputV1('send-message', {
+      ...sendMessageInput,
+      taskContinuationSource: { schemaVersion: 1, sourceTaskId: 'task-1', sourceTaskRevision: 2, trusted: true },
+    })).toThrow(INVALID);
+  });
   test('rejects send-message without freshnessBasis', () => {
     const { freshnessBasis: _f, ...rest } = sendMessageInput as Record<string, unknown>;
     expect(() => parseMessageTracerInputV1('send-message', rest)).toThrow(INVALID);

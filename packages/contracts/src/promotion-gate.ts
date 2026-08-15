@@ -28,7 +28,7 @@ import { COMMAND_PROVENANCE_KINDS, type CommandProvenanceKind, type CommandProve
  * 冻结的具名 command 集合。未登记 command 必须被 Server 拒绝（ADR-0067）。
  * 顺序即 registry 公开顺序，测试钉死长度防止误增删。
  */
-export const PROMOTION_GATE_COMMAND_NAMES = ['promote-to-task'] as const;
+export const PROMOTION_GATE_COMMAND_NAMES = ['promote-to-task', 'create-task-continuation'] as const;
 
 export type PromotionGateCommandName = (typeof PROMOTION_GATE_COMMAND_NAMES)[number];
 
@@ -114,7 +114,7 @@ export interface PromotionFreshnessBasisV1 {
  */
 export interface PromotionGateCommandEnvelopeV1 {
   readonly schemaVersion: 1;
-  readonly commandName: 'promote-to-task';
+  readonly commandName: PromotionGateCommandName;
   readonly commandSchemaVersion: number;
   readonly idempotencyKey: string;
   readonly causationRef?: CommandProvenanceRefV1;
@@ -135,6 +135,21 @@ export interface PromotionGateCommandInputMapV1 {
     readonly freshnessBasis: PromotionFreshnessBasisV1;
     /** 来源去重输入（ADR-0067 §21）：client ID 只能作为意图或来源去重输入，不作为权威身份。 */
     readonly clientMessageId?: string;
+  };
+  /**
+   * 终态 root Task 的显式后续工作入口。普通 message:send / @Agent 永远不会隐式触发本命令；
+   * 客户端必须在用户发送原 thread 回复后，携带 Server 投影的 Task revision 与稳定文件版本集合提交。
+   */
+  readonly 'create-task-continuation': {
+    readonly channelId: ID;
+    readonly rootMessageId: ID;
+    /** 用户显式发送、且位于原 root thread 下的 human Message。 */
+    readonly sourceMessageId: ID;
+    readonly sourceTaskId: ID;
+    readonly sourceTaskRevision: number;
+    /** 规范化、去重并按字节序排序的当前必需文件版本。空数组表示该 Task 无必需文件。 */
+    readonly sourceVersionIds: readonly ID[];
+    readonly objectiveSnapshot: PromotionObjectiveSnapshotV1;
   };
 }
 
@@ -163,10 +178,17 @@ export interface PromotionGateCommandOutputMapV1 {
     /** 幂等收敛结果（#894 §6）。 */
     readonly disposition: PromotionDisposition;
   };
+  readonly 'create-task-continuation': {
+    readonly rootTaskId: ID;
+    readonly managementRunId: ID;
+    readonly sourceRelationId: ID;
+    readonly disposition: PromotionDisposition;
+  };
 }
 
 export type PromotionGateCommandOutputUnionV1 =
-  | ({ readonly commandName: 'promote-to-task' } & PromotionGateCommandOutputMapV1['promote-to-task']);
+  | ({ readonly commandName: 'promote-to-task' } & PromotionGateCommandOutputMapV1['promote-to-task'])
+  | ({ readonly commandName: 'create-task-continuation' } & PromotionGateCommandOutputMapV1['create-task-continuation']);
 
 // ---------------------------------------------------------------------------
 // Receipt + response outcome（#900 §6/§16 / ADR-0067）
@@ -180,7 +202,7 @@ export type PromotionGateCommandOutputUnionV1 =
 export interface PromotionCommandReceiptV1 {
   readonly schemaVersion: 1;
   readonly receiptId: ID;
-  readonly commandName: 'promote-to-task';
+  readonly commandName: PromotionGateCommandName;
   readonly commandSchemaVersion: number;
   readonly idempotencyKey: string;
   /** canonical command hash（由 canonicalizePromotionGateCommand 派生，domain/server 计算 sha256）。 */
@@ -216,7 +238,7 @@ export type PromotionGateRetryDirective = (typeof PROMOTION_GATE_RETRY_DIRECTIVE
  */
 export interface PromotionGateCommandResponseV1 {
   readonly schemaVersion: 1;
-  readonly commandName: 'promote-to-task';
+  readonly commandName: PromotionGateCommandName;
   readonly outcome: PromotionGateOutcome;
   readonly retryDirective: PromotionGateRetryDirective;
   readonly stableCode: string;
@@ -315,6 +337,31 @@ function assertPromotionGateInput(value: unknown): void {
   if (value.clientMessageId !== undefined && !nonEmpty(value.clientMessageId)) throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
 }
 
+function assertCanonicalIdArray(value: unknown): void {
+  if (!Array.isArray(value) || value.some((entry) => !nonEmpty(entry))) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
+  const normalized = [...value].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  if (new Set(value).size !== value.length || normalized.some((entry, index) => entry !== value[index])) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
+}
+
+function assertTaskContinuationInput(value: unknown): void {
+  assertExactKeys(value,
+    ['channelId', 'rootMessageId', 'sourceMessageId', 'sourceTaskId', 'sourceTaskRevision',
+      'sourceVersionIds', 'objectiveSnapshot'],
+    ['channelId', 'rootMessageId', 'sourceMessageId', 'sourceTaskId', 'sourceTaskRevision',
+      'sourceVersionIds', 'objectiveSnapshot']);
+  assertId(value.channelId);
+  assertId(value.rootMessageId);
+  assertId(value.sourceMessageId);
+  assertId(value.sourceTaskId);
+  assertInteger(value.sourceTaskRevision, 1);
+  assertCanonicalIdArray(value.sourceVersionIds);
+  assertObjectiveSnapshot(value.objectiveSnapshot);
+}
+
 function assertRevisionRef(value: unknown): void {
   assertExactKeys(value, ['streamKind', 'streamId', 'revision'], ['streamKind', 'streamId', 'revision']);
   if (!nonEmpty(value.streamKind) || !nonEmpty(value.streamId)) throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
@@ -355,7 +402,9 @@ function assertCommandReceipt(value: unknown): void {
 function assertPromotionGateOutput(value: unknown): void {
   assertExactKeys(value, ['commandName', 'rootTaskId', 'managementRunId', 'sourceRelationId', 'disposition'],
     ['commandName', 'rootTaskId', 'managementRunId', 'sourceRelationId', 'disposition']);
-  if (value.commandName !== 'promote-to-task') throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  if (!PROMOTION_GATE_COMMAND_NAMES.includes(value.commandName as PromotionGateCommandName)) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
   assertId(value.rootTaskId);
   assertId(value.managementRunId);
   assertId(value.sourceRelationId);
@@ -384,7 +433,9 @@ export function parsePromotionGateCommandEnvelopeV1(value: unknown): PromotionGa
     ['schemaVersion', 'commandName', 'commandSchemaVersion', 'idempotencyKey', 'causationRef', 'sourceRefs'],
     ['schemaVersion', 'commandName', 'commandSchemaVersion', 'idempotencyKey']);
   if (value.schemaVersion !== PROMOTION_GATE_ENVELOPE_SCHEMA_VERSION) throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
-  if (value.commandName !== 'promote-to-task') throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  if (!PROMOTION_GATE_COMMAND_NAMES.includes(value.commandName as PromotionGateCommandName)) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
   // 本切片只实现 V1：未知/未来 commandSchemaVersion 必须拒绝，禁止按 V1 静默执行。
   if (value.commandSchemaVersion !== PROMOTION_GATE_COMMAND_SCHEMA_VERSION) {
     throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
@@ -403,6 +454,13 @@ export function parsePromotionGateInputV1(value: unknown): PromotionGateCommandI
   return structuredClone(value) as unknown as PromotionGateCommandInputMapV1['promote-to-task'];
 }
 
+export function parseTaskContinuationPromotionInputV1(
+  value: unknown,
+): PromotionGateCommandInputMapV1['create-task-continuation'] {
+  assertTaskContinuationInput(value);
+  return structuredClone(value) as unknown as PromotionGateCommandInputMapV1['create-task-continuation'];
+}
+
 export function parsePromotionCommandReceiptV1(value: unknown): PromotionCommandReceiptV1 {
   assertCommandReceipt(value);
   return structuredClone(value) as unknown as PromotionCommandReceiptV1;
@@ -414,7 +472,9 @@ export function parsePromotionGateCommandResponseV1(value: unknown): PromotionGa
       'conflictReason', 'freshnessReason'],
     ['schemaVersion', 'commandName', 'outcome', 'retryDirective', 'stableCode']);
   if (value.schemaVersion !== 1) throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
-  if (value.commandName !== 'promote-to-task') throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  if (!PROMOTION_GATE_COMMAND_NAMES.includes(value.commandName as PromotionGateCommandName)) {
+    throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
+  }
   if (!PROMOTION_GATE_OUTCOMES.includes(value.outcome as typeof PROMOTION_GATE_OUTCOMES[number])) {
     throw new Error(PROMOTION_GATE_PAYLOAD_INVALID);
   }

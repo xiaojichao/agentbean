@@ -19,7 +19,11 @@ import {
   createSendMessageCommandHandler,
 } from './message-tracer-handlers.js';
 import { createMessageTracerCommandDispatcher } from './message-tracer-dispatcher.js';
-import { parseMessageTracerCommandEnvelopeV1, type MessageTracerCommandResponseV1 } from '../../../../packages/contracts/src/index.js';
+import {
+  parseMessageTracerCommandEnvelopeV1,
+  type MessageTracerCommandResponseV1,
+  type TaskContinuationSourceMarkerV1,
+} from '../../../../packages/contracts/src/index.js';
 import type {
   SystemActivityCommandResponseV1,
   SystemActivityQueryName,
@@ -259,13 +263,17 @@ import { createPiProviderService, getEmergencyStopActive } from './pi-provider-s
 import { createAgentExposureService } from './agent-exposure-service.js';
 import { createAgentMemoryProjectionService } from './agent-memory-projection-service.js';
 import { createPromotionModesService } from './promotion-modes-service.js';
+import { createPromotionGateHandler } from './promotion-gate-handler.js';
 import {
+  parsePromotionGateCommandEnvelopeV1,
+  parseTaskContinuationPromotionInputV1,
   parseAgentOrchestrationEscalationCommandV1,
   parsePromotionProposalActionV1,
   parseSemanticPromotionEvaluateCommandV1,
   parseSemanticPromotionRolloutStateV1,
   parseTeamPromotionPolicyApplicationV1,
   parseTeamPromotionPolicyV1,
+  type PromotionGateCommandResponseV1,
 } from '../../../../packages/contracts/src/index.js';
 import { createChannelCoordinator, type CoordinationCycleSummary, type CoordinationJobOutcome } from './channel-coordination-coordinator.js';
 import { createCapabilitySummarizer } from './capability-summarizer.js';
@@ -520,6 +528,13 @@ export interface ServerNextUseCases {
     userId: string;
     teamId: string;
   }): Promise<{ ok: true; response: MessageTracerCommandResponseV1 } | { ok: false; error: string }>;
+  /** #1200：仅暴露显式 create-task-continuation；普通消息和 @Agent 不路由到 Promotion gate。 */
+  dispatchPromotionGateCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1 } | { ok: false; error: string }>;
   /**
    * #929 System activity command 派发（audience-scoped projection / attention / change-feed ack）。
    * authority（userId/teamId）由 socket session 注入。
@@ -2064,6 +2079,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           ids,
           clock,
           sessionSecret,
+          validateTaskContinuationSource: ({
+            repositories: transaction,
+            teamId,
+            channelId,
+            threadId,
+            marker,
+          }) => validateTaskContinuationSourceMarker(transaction, { teamId, channelId, threadId }, marker),
           deliverOutbox: deliverMessageTracerOutbox,
         }),
         checkInbox: createCheckInboxCommandHandler({
@@ -2124,6 +2146,81 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       authority: { actorId: input.userId, teamId: input.teamId },
     });
     return { ok: true, response };
+  }
+
+  async function dispatchPromotionGateCommand(input: {
+    envelope: unknown;
+    payload: unknown;
+    userId: string;
+    teamId: string;
+  }): Promise<{ ok: true; response: PromotionGateCommandResponseV1; task?: TaskDto } | { ok: false; error: string }> {
+    if (!(await repositories.teams.isMember(input.teamId, input.userId))) {
+      return { ok: false, error: 'FORBIDDEN' };
+    }
+    const stopped = await assertTeamPiCommandsAllowed(input.teamId);
+    if (stopped) return { ok: false, error: stopped.error };
+    let envelope;
+    let payload;
+    try {
+      envelope = parsePromotionGateCommandEnvelopeV1(input.envelope);
+      if (envelope.commandName !== 'create-task-continuation') {
+        return { ok: false, error: 'PROMOTION_COMMAND_NOT_WIRED' };
+      }
+      payload = parseTaskContinuationPromotionInputV1(input.payload);
+    } catch {
+      return { ok: false, error: 'PROMOTION_GATE_PAYLOAD_INVALID' };
+    }
+    const handler = createPromotionGateHandler({
+      teamId: input.teamId,
+      requesterId: input.userId,
+      unitOfWork: repositories.taskCoordinationUnitOfWork,
+      clock,
+      ids,
+      async resolveContinuationVersionIdsInTransaction({
+        repositories: transaction,
+        sourceTaskId,
+        sourceTaskRevision,
+        channelId,
+      }) {
+        const coordination = await transaction.coordination.coordinations.getByTaskId(sourceTaskId);
+        if (!coordination || coordination.taskRevision !== sourceTaskRevision) return null;
+        const current = await findCurrentManagedOutputPackage(transaction.outputPackages, {
+          teamId: input.teamId,
+          channelId,
+          taskId: sourceTaskId,
+          taskRevision: sourceTaskRevision,
+          taskAttempt: coordination.attempt,
+        });
+        if (!current.record) return current.hasManagedHistory ? null : [];
+        const projection = await transaction.outputPackages.getPackageById({
+          teamId: input.teamId,
+          packageId: current.record.packageId,
+        });
+        if (!projection) return null;
+        const requiredMembers = projection.members.filter((member) => member.requiredForFinal);
+        const collections = await transaction.channelProjects.listArtifactCollections({
+          teamId: input.teamId,
+          channelId,
+        });
+        const collectionById = new Map(collections.map((collection) => [collection.id, collection] as const));
+        const versionIds = requiredMembers.map((member) => collectionById.get(member.collectionId)?.currentVersionId);
+        if (versionIds.some((id) => !id)) return null;
+        return [...new Set(versionIds as string[])].sort();
+      },
+    });
+    try {
+      const response = await handler.createTaskContinuation(envelope, payload);
+      const task = response.result?.rootTaskId
+        ? await repositories.tasks.getById(response.result.rootTaskId)
+        : null;
+      return {
+        ok: true,
+        response,
+        ...(task && task.teamId === input.teamId ? { task: toTaskDto(task) } : {}),
+      };
+    } catch {
+      return { ok: false, error: 'TASK_CONTINUATION_FAILED' };
+    }
   }
 
   /**
@@ -2665,6 +2762,10 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
   // #921 slice D：mode='message-tracer' 时，sendMessage 路由到 message-tracer handler（cutover 路由层）。
   // 翻译 SendMessageInput → command envelope + payload → dispatch → 翻译回 SendMessageResult。
   async function sendMessageViaMessageTracer(messageInput: SendMessageInput): Promise<Ack<SendMessageResult>> {
+    const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+    if (continuationSource.kind === 'invalid') {
+      return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+    }
     const threadId = messageInput.threadId;
     const result = await dispatchMessageTracerCommand({
       envelope: {
@@ -2681,6 +2782,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         mentions: messageInput.meta?.mentions,
         attachmentIds: messageInput.artifactIds ?? messageInput.meta?.attachments,
         clientMessageId: messageInput.clientMessageId,
+        ...(continuationSource.kind === 'valid'
+          ? { taskContinuationSource: continuationSource.marker }
+          : {}),
         freshnessBasis: {
           schemaVersion: 1,
           target: {
@@ -2694,7 +2798,11 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       userId: messageInput.userId,
       teamId: messageInput.teamId,
     });
-    if (!result.ok) return makeFailure('INTERNAL_ERROR', `Message tracer: ${result.error}`);
+    if (!result.ok) {
+      return result.error === 'TASK_CONTINUATION_SOURCE_INVALID'
+        ? makeFailure('VALIDATION_ERROR', result.error)
+        : makeFailure('INTERNAL_ERROR', `Message tracer: ${result.error}`);
+    }
     const response = result.response;
     // applied → fetch message → SendMessageResult（dispatches 为空：message-tracer 不建 coordination job）
     if (response.outcome === 'applied' && response.result?.commandName === 'send-message') {
@@ -2722,7 +2830,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
     }
     // freshness_hold / conflict / rejected → failure ack（映射到已知错误码）
-    const errorCode = response.outcome === 'conflict' || response.outcome === 'freshness_hold'
+    const errorCode = response.stableCode === 'TASK_CONTINUATION_SOURCE_INVALID'
+      ? 'VALIDATION_ERROR'
+      : response.outcome === 'conflict' || response.outcome === 'freshness_hold'
       ? 'CONFLICT'
       : response.outcome === 'rejected' ? 'BAD_REQUEST' : 'INTERNAL_ERROR';
     return makeFailure(errorCode, response.stableCode);
@@ -2770,6 +2880,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         });
       }
     }
+    const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+    if (continuationSource.kind === 'invalid'
+      || (continuationSource.kind === 'valid'
+        && !(await validateTaskContinuationSourceMarker(repositories, messageInput, continuationSource.marker)))) {
+      return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+    }
+    const suppressContinuationRouting = continuationSource.kind === 'valid';
     const frozen = await resolveAndFreezeSelections(repositories, {
       userId: messageInput.userId,
       teamId: messageInput.teamId,
@@ -2789,23 +2906,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       channel,
       visibleAgents,
     });
-    const contextOwner = messageInput.threadId
+    const contextOwner = messageInput.threadId && !suppressContinuationRouting
       ? await resolveRoutingContextAgentId(repositories, {
           teamId: messageInput.teamId,
           channel,
           threadId: messageInput.threadId,
         })
       : undefined;
-    const route = routeMessageForChannel({
-      channel,
-      visibleAgents,
-      teamId: messageInput.teamId,
-      body: messageInput.body,
-      mentions,
-      contextOwner,
-      connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-      dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-    });
+    const route: RouteResult = suppressContinuationRouting
+      ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+      : routeMessageForChannel({
+          channel,
+          visibleAgents,
+          teamId: messageInput.teamId,
+          body: messageInput.body,
+          mentions,
+          contextOwner,
+          connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+          dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+        });
     const attachmentResult = await getAttachableUploadedArtifacts(repositories, {
       userId: messageInput.userId,
       teamId: messageInput.teamId,
@@ -2838,16 +2957,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
         if (shouldCreateTask && reservedRun.rootTaskId) taskId = reservedRun.rootTaskId;
       }
     }
-    let management: ManagementRoutingResult = await managementRouter.route({
-      userId: messageInput.userId,
-      teamId: messageInput.teamId,
-      channelId: messageInput.channelId,
-      rootMessageId: messageId,
-      ...(taskId ? { rootTaskId: taskId } : {}),
-      ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-      body: messageInput.body,
-      ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-    });
+    let management: ManagementRoutingResult = suppressContinuationRouting
+      ? { kind: 'direct', mode: 'direct' }
+      : await managementRouter.route({
+          userId: messageInput.userId,
+          teamId: messageInput.teamId,
+          channelId: messageInput.channelId,
+          rootMessageId: messageId,
+          ...(taskId ? { rootTaskId: taskId } : {}),
+          ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+          body: messageInput.body,
+          ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+        });
     if (management.kind === 'unavailable') {
       return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
     }
@@ -2873,6 +2994,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
             ...(taskId ? { taskId } : {}),
             ...(mentions.length ? { mentions } : {}),
+            ...(continuationSource.kind === 'valid'
+              ? { taskContinuationSource: continuationSource.marker }
+              : {}),
             projectReferenceRequestFingerprint: referenceFingerprint,
             routeReason: toRouteReason(route),
           },
@@ -5399,6 +5523,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
     },
 
     dispatchMessageTracerCommand,
+    dispatchPromotionGateCommand,
     dispatchSystemActivityCommand,
     dispatchSystemActivityQuery,
     dispatchTaskRemediationCommand,
@@ -5446,6 +5571,13 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       }
       const attachedArtifactIds = attachmentResult.artifacts.map((artifact) => artifact.id);
       const referenceFingerprint = projectReferenceRequestFingerprint(messageInput);
+      const continuationSource = parseTaskContinuationSourceMarker(messageInput.meta);
+      if (continuationSource.kind === 'invalid'
+        || (continuationSource.kind === 'valid'
+          && !(await validateTaskContinuationSourceMarker(repositories, messageInput, continuationSource.marker)))) {
+        return makeFailure('VALIDATION_ERROR', 'TASK_CONTINUATION_SOURCE_INVALID');
+      }
+      const suppressContinuationRouting = continuationSource.kind === 'valid';
 
       const clientIdempotencyKey = messageInput.clientMessageId
         ? `client:${messageInput.teamId}:${messageInput.clientMessageId}`
@@ -5473,17 +5605,41 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           const existingByClientKey = clientIdempotencyKey
             ? await transaction.jobs.getByIdempotencyKey(clientIdempotencyKey)
             : null;
+          const existingMessageByClientId = messageInput.clientMessageId
+            ? await transaction.messages.getByClientMessageId({
+                teamId: messageInput.teamId,
+                channelId: messageInput.channelId,
+                clientMessageId: messageInput.clientMessageId,
+              })
+            : null;
+          const existingMessageByExplicitId = messageInput.messageId
+            ? await transaction.messages.getById(messageInput.messageId)
+            : null;
           if (existingByMessageId && existingByClientKey && existingByMessageId.id !== existingByClientKey.id) {
             return { kind: 'conflict' as const };
           }
           const existingJob = existingByMessageId ?? existingByClientKey;
-          if (existingJob) {
-            const existingMessage = await transaction.messages.getById(existingJob.messageId);
-            if (!existingMessage) throw new Error('Coordination job references a missing message');
+          const existingMessageByJob = existingJob
+            ? await transaction.messages.getById(existingJob.messageId)
+            : null;
+          if (existingJob && !existingMessageByJob) {
+            throw new Error('Coordination job references a missing message');
+          }
+          const existingMessageIds = new Set([
+            existingMessageByJob?.id,
+            existingMessageByClientId?.id,
+            existingMessageByExplicitId?.id,
+          ].filter((id): id is string => Boolean(id)));
+          if (existingMessageIds.size > 1) return { kind: 'conflict' as const };
+          const existingMessage = existingMessageByJob
+            ?? existingMessageByClientId
+            ?? existingMessageByExplicitId;
+          if (existingMessage) {
             const sameRequest = existingMessage.teamId === messageInput.teamId
               && existingMessage.channelId === messageInput.channelId
               && existingMessage.senderId === messageInput.userId
               && existingMessage.body === messageInput.body
+              && (!messageInput.messageId || existingMessage.id === messageInput.messageId)
               && projectReferenceRequestFingerprintMatches(existingMessage.meta?.projectReferenceRequestFingerprint, messageInput)
               && (!messageInput.threadId || existingMessage.threadId === messageInput.threadId);
             if (!sameRequest) return { kind: 'conflict' as const };
@@ -5518,7 +5674,8 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           } | null = null;
           // 只对显式 @Agent 触发 task-linked；纯 @人类 提及回到既有 dispatch 路径（AC9）。
           const agentMentions = mentions.filter((mention) => mention.kind === 'agent');
-          if (messageInput.threadId
+          if (!suppressContinuationRouting
+            && messageInput.threadId
             && agentMentions.length > 0
             && (messageInput.selections?.length ?? 0) > 0
             && frozen.selections.length > 0) {
@@ -5576,6 +5733,9 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
               ...(attachedArtifactIds.length > 0 ? { artifactIds: attachedArtifactIds } : {}),
               ...(messageInput.asTask === true ? { asTask: true } : {}),
               ...(mentions.length ? { mentions } : {}),
+              ...(continuationSource.kind === 'valid'
+                ? { taskContinuationSource: continuationSource.marker }
+                : {}),
               projectReferenceRequestFingerprint: referenceFingerprint,
             },
           });
@@ -5599,7 +5759,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
             repositories.teamPiAuthorityMigrations,
             messageInput.teamId,
           );
-          if (!legacyFenced) {
+          if (!legacyFenced && !suppressContinuationRouting) {
             await transaction.jobs.create({
               id: ids.nextId(),
               teamId: messageInput.teamId,
@@ -5659,23 +5819,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
 
       // Replay: return already-created dispatches/tasks without re-executing side effects.
       if (outcome.kind === 'replay') {
-        const contextOwner = messageInput.threadId
+        const contextOwner = messageInput.threadId && !suppressContinuationRouting
           ? await resolveRoutingContextAgentId(repositories, {
               teamId: messageInput.teamId,
               channel,
               threadId: messageInput.threadId,
             })
           : undefined;
-        const route = routeMessageForChannel({
-          channel,
-          visibleAgents,
-          teamId: messageInput.teamId,
-          body: messageInput.body,
-          mentions,
-          contextOwner,
-          connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-          dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-        });
+        const route: RouteResult = suppressContinuationRouting
+          ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+          : routeMessageForChannel({
+              channel,
+              visibleAgents,
+              teamId: messageInput.teamId,
+              body: messageInput.body,
+              mentions,
+              contextOwner,
+              connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+              dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+            });
         const message = outcome.artifacts.length > 0
           ? {
             ...outcome.message,
@@ -5708,23 +5870,25 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
       // Immediate execution bridge (until Coordinator owns full dispatch lifecycle):
       // hard-constrained paths (@mention / DM / thread owner) and asTask management still
       // run synchronously. Unmentioned root messages stay job-only (ADR 0061).
-      const contextOwner = messageInput.threadId
+      const contextOwner = messageInput.threadId && !suppressContinuationRouting
         ? await resolveRoutingContextAgentId(repositories, {
             teamId: messageInput.teamId,
             channel,
             threadId: messageInput.threadId,
           })
         : undefined;
-      const route = routeMessageForChannel({
-        channel,
-        visibleAgents,
-        teamId: messageInput.teamId,
-        body: messageInput.body,
-        mentions,
-        contextOwner,
-        connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
-        dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
-      });
+      const route: RouteResult = suppressContinuationRouting
+        ? { kind: 'no-dispatch', reason: 'task-continuation-source' }
+        : routeMessageForChannel({
+            channel,
+            visibleAgents,
+            teamId: messageInput.teamId,
+            body: messageInput.body,
+            mentions,
+            contextOwner,
+            connectedAgentDeviceIds: messageInput.connectedAgentDeviceIds,
+            dispatchClaimDeviceIds: messageInput.dispatchClaimDeviceIds,
+          });
       const shouldCreateTask = messageInput.asTask === true || shouldAutoCreateTaskThread({
         body: messageInput.body,
         route,
@@ -5747,16 +5911,18 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           taskId = reservedRun.rootTaskId;
         }
       }
-      let management: ManagementRoutingResult = await managementRouter.route({
-        userId: messageInput.userId,
-        teamId: messageInput.teamId,
-        channelId: messageInput.channelId,
-        rootMessageId: outcome.message.id,
-        ...(taskId ? { rootTaskId: taskId } : {}),
-        ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
-        body: messageInput.body,
-        ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
-      });
+      let management: ManagementRoutingResult = suppressContinuationRouting
+        ? { kind: 'direct', mode: 'direct' }
+        : await managementRouter.route({
+            userId: messageInput.userId,
+            teamId: messageInput.teamId,
+            channelId: messageInput.channelId,
+            rootMessageId: outcome.message.id,
+            ...(taskId ? { rootTaskId: taskId } : {}),
+            ...(messageInput.clientMessageId ? { clientMessageId: messageInput.clientMessageId } : {}),
+            body: messageInput.body,
+            ...(route.kind === 'dispatch' ? { targetAgentId: route.agentId } : {}),
+          });
       if (management.kind === 'unavailable') {
         return makeFailure('VALIDATION_ERROR', management.diagnostics.join(','));
       }
@@ -14796,6 +14962,59 @@ function renderCoalescedDispatchPrompt(messages: MessageRecord[]): string {
   return messages.map((message) => message.body).join('\n\n');
 }
 
+function parseTaskContinuationSourceMarker(meta: MessageMetaDto | undefined):
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'valid'; readonly marker: TaskContinuationSourceMarkerV1 } {
+  if (!meta || !Object.prototype.hasOwnProperty.call(meta, 'taskContinuationSource')) {
+    return { kind: 'absent' };
+  }
+  const value = meta.taskContinuationSource;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'invalid' };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !['schemaVersion', 'sourceTaskId', 'sourceTaskRevision'].includes(key))
+    || record.schemaVersion !== 1
+    || typeof record.sourceTaskId !== 'string'
+    || record.sourceTaskId.trim().length === 0
+    || !Number.isSafeInteger(record.sourceTaskRevision)
+    || Number(record.sourceTaskRevision) < 1) {
+    return { kind: 'invalid' };
+  }
+  return {
+    kind: 'valid',
+    marker: {
+      schemaVersion: 1,
+      sourceTaskId: record.sourceTaskId,
+      sourceTaskRevision: Number(record.sourceTaskRevision),
+    },
+  };
+}
+
+async function validateTaskContinuationSourceMarker(
+  repositories: Pick<ServerNextRepositories, 'tasks' | 'messages' | 'taskCoordination' | 'management'>,
+  input: Pick<SendMessageInput, 'teamId' | 'channelId' | 'threadId'>,
+  marker: TaskContinuationSourceMarkerV1,
+): Promise<boolean> {
+  if (!input.threadId) return false;
+  const [task, rootMessage, coordination] = await Promise.all([
+    repositories.tasks.getById(marker.sourceTaskId),
+    repositories.messages.getById(input.threadId),
+    repositories.taskCoordination.coordinations.getByTaskId(marker.sourceTaskId),
+  ]);
+  if (!task || task.teamId !== input.teamId || task.channelId !== input.channelId
+    || task.revision !== marker.sourceTaskRevision
+    || !['done', 'cancelled', 'closed'].includes(task.status)
+    || !rootMessage || rootMessage.teamId !== input.teamId
+    || rootMessage.channelId !== input.channelId || isDeletedMessage(rootMessage)
+    || !coordination || coordination.teamId !== input.teamId
+    || coordination.taskRevision !== marker.sourceTaskRevision) {
+    return false;
+  }
+  const run = await repositories.management.runs.getById(coordination.managementRunId);
+  return Boolean(run && run.teamId === input.teamId && run.channelId === input.channelId
+    && run.rootTaskId === marker.sourceTaskId && run.rootMessageId === input.threadId);
+}
+
 function routeMessageForChannel(input: {
   channel: ChannelRecord;
   visibleAgents: AgentDto[];
@@ -17389,6 +17608,36 @@ async function buildTaskDeliveryOverview(
         : fileReviewGate.kind === 'rejected'
           ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
           : { action: 'accept-delivery', label: '验收本次交付' };
+  const terminalRoot = ['done', 'cancelled', 'closed'].includes(task.status)
+    && coordination?.nodeKind === 'root';
+  const continuationRun = terminalRoot
+    ? coordination
+      ? await repositories.management.runs.getById(coordination.managementRunId)
+      : await repositories.management.runs.getByRootTaskId(task.id)
+    : null;
+  const continuationVersionIds = [...new Set(fileReviewCoverage.items
+    .map((item) => item.currentVersionId)
+    .filter((id): id is string => Boolean(id)))].sort();
+  const continuationAction: TaskLevelAvailableActionDto = !terminalRoot
+    ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '仅终态根任务可创建后续任务' }
+    : !continuationRun?.rootMessageId
+      ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '原讨论串不可用' }
+      : !fileReviewProjectionAvailable
+        ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '当前文件版本不可用，请刷新后重试' }
+        : fileReviewCoverage.items.some((item) => !item.currentVersionId)
+          ? { action: 'create-continuation', label: '创建后续任务', disabled: true, disabledReason: '当前文件版本不完整，请刷新后重试' }
+          : {
+              action: 'create-continuation',
+              label: '创建后续任务',
+              continuationBasis: {
+                schemaVersion: 1,
+                sourceTaskId: task.id,
+                sourceTaskRevision: task.revision,
+                sourceVersionIds: continuationVersionIds,
+                channelId,
+                rootMessageId: continuationRun.rootMessageId,
+              },
+            };
   const availableActions: TaskLevelAvailableActionDto[] = [
     { action: 'open-task', label: '打开 Task' },
     packages.length > 0
@@ -17398,6 +17647,7 @@ async function buildTaskDeliveryOverview(
       ? { action: 'review-package', label: '审核交付文件' }
       : { action: 'review-package', label: '审核交付文件', disabled: true, disabledReason: '当前无待审核交付' },
     acceptDeliveryAction,
+    continuationAction,
   ];
 
   const watermark = await repositories.systemActivity?.watermarks

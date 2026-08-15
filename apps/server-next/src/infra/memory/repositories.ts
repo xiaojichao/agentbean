@@ -373,7 +373,7 @@ export function createInMemoryRepositories(): ServerNextRepositories {
     agentMemoryProjectionUnitOfWork: agentMemoryProjection.unitOfWork,
     channelCoordination,
     channelCoordinationUnitOfWork: createChannelCoordinationUnitOfWork((operation) =>
-      management.unitOfWork.run(async () => {
+      management.unitOfWork.run(async (managementRepositories) => {
         const messageSnapshot = new Map(messages);
         const artifactSnapshot = new Map(artifacts);
         const jobSnapshot = new Map(channelCoordinationJobs);
@@ -392,6 +392,8 @@ export function createInMemoryRepositories(): ServerNextRepositories {
             decisions: channelCoordination.decisions,
             tasks: repositories.tasks,
             channels: repositories.channels,
+            management: managementRepositories,
+            taskCoordination,
             projectReferenceSets: repositories.projectReferenceSets,
             inbox: messageTracer.inbox,
             commandReceipts: messageTracer.commandReceipts,

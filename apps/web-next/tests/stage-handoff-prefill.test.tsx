@@ -103,7 +103,7 @@ describe('阶段工作区交接入口（#1178）', () => {
     const onAction = vi.fn();
     await renderWorkspace(workspaceFixture({ taskActions: ['delegate-to-agent'] }), { onAction });
     fireEvent.click(document.querySelector('[data-smoke="task-action-delegate-to-agent"]')!);
-    expect(onAction).toHaveBeenCalledWith('delegate-to-agent');
+    expect(onAction).toHaveBeenCalledWith({ action: 'delegate-to-agent', label: '交给智能体处理' });
   });
 
   test('无交付包时「交给智能体处理」上抛不带引用选择', async () => {

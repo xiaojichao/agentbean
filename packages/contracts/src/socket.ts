@@ -41,6 +41,8 @@ export const WEB_EVENTS = {
   },
   /** #923 Promotion proposal 与 Team rollout/policy 控制；完整 projection 属后续切片。 */
   promotion: {
+    /** #1200：Promotion registry 的显式 human command；当前只接 create-task-continuation。 */
+    command: 'promotion:command',
     semanticEvaluate: 'promotion:semantic-evaluate',
     proposalAction: 'promotion:proposal-action',
     semanticRolloutUpdate: 'promotion:semantic-rollout-update',

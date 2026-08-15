@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskDagViewDto, type TaskLevelAction } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDagViewDto, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -453,6 +453,14 @@ export default function ChatPage() {
   // #1064：线程 composer 的项目引用选择（Task 页预填导航写入；与主 composer 的
   // projectReferenceSelections 同型，发送时随 threadId 一起冻结为消息 ProjectReferenceSet）。
   const [threadSelections, setThreadSelections] = useState<ProjectReferenceSelectionRequestDto[]>([]);
+  // #1200：仅由 Server availableAction/一次性 compose 写入；普通 thread composer 保持 null。
+  const [threadContinuationBasis, setThreadContinuationBasis] = useState<TaskContinuationBasisV1 | null>(null);
+  const [pendingThreadContinuation, setPendingThreadContinuation] = useState<{
+    sourceMessageId: string;
+    clientMessageId: string;
+    objective: string;
+  } | null>(null);
+  const [threadContinuationSubmitting, setThreadContinuationSubmitting] = useState(false);
   const [showBackToBottom, setShowBackToBottom] = useState(false);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [channelTaskWorkspace, setChannelTaskWorkspace] = useState<ChannelTaskWorkspaceV1 | null>(null);
@@ -477,6 +485,10 @@ export default function ChatPage() {
   const threadFileInputRef = useRef<HTMLInputElement>(null);
   // #1064：线程 composer 焦点（Task 页「交给 Agent 处理」预填后移焦）。
   const threadTextareaRef = useRef<HTMLTextAreaElement>(null);
+  // React state 不能阻止同一事件循环内的双击/连续回车；ref 是两阶段提交的同步互斥锁。
+  const threadContinuationSubmittingRef = useRef(false);
+  // 第一阶段 ack 超时结果不确定时复用同一 message 幂等键，避免解锁重试产生第二条来源消息。
+  const threadContinuationSourceClientMessageIdRef = useRef<string | null>(null);
   const dmsRef = useRef(dms);
   const activeChannelRef = useRef(activeChannel);
   activeChannelRef.current = activeChannel;
@@ -1525,6 +1537,9 @@ export default function ChatPage() {
     setThreadRootId(null);
     setThreadInput('');
     setThreadSelections([]);
+    setThreadContinuationBasis(null);
+    setPendingThreadContinuation(null);
+    threadContinuationSourceClientMessageIdRef.current = null;
     setThreadAttachments((prev) => {
       prev.forEach(revokeComposerPreview);
       return [];
@@ -1618,14 +1633,27 @@ export default function ChatPage() {
     });
   }, [activeChannel, threadParam]);
 
+  useEffect(() => {
+    if (!threadContinuationBasis) return;
+    if (threadContinuationBasis.channelId === activeChannel
+      && threadContinuationBasis.rootMessageId === threadRootId) return;
+    setThreadContinuationBasis(null);
+    setPendingThreadContinuation(null);
+    threadContinuationSourceClientMessageIdRef.current = null;
+  }, [activeChannel, threadContinuationBasis, threadRootId]);
+
   // #1064 AC1/AC2：Task 页「交给 Agent 处理」预填导航。compose 参数只携带 text +
   // selections，落笔均为本地 state——未发送不创建 Message/Offer/claim/Invocation/负责人事实。
   // 填充一次后立即从 URL 移除（history.replaceState），刷新/回退不会重复填充。
   useEffect(() => {
     if (!activeChannel || !composeParam || !threadRootId) return;
-    let parsed: { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+    let parsed: {
+      text?: string;
+      selections?: ProjectReferenceSelectionRequestDto[];
+      continuationBasis?: TaskContinuationBasisV1;
+    };
     try {
-      parsed = JSON.parse(composeParam) as { text?: string; selections?: ProjectReferenceSelectionRequestDto[] };
+      parsed = JSON.parse(composeParam) as typeof parsed;
     } catch {
       return;
     }
@@ -1634,6 +1662,12 @@ export default function ChatPage() {
     }
     if (Array.isArray(parsed.selections) && parsed.selections.length > 0) {
       setThreadSelections(parsed.selections);
+    }
+    if (parsed.continuationBasis?.schemaVersion === 1
+      && parsed.continuationBasis.channelId === activeChannel
+      && parsed.continuationBasis.rootMessageId === threadRootId) {
+      threadContinuationSourceClientMessageIdRef.current = null;
+      setThreadContinuationBasis(parsed.continuationBasis);
     }
     requestAnimationFrame(() => threadTextareaRef.current?.focus());
     const params = new URLSearchParams(searchParams.toString());
@@ -1831,33 +1865,193 @@ export default function ChatPage() {
       || hasUploadingAttachments(threadAttachments)
       || hasFailedAttachments(threadAttachments)
     ) return;
+    const continuationOperation = Boolean(threadContinuationBasis || pendingThreadContinuation);
+    if (continuationOperation) {
+      if (threadContinuationSubmittingRef.current) return;
+      threadContinuationSubmittingRef.current = true;
+      setThreadContinuationSubmitting(true);
+    }
+    const releaseContinuationLock = () => {
+      if (!continuationOperation) return;
+      threadContinuationSubmittingRef.current = false;
+      setThreadContinuationSubmitting(false);
+    };
     const channelId = activeChannel;
     const body = threadInput.trim() || '附件';
     const artifactIds = artifacts.map((a) => a.id);
     const mentions = extractMentions(body, visibleMentionMembers);
-    const clientMessageId = createClientMessageId('chat-thread');
-    // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
-    // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
-    // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
-    getWebSocket().emit(WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(mentions.length ? { meta: { mentions } } : {}) }, (res?: SendMessageAck) => {
-      if (res?.ok) {
-        appendAckMessage(res);
+    const continuationSourceSend = Boolean(threadContinuationBasis && !pendingThreadContinuation);
+    const clientMessageId = pendingThreadContinuation?.clientMessageId
+      ?? (continuationSourceSend
+        ? threadContinuationSourceClientMessageIdRef.current ?? createClientMessageId('chat-thread')
+        : createClientMessageId('chat-thread'));
+    if (continuationSourceSend) threadContinuationSourceClientMessageIdRef.current = clientMessageId;
+    const createContinuation = async (sourceMessageId: string, objective: string) => {
+      const basis = threadContinuationBasis;
+      if (!basis) return true;
+      let continuation: Awaited<ReturnType<ReturnType<typeof taskEvents>['createContinuation']>>;
+      let transportUncertain = false;
+      try {
+        continuation = await taskEvents().createContinuation({
+          channelId: basis.channelId,
+          rootMessageId: basis.rootMessageId,
+          sourceMessageId,
+          sourceTaskId: basis.sourceTaskId,
+          sourceTaskRevision: basis.sourceTaskRevision,
+          sourceVersionIds: basis.sourceVersionIds,
+          objectiveSnapshot: {
+            schemaVersion: 1,
+            objective,
+            scope: `task-continuation:${basis.sourceTaskId}`,
+            riskLevel: 'low',
+            dataSnapshot: JSON.stringify({ sourceVersionIds: basis.sourceVersionIds }),
+          },
+        }, `task-continuation:${clientMessageId}`);
+      } catch {
+        transportUncertain = true;
+        continuation = { ok: false, error: 'NETWORK_UNCERTAIN' };
+      }
+      const accepted = continuation.ok
+        && continuation.response
+        && ['applied', 'replayed'].includes(continuation.response.outcome);
+      if (!accepted) {
+        const retrySameKey = transportUncertain
+          || continuation.response?.retryDirective === 'same_key';
+        let retryHint = '请再次点击发送重试';
+        if (retrySameKey) {
+          setPendingThreadContinuation({ sourceMessageId, clientMessageId, objective });
+        } else {
+          const refreshed = await projectEvents().queryTaskDeliveryOverview({
+            channelId: basis.channelId,
+            taskId: basis.sourceTaskId,
+          }).catch(() => null);
+          const refreshedAction = refreshed?.ok && refreshed.overview
+            ? refreshed.overview.availableActions.find((action) =>
+                action.action === 'create-continuation' && !action.disabled && action.continuationBasis)
+            : undefined;
+          if (refreshedAction?.continuationBasis) {
+            setThreadContinuationBasis(refreshedAction.continuationBasis);
+            setPendingThreadContinuation({
+              sourceMessageId,
+              clientMessageId: createClientMessageId('task-continuation-retry'),
+              objective,
+            });
+            retryHint = '依据已刷新，请再次点击发送';
+          } else {
+            setPendingThreadContinuation(null);
+            setThreadContinuationBasis(null);
+            setThreadInput('');
+            setThreadSelections([]);
+            threadAttachments.forEach(revokeComposerPreview);
+            setThreadAttachments([]);
+            retryHint = '请返回 Task 重新发起';
+          }
+          void loadTasks();
+        }
+        appendMessage({
+          id: `local-continuation-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: retrySameKey
+            ? `后续任务状态不确定：${continuation.response?.stableCode ?? continuation.error ?? '请再次点击发送重试'}`
+            : `后续任务未创建：${continuation.response?.stableCode ?? continuation.error ?? '依据已变化'}；${retryHint}`,
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+        return false;
+      }
+      setPendingThreadContinuation(null);
+      setThreadContinuationBasis(null);
+      void loadTasks();
+      return true;
+    };
+    if (pendingThreadContinuation && threadContinuationBasis) {
+      void createContinuation(
+        pendingThreadContinuation.sourceMessageId,
+        pendingThreadContinuation.objective,
+      ).then((created) => {
+        if (!created) return;
         setThreadInput('');
         setThreadSelections([]);
         threadAttachments.forEach(revokeComposerPreview);
         setThreadAttachments([]);
-        return;
-      }
-      appendMessage({
-        id: `local-thread-error-${Date.now()}`,
-        channelId,
-        senderKind: 'system',
-        senderId: null,
-        body: messageSendFailureText(res),
-        createdAt: Date.now(),
-        metaJson: JSON.stringify({ kind: 'send-fail' }),
-      });
-    });
+      }).finally(releaseContinuationLock);
+      return;
+    }
+    // #1064：线程回复携带项目引用选择（Task 页预填的 delivered 包等），发送时由
+    // Server 冻结为 ProjectReferenceSet。失败（freshness_hold/conflict/rejected）时
+    // 保留 input + selections + attachments 供重试（AC11），只在成功路径清空。
+    const messageMeta = {
+      ...(mentions.length ? { mentions } : {}),
+      ...(threadContinuationBasis
+        ? {
+            taskContinuationSource: {
+              schemaVersion: 1,
+              sourceTaskId: threadContinuationBasis.sourceTaskId,
+              sourceTaskRevision: threadContinuationBasis.sourceTaskRevision,
+            },
+          }
+        : {}),
+    };
+    void emitWithTimeout(getWebSocket(), WEB_EVENTS.message.send, { teamId: currentTeamId, channelId, body, threadId: threadRootId, artifactIds, clientMessageId, selections: threadSelections, ...(Object.keys(messageMeta).length ? { meta: messageMeta } : {}) })
+      .then(async (res?: SendMessageAck) => {
+        if (res?.ok) {
+          threadContinuationSourceClientMessageIdRef.current = null;
+          appendAckMessage(res);
+          if (threadContinuationBasis) {
+            const sourceMessageId = res.message && typeof res.message === 'object'
+              ? res.message.id
+              : undefined;
+            if (!sourceMessageId) {
+              setPendingThreadContinuation(null);
+              setThreadContinuationBasis(null);
+              setThreadInput('');
+              setThreadSelections([]);
+              threadAttachments.forEach(revokeComposerPreview);
+              setThreadAttachments([]);
+              appendMessage({
+                id: `local-continuation-error-${Date.now()}`,
+                channelId,
+                senderKind: 'system',
+                senderId: null,
+                body: '消息已发送，但回执缺少消息 ID；请返回 Task 重新发起后续任务',
+                createdAt: Date.now(),
+                metaJson: JSON.stringify({ kind: 'send-fail' }),
+              });
+              return;
+            }
+            if (!(await createContinuation(sourceMessageId, body))) return;
+          }
+          setThreadInput('');
+          setThreadSelections([]);
+          threadAttachments.forEach(revokeComposerPreview);
+          setThreadAttachments([]);
+          return;
+        }
+        if (res?.error !== 'timeout') threadContinuationSourceClientMessageIdRef.current = null;
+        appendMessage({
+          id: `local-thread-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: messageSendFailureText(res),
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+      })
+      .catch(() => {
+        appendMessage({
+          id: `local-thread-error-${Date.now()}`,
+          channelId,
+          senderKind: 'system',
+          senderId: null,
+          body: '消息发送状态不确定，请再次点击发送重试',
+          createdAt: Date.now(),
+          metaJson: JSON.stringify({ kind: 'send-fail' }),
+        });
+      })
+      .finally(releaseContinuationLock);
   };
 
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
@@ -2899,7 +3093,7 @@ export default function ChatPage() {
           onDeliveryAction={(action) => {
             // 原型 §5.1/§7.2:「交给智能体处理」定位到讨论串并预填 @ 触发智能体选择;
             // task-only(无关联消息)回落到主 composer;审核面在 Files 逻辑产物视图。
-            if (action === 'delegate-to-agent') {
+            if (action.action === 'delegate-to-agent') {
               if (taskDetailMessage) {
                 openThread(taskDetailMessage.id);
                 setThreadInput('@');
@@ -2910,14 +3104,21 @@ export default function ChatPage() {
                 setInput('@');
                 setTimeout(() => textareaRef.current?.focus(), 0);
               }
-            } else if (action === 'review-package') {
+            } else if (action.action === 'review-package') {
               // #1177：阶段详情工作区内已可完成审核闭环；保留详情，不再跳转到 Files。
               const packageSection = document.querySelector<HTMLElement>('[data-smoke="stage-review-package"]')
                 ?? document.querySelector<HTMLElement>('[data-smoke="stage-delivery-review-workspace"]');
               packageSection?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-            } else if (action === 'open-task') {
+            } else if (action.action === 'open-task') {
               closeTaskDetail();
               switchTab('tasks');
+            } else if (action.action === 'create-continuation' && action.continuationBasis) {
+              closeTaskDetail();
+              openThread(action.continuationBasis.rootMessageId);
+              threadContinuationSourceClientMessageIdRef.current = null;
+              setThreadContinuationBasis(action.continuationBasis);
+              setThreadInput(`请继续任务「${taskDetailTask?.title ?? '当前任务'}」：`);
+              setTimeout(() => threadTextareaRef.current?.focus(), 0);
             }
           }}
           onStageHandoff={(handoff) => {
@@ -2990,6 +3191,7 @@ export default function ChatPage() {
               threadTextareaRef.current?.focus();
             }}
             uploading={uploading}
+            submitting={threadContinuationSubmitting}
             imageInputRef={threadImageInputRef}
             fileInputRef={threadFileInputRef}
             threadTextareaRef={threadTextareaRef}
@@ -4402,7 +4604,7 @@ function TaskDetailPanel({
   onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
   onTaskStatus: (status: TaskStatus) => void;
   /** 原型收敛:任务详情内嵌交付视图的动作导航(交给智能体/审核文件包)。 */
-  onDeliveryAction?: (action: TaskLevelAction) => void;
+  onDeliveryAction?: (action: TaskLevelAvailableActionDto) => void;
   /** #1178：阶段工作区交接入口（交给智能体处理/要求修改后继续）的本地预填导航。 */
   onStageHandoff?: (action: StageHandoffAction) => void;
 }) {
@@ -4845,6 +5047,7 @@ function ThreadPanel({
   onRemoveSelection,
   onAddSelection,
   uploading,
+  submitting,
   imageInputRef,
   fileInputRef,
   threadTextareaRef,
@@ -4906,6 +5109,7 @@ function ThreadPanel({
   /** 原型收敛:讨论串内文件包卡片的引用入口(整包/单选/多选)加入线程 composer。 */
   onAddSelection: (selection: ProjectReferenceSelectionRequestDto) => void;
   uploading: boolean;
+  submitting: boolean;
   imageInputRef: RefObject<HTMLInputElement>;
   fileInputRef: RefObject<HTMLInputElement>;
   /** #1064：线程 composer 焦点（ChatPage 持有，预填导航后移焦）。 */
@@ -5228,6 +5432,7 @@ function ThreadPanel({
             value={input}
             onChange={handleThreadInputChange}
             onKeyDown={handleThreadInputKeyDown}
+            disabled={submitting}
             rows={2}
             placeholder="回复讨论串（输入 @ 可选择成员、智能体、文件或文件包）"
             data-smoke="thread-message-input"
@@ -5265,14 +5470,14 @@ function ThreadPanel({
             <div className="flex items-center gap-1">
               <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
               <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => { if (e.target.files) onUpload(e.target.files); e.currentTarget.value = ''; }} />
-              <button onClick={() => imageInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
+              <button onClick={() => imageInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传图片">
                 <Image size={16} />
               </button>
-              <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
+              <button onClick={() => fileInputRef.current?.click()} disabled={uploading || submitting} className="flex h-7 w-7 items-center justify-center rounded-sm border border-neutral-300 bg-white text-neutral-600 hover:border-neutral-900 hover:bg-amber-50 disabled:opacity-40" title="上传附件">
                 <Paperclip size={16} />
               </button>
             </div>
-            <button onClick={onSend} disabled={uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0 && selections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
+            <button onClick={onSend} disabled={submitting || uploading || hasUploadingAttachments(attachments) || hasFailedAttachments(attachments) || (!input.trim() && readyArtifacts(attachments).length === 0 && selections.length === 0)} className="flex h-7 w-7 items-center justify-center rounded-md bg-pink-500 text-white hover:bg-pink-600 disabled:opacity-40">
               <Send size={14} />
             </button>
           </div>

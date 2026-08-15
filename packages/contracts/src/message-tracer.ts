@@ -145,6 +145,13 @@ export interface MessageTracerCommandEnvelopeV1 {
   readonly sourceRefs?: readonly CommandProvenanceRefV1[];
 }
 
+/** Server 校验后随 continuation source 消息持久化的来源标记。 */
+export interface TaskContinuationSourceMarkerV1 {
+  readonly schemaVersion: 1;
+  readonly sourceTaskId: ID;
+  readonly sourceTaskRevision: number;
+}
+
 export interface MessageTracerCommandInputMapV1 {
   /**
    * 投递一条消息。成功只提交本次已校验、已展示的 candidate；自身消息不入自身 Inbox；
@@ -159,6 +166,8 @@ export interface MessageTracerCommandInputMapV1 {
     readonly attachmentIds?: readonly ID[];
     /** 来源去重输入（ADR-0067 §21）：client ID 只能作为意图或来源去重输入，不作为权威身份。 */
     readonly clientMessageId?: string;
+    /** 经 Server 复验后持久化，供 promotion gate 绑定原 Task revision。 */
+    readonly taskContinuationSource?: TaskContinuationSourceMarkerV1;
     /** send 必带 Freshness basis（ADR-0067）。 */
     readonly freshnessBasis: SendMessageFreshnessBasisV1;
   };
@@ -380,6 +389,14 @@ function assertSendMessageFreshnessBasis(value: unknown): void {
   if (value.basisTaskId !== undefined && !nonEmpty(value.basisTaskId)) throw new Error(MESSAGE_TRACER_PAYLOAD_INVALID);
 }
 
+function assertTaskContinuationSourceMarker(value: unknown): void {
+  assertExactKeys(value, ['schemaVersion', 'sourceTaskId', 'sourceTaskRevision'],
+    ['schemaVersion', 'sourceTaskId', 'sourceTaskRevision']);
+  if (value.schemaVersion !== 1) throw new Error(MESSAGE_TRACER_PAYLOAD_INVALID);
+  assertId(value.sourceTaskId);
+  assertInteger(value.sourceTaskRevision, 1);
+}
+
 function assertInboxItemSummary(value: unknown): void {
   assertExactKeys(value, ['messageId', 'targetSeq', 'senderKind', 'senderId'],
     ['messageId', 'targetSeq', 'senderKind', 'senderId']);
@@ -402,7 +419,7 @@ function assertMention(value: unknown): void {
 function assertMessageTracerInput(commandName: MessageTracerCommandName, value: unknown): void {
   if (commandName === 'send-message') {
     assertExactKeys(value,
-      ['channelId', 'threadId', 'senderKind', 'body', 'mentions', 'attachmentIds', 'clientMessageId', 'freshnessBasis'],
+      ['channelId', 'threadId', 'senderKind', 'body', 'mentions', 'attachmentIds', 'clientMessageId', 'taskContinuationSource', 'freshnessBasis'],
       ['channelId', 'senderKind', 'body', 'freshnessBasis']);
     assertId(value.channelId);
     if (value.threadId !== undefined && !nonEmpty(value.threadId)) throw new Error(MESSAGE_TRACER_PAYLOAD_INVALID);
@@ -414,6 +431,7 @@ function assertMessageTracerInput(commandName: MessageTracerCommandName, value: 
     }
     if (value.attachmentIds !== undefined) assertStringArray(value.attachmentIds);
     if (value.clientMessageId !== undefined && !nonEmpty(value.clientMessageId)) throw new Error(MESSAGE_TRACER_PAYLOAD_INVALID);
+    if (value.taskContinuationSource !== undefined) assertTaskContinuationSourceMarker(value.taskContinuationSource);
     assertSendMessageFreshnessBasis(value.freshnessBasis);
     return;
   }

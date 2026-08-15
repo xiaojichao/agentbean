@@ -42,6 +42,10 @@ interface SourceRelationRow {
   risk_level: PromotionRiskLevel;
   data_snapshot_json: string | null;
   provenance_json: string;
+  relation_kind: 'task-continuation' | null;
+  source_task_id: string | null;
+  source_task_revision: number | null;
+  source_version_ids_json: string | null;
   claim_state: string;
   created_at: number;
 }
@@ -186,6 +190,10 @@ function mapSourceRelation(row: SourceRelationRow | undefined): PromotionSourceR
     riskLevel: row.risk_level,
     dataSnapshotJson: row.data_snapshot_json,
     provenanceJson: row.provenance_json,
+    relationKind: row.relation_kind,
+    sourceTaskId: row.source_task_id,
+    sourceTaskRevision: row.source_task_revision,
+    sourceVersionIdsJson: row.source_version_ids_json,
     claimState: row.claim_state as 'awaiting-driver',
     createdAt: row.created_at,
   };
@@ -271,8 +279,8 @@ export function createSqlitePromotionSourceRelationRepository(
       teamDb.prepare(`INSERT INTO promotion_source_relations (
           id, team_id, lineage_key, task_id, management_run_id, requester_id, trigger_command_revision,
           objective_snapshot_json, scope_snapshot_json, risk_level, data_snapshot_json, provenance_json,
-          claim_state, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          relation_kind, source_task_id, source_task_revision, source_version_ids_json, claim_state, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(
           input.id,
           input.teamId,
@@ -286,6 +294,10 @@ export function createSqlitePromotionSourceRelationRepository(
           input.riskLevel,
           input.dataSnapshotJson,
           input.provenanceJson,
+          input.relationKind,
+          input.sourceTaskId,
+          input.sourceTaskRevision,
+          input.sourceVersionIdsJson,
           input.claimState,
           input.createdAt,
         );
@@ -295,7 +307,7 @@ export function createSqlitePromotionSourceRelationRepository(
       const row = teamDb.prepare(
         `SELECT id, team_id, lineage_key, task_id, management_run_id, requester_id, trigger_command_revision,
            objective_snapshot_json, scope_snapshot_json, risk_level, data_snapshot_json, provenance_json,
-           claim_state, created_at
+           relation_kind, source_task_id, source_task_revision, source_version_ids_json, claim_state, created_at
          FROM promotion_source_relations WHERE lineage_key = ?`,
       ).get(lineageKey) as SourceRelationRow | undefined;
       return mapSourceRelation(row);
