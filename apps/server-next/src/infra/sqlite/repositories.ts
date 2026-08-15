@@ -319,7 +319,11 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0082_dispatch_heartbeat.sql');
   }
   // #1200：终态 root Task 后续关系 provenance + continuation command receipt。
-  applyMigration(db, 'team/0084_task_continuation.sql', { disableForeignKeys: true });
+  // 早期 Phase 2 局部历史库可能只有 promotion 表、没有 channels；此时 ALTER TABLE 会让
+  // SQLite 重解析引用 channels 的后期 trigger，必须像 OutputPackage 迁移一样 fail closed。
+  if (sqliteTableExists(db, 'promotion_source_relations') && sqliteTableExists(db, 'channels')) {
+    applyMigration(db, 'team/0084_task_continuation.sql', { disableForeignKeys: true });
+  }
 }
 
 function sqliteTableExists(db: SqliteDatabase, tableName: string): boolean {
