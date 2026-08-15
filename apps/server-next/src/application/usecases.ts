@@ -14739,16 +14739,6 @@ async function buildDispatchRequest(
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
   const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
-  const workspaceSnapshot = includeRuntimeMemory
-    ? await buildDispatchWorkspaceSnapshot(repositories, {
-        dispatch,
-        agent,
-        now,
-        originMessage,
-        managementInvocation,
-        projectReferenceSets,
-      })
-    : undefined;
   const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
     ? originMessage.meta.taskId
     : undefined;
@@ -14763,6 +14753,17 @@ async function buildDispatchRequest(
   const directTaskCoordination = directTask
     ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
     : null;
+  const workspaceSnapshot = includeRuntimeMemory
+    ? await buildDispatchWorkspaceSnapshot(repositories, {
+        dispatch,
+        agent,
+        now,
+        originMessage,
+        managementInvocation,
+        projectReferenceSets,
+        ...(directTaskCoordination ? { directTaskAttempt: directTaskCoordination.attempt } : {}),
+      })
+    : undefined;
 
   return {
     id: dispatch.id,
@@ -14840,6 +14841,7 @@ async function buildDispatchWorkspaceSnapshot(
     originMessage: MessageRecord | null;
     managementInvocation: Awaited<ReturnType<ServerNextRepositories['management']['invocations']['getById']>>;
     projectReferenceSets: readonly ProjectReferenceSetRecord[];
+    directTaskAttempt?: number;
   },
 ): Promise<DeviceWorkspaceSnapshotDto | undefined> {
   const references = input.projectReferenceSets.flatMap((set) => set.selections.flatMap((selection) => selection.items))
@@ -14906,7 +14908,7 @@ async function buildDispatchWorkspaceSnapshot(
   const taskId: string = taskContext?.taskId
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
     ?? input.dispatch.id;
-  const taskAttempt = taskContext?.taskAttempt ?? 1;
+  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per
   // attempt and is already a safe path segment, so use it as the immutable run
   // identity instead of reusing the invocation id (or the colon-delimited

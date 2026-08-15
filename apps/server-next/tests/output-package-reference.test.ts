@@ -420,6 +420,79 @@ for (const variant of variants) {
         collectionRevision: collection.revision,
       });
 
+      // #1219：Direct Task 重试时，顶层 request 与 artifact-version snapshot 必须使用
+      // 同一个当前 attempt；daemon 会优先读取 snapshot provenance。
+      const directTaskId = 'task-direct-snapshot';
+      await seedValue.repositories.management.runs.create({
+        schemaVersion: 1,
+        id: 'run-direct-snapshot',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        rootMessageId: sent.message.id,
+        mode: 'managed',
+        status: 'running',
+        placementPolicy: { placement: 'auto', allowServerContext: false, requireLocalModelCredentials: false },
+        checkpointRevision: 0,
+        budget: { maxSubtasks: 4, maxDepth: 3, maxExternalInvocations: 8 },
+        createdAt: 10,
+        updatedAt: 10,
+      });
+      await seedValue.repositories.tasks.create({
+        id: directTaskId,
+        teamId: seedValue.teamId,
+        title: '带冻结引用的 Direct Task',
+        status: 'in_progress',
+        creatorId: seedValue.userId,
+        channelId: seedValue.channelId,
+        tags: [],
+        sortOrder: 0,
+        createdAt: 10,
+        updatedAt: 10,
+      });
+      await seedValue.repositories.taskCoordination.coordinations.create({
+        taskId: directTaskId,
+        teamId: seedValue.teamId,
+        managementRunId: 'run-direct-snapshot',
+        nodeKind: 'subtask',
+        reviewPolicy: 'manager',
+        claimPolicy: 'open',
+        requiredCapabilities: [],
+        acceptanceCriteria: [],
+        dependencyTaskIds: [],
+        attempt: 2,
+        maxAttempts: 3,
+        taskRevision: 1,
+        createdAt: 10,
+        updatedAt: 10,
+      });
+      await seedValue.repositories.messages.setTaskIdIfAbsent({
+        messageId: sent.message.id,
+        taskId: directTaskId,
+      });
+      await seedValue.repositories.dispatches.create({
+        id: 'dispatch-direct-snapshot',
+        teamId: seedValue.teamId,
+        channelId: seedValue.channelId,
+        messageId: sent.message.id,
+        agentId: seedValue.agentId,
+        status: 'queued',
+        requestId: 'request-direct-snapshot',
+        prompt: sent.message.body,
+        createdAt: 10,
+        updatedAt: 10,
+      });
+      await expect(seedValue.app.getDispatchRequest({ dispatchId: 'dispatch-direct-snapshot' }))
+        .resolves.toMatchObject({
+          ok: true,
+          request: {
+            taskId: directTaskId,
+            taskAttempt: 2,
+            workspaceSnapshot: {
+              provenance: { taskId: directTaskId, taskAttempt: 2 },
+            },
+          },
+        });
+
       // 后续同路径 append v2(current 指针漂移),历史消息引用不变。
       await commitDelivery(seedValue, 'pub-2', [{ path: 'docs/ep1.md', body: Buffer.from('v2') }], {
         agentId: seedValue.agentId, taskId: 'task-1', taskAttempt: 2,
