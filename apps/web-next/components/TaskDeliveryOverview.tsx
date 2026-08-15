@@ -34,6 +34,7 @@ function formatTime(at: number): string {
 
 type FrozenDeliveryAcceptance = {
   readonly channelId?: string;
+  readonly generation: number;
   readonly target: DeliveryMutationTarget;
 };
 
@@ -58,6 +59,15 @@ export function TaskDeliveryOverview({
   const [refreshNonce, setRefreshNonce] = useState(0);
   const acceptanceTitleId = useId();
   const acceptanceTriggerRef = useRef<HTMLElement | null>(null);
+  const acceptanceGenerationRef = useRef(0);
+  const acceptanceIdentityRef = useRef({ channelId, taskId });
+  if (
+    acceptanceIdentityRef.current.channelId !== channelId
+    || acceptanceIdentityRef.current.taskId !== taskId
+  ) {
+    acceptanceIdentityRef.current = { channelId, taskId };
+    acceptanceGenerationRef.current += 1;
+  }
   const currentAcceptance = frozenAcceptance?.target.taskId === taskId
     && frozenAcceptance.channelId === channelId
     ? frozenAcceptance
@@ -75,6 +85,7 @@ export function TaskDeliveryOverview({
 
   useEffect(() => {
     setFrozenAcceptance(null);
+    setAccepting(false);
     setAcceptanceError(null);
     acceptanceTriggerRef.current = null;
   }, [channelId, taskId]);
@@ -165,6 +176,7 @@ export function TaskDeliveryOverview({
     setAcceptanceError(null);
     setFrozenAcceptance({
       channelId,
+      generation: ++acceptanceGenerationRef.current,
       target: {
         taskId,
         expectedTaskRevision: overview.acceptanceContract.taskRevision,
@@ -175,10 +187,17 @@ export function TaskDeliveryOverview({
 
   const confirmAcceptance = async () => {
     if (accepting || !currentAcceptance) return;
+    const submittedAcceptance = currentAcceptance;
+    const requestIsCurrent = () => (
+      acceptanceGenerationRef.current === submittedAcceptance.generation
+      && acceptanceIdentityRef.current.channelId === submittedAcceptance.channelId
+      && acceptanceIdentityRef.current.taskId === submittedAcceptance.target.taskId
+    );
     setAccepting(true);
     setAcceptanceError(null);
     try {
-      const result = await submitDeliveryMutation(currentAcceptance.target, { comment: '', rejectReason: '' });
+      const result = await submitDeliveryMutation(submittedAcceptance.target, { comment: '', rejectReason: '' });
+      if (!requestIsCurrent()) return;
       if (!result.ok) {
         setAcceptanceError(mutationErrorCopy(result));
         return;
@@ -186,9 +205,10 @@ export function TaskDeliveryOverview({
       closeAcceptance();
       setRefreshNonce((current) => current + 1);
     } catch (acceptError) {
+      if (!requestIsCurrent()) return;
       setAcceptanceError(acceptError instanceof Error ? acceptError.message : '验收失败，请稍后重试');
     } finally {
-      setAccepting(false);
+      if (requestIsCurrent()) setAccepting(false);
     }
   };
 
