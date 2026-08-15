@@ -17880,7 +17880,7 @@ async function buildTaskDeliveryOverview(
     ? preboundAcceptanceAuthorityIds
     : ((coordination?.nodeKind ?? 'root') === 'root' && acceptanceRun?.initiatedByUserId
       ? [acceptanceRun.initiatedByUserId]
-      : governance.sources.includes('agent_delivery')
+      : governance.sources.length === 1 && governance.sources[0] === 'agent_delivery'
         ? [task.creatorId]
       : []);
   const fileReviewStateLabels = {
