@@ -124,6 +124,13 @@ export interface DispatchRequestDto {
   requestId: string;
   managementInvocationId?: ID;
   managementContext?: DispatchManagementContextDto;
+  /**
+   * Direct Agent 的 Server 派生 Task / run 身份。managed invocation 仍以
+   * managementContext.taskContext 为权威；旧调用方可省略并由 daemon 回退到 dispatch id。
+   */
+  taskId?: ID;
+  taskAttempt?: number;
+  workspaceRunId?: ID;
   memoryContext?: readonly DispatchMemoryContextItemDto[];
   /**
    * 本次 prompt 中各消息发送时冻结的项目引用事实。

@@ -783,6 +783,87 @@ for (const variant of variants) {
       expect(card!.threadId).toBe('msg-prod');
     });
 
+    test('#1219 Direct Agent fallback 从 origin Message 恢复真实 Task 绑定', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      const taskId = 'task-direct-lineage';
+      const dispatchId = 'dispatch-direct-lineage';
+      await repositories.tasks.create({
+        id: taskId,
+        teamId,
+        title: 'Direct Agent 交付',
+        status: 'in_review',
+        creatorId: userId,
+        channelId,
+        tags: [],
+        sortOrder: 0,
+        createdAt: 5,
+        updatedAt: 5,
+      });
+      await repositories.messages.append({
+        id: 'msg-direct-lineage', teamId, channelId, threadId: 'msg-direct-lineage',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 交付',
+        meta: { taskId }, createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-direct-lineage', agentId,
+        status: 'succeeded', requestId: 'req-direct-lineage', prompt: '交付',
+        createdAt: 7, updatedAt: 7,
+      });
+      await expect(seedValue.app.getDispatchRequest({ dispatchId })).resolves.toMatchObject({
+        ok: true,
+        request: { taskId, taskAttempt: 1, workspaceRunId: dispatchId },
+      });
+
+      await commitDelivery(seedValue, 'pub-direct-lineage', [
+        { path: 'docs/direct.md', body: Buffer.from('direct') },
+      ], {
+        agentId,
+        taskId: dispatchId,
+        taskAttempt: 1,
+        workspaceRunId: dispatchId,
+      });
+
+      const byPublish = await repositories.outputPackages.getPackageByPublishId({
+        teamId,
+        publishId: 'pub-direct-lineage',
+      });
+      expect(byPublish?.package).toMatchObject({
+        taskId,
+        taskBinding: 'managed',
+        taskRevision: 1,
+      });
+      const card = await repositories.messages.getByClientMessageId({
+        teamId,
+        channelId,
+        clientMessageId: `output-package:${byPublish!.package.packageId}`,
+      });
+      expect(card?.threadId).toBe('msg-direct-lineage');
+    });
+
+    test('#1219 Direct Agent request 使用真实 Task 的当前 coordination attempt', async () => {
+      seedValue = await seed(variant);
+      const { repositories, teamId, channelId, userId, agentId } = seedValue;
+      const taskId = 'task-direct-retry';
+      const dispatchId = 'dispatch-direct-retry';
+      await seedManagedTask(seedValue, taskId, 2, 'run-direct-retry');
+      await repositories.messages.append({
+        id: 'msg-direct-retry', teamId, channelId, threadId: 'msg-direct-retry',
+        senderKind: 'user', senderId: userId, body: '@Agent-A 重试交付',
+        meta: { taskId }, createdAt: 5,
+      });
+      await repositories.dispatches.create({
+        id: dispatchId, teamId, channelId, messageId: 'msg-direct-retry', agentId,
+        status: 'queued', requestId: 'req-direct-retry', prompt: '重试交付',
+        createdAt: 7, updatedAt: 7,
+      });
+
+      await expect(seedValue.app.getDispatchRequest({ dispatchId })).resolves.toMatchObject({
+        ok: true,
+        request: { taskId, taskAttempt: 2, workspaceRunId: dispatchId },
+      });
+    });
+
     test('managed 生产形态:commit 早于 workspace run 落库时仍形成讨论串卡片', async () => {
       seedValue = await seed(variant);
       const { repositories, app, teamId, channelId, userId, agentId } = seedValue;

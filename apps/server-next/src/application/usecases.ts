@@ -14739,6 +14739,20 @@ async function buildDispatchRequest(
     : [];
   const memoryContext = [...capsuleContext, ...projectionContext];
   const artifactSourceRoots = parseAgentArtifactSourceRoots(executionConfig?.env);
+  const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
+    ? originMessage.meta.taskId
+    : undefined;
+  const directTaskCandidate = directTaskId
+    ? await repositories.tasks.getById(directTaskId)
+    : null;
+  const directTask = directTaskCandidate
+    && directTaskCandidate.teamId === dispatch.teamId
+    && (!directTaskCandidate.channelId || directTaskCandidate.channelId === dispatch.channelId)
+    ? directTaskCandidate
+    : null;
+  const directTaskCoordination = directTask
+    ? await repositories.taskCoordination.coordinations.getByTaskId(directTask.id)
+    : null;
   const workspaceSnapshot = includeRuntimeMemory
     ? await buildDispatchWorkspaceSnapshot(repositories, {
         dispatch,
@@ -14747,6 +14761,7 @@ async function buildDispatchRequest(
         originMessage,
         managementInvocation,
         projectReferenceSets,
+        ...(directTaskCoordination ? { directTaskAttempt: directTaskCoordination.attempt } : {}),
       })
     : undefined;
 
@@ -14759,6 +14774,9 @@ async function buildDispatchRequest(
     agentId: dispatch.agentId,
     deviceId: agent.deviceId,
     requestId: dispatch.requestId,
+    ...(directTask
+      ? { taskId: directTask.id, taskAttempt: directTaskCoordination?.attempt ?? 1, workspaceRunId: dispatch.id }
+      : {}),
     ...(managementAttempt ? { managementInvocationId: managementAttempt.invocationId } : {}),
     ...(managementInvocation ? { managementContext: {
       invocationId: managementInvocation.id,
@@ -14823,6 +14841,7 @@ async function buildDispatchWorkspaceSnapshot(
     originMessage: MessageRecord | null;
     managementInvocation: Awaited<ReturnType<ServerNextRepositories['management']['invocations']['getById']>>;
     projectReferenceSets: readonly ProjectReferenceSetRecord[];
+    directTaskAttempt?: number;
   },
 ): Promise<DeviceWorkspaceSnapshotDto | undefined> {
   const references = input.projectReferenceSets.flatMap((set) => set.selections.flatMap((selection) => selection.items))
@@ -14889,7 +14908,7 @@ async function buildDispatchWorkspaceSnapshot(
   const taskId: string = taskContext?.taskId
     ?? (typeof input.originMessage?.meta?.taskId === 'string' ? input.originMessage.meta.taskId : undefined)
     ?? input.dispatch.id;
-  const taskAttempt = taskContext?.taskAttempt ?? 1;
+  const taskAttempt = taskContext?.taskAttempt ?? input.directTaskAttempt ?? 1;
   // A management invocation may be retried.  The dispatch id is allocated per
   // attempt and is already a safe path segment, so use it as the immutable run
   // identity instead of reusing the invocation id (or the colon-delimited
