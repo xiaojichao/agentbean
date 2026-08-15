@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDagViewDto, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDagViewDto, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
@@ -4640,6 +4640,7 @@ function TaskDetailPanel({
   const [workspaceRunError, setWorkspaceRunError] = useState<string | null>(null);
   const [taskDag, setTaskDag] = useState<TaskDagViewDto | null>(null);
   const [taskDagLoading, setTaskDagLoading] = useState(false);
+  const [taskDeliveryOverview, setTaskDeliveryOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const taskStatus = task?.status ?? 'todo';
   const taskLabel = taskNumber ? `#${taskNumber}` : '#任务';
   const assigneeName = task?.assigneeId
@@ -4656,8 +4657,11 @@ function TaskDetailPanel({
     || workspaceEntry?.stage
     || workspaceEntry?.governance.mode === 'managed',
   );
-  const showTaskDelivery = Boolean(stageId || channelTaskHasProjectFacts(workspaceEntry));
-  const managedStatusOptions = readOnly || workspaceEntry?.governance.mode === 'managed'
+  const managedByDeliveryProjection = taskDeliveryOverview?.delivery.packages.some(
+    (outputPackage) => outputPackage.taskBinding === 'managed',
+  ) ?? false;
+  const managedTask = workspaceEntry?.governance.mode === 'managed' || managedByDeliveryProjection;
+  const managedStatusOptions = readOnly || managedTask
     ? readOnly || ['done', 'cancelled', 'closed'].includes(taskStatus)
       ? []
       : TASK_COLUMNS.filter((column) => (
@@ -4792,7 +4796,7 @@ function TaskDetailPanel({
           </section>
         ) : null}
 
-        {detailTaskId && workspaceTeamId && detailChannelId && showTaskDelivery ? (
+        {detailTaskId && workspaceTeamId && detailChannelId ? (
           <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
             {stageId ? (
               <StageDeliveryReviewWorkspace
@@ -4815,6 +4819,7 @@ function TaskDetailPanel({
                 channelId={detailChannelId}
                 taskId={detailTaskId}
                 onAction={onDeliveryAction}
+                onOverviewChange={setTaskDeliveryOverview}
               />
             )}
           </section>
@@ -4973,7 +4978,7 @@ function TaskDetailPanel({
           {readOnly && (
             <p data-smoke="task-detail-readonly" className="text-xs text-neutral-500">频道已归档，任务状态只读。</p>
           )}
-          {workspaceEntry?.governance.mode === 'managed' && (
+          {managedTask && (
             <p className="mb-2 text-[11px] text-violet-700">状态由任务执行与验收流程推进，仅显示当前可用的具名流程操作。</p>
           )}
           <div className="grid grid-cols-2 gap-2">

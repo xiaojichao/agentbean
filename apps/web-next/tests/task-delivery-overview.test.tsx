@@ -113,6 +113,44 @@ describe('TaskDeliveryOverview(#1065 AC3/AC4)', () => {
     await vi.waitFor(() => expect(mocks.queryTaskDeliveryOverview).toHaveBeenCalledTimes(3));
   });
 
+  test('把当前 Server 投影同步给父级，并在切换 Task 时先清空旧投影', async () => {
+    mocks.queryTaskDeliveryOverview
+      .mockResolvedValueOnce({ ok: true, overview: overviewFixture })
+      .mockResolvedValueOnce({
+        ok: true,
+        overview: {
+          ...overviewFixture,
+          taskId: 'task-2',
+          channelId: 'ch-2',
+          task: { ...overviewFixture.task, id: 'task-2' },
+        },
+      });
+    const onOverviewChange = vi.fn();
+    const { rerender } = render(
+      <TaskDeliveryOverview
+        teamId="team-1"
+        channelId="ch-1"
+        taskId="task-1"
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+    await vi.waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(overviewFixture));
+
+    rerender(
+      <TaskDeliveryOverview
+        teamId="team-1"
+        channelId="ch-2"
+        taskId="task-2"
+        onOverviewChange={onOverviewChange}
+      />,
+    );
+    expect(onOverviewChange).toHaveBeenLastCalledWith(null);
+    await vi.waitFor(() => expect(onOverviewChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      taskId: 'task-2',
+      channelId: 'ch-2',
+    })));
+  });
+
   test('渲染责任焦点/验收约定/当前交付/availableActions/执行链(文本标签)', async () => {
     mocks.queryTaskDeliveryOverview.mockResolvedValue({ ok: true, overview: overviewFixture });
     render(<TaskDeliveryOverview teamId="team-1" channelId="ch-1" taskId="task-1" />);
