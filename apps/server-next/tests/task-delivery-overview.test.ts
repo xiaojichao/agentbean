@@ -602,6 +602,12 @@ for (const variant of variants) {
           taskAttempt: 2,
         },
       });
+      expect((await queryOverview(seedValue, taskId)).availableActions.find(
+        (action) => action.action === 'accept-delivery',
+      )).toMatchObject({
+        disabled: true,
+        disabledReason: '新交付仍在处理中，请刷新后重试',
+      });
       await expect(seedValue.app.acceptRootDelivery({
         userId: seedValue.userId,
         teamId: seedValue.teamId,

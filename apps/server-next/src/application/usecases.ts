@@ -17900,11 +17900,13 @@ async function buildTaskDeliveryOverview(
     ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前任务不在待验收状态' }
     : !humanAcceptanceAuthorityIds.includes(input.userId)
       ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '你不是当前交付的验收人' }
-      : !fileReviewProjectionAvailable
-        ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前交付文件包不可用，请刷新后重试' }
-        : fileReviewGate.kind === 'rejected'
-          ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
-          : { action: 'accept-delivery', label: '验收本次交付' };
+      : pendingDeliveries.length > 0
+        ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '新交付仍在处理中，请刷新后重试' }
+        : !fileReviewProjectionAvailable
+          ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: '当前交付文件包不可用，请刷新后重试' }
+          : fileReviewGate.kind === 'rejected'
+            ? { action: 'accept-delivery', label: '验收本次交付', disabled: true, disabledReason: incompleteFileReviewReason }
+            : { action: 'accept-delivery', label: '验收本次交付' };
   const terminalRoot = ['done', 'cancelled', 'closed'].includes(task.status)
     && coordination?.nodeKind === 'root';
   const continuationRun = terminalRoot ? managementRun : null;
