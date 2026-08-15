@@ -14749,6 +14749,9 @@ async function buildDispatchRequest(
         projectReferenceSets,
       })
     : undefined;
+  const directTaskId = !managementInvocation && typeof originMessage?.meta?.taskId === 'string'
+    ? originMessage.meta.taskId
+    : undefined;
 
   return {
     id: dispatch.id,
@@ -14759,6 +14762,9 @@ async function buildDispatchRequest(
     agentId: dispatch.agentId,
     deviceId: agent.deviceId,
     requestId: dispatch.requestId,
+    ...(directTaskId
+      ? { taskId: directTaskId, taskAttempt: 1, workspaceRunId: dispatch.id }
+      : {}),
     ...(managementAttempt ? { managementInvocationId: managementAttempt.invocationId } : {}),
     ...(managementInvocation ? { managementContext: {
       invocationId: managementInvocation.id,

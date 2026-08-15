@@ -172,12 +172,6 @@ export async function attemptOutputPackageFormation(
     : null;
 
   const authority = await ensurePublishAgentAuthority(repositories, teamId, channel, staging?.provenance);
-  const task = staging?.provenance?.taskId
-    ? await repositories.tasks.getById(staging.provenance.taskId)
-    : null;
-  const coordination = task
-    ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
-    : null;
   const workspaceRunId = staging?.provenance?.workspaceRunId;
   const workspaceRunById = workspaceRunId
     ? await repositories.workspaceRuns.getForTeam({ teamId, runId: workspaceRunId })
@@ -185,13 +179,43 @@ export async function attemptOutputPackageFormation(
   // Device 在 commit 时可能还没有 Server workspace_runs 行，并且生产 daemon
   // 上报的 workspaceRunId 是 dispatchId。沿 dispatch → invocation 解析 managed
   // lineage，让 commit 后的首次/重试成形都能通过同一 authority fence。
-  const workspaceDispatch = !workspaceRunById && workspaceRunId
+  const workspaceDispatch = workspaceRunId
     ? await repositories.dispatches.getById(workspaceRunId)
     : null;
-  const workspaceRunByDispatch = workspaceDispatch?.teamId === teamId
+  const workspaceRunByDispatch = !workspaceRunById && workspaceDispatch?.teamId === teamId
     ? (await repositories.workspaceRuns.listByDispatch(workspaceDispatch.id)).at(-1) ?? null
     : null;
   const workspaceRun = workspaceRunById ?? workspaceRunByDispatch;
+  // #1219：旧 Direct Agent daemon 在没有 workspace snapshot 时把 dispatchId 同时写入
+  // taskId/workspaceRunId。只接受这一精确 fallback 形态，并从该 Dispatch 的 Server-owned
+  // origin Message 恢复真实 Task；普通合成 taskId 与 managed lineage 均保持原语义。
+  const rawTaskId = staging?.provenance?.taskId;
+  const directOriginMessage = rawTaskId
+    && workspaceDispatch
+    && rawTaskId === workspaceDispatch.id
+    && workspaceRunId === workspaceDispatch.id
+    && workspaceDispatch.teamId === teamId
+    && workspaceDispatch.channelId === input.channelId
+    ? await repositories.messages.getById(workspaceDispatch.messageId)
+    : null;
+  const linkedDirectTaskId = directOriginMessage?.teamId === teamId
+    && directOriginMessage.channelId === input.channelId
+    && typeof directOriginMessage.meta?.taskId === 'string'
+    ? directOriginMessage.meta.taskId
+    : undefined;
+  const linkedDirectTaskCandidate = linkedDirectTaskId
+    ? await repositories.tasks.getById(linkedDirectTaskId)
+    : null;
+  const linkedDirectTask = linkedDirectTaskCandidate
+    && linkedDirectTaskCandidate.teamId === teamId
+    && (!linkedDirectTaskCandidate.channelId || linkedDirectTaskCandidate.channelId === input.channelId)
+    ? linkedDirectTaskCandidate
+    : null;
+  const effectiveTaskId = linkedDirectTask?.id ?? rawTaskId;
+  const task = linkedDirectTask ?? (rawTaskId ? await repositories.tasks.getById(rawTaskId) : null);
+  const coordination = task
+    ? await repositories.taskCoordination.coordinations.getByTaskId(task.id)
+    : null;
   const dispatchAttempt = workspaceDispatch
     ? await repositories.management.dispatchAttempts.getByDispatchId(workspaceDispatch.id)
     : null;
@@ -220,7 +244,7 @@ export async function attemptOutputPackageFormation(
           ? {
             provenance: {
               agentId: staging.provenance.agentId,
-              taskId: staging.provenance.taskId,
+              taskId: effectiveTaskId ?? staging.provenance.taskId,
               taskAttempt: staging.provenance.taskAttempt,
               ...(staging.provenance.deviceId ? { deviceId: staging.provenance.deviceId } : {}),
               ...(staging.provenance.workspaceRunId ? { workspaceRunId: staging.provenance.workspaceRunId } : {}),

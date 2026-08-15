@@ -310,6 +310,15 @@ export function applyTeamMigrations(db: SqliteDatabase): void {
     applyMigration(db, 'team/0080_artifact_version_revision.sql');
     // #1199：PackageReview command registry 加入批量逐文件审核。
     applyMigration(db, 'team/0083_package_batch_review.sql');
+    // #1219：只回填 Direct Agent 把 dispatchId 同时当 taskId/workspaceRunId 的精确旧形态。
+    if (
+      sqliteTableExists(db, 'workspace_publish_stagings')
+      && sqliteTableExists(db, 'dispatches')
+      && sqliteTableExists(db, 'messages')
+      && sqliteTableExists(db, 'tasks')
+    ) {
+      applyMigration(db, 'team/0085_direct_agent_task_lineage.sql');
+    }
   }
   // #1064：Task-linked @Agent 请求冻结的项目输入（frozen inputs）随 Offer 持久化。
   applyMigration(db, 'team/0080_task_offer_frozen_inputs.sql');

@@ -985,11 +985,11 @@ export function createDaemonProtocolClient(input: CreateDaemonProtocolClientInpu
           // 无论 Agent 是否配置 custom cwd，项目协作状态都进入本机 Channel projection；
           // custom cwd 只作为显式执行进程 cwd，不参与默认文件扫描。
           const explicitWorkspaceCwd = request.customAgent?.cwd;
-          // #1053：受管 dispatch 的真实 task 身份只经 managementContext.taskContext 下发
-          // （server 从不设置顶层 taskId/taskAttempt）。invocation/request 身份不是 taskId
-          // 的合法回退——requestId 形如 management:<invocation>:<attempt>，含冒号会被
-          // projection 段校验拒绝；没有 Task context 时只能回退到安全且唯一的 dispatch id
-          // （与 server 端 snapshot provenance 的回退一致）。
+          // #1053/#1219：managed dispatch 的真实 Task 身份经 managementContext.taskContext
+          // 下发；Direct Agent 则可使用 Server 从 origin Message 派生的顶层身份。
+          // invocation/request 身份不是 taskId 的合法回退——requestId 形如
+          // management:<invocation>:<attempt>，含冒号会被 projection 段校验拒绝；旧调用方
+          // 没有任何 Task context 时才回退到安全且唯一的 dispatch id。
           const taskContext = request.managementContext?.taskContext;
           const taskId = request.workspaceSnapshot?.provenance.taskId
             ?? taskContext?.taskId
