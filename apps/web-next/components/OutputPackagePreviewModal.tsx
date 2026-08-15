@@ -201,6 +201,13 @@ export function OutputPackagePreviewModal({
   }, [loadWorkspace]);
 
   useEffect(() => {
+    if (!readOnly) return;
+    setReviewPanel(null);
+    setBatchPanelOpen(false);
+    setSelectedVersionIds(new Set());
+  }, [readOnly]);
+
+  useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (historyOpen) {
@@ -234,7 +241,7 @@ export function OutputPackagePreviewModal({
   const activeIsMarkdown = active
     ? isMarkdownFilename((active.current.artifact as unknown as Artifact).filename)
     : false;
-  const activeActions = active && availableActions
+  const activeActions = active && availableActions && !readOnly
     ? availableActions.find((entry) => (
       entry.collectionId === active.collection.id && entry.versionId === active.current.id
     )) ?? null
@@ -517,7 +524,7 @@ export function OutputPackagePreviewModal({
     reviewBusy, reviewComment, reviewPackageBasis, reviewThreadRootMessageId]);
 
   const submitBatchReview = useCallback(async () => {
-    if (!reviewPackageBasis || selectedBatchTargets.length === 0 || batchBusy) return;
+    if (readOnly || !reviewPackageBasis || selectedBatchTargets.length === 0 || batchBusy) return;
     if (batchDecision !== 'approved' && !batchComment.trim()) {
       setActionError(batchDecision === 'rejected' ? '全部拒绝时请填写统一意见' : '全部要求修改时请填写统一意见');
       return;
@@ -601,7 +608,7 @@ export function OutputPackagePreviewModal({
       setBatchBusy(false);
     }
   }, [availableActions, batchBusy, batchComment, batchDecision, channelId, loadWorkspace, onSaved,
-    reviewPackageBasis, selectedBatchTargets]);
+    readOnly, reviewPackageBasis, selectedBatchTargets]);
 
   const loadLatest = useCallback(async () => {
     const { collections: latestCollections } = await loadWorkspace();
@@ -1017,7 +1024,7 @@ export function OutputPackagePreviewModal({
           </section>
         )}
 
-        {batchPanelOpen && (
+        {batchPanelOpen && !readOnly && (
           <section
             className="absolute bottom-14 right-3 z-20 w-[min(460px,calc(100%-24px))] rounded-lg border border-neutral-200 bg-white p-3 shadow-xl"
             aria-label="批量审核文件版本"

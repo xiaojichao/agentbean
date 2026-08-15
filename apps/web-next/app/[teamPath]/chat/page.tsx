@@ -3047,7 +3047,7 @@ export default function ChatPage() {
           packageMeta={openPackagePreview.packageMeta}
           channelId={openPackagePreview.channelId}
           {...(openPackagePreview.initialVersionId ? { initialVersionId: openPackagePreview.initialVersionId } : {})}
-          {...(openPackagePreview.readOnly ? { readOnly: true } : {})}
+          {...(openPackagePreview.readOnly || activeChannelObj?.archivedAt ? { readOnly: true } : {})}
           renderPreview={(content) => <MarkdownMessage body={content} safeDocumentResources collapsible={false} />}
           onClose={() => setOpenPackagePreview(null)}
           onSaved={() => refreshProjectArtifactLibrary()}

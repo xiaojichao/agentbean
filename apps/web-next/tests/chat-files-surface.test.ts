@@ -126,5 +126,6 @@ describe('chat files surface', () => {
     expect(source).toMatch(/<StageDeliveryReviewWorkspace[\s\S]*?onOpenPackagePreview=\{onOpenPackagePreview\}/);
     expect(source).toMatch(/<ProjectFilesBoard[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
     expect(source).toMatch(/<ThreadPanel[\s\S]*?onOpenPackagePreview=\{openPackagePreviewModal\}/);
+    expect(source).toContain('openPackagePreview.readOnly || activeChannelObj?.archivedAt');
   });
 });
