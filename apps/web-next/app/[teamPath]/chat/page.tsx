@@ -4657,17 +4657,26 @@ function TaskDetailPanel({
     || workspaceEntry?.stage
     || workspaceEntry?.governance.mode === 'managed',
   );
-  const managedByDeliveryProjection = taskDeliveryOverview?.delivery.packages.some(
-    (outputPackage) => outputPackage.taskBinding === 'managed',
-  ) ?? false;
-  const managedTask = workspaceEntry?.governance.mode === 'managed' || managedByDeliveryProjection;
-  const managedStatusOptions = readOnly || managedTask
-    ? readOnly || ['done', 'cancelled', 'closed'].includes(taskStatus)
+  const managedTask = Boolean(
+    stageId
+    || workspaceEntry?.governance.mode === 'managed'
+    || taskDeliveryOverview?.governance.mode === 'managed',
+  );
+  const taskGovernancePending = Boolean(detailTaskId && detailChannelId && !stageId && !taskDeliveryOverview);
+  const showTaskDelivery = Boolean(
+    stageId
+    || channelTaskHasProjectFacts(workspaceEntry)
+    || taskDeliveryOverview?.governance.mode === 'managed',
+  );
+  const managedStatusOptions = readOnly || taskGovernancePending
+    ? []
+    : managedTask
+      ? ['done', 'cancelled', 'closed'].includes(taskStatus)
       ? []
       : TASK_COLUMNS.filter((column) => (
           column.id === 'cancelled' || column.id === 'closed'
         ) && column.id !== taskStatus)
-    : TASK_COLUMNS;
+      : TASK_COLUMNS;
 
   useEffect(() => {
     if (!detailTaskId || !showTaskDag) {
@@ -4797,7 +4806,11 @@ function TaskDetailPanel({
         ) : null}
 
         {detailTaskId && workspaceTeamId && detailChannelId ? (
-          <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-delivery">
+          <section
+            className={showTaskDelivery ? 'border-b border-neutral-100 py-4' : 'hidden'}
+            data-smoke="chat-task-detail-delivery"
+            aria-hidden={!showTaskDelivery}
+          >
             {stageId ? (
               <StageDeliveryReviewWorkspace
                 teamId={workspaceTeamId}
@@ -4980,6 +4993,9 @@ function TaskDetailPanel({
           )}
           {managedTask && (
             <p className="mb-2 text-[11px] text-violet-700">状态由任务执行与验收流程推进，仅显示当前可用的具名流程操作。</p>
+          )}
+          {taskGovernancePending && (
+            <p data-smoke="task-governance-loading" className="text-xs text-neutral-500">正在读取 Server 任务治理状态…</p>
           )}
           <div className="grid grid-cols-2 gap-2">
             {managedStatusOptions.map((column) => (

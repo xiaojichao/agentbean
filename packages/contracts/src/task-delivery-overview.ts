@@ -151,11 +151,22 @@ export interface TaskLevelAvailableActionDto {
   readonly continuationBasis?: TaskContinuationBasisV1;
 }
 
+/** Task 治理身份与直接修改许可（Server 投影，Web 不从 assignee/package/status 推断）。 */
+export interface TaskGovernanceV1 {
+  readonly mode: 'plain' | 'managed';
+  readonly sources: readonly ('management_run' | 'task_coordination' | 'project_stage')[];
+  readonly nodeKind?: 'root' | 'subtask';
+  readonly allowDirectStatusMutation: boolean;
+  readonly allowDirectAssigneeMutation: boolean;
+  readonly allowDirectDelete: boolean;
+}
+
 export interface TaskDeliveryOverviewV1 {
   readonly schemaVersion: 1;
   readonly taskId: ID;
   readonly channelId: ID;
   readonly task: TaskDto;
+  readonly governance: TaskGovernanceV1;
   /** 阶段绑定存在时携带(目标/依赖/executionAllowed)。 */
   readonly stage?: ProjectStageDto;
   readonly acceptanceContract: TaskAcceptanceContractV1;
@@ -189,14 +200,7 @@ export interface QueryTaskDeliveryOverviewInputV1 {
 export interface ChannelTaskWorkspaceEntryV1 {
   readonly schemaVersion: 1;
   readonly task: TaskDto;
-  readonly governance: {
-    readonly mode: 'plain' | 'managed';
-    readonly sources: readonly ('management_run' | 'task_coordination' | 'project_stage')[];
-    readonly nodeKind?: 'root' | 'subtask';
-    readonly allowDirectStatusMutation: boolean;
-    readonly allowDirectAssigneeMutation: boolean;
-    readonly allowDirectDelete: boolean;
-  };
+  readonly governance: TaskGovernanceV1;
   readonly responsibilityFocus: TaskResponsibilityFocusV1;
   readonly stage?: ProjectStageDto;
   readonly delivery: {

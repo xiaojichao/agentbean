@@ -51,6 +51,14 @@ const overviewFixture: TaskDeliveryOverviewV1 = {
     id: 'task-1', teamId: 'team-1', title: '交付文档', description: '', status: 'in_review',
     creatorId: 'u-1', tags: [], sortOrder: 0, createdAt: 100, updatedAt: 200,
   },
+  governance: {
+    mode: 'managed',
+    sources: ['task_coordination'],
+    nodeKind: 'root',
+    allowDirectStatusMutation: false,
+    allowDirectAssigneeMutation: false,
+    allowDirectDelete: false,
+  },
   acceptanceContract: {
     nodeKind: 'root',
     reviewPolicy: 'human',
