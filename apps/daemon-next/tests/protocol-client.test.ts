@@ -260,9 +260,16 @@ describe('daemon-next protocol client', () => {
 
     expect(executor).not.toHaveBeenCalled();
     expect(socket.emitted.filter(([event]) => event === AGENT_EVENTS.dispatch.accepted)).toHaveLength(1);
-    expect(socket.emitted.some(([event]) =>
-      event === AGENT_EVENTS.dispatch.result || event === AGENT_EVENTS.dispatch.error
-    )).toBe(false);
+    expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.error)).toBe(false);
+    await vi.waitFor(() => {
+      expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.result)).toBe(true);
+    });
+    const cancelled = socket.emitted.find(([event]) => event === AGENT_EVENTS.dispatch.result);
+    expect(cancelled?.[1]).toMatchObject({
+      dispatchId: 'dispatch-1',
+      outcome: 'stopped',
+      reasonCode: 'USER_CANCELLED',
+    });
   });
 
   test('forwards structured executor workspace run metadata with dispatch results', async () => {
@@ -838,8 +845,16 @@ describe('daemon-next protocol client', () => {
     await running;
 
     expect(executor).not.toHaveBeenCalled();
-    expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.result)).toBe(false);
     expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.error)).toBe(false);
+    await vi.waitFor(() => {
+      expect(socket.emitted.some(([event]) => event === AGENT_EVENTS.dispatch.result)).toBe(true);
+    });
+    const cancelled = socket.emitted.find(([event]) => event === AGENT_EVENTS.dispatch.result);
+    expect(cancelled?.[1]).toMatchObject({
+      dispatchId: 'dispatch-1',
+      outcome: 'stopped',
+      reasonCode: 'USER_CANCELLED',
+    });
   });
 
   test('ignores dispatch results after a cancel request', async () => {

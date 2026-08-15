@@ -317,6 +317,7 @@ export async function runPtyAgentCommand(
     let bytes = 0;
     let finished = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let timer: NodeJS.Timeout | undefined;
 
     let pty: PtyProcess;
     try {
@@ -347,6 +348,7 @@ export async function runPtyAgentCommand(
     const stopPty = (reasonCode: DispatchReasonCode, reasonText: string) => {
       if (finished) return;
       finished = true;
+      if (timer) clearTimeout(timer);
       try { pty.kill('SIGTERM'); } catch { /* already exited */ }
       killTimer = setTimeout(() => { try { pty.kill('SIGKILL'); } catch { /* ignore */ } }, options.killGraceMs);
       if (typeof killTimer.unref === 'function') killTimer.unref();
@@ -356,7 +358,7 @@ export async function runPtyAgentCommand(
       resolve(ptyStopped(request, cwd, persistedCommand, startedAt, options.clock.now(),
         reasonCode, reasonText, output));
     };
-    const timer = timeoutMs > 0
+    timer = timeoutMs > 0
       ? setTimeout(() => {
         stopPty('EXECUTION_LIMIT', EXECUTION_LIMIT_REASON_TEXT);
       }, timeoutMs)

@@ -12019,7 +12019,7 @@ export function createServerNextUseCases(input: CreateServerNextUseCasesInput): 
           invocationId: managedAttempt.invocationId,
           ...(managedInvocation?.intent.taskContext?.taskId
             ? { taskId: managedInvocation.intent.taskContext.taskId } : {}),
-          agentId: resultInput.agentId, status: resultSucceeded ? 'succeeded' : 'failed',
+          agentId: resultInput.agentId, status: completion.terminal,
           body: resultInput.body, artifactIds: artifacts.map((artifact) => artifact.id),
           ...(workspaceRun ? { workspaceRunId: workspaceRun.id } : {}), memoryCandidateIds: [],
           ...(collaborationProposals.length > 0 ? { collaborationProposals } : {}),
