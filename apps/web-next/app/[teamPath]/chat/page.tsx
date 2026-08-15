@@ -2304,13 +2304,15 @@ export default function ChatPage() {
 
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
   // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
-  const continueWithAgentFromCard = useCallback((packageId: string, taskTitle?: string) => {
+  const continueWithAgentFromCard = useCallback((surface: 'main' | 'thread', packageId: string, taskTitle?: string) => {
     const text = taskTitle ? `请基于交付文件包继续处理任务「${taskTitle}」：` : '请基于交付文件包继续处理：';
     const addDeliveredPackage = (current: ProjectReferenceSelectionRequestDto[]) => [
-      ...current.filter((item) => item.kind !== 'package_projection' || item.packageId !== packageId),
+      ...current.filter((item) =>
+        (item.kind !== 'package_projection' && item.kind !== 'package_members')
+        || item.packageId !== packageId),
       { kind: 'package_projection' as const, packageId, policy: 'delivered' as const },
     ];
-    if (threadRootId) {
+    if (surface === 'thread') {
       setThreadInput(text);
       setThreadSelections(addDeliveredPackage);
       threadTextareaRef.current?.focus();
@@ -2319,7 +2321,7 @@ export default function ChatPage() {
     setInput(text);
     setProjectReferenceSelections(addDeliveredPackage);
     textareaRef.current?.focus();
-  }, [threadRootId]);
+  }, []);
 
   // 原型对齐:打开文件包预览/编辑浮窗。
   const openPackagePreviewModal = useCallback((
@@ -2838,7 +2840,8 @@ export default function ChatPage() {
                           onEditArtifact={(artifact) => void openMarkdownDocumentEditor(artifact)}
                           onDeleteMessage={() => deleteMessage(msg)}
                           onOpenTaskDetail={() => openTaskDetail(msg)}
-                          onContinueWithAgent={continueWithAgentFromCard}
+                          onContinueWithAgent={(packageId, taskTitle) =>
+                            continueWithAgentFromCard('main', packageId, taskTitle)}
                           onOpenPackagePreview={openPackagePreviewModal}
                           onOpenTaskDetailById={openTaskDetailById}
                           onConvertToTask={() => convertMessageToTask(msg)}
@@ -3244,7 +3247,8 @@ export default function ChatPage() {
             onViewInChannel={viewThreadRootInChannel}
             onClose={closeThread}
             onReviseVersion={(request) => void openArtifactRevisionEditor({ ...request, channelId: activeChannel ?? '' })}
-            onContinueWithAgent={continueWithAgentFromCard}
+            onContinueWithAgent={(packageId, taskTitle) =>
+              continueWithAgentFromCard('thread', packageId, taskTitle)}
             onOpenPackagePreview={openPackagePreviewModal}
             outputPackages={outputPackages}
             artifactLibrary={projectArtifactLibrary}

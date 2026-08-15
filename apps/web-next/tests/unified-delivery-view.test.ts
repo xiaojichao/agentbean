@@ -20,24 +20,27 @@ describe('贯通 Chat/Task/Files 一致交付视图（#1065）', () => {
     expect(cardSource).toContain('data-smoke="output-package-open-task"');
     expect(cardSource).toContain('data-smoke="output-package-continue-agent"');
     expect(chatSource).toContain('onOpenTask={onOpenTaskDetailById}');
-    expect(chatSource).toContain('onContinueWithAgent={continueWithAgentFromCard}');
+    expect(chatSource).toContain("continueWithAgentFromCard('main', packageId, taskTitle)");
+    expect(chatSource).toContain("continueWithAgentFromCard('thread', packageId, taskTitle)");
   });
 
-  test('「继续 @Agent」在线程打开时写 thread composer，否则回退主 composer，且不触发发送', () => {
+  test('「继续 @Agent」按触发卡片所在 surface 写对应 composer，且不触发发送', () => {
     const start = chatSource.indexOf('const continueWithAgentFromCard');
     expect(start).toBeGreaterThan(-1);
-    const region = chatSource.slice(start, chatSource.indexOf('}, [threadRootId]);', start));
-    // 线程已打开时，预填必须落进线程 composer，避免主输入框发送后丢失 thread lineage。
-    expect(region).toContain('if (threadRootId)');
+    const region = chatSource.slice(start, chatSource.indexOf('}, []);', start));
+    // 由调用方明确传入触发 surface，不能用当前是否打开讨论串推断点击来源。
+    expect(region).toContain("surface: 'main' | 'thread'");
+    expect(region).toContain("if (surface === 'thread')");
     expect(region).toContain('setThreadInput(text)');
     expect(region).toContain('setThreadSelections(addDeliveredPackage)');
     expect(region).toContain('threadTextareaRef.current?.focus()');
-    // 无线程时保留主 composer 行为。
+    // 主消息卡片明确写主 composer。
     expect(region).toContain('setInput(text)');
     expect(region).toContain('setProjectReferenceSelections(addDeliveredPackage)');
     expect(region).toContain('textareaRef.current?.focus()');
-    // 两个 composer 都使用 delivered 整包引用。
+    // 两个 composer 都使用 delivered 整包引用，并移除同包已有整包/成员选择。
     expect(region).toContain("kind: 'package_projection'");
+    expect(region).toContain("item.kind !== 'package_members'");
     expect(region).toContain("policy: 'delivered'");
     // 预填段不得出现网络发送。
     expect(region).not.toContain('emit(');
