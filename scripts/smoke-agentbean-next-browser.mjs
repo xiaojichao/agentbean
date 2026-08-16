@@ -2938,40 +2938,36 @@ export async function exerciseWebUiProjectCollaborationSmoke({
     `project Stage "${reviewStageName}" to render from the Server projection`,
     timeoutMs,
   );
-  const openedStage = await page.evaluateJson(`
-    (() => {
-      const stageId = ${JSON.stringify(reviewStage.id)};
-      const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
-        .find((candidate) => candidate.dataset.stageId === stageId);
-      if (!card) return false;
-      const button = card.querySelector('button');
-      if (!(button instanceof HTMLButtonElement)) return false;
-      button.click();
-      return true;
-    })()
-  `);
-  if (!openedStage) throw new Error(`Could not open project Stage "${reviewStageName}" review workspace`);
+  // 原型对齐（#1222 后续）：审核动作内嵌待审核卡片——卡片不再提供打开详情侧边栏的入口，
+  // 面板按钮只消费 Server availableActions 投影。
   await page.waitForFunction(
     `
     (() => {
-      const workspace = document.querySelector('[data-smoke="stage-delivery-review-workspace"]');
-      const text = workspace?.textContent ?? '';
-      const preview = document.querySelector('[data-smoke="stage-review-open-package-preview"]');
-      return text.includes(${JSON.stringify(deliveryReview.packageId)})
-        && text.includes(${JSON.stringify(deliveryReview.versionId)})
-        && Boolean(preview instanceof HTMLButtonElement && !preview.disabled)
-        && !document.querySelector('[data-smoke="package-review-action"]');
+      const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
+        .find((candidate) => candidate.dataset.stageId === ${JSON.stringify(reviewStage.id)});
+      if (!card) return false;
+      const panel = card.querySelector('[data-smoke="task-card-review-panel"]');
+      const retired = card.querySelector('button')?.textContent ?? '';
+      return Boolean(panel && panel.textContent.includes('通过审核'))
+        && !retired.includes('查看交付文件与审核');
     })()
     `,
-    `stage review workspace to render package ${deliveryReview.packageId}, version ${deliveryReview.versionId}, and shared preview entry`,
+    `review card to render its inline review panel for package ${deliveryReview.packageId}`,
     timeoutMs,
   );
 
   // #1200：Task 不再直接修改文件审核事实；Task/Files/Thread 共用同一个预览审核弹窗。
-  await page.click('[data-smoke="stage-review-open-package-preview"]');
+  // 任务页入口收敛后，预览审核从 Files 逻辑产物视图进入。
+  await page.click('[data-smoke="channel-files-tab"]');
+  await page.waitForFunction(
+    `Boolean(document.querySelector('[data-smoke="project-files-board"]') && document.querySelector('[data-smoke="files-row-preview-edit"]'))`,
+    'Files to render the focus package row with its preview entry',
+    timeoutMs,
+  );
+  await page.click('[data-smoke="files-row-preview-edit"]');
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="output-package-preview-modal"]') && document.querySelector('[data-smoke="package-preview-approve"]'))`,
-    'shared package preview modal to open from Task',
+    'shared package preview modal to open from Files',
     timeoutMs,
   );
   await page.click('[data-smoke="package-preview-approve"]');
@@ -2995,19 +2991,31 @@ export async function exerciseWebUiProjectCollaborationSmoke({
   );
 
   await page.click('[data-smoke="output-package-preview-modal"] header button[title="关闭"]');
-  await page.click('[data-smoke="channel-files-tab"]');
   await page.waitForFunction(
-    `Boolean(document.querySelector('[data-smoke="project-files-board"]') && document.querySelector('[data-smoke="files-row-preview-edit"]'))`,
-    'Files to render the reviewed package row',
+    `document.querySelector('[data-smoke="output-package-preview-modal"]') === null`,
+    'package preview modal to close after the Files review round',
     timeoutMs,
   );
-  await page.click('[data-smoke="files-row-preview-edit"]');
+  // 审核后回到任务页：卡片摘要应反映文件审核已齐（Server 投影刷新）。
+  const backToTasks = await page.evaluateJson(`
+    (() => {
+      const button = Array.from(document.querySelectorAll('button'))
+        .find((candidate) => candidate.textContent?.trim() === '任务');
+      if (!(button instanceof HTMLElement)) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!backToTasks) throw new Error('Could not return to the channel Tasks tab after the Files review round');
   await page.waitForFunction(
-    `Boolean(document.querySelector('[data-smoke="output-package-preview-modal"]'))`,
-    'the same package preview modal to open from Files',
+    `(() => {
+      const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
+        .find((candidate) => candidate.dataset.stageId === ${JSON.stringify(reviewStage.id)});
+      return Boolean(card && (card.textContent ?? '').includes('文件审核 1/1（已齐）'));
+    })()`,
+    'review card to reflect the completed file review coverage',
     timeoutMs,
   );
-  await page.click('[data-smoke="output-package-preview-modal"] header button[title="关闭"]');
 
   const hasAccept = await page.evaluateJson(`
     (() => {

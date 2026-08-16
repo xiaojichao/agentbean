@@ -461,7 +461,8 @@ describe('AgentBean Next browser smoke script', () => {
       'setInputValue',
     ]));
     expect(calls).toEqual(expect.arrayContaining([
-      ['click', '[data-smoke="stage-review-open-package-preview"]'],
+      // 原型对齐：预览审核入口收敛到 Files（任务卡不再进详情侧边栏）。
+      ['click', '[data-smoke="channel-files-tab"]'],
       ['click', '[data-smoke="package-preview-approve"]'],
       ['setInputValue', {
         selector: '[data-smoke="package-preview-review-panel"] textarea',
