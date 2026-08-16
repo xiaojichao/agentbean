@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowRight,
   CheckCircle2,
   Clock3,
   PackageCheck,
@@ -16,7 +15,9 @@ import type {
 } from '@agentbean/contracts';
 
 import { channelTaskResponsibilityFocusFilterValue } from '@/components/ChannelTaskCard';
+import { TaskCardReviewPanel, type TaskCardReviewProjection } from '@/components/TaskCardReviewPanel';
 import { channelTaskEntrySubview } from '@/lib/channel-task-workspace-route';
+import { reviewStateLabel } from '@/lib/delivery-labels';
 import { taskStatusText } from '@/lib/task-status';
 
 export type ChannelProjectProgressState = 'loading' | 'not_ready' | 'no_permission' | 'error' | 'ready';
@@ -51,24 +52,36 @@ const PROJECT_LANES: readonly {
 export function ChannelProjectProgress({
   overview,
   workspace,
+  channelId,
   participants,
   currentUserId,
   selectedStageId,
   state,
   errorMessage,
   archived,
-  onOpenStage,
+  onBackToThread,
+  onDelegateToAgent,
+  onViewDeliveryFiles,
+  onWorkspaceRefresh,
   onOpenSettings,
 }: {
   overview: ChannelProjectOverviewDto | null;
   workspace: ChannelTaskWorkspaceV1 | null;
+  channelId: string;
   participants: Participant[];
   currentUserId?: string;
   selectedStageId?: string | null;
   state: ChannelProjectProgressState;
   errorMessage?: string;
   archived: boolean;
-  onOpenStage: (stageId: string | null, taskId: string) => void;
+  /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
+  onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
+  /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
+  onDelegateToAgent: (taskId: string) => void;
+  /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
+  onViewDeliveryFiles: (taskId: string) => void;
+  /** 审核动作提交成功后刷新频道任务工作区投影（lane 归属可能变化）。 */
+  onWorkspaceRefresh: () => void;
   onOpenSettings: () => void;
 }) {
   const [creatorFilter, setCreatorFilter] = useState('all');
@@ -222,9 +235,14 @@ export function ChannelProjectProgress({
                       key={item.key}
                       item={item}
                       overview={overview}
+                      channelId={channelId}
                       participants={participants}
                       selectedStageId={selectedStageId}
-                      onOpenStage={onOpenStage}
+                      archived={archived}
+                      onBackToThread={onBackToThread}
+                      onDelegateToAgent={onDelegateToAgent}
+                      onViewDeliveryFiles={onViewDeliveryFiles}
+                      onWorkspaceRefresh={onWorkspaceRefresh}
                     />
                   ))}
                   {laneItems.length === 0 ? (
@@ -294,20 +312,31 @@ export function ChannelProjectSetupPrompt({
 function ProjectWorkCard({
   item,
   overview,
+  channelId,
   participants,
   selectedStageId,
-  onOpenStage,
+  archived,
+  onBackToThread,
+  onDelegateToAgent,
+  onViewDeliveryFiles,
+  onWorkspaceRefresh,
 }: {
   item: ProjectProgressItem;
   overview: ChannelProjectOverviewDto | null;
+  channelId: string;
   participants: Participant[];
   selectedStageId?: string | null;
-  onOpenStage: (stageId: string | null, taskId: string) => void;
+  archived: boolean;
+  onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
+  onDelegateToAgent: (taskId: string) => void;
+  onViewDeliveryFiles: (taskId: string) => void;
+  onWorkspaceRefresh: () => void;
 }) {
   const { stage, entry } = item;
+  // 焦点包投影（成员清单 + 审核态）由 TaskCardReviewPanel 拉取后上抛；review lane 之外不查询。
+  const [reviewProjection, setReviewProjection] = useState<TaskCardReviewProjection | null>(null);
   const task = stage?.task ?? entry?.task;
   if (!task) return null;
-  const stageId = stage?.id ?? null;
   const selected = Boolean(stage && selectedStageId === stage.id);
   const reviewer = entry
     ? reviewerLabel(entry, participants)
@@ -318,15 +347,6 @@ function ProjectWorkCard({
   const statusLabel = stage
     ? aggregateStatusLabel(stage.aggregateStatus, task.status)
     : taskStatusText(task.status);
-  const actionLabel = task.status === 'cancelled'
-    ? '查看取消记录'
-    : item.lane === 'review'
-      ? '查看交付文件与审核'
-      : item.lane === 'complete'
-        ? '查看交付与 final'
-        : stage?.aggregateStatus === 'pending'
-          ? '交给智能体处理'
-          : '查看执行进度';
   const delivery = entry?.delivery;
   const deliverySummary = delivery ? projectDeliverySummary(delivery) : '项目推进事实尚未就绪';
   const inputSummary = stage
@@ -385,36 +405,40 @@ function ProjectWorkCard({
         <>
           <div className="mt-2.5 rounded-lg border border-sky-200 bg-sky-50/70 p-2 text-xs leading-5 text-neutral-700" data-smoke="project-card-delivery-summary">
             <strong className="block text-sky-800">待审核输出</strong>
-            {deliverySummary}
+            {projectReviewMemberList(reviewProjection) ?? deliverySummary}
           </div>
-          <div className="mt-2.5 grid gap-2 rounded-lg border border-amber-200 bg-amber-50/70 p-2" data-smoke="project-card-review-entry">
-            <strong className="text-xs text-amber-800">任务卡片只做状态摘要和入口</strong>
-            <p className="text-xs leading-5 text-amber-900/80">{projectReviewGuidance(entry)}</p>
-            <button
-              type="button"
-              aria-label={stage ? `打开阶段 ${stage.name}` : `打开受管任务 ${task.title}`}
-              aria-current={selected ? 'true' : undefined}
-              onClick={() => onOpenStage(stageId, task.id)}
-              className="inline-flex h-8 w-fit items-center gap-1.5 rounded-md bg-sky-700 px-3 text-xs font-semibold text-white hover:bg-sky-800 focus:outline-none focus:ring-2 focus:ring-sky-400"
-            >
-              {actionLabel}
-              <ArrowRight size={13} />
-            </button>
-            <p className="text-[11px] leading-4 text-amber-800/80">进入交付工作台查看文件版本、逐个审核，并单独确认本次交付。</p>
-          </div>
+          <TaskCardReviewPanel
+            channelId={channelId}
+            focusPackageId={entry.delivery.focusPackageId ?? null}
+            archived={archived}
+            onBackToThread={(threadRootMessageId) => onBackToThread(threadRootMessageId, task.id)}
+            onMutationSucceeded={onWorkspaceRefresh}
+            onProjection={setReviewProjection}
+          />
         </>
-      ) : (
+      ) : null}
+
+      {item.lane === 'active' ? (
         <button
           type="button"
-          aria-label={stage ? `打开阶段 ${stage.name}` : `打开受管任务 ${task.title}`}
-          aria-current={selected ? 'true' : undefined}
-          onClick={() => onOpenStage(stageId, task.id)}
-          className="mt-2.5 inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
+          onClick={() => onDelegateToAgent(task.id)}
+          className="mt-2.5 inline-flex h-8 items-center rounded-md border border-sky-300 bg-white px-3 text-xs font-semibold text-sky-700 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
+          data-smoke="project-card-delegate-agent"
         >
-          {actionLabel}
-          <ArrowRight size={13} />
+          交给智能体处理
         </button>
-      )}
+      ) : null}
+
+      {item.lane === 'complete' ? (
+        <button
+          type="button"
+          onClick={() => onViewDeliveryFiles(task.id)}
+          className="mt-2.5 inline-flex h-8 items-center rounded-md border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
+          data-smoke="project-card-view-delivery"
+        >
+          查看交付与 final
+        </button>
+      ) : null}
 
       {entry && item.lane !== 'active' ? (
         <div className="mt-3 grid grid-cols-[18px_minmax(0,1fr)] items-start gap-1.5 border-t border-neutral-200 pt-2.5 text-[11px] leading-4 text-neutral-500" data-smoke="project-card-timeline">
@@ -424,6 +448,20 @@ function ProjectWorkCard({
       ) : null}
     </article>
   );
+}
+
+/** 原型 mini-package：待审核输出按焦点包成员清单展示（投影未就绪回落文字摘要）。 */
+function projectReviewMemberList(projection: TaskCardReviewProjection | null): string | null {
+  if (!projection || projection.package.members.length === 0) return null;
+  const stateByMember = new Map(
+    projection.availableActions.map((action) => [`${action.collectionId}:${action.versionId}`, action.reviewState] as const),
+  );
+  return projection.package.members
+    .map((member) => {
+      const state = stateByMember.get(`${member.collectionId}:${member.artifactVersionId}`);
+      return `${member.shortLabel} ${member.filename}${state ? `（${reviewStateLabel(state)}）` : ''}`;
+    })
+    .join('；');
 }
 
 function ProjectCardFact({ label, value }: { label: string; value: string }) {
@@ -450,19 +488,6 @@ function projectFinalSummary(delivery: ChannelTaskWorkspaceEntryV1['delivery']):
     : '无必需 final 文件';
 }
 
-function projectReviewGuidance(entry: ChannelTaskWorkspaceEntryV1): string {
-  const { delivery } = entry;
-  if (delivery.fileReviewRequiredCount === 0) {
-    return '当前焦点包没有必需 final 文件，文件审核不适用；仍需在交付工作台单独确认本次交付。';
-  }
-  if (!delivery.fileReviewRequiredCount) {
-    return '逐文件审核覆盖尚未形成；请进入交付工作台核对当前文件版本。';
-  }
-  if (!delivery.fileReviewComplete) {
-    return `文件审核覆盖：${delivery.fileReviewApprovedCount ?? 0} 通过 / ${delivery.fileReviewRequiredCount} 需审核，仍有版本待处理。`;
-  }
-  return '文件版本审核已齐；文件审核、final 与本次交付验收仍是三类独立事实。';
-}
 
 function projectTimelineSummary(entry: ChannelTaskWorkspaceEntryV1, lane: ProjectLaneId): string {
   if (lane === 'complete') {

@@ -2303,6 +2303,39 @@ export default function ChatPage() {
     router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
   }, [openTaskDetail, visibleMessages, router, searchParams]);
 
+  // 原型 review-panel「回到讨论串继续」：只定位到当前话题输入框，不产生任何 Server 写入（设计文档 §8.6）。
+  const backToThreadFromTaskCard = useCallback((threadRootMessageId: string | undefined, taskId: string) => {
+    const targetMessageId = threadRootMessageId
+      ?? visibleMessages.find((msg) => metaTaskId(msg) === taskId)?.id;
+    if (targetMessageId) {
+      openThread(targetMessageId);
+      setTimeout(() => threadTextareaRef.current?.focus(), 0);
+      return;
+    }
+    // 无绑定讨论串：回到聊天主输入框。
+    switchTab('chat');
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [openThread, switchTab, visibleMessages]);
+
+  // 原型进行中卡「交给智能体处理」：定位讨论串并预填 @ 触发智能体选择（§5.1/§8.2）。
+  const delegateToAgentFromTaskCard = useCallback((taskId: string) => {
+    const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
+    if (taskMessage) {
+      openThread(taskMessage.id);
+      setThreadInput('@');
+      setTimeout(() => threadTextareaRef.current?.focus(), 0);
+      return;
+    }
+    switchTab('chat');
+    setInput('@');
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [openThread, switchTab, visibleMessages]);
+
+  // 原型已结束卡「查看交付与 final」：交付明细在 Files 逻辑产物视图。
+  const viewDeliveryFilesFromTaskCard = useCallback(() => {
+    switchTab('files');
+  }, [switchTab]);
+
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
   // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
   const continueWithAgentFromCard = useCallback((surface: 'main' | 'thread', packageId: string, taskTitle?: string) => {
@@ -2989,7 +3022,10 @@ export default function ChatPage() {
               })}
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
               onOpenTaskDetail={openTaskDetailById}
-              onOpenProjectStage={openProjectStage}
+              onBackToThread={backToThreadFromTaskCard}
+              onDelegateToAgent={delegateToAgentFromTaskCard}
+              onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
+              onWorkspaceRefresh={() => { void loadTasks(); }}
               onSubviewChange={selectTasksSubview}
               onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
@@ -3792,7 +3828,10 @@ function ConversationTasks({
   onToggleColumn,
   onTaskUpdate,
   onOpenTaskDetail,
-  onOpenProjectStage,
+  onBackToThread,
+  onDelegateToAgent,
+  onViewDeliveryFiles,
+  onWorkspaceRefresh,
   onSubviewChange,
   onResolveDefaultSubview,
 }: {
@@ -3831,7 +3870,14 @@ function ConversationTasks({
   onTaskUpdate: (task: TaskItem) => void;
   /** 原型收敛:看板/列表点击任务标题打开详情(含无关联消息的 task-only)。 */
   onOpenTaskDetail: (taskId: string) => void;
-  onOpenProjectStage: (stageId: string | null, taskId: string) => void;
+  /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
+  onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
+  /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
+  onDelegateToAgent: (taskId: string) => void;
+  /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
+  onViewDeliveryFiles: (taskId: string) => void;
+  /** 审核动作提交成功后刷新频道任务工作区投影。 */
+  onWorkspaceRefresh: () => void;
   onSubviewChange: (view: ChannelTasksSubview) => void;
   onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
@@ -4132,13 +4178,17 @@ function ConversationTasks({
         <ChannelProjectProgress
           overview={projectOverview ?? null}
           workspace={workspace}
+          channelId={channelId}
           participants={participants}
           currentUserId={currentUserId}
           selectedStageId={selectedStageId}
           state={projectProgressState}
           errorMessage={projectProgressErrorMessage}
           archived={workspaceReadOnly}
-          onOpenStage={onOpenProjectStage}
+          onBackToThread={onBackToThread}
+          onDelegateToAgent={onDelegateToAgent}
+          onViewDeliveryFiles={onViewDeliveryFiles}
+          onWorkspaceRefresh={onWorkspaceRefresh}
           onOpenSettings={() => setShowProjectSettings(true)}
         />
       ) : loadError ? (
