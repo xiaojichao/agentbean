@@ -1777,8 +1777,16 @@ export async function exerciseWebUiTaskBusinessSmoke({
       suffix,
       timeoutMs,
     });
+    await exerciseWebUiChannelTaskSubviewSmoke({
+      page,
+      root,
+      teamPath,
+      webSocket,
+      session,
+      suffix,
+      timeoutMs,
+    });
   }
-  await exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs });
   return {
     title,
     status: targetStatus,
@@ -1945,8 +1953,19 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   );
 }
 
-async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs }) {
+async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webSocket, session, suffix, timeoutMs }) {
   // 频道级锁定：公共频道只渲染项目工作台；旧 plain/project 切换与前进后退能力随锁定退役。
+  // 注意不能用 session 默认频道（#all 锁普通任务）；自建公共频道验证锁定。
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `subview-lock-${suffix}`,
+    visibility: 'public',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) {
+    throw new Error(`Channel Tasks subview smoke could not create its isolated channel: ${formatAck(channelAck)}`);
+  }
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
     `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
