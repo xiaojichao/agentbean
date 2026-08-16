@@ -2987,9 +2987,10 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       if (!panel) return false;
       const buttons = Array.from(panel.querySelectorAll('[data-smoke="task-card-review-entry-action"]'))
         .map((button) => button.getAttribute('data-action'));
-      return panel.textContent.includes('任务卡片只做状态摘要和入口，不直接审核文件')
-        && buttons.includes('view-files') && buttons.includes('review-files') && buttons.includes('open-thread')
-        && !panel.textContent.includes('通过并设为最终版');
+      // 微调对齐原型：入口面板只保留三按钮，无标题/摘要/help 文字。
+      return buttons.includes('view-files') && buttons.includes('review-files') && buttons.includes('open-thread')
+        && !panel.textContent.includes('通过并设为最终版')
+        && !panel.textContent.includes('任务卡片只做状态摘要和入口');
     })()
     `,
     `review card to render its entry panel with the three prototype buttons for package ${deliveryReview.packageId}`,
