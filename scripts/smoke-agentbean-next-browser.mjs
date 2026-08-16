@@ -1827,6 +1827,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   }
 
   const titles = [`普通任务甲 ${suffix}`, `普通任务乙 ${suffix}`];
+  let firstTaskId = null;
   for (const title of titles) {
     const taskAck = await emitAck(webSocket, WEB_EVENTS.task.create, {
       userId: session.user.id,
@@ -1837,6 +1838,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     if (taskAck?.ok !== true || typeof taskAck?.task?.id !== 'string') {
       throw new Error(`Channel Tasks no-project smoke could not create ordinary Task "${title}": ${formatAck(taskAck)}`);
     }
+    if (firstTaskId === null) firstTaskId = taskAck.task.id;
   }
 
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
@@ -1862,6 +1864,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     timeoutMs,
   );
 
+  // 原型对齐（#1225 收口）：无绑定消息的普通任务点击不再打开 task-only 详情侧边栏。
   const openedTask = await page.evaluateJson(`
     (() => {
       const title = ${JSON.stringify(titles[0])};
@@ -1873,22 +1876,21 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
       return true;
     })()
   `);
-  if (!openedTask) throw new Error(`Could not open ordinary channel Task "${titles[0]}"`);
+  if (!openedTask) throw new Error(`Could not click ordinary channel Task "${titles[0]}"`);
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="chat-task-detail"]') !== null
-      && new URLSearchParams(window.location.search).get('task')?.startsWith('task:') === true`,
-    'ordinary channel Task opens its task-only detail',
+    `document.querySelector('[data-smoke="chat-task-detail"]') === null
+      && !new URLSearchParams(window.location.search).has('task')`,
+    'ordinary channel Task click no longer opens the retired task-only detail',
     timeoutMs,
   );
 
-  const selectedTaskParam = await page.evaluateJson(
-    `new URLSearchParams(window.location.search).get('task')`,
-  );
-  await page.click('[data-smoke="channel-tasks-view-plain"]');
+  // task=task:<taskId> 深链回落：清参数、不渲染侧边栏、留在任务页。
+  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&task=task:${firstTaskId}`, root).toString());
   await page.waitForFunction(
-    `new URLSearchParams(window.location.search).get('task') === ${JSON.stringify(selectedTaskParam)}
-      && document.querySelector('[data-smoke="chat-task-detail"]') !== null`,
-    'reselecting the active channel Tasks subview preserves the selected Task deep link',
+    `!new URLSearchParams(window.location.search).has('task')
+      && document.querySelector('[data-smoke="chat-task-detail"]') === null
+      && document.querySelector('[data-smoke="channel-plain-task-workspace"], [data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') !== null`,
+    'task-only deep link falls back to the Tasks surface without the retired detail panel',
     timeoutMs,
   );
 
@@ -1898,7 +1900,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
       && !new URLSearchParams(window.location.search).has('task')
       && document.querySelector('[data-smoke="chat-task-detail"]') === null
       && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null`,
-    'switching to project progress clears stale ordinary Task detail and keeps explicit setup guidance',
+    'switching to project progress keeps the Tasks surface free of the retired detail panel',
     timeoutMs,
   );
 }
