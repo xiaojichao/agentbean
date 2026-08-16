@@ -238,6 +238,83 @@ export async function submitPackageMutation(
   };
 }
 
+/** 原型对齐（#1222 后续）：卡片级批量审核输入。targets 为焦点包内仍有对应动作的成员。 */
+export interface PackageBatchReviewInput {
+  readonly channelId: string;
+  readonly packageId: string;
+  readonly deliveryId: string;
+  readonly expectedPackageRevision: number;
+  readonly targets: readonly { readonly collectionId: string; readonly artifactVersionId: string }[];
+  readonly decision: ProjectArtifactReviewDecision;
+  readonly comment: string;
+}
+
+export interface PackageBatchReviewResult extends MutationSubmitResult {
+  readonly reviews?: readonly unknown[];
+  readonly rejectedTargets?: readonly { readonly collectionId?: string; readonly artifactVersionId?: string; readonly reason: string }[];
+}
+
+/**
+ * 批量提交文件版本审核（#1199 全有或全无命令）。
+ * idempotencyKey 由调用方在同一次意图内保持稳定；成功后由调用方刷新 Server projection。
+ */
+export async function submitPackageBatchReview(
+  input: PackageBatchReviewInput,
+  idempotencyKey: string,
+): Promise<PackageBatchReviewResult> {
+  const result = await projectEvents().submitPackageArtifactReviews({
+    channelId: input.channelId,
+    packageId: input.packageId,
+    deliveryId: input.deliveryId,
+    expectedPackageRevision: input.expectedPackageRevision,
+    targets: input.targets,
+    decision: input.decision,
+    comment: input.comment,
+    idempotencyKey,
+  });
+  return {
+    ok: result.ok,
+    ...(result.reviews ? { reviews: result.reviews } : {}),
+    ...(result.details?.rejectedTargets ? { rejectedTargets: result.details.rejectedTargets } : {}),
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.message ? { message: result.message } : {}),
+    ...(result.replayed !== undefined ? { replayed: result.replayed } : {}),
+  };
+}
+
+/**
+ * 单成员「通过并设为最终版」（#1061 AC9：一个事务两个独立事实）。
+ * expectedCollectionRevision 取 Server availableActions 的集合 revision fence。
+ */
+export async function submitPackageReviewAndFinalizeMember(
+  input: {
+    readonly channelId: string;
+    readonly packageId: string;
+    readonly collectionId: string;
+    readonly versionId: string;
+    readonly expectedCollectionRevision: number;
+    readonly comment: string;
+    readonly idempotencyKey: string;
+  },
+): Promise<MutationSubmitResult> {
+  const result = await projectEvents().submitPackageReviewAndFinalize({
+    channelId: input.channelId,
+    packageId: input.packageId,
+    collectionId: input.collectionId,
+    versionId: input.versionId,
+    decision: 'approved',
+    comment: input.comment,
+    idempotencyKey: input.idempotencyKey,
+    expectedCollectionRevision: input.expectedCollectionRevision,
+  });
+  return {
+    ok: result.ok,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.message ? { message: result.message } : {}),
+    ...(result.replayed !== undefined ? { replayed: result.replayed } : {}),
+  };
+}
+
 /** 提交 Task delivery 验收/退回（既有 root lifecycle commands）。 */
 export async function submitDeliveryMutation(
   target: DeliveryMutationTarget,
