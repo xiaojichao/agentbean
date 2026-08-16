@@ -98,14 +98,17 @@ export function Sidebar() {
       </div>
 
       {/* Team Switcher + Add */}
-      <div className="hidden items-center gap-1.5 px-3 py-2 md:flex">
+      <div className="flex items-center gap-1.5 px-2 py-2 md:px-3">
         <div className="relative flex-1 min-w-0">
           <button
             onClick={() => { setShowTeams((v) => !v); }}
-            className="flex w-full items-center justify-between gap-1.5 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 text-xs hover:bg-neutral-50 transition-colors"
+            className="flex h-[30px] w-full items-center justify-center gap-1.5 rounded-md border border-neutral-200 bg-white px-1 text-xs transition-colors hover:bg-neutral-50 md:justify-between md:px-2.5"
+            aria-label={`切换团队，当前团队：${currentTeam?.name ?? '当前团队'}`}
+            title={currentTeam?.name ?? '切换团队'}
           >
-            <span className="truncate font-medium">{currentTeam?.name ?? '当前团队'}</span>
-            <ChevronDown size={12} className={`shrink-0 text-neutral-400 transition-transform ${showTeams ? 'rotate-180' : ''}`} />
+            <span className="font-semibold md:hidden" aria-hidden="true">{currentTeam?.name?.trim().charAt(0) || '团'}</span>
+            <span className="hidden truncate font-medium md:inline">{currentTeam?.name ?? '当前团队'}</span>
+            <ChevronDown size={12} className={`hidden shrink-0 text-neutral-400 transition-transform md:block ${showTeams ? 'rotate-180' : ''}`} />
           </button>
           {showTeams && (
             <div
@@ -138,13 +141,24 @@ export function Sidebar() {
                     </button>
                   ))
                 )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowTeams(false);
+                    setShowCreateDialog(true);
+                  }}
+                  className="mt-1 flex w-full items-center gap-2 border-t border-neutral-100 px-2.5 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50 md:hidden"
+                >
+                  <Plus size={14} />
+                  创建团队
+                </button>
               </div>
             </div>
           )}
         </div>
         <button
           onClick={() => setShowCreateDialog(true)}
-          className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 transition-colors"
+          className="hidden h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md border border-neutral-200 bg-white text-neutral-500 transition-colors hover:bg-neutral-100 hover:text-neutral-700 md:flex"
           title="创建团队"
         >
           <Plus size={14} />
@@ -169,6 +183,8 @@ export function Sidebar() {
             href={`/${np}/dashboard/pi`}
             className="flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 md:justify-start"
             data-smoke="pi-configuration-readiness-alert"
+            aria-label="PI 配置需要处理"
+            title="PI 配置需要处理"
           >
             <TriangleAlert size={14} className="shrink-0" />
             <span className="hidden md:inline">PI 需要处理</span>

@@ -373,6 +373,7 @@ export default function ChatPage() {
   const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
   const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
   const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved' | 'pinned'>('channels');
+  const [mobileConversationListOpen, setMobileConversationListOpen] = useState(false);
   const [searchChannelScope, setSearchChannelScope] = useState<SearchChannelScope | null>(null);
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
@@ -2539,7 +2540,7 @@ export default function ChatPage() {
     <div ref={chatContainerRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
       <div
-        className={`${activeChannel ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
+        className={`${activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
         data-smoke="conversation-sidebar"
       >
         {/* Chat label */}
@@ -2596,7 +2597,7 @@ export default function ChatPage() {
           {channelsExpanded && (
             <div className="space-y-0.5">
               {orderedChannels.map((ch) => (
-                <button key={ch.id} onClick={() => { setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                <button key={ch.id} onClick={() => { setMobileConversationListOpen(false); setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                   {ch.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
                   <span className="truncate">{ch.name}</span>
                 </button>
@@ -2629,7 +2630,7 @@ export default function ChatPage() {
                 const dmLastMessage = lastLoadedMessage(messagesByChannel[dm.id]);
                 const dmSubtitle = dmLastMessage ? displayMessageBody(dmLastMessage) : (dmAgent?.description?.trim() || dmAgent?.role || '智能体私聊');
                 return (
-                  <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                  <button key={dm.id} onClick={() => { setMobileConversationListOpen(false); setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                     <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-purple-100 text-[10px] font-semibold text-purple-700">
                       {dmName[0]?.toUpperCase() ?? 'A'}
                       <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[#F8F5E6] ${statusDotClass(dmStatus)}`} />
@@ -2707,10 +2708,7 @@ export default function ChatPage() {
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <button
                 type="button"
-                onClick={() => {
-                  setActiveChannel(null);
-                  router.push(`/${np}/chat`);
-                }}
+                onClick={() => setMobileConversationListOpen(true)}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 md:hidden"
                 title="返回会话列表"
                 aria-label="返回会话列表"

@@ -19,9 +19,15 @@ describe('chat task surface', () => {
     expect(sidebarSource).toContain('w-14 shrink-0');
     expect(sidebarSource).toContain('md:w-52');
     expect(sidebarSource).toContain('<span className="hidden md:inline">{label}</span>');
-    expect(chatSource).toContain("activeChannel ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'");
+    expect(chatSource).toContain("activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'");
     expect(chatSource).toContain('data-smoke="channel-mobile-list-back"');
+    expect(chatSource).toContain('onClick={() => setMobileConversationListOpen(true)}');
+    expect(chatSource).toContain('setMobileConversationListOpen(false); setActiveChannel(ch.id)');
     expect(chatSource).toContain('className="flex min-w-0 flex-1 overflow-hidden"');
+    expect(sidebarSource).toContain('切换团队，当前团队：');
+    expect(sidebarSource).toContain('className="font-semibold md:hidden"');
+    expect(sidebarSource).toContain('创建团队');
+    expect(sidebarSource).toContain('aria-label="PI 配置需要处理"');
   });
 
   test('普通任务从整枚徽标打开完整状态菜单，受管任务只保留取消与关闭', () => {
