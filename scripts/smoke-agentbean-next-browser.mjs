@@ -1838,8 +1838,8 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
   await page.waitForFunction(
     `(() => {
-      return document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
-        && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null
+      return document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null
         && document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null;
     })()
@@ -1851,8 +1851,8 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   // tasksView=plain 深链在锁定 project 的频道回落到锁定视图（AC6：不 404、显示锁定视图）。
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
-      && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null`,
+    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+      && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null`,
     'tasksView=plain deep link falls back to the locked project workbench',
     timeoutMs,
   );
@@ -1907,8 +1907,8 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     (() => {
       const titles = ${JSON.stringify(titles)};
       const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
-      return document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null
-        && document.querySelector('[data-smoke="channel-tasks-view-project"]') === null
+      return document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
+        && document.querySelector('[data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') === null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
         && document.querySelector('[data-smoke="channel-plain-secondary-label"]') !== null
         && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
@@ -1968,14 +1968,14 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
   }
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
-      && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null`,
+    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+      && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null`,
     'channel Tasks stays locked to the project workbench regardless of the tasksView URL param',
     timeoutMs,
   );
   await page.reload();
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    `document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null`,
     'channel Tasks preserves the locked project subview after refresh',
     timeoutMs,
   );
@@ -2987,9 +2987,10 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       if (!panel) return false;
       const buttons = Array.from(panel.querySelectorAll('[data-smoke="task-card-review-entry-action"]'))
         .map((button) => button.getAttribute('data-action'));
-      return panel.textContent.includes('任务卡片只做状态摘要和入口，不直接审核文件')
-        && buttons.includes('view-files') && buttons.includes('review-files') && buttons.includes('open-thread')
-        && !panel.textContent.includes('通过并设为最终版');
+      // 微调对齐原型：入口面板只保留三按钮，无标题/摘要/help 文字。
+      return buttons.includes('view-files') && buttons.includes('review-files') && buttons.includes('open-thread')
+        && !panel.textContent.includes('通过并设为最终版')
+        && !panel.textContent.includes('任务卡片只做状态摘要和入口');
     })()
     `,
     `review card to render its entry panel with the three prototype buttons for package ${deliveryReview.packageId}`,

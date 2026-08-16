@@ -82,31 +82,13 @@ export function TaskCardReviewEntryPanel({
   if (archived || !focusPackageId) return null;
   if (!projection) return null;
 
-  const stateByMember = new Map(
-    projection.availableActions.map((entry) => [`${entry.collectionId}:${entry.versionId}`, entry.reviewState] as const),
-  );
-  const memberStates = projection.package.members
-    .map((member) => stateByMember.get(`${member.collectionId}:${member.artifactVersionId}`))
-    .filter((state): state is NonNullable<typeof state> => Boolean(state));
-  const approvedCount = memberStates.filter((state) => state === 'approved').length;
-  const pendingCount = memberStates.filter((state) => state === 'pending').length;
-  const changesCount = memberStates.filter((state) => state === 'changes_requested' || state === 'rejected').length;
   const firstPending = projection.availableActions.find(
     (entry) => entry.reviewState === 'pending' || entry.reviewState === 'changes_requested',
   );
-  const acceptanceSummary = pendingCount + changesCount > 0
-    ? '交付验收：还有文件未通过审核，暂不可验收本次交付。'
-    : '交付验收：文件审核已齐，可在交付视图确认本次交付。';
 
   return (
     <div className="mt-2.5 rounded-lg border border-amber-200 bg-amber-50/70 p-2.5" data-smoke="task-card-review-entry">
-      <div className="text-xs font-medium text-amber-800" data-smoke="task-card-review-entry-title">
-        任务卡片只做状态摘要和入口，不直接审核文件
-      </div>
-      <p className="mt-1 text-[11px] leading-4 text-amber-900/80" data-smoke="task-card-review-entry-coverage">
-        {`文件审核覆盖：${approvedCount} 通过 / ${pendingCount} 待审核 / ${changesCount} 要修改。${acceptanceSummary}`}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         <button
           type="button"
           data-smoke="task-card-review-entry-action"
@@ -137,9 +119,6 @@ export function TaskCardReviewEntryPanel({
           打开讨论串
         </button>
       </div>
-      <p className="mt-1 text-[11px] leading-4 text-neutral-500">
-        查看交付文件会切到文件页输出包概览；审核交付文件会打开预览/编辑浮窗，并选中第一个需要处理的文件版本。
-      </p>
     </div>
   );
 }

@@ -56,7 +56,6 @@ describe('频道项目推进工作区', () => {
     expect(card?.textContent).toContain('交付包 2 个');
     expect(card?.textContent).toContain('最终版 1/2');
     expect(card?.textContent).toContain('实际审核人审核人');
-    expect(screen.getByText('当前视图：阶段状态 + 审核动作')).toBeTruthy();
     expect(document.querySelector('[data-smoke="channel-project-lanes"]')).toBeTruthy();
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('暂无待审核交付');
@@ -332,7 +331,8 @@ describe('频道项目推进工作区', () => {
   test('归档频道只提供查看设置入口，不暴露运行态写操作', () => {
     renderProgress({ overview: { ...overview(), archived: true }, archived: true });
     expect(screen.getByText('已归档 · 只读')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '查看项目设置' })).toBeTruthy();
+    // 微调对齐原型：header 只保留筛选下拉；项目设置按钮移除（归档徽章保留为只读状态提示）。
+    expect(screen.queryByRole('button', { name: '查看项目设置' })).toBeNull();
     expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
 
@@ -344,7 +344,7 @@ describe('频道项目推进工作区', () => {
     expect(screen.queryByLabelText('前置阶段')).toBeNull();
     expect(screen.queryByLabelText('产物集合 ID')).toBeNull();
     expect(screen.queryByLabelText('必需输入来源 ID')).toBeNull();
-    expect(screen.getByRole('button', { name: '项目设置 / 阶段配置' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
 });
 

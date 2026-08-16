@@ -101,13 +101,13 @@ describe('TaskCardReviewEntryPanel（新版原型三入口）', () => {
     );
 
     await waitForPanel();
-    expect(screen.getByText('任务卡片只做状态摘要和入口，不直接审核文件')).toBeTruthy();
-    expect(screen.getByText(/文件审核覆盖：1 通过 \/ 1 待审核 \/ 1 要修改。交付验收：还有文件未通过审核/)).toBeTruthy();
     expect(screen.getByText('查看交付文件')).toBeTruthy();
     expect(screen.getByText('审核交付文件')).toBeTruthy();
     expect(screen.getByText('打开讨论串')).toBeTruthy();
     // 新版原型：卡片不承载审核操作。
     expect(screen.queryByText('通过并设为最终版')).toBeNull();
+    // 微调对齐原型：入口面板只保留三按钮，无标题/摘要/help 文字。
+    expect(screen.queryByText('任务卡片只做状态摘要和入口，不直接审核文件')).toBeNull();
 
     fireEvent.click(screen.getByText('查看交付文件'));
     expect(onViewFiles).toHaveBeenCalledOnce();
@@ -139,7 +139,6 @@ describe('TaskCardReviewEntryPanel（新版原型三入口）', () => {
     await waitForPanel();
     const reviewButton = screen.getByText('审核交付文件').closest('button');
     expect(reviewButton?.disabled).toBe(true);
-    expect(screen.getByText(/文件审核覆盖：2 通过 \/ 0 待审核 \/ 0 要修改。交付验收：文件审核已齐/)).toBeTruthy();
   });
 
   test('投影未就绪或焦点包缺失时不渲染面板', () => {
@@ -172,5 +171,5 @@ describe('TaskCardReviewEntryPanel（新版原型三入口）', () => {
 });
 
 function waitForPanel() {
-  return screen.findByText('任务卡片只做状态摘要和入口，不直接审核文件');
+  return screen.findByText('查看交付文件');
 }
