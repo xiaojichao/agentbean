@@ -41,12 +41,11 @@ interface ProjectProgressItem {
 const PROJECT_LANES: readonly {
   id: ProjectLaneId;
   title: string;
-  description: string;
   empty: string;
 }[] = [
-  { id: 'active', title: '进行中', description: '待触发、执行中与受阻阶段', empty: '暂无进行中的阶段' },
-  { id: 'review', title: '待审核', description: '已交付，等待成员给出审核结论', empty: '暂无待审核交付' },
-  { id: 'complete', title: '已结束', description: '已完成或已终止；交付与 final 以卡片事实为准', empty: '暂无已结束阶段' },
+  { id: 'active', title: '进行中', empty: '暂无进行中的阶段' },
+  { id: 'review', title: '待审核', empty: '暂无待审核交付' },
+  { id: 'complete', title: '已结束', empty: '暂无已结束阶段' },
 ];
 
 export function ChannelProjectProgress({
@@ -142,29 +141,11 @@ export function ChannelProjectProgress({
     <section className="min-h-0 flex-1 overflow-auto bg-[#fcfcfb]" data-smoke="channel-project-progress">
       {stages.length > 0 || projectEntries.length > 0 ? (
         <div className="sticky top-0 z-10 border-b border-neutral-200 bg-white/95 px-4 py-3 backdrop-blur">
-          <div className="flex flex-wrap items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-sm font-semibold text-neutral-900">项目阶段与审核</h2>
-                <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                  当前视图：阶段状态 + 审核动作
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-neutral-500">责任来自真实执行，审核与 final 分开记录；点击阶段进入交付工作台。</p>
-            </div>
+          <div className="flex flex-wrap items-center gap-3">
             {archived || overview?.archived ? (
               <span className="rounded bg-neutral-200 px-2 py-1 text-xs font-medium text-neutral-600">已归档 · 只读</span>
             ) : null}
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              <Settings2 size={13} />
-              {archived || overview?.archived ? '查看项目设置' : '项目设置 / 阶段配置'}
-            </button>
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
             <select
               aria-label="项目任务创建者"
               value={creatorFilter}
@@ -198,6 +179,7 @@ export function ChannelProjectProgress({
                 <option key={`actual:${participant.id}`} value={`actual:${participant.id}`}>实际：{participant.name}</option>,
               ])}
             </select>
+            </div>
           </div>
         </div>
       ) : null}
@@ -224,7 +206,6 @@ export function ChannelProjectProgress({
                     <h3 className="text-sm font-semibold text-neutral-900">{lane.title}</h3>
                     <span className="ml-auto rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-neutral-600">{laneItems.length}</span>
                   </div>
-                  <p className="mt-1 text-[11px] leading-4 text-neutral-500">{lane.description}</p>
                 </div>
                 <div className="space-y-2.5 p-2.5">
                   {laneItems.map((item) => (

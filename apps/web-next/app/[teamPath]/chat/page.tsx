@@ -1418,15 +1418,6 @@ export default function ChatPage() {
     else router.replace(href, { scroll: false });
   }, [router]);
 
-  const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
-    if (view === tasksViewParam) return;
-    setTaskDetailMessageId(null);
-    navigateChannelTasksRoute(
-      channelTasksRouteParams(searchParams, { view, stageId: null, taskId: null }),
-      channelTasksHistoryMode('select_subview'),
-    );
-  }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
-
   const resolveDefaultTasksSubview = useCallback((view: ChannelTasksSubview) => {
     if (tasksViewParam) return;
     const next = new URLSearchParams(searchParams.toString());
@@ -3001,7 +2992,6 @@ export default function ChatPage() {
               onBackToThread={backToThreadFromTaskCard}
               onReviewDeliveryFiles={openReviewFilesFromProjection}
               onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
-              onSubviewChange={selectTasksSubview}
               onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
           ) : (
@@ -3805,7 +3795,6 @@ function ConversationTasks({
   onBackToThread,
   onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onSubviewChange,
   onResolveDefaultSubview,
 }: {
   tasks: TaskItem[];
@@ -3852,7 +3841,6 @@ function ConversationTasks({
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
   /** 审核动作提交成功后刷新频道任务工作区投影。 */
-  onSubviewChange: (view: ChannelTasksSubview) => void;
   onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
   const [title, setTitle] = useState('');
@@ -4113,45 +4101,6 @@ function ConversationTasks({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
-      <div className="flex min-h-16 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-neutral-200 bg-white px-4" role="tablist" aria-label="频道任务子视图">
-        {lockedSubview !== 'plain' ? (
-        <button
-          type="button"
-          role="tab"
-          aria-selected={subview === 'project'}
-          data-smoke="channel-tasks-view-project"
-          onClick={() => onSubviewChange('project')}
-          className={`relative flex min-w-44 shrink-0 flex-col items-start justify-center px-3 text-left transition ${subview === 'project' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
-        >
-          <span className="text-xs font-semibold">项目工作台</span>
-          <span className="mt-0.5 text-[10px] font-normal text-neutral-400">阶段推进 · 交付审核 · final</span>
-        </button>
-        ) : null}
-        {lockedSubview !== 'project' ? (
-        <button
-          type="button"
-          role="tab"
-          aria-selected={subview === 'plain'}
-          data-smoke="channel-tasks-view-plain"
-          onClick={() => onSubviewChange('plain')}
-          className={`relative flex min-w-40 shrink-0 flex-col items-start justify-center px-3 text-left transition ${subview === 'plain' ? 'text-neutral-900 after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:bg-amber-400' : 'text-neutral-500 hover:bg-neutral-50 hover:text-neutral-800'}`}
-        >
-          <span className="text-xs font-semibold">普通任务</span>
-          <span className="mt-0.5 text-[10px] font-normal text-neutral-400">辅助状态 · 负责人视图</span>
-        </button>
-        ) : null}
-        <div className="min-w-3 flex-1" />
-        {subview === 'plain' && lockedSubview !== 'plain' ? (
-          <button
-            type="button"
-            onClick={() => setShowProjectSettings(true)}
-            className="h-8 shrink-0 rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-          >
-            {workspaceReadOnly ? '查看项目设置' : '项目设置 / 阶段配置'}
-          </button>
-        ) : null}
-      </div>
-
       {subview === 'project' ? (
         <ChannelProjectProgress
           overview={projectOverview ?? null}

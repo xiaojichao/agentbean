@@ -146,14 +146,12 @@ describe('chat task surface', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
     expect(source).toContain("useState<TaskViewMode>('list')");
-    expect(source).toContain('项目工作台');
-    expect(source).toContain('阶段推进 · 交付审核 · final');
+    // 微调对齐原型：子视图 tablist 整行移除（频道级锁定后无切换 UI）。
+    expect(source).not.toContain('频道任务子视图');
+    expect(source).not.toContain('阶段推进 · 交付审核 · final');
     expect(source).toContain('辅助视图：普通任务状态 + 负责人');
     expect(source).toContain('未进入阶段流程的任务');
     expect(source).toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
-    expect(source).toContain('items-stretch gap-1 overflow-x-auto border-b');
-    expect(source).toContain('min-w-44 shrink-0');
-    expect(source).toContain('min-w-40 shrink-0');
     expect(source).toContain('overflow-x-auto rounded-lg');
     expect(source).toContain('min-w-[880px] w-full');
   });
@@ -193,12 +191,8 @@ describe('chat task surface', () => {
     // 锁定优先于 URL tasksView 参数与默认解析。
     expect(source).toContain('const subview = lockedSubview ?? (requestedSubview');
     expect(source).toContain('if (lockedSubview || projectOverview === undefined');
-    // tablist 只渲染未锁定一侧；#all/私聊（锁 plain）不暴露项目设置入口。
-    const tabsStart = source.indexOf('role="tablist" aria-label="频道任务子视图"');
-    const tabsEnd = source.indexOf("{subview === 'project' ? (", tabsStart);
-    const tabsBlock = source.slice(tabsStart, tabsEnd);
-    expect(tabsBlock).toContain("{lockedSubview !== 'plain' ? (");
-    expect(tabsBlock).toContain("{lockedSubview !== 'project' ? (");
-    expect(tabsBlock).toContain("{subview === 'plain' && lockedSubview !== 'plain' ? (");
+    // 微调对齐原型：tablist 整行移除——锁定视图无切换 UI，也无项目设置入口。
+    expect(source).not.toContain('channel-tasks-view-project');
+    expect(source).not.toContain('channel-tasks-view-plain');
   });
 });
