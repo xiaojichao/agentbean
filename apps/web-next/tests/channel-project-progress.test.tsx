@@ -24,9 +24,8 @@ function renderProgress(props: Partial<Parameters<typeof ChannelProjectProgress>
   const callbacks = {
     channelId: 'channel-1',
     onBackToThread: vi.fn(),
-    onDelegateToAgent: vi.fn(),
+    onReviewDeliveryFiles: vi.fn(),
     onViewDeliveryFiles: vi.fn(),
-    onWorkspaceRefresh: vi.fn(),
   };
   render(
     <ChannelProjectProgress
@@ -45,7 +44,7 @@ function renderProgress(props: Partial<Parameters<typeof ChannelProjectProgress>
 }
 
 describe('频道项目推进工作区', () => {
-  test('阶段卡片展示 Server 阶段、责任、交付与审核事实，进行中卡提供交给智能体处理入口', () => {
+  test('阶段卡片展示 Server 阶段、责任、交付与审核事实，进行中卡提供查看进度与讨论串入口', () => {
     const callbacks = renderProgress({ selectedStageId: 'stage-1' });
 
     const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
@@ -61,11 +60,11 @@ describe('频道项目推进工作区', () => {
     expect(document.querySelector('[data-smoke="channel-project-lanes"]')).toBeTruthy();
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('暂无待审核交付');
-    // 原型：进行中卡唯一动作是「交给智能体处理」；不再打开任务详情侧边栏。
-    const delegateButton = screen.getByRole('button', { name: '交给智能体处理' });
-    fireEvent.click(delegateButton);
-    expect(callbacks.onDelegateToAgent).toHaveBeenCalledWith('task-1');
-    expect(card?.textContent).not.toContain('查看执行进度');
+    // 新版原型：进行中卡为「查看执行进度」「打开讨论串」；不再打开任务详情侧边栏，无直接指派入口。
+    fireEvent.click(screen.getByRole('button', { name: '查看执行进度' }));
+    expect(callbacks.onBackToThread).toHaveBeenCalledWith(undefined, 'task-1');
+    fireEvent.click(screen.getByRole('button', { name: '打开讨论串' }));
+    expect(card?.textContent).not.toContain('交给智能体处理');
   });
 
   test('待审核卡片展示结构化事实与交付摘要，不再提供打开侧边栏的入口按钮', () => {
@@ -112,7 +111,7 @@ describe('频道项目推进工作区', () => {
     // 原型对齐：审核动作内嵌卡片；「查看交付文件与审核」侧边栏入口与提示语移除。
     expect(card?.textContent).not.toContain('查看交付文件与审核');
     expect(card?.textContent).not.toContain('任务卡片只做状态摘要和入口');
-    expect(document.querySelector('[data-smoke="task-card-review-panel"]')).toBeNull();
+    expect(document.querySelector('[data-smoke="task-card-review-entry"]')).toBeNull();
   });
 
   test('零个必需文件时将文件审核展示为不适用', () => {
@@ -194,9 +193,7 @@ describe('频道项目推进工作区', () => {
       archived={false}
       state="loading"
       onBackToThread={vi.fn()}
-      onDelegateToAgent={vi.fn()}
       onViewDeliveryFiles={vi.fn()}
-      onWorkspaceRefresh={vi.fn()}
       onOpenSettings={vi.fn()}
     />);
     expect(screen.getByText('正在加载项目推进事实…')).toBeTruthy();
@@ -210,9 +207,7 @@ describe('频道项目推进工作区', () => {
       archived={false}
       state="not_ready"
       onBackToThread={vi.fn()}
-      onDelegateToAgent={vi.fn()}
       onViewDeliveryFiles={vi.fn()}
-      onWorkspaceRefresh={vi.fn()}
       onOpenSettings={vi.fn()}
     />);
     expect(screen.getByText('项目推进事实尚未就绪')).toBeTruthy();
@@ -226,9 +221,7 @@ describe('频道项目推进工作区', () => {
       archived={false}
       state="no_permission"
       onBackToThread={vi.fn()}
-      onDelegateToAgent={vi.fn()}
       onViewDeliveryFiles={vi.fn()}
-      onWorkspaceRefresh={vi.fn()}
       onOpenSettings={vi.fn()}
     />);
     expect(screen.getByText('你没有查看该频道项目事实的权限')).toBeTruthy();
@@ -243,9 +236,7 @@ describe('频道项目推进工作区', () => {
       state="error"
       errorMessage="读取失败"
       onBackToThread={vi.fn()}
-      onDelegateToAgent={vi.fn()}
       onViewDeliveryFiles={vi.fn()}
-      onWorkspaceRefresh={vi.fn()}
       onOpenSettings={vi.fn()}
     />);
     expect(screen.getByText('读取失败')).toBeTruthy();

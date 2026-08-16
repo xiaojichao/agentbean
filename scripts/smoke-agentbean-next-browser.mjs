@@ -1777,8 +1777,16 @@ export async function exerciseWebUiTaskBusinessSmoke({
       suffix,
       timeoutMs,
     });
+    await exerciseWebUiChannelTaskSubviewSmoke({
+      page,
+      root,
+      teamPath,
+      webSocket,
+      session,
+      suffix,
+      timeoutMs,
+    });
   }
-  await exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs });
   return {
     title,
     status: targetStatus,
@@ -1815,6 +1823,7 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   suffix,
   timeoutMs,
 }) {
+  // 频道级子视图锁定（新版规则）：非默认频道只显示项目工作台；#all/私聊只显示普通任务。
   const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
     userId: session.user.id,
     teamId: session.team.id,
@@ -1826,41 +1835,90 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
     throw new Error(`Channel Tasks no-project smoke could not create its isolated channel: ${formatAck(channelAck)}`);
   }
 
+  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
+  await page.waitForFunction(
+    `(() => {
+      return document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
+        && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null
+        && document.querySelector('[data-smoke="channel-project-setup-prompt"], [data-smoke="channel-project-progress"]') !== null
+        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') === null;
+    })()
+    `,
+    'non-default channel locks the Tasks tab to the project workbench subview',
+    timeoutMs,
+  );
+
+  // tasksView=plain 深链在锁定 project 的频道回落到锁定视图（AC6：不 404、显示锁定视图）。
+  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
+  await page.waitForFunction(
+    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
+      && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null`,
+    'tasksView=plain deep link falls back to the locked project workbench',
+    timeoutMs,
+  );
+
+  // #all（默认频道）：锁定普通任务视图。
+  await page.navigate(new URL(`/${teamPath}/chat`, root).toString());
+  const clickedAll = await page.evaluateJson(`
+    (() => {
+      const candidates = Array.from(document.querySelectorAll('button'));
+      const button = candidates.find((candidate) => (candidate.textContent ?? '').trim() === 'all');
+      if (!(button instanceof HTMLElement)) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!clickedAll) throw new Error('Could not open the default #all channel from the sidebar');
+  await page.waitForFunction(
+    `window.location.pathname.includes('/channel/')`,
+    'default #all channel to open from the sidebar',
+    timeoutMs,
+  );
+  const allChannelId = await page.evaluateJson(`window.location.pathname.split('/channel/')[1] ?? ''`);
+  if (!allChannelId) throw new Error('Could not read the default #all channel id from the URL');
+
   const titles = [`普通任务甲 ${suffix}`, `普通任务乙 ${suffix}`];
   let firstTaskId = null;
   for (const title of titles) {
     const taskAck = await emitAck(webSocket, WEB_EVENTS.task.create, {
       userId: session.user.id,
       teamId: session.team.id,
-      channelId,
+      channelId: allChannelId,
       title,
     }, timeoutMs);
     if (taskAck?.ok !== true || typeof taskAck?.task?.id !== 'string') {
-      throw new Error(`Channel Tasks no-project smoke could not create ordinary Task "${title}": ${formatAck(taskAck)}`);
+      throw new Error(`Channel Tasks no-project smoke could not create ordinary Task "${title}" in #all: ${formatAck(taskAck)}`);
     }
     if (firstTaskId === null) firstTaskId = taskAck.task.id;
   }
 
-  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks`, root).toString());
+  const openedTasksTab = await page.evaluateJson(`
+    (() => {
+      const button = Array.from(document.querySelectorAll('button'))
+        .find((candidate) => candidate.textContent?.trim() === '任务');
+      if (!(button instanceof HTMLElement)) return false;
+      button.click();
+      return true;
+    })()
+  `);
+  if (!openedTasksTab) throw new Error('Could not open the Tasks tab in #all');
   await page.waitForFunction(
     `
     (() => {
       const titles = ${JSON.stringify(titles)};
-      const plainWorkspace = document.querySelector('[data-smoke="channel-plain-task-workspace"]');
       const taskList = document.querySelector('[data-smoke="channel-plain-task-list"]');
-      const params = new URLSearchParams(window.location.search);
-      return params.get('tasksView') === 'plain'
-        && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null
-        && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null
+      return document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null
+        && document.querySelector('[data-smoke="channel-tasks-view-project"]') === null
+        && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
         && document.querySelector('[data-smoke="channel-plain-secondary-label"]') !== null
         && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
+        && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('项目设置'))
+        && document.querySelector('[data-smoke="task-card-facts"]') === null
         && taskList !== null
-        && titles.every((title) => taskList.textContent?.includes(title))
-        && plainWorkspace?.textContent?.includes('未进入阶段流程的任务') === true
-        && document.querySelector('[data-smoke="task-card-facts"]') === null;
+        && titles.every((title) => taskList.textContent?.includes(title));
     })()
     `,
-    'no-stage channel defaults to ordinary Tasks, exposes setup guidance, and hides empty project facts',
+    'default #all channel locks the Tasks tab to the ordinary subview without project settings',
     timeoutMs,
   );
 
@@ -1885,78 +1943,64 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
   );
 
   // task=task:<taskId> 深链回落：清参数、不渲染侧边栏、留在任务页。
-  await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&task=task:${firstTaskId}`, root).toString());
+  await page.navigate(new URL(`/${teamPath}/channel/${allChannelId}?chatTab=tasks&task=task:${firstTaskId}`, root).toString());
   await page.waitForFunction(
     `!new URLSearchParams(window.location.search).has('task')
       && document.querySelector('[data-smoke="chat-task-detail"]') === null
-      && document.querySelector('[data-smoke="channel-plain-task-workspace"], [data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') !== null`,
-    'task-only deep link falls back to the Tasks surface without the retired detail panel',
-    timeoutMs,
-  );
-
-  await page.click('[data-smoke="channel-tasks-view-project"]');
-  await page.waitForFunction(
-    `new URLSearchParams(window.location.search).get('tasksView') === 'project'
-      && !new URLSearchParams(window.location.search).has('task')
-      && document.querySelector('[data-smoke="chat-task-detail"]') === null
-      && document.querySelector('[data-smoke="channel-project-setup-prompt"]') !== null`,
-    'switching to project progress keeps the Tasks surface free of the retired detail panel',
+      && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null`,
+    'task-only deep link falls back to the locked ordinary Tasks surface without the retired detail panel',
     timeoutMs,
   );
 }
 
-async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, channelId, timeoutMs }) {
+async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webSocket, session, suffix, timeoutMs }) {
+  // 频道级锁定：公共频道只渲染项目工作台；旧 plain/project 切换与前进后退能力随锁定退役。
+  // 注意不能用 session 默认频道（#all 锁普通任务）；自建公共频道验证锁定。
+  const channelAck = await emitAck(webSocket, WEB_EVENTS.channel.create, {
+    userId: session.user.id,
+    teamId: session.team.id,
+    name: `subview-lock-${suffix}`,
+    visibility: 'public',
+  }, timeoutMs);
+  const channelId = readNestedString(channelAck, ['channel', 'id']);
+  if (!channelId) {
+    throw new Error(`Channel Tasks subview smoke could not create its isolated channel: ${formatAck(channelAck)}`);
+  }
   await page.navigate(new URL(`/${teamPath}/channel/${channelId}?chatTab=tasks&tasksView=plain`, root).toString());
   await page.waitForFunction(
-    `document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
-    'channel Tasks restores the plain subview from URL',
-    timeoutMs,
-  );
-  await page.click('[data-smoke="channel-tasks-view-project"]');
-  await page.waitForFunction(
-    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
-    'channel Tasks switches to project progress and records it in URL',
-    timeoutMs,
-  );
-  await page.evaluateJson('history.back(); true');
-  await page.waitForFunction(
-    `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
-    'channel Tasks browser back restores the previous subview',
-    timeoutMs,
-  );
-  await page.evaluateJson('history.forward(); true');
-  await page.waitForFunction(
-    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
-    'channel Tasks browser forward restores the selected subview',
+    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null
+      && document.querySelector('[data-smoke="channel-tasks-view-plain"]') === null`,
+    'channel Tasks stays locked to the project workbench regardless of the tasksView URL param',
     timeoutMs,
   );
   await page.reload();
   await page.waitForFunction(
-    `window.location.search.includes('tasksView=project') && document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
-    'channel Tasks preserves the project subview after refresh',
+    `document.querySelector('[data-smoke="channel-tasks-view-project"][aria-selected="true"]') !== null`,
+    'channel Tasks preserves the locked project subview after refresh',
     timeoutMs,
   );
 
   // #1179：项目设置独立于默认推进面；打开后可见配置面，推进面本身不混排创建阶段/依赖表单。
+  // 自建频道无项目数据时渲染 setup prompt（其「配置首个项目阶段」同为设置入口），两种形态都接受。
   await page.waitForFunction(
     `
     (() => {
-      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
-      if (!progress) return false;
-      const text = progress.textContent ?? '';
-      const settingsButton = Array.from(progress.querySelectorAll('button'))
+      const surface = document.querySelector('[data-smoke="channel-project-progress"]')
+        ?? document.querySelector('[data-smoke="channel-project-setup-prompt"]');
+      if (!surface) return false;
+      const text = surface.textContent ?? '';
+      const settingsButton = Array.from(surface.querySelectorAll('button'))
         .find((candidate) => {
           const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
         });
-      return !text.includes('创建首个项目阶段')
-        && !text.includes('阶段依赖')
+      return !text.includes('阶段依赖')
         && !text.includes('添加依赖')
         && Boolean(settingsButton)
         && document.body.querySelector('[data-smoke="channel-project-settings-dialog"]') === null;
     })()
     `,
-    'project progress view keeps config forms out of the runtime surface',
+    'project surface keeps config forms out of the runtime view',
     timeoutMs,
   );
   const openedSettings = await page.evaluateJson(`
@@ -1964,14 +2008,14 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, chan
       const button = Array.from(document.querySelectorAll('button'))
         .find((candidate) => {
           const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
         });
       if (!button) return false;
       button.click();
       return true;
     })()
   `);
-  if (!openedSettings) throw new Error('Could not open channel project settings from project progress');
+  if (!openedSettings) throw new Error('Could not open channel project settings from the project surface');
   await page.waitForFunction(
     `document.querySelector('[data-smoke="channel-project-settings-dialog"]') !== null
       && document.querySelector('[data-smoke="channel-project-settings"]') !== null`,
@@ -1985,12 +2029,6 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, chan
     timeoutMs,
   );
 
-  await page.click('[data-smoke="channel-tasks-view-plain"]');
-  await page.waitForFunction(
-    `window.location.search.includes('tasksView=plain') && document.querySelector('[data-smoke="channel-tasks-view-plain"][aria-selected="true"]') !== null`,
-    'channel Tasks can return to plain tasks',
-    timeoutMs,
-  );
 }
 
 async function seedPhase2BrowserTask({ baseUrl, webSocket, session, ioFactory, suffix, timeoutMs }) {
@@ -2938,36 +2976,31 @@ export async function exerciseWebUiProjectCollaborationSmoke({
     `project Stage "${reviewStageName}" to render from the Server projection`,
     timeoutMs,
   );
-  // 原型对齐（#1222 后续）：审核动作内嵌待审核卡片——卡片不再提供打开详情侧边栏的入口，
-  // 面板按钮只消费 Server availableActions 投影。
+  // 新版原型（#1194）：任务卡片只做状态摘要和入口，不直接审核文件——三入口按钮。
   await page.waitForFunction(
     `
     (() => {
       const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
         .find((candidate) => candidate.dataset.stageId === ${JSON.stringify(reviewStage.id)});
       if (!card) return false;
-      const panel = card.querySelector('[data-smoke="task-card-review-panel"]');
-      const retired = card.querySelector('button')?.textContent ?? '';
-      return Boolean(panel && panel.textContent.includes('通过审核'))
-        && !retired.includes('查看交付文件与审核');
+      const panel = card.querySelector('[data-smoke="task-card-review-entry"]');
+      if (!panel) return false;
+      const buttons = Array.from(panel.querySelectorAll('[data-smoke="task-card-review-entry-action"]'))
+        .map((button) => button.getAttribute('data-action'));
+      return panel.textContent.includes('任务卡片只做状态摘要和入口，不直接审核文件')
+        && buttons.includes('view-files') && buttons.includes('review-files') && buttons.includes('open-thread')
+        && !panel.textContent.includes('通过并设为最终版');
     })()
     `,
-    `review card to render its inline review panel for package ${deliveryReview.packageId}`,
+    `review card to render its entry panel with the three prototype buttons for package ${deliveryReview.packageId}`,
     timeoutMs,
   );
 
-  // #1200：Task 不再直接修改文件审核事实；Task/Files/Thread 共用同一个预览审核弹窗。
-  // 任务页入口收敛后，预览审核从 Files 逻辑产物视图进入。
-  await page.click('[data-smoke="channel-files-tab"]');
-  await page.waitForFunction(
-    `Boolean(document.querySelector('[data-smoke="project-files-board"]') && document.querySelector('[data-smoke="files-row-preview-edit"]'))`,
-    'Files to render the focus package row with its preview entry',
-    timeoutMs,
-  );
-  await page.click('[data-smoke="files-row-preview-edit"]');
+  // #1200：Task 不再直接修改文件审核事实；审核交付文件打开共享预览/编辑浮窗（初始选中首个待处理版本）。
+  await page.click('[data-smoke="task-card-review-entry-action"][data-action="review-files"]');
   await page.waitForFunction(
     `Boolean(document.querySelector('[data-smoke="output-package-preview-modal"]') && document.querySelector('[data-smoke="package-preview-approve"]'))`,
-    'shared package preview modal to open from Files',
+    'shared package preview modal to open from the review card entry button',
     timeoutMs,
   );
   await page.click('[data-smoke="package-preview-approve"]');

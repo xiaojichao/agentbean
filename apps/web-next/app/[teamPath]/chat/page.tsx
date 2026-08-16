@@ -34,6 +34,7 @@ import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/componen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
+import type { TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import {
   ChannelTaskCard,
   ChannelTaskFactSummary,
@@ -1344,6 +1345,10 @@ export default function ChatPage() {
   }, [activeChannel, openArtifactRevision]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
+  // 频道级子视图锁定：#all 与私聊只显示普通任务；其余频道只显示项目工作台。
+  const lockedTasksSubview: ChannelTasksSubview | null = !activeChannel
+    ? null
+    : isDm || isDefaultPublicChannel ? 'plain' : 'project';
   const canManageActiveChannel = Boolean(
     activeChannelObj &&
     currentUser &&
@@ -2280,20 +2285,6 @@ export default function ChatPage() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   }, [openThread, switchTab, visibleMessages]);
 
-  // 原型进行中卡「交给智能体处理」：定位讨论串并预填 @ 触发智能体选择（§5.1/§8.2）。
-  const delegateToAgentFromTaskCard = useCallback((taskId: string) => {
-    const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
-    if (taskMessage) {
-      openThread(taskMessage.id);
-      setThreadInput('@');
-      setTimeout(() => threadTextareaRef.current?.focus(), 0);
-      return;
-    }
-    switchTab('chat');
-    setInput('@');
-    setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [openThread, switchTab, visibleMessages]);
-
   // 原型已结束卡「查看交付与 final」：交付明细在 Files 逻辑产物视图。
   const viewDeliveryFilesFromTaskCard = useCallback(() => {
     switchTab('files');
@@ -2334,6 +2325,28 @@ export default function ChatPage() {
       ...(readOnly ? { readOnly: true } : {}),
     });
   }, [activeChannel, activeChannelObj?.archivedAt]);
+
+  // 新版原型待审核卡「审核交付文件」：焦点包投影组 OutputPackageMeta 后打开共享预览/编辑浮窗。
+  const openReviewFilesFromProjection = useCallback((projection: TaskCardReviewProjection, versionId: string | undefined) => {
+    const pkg = projection.package;
+    openPackagePreviewModal({
+      kind: 'output-package',
+      packageId: pkg.packageId,
+      ...(projection.threadRootMessageId ? { threadRootMessageId: projection.threadRootMessageId } : {}),
+      taskId: pkg.taskId,
+      agentId: pkg.agentId,
+      memberCount: pkg.memberCount,
+      members: pkg.members.map((member) => ({
+        shortLabel: member.shortLabel,
+        filename: member.filename,
+        artifactVersionId: member.artifactVersionId,
+        collectionId: member.collectionId,
+      })),
+      workspaceRevisionId: pkg.workspaceRevisionId,
+      publishId: pkg.publishId,
+      createdAt: pkg.createdAt,
+    }, versionId);
+  }, [openPackagePreviewModal]);
 
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
@@ -2952,6 +2965,7 @@ export default function ChatPage() {
               loading={tasksLoading}
               loadError={tasksLoadError}
               requestedSubview={tasksViewParam}
+              lockedSubview={lockedTasksSubview}
               selectedStageId={selectedStageId}
               archived={Boolean(activeChannelObj?.archivedAt)}
               view={taskView}
@@ -2985,9 +2999,8 @@ export default function ChatPage() {
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
               onOpenTaskDetail={openTaskDetailById}
               onBackToThread={backToThreadFromTaskCard}
-              onDelegateToAgent={delegateToAgentFromTaskCard}
+              onReviewDeliveryFiles={openReviewFilesFromProjection}
               onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
-              onWorkspaceRefresh={() => { void loadTasks(); }}
               onSubviewChange={selectTasksSubview}
               onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
@@ -3760,6 +3773,7 @@ function ConversationTasks({
   loading,
   loadError,
   requestedSubview,
+  lockedSubview,
   selectedStageId,
   archived,
   view,
@@ -3789,9 +3803,8 @@ function ConversationTasks({
   onTaskUpdate,
   onOpenTaskDetail,
   onBackToThread,
-  onDelegateToAgent,
+  onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onWorkspaceRefresh,
   onSubviewChange,
   onResolveDefaultSubview,
 }: {
@@ -3801,6 +3814,8 @@ function ConversationTasks({
   loading: boolean;
   loadError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
   requestedSubview?: ChannelTasksSubview;
+  /** 频道级锁定子视图：#all/私聊→plain，其余频道→project；锁定时优先于 URL 参数。 */
+  lockedSubview?: ChannelTasksSubview | null;
   selectedStageId: string | null;
   archived: boolean;
   view: TaskViewMode;
@@ -3833,11 +3848,10 @@ function ConversationTasks({
   /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
   onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
   /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
-  onDelegateToAgent: (taskId: string) => void;
+  onReviewDeliveryFiles: (projection: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
   /** 审核动作提交成功后刷新频道任务工作区投影。 */
-  onWorkspaceRefresh: () => void;
   onSubviewChange: (view: ChannelTasksSubview) => void;
   onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
@@ -3922,18 +3936,18 @@ function ConversationTasks({
   ).length ?? 0;
   const hasProjectWork = hasProjectStages || hasManagedEntries;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
-  const subview = requestedSubview
+  const subview = lockedSubview ?? (requestedSubview
     ?? ((loading && !workspace) || loadError || projectOverviewError
       ? 'project'
-      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries));
+      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries)));
   useEffect(() => {
-    if (projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
+    if (lockedSubview || projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
     onResolveDefaultSubview(resolveChannelTasksSubview(
       undefined,
       (projectOverview?.stages.length ?? 0) > 0,
       workspace?.entries.some((entry) => channelTaskEntrySubview(entry) === 'project') ?? false,
     ));
-  }, [loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
+  }, [lockedSubview, loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
 
   const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, workspaceReadOnly
     ? {
@@ -4100,6 +4114,7 @@ function ConversationTasks({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       <div className="flex min-h-16 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-neutral-200 bg-white px-4" role="tablist" aria-label="频道任务子视图">
+        {lockedSubview !== 'plain' ? (
         <button
           type="button"
           role="tab"
@@ -4111,6 +4126,8 @@ function ConversationTasks({
           <span className="text-xs font-semibold">项目工作台</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">阶段推进 · 交付审核 · final</span>
         </button>
+        ) : null}
+        {lockedSubview !== 'project' ? (
         <button
           type="button"
           role="tab"
@@ -4122,8 +4139,9 @@ function ConversationTasks({
           <span className="text-xs font-semibold">普通任务</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">辅助状态 · 负责人视图</span>
         </button>
+        ) : null}
         <div className="min-w-3 flex-1" />
-        {subview === 'plain' ? (
+        {subview === 'plain' && lockedSubview !== 'plain' ? (
           <button
             type="button"
             onClick={() => setShowProjectSettings(true)}
@@ -4146,9 +4164,8 @@ function ConversationTasks({
           errorMessage={projectProgressErrorMessage}
           archived={workspaceReadOnly}
           onBackToThread={onBackToThread}
-          onDelegateToAgent={onDelegateToAgent}
+          onReviewDeliveryFiles={onReviewDeliveryFiles}
           onViewDeliveryFiles={onViewDeliveryFiles}
-          onWorkspaceRefresh={onWorkspaceRefresh}
           onOpenSettings={() => setShowProjectSettings(true)}
         />
       ) : loadError ? (

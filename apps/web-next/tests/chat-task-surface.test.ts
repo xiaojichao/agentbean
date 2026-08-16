@@ -182,4 +182,23 @@ describe('chat task surface', () => {
     expect(progressBranch).not.toContain('onCreateEdge');
     expect(progressBranch).not.toContain('createInitialProjectStage');
   });
+
+  test('频道级子视图锁定：#all/私聊只渲染普通任务，其余频道只渲染项目工作台', () => {
+    const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
+    // 锁定派生：isDm 或默认频道 #all → plain；其余频道 → project。
+    const lockStart = source.indexOf('const lockedTasksSubview');
+    expect(lockStart).toBeGreaterThan(-1);
+    const lockBlock = source.slice(lockStart, source.indexOf(';', lockStart) + 1);
+    expect(lockBlock).toContain("isDm || isDefaultPublicChannel ? 'plain' : 'project'");
+    // 锁定优先于 URL tasksView 参数与默认解析。
+    expect(source).toContain('const subview = lockedSubview ?? (requestedSubview');
+    expect(source).toContain('if (lockedSubview || projectOverview === undefined');
+    // tablist 只渲染未锁定一侧；#all/私聊（锁 plain）不暴露项目设置入口。
+    const tabsStart = source.indexOf('role="tablist" aria-label="频道任务子视图"');
+    const tabsEnd = source.indexOf("{subview === 'project' ? (", tabsStart);
+    const tabsBlock = source.slice(tabsStart, tabsEnd);
+    expect(tabsBlock).toContain("{lockedSubview !== 'plain' ? (");
+    expect(tabsBlock).toContain("{lockedSubview !== 'project' ? (");
+    expect(tabsBlock).toContain("{subview === 'plain' && lockedSubview !== 'plain' ? (");
+  });
 });
