@@ -1981,25 +1981,26 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
   );
 
   // #1179：项目设置独立于默认推进面；打开后可见配置面，推进面本身不混排创建阶段/依赖表单。
+  // 自建频道无项目数据时渲染 setup prompt（其「配置首个项目阶段」同为设置入口），两种形态都接受。
   await page.waitForFunction(
     `
     (() => {
-      const progress = document.querySelector('[data-smoke="channel-project-progress"]');
-      if (!progress) return false;
-      const text = progress.textContent ?? '';
-      const settingsButton = Array.from(progress.querySelectorAll('button'))
+      const surface = document.querySelector('[data-smoke="channel-project-progress"]')
+        ?? document.querySelector('[data-smoke="channel-project-setup-prompt"]');
+      if (!surface) return false;
+      const text = surface.textContent ?? '';
+      const settingsButton = Array.from(surface.querySelectorAll('button'))
         .find((candidate) => {
           const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
         });
-      return !text.includes('创建首个项目阶段')
-        && !text.includes('阶段依赖')
+      return !text.includes('阶段依赖')
         && !text.includes('添加依赖')
         && Boolean(settingsButton)
         && document.body.querySelector('[data-smoke="channel-project-settings-dialog"]') === null;
     })()
     `,
-    'project progress view keeps config forms out of the runtime surface',
+    'project surface keeps config forms out of the runtime view',
     timeoutMs,
   );
   const openedSettings = await page.evaluateJson(`
@@ -2007,14 +2008,14 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, webS
       const button = Array.from(document.querySelectorAll('button'))
         .find((candidate) => {
           const label = candidate.textContent?.trim() ?? '';
-          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置' || label === '配置首个项目阶段';
         });
       if (!button) return false;
       button.click();
       return true;
     })()
   `);
-  if (!openedSettings) throw new Error('Could not open channel project settings from project progress');
+  if (!openedSettings) throw new Error('Could not open channel project settings from the project surface');
   await page.waitForFunction(
     `document.querySelector('[data-smoke="channel-project-settings-dialog"]') !== null
       && document.querySelector('[data-smoke="channel-project-settings"]') !== null`,
