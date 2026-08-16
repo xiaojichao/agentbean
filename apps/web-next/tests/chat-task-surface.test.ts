@@ -149,9 +149,10 @@ describe('chat task surface', () => {
     // 微调对齐原型：子视图 tablist 整行移除（频道级锁定后无切换 UI）。
     expect(source).not.toContain('频道任务子视图');
     expect(source).not.toContain('阶段推进 · 交付审核 · final');
-    expect(source).toContain('辅助视图：普通任务状态 + 负责人');
+    // 微调：plain 视图不再渲染辅助视图标签与项目责任说明。
+    expect(source).not.toContain('辅助视图：普通任务状态 + 负责人');
     expect(source).toContain('未进入阶段流程的任务');
-    expect(source).toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
+    expect(source).not.toContain('项目责任、审核和 final 以项目工作台的 Server 投影为准');
     expect(source).toContain('overflow-x-auto rounded-lg');
     expect(source).toContain('min-w-[880px] w-full');
   });

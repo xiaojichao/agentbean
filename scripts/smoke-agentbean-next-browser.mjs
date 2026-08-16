@@ -1910,7 +1910,6 @@ export async function exerciseWebUiChannelNoProjectFactsSmoke({
       return document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
         && document.querySelector('[data-smoke="channel-project-progress"], [data-smoke="channel-project-setup-prompt"]') === null
         && document.querySelector('[data-smoke="channel-plain-task-workspace"]') !== null
-        && document.querySelector('[data-smoke="channel-plain-secondary-label"]') !== null
         && document.querySelector('[title="列表"]')?.className.includes('bg-amber-300') === true
         && !Array.from(document.querySelectorAll('button')).some((button) => (button.textContent ?? '').trim().includes('项目设置'))
         && document.querySelector('[data-smoke="task-card-facts"]') === null
