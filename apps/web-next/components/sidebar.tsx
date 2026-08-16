@@ -88,17 +88,17 @@ export function Sidebar() {
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/');
 
   return (
-    <aside className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50">
+    <aside className="flex w-14 shrink-0 flex-col border-r border-neutral-200 bg-neutral-50 md:w-52" data-smoke="app-sidebar">
       {/* Brand */}
-      <div className="flex h-14 items-center gap-2.5 border-b border-neutral-200 px-4">
+      <div className="flex h-14 items-center justify-center gap-2.5 border-b border-neutral-200 px-2 md:justify-start md:px-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-neutral-900 text-white">
           <Bot size={16} />
         </div>
-        <span className="text-sm font-semibold tracking-tight">AgentBean</span>
+        <span className="hidden text-sm font-semibold tracking-tight md:inline">AgentBean</span>
       </div>
 
       {/* Team Switcher + Add */}
-      <div className="px-3 py-2 flex items-center gap-1.5">
+      <div className="hidden items-center gap-1.5 px-3 py-2 md:flex">
         <div className="relative flex-1 min-w-0">
           <button
             onClick={() => { setShowTeams((v) => !v); }}
@@ -167,11 +167,11 @@ export function Sidebar() {
         {isAdmin && piReadiness?.status === 'attention_required' && (
           <Link
             href={`/${np}/dashboard/pi`}
-            className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100"
+            className="flex items-center justify-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 md:justify-start"
             data-smoke="pi-configuration-readiness-alert"
           >
             <TriangleAlert size={14} className="shrink-0" />
-            <span>PI 需要处理</span>
+            <span className="hidden md:inline">PI 需要处理</span>
           </Link>
         )}
         <NavItem href={`/${np}/settings`} icon={<Settings size={16} />} label="设置" active={isActive(`/${np}/settings`)} />
@@ -203,12 +203,13 @@ function NavItem({ href, icon, label, active }: { href: string; icon: React.Reac
   return (
     <Link
       href={href}
+      title={label}
       className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
         active ? 'bg-neutral-200/70 font-medium text-neutral-900' : 'text-neutral-600 hover:bg-neutral-100'
-      }`}
+      } justify-center md:justify-start`}
     >
       {icon}
-      {label}
+      <span className="hidden md:inline">{label}</span>
     </Link>
   );
 }

@@ -2536,9 +2536,12 @@ export default function ChatPage() {
   };
 
   return (
-    <div ref={chatContainerRef} className="flex flex-1 overflow-hidden">
+    <div ref={chatContainerRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]">
+      <div
+        className={`${activeChannel ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
+        data-smoke="conversation-sidebar"
+      >
         {/* Chat label */}
         <div className="flex h-14 items-center border-b border-neutral-300/40 px-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">聊天</div>
 
@@ -2702,6 +2705,19 @@ export default function ChatPage() {
         {activeChannel && (
           <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveChannel(null);
+                  router.push(`/${np}/chat`);
+                }}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 md:hidden"
+                title="返回会话列表"
+                aria-label="返回会话列表"
+                data-smoke="channel-mobile-list-back"
+              >
+                <ChevronRight size={16} className="rotate-180" />
+              </button>
               {isDm ? (
                 <>
                   <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900" title="查看智能体资料">
