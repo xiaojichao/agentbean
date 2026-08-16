@@ -96,6 +96,15 @@ output-package 卡片有两种载体:独立 system 消息(commit 时创建,兜�
 
 ChatBubble 内嵌渲染:`outputPackageFromMeta(msg.meta) ?? inlineOutputPackageFromMeta(msg.meta)`——顶层 meta 与嵌套 `outputPackageCard` 都要认。
 
+## 坑 7:卡片级审核动作只消费 Server 投影,批量语义按命令能力选型(#1222 后续/原型对齐)
+
+任务卡片内嵌审核动作（`components/TaskCardReviewPanel.tsx`）的两条硬边界：
+
+- **按钮可见性只来自 `getOutputPackage` 返回的 `availableActions`**（成员级 `PackageMemberAvailableActionsDto.actions`）。前端不得从 reviewState/角色/状态推断「可审核」——投影空 = 按钮不渲染，而不是禁用。这沿用 #1061 AC11「客户端只渲染 Server 给的动作」。
+- **批量动作选命令按原子性能力**：`submit-package-artifact-reviews`（#1199）是全有或全无的批量决策，三种 decision（approved/changes_requested/rejected）可用；**没有批量 finalize 命令**。多成员「通过并设为最终版」必须逐成员走 `submit-package-review-and-finalize`（#1061 单成员原子），串行提交并透明汇报 N/M——不要伪造整包原子性，也不要为此新增批量 Server 命令（final 是 per-collection 指针）。
+
+另外：`getOutputPackage` 客户端响应带 `threadRootMessageId`（Server 从 package provenance 解析），「回到讨论串」类导航直接用它，不需要从消息缓存反查。
+
 ## 佐证文件一览
 
 | 坑 | 主佐证 |
@@ -105,3 +114,4 @@ ChatBubble 内嵌渲染:`outputPackageFromMeta(msg.meta) ?? inlineOutputPackageF
 | 3 dispatch hint | `lib/dispatch-failure.ts:36-58`（docblock `:43-47`） |
 | 4 tsconfig 排除 | `tsconfig.json:43-47`、`tsconfig.lib.json:13`、`src/index.ts` |
 | 5 teamId 可选 | `lib/schema.ts:74-76` |
+| 7 卡片动作投影 | `components/TaskCardReviewPanel.tsx`、`lib/package-review-actions.ts`（`submitPackageBatchReview`/`submitPackageReviewAndFinalizeMember`） |
