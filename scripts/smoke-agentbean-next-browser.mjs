@@ -1942,9 +1942,15 @@ async function exerciseWebUiChannelTaskSubviewSmoke({ page, root, teamPath, chan
       const progress = document.querySelector('[data-smoke="channel-project-progress"]');
       if (!progress) return false;
       const text = progress.textContent ?? '';
+      const settingsButton = Array.from(progress.querySelectorAll('button'))
+        .find((candidate) => {
+          const label = candidate.textContent?.trim() ?? '';
+          return label === '项目设置 / 阶段配置' || label === '查看项目设置';
+        });
       return !text.includes('创建首个项目阶段')
         && !text.includes('阶段依赖')
         && !text.includes('添加依赖')
+        && Boolean(settingsButton)
         && document.body.querySelector('[data-smoke="channel-project-settings-dialog"]') === null;
     })()
     `,
@@ -2936,7 +2942,9 @@ export async function exerciseWebUiProjectCollaborationSmoke({
       const card = Array.from(document.querySelectorAll('[data-smoke="channel-project-stage-card"]'))
         .find((candidate) => candidate.dataset.stageId === stageId);
       if (!card) return false;
-      card.click();
+      const button = card.querySelector('button');
+      if (!(button instanceof HTMLButtonElement)) return false;
+      button.click();
       return true;
     })()
   `);
