@@ -2,6 +2,18 @@
 import type { Release } from './changelog';
 export const releases: Release[] = [
   {
+    "version": "Daily 2026-08-16",
+    "date": "2026-08-16",
+    "sections": [
+      {
+        "type": "改进",
+        "items": [
+          "当日无面向用户的代码变更，服务保持稳定运行。"
+        ]
+      }
+    ]
+  },
+  {
     "version": "Daily 2026-08-15",
     "date": "2026-08-15",
     "sections": [
