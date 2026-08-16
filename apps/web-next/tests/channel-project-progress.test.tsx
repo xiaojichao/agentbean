@@ -9,28 +9,47 @@ import { ChannelProjectProgress } from '../components/ChannelProjectProgress';
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
+// review lane 卡片挂载 TaskCardReviewPanel 会拉焦点包投影；默认投影不可得（面板不渲染）。
+vi.mock('@/lib/socket', () => ({
+  projectEvents: () => ({
+    getOutputPackage: vi.fn().mockResolvedValue({ ok: false, error: 'NOT_FOUND' }),
+    onUpdated: () => () => {},
+    onArtifactsUpdated: () => () => {},
+  }),
+}));
+
 afterEach(cleanup);
 
-describe('频道项目推进工作区', () => {
-  test('阶段卡片展示 Server 阶段、责任、交付与审核事实并保持选中态', () => {
-    const onOpenStage = vi.fn();
-    render(
-      <ChannelProjectProgress
-        overview={overview()}
-        workspace={workspace()}
-        participants={participants}
-        currentUserId="reviewer-1"
-        selectedStageId="stage-1"
-        state="ready"
-        archived={false}
-        onOpenStage={onOpenStage}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+function renderProgress(props: Partial<Parameters<typeof ChannelProjectProgress>[0]> = {}) {
+  const callbacks = {
+    channelId: 'channel-1',
+    onBackToThread: vi.fn(),
+    onDelegateToAgent: vi.fn(),
+    onViewDeliveryFiles: vi.fn(),
+    onWorkspaceRefresh: vi.fn(),
+  };
+  render(
+    <ChannelProjectProgress
+      overview={overview()}
+      workspace={workspace()}
+      participants={participants}
+      currentUserId="reviewer-1"
+      state="ready"
+      archived={false}
+      onOpenSettings={vi.fn()}
+      {...callbacks}
+      {...props}
+    />,
+  );
+  return callbacks;
+}
 
-    const openButton = screen.getByRole('button', { name: /打开阶段 发布准备/ });
-    const card = openButton.closest('article');
-    expect(openButton.getAttribute('aria-current')).toBe('true');
+describe('频道项目推进工作区', () => {
+  test('阶段卡片展示 Server 阶段、责任、交付与审核事实，进行中卡提供交给智能体处理入口', () => {
+    const callbacks = renderProgress({ selectedStageId: 'stage-1' });
+
+    const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
+    expect(card?.getAttribute('aria-current')).toBe('true');
     expect(card?.textContent).toContain('形成可验收的发布方案');
     expect(card?.textContent).toContain('任务状态：进行中');
     expect(card?.textContent).toContain('Agent「执行 Agent」正在执行');
@@ -42,12 +61,14 @@ describe('频道项目推进工作区', () => {
     expect(document.querySelector('[data-smoke="channel-project-lanes"]')).toBeTruthy();
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('暂无待审核交付');
-    expect(card?.textContent).toContain('查看执行进度');
-    fireEvent.click(openButton);
-    expect(onOpenStage).toHaveBeenCalledWith('stage-1', 'task-1');
+    // 原型：进行中卡唯一动作是「交给智能体处理」；不再打开任务详情侧边栏。
+    const delegateButton = screen.getByRole('button', { name: '交给智能体处理' });
+    fireEvent.click(delegateButton);
+    expect(callbacks.onDelegateToAgent).toHaveBeenCalledWith('task-1');
+    expect(card?.textContent).not.toContain('查看执行进度');
   });
 
-  test('待审核卡片按原型展示结构化事实、交付摘要、审核入口与时间线', () => {
+  test('待审核卡片展示结构化事实与交付摘要，不再提供打开侧边栏的入口按钮', () => {
     const baseOverview = overview();
     const reviewStage = {
       ...baseOverview.stages[0]!,
@@ -72,34 +93,26 @@ describe('频道项目推进工作区', () => {
       },
       review: { reviewerIds: ['reviewer-1'] },
     };
-    const onOpenStage = vi.fn();
 
-    render(
-      <ChannelProjectProgress
-        overview={{ ...baseOverview, stages: [reviewStage] }}
-        workspace={{ ...workspace(), entries: [reviewEntry] }}
-        participants={participants}
-        currentUserId="reviewer-1"
-        selectedStageId="stage-review"
-        state="ready"
-        archived={false}
-        onOpenStage={onOpenStage}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({
+      overview: { ...baseOverview, stages: [reviewStage] },
+      workspace: { ...workspace(), entries: [reviewEntry] },
+      selectedStageId: 'stage-review',
+    });
 
     const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
+    expect(card?.getAttribute('aria-current')).toBe('true');
     expect(card?.textContent).toContain('阶段任务 · 审核中');
     expect(card?.textContent).toContain('负责人等待成员审核交付');
     expect(card?.textContent).toContain('建议审核人审核人');
     expect(card?.textContent).toContain('待审核输出');
     expect(card?.textContent).toContain('文件审核 1/3（待补齐）');
-    expect(card?.textContent).toContain('任务卡片只做状态摘要和入口');
     expect(card?.textContent).toContain('当前状态：待审核');
     expect(card?.textContent).not.toContain('Agent 已形成');
-
-    fireEvent.click(screen.getByRole('button', { name: '打开阶段 交付审核' }));
-    expect(onOpenStage).toHaveBeenCalledWith('stage-review', 'task-review');
+    // 原型对齐：审核动作内嵌卡片；「查看交付文件与审核」侧边栏入口与提示语移除。
+    expect(card?.textContent).not.toContain('查看交付文件与审核');
+    expect(card?.textContent).not.toContain('任务卡片只做状态摘要和入口');
+    expect(document.querySelector('[data-smoke="task-card-review-panel"]')).toBeNull();
   });
 
   test('零个必需文件时将文件审核展示为不适用', () => {
@@ -125,48 +138,31 @@ describe('频道项目推进工作区', () => {
       review: { reviewerIds: ['reviewer-1'] },
     };
 
-    render(
-      <ChannelProjectProgress
-        overview={{ ...baseOverview, stages: [reviewStage] }}
-        workspace={{ ...workspace(), entries: [reviewEntry] }}
-        participants={participants}
-        currentUserId="reviewer-1"
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({
+      overview: { ...baseOverview, stages: [reviewStage] },
+      workspace: { ...workspace(), entries: [reviewEntry] },
+    });
 
     const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
     expect(card?.textContent).toContain('文件审核不适用（0 个必需文件）');
-    expect(card?.textContent).toContain('文件审核不适用；仍需在交付工作台单独确认本次交付');
     expect(card?.textContent).not.toContain('文件审核尚未补齐');
   });
 
   test('支持创建者、责任焦点、建议/实际审核人与待我审核筛选', () => {
-    render(
-      <ChannelProjectProgress
-        overview={overview()}
-        workspace={workspace({ includeSecond: true })}
-        participants={participants}
-        currentUserId="reviewer-1"
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({ workspace: workspace({ includeSecond: true }) });
+
+    const activeLane = () => document.querySelector('[data-smoke="channel-project-lane-active"]')!;
 
     fireEvent.change(screen.getByLabelText('项目任务创建者'), { target: { value: 'creator-2' } });
-    expect(screen.queryByRole('button', { name: /打开阶段 发布准备/ })).toBeNull();
+    expect(activeLane().textContent).not.toContain('发布准备');
     fireEvent.change(screen.getByLabelText('项目任务创建者'), { target: { value: 'all' } });
+    expect(activeLane().textContent).toContain('发布准备');
 
     fireEvent.change(screen.getByLabelText('项目任务责任焦点'), { target: { value: 'agent-1' } });
-    expect(screen.getByRole('button', { name: /打开阶段 发布准备/ })).toBeTruthy();
+    expect(activeLane().textContent).toContain('发布准备');
 
     fireEvent.change(screen.getByLabelText('项目任务审核人'), { target: { value: 'actual:reviewer-1' } });
-    expect(screen.getByRole('button', { name: /打开阶段 发布准备/ })).toBeTruthy();
+    expect(activeLane().textContent).toContain('发布准备');
 
     fireEvent.change(screen.getByLabelText('项目任务审核人'), { target: { value: 'pending-me' } });
     expect(screen.getByText('当前筛选下没有项目任务')).toBeTruthy();
@@ -178,62 +174,86 @@ describe('频道项目推进工作区', () => {
       ...current.entries[0]!,
       delivery: { ...current.entries[0]!.delivery, focusReviewState: 'pending' as const },
     };
-    render(
-      <ChannelProjectProgress
-        overview={overview()}
-        workspace={{ ...current, entries: [historicalReviewWithPendingDelivery, current.entries[1]!] }}
-        participants={participants}
-        currentUserId="reviewer-1"
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({
+      workspace: { ...current, entries: [historicalReviewWithPendingDelivery, current.entries[1]!] },
+    });
 
     fireEvent.change(screen.getByLabelText('项目任务审核人'), { target: { value: 'pending-me' } });
-    expect(screen.getByRole('button', { name: /打开阶段 发布准备/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /打开受管任务/ })).toBeNull();
+    const activeLane = document.querySelector('[data-smoke="channel-project-lane-active"]');
+    expect(activeLane?.textContent).toContain('发布准备');
+    expect(activeLane?.textContent).not.toContain('managed-2');
   });
 
   test('准确区分 loading、not_ready、无权限和错误', () => {
-    const props = {
-      overview: null,
-      workspace: null,
-      participants,
-      currentUserId: 'reviewer-1',
-      archived: false,
-      onOpenStage: vi.fn(),
-      onOpenSettings: vi.fn(),
-    } as const;
-    const { rerender } = render(<ChannelProjectProgress {...props} state="loading" />);
+    const { rerender } = render(<ChannelProjectProgress
+      overview={null}
+      workspace={null}
+      channelId="channel-1"
+      participants={participants}
+      currentUserId="reviewer-1"
+      archived={false}
+      state="loading"
+      onBackToThread={vi.fn()}
+      onDelegateToAgent={vi.fn()}
+      onViewDeliveryFiles={vi.fn()}
+      onWorkspaceRefresh={vi.fn()}
+      onOpenSettings={vi.fn()}
+    />);
     expect(screen.getByText('正在加载项目推进事实…')).toBeTruthy();
 
-    rerender(<ChannelProjectProgress {...props} state="not_ready" />);
+    rerender(<ChannelProjectProgress
+      overview={null}
+      workspace={null}
+      channelId="channel-1"
+      participants={participants}
+      currentUserId="reviewer-1"
+      archived={false}
+      state="not_ready"
+      onBackToThread={vi.fn()}
+      onDelegateToAgent={vi.fn()}
+      onViewDeliveryFiles={vi.fn()}
+      onWorkspaceRefresh={vi.fn()}
+      onOpenSettings={vi.fn()}
+    />);
     expect(screen.getByText('项目推进事实尚未就绪')).toBeTruthy();
 
-    rerender(<ChannelProjectProgress {...props} state="no_permission" />);
+    rerender(<ChannelProjectProgress
+      overview={null}
+      workspace={null}
+      channelId="channel-1"
+      participants={participants}
+      currentUserId="reviewer-1"
+      archived={false}
+      state="no_permission"
+      onBackToThread={vi.fn()}
+      onDelegateToAgent={vi.fn()}
+      onViewDeliveryFiles={vi.fn()}
+      onWorkspaceRefresh={vi.fn()}
+      onOpenSettings={vi.fn()}
+    />);
     expect(screen.getByText('你没有查看该频道项目事实的权限')).toBeTruthy();
 
-    rerender(<ChannelProjectProgress {...props} state="error" errorMessage="读取失败" />);
+    rerender(<ChannelProjectProgress
+      overview={null}
+      workspace={null}
+      channelId="channel-1"
+      participants={participants}
+      currentUserId="reviewer-1"
+      archived={false}
+      state="error"
+      errorMessage="读取失败"
+      onBackToThread={vi.fn()}
+      onDelegateToAgent={vi.fn()}
+      onViewDeliveryFiles={vi.fn()}
+      onWorkspaceRefresh={vi.fn()}
+      onOpenSettings={vi.fn()}
+    />);
     expect(screen.getByText('读取失败')).toBeTruthy();
-
   });
 
   test('无项目事实时用已有普通任务数量引导显式配置首个阶段', () => {
     const onOpenSettings = vi.fn();
-    render(
-      <ChannelProjectProgress
-        overview={null}
-        workspace={plainWorkspace()}
-        participants={participants}
-        currentUserId="reviewer-1"
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={onOpenSettings}
-      />,
-    );
+    renderProgress({ overview: null, workspace: plainWorkspace(), onOpenSettings });
 
     expect(screen.getByText('把频道工作组织成阶段推进')).toBeTruthy();
     expect(screen.getByText(/已有 2 个普通任务/)).toBeTruthy();
@@ -276,67 +296,57 @@ describe('频道项目推进工作区', () => {
     };
     const baseWorkspace = workspace();
     const entry = baseWorkspace.entries[0]!;
-    render(
-      <ChannelProjectProgress
-        overview={{ ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage, cancelledStage, dependencyBlockedStage] }}
-        workspace={{
-          ...baseWorkspace,
-          entries: [
-            entry,
-            { ...entry, task: reviewStage.task, stage: reviewStage, delivery: { ...entry.delivery, focusReviewState: 'pending' } },
-            { ...entry, task: completeStage.task, stage: completeStage },
-            { ...entry, task: cancelledStage.task, stage: cancelledStage },
-            { ...entry, task: dependencyBlockedStage.task, stage: dependencyBlockedStage },
-          ],
-        }}
-        participants={participants}
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({
+      overview: { ...baseOverview, stages: [baseOverview.stages[0]!, reviewStage, completeStage, cancelledStage, dependencyBlockedStage] },
+      workspace: {
+        ...baseWorkspace,
+        entries: [
+          entry,
+          { ...entry, task: reviewStage.task, stage: reviewStage, delivery: { ...entry.delivery, focusReviewState: 'pending' } },
+          { ...entry, task: completeStage.task, stage: completeStage },
+          { ...entry, task: cancelledStage.task, stage: cancelledStage },
+          { ...entry, task: dependencyBlockedStage.task, stage: dependencyBlockedStage },
+        ],
+      },
+    });
 
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('发布准备');
     expect(document.querySelector('[data-smoke="channel-project-lane-active"]')?.textContent).toContain('等待前置交付');
     expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('交付审核');
-    expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).toContain('查看交付文件与审核');
+    // 原型对齐：审核动作内嵌卡片；旧侧边栏入口按钮不再渲染。
+    expect(document.querySelector('[data-smoke="channel-project-lane-review"]')?.textContent).not.toContain('查看交付文件与审核');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('发布完成');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('查看交付与 final');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('取消发布');
     expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('阶段任务 · 已取消');
-    expect(document.querySelector('[data-smoke="channel-project-lane-complete"]')?.textContent).toContain('查看取消记录');
+  });
+
+  test('已结束卡「查看交付与 final」定位 Files 逻辑产物视图', () => {
+    const baseOverview = overview();
+    const completeStage = {
+      ...baseOverview.stages[0]!,
+      task: { ...baseOverview.stages[0]!.task, status: 'done' as const },
+      aggregateStatus: 'complete' as const,
+    };
+    const entry = workspace().entries[0]!;
+    const callbacks = renderProgress({
+      overview: { ...baseOverview, stages: [completeStage] },
+      workspace: { ...workspace(), entries: [{ ...entry, task: completeStage.task, stage: completeStage }] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '查看交付与 final' }));
+    expect(callbacks.onViewDeliveryFiles).toHaveBeenCalledWith('task-1');
   });
 
   test('归档频道只提供查看设置入口，不暴露运行态写操作', () => {
-    render(
-      <ChannelProjectProgress
-        overview={{ ...overview(), archived: true }}
-        workspace={workspace()}
-        participants={participants}
-        state="ready"
-        archived
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress({ overview: { ...overview(), archived: true }, archived: true });
     expect(screen.getByText('已归档 · 只读')).toBeTruthy();
     expect(screen.getByRole('button', { name: '查看项目设置' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: '项目设置 / 阶段配置' })).toBeNull();
   });
 
   test('#1179 默认推进面不展示创建阶段、依赖边或底层引用 ID 表单', () => {
-    render(
-      <ChannelProjectProgress
-        overview={overview()}
-        workspace={workspace()}
-        participants={participants}
-        state="ready"
-        archived={false}
-        onOpenStage={vi.fn()}
-        onOpenSettings={vi.fn()}
-      />,
-    );
+    renderProgress();
     expect(screen.queryByText('创建首个项目阶段')).toBeNull();
     expect(screen.queryByText('添加阶段')).toBeNull();
     expect(screen.queryByText('阶段依赖')).toBeNull();

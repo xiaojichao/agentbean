@@ -4,13 +4,12 @@ import { Fragment, useEffect, useState, useRef, useCallback, useMemo, type Dispa
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { Hash, Search, Plus, Activity, Bookmark, Image, Paperclip, Send, SquareDot, Pencil, Users, BookmarkCheck, Lock, MessageSquare, X, Trash2, FolderOpen, ChevronRight, Smile, LayoutGrid, List, ChevronDown, User, Tag, ExternalLink, ArrowUpDown, Check, Eye, CheckCircle2, Loader2, AlertCircle, Link2, ClipboardCopy, MousePointer2, ListTodo, BellOff, Pin, PinOff, Package } from 'lucide-react';
 import { uploadArtifact, getResolvedServerUrl, getStoredAuthToken, getWebSocket, dmEvents, channelEvents, memberEvents, taskEvents, projectEvents, messageReactionEvents, dispatchEvents, emitWithTimeout, fetchWorkspaceRunDetail } from '@/lib/socket';
-import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDagViewDto, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
+import { WEB_EVENTS, type ArtifactDto, type ArtifactRole, type ChannelDocumentDto, type ChannelDocumentRevisionDto, type ChannelFileEntryDto, type ChannelFilesResultDto, type ChannelProjectOverviewDto, type ChannelTaskWorkspaceEntryV1, type ChannelTaskWorkspaceV1, type ConsistencyTokenV1, type MessageMentionDto, type OutputPackagePendingDeliveryDto, type OutputPackageSummaryDto, type ProjectArtifactLibraryDto, type ProjectArtifactVersionDto, type ProjectDocumentBundleDto, type ProjectReferenceSelectionRequestDto, type TaskContinuationBasisV1, type TaskDeliveryOverviewV1, type TaskLevelAvailableActionDto } from '@agentbean/contracts';
 import { useAgentBeanStore, useCurrentTeamPath } from '@/lib/store';
 import type { AgentSnapshot, AgentStatus, Artifact, ChatMessage, DispatchStatus, WorkspaceRunDetail } from '@/lib/schema';
 import { chatArtifactUrl } from '@/lib/chat-artifact-url';
 import { useLocalFirstArtifactUrls } from '@/lib/use-local-first-artifact-urls';
-import { matchingWorkspaceRunDetail, workspaceRunHistoryItems, type WorkspaceRunDetailBundle } from '@/lib/task-workspace-run-detail';
-import { taskRootIdFromMessageMeta, taskStatusEventForTask, type TaskStatusEventSummary } from '@/lib/task-status-event';
+import { taskRootIdFromMessageMeta } from '@/lib/task-status-event';
 import {
   projectChatViewMessages,
   taskIdForStatusMessageDeepLink,
@@ -35,7 +34,6 @@ import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/componen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
-import { TaskDagPanel } from '@/components/TaskDagPanel';
 import {
   ChannelTaskCard,
   ChannelTaskFactSummary,
@@ -71,7 +69,6 @@ import { ProjectFilesBoard } from '@/components/project/ProjectFilesBoard';
 import { outputPackageFromMeta, inlineOutputPackageFromMeta, type OutputPackageMeta } from '@/lib/output-package';
 import { buildPackageReturnComposerDraft } from '@/lib/output-package-return-handoff';
 import { OutputPackagePreviewModal } from '@/components/OutputPackagePreviewModal';
-import { acceptTaskDagSnapshot } from '@/lib/task-dag';
 import { ProjectReferenceChips } from '@/components/project/ProjectReferenceChips';
 import { ProjectDocumentReferenceButton } from '@/components/project/ProjectDocumentReferenceButton';
 import { ArtifactCard } from '@/components/artifact/ArtifactCard';
@@ -448,7 +445,6 @@ export default function ChatPage() {
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const [taskDetailMessageId, setTaskDetailMessageId] = useState<string | null>(null);
   /** 原型收敛:无关联消息的任务(看板直接创建)的详情——task-only 模式,值为 taskId。 */
-  const [taskDetailOnlyTaskId, setTaskDetailOnlyTaskId] = useState<string | null>(null);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
   const [threadInput, setThreadInput] = useState('');
   // #1064：线程 composer 的项目引用选择（Task 页预填导航写入；与主 composer 的
@@ -1420,7 +1416,6 @@ export default function ChatPage() {
   const selectTasksSubview = useCallback((view: ChannelTasksSubview) => {
     if (view === tasksViewParam) return;
     setTaskDetailMessageId(null);
-    setTaskDetailOnlyTaskId(null);
     navigateChannelTasksRoute(
       channelTasksRouteParams(searchParams, { view, stageId: null, taskId: null }),
       channelTasksHistoryMode('select_subview'),
@@ -1434,21 +1429,6 @@ export default function ChatPage() {
     next.set('tasksView', view);
     navigateChannelTasksRoute(next, channelTasksHistoryMode('resolve_default'));
   }, [navigateChannelTasksRoute, searchParams, tasksViewParam]);
-
-  const openProjectStage = useCallback((stageId: string | null, taskId: string) => {
-    setTaskDetailOnlyTaskId(taskId);
-    setTaskDetailMessageId(null);
-    setThreadRootId(null);
-    setChatTaskMenuTarget(null);
-    navigateChannelTasksRoute(
-      channelTasksRouteParams(searchParams, {
-        view: 'project',
-        stageId,
-        taskId,
-      }),
-      channelTasksHistoryMode('open_task'),
-    );
-  }, [navigateChannelTasksRoute, searchParams]);
 
   const handleArchiveChannel = async (channelId: string, confirmationToken?: string) => {
     const res = await channelEvents().archive(channelId, currentTeamId, confirmationToken);
@@ -1529,7 +1509,6 @@ export default function ChatPage() {
   const openThread = useCallback((messageId: string) => {
     setThreadRootId(messageId);
     setTaskDetailMessageId(null);
-    setTaskDetailOnlyTaskId(null);
     setChatTaskMenuTarget(null);
     setThreadUrl(messageId);
   }, [setThreadUrl]);
@@ -1682,16 +1661,26 @@ export default function ChatPage() {
     if (!activeChannel) return;
     const nextTaskMessageId = parseScopedMessageId(taskParam, activeChannel);
     setTaskDetailMessageId(nextTaskMessageId);
-    // task:<taskId> 前缀 = task-only 详情深链(bare id 会被 parseScopedMessageId 当 messageId)
-    setTaskDetailOnlyTaskId(!nextTaskMessageId && taskParam?.startsWith('task:') ? taskParam.slice(5) : null);
     if (nextTaskMessageId) {
       // 显式 Tasks / Files 投影保留各自主区；无标签或聊天深链才回到聊天流。
       if (chatTabParam !== 'tasks' && chatTabParam !== 'files') setTab('chat');
       setThreadRootId(null);
       setSelectedMessageId(nextTaskMessageId);
       setChatTaskMenuTarget(null);
+      return;
     }
-  }, [activeChannel, chatTabParam, taskParam]);
+    // 原型对齐：task:<taskId> 显式深链不再打开任务详情侧边栏——回落到任务页卡片定位后清参数。
+    const bareTaskId = taskParam?.startsWith('task:') ? taskParam.slice(5) : null;
+    if (bareTaskId) {
+      if (chatTabParam !== 'tasks') setTab('tasks');
+      queueMicrotask(() => {
+        document.querySelector(`[data-task-id="${CSS.escape(bareTaskId)}"]`)?.scrollIntoView({ block: 'center' });
+      });
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('task');
+      router.replace(`${window.location.pathname}${params.toString() ? `?${params.toString()}` : ''}`, { scroll: false });
+    }
+  }, [activeChannel, chatTabParam, taskParam, searchParams, router]);
 
   useEffect(() => {
     setTaskCreatorFilter('all');
@@ -1699,7 +1688,6 @@ export default function ChatPage() {
     setShowCreateTask(false);
     if (!taskParam) {
       setTaskDetailMessageId(null);
-      setTaskDetailOnlyTaskId(null);
     }
   }, [activeChannel, taskParam]);
 
@@ -2066,23 +2054,11 @@ export default function ChatPage() {
   const taskDetailMessage = taskDetailMessageId
     ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
     : null;
-  const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : taskDetailOnlyTaskId;
-  const taskDetailTask = (taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null)
-    ?? (taskDetailOnlyTaskId ? tasks.find((task) => task.id === taskDetailOnlyTaskId) ?? null : null);
+  const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : null;
+  const taskDetailTask = taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null;
   const taskDetailWorkspaceEntry = taskDetailTask
     ? channelTaskWorkspace?.entries.find((entry) => entry.task.id === taskDetailTask.id)
     : undefined;
-  const taskDetailMessages = taskDetailTaskId
-    ? uniqueMessages([
-        ...(taskDetailMessage
-          ? visibleMessages.filter((msg) =>
-              msg.id === taskDetailMessage.id
-              || msg.threadId === taskDetailMessage.id
-              || parentMessageId(msg, messagesById) === taskDetailMessage.id)
-          : []),
-        ...taskStatusMessagesForTask(messages, taskDetailTaskId),
-      ]).sort((a, b) => a.createdAt - b.createdAt)
-    : [];
 
   useEffect(() => {
     if (!activeChannel) return;
@@ -2272,7 +2248,6 @@ export default function ChatPage() {
   ) => {
     if (!metaTaskId(msg)) return;
     setTaskDetailMessageId(msg.id);
-    setTaskDetailOnlyTaskId(null);
     setThreadRootId(null);
     setThreadInput('');
     setThreadSelections([]);
@@ -2287,21 +2262,42 @@ export default function ChatPage() {
 
   const openTaskDetailById = useCallback((taskId: string) => {
     const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
-    if (taskMessage) {
-      openTaskDetail(taskMessage, channelTasksHistoryMode('open_task'));
+    // 原型对齐：任务页不再打开详情侧边栏；仅当任务有绑定消息时定位到消息锚定详情。
+    if (taskMessage) openTaskDetail(taskMessage, channelTasksHistoryMode('open_task'));
+  }, [openTaskDetail, visibleMessages, router, searchParams]);
+
+  // 原型 review-panel「回到讨论串继续」：只定位到当前话题输入框，不产生任何 Server 写入（设计文档 §8.6）。
+  const backToThreadFromTaskCard = useCallback((threadRootMessageId: string | undefined, taskId: string) => {
+    const targetMessageId = threadRootMessageId
+      ?? visibleMessages.find((msg) => metaTaskId(msg) === taskId)?.id;
+    if (targetMessageId) {
+      openThread(targetMessageId);
+      setTimeout(() => threadTextareaRef.current?.focus(), 0);
       return;
     }
-    // 原型收敛:看板直接创建的任务没有关联消息——task-only 详情(URL 记 task:<taskId>)。
-    setTaskDetailOnlyTaskId(taskId);
-    setTaskDetailMessageId(null);
-    setChatTaskMenuTarget(null);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set('task', `task:${taskId}`);
-    params.delete('thread');
-    params.delete('message');
-    params.delete('profile');
-    router.push(`${window.location.pathname}?${params.toString()}`, { scroll: false });
-  }, [openTaskDetail, visibleMessages, router, searchParams]);
+    // 无绑定讨论串：回到聊天主输入框。
+    switchTab('chat');
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [openThread, switchTab, visibleMessages]);
+
+  // 原型进行中卡「交给智能体处理」：定位讨论串并预填 @ 触发智能体选择（§5.1/§8.2）。
+  const delegateToAgentFromTaskCard = useCallback((taskId: string) => {
+    const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
+    if (taskMessage) {
+      openThread(taskMessage.id);
+      setThreadInput('@');
+      setTimeout(() => threadTextareaRef.current?.focus(), 0);
+      return;
+    }
+    switchTab('chat');
+    setInput('@');
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [openThread, switchTab, visibleMessages]);
+
+  // 原型已结束卡「查看交付与 final」：交付明细在 Files 逻辑产物视图。
+  const viewDeliveryFilesFromTaskCard = useCallback(() => {
+    switchTab('files');
+  }, [switchTab]);
 
   // #1065 AC2：「继续 @Agent」——只预填 composer(delivered 整包引用 + 说明文本 + 焦点),
   // 未发送不创建 Message/Offer/claim/Invocation 事实(#1064 同语义)。
@@ -2341,7 +2337,6 @@ export default function ChatPage() {
 
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
-    setTaskDetailOnlyTaskId(null);
     setChatTaskMenuTarget(null);
     setTaskDetailUrl(null);
     if (selectedStageId) {
@@ -2989,7 +2984,10 @@ export default function ChatPage() {
               })}
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
               onOpenTaskDetail={openTaskDetailById}
-              onOpenProjectStage={openProjectStage}
+              onBackToThread={backToThreadFromTaskCard}
+              onDelegateToAgent={delegateToAgentFromTaskCard}
+              onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
+              onWorkspaceRefresh={() => { void loadTasks(); }}
               onSubviewChange={selectTasksSubview}
               onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
@@ -3086,10 +3084,9 @@ export default function ChatPage() {
         />
       )}
 
-      {!profileTarget && (taskDetailMessage || (taskDetailOnlyTaskId && taskDetailTask)) && activeChannel && (
+      {!profileTarget && taskDetailMessage && activeChannel && (
         <TaskDetailPanel
           message={taskDetailMessage}
-          relatedMessages={taskDetailMessages}
           task={taskDetailTask}
           workspaceEntry={taskDetailWorkspaceEntry}
           stageId={matchingChannelTaskStageId(taskDetailWorkspaceEntry, selectedStageId)}
@@ -3104,7 +3101,6 @@ export default function ChatPage() {
           routeTeamPath={routeTeamPath}
           readOnly={Boolean(activeChannelObj?.archivedAt)}
           onClose={closeTaskDetail}
-          onViewInChannel={() => { if (taskDetailMessage) jumpToMessage(taskDetailMessage.id); }}
           onOpenThread={(rootMessageId) => {
             const targetMessageId = rootMessageId ?? taskDetailMessage?.id;
             if (!targetMessageId) return;
@@ -3792,7 +3788,10 @@ function ConversationTasks({
   onToggleColumn,
   onTaskUpdate,
   onOpenTaskDetail,
-  onOpenProjectStage,
+  onBackToThread,
+  onDelegateToAgent,
+  onViewDeliveryFiles,
+  onWorkspaceRefresh,
   onSubviewChange,
   onResolveDefaultSubview,
 }: {
@@ -3831,7 +3830,14 @@ function ConversationTasks({
   onTaskUpdate: (task: TaskItem) => void;
   /** 原型收敛:看板/列表点击任务标题打开详情(含无关联消息的 task-only)。 */
   onOpenTaskDetail: (taskId: string) => void;
-  onOpenProjectStage: (stageId: string | null, taskId: string) => void;
+  /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
+  onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
+  /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
+  onDelegateToAgent: (taskId: string) => void;
+  /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
+  onViewDeliveryFiles: (taskId: string) => void;
+  /** 审核动作提交成功后刷新频道任务工作区投影。 */
+  onWorkspaceRefresh: () => void;
   onSubviewChange: (view: ChannelTasksSubview) => void;
   onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
@@ -4132,13 +4138,17 @@ function ConversationTasks({
         <ChannelProjectProgress
           overview={projectOverview ?? null}
           workspace={workspace}
+          channelId={channelId}
           participants={participants}
           currentUserId={currentUserId}
           selectedStageId={selectedStageId}
           state={projectProgressState}
           errorMessage={projectProgressErrorMessage}
           archived={workspaceReadOnly}
-          onOpenStage={onOpenProjectStage}
+          onBackToThread={onBackToThread}
+          onDelegateToAgent={onDelegateToAgent}
+          onViewDeliveryFiles={onViewDeliveryFiles}
+          onWorkspaceRefresh={onWorkspaceRefresh}
           onOpenSettings={() => setShowProjectSettings(true)}
         />
       ) : loadError ? (
@@ -4586,7 +4596,6 @@ function DirectoryPreview({ previews }: { previews: string[] }) {
 
 function TaskDetailPanel({
   message,
-  relatedMessages,
   task,
   workspaceEntry,
   stageId,
@@ -4601,7 +4610,6 @@ function TaskDetailPanel({
   routeTeamPath,
   readOnly,
   onClose,
-  onViewInChannel,
   onOpenThread,
   onViewAssetSource,
   onOpenPackagePreview,
@@ -4611,7 +4619,6 @@ function TaskDetailPanel({
 }: {
   /** task-only 模式(看板直接创建的任务无关联消息)时为 null。 */
   message: ChatMessage | null;
-  relatedMessages: ChatMessage[];
   task: TaskItem | null;
   workspaceEntry?: ChannelTaskWorkspaceEntryV1;
   stageId?: string | null;
@@ -4626,7 +4633,6 @@ function TaskDetailPanel({
   routeTeamPath: string;
   readOnly: boolean;
   onClose: () => void;
-  onViewInChannel: () => void;
   onOpenThread: (rootMessageId?: string) => void;
   onViewAssetSource: (packageId: string) => void;
   onOpenPackagePreview: (packageMeta: OutputPackageMeta, versionId?: string, readOnly?: boolean) => void;
@@ -4636,26 +4642,7 @@ function TaskDetailPanel({
   /** #1178：阶段工作区交接入口（交给智能体处理/要求修改后继续）的本地预填导航。 */
   onStageHandoff?: (action: StageHandoffAction) => void;
 }) {
-  // 原型收敛:看板直接创建的任务没有关联消息,message 可为 null(task-only 模式)。
-  const sortedMessages = relatedMessages.length > 0
-    ? relatedMessages
-    : (message ? [message] : []);
-  const agentResults = sortedMessages.filter((item) => item.id !== message?.id && item.senderKind === 'agent');
-  const latestAgentResult = agentResults.length > 0 ? agentResults[agentResults.length - 1]! : null;
-  const artifacts = uniqueArtifacts(sortedMessages.flatMap((item) => item.artifacts ?? []));
-  const workspaceRuns = uniqueWorkspaceRuns(sortedMessages.map((item) => item.workspaceRun).filter(Boolean) as NonNullable<ChatMessage['workspaceRun']>[]);
-  const latestWorkspaceRun = workspaceRuns.length > 0 ? workspaceRuns[workspaceRuns.length - 1]! : null;
   const detailTaskId = task?.id ?? (message ? metaTaskId(message) : null);
-  const taskStatusEvents = detailTaskId
-    ? sortedMessages
-        .map((item) => ({ message: item, event: taskStatusEventForTask(parseMeta(item), detailTaskId) }))
-        .filter((item): item is { message: ChatMessage; event: TaskStatusEventSummary } => Boolean(item.event))
-    : [];
-  const [workspaceRunDetail, setWorkspaceRunDetail] = useState<WorkspaceRunDetailBundle | null>(null);
-  const [workspaceRunLoading, setWorkspaceRunLoading] = useState(false);
-  const [workspaceRunError, setWorkspaceRunError] = useState<string | null>(null);
-  const [taskDag, setTaskDag] = useState<TaskDagViewDto | null>(null);
-  const [taskDagLoading, setTaskDagLoading] = useState(false);
   const [taskDeliveryOverview, setTaskDeliveryOverview] = useState<TaskDeliveryOverviewV1 | null>(null);
   const taskStatus = task?.status ?? 'todo';
   const taskLabel = taskNumber ? `#${taskNumber}` : '#任务';
@@ -4668,11 +4655,6 @@ function TaskDetailPanel({
   const statusColumn = TASK_COLUMNS.find((item) => item.id === taskStatus) ?? TASK_COLUMNS[0]!;
   const workspaceTeamId = currentTeamId ?? message?.teamId ?? null;
   const detailChannelId = message?.channelId ?? task?.channelId ?? null;
-  const showTaskDag = Boolean(
-    stageId
-    || workspaceEntry?.stage
-    || workspaceEntry?.governance.mode === 'managed',
-  );
   const managedTask = Boolean(
     stageId
     || workspaceEntry?.governance.mode === 'managed'
@@ -4696,61 +4678,6 @@ function TaskDetailPanel({
         ) && column.id !== taskStatus)
       : TASK_COLUMNS;
 
-  useEffect(() => {
-    if (!detailTaskId || !showTaskDag) {
-      setTaskDag(null);
-      setTaskDagLoading(false);
-      return;
-    }
-    let active = true;
-    setTaskDagLoading(true);
-    void taskEvents().getDag(detailTaskId).then((result) => {
-      if (!active) return;
-      setTaskDag((current) => result.ok && result.dag
-        ? acceptTaskDagSnapshot(current, result.dag)
-        : null);
-      setTaskDagLoading(false);
-    });
-    return () => { active = false; };
-  }, [detailTaskId, showTaskDag, task?.updatedAt]);
-
-  useEffect(() => {
-    if (!latestWorkspaceRun || !workspaceTeamId) {
-      setWorkspaceRunDetail(null);
-      setWorkspaceRunError(null);
-      setWorkspaceRunLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setWorkspaceRunDetail(null);
-    setWorkspaceRunLoading(true);
-    setWorkspaceRunError(null);
-    fetchWorkspaceRunDetail(workspaceTeamId, latestWorkspaceRun.id)
-      .then((res) => {
-        if (cancelled) return;
-        if (res.ok && res.workspaceRun && res.artifacts) {
-          setWorkspaceRunDetail({ workspaceRun: res.workspaceRun, artifacts: res.artifacts });
-        } else {
-          setWorkspaceRunDetail(null);
-          setWorkspaceRunError(res.error ?? '执行环境加载失败');
-        }
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setWorkspaceRunDetail(null);
-        setWorkspaceRunError(error instanceof Error ? error.message : '执行环境加载失败');
-      })
-      .finally(() => {
-        if (!cancelled) setWorkspaceRunLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [latestWorkspaceRun?.id, latestWorkspaceRun?.updatedAt, workspaceTeamId]);
-  const currentWorkspaceRunDetail = matchingWorkspaceRunDetail(workspaceRunDetail, workspaceTeamId, latestWorkspaceRun?.id);
-  const environmentRun = currentWorkspaceRunDetail?.workspaceRun ?? latestWorkspaceRun;
-  const environmentArtifacts = currentWorkspaceRunDetail?.artifacts ?? [];
-  const workspaceRunHistory = workspaceRunHistoryItems(workspaceRuns, latestWorkspaceRun?.id);
 
   return (
     <aside className="flex w-[min(720px,46vw)] min-w-[420px] shrink-0 flex-col border-l border-neutral-200 bg-white" data-smoke="chat-task-detail">
@@ -4794,34 +4721,7 @@ function TaskDetailPanel({
           )}
         </section>
 
-        {message && (
-        <section className="border-b border-neutral-100 py-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">任务消息</h3>
-            <button onClick={onViewInChannel} className="inline-flex h-7 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900">
-              <MousePointer2 size={12} />
-              定位
-            </button>
-          </div>
-          <div className="rounded-md border border-neutral-200 bg-white px-3 py-2">
-            <MarkdownMessage body={displayMessageBody(message)} mentionMembers={mentionMembers} mentions={message.meta?.mentions as MessageMentionDto[] | undefined} />
-          </div>
-        </section>
-        )}
 
-        {detailTaskId && showTaskDag ? (
-          <section className="border-b border-neutral-100 py-4" data-smoke="chat-task-detail-dag">
-            {taskDagLoading
-              ? <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-loading">正在读取 Task DAG…</div>
-              : taskDag
-                ? <TaskDagPanel dag={taskDag} teamPath={routeTeamPath} />
-                : <div className="text-center text-[11px] text-neutral-400" data-smoke="task-dag-unmanaged">
-                    {stageId || workspaceEntry?.stage
-                      ? '尚未产生 Task DAG；阶段责任、交付与审核事实见下方。'
-                      : '受管任务尚未产生可见 Task DAG。'}
-                  </div>}
-          </section>
-        ) : null}
 
         {detailTaskId && workspaceTeamId && detailChannelId ? (
           <section
@@ -4856,153 +4756,8 @@ function TaskDetailPanel({
           </section>
         ) : null}
 
-        <section className="border-b border-neutral-100 py-4">
-          <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">最新结果</h3>
-            <span className="text-xs text-neutral-400">{agentResults.length} 条 agent 回复</span>
-          </div>
-          {latestAgentResult ? (
-            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2">
-              <div className="mb-1 flex items-center gap-2 text-xs text-neutral-400">
-                <MessageSquare size={12} />
-                <span>{resolveMessageSpeaker(latestAgentResult, agents, { humanProfiles, channelMembers, mentionMembers })}</span>
-                <span>{formatTime(latestAgentResult.createdAt)}</span>
-              </div>
-              <MarkdownMessage body={displayMessageBody(latestAgentResult)} mentionMembers={mentionMembers} mentions={latestAgentResult.meta?.mentions as MessageMentionDto[] | undefined} />
-            </div>
-          ) : (
-            <div className="rounded-md border border-dashed border-neutral-200 px-3 py-6 text-center text-sm text-neutral-400">
-              还没有 agent 结果，任务执行完成后会出现在这里。
-            </div>
-          )}
-        </section>
 
-        {taskStatusEvents.length > 0 && (
-          <section className="border-b border-neutral-100 py-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">状态历史</h3>
-              <span className="text-xs text-neutral-400">{taskStatusEvents.length} 条状态事件</span>
-            </div>
-            <div className="space-y-2">
-              {taskStatusEvents.map(({ message: statusMessage, event }) => (
-                <div key={statusMessage.id} className="flex items-center justify-between gap-3 rounded-md border border-neutral-200 bg-white px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 text-xs font-medium text-neutral-700">
-                      <span className={`h-2 w-2 rounded-full ${taskStatusDotClass(event.status)}`} />
-                      <span>状态更新为 {taskStatusText(event.status)}</span>
-                    </div>
-                    <div className="mt-0.5 truncate text-[11px] text-neutral-400">{event.label}</div>
-                  </div>
-                  <div className="shrink-0 text-xs text-neutral-400">{formatTime(statusMessage.createdAt)}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
-        {environmentRun && (
-          <section className="border-b border-neutral-100 py-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-400">环境信息</h3>
-              <a
-                href={`/${routeTeamPath}/runs/${encodeURIComponent(environmentRun.id)}`}
-                className="inline-flex h-7 items-center gap-1 rounded-md border border-neutral-200 px-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 hover:text-neutral-900"
-              >
-                详情
-                <ExternalLink size={12} />
-              </a>
-            </div>
-            <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className={`inline-flex h-6 items-center rounded-full px-2 text-xs font-semibold ${workspaceRunStatusClass(environmentRun.status)}`}>
-                  {workspaceRunStatusText(environmentRun.status)}
-                </span>
-                <span className="truncate font-mono text-xs text-neutral-400">{shortWorkspaceRunId(environmentRun.id)}</span>
-              </div>
-              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
-                <TaskRunMeta label="Agent" value={agents[environmentRun.agentId]?.name ?? shortWorkspaceRunId(environmentRun.agentId)} />
-                <TaskRunMeta label="设备" value={environmentRun.deviceId ? shortWorkspaceRunId(environmentRun.deviceId) : '未绑定'} />
-                <TaskRunMeta label="耗时" value={formatWorkspaceRunDuration(environmentRun.startedAt, environmentRun.completedAt) ?? '进行中'} />
-                <TaskRunMeta label="退出码" value={environmentRun.exitCode === undefined ? '未完成' : String(environmentRun.exitCode)} />
-                <TaskRunMeta label="产物" value={`${environmentArtifacts.length || environmentRun.artifactIds.length} 个`} />
-                <TaskRunMeta label="更新时间" value={formatTime(environmentRun.updatedAt)} />
-              </dl>
-              {environmentRun.cwd && (
-                <div className="mt-3 rounded-md bg-white px-2 py-1.5">
-                  <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">cwd</div>
-                  <div className="truncate font-mono text-xs text-neutral-600">{environmentRun.cwd}</div>
-                </div>
-              )}
-              {environmentRun.command && (
-                <div className="mt-2 rounded-md bg-white px-2 py-1.5">
-                  <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">command</div>
-                  <div className="truncate font-mono text-xs text-neutral-600">{environmentRun.command}</div>
-                </div>
-              )}
-              {workspaceRunLoading && (
-                <div className="mt-3 flex items-center gap-2 text-xs text-neutral-400">
-                  <Loader2 size={12} className="animate-spin" />
-                  正在加载最新执行环境...
-                </div>
-              )}
-              {workspaceRunError && (
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-xs text-amber-700">
-                  {workspaceRunError}
-                </div>
-              )}
-              {environmentRun.logExcerpt && (
-                <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-neutral-900 px-3 py-2 font-mono text-[11px] leading-5 text-neutral-100">
-                  {trimWorkspaceRunLog(environmentRun.logExcerpt)}
-                </pre>
-              )}
-            </div>
-            {workspaceRunHistory.length > 1 && (
-              <div className="mt-3 space-y-2">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">执行记录</div>
-                {workspaceRunHistory.map(({ workspaceRun: run, isLatest }) => (
-                  <a
-                    key={run.id}
-                    href={`/${routeTeamPath}/runs/${encodeURIComponent(run.id)}`}
-                    className="flex items-center justify-between rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs hover:bg-neutral-50"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate font-mono text-neutral-700">{run.command ?? run.id}</span>
-                      <span className="mt-0.5 block text-neutral-400">{workspaceRunStatusText(run.status)} · {run.exitCode === undefined ? '未完成' : `exit ${run.exitCode}`}</span>
-                    </span>
-                    <span className="ml-3 inline-flex shrink-0 items-center gap-1 text-neutral-400">
-                      {isLatest && <span>最新</span>}
-                      <ExternalLink size={13} />
-                    </span>
-                  </a>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
-        {artifacts.length > 0 && (
-          <section className="border-b border-neutral-100 py-4">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">附件</h3>
-            <div className="space-y-2">
-              {artifacts.map((artifact) => (
-                <div key={artifact.id} className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm">
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-neutral-800">{artifact.relativePath ?? artifact.filename}</div>
-                    <div className="text-xs text-neutral-400">{artifact.pathKind ?? 'artifact'} · {formatFileSize(artifact.sizeBytes)}</div>
-                  </div>
-                  <div className="mt-2 flex gap-2 text-xs">
-                    {messageArtifactUrl(artifact, 'preview', currentTeamId ?? message?.teamId) && (
-                      <a className="font-medium text-blue-600 hover:underline" href={messageArtifactUrl(artifact, 'preview', currentTeamId ?? message?.teamId) ?? '#'} target="_blank" rel="noreferrer">预览</a>
-                    )}
-                    {messageArtifactUrl(artifact, 'download', currentTeamId ?? message?.teamId) && (
-                      <a className="font-medium text-neutral-600 hover:underline" href={messageArtifactUrl(artifact, 'download', currentTeamId ?? message?.teamId) ?? '#'}>下载</a>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
         <section className="py-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">任务状态</h3>
@@ -5043,15 +4798,6 @@ function TaskDetailPanel({
       </div>
       )}
     </aside>
-  );
-}
-
-function TaskRunMeta({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</dt>
-      <dd className="mt-0.5 truncate text-xs font-medium text-neutral-700">{value}</dd>
-    </div>
   );
 }
 
@@ -7145,12 +6891,6 @@ function uniqueMessages(messages: ChatMessage[]): ChatMessage[] {
   return [...map.values()];
 }
 
-function uniqueArtifacts(artifacts: Artifact[]): Artifact[] {
-  const map = new Map<string, Artifact>();
-  for (const artifact of artifacts) map.set(artifact.id, artifact);
-  return [...map.values()];
-}
-
 function channelDocumentIdForArtifact(artifactId: string): string {
   return `channel-document:${artifactId}`;
 }
@@ -7194,41 +6934,6 @@ function channelFileRoleLabel(role: string): string {
   return '普通附件';
 }
 
-function uniqueWorkspaceRuns(runs: NonNullable<ChatMessage['workspaceRun']>[]): NonNullable<ChatMessage['workspaceRun']>[] {
-  const map = new Map<string, NonNullable<ChatMessage['workspaceRun']>>();
-  for (const run of runs) map.set(run.id, run);
-  return [...map.values()];
-}
-
-function workspaceRunStatusText(status: WorkspaceRunDetail['status']): string {
-  if (status === 'running') return '运行中';
-  if (status === 'succeeded') return '成功';
-  if (status === 'failed') return '失败';
-  if (status === 'cancelled') return '已取消';
-  return status;
-}
-
-function workspaceRunStatusClass(status: WorkspaceRunDetail['status']): string {
-  if (status === 'running') return 'bg-blue-50 text-blue-700';
-  if (status === 'succeeded') return 'bg-emerald-50 text-emerald-700';
-  if (status === 'failed') return 'bg-red-50 text-red-700';
-  return 'bg-neutral-100 text-neutral-600';
-}
-
-function formatWorkspaceRunDuration(startedAt?: number, completedAt?: number): string | null {
-  if (!startedAt || !completedAt) return null;
-  const ms = Math.max(0, completedAt - startedAt);
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  return `${minutes}m ${seconds}s`;
-}
-
-function shortWorkspaceRunId(id: string): string {
-  return id.length <= 8 ? id : `${id.slice(0, 8)}...`;
-}
-
 function trimWorkspaceRunLog(text: string, maxChars = 1200): string {
   return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n...`;
 }
@@ -7252,12 +6957,6 @@ function speakerName(msg: ChatMessage, agents: Record<string, { name: string }>,
 function participantName(id: string, participants: { id: string; name: string }[], currentUserId?: string): string {
   if (id === currentUserId) return '你';
   return participants.find((person) => person.id === id)?.name ?? '未命名成员';
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
 }
 
 function formatDateTime(ts: number): string {

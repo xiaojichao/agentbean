@@ -54,7 +54,8 @@ describe('chat task surface', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
 
     expect(source.match(/projectChatViewMessages\(/g)?.length).toBeGreaterThanOrEqual(3);
-    expect(source).toContain('taskStatusMessagesForTask(messages, taskDetailTaskId)');
+    // 原型对齐（R4）：任务详情侧边栏不再渲染消息上下文区块（状态历史/最新结果/环境信息/附件）。
+    expect(source).not.toContain('taskStatusMessagesForTask(messages, taskDetailTaskId)');
     expect(source).toContain('taskIdForStatusMessageDeepLink(messages, targetMessageId)');
   });
 
@@ -81,16 +82,13 @@ describe('chat task surface', () => {
     expect(threadPanel).toContain('threadId={root.id}');
   });
 
-  test('频道任务详情复用 Server Task DAG 投影', () => {
+  test('任务详情保留交付视图与治理事实，原型外区块已移除', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('function TaskDetailPanel');
     const end = source.indexOf('function ThreadPanel', start);
     const detailPanel = source.slice(start, end);
 
-    expect(detailPanel).toContain('taskEvents().getDag(detailTaskId)');
-    expect(detailPanel).toContain('acceptTaskDagSnapshot(current, result.dag)');
-    expect(detailPanel).toContain('<TaskDagPanel');
-    expect(detailPanel).toContain('const showTaskDag = Boolean(');
+    // 原型对齐（R4）：交付视图与任务治理保留；Task DAG/任务消息/最新结果/环境信息/附件区块移除。
     expect(detailPanel).toContain('const showTaskDelivery = Boolean(');
     expect(detailPanel).toContain('onOverviewChange={setTaskDeliveryOverview}');
     expect(detailPanel).toContain("taskDeliveryOverview?.governance?.mode === 'managed'");
@@ -98,7 +96,11 @@ describe('chat task surface', () => {
     expect(detailPanel).toContain('const taskGovernancePending = Boolean(');
     expect(detailPanel).toContain('!taskDeliveryOverview?.governance');
     expect(detailPanel).toContain('正在读取 Server 任务治理状态');
-    expect(detailPanel).toContain('尚未产生 Task DAG；阶段责任、交付与审核事实见下方。');
+    expect(detailPanel).not.toContain('taskEvents().getDag(detailTaskId)');
+    expect(detailPanel).not.toContain('<TaskDagPanel');
+    expect(detailPanel).not.toContain('条 agent 回复');
+    expect(detailPanel).not.toContain('环境信息');
+    expect(detailPanel).not.toContain('任务消息');
     expect(detailPanel).toContain('w-[min(720px,46vw)]');
     expect(detailPanel).toContain("workspaceEntry?.governance.mode === 'managed'");
     expect(detailPanel).toContain('仅显示当前可用的具名流程操作');
@@ -108,15 +110,20 @@ describe('chat task surface', () => {
     expect(source).toContain('if (activeChannelObj?.archivedAt)');
   });
 
-  test('有关联消息的任务深链保留显式 Tasks / Files 主区', () => {
+  test('有关联消息的任务深链保留显式 Tasks / Files 主区，task-only 深链回落卡片定位', () => {
     const source = readFileSync(new URL('../app/[teamPath]/chat/page.tsx', import.meta.url), 'utf8');
     const start = source.indexOf('const nextTaskMessageId = parseScopedMessageId(taskParam, activeChannel);');
-    const end = source.indexOf('}, [activeChannel, chatTabParam, taskParam]);', start);
+    const end = source.indexOf('}, [activeChannel, chatTabParam, taskParam, searchParams, router]);', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
 
     const taskParamEffect = source.slice(start, end);
     expect(taskParamEffect).toContain("if (chatTabParam !== 'tasks' && chatTabParam !== 'files') setTab('chat');");
+    // 原型对齐（R3/AC6）：task:<taskId> 深链不再打开侧边栏——切任务页、滚动定位卡片并清参数。
+    expect(taskParamEffect).toContain("taskParam?.startsWith('task:')");
+    expect(taskParamEffect).toContain("setTab('tasks')");
+    expect(taskParamEffect).toContain('[data-task-id=');
+    expect(taskParamEffect).toContain("params.delete('task')");
   });
 
   test('公开频道任务投影补齐当前用户，并让任务详情复用同一参与者集合', () => {
