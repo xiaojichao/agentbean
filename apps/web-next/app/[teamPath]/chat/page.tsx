@@ -3919,10 +3919,6 @@ function ConversationTasks({
   const hasManagedEntries = workspace?.entries.some(
     (entry) => channelTaskEntrySubview(entry) === 'project',
   ) ?? false;
-  const ordinaryTaskCount = workspace?.entries.filter(
-    (entry) => channelTaskEntrySubview(entry) === 'plain',
-  ).length ?? 0;
-  const hasProjectWork = hasProjectStages || hasManagedEntries;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
   const subview = lockedSubview ?? (requestedSubview
     ?? ((loading && !workspace) || loadError || projectOverviewError
@@ -4125,17 +4121,7 @@ function ConversationTasks({
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col bg-[#f7f6f2]" data-smoke="channel-plain-task-workspace">
-      {!hasProjectWork && !workspaceReadOnly ? (
-        <ChannelProjectSetupPrompt
-          ordinaryTaskCount={ordinaryTaskCount}
-          archived={false}
-          onOpenSettings={() => setShowProjectSettings(true)}
-        />
-      ) : null}
       <div className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-y border-neutral-200 bg-white px-4 py-2">
-        <span className="rounded border border-neutral-300 bg-neutral-50 px-2 py-1 text-[11px] font-medium text-neutral-600" data-smoke="channel-plain-secondary-label">
-          辅助视图：普通任务状态 + 负责人
-        </span>
         <div className="relative">
           <button onClick={() => { onToggleCreatorFilter(); if (showAssigneeFilter) onToggleAssigneeFilter(); }} className="flex h-8 items-center gap-1.5 rounded-md border border-neutral-200 bg-white px-3 text-xs font-medium text-neutral-600 hover:bg-neutral-50">
             <User size={13} />
@@ -4273,7 +4259,6 @@ function ConversationTasks({
           <div className="mb-3 flex items-end justify-between">
             <div>
               <h2 className="text-sm font-semibold text-neutral-900">未进入阶段流程的任务</h2>
-              <p className="mt-1 text-xs text-neutral-500">这里维护基础状态与负责人；项目责任、审核和 final 以项目工作台的 Server 投影为准。</p>
             </div>
             <span className="text-xs text-neutral-400">{filteredTasks.length} 个任务</span>
           </div>

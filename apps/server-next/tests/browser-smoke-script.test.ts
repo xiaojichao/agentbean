@@ -107,7 +107,6 @@ describe('AgentBean Next browser smoke script', () => {
     expect(start).toBeGreaterThan(-1);
     expect(smoke).toContain('plain-task-workbench-');
     expect(smoke).toContain('channel-project-setup-prompt');
-    expect(smoke).toContain('channel-plain-secondary-label');
     expect(smoke).toContain('channel-plain-task-list');
     expect(smoke).toContain('channel-plain-task-workspace');
     expect(smoke).toContain("[title=\"列表\"]");
