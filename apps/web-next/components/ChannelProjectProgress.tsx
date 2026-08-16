@@ -436,9 +436,11 @@ function ProjectCardFact({ label, value }: { label: string; value: string }) {
 }
 
 function projectDeliverySummary(delivery: ChannelTaskWorkspaceEntryV1['delivery']): string {
-  const review = delivery.fileReviewRequiredCount && delivery.fileReviewRequiredCount > 0
-    ? `文件审核 ${delivery.fileReviewApprovedCount ?? 0}/${delivery.fileReviewRequiredCount}${delivery.fileReviewComplete ? '（已齐）' : '（待补齐）'}`
-    : '文件审核尚未补齐';
+  const review = delivery.fileReviewRequiredCount === 0
+    ? '文件审核不适用（0 个必需文件）'
+    : delivery.fileReviewRequiredCount
+      ? `文件审核 ${delivery.fileReviewApprovedCount ?? 0}/${delivery.fileReviewRequiredCount}${delivery.fileReviewComplete ? '（已齐）' : '（待补齐）'}`
+      : '文件审核事实尚未投影';
   return `交付包 ${delivery.packageCount} 个 · ${review} · 最终版 ${delivery.finalizedCount}/${delivery.requiredForFinalCount}`;
 }
 
@@ -450,6 +452,9 @@ function projectFinalSummary(delivery: ChannelTaskWorkspaceEntryV1['delivery']):
 
 function projectReviewGuidance(entry: ChannelTaskWorkspaceEntryV1): string {
   const { delivery } = entry;
+  if (delivery.fileReviewRequiredCount === 0) {
+    return '当前焦点包没有必需 final 文件，文件审核不适用；仍需在交付工作台单独确认本次交付。';
+  }
   if (!delivery.fileReviewRequiredCount) {
     return '逐文件审核覆盖尚未形成；请进入交付工作台核对当前文件版本。';
   }
@@ -461,9 +466,9 @@ function projectReviewGuidance(entry: ChannelTaskWorkspaceEntryV1): string {
 
 function projectTimelineSummary(entry: ChannelTaskWorkspaceEntryV1, lane: ProjectLaneId): string {
   if (lane === 'complete') {
-    return `任务已结束；${projectDeliverySummary(entry.delivery)}。`;
+    return `当前状态：任务已结束；${projectDeliverySummary(entry.delivery)}。`;
   }
-  return `Agent 已形成 ${entry.delivery.packageCount} 个交付包，任务进入待审核；下一步在交付工作台处理当前版本。`;
+  return `当前状态：待审核；${projectDeliverySummary(entry.delivery)}。下一步在交付工作台处理当前版本。`;
 }
 
 function ProjectLaneIcon({ lane }: { lane: ProjectLaneId }) {

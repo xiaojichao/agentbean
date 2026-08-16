@@ -95,10 +95,53 @@ describe('频道项目推进工作区', () => {
     expect(card?.textContent).toContain('待审核输出');
     expect(card?.textContent).toContain('文件审核 1/3（待补齐）');
     expect(card?.textContent).toContain('任务卡片只做状态摘要和入口');
-    expect(card?.textContent).toContain('任务进入待审核');
+    expect(card?.textContent).toContain('当前状态：待审核');
+    expect(card?.textContent).not.toContain('Agent 已形成');
 
     fireEvent.click(screen.getByRole('button', { name: '打开阶段 交付审核' }));
     expect(onOpenStage).toHaveBeenCalledWith('stage-review', 'task-review');
+  });
+
+  test('零个必需文件时将文件审核展示为不适用', () => {
+    const baseOverview = overview();
+    const reviewStage = {
+      ...baseOverview.stages[0]!,
+      task: { ...baseOverview.stages[0]!.task, status: 'in_review' as const },
+      aggregateStatus: 'in_review' as const,
+    };
+    const baseEntry = workspace().entries[0]!;
+    const reviewEntry = {
+      ...baseEntry,
+      task: reviewStage.task,
+      stage: reviewStage,
+      delivery: {
+        ...baseEntry.delivery,
+        fileReviewApprovedCount: 0,
+        fileReviewRequiredCount: 0,
+        fileReviewComplete: true,
+        requiredForFinalCount: 0,
+        finalizedCount: 0,
+      },
+      review: { reviewerIds: ['reviewer-1'] },
+    };
+
+    render(
+      <ChannelProjectProgress
+        overview={{ ...baseOverview, stages: [reviewStage] }}
+        workspace={{ ...workspace(), entries: [reviewEntry] }}
+        participants={participants}
+        currentUserId="reviewer-1"
+        state="ready"
+        archived={false}
+        onOpenStage={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+
+    const card = document.querySelector('[data-smoke="channel-project-stage-card"]');
+    expect(card?.textContent).toContain('文件审核不适用（0 个必需文件）');
+    expect(card?.textContent).toContain('文件审核不适用；仍需在交付工作台单独确认本次交付');
+    expect(card?.textContent).not.toContain('文件审核尚未补齐');
   });
 
   test('支持创建者、责任焦点、建议/实际审核人与待我审核筛选', () => {
