@@ -34,6 +34,7 @@ import { ChatAttentionInboxSection, TaskThreadActivitySection } from '@/componen
 import { NewChannelDialog } from '@/components/new-channel-dialog';
 import { TaskDeliveryOverview } from '@/components/TaskDeliveryOverview';
 import { StageDeliveryReviewWorkspace, type StageHandoffAction } from '@/components/StageDeliveryReviewWorkspace';
+import type { TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import {
   ChannelTaskCard,
   ChannelTaskFactSummary,
@@ -2280,20 +2281,6 @@ export default function ChatPage() {
     setTimeout(() => textareaRef.current?.focus(), 0);
   }, [openThread, switchTab, visibleMessages]);
 
-  // 原型进行中卡「交给智能体处理」：定位讨论串并预填 @ 触发智能体选择（§5.1/§8.2）。
-  const delegateToAgentFromTaskCard = useCallback((taskId: string) => {
-    const taskMessage = visibleMessages.find((msg) => metaTaskId(msg) === taskId);
-    if (taskMessage) {
-      openThread(taskMessage.id);
-      setThreadInput('@');
-      setTimeout(() => threadTextareaRef.current?.focus(), 0);
-      return;
-    }
-    switchTab('chat');
-    setInput('@');
-    setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [openThread, switchTab, visibleMessages]);
-
   // 原型已结束卡「查看交付与 final」：交付明细在 Files 逻辑产物视图。
   const viewDeliveryFilesFromTaskCard = useCallback(() => {
     switchTab('files');
@@ -2334,6 +2321,28 @@ export default function ChatPage() {
       ...(readOnly ? { readOnly: true } : {}),
     });
   }, [activeChannel, activeChannelObj?.archivedAt]);
+
+  // 新版原型待审核卡「审核交付文件」：焦点包投影组 OutputPackageMeta 后打开共享预览/编辑浮窗。
+  const openReviewFilesFromProjection = useCallback((projection: TaskCardReviewProjection, versionId: string | undefined) => {
+    const pkg = projection.package;
+    openPackagePreviewModal({
+      kind: 'output-package',
+      packageId: pkg.packageId,
+      ...(projection.threadRootMessageId ? { threadRootMessageId: projection.threadRootMessageId } : {}),
+      taskId: pkg.taskId,
+      agentId: pkg.agentId,
+      memberCount: pkg.memberCount,
+      members: pkg.members.map((member) => ({
+        shortLabel: member.shortLabel,
+        filename: member.filename,
+        artifactVersionId: member.artifactVersionId,
+        collectionId: member.collectionId,
+      })),
+      workspaceRevisionId: pkg.workspaceRevisionId,
+      publishId: pkg.publishId,
+      createdAt: pkg.createdAt,
+    }, versionId);
+  }, [openPackagePreviewModal]);
 
   const closeTaskDetail = useCallback(() => {
     setTaskDetailMessageId(null);
@@ -2985,9 +2994,8 @@ export default function ChatPage() {
               onTaskUpdate={(updated) => setTasks((prev) => prev.map((task) => task.id === updated.id ? updated : task))}
               onOpenTaskDetail={openTaskDetailById}
               onBackToThread={backToThreadFromTaskCard}
-              onDelegateToAgent={delegateToAgentFromTaskCard}
+              onReviewDeliveryFiles={openReviewFilesFromProjection}
               onViewDeliveryFiles={viewDeliveryFilesFromTaskCard}
-              onWorkspaceRefresh={() => { void loadTasks(); }}
               onSubviewChange={selectTasksSubview}
               onResolveDefaultSubview={resolveDefaultTasksSubview}
             />
@@ -3789,9 +3797,8 @@ function ConversationTasks({
   onTaskUpdate,
   onOpenTaskDetail,
   onBackToThread,
-  onDelegateToAgent,
+  onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onWorkspaceRefresh,
   onSubviewChange,
   onResolveDefaultSubview,
 }: {
@@ -3833,11 +3840,10 @@ function ConversationTasks({
   /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
   onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
   /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
-  onDelegateToAgent: (taskId: string) => void;
+  onReviewDeliveryFiles: (projection: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
   /** 审核动作提交成功后刷新频道任务工作区投影。 */
-  onWorkspaceRefresh: () => void;
   onSubviewChange: (view: ChannelTasksSubview) => void;
   onResolveDefaultSubview: (view: ChannelTasksSubview) => void;
 }) {
@@ -4146,9 +4152,8 @@ function ConversationTasks({
           errorMessage={projectProgressErrorMessage}
           archived={workspaceReadOnly}
           onBackToThread={onBackToThread}
-          onDelegateToAgent={onDelegateToAgent}
+          onReviewDeliveryFiles={onReviewDeliveryFiles}
           onViewDeliveryFiles={onViewDeliveryFiles}
-          onWorkspaceRefresh={onWorkspaceRefresh}
           onOpenSettings={() => setShowProjectSettings(true)}
         />
       ) : loadError ? (

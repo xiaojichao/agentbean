@@ -15,7 +15,7 @@ import type {
 } from '@agentbean/contracts';
 
 import { channelTaskResponsibilityFocusFilterValue } from '@/components/ChannelTaskCard';
-import { TaskCardReviewPanel, type TaskCardReviewProjection } from '@/components/TaskCardReviewPanel';
+import { TaskCardReviewEntryPanel, type TaskCardReviewProjection } from '@/components/TaskCardReviewEntryPanel';
 import { channelTaskEntrySubview } from '@/lib/channel-task-workspace-route';
 import { reviewStateLabel } from '@/lib/delivery-labels';
 import { taskStatusText } from '@/lib/task-status';
@@ -60,9 +60,8 @@ export function ChannelProjectProgress({
   errorMessage,
   archived,
   onBackToThread,
-  onDelegateToAgent,
+  onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onWorkspaceRefresh,
   onOpenSettings,
 }: {
   overview: ChannelProjectOverviewDto | null;
@@ -76,12 +75,10 @@ export function ChannelProjectProgress({
   archived: boolean;
   /** 原型 review-panel「回到讨论串继续」：只定位，不改状态。 */
   onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
-  /** 原型进行中卡「交给智能体处理」：定位讨论串并预填 @。 */
-  onDelegateToAgent: (taskId: string) => void;
+  /** 原型待审核卡「审核交付文件」：打开共享预览/编辑浮窗并选中首个待处理版本。 */
+  onReviewDeliveryFiles: (packageMeta: TaskCardReviewProjection, versionId: string | undefined) => void;
   /** 原型已结束卡「查看交付与 final」：定位 Files 逻辑产物视图。 */
   onViewDeliveryFiles: (taskId: string) => void;
-  /** 审核动作提交成功后刷新频道任务工作区投影（lane 归属可能变化）。 */
-  onWorkspaceRefresh: () => void;
   onOpenSettings: () => void;
 }) {
   const [creatorFilter, setCreatorFilter] = useState('all');
@@ -240,9 +237,8 @@ export function ChannelProjectProgress({
                       selectedStageId={selectedStageId}
                       archived={archived}
                       onBackToThread={onBackToThread}
-                      onDelegateToAgent={onDelegateToAgent}
+                      onReviewDeliveryFiles={onReviewDeliveryFiles}
                       onViewDeliveryFiles={onViewDeliveryFiles}
-                      onWorkspaceRefresh={onWorkspaceRefresh}
                     />
                   ))}
                   {laneItems.length === 0 ? (
@@ -317,9 +313,8 @@ function ProjectWorkCard({
   selectedStageId,
   archived,
   onBackToThread,
-  onDelegateToAgent,
+  onReviewDeliveryFiles,
   onViewDeliveryFiles,
-  onWorkspaceRefresh,
 }: {
   item: ProjectProgressItem;
   overview: ChannelProjectOverviewDto | null;
@@ -328,12 +323,11 @@ function ProjectWorkCard({
   selectedStageId?: string | null;
   archived: boolean;
   onBackToThread: (threadRootMessageId: string | undefined, taskId: string) => void;
-  onDelegateToAgent: (taskId: string) => void;
+  onReviewDeliveryFiles: (packageMeta: TaskCardReviewProjection, versionId: string | undefined) => void;
   onViewDeliveryFiles: (taskId: string) => void;
-  onWorkspaceRefresh: () => void;
 }) {
   const { stage, entry } = item;
-  // 焦点包投影（成员清单 + 审核态）由 TaskCardReviewPanel 拉取后上抛；review lane 之外不查询。
+  // 焦点包投影（成员清单 + 审核态）由 TaskCardReviewEntryPanel 拉取后上抛；review lane 之外不查询。
   const [reviewProjection, setReviewProjection] = useState<TaskCardReviewProjection | null>(null);
   const task = stage?.task ?? entry?.task;
   if (!task) return null;
@@ -412,26 +406,37 @@ function ProjectWorkCard({
           {/* 审核面板锚定「焦点包有待审动作」这一 Server 事实（availableActions 自决按钮）：
               任务状态推进依赖消息路径（markLinkedTaskInReview），API 直发交付（无消息）
               时任务可能仍处非 in_review——但焦点包成员待审本身即待审核事实，面板照常内嵌。 */}
-          <TaskCardReviewPanel
+          <TaskCardReviewEntryPanel
             channelId={channelId}
             focusPackageId={entry.delivery.focusPackageId ?? null}
             archived={archived}
-            onBackToThread={(threadRootMessageId) => onBackToThread(threadRootMessageId, task.id)}
-            onMutationSucceeded={onWorkspaceRefresh}
+            onViewFiles={() => onViewDeliveryFiles(task.id)}
+            onReviewFiles={(versionId) => reviewProjection && onReviewDeliveryFiles(reviewProjection, versionId)}
+            onOpenThread={(threadRootMessageId) => onBackToThread(threadRootMessageId, task.id)}
             onProjection={setReviewProjection}
           />
         </>
       ) : null}
 
       {item.lane === 'active' ? (
-        <button
-          type="button"
-          onClick={() => onDelegateToAgent(task.id)}
-          className="mt-2.5 inline-flex h-8 items-center rounded-md border border-sky-300 bg-white px-3 text-xs font-semibold text-sky-700 hover:bg-sky-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
-          data-smoke="project-card-delegate-agent"
-        >
-          交给智能体处理
-        </button>
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={() => onBackToThread(undefined, task.id)}
+            className="inline-flex h-8 items-center rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            data-smoke="project-card-view-progress"
+          >
+            查看执行进度
+          </button>
+          <button
+            type="button"
+            onClick={() => onBackToThread(undefined, task.id)}
+            className="inline-flex h-8 items-center rounded-md border border-neutral-300 bg-white px-3 text-xs font-medium text-neutral-700 hover:bg-neutral-50 focus:outline-none focus:ring-2 focus:ring-sky-400"
+            data-smoke="project-card-open-thread"
+          >
+            打开讨论串
+          </button>
+        </div>
       ) : null}
 
       {item.lane === 'complete' ? (
