@@ -373,6 +373,7 @@ export default function ChatPage() {
   const [channelMembers, setChannelMembers] = useState<ChannelMemberEntry[]>([]);
   const [humanProfiles, setHumanProfiles] = useState<HumanProfile[]>([]);
   const [sidebarView, setSidebarView] = useState<'channels' | 'search' | 'inbox' | 'saved' | 'pinned'>('channels');
+  const [mobileConversationListOpen, setMobileConversationListOpen] = useState(false);
   const [searchChannelScope, setSearchChannelScope] = useState<SearchChannelScope | null>(null);
   const [channelsExpanded, setChannelsExpanded] = useState(true);
   const [dmsExpanded, setDmsExpanded] = useState(true);
@@ -2532,13 +2533,17 @@ export default function ChatPage() {
       channelId: activeChannel,
       label: isDm ? `@${activeDmName || '私聊'}` : `#${activeName || '频道'}`,
     });
+    setMobileConversationListOpen(false);
     setSidebarView('search');
   };
 
   return (
-    <div ref={chatContainerRef} className="flex flex-1 overflow-hidden">
+    <div ref={chatContainerRef} className="flex min-w-0 flex-1 overflow-hidden">
       {/* Left sidebar — channel list */}
-      <div className="flex w-60 shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]">
+      <div
+        className={`${activeChannel && !mobileConversationListOpen ? 'hidden md:flex md:w-60' : 'flex w-full md:w-60'} shrink-0 flex-col border-r border-neutral-200 bg-[#F8F5E6]`}
+        data-smoke="conversation-sidebar"
+      >
         {/* Chat label */}
         <div className="flex h-14 items-center border-b border-neutral-300/40 px-4 text-xs font-semibold uppercase tracking-wider text-neutral-500">聊天</div>
 
@@ -2546,25 +2551,26 @@ export default function ChatPage() {
         <div className="px-2 py-2 space-y-0.5">
           <button onClick={() => {
             setSearchChannelScope(null);
+            setMobileConversationListOpen(false);
             setSidebarView(sidebarView === 'search' ? 'channels' : 'search');
           }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' && !searchChannelScope ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Search size={14} className="text-neutral-400 shrink-0" />
             <span>搜索</span>
             <span className="ml-auto text-[10px] text-neutral-400">⌘K</span>
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Activity size={14} className="text-neutral-400 shrink-0" />
             <span>活动</span>
             {inboxUnread > 0 && (
               <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{inboxUnread}</span>
             )}
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
             <span>收藏</span>
             <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedDisplayMessages.length}</span>
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'pinned' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'pinned' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Pin size={14} className="text-neutral-400 shrink-0" />
             <span>固定</span>
             <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{loadedPinnedChannel === activeChannel ? pinnedDisplayMessages.length : 0}</span>
@@ -2593,7 +2599,7 @@ export default function ChatPage() {
           {channelsExpanded && (
             <div className="space-y-0.5">
               {orderedChannels.map((ch) => (
-                <button key={ch.id} onClick={() => { setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                <button key={ch.id} onClick={() => { setMobileConversationListOpen(false); setActiveChannel(ch.id); setSidebarView('channels'); router.push(`/${np}/channel/${ch.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === ch.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                   {ch.visibility === 'private' ? <Lock size={14} className="text-neutral-400 shrink-0" /> : <Hash size={14} className="text-neutral-400 shrink-0" />}
                   <span className="truncate">{ch.name}</span>
                 </button>
@@ -2626,7 +2632,7 @@ export default function ChatPage() {
                 const dmLastMessage = lastLoadedMessage(messagesByChannel[dm.id]);
                 const dmSubtitle = dmLastMessage ? displayMessageBody(dmLastMessage) : (dmAgent?.description?.trim() || dmAgent?.role || '智能体私聊');
                 return (
-                  <button key={dm.id} onClick={() => { setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+                  <button key={dm.id} onClick={() => { setMobileConversationListOpen(false); setActiveChannel(dm.id); setSidebarView('channels'); router.push(`/${np}/dm/${dm.id}`); }} className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${activeChannel === dm.id && sidebarView === 'channels' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
                     <div className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-purple-100 text-[10px] font-semibold text-purple-700">
                       {dmName[0]?.toUpperCase() ?? 'A'}
                       <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[#F8F5E6] ${statusDotClass(dmStatus)}`} />
@@ -2702,6 +2708,16 @@ export default function ChatPage() {
         {activeChannel && (
           <div className="flex h-14 items-center justify-between border-b border-neutral-200 px-4">
             <div className="flex min-w-0 flex-1 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileConversationListOpen(true)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 md:hidden"
+                title="返回会话列表"
+                aria-label="返回会话列表"
+                data-smoke="channel-mobile-list-back"
+              >
+                <ChevronRight size={16} className="rotate-180" />
+              </button>
               {isDm ? (
                 <>
                   <button onClick={() => activeDm && openProfile({ kind: 'agent', id: activeDm.dmTargetId })} className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-purple-100 text-xs font-semibold text-purple-700 hover:ring-2 hover:ring-neutral-900" title="查看智能体资料">
