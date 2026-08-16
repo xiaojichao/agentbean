@@ -1345,6 +1345,10 @@ export default function ChatPage() {
   }, [activeChannel, openArtifactRevision]);
   const isDm = !!activeDm;
   const isDefaultPublicChannel = !isDm && activeChannelObj?.name === 'all';
+  // 频道级子视图锁定：#all 与私聊只显示普通任务；其余频道只显示项目工作台。
+  const lockedTasksSubview: ChannelTasksSubview | null = !activeChannel
+    ? null
+    : isDm || isDefaultPublicChannel ? 'plain' : 'project';
   const canManageActiveChannel = Boolean(
     activeChannelObj &&
     currentUser &&
@@ -2961,6 +2965,7 @@ export default function ChatPage() {
               loading={tasksLoading}
               loadError={tasksLoadError}
               requestedSubview={tasksViewParam}
+              lockedSubview={lockedTasksSubview}
               selectedStageId={selectedStageId}
               archived={Boolean(activeChannelObj?.archivedAt)}
               view={taskView}
@@ -3768,6 +3773,7 @@ function ConversationTasks({
   loading,
   loadError,
   requestedSubview,
+  lockedSubview,
   selectedStageId,
   archived,
   view,
@@ -3808,6 +3814,8 @@ function ConversationTasks({
   loading: boolean;
   loadError: { kind: 'not_ready' | 'no_permission' | 'error'; message: string } | null;
   requestedSubview?: ChannelTasksSubview;
+  /** 频道级锁定子视图：#all/私聊→plain，其余频道→project；锁定时优先于 URL 参数。 */
+  lockedSubview?: ChannelTasksSubview | null;
   selectedStageId: string | null;
   archived: boolean;
   view: TaskViewMode;
@@ -3928,18 +3936,18 @@ function ConversationTasks({
   ).length ?? 0;
   const hasProjectWork = hasProjectStages || hasManagedEntries;
   const workspaceReadOnly = archived || Boolean(projectOverview?.archived);
-  const subview = requestedSubview
+  const subview = lockedSubview ?? (requestedSubview
     ?? ((loading && !workspace) || loadError || projectOverviewError
       ? 'project'
-      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries));
+      : resolveChannelTasksSubview(undefined, hasProjectStages, hasManagedEntries)));
   useEffect(() => {
-    if (projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
+    if (lockedSubview || projectOverview === undefined || projectOverviewError || requestedSubview || (loading && !workspace)) return;
     onResolveDefaultSubview(resolveChannelTasksSubview(
       undefined,
       (projectOverview?.stages.length ?? 0) > 0,
       workspace?.entries.some((entry) => channelTaskEntrySubview(entry) === 'project') ?? false,
     ));
-  }, [loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
+  }, [lockedSubview, loading, onResolveDefaultSubview, projectOverview, projectOverviewError, requestedSubview, workspace]);
 
   const workspaceEntries = new Map(workspace?.entries.map((entry) => [entry.task.id, workspaceReadOnly
     ? {
@@ -4106,6 +4114,7 @@ function ConversationTasks({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       <div className="flex min-h-16 shrink-0 items-stretch gap-1 overflow-x-auto border-b border-neutral-200 bg-white px-4" role="tablist" aria-label="频道任务子视图">
+        {lockedSubview !== 'plain' ? (
         <button
           type="button"
           role="tab"
@@ -4117,6 +4126,8 @@ function ConversationTasks({
           <span className="text-xs font-semibold">项目工作台</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">阶段推进 · 交付审核 · final</span>
         </button>
+        ) : null}
+        {lockedSubview !== 'project' ? (
         <button
           type="button"
           role="tab"
@@ -4128,8 +4139,9 @@ function ConversationTasks({
           <span className="text-xs font-semibold">普通任务</span>
           <span className="mt-0.5 text-[10px] font-normal text-neutral-400">辅助状态 · 负责人视图</span>
         </button>
+        ) : null}
         <div className="min-w-3 flex-1" />
-        {subview === 'plain' ? (
+        {subview === 'plain' && lockedSubview !== 'plain' ? (
           <button
             type="button"
             onClick={() => setShowProjectSettings(true)}
