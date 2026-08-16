@@ -2533,6 +2533,7 @@ export default function ChatPage() {
       channelId: activeChannel,
       label: isDm ? `@${activeDmName || '私聊'}` : `#${activeName || '频道'}`,
     });
+    setMobileConversationListOpen(false);
     setSidebarView('search');
   };
 
@@ -2550,25 +2551,26 @@ export default function ChatPage() {
         <div className="px-2 py-2 space-y-0.5">
           <button onClick={() => {
             setSearchChannelScope(null);
+            setMobileConversationListOpen(false);
             setSidebarView(sidebarView === 'search' ? 'channels' : 'search');
           }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'search' && !searchChannelScope ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Search size={14} className="text-neutral-400 shrink-0" />
             <span>搜索</span>
             <span className="ml-auto text-[10px] text-neutral-400">⌘K</span>
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'inbox' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Activity size={14} className="text-neutral-400 shrink-0" />
             <span>活动</span>
             {inboxUnread > 0 && (
               <span className="ml-auto rounded bg-pink-100 px-1.5 py-0.5 text-[10px] font-medium text-pink-600">{inboxUnread}</span>
             )}
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'saved' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Bookmark size={14} className="text-neutral-400 shrink-0" />
             <span>收藏</span>
             <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{savedDisplayMessages.length}</span>
           </button>
-          <button onClick={() => setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned')} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'pinned' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
+          <button onClick={() => { setMobileConversationListOpen(false); setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned'); }} className={`flex w-full items-center gap-2 rounded px-3 py-1.5 text-sm ${sidebarView === 'pinned' ? 'bg-white font-medium text-neutral-900 shadow-sm' : 'text-neutral-600 hover:bg-white/50'}`}>
             <Pin size={14} className="text-neutral-400 shrink-0" />
             <span>固定</span>
             <span className="ml-auto rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-medium text-neutral-600">{loadedPinnedChannel === activeChannel ? pinnedDisplayMessages.length : 0}</span>

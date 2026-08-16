@@ -23,6 +23,9 @@ describe('chat task surface', () => {
     expect(chatSource).toContain('data-smoke="channel-mobile-list-back"');
     expect(chatSource).toContain('onClick={() => setMobileConversationListOpen(true)}');
     expect(chatSource).toContain('setMobileConversationListOpen(false); setActiveChannel(ch.id)');
+    expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'inbox' ? 'channels' : 'inbox')");
+    expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'saved' ? 'channels' : 'saved')");
+    expect(chatSource).toContain("setMobileConversationListOpen(false); setSidebarView(sidebarView === 'pinned' ? 'channels' : 'pinned')");
     expect(chatSource).toContain('className="flex min-w-0 flex-1 overflow-hidden"');
     expect(sidebarSource).toContain('切换团队，当前团队：');
     expect(sidebarSource).toContain('className="font-semibold md:hidden"');
