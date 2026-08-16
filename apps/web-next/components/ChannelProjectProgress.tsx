@@ -401,12 +401,17 @@ function ProjectWorkCard({
         </div>
       ) : null}
 
-      {entry && item.lane === 'review' ? (
+      {entry && (item.lane === 'review' || (item.lane === 'active' && entry.delivery.focusPackageId)) ? (
         <>
-          <div className="mt-2.5 rounded-lg border border-sky-200 bg-sky-50/70 p-2 text-xs leading-5 text-neutral-700" data-smoke="project-card-delivery-summary">
-            <strong className="block text-sky-800">待审核输出</strong>
-            {projectReviewMemberList(reviewProjection) ?? deliverySummary}
-          </div>
+          {item.lane === 'review' ? (
+            <div className="mt-2.5 rounded-lg border border-sky-200 bg-sky-50/70 p-2 text-xs leading-5 text-neutral-700" data-smoke="project-card-delivery-summary">
+              <strong className="block text-sky-800">待审核输出</strong>
+              {projectReviewMemberList(reviewProjection) ?? deliverySummary}
+            </div>
+          ) : null}
+          {/* 审核面板锚定「焦点包有待审动作」这一 Server 事实（availableActions 自决按钮）：
+              任务状态推进依赖消息路径（markLinkedTaskInReview），API 直发交付（无消息）
+              时任务可能仍处非 in_review——但焦点包成员待审本身即待审核事实，面板照常内嵌。 */}
           <TaskCardReviewPanel
             channelId={channelId}
             focusPackageId={entry.delivery.focusPackageId ?? null}
