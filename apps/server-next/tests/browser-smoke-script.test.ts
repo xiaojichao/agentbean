@@ -114,7 +114,10 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain('task-card-facts');
     // 原型对齐（#1225 收口）：task-only 详情已退役——守卫锚定新契约（点击不开侧边栏、深链回落）。
     expect(smoke).toContain('ordinary channel Task click no longer opens the retired task-only detail');
-    expect(smoke).toContain('task-only deep link falls back to the Tasks surface without the retired detail panel');
+    expect(smoke).toContain('task-only deep link falls back to the locked ordinary Tasks surface without the retired detail panel');
+    // 频道级子视图锁定：非默认频道锁项目工作台；#all 锁普通任务且无项目设置入口。
+    expect(smoke).toContain('non-default channel locks the Tasks tab to the project workbench subview');
+    expect(smoke).toContain('default #all channel locks the Tasks tab to the ordinary subview without project settings');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
   });
@@ -461,8 +464,8 @@ describe('AgentBean Next browser smoke script', () => {
       'setInputValue',
     ]));
     expect(calls).toEqual(expect.arrayContaining([
-      // 原型对齐：预览审核入口收敛到 Files（任务卡不再进详情侧边栏）。
-      ['click', '[data-smoke="channel-files-tab"]'],
+      // 新版原型（#1194）：任务卡「审核交付文件」入口直接打开共享预览/编辑浮窗。
+      ['click', '[data-smoke="task-card-review-entry-action"][data-action="review-files"]'],
       ['click', '[data-smoke="package-preview-approve"]'],
       ['setInputValue', {
         selector: '[data-smoke="package-preview-review-panel"] textarea',
@@ -470,7 +473,6 @@ describe('AgentBean Next browser smoke script', () => {
       }],
       ['click', '[data-smoke="package-preview-review-panel"] input[type="checkbox"]'],
       ['click', '[data-smoke="package-preview-review-submit"]'],
-      ['click', '[data-smoke="files-row-preview-edit"]'],
     ]));
     expect(calls).toContainEqual([
       'waitForFunction',
