@@ -112,7 +112,9 @@ describe('AgentBean Next browser smoke script', () => {
     expect(smoke).toContain('channel-plain-task-workspace');
     expect(smoke).toContain("[title=\"列表\"]");
     expect(smoke).toContain('task-card-facts');
-    expect(smoke).toContain('reselecting the active channel Tasks subview preserves the selected Task deep link');
+    // 原型对齐（#1225 收口）：task-only 详情已退役——守卫锚定新契约（点击不开侧边栏、深链回落）。
+    expect(smoke).toContain('ordinary channel Task click no longer opens the retired task-only detail');
+    expect(smoke).toContain('task-only deep link falls back to the Tasks surface without the retired detail panel');
     expect(smoke).toContain("!new URLSearchParams(window.location.search).has('task')");
     expect(smoke).toContain("document.querySelector('[data-smoke=\"chat-task-detail\"]') === null");
   });
