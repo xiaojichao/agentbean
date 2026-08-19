@@ -1,0 +1,5 @@
+interface:
+  display_name: "Trellis Brainstorm (explicit only)"
+  short_description: "Legacy Trellis planning flow; explicit use only in AgentBean"
+policy:
+  allow_implicit_invocation: false
