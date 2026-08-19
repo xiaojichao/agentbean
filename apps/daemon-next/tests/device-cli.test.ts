@@ -188,6 +188,39 @@ describe('MacOSLaunchAgentAdapter', () => {
     stdout = '';
     await expect(adapter.status()).resolves.toEqual({ installed: true, loaded: false, running: false, queryFailed: true });
   });
+
+  test('launchctl not-found 属于未加载而非查询失败(macOS 26 对未注册服务 print 退出码 113)', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-launch-notfound-'));
+    const baseDir = join(home, '.agentbean');
+    // 全新机器:plist 尚未写入,launchctl print 如实报告服务不存在(实测 macOS 26.4.1)。
+    const adapter = createMacOSLaunchAgentAdapter({
+      uid: 501,
+      home,
+      baseDir,
+      run: vi.fn(async () => ({
+        exitCode: 113,
+        stdout: '',
+        stderr: 'Bad request.\nCould not find service "com.agentbean.device-service" in domain for user gui: 501',
+      })),
+    });
+    await expect(adapter.status()).resolves.toEqual({ installed: false, loaded: false, running: false, queryFailed: false });
+  });
+
+  test('旧版 macOS not-found 文案(Target is not loaded)同样不算查询失败', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-launch-notfound-legacy-'));
+    const baseDir = join(home, '.agentbean');
+    const adapter = createMacOSLaunchAgentAdapter({
+      uid: 501,
+      home,
+      baseDir,
+      run: vi.fn(async () => ({
+        exitCode: 5,
+        stdout: '',
+        stderr: 'Print: Target is not loaded, nor found in the cache. (5: No such process)',
+      })),
+    });
+    await expect(adapter.status()).resolves.toEqual({ installed: false, loaded: false, running: false, queryFailed: false });
+  });
 });
 
 describe('agentbean device CLI', () => {
@@ -278,6 +311,51 @@ describe('agentbean device CLI', () => {
 
     expect(connectProfile).not.toHaveBeenCalled();
     expect(stderr).toHaveBeenCalledWith('无法读取系统服务管理器中的 Device Service 状态，未消耗设备邀请。');
+  });
+
+  test('全新机器上 connect 不因服务未注册而拒绝,完整走通邀请与安装', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agentbean-device-connect-fresh-'));
+    const baseDir = join(home, '.agentbean');
+    // 真实 adapter + 真实 launchctl 语义:print 对未注册 target 返回非零 not-found(实测 macOS 26.4.1)。
+    const adapter = createMacOSLaunchAgentAdapter({
+      uid: 501,
+      home,
+      baseDir,
+      run: vi.fn(async (_executable, argv) => {
+        if (argv[0] === 'print') {
+          return {
+            exitCode: 113,
+            stdout: '',
+            stderr: 'Bad request.\nCould not find service "com.agentbean.device-service" in domain for user gui: 501',
+          };
+        }
+        return success();
+      }),
+    });
+    const connectProfile = vi.fn(async () => ({ profileId: 'team-a', teamId: 'team-a' }));
+    const stderr = vi.fn();
+
+    await expect(runDeviceCli([
+      'connect',
+      '--invite-code', 'invite-secret',
+      '--server-url', 'https://api.agentbean.dev',
+      '--profile-id', 'team-a',
+    ], {
+      platform: 'darwin',
+      home,
+      baseDir,
+      executablePath: '/opt/AgentBean/dist/bin.js',
+      nodeExecutablePath: '/opt/homebrew/bin/node',
+      createAdapter: () => adapter,
+      controlClient: { request: vi.fn() } as unknown as DeviceControlClient,
+      waitForReady: vi.fn(async () => runningState()),
+      assertRuntimeOwner: vi.fn(async () => undefined),
+      connectProfile,
+      stderr,
+    })).resolves.toBe(DEVICE_CLI_EXIT.success);
+
+    expect(connectProfile).toHaveBeenCalledOnce();
+    expect(stderr).not.toHaveBeenCalledWith('无法读取系统服务管理器中的 Device Service 状态，未消耗设备邀请。');
   });
 
   test('install writes payload and plist, bootstraps once, waits ready, and is idempotent', async () => {
