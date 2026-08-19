@@ -1,61 +1,40 @@
 ---
 name: trellis-continue
-description: "Resume work on the current task. Loads the workflow Phase Index, figures out which phase/step to pick up at, then pulls the step-level detail via get_context.py --mode phase. Use when coming back to an in-progress task and you need to know what to do next."
+description: "Resume AgentBean work from shared project truth plus optional Trellis Execution Packet context. Use when continuing across sessions or Coding Agents."
 ---
 
-# Continue Current Task
+# Continue Current Work — AgentBean Override
 
-Resume work on the current task — pick up at the right phase/step in `.trellis/workflow.md`.
+Do not resume by blindly following a Trellis phase state. `AGENTS.md` owns the repository workflow; Trellis only helps restore context.
 
----
+## 1. Re-establish current truth
 
-## Step 1: Load Current Context
+Read, in order:
+
+1. `AGENTS.md` and `docs/agents/harness.md`
+2. current GitHub Issue / PR / comments
+3. branch, worktree, `git status`, recent commits
+4. relevant CONTEXT / ADR
+5. relevant `.trellis/spec/`
+
+## 2. Load optional Execution Packet
 
 ```bash
 python3 ./.trellis/scripts/get_context.py
 ```
 
-Confirms: current task, git state, recent commits.
+If an active Trellis task exists, read its relevant `prd.md`, `design.md`, `implement.md`, research, or notes only as handoff context. If history is still missing, use `trellis mem` / `trellis-session-insight`.
 
-## Step 2: Load the Phase Index
+Trellis `status` describes the packet, not permission to code:
 
-```bash
-python3 ./.trellis/scripts/get_context.py --mode phase
-```
+- `planning` → packet context is still being assembled; if the user's implementation request is already clear, no extra approval is required;
+- `in_progress` → continue the next bounded slice under `AGENTS.md`;
+- no active task → normal state; continue directly if the request is clear.
 
-Shows the Phase Index (Plan / Execute / Finish) with routing + skill mapping.
+## 3. Reuse valid evidence
 
-## Step 3: Decide Where You Are
+Do not rerun tests or Review solely because a new Coding Agent took over. Reuse evidence that still applies to the current source state; rerun only checks affected by subsequent changes or a new concrete remote failure.
 
-`get_context.py` shows the active task's `status` field. Route by `status` + artifact presence. This command replaces the user needing to remember the Trellis flow; it does not itself approve implementation.
+## 4. Continue with AgentBean routing
 
-- `status=planning` + no `prd.md` → **1.1** (load `trellis-brainstorm`)
-- `status=planning` + `prd.md` only → decide whether the task is lightweight or complex. Lightweight can move to **1.4** review; complex returns to **1.1** to add `design.md` + `implement.md`.
-- `status=planning` + complex artifacts complete + sub-agent jsonl not curated (only the seed `_example` row) → **1.3**
-- `status=planning` + required artifacts complete + required jsonl curated or inline mode → **1.4** (ask for start review; only run `task.py start` after user confirms)
-- `status=in_progress` + implementation not started → **2.1**
-- `status=in_progress` + implementation done, not yet checked → **2.2**
-- `status=in_progress` + check passed → **3.3** (spec update) → **3.4** (commit)
-- `status=completed` (rare; usually archived immediately) → archive flow
-
-Phase rules (full detail in `.trellis/workflow.md`):
-
-1. Run steps **in order** within a phase — `[required]` steps must not be skipped
-2. `[once]` steps are already done if the required output exists. `prd.md` alone can be enough only for lightweight tasks; complex tasks also need `design.md` and `implement.md`.
-3. You may go back to an earlier phase if discoveries require it
-
-## Step 4: Load the Specific Step
-
-Once you know which step to resume at:
-
-```bash
-python3 ./.trellis/scripts/get_context.py --mode phase --step <X.X> --platform codex
-```
-
-Follow the loaded instructions. After each `[required]` step completes, move to the next.
-
----
-
-## Reference
-
-Full workflow and detailed phase steps live in `.trellis/workflow.md`. This command is only an entry point — the canonical guidance is there.
+Use Matt / Addy / Trellis capabilities only when their trigger conditions actually match. Do not default to `trellis-brainstorm`, automatic implement/check sub-agents, mandatory spec update, or `trellis-finish-work`.
