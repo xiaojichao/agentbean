@@ -1,0 +1,5 @@
+interface:
+  display_name: "Trellis Before Dev (explicit only)"
+  short_description: "Legacy Trellis pre-dev flow; explicit use only in AgentBean"
+policy:
+  allow_implicit_invocation: false
