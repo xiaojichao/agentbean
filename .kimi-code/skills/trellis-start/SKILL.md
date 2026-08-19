@@ -1,64 +1,36 @@
 ---
 name: trellis-start
-description: "Initializes an AI development session by reading workflow guides, developer identity, git status, active tasks, and project guidelines from .trellis/. Classifies incoming tasks and routes to brainstorm, direct edit, or task workflow. Use when beginning a new coding session, resuming work, starting a new task, or re-establishing project context."
+description: "Loads AgentBean's shared Trellis context for a coding session without taking over the repository workflow. Use when beginning or resuming work and Trellis context may help."
 ---
 
-# Start Session
+# Start Session — AgentBean Override
 
-Initialize a Trellis-managed development session. This platform has no session-start hook, so manually load the equivalent compact context by following these steps.
+`AGENTS.md` is the canonical engineering contract across Codex, Claude Code, Kimi Code, Cursor, and other Coding Agents. Trellis only supplies context, memory, and collaboration capabilities.
 
----
+## Load current truth
 
-## Step 1: Current state
-Identity, git status, current task, active tasks, journal location.
+Read `AGENTS.md` and `docs/agents/harness.md`, then inspect the current GitHub Issue / PR and git state.
+
+## Load Trellis context only when useful
 
 ```bash
 python3 ./.trellis/scripts/get_context.py
-```
-
-If this output includes a line beginning `Trellis update available:`, copy the full line verbatim when summarizing session context. Do not shorten operational command hints.
-
-## Step 2: Workflow overview
-Compact Phase Index, request triage rules, planning artifact contract, and the step-detail command.
-
-```bash
-python3 ./.trellis/scripts/get_context.py --mode phase
-```
-
-Full guide in `.trellis/workflow.md` (read on demand).
-
-## Step 3: Guideline indexes
-Discover packages + spec layers, then read each relevant index file.
-
-```bash
 python3 ./.trellis/scripts/get_context.py --mode packages
-cat .trellis/spec/guides/index.md
-cat .trellis/spec/<package>/<layer>/index.md   # for each relevant layer
 ```
 
-Index files list the specific guideline docs to read when you actually start coding.
+If an active Execution Packet exists, read its relevant artifacts. If no active task exists, that is normal: **do not ask for Trellis task-creation consent**.
 
-## Step 4: Decide next action
-From Step 1 you know the current task and status. Check the task directory:
+Create a Trellis task only for cross-session, cross-Coding-Agent, or genuinely multi-stage context persistence.
 
-- **Active task status `planning` + no `prd.md`** → Phase 1.1. Load the `trellis-brainstorm` skill.
-- **Active task status `planning` + `prd.md` exists** → stay in Phase 1. Lightweight tasks can be PRD-only; complex tasks need `design.md` + `implement.md`. Load the relevant Phase 1 step detail before `task.py start`.
-- **Active task status `in_progress`** → Phase 2 step 2.1. Load the step detail:
-  ```bash
-  python3 ./.trellis/scripts/get_context.py --mode phase --step 2.1 --platform kimi
-  ```
-- **No active task** → classify first. For simple conversation / small task, ask only whether this turn should create a Trellis task. For complex work, ask whether you may create a Trellis task and enter planning. If the user says no, skip Trellis for this session.
+## Load relevant project guidance
 
----
+Read the relevant CONTEXT / ADR first, then only the `.trellis/spec/` indexes and concrete guideline files that apply to the code being changed.
 
-## Skill routing (quick reference)
+## Continue under AgentBean routing
 
-| User intent | Skill |
-|---|---|
-| New feature / unclear requirements | `trellis-brainstorm` |
-| About to write code | `trellis-before-dev` |
-| Done coding / quality check | `trellis-check` |
-| Stuck / fixed same bug multiple times | `trellis-break-loop` |
-| Learned something worth capturing | `trellis-update-spec` |
+- clear bounded request → direct execution;
+- unclear requirement → normal AgentBean clarification / Matt skills when appropriate;
+- hard bug → Matt `diagnosing-bugs`;
+- cross-Agent handoff → existing Execution Packet + `trellis mem` if needed.
 
-Full rules + anti-rationalization table in `.trellis/workflow.md`.
+Do not default-route to `trellis-brainstorm`, `trellis-implement`, `trellis-check`, `trellis-break-loop`, or `trellis-finish-work`.
