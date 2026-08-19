@@ -1,0 +1,5 @@
+interface:
+  display_name: "Trellis Finish Work (explicit only)"
+  short_description: "Legacy Trellis closeout flow; explicit use only in AgentBean"
+policy:
+  allow_implicit_invocation: false
