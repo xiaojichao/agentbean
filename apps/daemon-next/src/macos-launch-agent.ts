@@ -85,7 +85,9 @@ export function createMacOSLaunchAgentAdapter(
         installed,
         loaded,
         running: loaded && launchctlPrintHasLivePid(result.stdout),
-        queryFailed: result.exitCode !== 0,
+        // 服务未注册时 launchctl print 必然非零(全新机器是 connect 的正常前置态,
+        // 实测 macOS 26.4.1 退出码 113),只有非 not-found 的失败才算查询失败。
+        queryFailed: result.exitCode !== 0 && !launchctlReportsTargetNotFound(result.stderr),
       };
     },
   };
@@ -262,6 +264,12 @@ function escapeXml(value: string): string {
 function launchctlPrintHasLivePid(stdout: string): boolean {
   const match = stdout.match(/^\s*pid\s*=\s*(\d+)\s*$/m);
   return Boolean(match?.[1] && Number(match[1]) > 0);
+}
+
+// macOS 26.x: `Could not find service "…" in domain for user gui: 501`(退出码 113)
+// 旧版 macOS: `Print: Target is not loaded, nor found in the cache. (5: No such process)`
+function launchctlReportsTargetNotFound(stderr: string): boolean {
+  return /Could not find service|Target is not loaded|No such process/i.test(stderr);
 }
 
 function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
