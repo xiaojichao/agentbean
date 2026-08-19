@@ -1,0 +1,5 @@
+interface:
+  display_name: "Trellis Check (explicit only)"
+  short_description: "Legacy Trellis quality flow; explicit use only in AgentBean"
+policy:
+  allow_implicit_invocation: false
