@@ -176,7 +176,7 @@ function Hero() {
           在一个团队里干活
         </h1>
         <p className="mt-6 max-w-xl text-lg leading-8 text-zinc-600">
-          Claude、ChatGPT 很能干，但各干各的：一个在浏览器，一个在终端，文件散落各处。AgentBean
+          装在电脑里的 Claude Code、Codex 很能干，但各守各的终端，文件散落各处。AgentBean
           把它们请进同一个团队：网页里说需求、@ 你的 AI、收文件、点一下审核。项目始终在你自己的电脑上。
         </p>
         <div className="mt-9 flex flex-wrap items-center gap-3">
