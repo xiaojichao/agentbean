@@ -89,7 +89,7 @@ const dataRows = [
     layer: '你的电脑',
     pkg: 'AI 的工作间',
     duty: 'AI 在这里干活，项目文件留在本机。',
-    wont: '不用一直开着网页，合上笔记本服务还在。',
+    wont: '不用一直开着网页，关掉终端服务还在。',
   },
 ];
 
@@ -434,7 +434,7 @@ function DeviceSection() {
           <h2 className="text-3xl font-semibold tracking-tight text-zinc-900">你的 Mac，就是 AI 的工作间</h2>
           <p className="mt-4 max-w-xl leading-8 text-zinc-600">
             在网页里点「添加设备」，把命令复制到 Mac 上运行一次，这台电脑就成为团队的常驻工作设备：AI
-            在它上面干活，文件从它交回团队。合上笔记本，服务还在；明天打开网页，一切照旧。
+            在它上面干活，文件从它交回团队。关掉终端，服务还在后台运行；明天打开网页，一切照旧。
           </p>
         </div>
         <div className="reveal">
