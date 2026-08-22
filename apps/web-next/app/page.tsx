@@ -529,8 +529,7 @@ function DataSection() {
         <div className="reveal max-w-2xl">
           <h2 className="text-3xl font-semibold tracking-tight text-zinc-900">你的东西放在哪，清清楚楚</h2>
           <p className="mt-4 leading-8 text-zinc-600">
-            AgentBean 分三层工作：你看到的网页、记录团队协作的服务器、以及你自己的电脑。项目文件和
-            AI 的操作，都在你的电脑上。
+            AgentBean 分三层工作：你看到的网页、记录团队协作的服务器、以及你自己的电脑。项目文件和执行环境留在本机，交回的成果、日志和协作记录会上云。
           </p>
         </div>
         <div className="reveal mt-12 divide-y divide-zinc-200">
