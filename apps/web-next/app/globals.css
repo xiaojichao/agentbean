@@ -8,3 +8,24 @@ body {
   @apply bg-neutral-50 text-neutral-900 antialiased;
   font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", "PingFang SC", sans-serif;
 }
+
+/* Landing motion: CSS-only entry/scroll reveals, degrade to static without support. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes ab-fade-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .hero-in {
+    animation: ab-fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .hero-in-delay {
+    animation-delay: 0.12s;
+  }
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: ab-fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 55%;
+    }
+  }
+}
