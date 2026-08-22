@@ -3,7 +3,6 @@ import Link from 'next/link';
 import { Check, X } from 'lucide-react';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://api.agentbean.dev'),
   title: 'AgentBean：和你的 AI 同事，在一个团队里干活',
   description:
     '给「人类 + AI」一起用的团队工作台：在网页里说需求、@ 你的 AI、收文件、点一下审核。项目文件留在你自己的电脑上，AI 交回的成果与团队协作记录同步到云端。',
