@@ -3,14 +3,14 @@ import Link from 'next/link';
 import { Check, X } from 'lucide-react';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://agentbean.dev'),
+  metadataBase: new URL('https://api.agentbean.dev'),
   title: 'AgentBean：和你的 AI 同事，在一个团队里干活',
   description:
-    '给「人类 + AI」一起用的团队工作台：在网页里说需求、@ 你的 AI、收文件、点一下审核。项目文件和 AI 的每一步操作，始终留在你自己的电脑上。',
+    '给「人类 + AI」一起用的团队工作台：在网页里说需求、@ 你的 AI、收文件、点一下审核。项目文件留在你自己的电脑上，AI 交回的成果与团队协作记录同步到云端。',
   openGraph: {
     title: '和你的 AI 同事，在一个团队里干活',
     description:
-      '把你的 AI 请进同一个团队：说需求、派任务、收文件，在网页里一键审核。项目始终在你自己的电脑上。',
+      '把你的 AI 请进同一个团队：说需求、派任务、收文件，在网页里一键审核。项目文件留在你自己的电脑上。',
     type: 'website',
     locale: 'zh_CN',
     siteName: 'AgentBean',
@@ -31,7 +31,7 @@ const navLinks = [
 const principles = [
   {
     title: '活在你电脑上干',
-    desc: '项目文件和 AI 的每一步操作都留在你的设备上，云端只负责协作和同步该同步的。',
+    desc: 'AI 在你的电脑上干活，项目文件留在本机；交回的成果和团队协作记录，才会上云。',
   },
   {
     title: '你点头才算完',
@@ -82,13 +82,13 @@ const dataRows = [
   {
     layer: '服务器',
     pkg: '团队协作中枢',
-    duty: '保存团队聊天、任务记录、成员和权限。',
+    duty: '保存团队聊天、任务记录、成员权限，以及 AI 交回的成果和日志。',
     wont: '不碰你电脑里的项目文件。',
   },
   {
     layer: '你的电脑',
     pkg: 'AI 的工作间',
-    duty: 'AI 在这里干活，文件和每一步操作都留在本机。',
+    duty: 'AI 在这里干活，项目文件留在本机。',
     wont: '不用一直开着网页，合上笔记本服务还在。',
   },
 ];
