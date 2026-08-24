@@ -212,6 +212,10 @@ function conclusionKey(run) {
 }
 
 export function computeFirstPassCiMetrics(runs, pullRequests = [], window = null) {
+  return summarizeFirstPassCiResolution(resolveFirstPassCiRuns(runs, pullRequests, window));
+}
+
+export function resolveFirstPassCiRuns(runs, pullRequests = [], window = null) {
   const prByCommit = new Map();
   const commitFallbackTruncatedPrNumbers = pullRequests
     .filter((pr) => pr.commits?.pageInfo?.hasNextPage)
@@ -230,41 +234,165 @@ export function computeFirstPassCiMetrics(runs, pullRequests = [], window = null
     ? runs.filter((run) => inWindow(run.created_at, window.from, window.to))
     : runs;
   const ordered = [...eligibleRuns]
-    .sort((left, right) => timestamp(left.created_at) - timestamp(right.created_at));
+    .sort((left, right) => (
+      timestamp(left.created_at) - timestamp(right.created_at)
+      || Number(left.id ?? 0) - Number(right.id ?? 0)
+    ));
   for (const run of ordered) {
     const directPullRequests = run.pull_requests ?? [];
     if (directPullRequests.length > 1) {
       runsWithUnresolvedPullRequestAssociation += 1;
       continue;
     }
-    const number = directPullRequests.length === 1
+    const association = directPullRequests.length === 1 ? 'direct' : 'commit_fallback';
+    const number = association === 'direct'
       ? directPullRequests[0]?.number
       : prByCommit.get(run.head_sha);
     if (!number) {
       runsWithUnresolvedPullRequestAssociation += 1;
       continue;
     }
-    if (!firstByPr.has(number)) firstByPr.set(number, run);
+    const first = firstByPr.get(number);
+    if (!first) {
+      firstByPr.set(number, {
+        prNumber: number,
+        run,
+        association,
+        laterRunId: null,
+        laterRunCreatedAt: null,
+        laterRunHeadSha: null,
+      });
+    } else if (!first.laterRunId) {
+      first.laterRunId = run.id;
+      first.laterRunCreatedAt = run.created_at;
+      first.laterRunHeadSha = run.head_sha ?? null;
+    }
   }
-  const byConclusion = {};
-  for (const run of firstByPr.values()) {
-    const key = conclusionKey(run);
-    byConclusion[key] = (byConclusion[key] ?? 0) + 1;
-  }
-  const completed = [...firstByPr.values()].filter((run) => Boolean(run.conclusion));
-  const success = completed.filter((run) => run.conclusion === 'success').length;
   return {
-    pullRequestsWithFirstRun: firstByPr.size,
-    completedFirstRuns: completed.length,
-    success,
-    successRate: completed.length === 0 ? null : Number((success / completed.length).toFixed(4)),
-    byConclusion,
+    firstRuns: [...firstByPr.values()],
     commitFallbackEvidenceComplete: commitFallbackTruncatedPrNumbers.length === 0,
     runsWithUnresolvedPullRequestAssociation,
     runsWithoutPullRequest: commitFallbackTruncatedPrNumbers.length === 0
       ? runsWithUnresolvedPullRequestAssociation
       : null,
     commitFallbackTruncatedPrNumbers,
+  };
+}
+
+function summarizeFirstPassCiResolution(resolution) {
+  const byConclusion = {};
+  for (const { run } of resolution.firstRuns) {
+    const key = conclusionKey(run);
+    byConclusion[key] = (byConclusion[key] ?? 0) + 1;
+  }
+  const completed = resolution.firstRuns.map((entry) => entry.run).filter((run) => Boolean(run.conclusion));
+  const success = completed.filter((run) => run.conclusion === 'success').length;
+  return {
+    pullRequestsWithFirstRun: resolution.firstRuns.length,
+    completedFirstRuns: completed.length,
+    success,
+    successRate: completed.length === 0 ? null : Number((success / completed.length).toFixed(4)),
+    byConclusion,
+    commitFallbackEvidenceComplete: resolution.commitFallbackEvidenceComplete,
+    runsWithUnresolvedPullRequestAssociation: resolution.runsWithUnresolvedPullRequestAssociation,
+    runsWithoutPullRequest: resolution.runsWithoutPullRequest,
+    commitFallbackTruncatedPrNumbers: resolution.commitFallbackTruncatedPrNumbers,
+  };
+}
+
+function classifyFailureStep(stepNames, failedJobNames) {
+  const names = [...stepNames, ...failedJobNames].map((name) => name.toLowerCase());
+  const includes = (fragment) => names.some((name) => name.includes(fragment));
+  if (includes('package tests and retained phase boundaries')) return 'package_tests_or_boundaries';
+  if (includes('build agentbean next packages')) return 'build';
+  if (includes('browser smoke')) return 'browser_smoke';
+  if (includes('preview smoke')) return 'preview_smoke';
+  if (includes('daemon install smoke')) return 'daemon_install_smoke';
+  if (includes('readiness')) return 'readiness';
+  if (includes('team terminology')) return 'terminology';
+  if (includes('agent configuration eval')) return 'agent_configuration_eval';
+  if (includes('install') || includes('set up') || includes('checkout')) return 'setup_or_dependencies';
+  if (failedJobNames.length > 0 && stepNames.length === 0) return 'job_failure_without_failed_step';
+  return 'other';
+}
+
+function categoryPareto(items) {
+  const counts = new Map();
+  for (const item of items) {
+    const current = counts.get(item.category) ?? { category: item.category, runIds: [], prNumbers: [] };
+    current.runIds.push(item.runId);
+    current.prNumbers.push(item.prNumber);
+    counts.set(item.category, current);
+  }
+  return {
+    sampleSize: items.length,
+    categories: [...counts.values()]
+      .map((item) => ({
+        ...item,
+        count: item.runIds.length,
+        share: items.length === 0 ? null : Number((item.runIds.length / items.length).toFixed(4)),
+      }))
+      .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category)),
+  };
+}
+
+export function computeFirstPassCiDiagnostics(resolution, jobResults = []) {
+  const jobsByRun = new Map(jobResults.map((result) => [result.runId, result]));
+  const nonSuccessRuns = resolution.firstRuns
+    .filter(({ run }) => run.conclusion && run.conclusion !== 'success')
+    .map((entry) => {
+      const result = jobsByRun.get(entry.run.id);
+      const failedJobs = (result?.jobs ?? [])
+        .filter((job) => job.conclusion === 'failure')
+        .map((job) => job.name);
+      const failedSteps = (result?.jobs ?? [])
+        .flatMap((job) => job.steps ?? [])
+        .filter((step) => step.conclusion === 'failure')
+        .map((step) => step.name);
+      let category = `conclusion:${entry.run.conclusion}`;
+      if (entry.run.conclusion === 'failure') {
+        category = result?.jobsCapped
+          ? 'jobs_truncated'
+          : classifyFailureStep(failedSteps, failedJobs);
+      } else if (entry.run.conclusion === 'cancelled') {
+        category = entry.laterRunId
+          ? 'cancelled_followed_by_later_pr_run'
+          : 'cancelled_without_later_pr_run';
+      }
+      return {
+        prNumber: entry.prNumber,
+        runId: entry.run.id,
+        createdAt: entry.run.created_at,
+        headSha: entry.run.head_sha,
+        conclusion: entry.run.conclusion,
+        association: entry.association,
+        category,
+        laterRunId: entry.laterRunId,
+        laterRunCreatedAt: entry.laterRunCreatedAt,
+        laterRunHeadSha: entry.laterRunHeadSha,
+        failedJobs,
+        failedSteps,
+      };
+    });
+  const failures = nonSuccessRuns.filter((run) => run.conclusion === 'failure');
+  const cancellations = nonSuccessRuns.filter((run) => run.conclusion === 'cancelled');
+  const cancellationsWithLaterRunCount = cancellations.filter(
+    (run) => run.category === 'cancelled_followed_by_later_pr_run',
+  ).length;
+  const completedFirstRunsExcludingCancellationsWithLaterRun = resolution.firstRuns.filter(({ run, laterRunId }) => (
+    Boolean(run.conclusion) && !(run.conclusion === 'cancelled' && laterRunId)
+  )).length;
+  const successCount = resolution.firstRuns.filter(({ run }) => run.conclusion === 'success').length;
+  return {
+    nonSuccessRuns,
+    failurePareto: categoryPareto(failures),
+    cancellationPareto: categoryPareto(cancellations),
+    cancellationsWithLaterRunCount,
+    completedFirstRunsExcludingCancellationsWithLaterRun,
+    successRateExcludingCancellationsWithLaterRun: completedFirstRunsExcludingCancellationsWithLaterRun === 0
+      ? null
+      : Number((successCount / completedFirstRunsExcludingCancellationsWithLaterRun).toFixed(4)),
+    jobsTruncatedRunIds: jobResults.filter((result) => result.jobsCapped).map((result) => result.runId),
   };
 }
 
@@ -498,6 +626,25 @@ export async function collectSdlcFlowMetrics(
   );
   const pullRequestWorkflowRuns = pullRequestRuns.workflowRuns
     .filter((run) => inWindow(run.created_at, from, to));
+  const firstPassResolution = resolveFirstPassCiRuns(
+    pullRequestWorkflowRuns,
+    prResult.pullRequests,
+    { from, to },
+  );
+  const failedFirstRuns = firstPassResolution.firstRuns
+    .filter(({ run }) => run.conclusion === 'failure');
+  const firstPassJobResults = await mapWithConcurrency(
+    failedFirstRuns,
+    JOB_FETCH_CONCURRENCY,
+    async ({ run }) => {
+      const result = await fetchRunJobs({ ...repository, runId: run.id }, runCommandAsync);
+      return { runId: run.id, jobs: result.jobs, jobsCapped: result.capped };
+    },
+  );
+  const firstPassDiagnostics = computeFirstPassCiDiagnostics(
+    firstPassResolution,
+    firstPassJobResults,
+  );
   const mainPushWorkflowRuns = mainPushRuns.workflowRuns
     .filter((run) => inWindow(run.created_at, from, to));
   const mergedPullRequests = prResult.pullRequests.filter((pr) => inWindow(pr.mergedAt, from, to));
@@ -524,6 +671,9 @@ export async function collectSdlcFlowMetrics(
   }
   const cappedJobRuns = deliveries.filter((item) => item.jobsCapped).map((item) => item.run.id);
   if (cappedJobRuns.length > 0) warnings.push(`部分 workflow run 的 jobs 超过 1000 项：${cappedJobRuns.join(', ')}`);
+  if (firstPassDiagnostics.jobsTruncatedRunIds.length > 0) {
+    warnings.push(`部分 first-pass CI run 的 jobs 超过 1000 项：${firstPassDiagnostics.jobsTruncatedRunIds.join(', ')}`);
+  }
 
   return {
     schemaVersion: 1,
@@ -536,17 +686,20 @@ export async function collectSdlcFlowMetrics(
       readyToFirstReview: '窗口内创建的 PR：首次 ready → 其后首次非 PENDING review',
       staleCodexReview: '观察窗口内有更新的 open、非 draft PR：有 Codex review，但没有 review 覆盖当前 head',
       firstPassCiSuccess: '窗口内 pull_request 事件中，每个 PR 最早一次 CI/CD run 的 conclusion',
+      firstPassCiFailurePareto: '失败 first-run 按固定优先级归一失败 job/step；不读取完整日志',
+      firstPassCiCancellationPareto: '取消 first-run 仅按是否存在同 PR 后续 run 分类；不把相关性直接断言为 concurrency supersede',
       mergeToProductionSmoke: 'merge commit 对应 main push run：mergedAt → production smoke job 完成',
       deployToFirstHealthy: '同一 main push run：deploy job 完成 → healthcheck step 完成',
     },
     pullRequests: prMetrics,
-    firstPassCi: computeFirstPassCiMetrics(
-      pullRequestWorkflowRuns,
-      prResult.pullRequests,
-      { from, to },
-    ),
+    firstPassCi: {
+      ...summarizeFirstPassCiResolution(firstPassResolution),
+      workflowRunsComplete: !pullRequestRuns.capped,
+      diagnostics: firstPassDiagnostics,
+    },
     delivery: {
       ...computeDeliveryMetrics(deliveries, mergedPullRequests),
+      workflowRunsComplete: !mainPushRuns.capped,
       observedMainPushRuns: mainPushWorkflowRuns.length,
       matchedMergeRuns: matchedMainPushRuns.length,
     },
@@ -574,11 +727,22 @@ function metricLine(label, metric) {
   return `${label}：样本 ${metric.sampleSize}，P50 ${formatSeconds(metric.p50Seconds)}，P90 ${formatSeconds(metric.p90Seconds)}`;
 }
 
+function paretoLine(label, pareto) {
+  const categories = pareto.categories
+    .slice(0, 3)
+    .map((item) => `${item.category} ${item.count}/${pareto.sampleSize}`)
+    .join('，');
+  return `${label}：${categories || '无样本'}`;
+}
+
 export function formatSdlcFlowMetrics(result) {
   const lines = [
     `AgentBean SDLC 流程指标（${result.window.from.slice(0, 10)} 至 ${result.window.to.slice(0, 10)}）`,
     `仓库：${result.repository}`,
     `首次 CI 成功率：${formatPercent(result.firstPassCi.successRate)}（${result.firstPassCi.success}/${result.firstPassCi.completedFirstRuns}）`,
+    `排除存在后续 run 的取消后：${formatPercent(result.firstPassCi.diagnostics.successRateExcludingCancellationsWithLaterRun)}（${result.firstPassCi.success}/${result.firstPassCi.diagnostics.completedFirstRunsExcludingCancellationsWithLaterRun}）`,
+    paretoLine('首次 CI 失败 Pareto', result.firstPassCi.diagnostics.failurePareto),
+    paretoLine('首次 CI 取消 Pareto', result.firstPassCi.diagnostics.cancellationPareto),
     metricLine('Draft → Ready', result.pullRequests.draftToReady),
     metricLine('Ready → 首次 Review', result.pullRequests.readyToFirstReview),
     `Codex stale review：${result.pullRequests.staleCodexReview.count}/${result.pullRequests.staleCodexReview.eligibleOpenNonDraft}`,
