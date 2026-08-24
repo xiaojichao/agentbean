@@ -91,6 +91,13 @@ test('detect-ci-changes script itself is a validate surface', () => {
   assert.equal(result.should_agent_config_eval, true);
 });
 
+test('changed preflight implementation stays under validate and Agent configuration eval', () => {
+  const result = classifyChangedFiles(['scripts/run-changed-preflight.mjs']);
+  assert.equal(result.should_validate, true);
+  assert.equal(result.should_browser_smoke, false);
+  assert.equal(result.should_agent_config_eval, true);
+});
+
 test('Agent contract changes run only the Agent configuration eval surface', () => {
   const result = classifyChangedFiles(['AGENTS.md', 'docs/agents/harness.md', '.codex/hooks.json', '.trellis/config.yaml']);
   assert.deepEqual(result, {

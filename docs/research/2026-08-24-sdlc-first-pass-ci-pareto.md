@@ -55,6 +55,14 @@ gh api repos/xiaojichao/agentbean/actions/runs/30595768911/jobs --paginate \
 3. 至少累计四周窗口后再设稳定门槛；当前一周数据适合发现热点，不适合直接制定团队/仓库 SLO。
 4. 优先改善开发者本地反馈：让受影响 package tests/fixtures 在提交前可复现，并补齐真实浏览器契约验证；对 runtime async/dispatch 类失败补充可诊断日志和稳定等待条件。
 
+## Changed preflight 落地基线
+
+对 25 次 `package_tests_or_boundaries` 失败继续下钻后，可复现根因分为：13 次行为、契约或断言不一致，9 次 fixture/setup 漂移，1 次缺失源码/导出，1 次语法错误，1 次因历史日志不足保持未知。24/25 已分类样本都能由对应 package 测试、边界脚本或 matching build 在 push 前发现。
+
+`npm run preflight:changed` 因此采用保守选择：明确的 `server-next`、`daemon-next`、`web-next` 改动运行对应测试和 build；共享 packages、CI validate surface 与未知路径回退完整 `test:ci + build:packages`。它不替换远端 CI，也不安装 git hook。
+
+首次用该命令对自身改动执行 full 模式时，真实捕获了 `cli-all-profiles.test.ts` 读取开发机 Device Service runtime-owner 状态造成的 3 个 fixture 失败。测试改为显式注入 runtime-owner 后，daemon 套件与完整 preflight 通过。这为“fixture/setup 是第二大失败簇”提供了新的本地复现证据。
+
 ## Primary sources
 
 - [CI/CD workflow（origin/main）](https://github.com/xiaojichao/agentbean/blob/main/.github/workflows/ci-cd.yml)

@@ -43,3 +43,16 @@ npm run report:sdlc-flow-metrics -- --repo xiaojichao/agentbean
 - `nonSuccessRuns` 仅保留 PR 号、run ID、SHA、conclusion、分类和失败 job/step 名称，不保留完整日志、环境变量或密钥。
 
 报告已接入周度只读 artifact，2026-08-24 生成了首份 28 天基线。累计获得至少四周产物后，再依据主要等待时间和失败 Pareto 决定下一项自动化，不以并行 Agent 数或代码行数作为主 KPI。
+
+## Changed preflight
+
+首份基线的 37 次 first-pass 失败中，25 次集中在 package tests 或 retained boundaries。开发者可在 push 前运行：
+
+```bash
+npm run preflight:changed -- --plan
+npm run preflight:changed
+```
+
+命令默认比较 `origin/main...HEAD`，并合并 staged、unstaged 与 untracked 文件。单一 `apps/{server-next,daemon-next,web-next}` 改动先运行 readiness 与 Team 术语检查，再运行一次 retained boundaries、对应测试和 Local Verification Contract 要求的 build，避免 migration registration 等跨目录守卫被 targeted 模式跳过；`web-next` build 后还会校验 `releases.generated.ts` 没有未提交漂移，作为其生成输入的根 `CHANGELOG.md` 也映射到同一执行面，即使混合改动触发 full fallback 也会保留 freshness 检查；Agent 配置执行面会保留专用 `eval:agent-config`；任意 workspace `package.json` 或锁文件改动会先运行只读的 `npm ci --dry-run` 校验清单与 lockfile 一致性；除此之外的普通文档-only 改动不运行 package 检查；共享 `packages/*`、CI validate 文档/配置、根脚本、工作流、锁文件或无法识别的路径会 fail-safe 回退 readiness、Team 术语、`npm run test:ci` 与 `npm run build:packages`。共享包默认完整回退，是因为其依赖扇出不能由目录名安全缩小。可用 `--base <ref>` 改变比较基线，也可直接传入文件路径检查计划。
+
+这是提交前反馈辅助，不替代 PR 的完整 CI、review、merge-readiness 或 post-merge 验证，也不安装或强制启用 git hook。

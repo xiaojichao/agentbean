@@ -163,6 +163,7 @@ describe('runDaemonNextCli --all-profiles empty list (Fix #2)', () => {
 
   test('rejects with a clear error when listAuthProfiles returns []', async () => {
     const deps: DaemonNextCliDeps = {
+      assertRuntimeOwner: vi.fn(async () => {}),
       listAuthProfiles: vi.fn(() => []),
       loadAuth: vi.fn(() => null),
       saveAuth: vi.fn(),
@@ -186,6 +187,7 @@ describe('runDaemonNextCli all-profiles wiring (listAuthProfiles + recursion)', 
     ];
     const runDaemon = vi.fn(async () => undefined);
     const deps: DaemonNextCliDeps = {
+      assertRuntimeOwner: vi.fn(async () => {}),
       listAuthProfiles: vi.fn(() => profiles),
       runDaemon,
     };
@@ -231,6 +233,7 @@ describe('runDaemonNextCli device-removed shutdown', () => {
     const captured: { onDeviceRemoved?: () => void } = {};
     const exit = vi.fn();
     const deps: DaemonNextCliDeps = {
+      assertRuntimeOwner: vi.fn(async () => {}),
       // saved auth → 走单 profile 路径，跳过 invite 握手
       loadAuth: vi.fn(() => ({
         profileId: 'default',
