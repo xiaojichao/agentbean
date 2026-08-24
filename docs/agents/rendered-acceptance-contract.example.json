@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "name": "频道阶段交付审核工作台（预置真实 Task）",
+  "sources": [
+    {
+      "id": "workbench-acceptance",
+      "path": "docs/agents/channel-task-review-workbench-acceptance.md",
+      "anchors": [
+        "待审核可在 Tasks 查看 package 成员、版本、coverage、验收与动作"
+      ]
+    },
+    {
+      "id": "architecture",
+      "path": "docs/superpowers/specs/2026-07-17-project-task-file-management-design.md",
+      "anchors": [
+        "- 文件审核覆盖和交付验收门槛。",
+        "任务列表卡片、文件页和预览浮窗要分层"
+      ]
+    },
+    {
+      "id": "prototype",
+      "path": "docs/superpowers/prototypes/2026-07-28-chat-task-file-package-flow-prototype.html",
+      "anchors": [
+        "任务卡片只做状态摘要和入口，不直接审核文件"
+      ]
+    }
+  ],
+  "viewports": [
+    {
+      "id": "narrow",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "id": "wide",
+      "width": 1440,
+      "height": 1000
+    }
+  ],
+  "ready": {
+    "selector": "[data-smoke=\"stage-delivery-review-workspace\"]",
+    "timeoutMs": 20000
+  },
+  "checks": [
+    {
+      "id": "review-workspace-visible",
+      "type": "visible",
+      "selector": "[data-smoke=\"stage-delivery-review-workspace\"]",
+      "contractRef": {
+        "sourceId": "workbench-acceptance",
+        "anchor": "待审核可在 Tasks 查看 package 成员、版本、coverage、验收与动作"
+      }
+    },
+    {
+      "id": "review-coverage-visible",
+      "type": "visible",
+      "selector": "[data-smoke=\"stage-review-coverage\"]",
+      "contractRef": {
+        "sourceId": "architecture",
+        "anchor": "- 文件审核覆盖和交付验收门槛。"
+      }
+    },
+    {
+      "id": "member-review-visible",
+      "type": "visible",
+      "selector": "[data-smoke=\"stage-review-member-review\"]",
+      "contractRef": {
+        "sourceId": "prototype",
+        "anchor": "任务卡片只做状态摘要和入口，不直接审核文件"
+      }
+    },
+    {
+      "id": "narrow-page-has-no-global-overflow",
+      "type": "page-no-horizontal-overflow",
+      "viewports": [
+        "narrow"
+      ],
+      "contractRef": {
+        "sourceId": "architecture",
+        "anchor": "任务列表卡片、文件页和预览浮窗要分层"
+      }
+    },
+    {
+      "id": "narrow-workspace-overflow-is-contained",
+      "type": "horizontal-overflow-contained",
+      "selector": "[data-smoke=\"stage-delivery-review-workspace\"]",
+      "viewports": [
+        "narrow"
+      ],
+      "contractRef": {
+        "sourceId": "architecture",
+        "anchor": "任务列表卡片、文件页和预览浮窗要分层"
+      }
+    }
+  ]
+}

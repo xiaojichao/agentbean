@@ -36,6 +36,8 @@ Release B 已通过 PR #485 合并到 `main`，merge commit 为 `b9238c5b8c14b7d
 
 ## 手动操作
 
+所有会读取生产或 npm 凭据的手动 job 都只允许从仓库默认分支触发；命令必须保留 `--ref main`，其他分支即使勾选输入也不会进入对应 job。
+
 ### 只读 Railway preflight
 
 ```bash
@@ -109,6 +111,8 @@ npm run smoke:agentbean-next-persistence
 它验证 server restart 后 session、Team、channel/message 能从 SQLite volume 恢复。
 
 ## Release B rollback
+
+Staging 受控演练使用 `docs/agents/staging-rollback-rehearsal.md` 定义的独立 plan / 人工授权路径。该工具硬拒绝 production target，只用于验证选版、Railway rollback、health 与只读 entry smoke；它不替代本节生产事故决策和授权。
 
 Release A 前 global SQLite backup 没有可验证证据，而 production 已应用 `global/0014_device_revocations_team_columns.sql`。发布后同 volume snapshot 不是 old binary rollback point，也不能覆盖 volume 丢失。
 

@@ -6,7 +6,7 @@ Task Management Script.
 Usage:
     python3 task.py create "<title>" [--slug <name>] [--assignee <dev>] [--priority P0|P1|P2|P3] [--parent <dir>] [--package <pkg>] [--no-start]
     python3 task.py add-context <dir> <file> <path> [reason] # Add jsonl entry
-    python3 task.py validate <dir>              # Validate jsonl files
+    python3 task.py validate <dir>              # Validate task lineage and jsonl files
     python3 task.py list-context <dir>          # List jsonl entries
     python3 task.py start <dir>                 # Set active task
     python3 task.py current [--source] [--json] # Show active task
@@ -15,6 +15,9 @@ Usage:
     python3 task.py set-base-branch <dir> <branch>  # Set PR target branch
     python3 task.py set-scope <dir> <scope>     # Set scope for PR title
     python3 task.py set-meta <dir> <key> <value>  # Set a task metadata key
+    python3 task.py add-lineage <dir> <stage> <kind> <ref>  # Add SDLC lineage reference
+    python3 task.py remove-lineage <dir> <stage> <kind> <ref>  # Remove SDLC lineage reference
+    python3 task.py list-lineage <dir> [--json]   # Show SDLC lineage
     python3 task.py archive <task-dir>          # Archive completed task
     python3 task.py list                        # List active tasks
     python3 task.py list-archive [month]        # List archived tasks
@@ -63,6 +66,12 @@ from common.task_context import (
     cmd_add_context,
     cmd_validate,
     cmd_list_context,
+)
+from common.task_lineage import (
+    LINEAGE_STAGES,
+    cmd_add_lineage,
+    cmd_remove_lineage,
+    cmd_list_lineage,
 )
 
 
@@ -383,7 +392,7 @@ Usage:
   python3 task.py create <title> --parent <dir>      Create task as child of parent
   python3 task.py create <title> --no-start          Create without making it active in this session
   python3 task.py add-context <dir> <jsonl> <path> [reason]  Add entry to jsonl
-  python3 task.py validate <dir>                     Validate jsonl files
+  python3 task.py validate <dir>                     Validate task lineage and jsonl files
   python3 task.py list-context <dir>                 List jsonl entries
   python3 task.py start <dir>                        Set active task
   python3 task.py current [--source]                 Show active task
@@ -392,6 +401,9 @@ Usage:
   python3 task.py set-base-branch <dir> <branch>     Set PR target branch
   python3 task.py set-scope <dir> <scope>            Set scope for PR title
   python3 task.py set-meta <dir> <key> <value>       Set/overwrite a task metadata key
+  python3 task.py add-lineage <dir> <stage> <kind> <ref>     Add a typed SDLC lineage reference
+  python3 task.py remove-lineage <dir> <stage> <kind> <ref>  Remove an exact lineage reference
+  python3 task.py list-lineage <dir> [--json]                Show SDLC lineage
   python3 task.py archive <task-dir>                 Archive completed task
   python3 task.py add-subtask <parent> <child>       Link child task to parent
   python3 task.py remove-subtask <parent> <child>    Unlink child from parent
@@ -413,6 +425,7 @@ Examples:
   python3 task.py create "Child task" --slug child --parent .trellis/tasks/01-21-parent
   python3 task.py add-context <dir> implement .trellis/spec/cli/backend/auth.md "Auth guidelines"
   python3 task.py set-branch <dir> task/add-login
+  python3 task.py add-lineage <dir> request github_issue https://github.com/owner/repo/issues/123
   python3 task.py start .trellis/tasks/01-21-add-login
   python3 task.py current --source
   python3 task.py finish
@@ -499,7 +512,7 @@ def main() -> int:
     p_add.add_argument("reason", nargs="?", help="Reason for adding")
 
     # validate
-    p_validate = subparsers.add_parser("validate", help="Validate context files")
+    p_validate = subparsers.add_parser("validate", help="Validate task lineage and context files")
     p_validate.add_argument("dir", help="Task directory")
 
     # list-context
@@ -540,6 +553,23 @@ def main() -> int:
     p_setmeta.add_argument("dir", help="Task directory")
     p_setmeta.add_argument("key", help="Metadata key")
     p_setmeta.add_argument("value", help="Metadata value")
+
+    # SDLC lineage
+    p_addlineage = subparsers.add_parser("add-lineage", help="Add SDLC lineage reference")
+    p_addlineage.add_argument("dir", help="Task directory")
+    p_addlineage.add_argument("stage", choices=LINEAGE_STAGES, help="Lineage stage")
+    p_addlineage.add_argument("kind", help="Reference kind, e.g. github_issue or adr")
+    p_addlineage.add_argument("ref", help="Reference ID, URL, or repository path")
+
+    p_removelineage = subparsers.add_parser("remove-lineage", help="Remove SDLC lineage reference")
+    p_removelineage.add_argument("dir", help="Task directory")
+    p_removelineage.add_argument("stage", choices=LINEAGE_STAGES, help="Lineage stage")
+    p_removelineage.add_argument("kind", help="Reference kind")
+    p_removelineage.add_argument("ref", help="Exact reference to remove")
+
+    p_listlineage = subparsers.add_parser("list-lineage", help="Show SDLC lineage")
+    p_listlineage.add_argument("dir", help="Task directory")
+    p_listlineage.add_argument("--json", action="store_true", help="Output machine-readable JSON")
 
     # archive
     p_archive = subparsers.add_parser("archive", help="Archive task")
@@ -584,6 +614,9 @@ def main() -> int:
         "set-base-branch": cmd_set_base_branch,
         "set-scope": cmd_set_scope,
         "set-meta": cmd_set_meta,
+        "add-lineage": cmd_add_lineage,
+        "remove-lineage": cmd_remove_lineage,
+        "list-lineage": cmd_list_lineage,
         "archive": cmd_archive,
         "add-subtask": cmd_add_subtask,
         "remove-subtask": cmd_remove_subtask,

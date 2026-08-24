@@ -6,6 +6,7 @@ import {
   hasPhase0ManagementBoundary,
   hasPhase1ManagementCiGate,
   hasPhase2TaskDagCiGate,
+  hasPrivilegedManualDefaultBranchGuards,
   summarizeReadiness,
 } from '../../../scripts/check-agentbean-next-readiness.mjs';
 
@@ -40,6 +41,7 @@ describe('AgentBean Next readiness checker', () => {
       'ci-deploys-only-server-next',
       'daily-changelog-uses-single-main-push-deploy',
       'ci-fails-closed-without-production-tokens',
+      'ci-privileged-manual-jobs-require-default-branch',
       'ci-deploys-production-on-main-push',
       'ci-bounds-railway-deploy-command',
       'contracts-package-publishable',
@@ -86,6 +88,28 @@ describe('AgentBean Next readiness checker', () => {
       'ci-detects-phase-0-changes',
       'sea-workflow-consumes-root-verdict-check',
     ]);
+  });
+
+  test('fails closed when a privileged manual job can run from a non-default branch', () => {
+    const guard = 'github.ref_name == github.event.repository.default_branch';
+    const workflow = [
+      '',
+      '  deploy:',
+      `    if: ${guard}`,
+      '  railway-next-preflight:',
+      `    if: ${guard}`,
+      '  railway-next-env-sync:',
+      `    if: ${guard}`,
+      '  agentbean-next-production-smoke:',
+      `    if: ${guard}`,
+      '  publish:',
+      `    if: ${guard}`,
+      '  promote-agentbean-daemon-latest:',
+      `    if: ${guard}`,
+    ].join('\n');
+
+    expect(hasPrivilegedManualDefaultBranchGuards(workflow)).toBe(true);
+    expect(hasPrivilegedManualDefaultBranchGuards(workflow.replace(`    if: ${guard}`, '    if: true'))).toBe(false);
   });
 
   test('fails closed when the Phase 0 root or CI gate is incomplete', () => {

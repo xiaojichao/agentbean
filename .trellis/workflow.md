@@ -79,6 +79,11 @@ python3 ./.trellis/scripts/task.py finish
 python3 ./.trellis/scripts/task.py archive <name>
 python3 ./.trellis/scripts/task.py list [--mine] [--status <s>]
 
+# Machine-readable SDLC lineage (stored as IDs/links, never copied prose)
+python3 ./.trellis/scripts/task.py add-lineage <name> <stage> <kind> <ref>
+python3 ./.trellis/scripts/task.py remove-lineage <name> <stage> <kind> <ref>
+python3 ./.trellis/scripts/task.py list-lineage <name> [--json]
+
 # Optional context manifests for deliberately dispatched Trellis workers
 python3 ./.trellis/scripts/task.py add-context <name> <action> <file> <reason>
 python3 ./.trellis/scripts/task.py list-context <name> [action]
@@ -87,10 +92,18 @@ python3 ./.trellis/scripts/task.py list-context <name> [action]
 python3 ./.trellis/scripts/task.py set-branch <name> <branch>
 python3 ./.trellis/scripts/task.py set-base-branch <name> <branch>
 python3 ./.trellis/scripts/task.py set-scope <name> <scope>
+python3 ./.trellis/scripts/task.py validate <name>
 ```
 
-When possible, record the owning GitHub Issue plus branch / worktree / PR URL in
-the task metadata or notes. GitHub remains authoritative if the two disagree.
+Lineage is optional for legacy packets and stored under
+`task.json.meta.lineage`. Once present it uses a versioned, fail-closed schema.
+The fixed stages are `request`, `context`, `decisions`, `design`,
+`implementation`, `delivery`, and `evidence`; every entry contains only a
+machine-readable `kind` plus an ID, URL, commit, or repository path in `ref`.
+References contain no whitespace; local absolute paths and repository traversal
+are rejected so the index stays portable.
+Keep authoritative prose in GitHub Issues, `CONTEXT.md`, ADRs, PRDs, PRs, and
+production systems. Lineage indexes those sources; it never copies them.
 
 `task.py start` marks an existing Execution Packet as being actively executed.
 It is **not** a user approval gate. If the user already gave a clear

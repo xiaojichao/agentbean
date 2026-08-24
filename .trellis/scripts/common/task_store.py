@@ -34,6 +34,7 @@ from .config import (
 from .git import branch_exists_locally, resolve_default_branch, run_git
 from .io import read_json, write_json
 from .log import Colors, colored
+from .task_lineage import LINEAGE_META_KEY, new_lineage
 from .paths import (
     DIR_ARCHIVE,
     DIR_TASKS,
@@ -174,14 +175,14 @@ def _write_seed_jsonl(path: Path) -> None:
     path.write_text(json.dumps(seed, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-def _parse_meta_pairs(pairs: list[str] | None) -> dict[str, str] | None:
+def _parse_meta_pairs(pairs: list[str] | None) -> dict[str, object] | None:
     """Parse repeatable ``--meta key=value`` pairs into a dict.
 
     Returns ``None`` (after printing an error naming the bad value) on the
     first malformed pair: missing ``=`` or an empty key. Values are stored
     as-is (strings, no nesting, no type coercion).
     """
-    meta: dict[str, str] = {}
+    meta: dict[str, object] = {}
     for pair in pairs or []:
         key, sep, value = pair.partition("=")
         if not sep or not key:
@@ -236,6 +237,16 @@ def cmd_create(args: argparse.Namespace) -> int:
     meta = _parse_meta_pairs(getattr(args, "meta", None))
     if meta is None:
         return 1
+    if LINEAGE_META_KEY in meta:
+        print(
+            colored(
+                f"Error: --meta {LINEAGE_META_KEY}=... is reserved; use task.py add-lineage",
+                Colors.RED,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    meta[LINEAGE_META_KEY] = new_lineage()
 
     # Validate --package (CLI source: fail-fast)
     package: str | None = getattr(args, "package", None)
@@ -386,7 +397,12 @@ def cmd_create(args: argparse.Namespace) -> int:
         "meta": meta,
     }
 
-    write_json(task_json_path, task_data)
+    if not write_json(task_json_path, task_data):
+        print(
+            colored(f"Error: failed to write {task_json_path}", Colors.RED),
+            file=sys.stderr,
+        )
+        return 1
 
     prd_path = task_dir / "prd.md"
     if not prd_path.exists():
@@ -923,6 +939,15 @@ def cmd_set_meta(args: argparse.Namespace) -> int:
     if not key:
         print(colored("Error: Missing arguments", Colors.RED))
         print("Usage: python3 task.py set-meta <task-dir> <key> <value>")
+        return 1
+    if key == LINEAGE_META_KEY:
+        print(
+            colored(
+                f"Error: meta key '{LINEAGE_META_KEY}' is structured; use task.py add-lineage/remove-lineage",
+                Colors.RED,
+            ),
+            file=sys.stderr,
+        )
         return 1
 
     task_json = target_dir / FILE_TASK_JSON
