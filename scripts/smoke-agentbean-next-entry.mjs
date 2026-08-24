@@ -58,7 +58,7 @@ function isAgentBeanNextProductEntryHtml(value) {
 
 function isStaticPreviewProductEntry(value) {
   return (
-    value.includes('<title>AgentBean</title>') &&
+    hasAgentBeanProductTitle(value) &&
     value.includes('class="landing"') &&
     value.includes('让人类、本机 Agent 和远程设备上的 Agent 无缝协作') &&
     value.includes('id="app-workspace"') &&
@@ -70,13 +70,18 @@ function isStaticPreviewProductEntry(value) {
 
 function isNextAppRouterProductEntryShell(value) {
   return (
-    value.includes('<title>AgentBean</title>') &&
-    value.includes('Your AI Agent Platform') &&
+    hasAgentBeanProductTitle(value) &&
+    value.includes('三步，把 AI 请进团队') &&
     value.includes('/_next/static/chunks/app/page-') &&
     value.includes('/_next/static/chunks/app/layout-') &&
     value.includes('SocketProvider') &&
     value.includes('AppShell')
   );
+}
+
+function hasAgentBeanProductTitle(value) {
+  const title = value.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
+  return title?.startsWith('AgentBean') === true;
 }
 
 export function summarizeEntrySmoke(checks) {

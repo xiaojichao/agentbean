@@ -41,12 +41,13 @@ describe('AgentBean Next entry smoke', () => {
           <!DOCTYPE html>
           <html lang="zh-CN">
             <head>
-              <title>AgentBean</title>
-              <meta name="description" content="Your AI Agent Platform — manage, chat, and collaborate with AI agents" />
+              <title>AgentBean：和你的 AI 同事，在一个团队里干活</title>
+              <meta name="description" content="给人类和 AI 一起用的团队工作台" />
               <script src="/_next/static/chunks/app/page-4e09954e9a714a5f.js" async=""></script>
               <script src="/_next/static/chunks/app/layout-ebd91e8a9bd52b5d.js" async=""></script>
             </head>
             <body>
+              <main><h2>三步，把 AI 请进团队</h2></main>
               <script>
                 self.__next_f.push([1,"5:I[3266,[],\\"default\\",1]\\n6:I[5331,[],\\"SocketProvider\\"]\\n7:I[7624,[],\\"AppShell\\"]\\n"]);
               </script>
