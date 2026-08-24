@@ -148,7 +148,7 @@ flowchart LR
 | --- | --- | --- |
 | **Web**（`apps/web-next`） | 登录、Team 切换、频道 / DM / 任务 / 设备 / 设置 / 管理台；展示 Server snapshot 与事件 | 不推断权限、Agent 去重、Task 真相或跨 Agent 路由 |
 | **Server**（`apps/server-next`） | 认证与 membership；消息 / 任务 / 项目 / 记忆权威；Dispatch 与 PI 编排；Artifact 授权 | 不在用户设备上执行 coding agent |
-| **Device Service**（`apps/daemon-next`） | 设备连接、Runtime 扫描、Agent 调用、Workspace Run、产物发布、本地记忆、可选 PI Worker | 不成为跨 Team 的全局业务真相源 |
+| **Device Service**（`apps/daemon-next`） | 设备连接、Runtime 扫描、Agent 调用、Workspace Run、产物发布、本地记忆 | 不承载 Promotion evaluator 或 PI Manager，也不成为跨 Team 的全局业务真相源 |
 | **contracts + domain** | 跨端 DTO、事件名、错误码；纯领域规则 | 不含 Socket / SQLite / 文件系统 IO |
 
 ### 3.2 仓库结构
