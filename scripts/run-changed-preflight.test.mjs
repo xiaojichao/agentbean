@@ -15,7 +15,7 @@ import {
 
 const scriptPath = fileURLToPath(new URL('./run-changed-preflight.mjs', import.meta.url));
 
-test('plans matching tests and builds for one package surface', () => {
+test('plans retained boundaries, matching tests and builds for one package surface', () => {
   const plan = planChangedPreflight([
     'apps/server-next/src/application/usecases.ts',
     'docs/notes.md',
@@ -23,6 +23,7 @@ test('plans matching tests and builds for one package surface', () => {
   assert.equal(plan.mode, 'targeted');
   assert.deepEqual(plan.targets, ['server-next']);
   assert.deepEqual(plan.commands.map((command) => command.display), [
+    'npm run test:retained-boundaries',
     'npm run test:server-next-ci',
     'npm run build:server-next',
   ]);
@@ -37,6 +38,7 @@ test('deduplicates commands while preserving canonical package order', () => {
   assert.equal(plan.mode, 'targeted');
   assert.deepEqual(plan.targets, ['daemon-next', 'web-next']);
   assert.deepEqual(plan.commands.map((command) => command.id), [
+    'test:retained-boundaries',
     'test:daemon-next',
     'build:daemon-next',
     'test:web-next',
@@ -74,6 +76,7 @@ test('workspace manifests and lock files prepend one frozen-lock validation', ()
   assert.equal(targeted.mode, 'targeted');
   assert.deepEqual(targeted.commands.map((command) => command.id), [
     'frozen-lock',
+    'test:retained-boundaries',
     'test:server-next-ci',
     'build:server-next',
   ]);
@@ -166,5 +169,5 @@ test('execution stops at the first failed command', () => {
     },
   });
   assert.equal(status, 7);
-  assert.deepEqual(executed, ['test:server-next-ci']);
+  assert.deepEqual(executed, ['test:retained-boundaries', 'test:server-next-ci']);
 });

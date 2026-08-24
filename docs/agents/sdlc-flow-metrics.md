@@ -53,6 +53,6 @@ npm run preflight:changed -- --plan
 npm run preflight:changed
 ```
 
-命令默认比较 `origin/main...HEAD`，并合并 staged、unstaged 与 untracked 文件。单一 `apps/{server-next,daemon-next,web-next}` 改动只运行对应测试和 Local Verification Contract 要求的 build；任意 workspace `package.json` 或锁文件改动会先运行只读的 `npm ci --dry-run` 校验清单与 lockfile 一致性；普通文档-only 改动不运行 package 检查；共享 `packages/*`、CI validate 文档/配置、根脚本、工作流、锁文件或无法识别的路径会 fail-safe 回退 `npm run test:ci` 与 `npm run build:packages`。共享包默认完整回退，是因为其依赖扇出不能由目录名安全缩小。可用 `--base <ref>` 改变比较基线，也可直接传入文件路径检查计划。
+命令默认比较 `origin/main...HEAD`，并合并 staged、unstaged 与 untracked 文件。单一 `apps/{server-next,daemon-next,web-next}` 改动运行一次 retained boundaries、对应测试和 Local Verification Contract 要求的 build，避免 migration registration 等跨目录守卫被 targeted 模式跳过；任意 workspace `package.json` 或锁文件改动会先运行只读的 `npm ci --dry-run` 校验清单与 lockfile 一致性；普通文档-only 改动不运行 package 检查；共享 `packages/*`、CI validate 文档/配置、根脚本、工作流、锁文件或无法识别的路径会 fail-safe 回退 `npm run test:ci` 与 `npm run build:packages`。共享包默认完整回退，是因为其依赖扇出不能由目录名安全缩小。可用 `--base <ref>` 改变比较基线，也可直接传入文件路径检查计划。
 
 这是提交前反馈辅助，不替代 PR 的完整 CI、review、merge-readiness 或 post-merge 验证，也不安装或强制启用 git hook。

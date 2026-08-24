@@ -37,6 +37,7 @@ const FROZEN_LOCK_COMMAND = {
   argv: ['ci', '--dry-run', '--ignore-scripts', '--no-audit', '--no-fund'],
   display: 'npm ci --dry-run --ignore-scripts --no-audit --no-fund',
 };
+const RETAINED_BOUNDARY_COMMAND = npmCommand('test:retained-boundaries');
 const FULL_COMMANDS = [npmCommand('test:ci'), npmCommand('build:packages')];
 const PACKAGE_NEUTRAL_PATH_RE = /^(?:docs\/|[^/]+\.md$|LICENSE(?:\.|$))/u;
 const PACKAGE_MANIFEST_PATH_RE = /(?:^|\/)package(?:-lock)?\.json$/u;
@@ -99,6 +100,9 @@ export function planChangedPreflight(files) {
   }
 
   const targets = TARGETS.filter((target) => targetIds.has(target.id));
+  const targetedCommands = targets.length > 0
+    ? [RETAINED_BOUNDARY_COMMAND, ...targets.flatMap((target) => target.commands)]
+    : [];
   return {
     mode: targets.length > 0 ? 'targeted' : 'none',
     reason: targets.length > 0
@@ -107,7 +111,7 @@ export function planChangedPreflight(files) {
     files: normalizedFiles,
     targets: targets.map((target) => target.id),
     fallbackFiles: [],
-    commands: uniqueCommands([...lockCommands, ...targets.flatMap((target) => target.commands)]),
+    commands: uniqueCommands([...lockCommands, ...targetedCommands]),
   };
 }
 
