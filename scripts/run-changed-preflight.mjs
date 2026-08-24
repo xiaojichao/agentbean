@@ -123,9 +123,9 @@ export function collectChangedFiles({
   git = runGit,
 } = {}) {
   const outputs = [
-    git(['diff', '--no-renames', '--name-only', '--diff-filter=ACDMR', `${base}...HEAD`, '--'], cwd),
-    git(['diff', '--no-renames', '--name-only', '--diff-filter=ACDMR', '--cached', '--'], cwd),
-    git(['diff', '--no-renames', '--name-only', '--diff-filter=ACDMR', '--'], cwd),
+    git(['diff', '--no-renames', '--name-only', `${base}...HEAD`, '--'], cwd),
+    git(['diff', '--no-renames', '--name-only', '--cached', '--'], cwd),
+    git(['diff', '--no-renames', '--name-only', '--'], cwd),
     git(['ls-files', '--others', '--exclude-standard'], cwd),
   ];
   return [...new Set(outputs.flatMap(lines).map(normalizePath).filter(Boolean))].sort();

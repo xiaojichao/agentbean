@@ -67,7 +67,7 @@ test('shared packages, CI validate surfaces and unknown paths fail safe to full 
   }
 });
 
-test('collects committed, staged, unstaged and untracked changes from git', () => {
+test('collects committed, staged, unstaged, untracked, deleted, renamed and type changes from git', () => {
   const directory = mkdtempSync(join(tmpdir(), 'agentbean-changed-preflight-'));
   const git = (...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8' });
   try {
@@ -78,9 +78,10 @@ test('collects committed, staged, unstaged and untracked changes from git', () =
     mkdirSync(join(directory, 'docs'), { recursive: true });
     writeFileSync(join(directory, 'apps/server-next/src/a.ts'), 'export const a = 1;\n');
     writeFileSync(join(directory, 'apps/server-next/src/renamed.ts'), 'export const renamed = true;\n');
+    writeFileSync(join(directory, 'apps/server-next/src/type-change.ts'), 'export const regular = true;\n');
     writeFileSync(join(directory, 'docs/base.md'), 'base\n');
     writeFileSync(join(directory, 'docs/delete.md'), 'delete me\n');
-    git('add', '--', 'apps/server-next/src/a.ts', 'apps/server-next/src/renamed.ts', 'docs/base.md', 'docs/delete.md');
+    git('add', '--', 'apps/server-next/src/a.ts', 'apps/server-next/src/renamed.ts', 'apps/server-next/src/type-change.ts', 'docs/base.md', 'docs/delete.md');
     git('commit', '--quiet', '-m', 'base');
     git('tag', 'preflight-base');
 
@@ -91,6 +92,8 @@ test('collects committed, staged, unstaged and untracked changes from git', () =
     writeFileSync(join(directory, 'docs/base.md'), 'staged\n');
     rmSync(join(directory, 'docs/delete.md'));
     git('mv', 'apps/server-next/src/renamed.ts', 'docs/renamed.ts');
+    const symlinkBlob = git('hash-object', '-w', 'apps/server-next/src/a.ts').trim();
+    git('update-index', '--cacheinfo', `120000,${symlinkBlob},apps/server-next/src/type-change.ts`);
     git('add', '--', 'docs/base.md');
     git('add', '--update', '--', 'docs/delete.md');
     mkdirSync(join(directory, 'packages/domain/src'), { recursive: true });
@@ -99,6 +102,7 @@ test('collects committed, staged, unstaged and untracked changes from git', () =
     assert.deepEqual(collectChangedFiles({ base: 'preflight-base', cwd: directory }), [
       'apps/server-next/src/a.ts',
       'apps/server-next/src/renamed.ts',
+      'apps/server-next/src/type-change.ts',
       'docs/base.md',
       'docs/delete.md',
       'docs/renamed.ts',
