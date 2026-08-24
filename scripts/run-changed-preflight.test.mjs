@@ -23,6 +23,9 @@ test('plans retained boundaries, matching tests and builds for one package surfa
   assert.equal(plan.mode, 'targeted');
   assert.deepEqual(plan.targets, ['server-next']);
   assert.deepEqual(plan.commands.map((command) => command.display), [
+    'npm run check:agentbean-next-readiness',
+    'npm run test:team-terminology',
+    'npm run check:team-terminology',
     'npm run test:retained-boundaries',
     'npm run test:server-next-ci',
     'npm run build:server-next',
@@ -38,6 +41,9 @@ test('deduplicates commands while preserving canonical package order', () => {
   assert.equal(plan.mode, 'targeted');
   assert.deepEqual(plan.targets, ['daemon-next', 'web-next']);
   assert.deepEqual(plan.commands.map((command) => command.id), [
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:retained-boundaries',
     'test:daemon-next',
     'build:daemon-next',
@@ -59,6 +65,9 @@ test('CHANGELOG.md is a web-next generated-data input', () => {
   assert.equal(plan.mode, 'targeted');
   assert.deepEqual(plan.targets, ['web-next']);
   assert.deepEqual(plan.commands.map((command) => command.id), [
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:retained-boundaries',
     'test:web-next',
     'build:web-next',
@@ -76,6 +85,9 @@ test('Agent configuration surfaces retain their dedicated eval', () => {
   assert.equal(skillPlan.mode, 'full');
   assert.deepEqual(skillPlan.commands.map((command) => command.id), [
     'eval:agent-config',
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:ci',
     'build:packages',
   ]);
@@ -88,6 +100,9 @@ test('full fallback retains web-next generated-file freshness', () => {
   ]);
   assert.equal(plan.mode, 'full');
   assert.deepEqual(plan.commands.map((command) => command.id), [
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:ci',
     'build:packages',
     'verify:web-next-changelog-freshness',
@@ -104,7 +119,13 @@ test('shared packages, CI validate surfaces and unknown paths fail safe to full 
   ]) {
     const plan = planChangedPreflight([file]);
     assert.equal(plan.mode, 'full');
-    assert.deepEqual(plan.commands.map((command) => command.id), ['test:ci', 'build:packages']);
+    assert.deepEqual(plan.commands.map((command) => command.id), [
+      'check:agentbean-next-readiness',
+      'test:team-terminology',
+      'check:team-terminology',
+      'test:ci',
+      'build:packages',
+    ]);
     assert.deepEqual(plan.fallbackFiles, [file]);
   }
 });
@@ -117,6 +138,9 @@ test('workspace manifests and lock files prepend one frozen-lock validation', ()
   assert.equal(targeted.mode, 'targeted');
   assert.deepEqual(targeted.commands.map((command) => command.id), [
     'frozen-lock',
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:retained-boundaries',
     'test:server-next-ci',
     'build:server-next',
@@ -127,6 +151,9 @@ test('workspace manifests and lock files prepend one frozen-lock validation', ()
   assert.deepEqual(full.commands.map((command) => command.id), [
     'frozen-lock',
     'eval:agent-config',
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
     'test:ci',
     'build:packages',
   ]);
@@ -207,9 +234,9 @@ test('execution stops at the first failed command', () => {
   const status = executePreflight(plan, {
     run(command) {
       executed.push(command.id);
-      return { status: command.id === 'test:server-next-ci' ? 7 : 0 };
+      return { status: command.id === 'check:agentbean-next-readiness' ? 7 : 0 };
     },
   });
   assert.equal(status, 7);
-  assert.deepEqual(executed, ['test:retained-boundaries', 'test:server-next-ci']);
+  assert.deepEqual(executed, ['check:agentbean-next-readiness']);
 });

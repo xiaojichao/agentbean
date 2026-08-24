@@ -45,6 +45,11 @@ const FROZEN_LOCK_COMMAND = {
 };
 const RETAINED_BOUNDARY_COMMAND = npmCommand('test:retained-boundaries');
 const AGENT_CONFIG_EVAL_COMMAND = npmCommand('eval:agent-config');
+const VALIDATE_PRECHECK_COMMANDS = [
+  npmCommand('check:agentbean-next-readiness'),
+  npmCommand('test:team-terminology'),
+  npmCommand('check:team-terminology'),
+];
 const FULL_COMMANDS = [npmCommand('test:ci'), npmCommand('build:packages')];
 const PACKAGE_NEUTRAL_PATH_RE = /^(?:docs\/|[^/]+\.md$|LICENSE(?:\.|$))/u;
 const PACKAGE_MANIFEST_PATH_RE = /(?:^|\/)package(?:-lock)?\.json$/u;
@@ -112,6 +117,7 @@ export function planChangedPreflight(files) {
       commands: uniqueCommands([
         ...lockCommands,
         ...agentConfigCommands,
+        ...VALIDATE_PRECHECK_COMMANDS,
         ...FULL_COMMANDS,
         ...webFreshnessCommands,
       ]),
@@ -120,7 +126,11 @@ export function planChangedPreflight(files) {
 
   const targets = TARGETS.filter((target) => targetIds.has(target.id));
   const targetedCommands = targets.length > 0
-    ? [RETAINED_BOUNDARY_COMMAND, ...targets.flatMap((target) => target.commands)]
+    ? [
+        ...VALIDATE_PRECHECK_COMMANDS,
+        RETAINED_BOUNDARY_COMMAND,
+        ...targets.flatMap((target) => target.commands),
+      ]
     : [];
   const commands = uniqueCommands([...lockCommands, ...agentConfigCommands, ...targetedCommands]);
   return {
