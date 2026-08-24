@@ -94,7 +94,7 @@ query($owner: String!, $name: String!, $number: Int!) {
   }
 }`;
 
-function checkState(context) {
+export function checkState(context) {
   if (context.__typename === 'CheckRun') {
     if (context.status !== 'COMPLETED') return 'pending';
     return PASSING_CHECK_CONCLUSIONS.has(context.conclusion) ? 'passing' : 'failing';
@@ -122,7 +122,7 @@ function alternativeReviewFromComment(comment) {
   return { commit, at: comment.createdAt, provider };
 }
 
-function collectReviewCandidates(pr) {
+export function collectReviewCandidates(pr) {
   const candidates = [
     ...(pr.reviews?.nodes ?? [])
       .filter((review) => review.author?.login === CODEX_REVIEWER)
@@ -143,7 +143,7 @@ function collectReviewCandidates(pr) {
   return { candidates, codexReviewLimit };
 }
 
-function matchesHead(candidate, headOid) {
+export function matchesHead(candidate, headOid) {
   return Boolean(candidate && headOid && (headOid.startsWith(candidate) || candidate.startsWith(headOid)));
 }
 

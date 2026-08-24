@@ -27,6 +27,7 @@ from .io import read_json
 from .log import Colors, colored
 from .paths import FILE_TASK_JSON, get_repo_root
 from .task_utils import resolve_task_dir
+from .task_lineage import validate_task_lineage
 
 # Extensions that look like code rather than spec/research docs. Entries with
 # one of these extensions outside .trellis/spec/, docs/docs-site, or the
@@ -111,7 +112,7 @@ def cmd_add_context(args: argparse.Namespace) -> int:
 # =============================================================================
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    """Validate JSONL context files."""
+    """Validate task lineage and JSONL context files."""
     repo_root = get_repo_root()
     target_dir = resolve_task_dir(args.dir, repo_root)
 
@@ -119,16 +120,33 @@ def cmd_validate(args: argparse.Namespace) -> int:
         print(colored("Error: task directory required", Colors.RED))
         return 1
 
-    print(colored("=== Validating Context Files ===", Colors.BLUE))
+    print(colored("=== Validating Task Files ===", Colors.BLUE))
     print(f"Target dir: {target_dir}")
     print()
 
+    total_errors = 0
+
+    # Validate task.json lineage before context manifests. Legacy tasks without
+    # meta.lineage remain valid; malformed structured lineage fails closed.
+    task_json_path = target_dir / FILE_TASK_JSON
+    task_data = read_json(task_json_path)
+    if not isinstance(task_data, dict) or not task_data:
+        print(f"  {colored('task.json: missing, unreadable, or not an object', Colors.RED)}")
+        total_errors += 1
+        task_data = None
+    else:
+        lineage_errors = validate_task_lineage(task_data)
+        if lineage_errors:
+            for error in lineage_errors:
+                print(f"  {colored(f'task.json: {error}', Colors.RED)}")
+            total_errors += len(lineage_errors)
+        else:
+            print(f"  {colored('task.json lineage: ✓', Colors.GREEN)}")
+
     # Warn (don't fail validation) when the recorded branch is stale — it
     # was likely already merged and deleted (#399 item 2).
-    task_json_path = target_dir / FILE_TASK_JSON
-    if task_json_path.is_file():
-        task_data = read_json(task_json_path)
-        stored_branch = task_data.get("branch") if task_data else None
+    if task_data is not None:
+        stored_branch = task_data.get("branch")
         if stored_branch and not branch_exists_locally(stored_branch, repo_root):
             print(
                 colored(
@@ -139,7 +157,6 @@ def cmd_validate(args: argparse.Namespace) -> int:
             )
             print()
 
-    total_errors = 0
     for jsonl_name in ["implement.jsonl", "check.jsonl"]:
         jsonl_file = target_dir / jsonl_name
         errors = _validate_jsonl(jsonl_file, repo_root, target_dir)

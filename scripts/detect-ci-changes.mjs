@@ -12,17 +12,18 @@
  *   should_browser_smoke=true|false
  *   should_publish=true|false
  *   should_deploy=true|false
+ *   should_agent_config_eval=true|false
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /** Paths that require the full AgentBean Next validate job (tests + build + smokes except browser gate). */
 export const VALIDATE_PATH_RE =
-  /^(?:agentbean-next\/|packages\/|apps\/(?:server-next|daemon-next|web-next)\/|scripts\/(?:check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-pr-merge-readiness(?:\.test)?|claim-github-issue(?:\.test)?|check-team-terminology(?:\.test)?|check-phase-0-pi-boundary(?:\.test)?|check-phase-1-management-boundary(?:\.test)?|check-phase-2-task-dag-boundary(?:\.test)?|check-phase-3-memory-boundary(?:\.test)?|check-migration-registration(?:\.test)?|check-pi-management-sea(?:\.test)?|build-pi-management-sea(?:\.test)?|detect-ci-changes(?:\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|docs\/superpowers\/(?:specs|plans)\/|README\.md$|\.nvmrc$|package(?:-lock)?\.json$|railway\.json$|\.github\/workflows\/(?:ci-cd|daily-changelog|pi-sea-compatibility)\.yml$)/;
+  /^(?:agentbean-next\/|packages\/|apps\/(?:server-next|daemon-next|web-next)\/|scripts\/(?:check-agentbean-next-readiness|check-agentbean-next-railway-preflight|check-agentbean-next-production-target(?:\.test)?|check-pr-merge-readiness(?:\.test)?|claim-github-issue(?:\.test)?|check-team-terminology(?:\.test)?|check-phase-0-pi-boundary(?:\.test)?|check-phase-1-management-boundary(?:\.test)?|check-phase-2-task-dag-boundary(?:\.test)?|check-phase-3-memory-boundary(?:\.test)?|check-migration-registration(?:\.test)?|check-pi-management-sea(?:\.test)?|build-pi-management-sea(?:\.test)?|detect-ci-changes(?:\.test)?|report-sdlc-flow-metrics(?:\.test)?|observe-pr-closeout(?:\.test)?|diagnose-ci-failure(?:\.test)?|rehearse-staging-rollback(?:\.test)?|verify-agentbean-next-rendered(?:\.test)?|observe-maintain-signal(?:\.test)?|audit-agentbean-next-cutover|prepare-agentbean-next-daemon-release|smoke-agentbean-next-.*)\.mjs$|\.trellis\/(?:scripts\/(?:task\.py|common\/task_(?:context|store|lineage)\.py)|tests\/)|docs\/superpowers\/(?:specs|plans)\/|README\.md$|\.nvmrc$|package(?:-lock)?\.json$|railway\.json$|\.github\/workflows\/(?:ci-cd|daily-changelog|pi-sea-compatibility|weekly-sdlc-flow-metrics|ci-failure-diagnosis)\.yml$)/;
 
 /** Paths that require browser / WebUI smoke (expensive, flaky surface). */
 export const BROWSER_SMOKE_PATH_RE =
-  /^(?:apps\/(?:web-next|server-next)\/|scripts\/smoke-agentbean-next-(?:browser|webui).*|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
+  /^(?:apps\/(?:web-next|server-next)\/|scripts\/(?:smoke-agentbean-next-(?:browser|webui).*|verify-agentbean-next-rendered(?:\.test)?\.mjs$)|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
 
 /** Paths that may produce a new npm package publish on main. */
 export const PUBLISH_PATH_RE =
@@ -33,6 +34,10 @@ export const PUBLISH_PATH_RE =
  */
 export const DEPLOY_PATH_RE =
   /^(?:apps\/(?:server-next|web-next)\/|packages\/(?:contracts|domain|pi-management-runtime)\/|scripts\/(?:check-agentbean-next-readiness|check-agentbean-next-railway-preflight|audit-agentbean-next-cutover|smoke-agentbean-next-.*)\.mjs$|railway\.json$|package(?:-lock)?\.json$|\.github\/workflows\/ci-cd\.yml$)/;
+
+/** Agent contract, routing, hook, Trellis workflow, and core delivery-gate paths. */
+export const AGENT_CONFIG_EVAL_PATH_RE =
+  /^(?:AGENTS\.md$|CLAUDE\.md$|\.agents\/skills\/|\.(?:claude|codex|cursor)\/|\.trellis\/(?:workflow\.md$|config\.yaml$|scripts\/(?:get_context\.py$|task\.py$|common\/task_(?:context|store|lineage)\.py$)|tests\/)|docs\/agents\/(?:harness|skill-routing-eval|agent-config-eval|channel-task-review-workbench-acceptance|issue-tracker|pr-merge-gate|pr-closeout-observer|ci-failure-diagnosis|sdlc-flow-metrics|staging-rollback-rehearsal|rendered-acceptance-verifier|maintain-signal-observer)(?:-cases\.json|\.md)$|docs\/agents\/rendered-acceptance-contract\.example\.json$|agentbean-next\/docs\/production-cutover-runbook\.md$|scripts\/(?:check-agent-config-eval|check-agentbean-next-production-target|check-pr-merge-readiness|claim-github-issue|observe-pr-closeout|diagnose-ci-failure|report-sdlc-flow-metrics|rehearse-staging-rollback|verify-agentbean-next-rendered|observe-maintain-signal|detect-ci-changes)(?:\.test)?\.mjs$|package\.json$|\.github\/workflows\/(?:ci-cd|weekly-sdlc-flow-metrics|ci-failure-diagnosis)\.yml$)/;
 
 export function normalizePath(filePath) {
   return String(filePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
@@ -45,6 +50,7 @@ export function classifyChangedFiles(files, { forceAll = false } = {}) {
       should_browser_smoke: true,
       should_publish: true,
       should_deploy: true,
+      should_agent_config_eval: true,
     };
   }
 
@@ -53,12 +59,14 @@ export function classifyChangedFiles(files, { forceAll = false } = {}) {
   const should_browser_smoke = should_validate && normalized.some((file) => BROWSER_SMOKE_PATH_RE.test(file));
   const should_publish = should_validate && normalized.some((file) => PUBLISH_PATH_RE.test(file));
   const should_deploy = should_validate && normalized.some((file) => DEPLOY_PATH_RE.test(file));
+  const should_agent_config_eval = normalized.some((file) => AGENT_CONFIG_EVAL_PATH_RE.test(file));
 
   return {
     should_validate,
     should_browser_smoke,
     should_publish,
     should_deploy,
+    should_agent_config_eval,
   };
 }
 
@@ -68,6 +76,7 @@ export function formatGithubOutput(classification) {
     `should_browser_smoke=${classification.should_browser_smoke}`,
     `should_publish=${classification.should_publish}`,
     `should_deploy=${classification.should_deploy}`,
+    `should_agent_config_eval=${classification.should_agent_config_eval}`,
   ].join('\n');
 }
 

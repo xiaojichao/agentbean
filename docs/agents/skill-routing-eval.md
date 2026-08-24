@@ -68,3 +68,5 @@
 ## 维护方式
 
 每次升级 Trellis、Matt Skills、Addy 适配或 Coding Agent 平台集成后，优先抽测 #1、#3、#10、#12、#16、#19 六个高信号用例；若任何一个失败，再运行完整 20 项矩阵并修复 routing / hook / adapter。
+
+10 条近期高风险、机器可判定的策略场景维护在 `agent-config-eval-cases.json`，离线检查和可选平台观察格式见 `agent-config-eval.md`。不要把完整 20 条矩阵复制到 JSON；这里仍是路由用例的人工可读权威。

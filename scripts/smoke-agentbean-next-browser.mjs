@@ -5200,7 +5200,7 @@ export async function exerciseTaskBrowserSmoke({ page, suffix, timeoutMs }) {
   return { title, status: 'done' };
 }
 
-async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
+export async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
   const executable = findChromeExecutable(chromeBin);
   if (!executable) {
     throw new Error('Chrome executable not found; set CHROME_BIN or pass --chrome-bin');
@@ -5246,7 +5246,7 @@ async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs }) {
   };
 }
 
-async function openPage(debugUrl, events, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function openPage(debugUrl, events, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const target = await fetchJson(`${debugUrl}/json/new?about:blank`, { method: 'PUT' });
   if (!target.webSocketDebuggerUrl) {
     throw new Error(`Chrome did not create a debuggable page: ${JSON.stringify(target)}`);
@@ -5344,6 +5344,10 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
     const current = listeners.get(method) ?? [];
     current.push(listener);
     listeners.set(method, current);
+    return () => {
+      const registered = listeners.get(method) ?? [];
+      listeners.set(method, registered.filter((candidate) => candidate !== listener));
+    };
   };
 
   on('Runtime.consoleAPICalled', (params) => {
@@ -5556,6 +5560,7 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
         temporaryDirectories.clear();
       }
     },
+    on,
     send,
   };
 }
