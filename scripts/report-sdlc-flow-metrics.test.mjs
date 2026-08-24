@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   computeDeliveryMetrics,
+  computeFirstPassCiDiagnostics,
   computeFirstPassCiMetrics,
   computePullRequestMetrics,
   durationSummary,
@@ -11,6 +12,7 @@ import {
   hydrateTruncatedPullRequestCommits,
   mapWithConcurrency,
   parseArgs,
+  resolveFirstPassCiRuns,
 } from './report-sdlc-flow-metrics.mjs';
 
 const from = '2026-08-01T00:00:00.000Z';
@@ -111,6 +113,90 @@ test('first-pass CI uses the earliest run per PR and separates unlinked runs', (
   assert.deepEqual(result.byConclusion, { failure: 1, success: 1 });
   assert.equal(result.runsWithoutPullRequest, 1);
   assert.equal(result.runsWithUnresolvedPullRequestAssociation, 1);
+});
+
+test('first-pass CI resolution preserves association evidence and the next run for cancellation diagnosis', () => {
+  const resolution = resolveFirstPassCiRuns([
+    { id: 1, head_sha: head, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 10 }] },
+    { id: 2, head_sha: 'b'.repeat(40), created_at: '2026-08-01T02:00:00Z', conclusion: 'success', pull_requests: [{ number: 10 }] },
+  ]);
+  assert.deepEqual(resolution.firstRuns[0], {
+    prNumber: 10,
+    run: {
+      id: 1,
+      head_sha: head,
+      created_at: '2026-08-01T01:00:00Z',
+      conclusion: 'cancelled',
+      pull_requests: [{ number: 10 }],
+    },
+    association: 'direct',
+    laterRunId: 2,
+    laterRunCreatedAt: '2026-08-01T02:00:00Z',
+    laterRunHeadSha: 'b'.repeat(40),
+  });
+});
+
+test('first-pass CI diagnostics classify failure evidence and keep cancellation inference neutral', () => {
+  const resolution = resolveFirstPassCiRuns([
+    { id: 1, created_at: '2026-08-01T01:00:00Z', conclusion: 'failure', pull_requests: [{ number: 10 }] },
+    { id: 2, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 11 }] },
+    { id: 3, created_at: '2026-08-01T02:00:00Z', conclusion: 'success', pull_requests: [{ number: 11 }] },
+    { id: 4, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 12 }] },
+    { id: 5, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 13 }] },
+  ]);
+  const result = computeFirstPassCiDiagnostics(resolution, [{
+    runId: 1,
+    jobsCapped: false,
+    jobs: [{
+      name: 'Validate AgentBean Next',
+      conclusion: 'failure',
+      steps: [{ name: 'Run package tests and retained phase boundaries once', conclusion: 'failure' }],
+    }],
+  }]);
+  assert.equal(result.nonSuccessRuns.length, 3);
+  assert.deepEqual(result.failurePareto.categories[0], {
+    category: 'package_tests_or_boundaries',
+    runIds: [1],
+    prNumbers: [10],
+    count: 1,
+    share: 1,
+  });
+  assert.deepEqual(result.cancellationPareto.categories[0], {
+    category: 'cancelled_followed_by_later_pr_run',
+    runIds: [2],
+    prNumbers: [11],
+    count: 1,
+    share: 0.5,
+  });
+  assert.equal(result.nonSuccessRuns[1].laterRunId, 3);
+  assert.equal(result.cancellationsWithLaterRunCount, 1);
+  assert.equal(result.completedFirstRunsExcludingCancellationsWithLaterRun, 3);
+  assert.equal(result.successRateExcludingCancellationsWithLaterRun, 0.3333);
+});
+
+test('first-pass CI diagnostics use documented fixed category priority and expose truncated jobs', () => {
+  const resolution = resolveFirstPassCiRuns([
+    { id: 1, created_at: '2026-08-01T01:00:00Z', conclusion: 'failure', pull_requests: [{ number: 10 }] },
+    { id: 2, created_at: '2026-08-01T01:00:00Z', conclusion: 'failure', pull_requests: [{ number: 11 }] },
+  ]);
+  const result = computeFirstPassCiDiagnostics(resolution, [
+    {
+      runId: 1,
+      jobsCapped: false,
+      jobs: [{
+        name: 'Validate AgentBean Next',
+        conclusion: 'failure',
+        steps: [
+          { name: 'Run browser smoke tests', conclusion: 'failure' },
+          { name: 'Run package tests and retained phase boundaries once', conclusion: 'failure' },
+        ],
+      }],
+    },
+    { runId: 2, jobsCapped: true, jobs: [] },
+  ]);
+  assert.equal(result.nonSuccessRuns[0].category, 'package_tests_or_boundaries');
+  assert.equal(result.nonSuccessRuns[1].category, 'jobs_truncated');
+  assert.deepEqual(result.jobsTruncatedRunIds, [2]);
 });
 
 test('first-pass CI falls back to PR commit SHA when Actions omits pull_requests', () => {
@@ -289,7 +375,20 @@ test('human report surfaces core metrics and data-quality warnings', () => {
   const text = formatSdlcFlowMetrics({
     repository: 'xiaojichao/agentbean',
     window: { from, to },
-    firstPassCi: { successRate: 0.5, success: 1, completedFirstRuns: 2 },
+    firstPassCi: {
+      successRate: 0.5,
+      success: 1,
+      completedFirstRuns: 2,
+      diagnostics: {
+        failurePareto: {
+          sampleSize: 1,
+          categories: [{ category: 'package_tests_or_boundaries', count: 1 }],
+        },
+        cancellationPareto: { sampleSize: 0, categories: [] },
+        completedFirstRunsExcludingCancellationsWithLaterRun: 2,
+        successRateExcludingCancellationsWithLaterRun: 0.5,
+      },
+    },
     pullRequests: {
       draftToReady: durationSummary([60]),
       readyToFirstReview: durationSummary([120]),
@@ -303,6 +402,8 @@ test('human report surfaces core metrics and data-quality warnings', () => {
     dataQuality: { warnings: ['示例提示'] },
   });
   assert.match(text, /首次 CI 成功率：50.0%/);
+  assert.match(text, /排除存在后续 run 的取消后：50.0%/);
+  assert.match(text, /首次 CI 失败 Pareto：package_tests_or_boundaries 1\/1/);
   assert.match(text, /Codex stale review：1\/3/);
   assert.match(text, /示例提示/);
 });
