@@ -31,8 +31,15 @@ const TARGETS = [
   },
 ];
 
+const FROZEN_LOCK_COMMAND = {
+  id: 'frozen-lock',
+  executable: 'npm',
+  argv: ['ci', '--dry-run', '--ignore-scripts', '--no-audit', '--no-fund'],
+  display: 'npm ci --dry-run --ignore-scripts --no-audit --no-fund',
+};
 const FULL_COMMANDS = [npmCommand('test:ci'), npmCommand('build:packages')];
 const PACKAGE_NEUTRAL_PATH_RE = /^(?:docs\/|[^/]+\.md$|LICENSE(?:\.|$))/u;
+const PACKAGE_MANIFEST_PATH_RE = /(?:^|\/)package(?:-lock)?\.json$/u;
 
 function npmCommand(script, forwardedArgs = []) {
   const argv = ['run', script];
@@ -67,6 +74,9 @@ export function planChangedPreflight(files) {
     };
   }
 
+  const lockCommands = normalizedFiles.some((file) => PACKAGE_MANIFEST_PATH_RE.test(file))
+    ? [FROZEN_LOCK_COMMAND]
+    : [];
   const targetIds = new Set();
   const fallbackFiles = [];
   for (const file of normalizedFiles) {
@@ -84,7 +94,7 @@ export function planChangedPreflight(files) {
       files: normalizedFiles,
       targets: [],
       fallbackFiles,
-      commands: FULL_COMMANDS,
+      commands: [...lockCommands, ...FULL_COMMANDS],
     };
   }
 
@@ -97,7 +107,7 @@ export function planChangedPreflight(files) {
     files: normalizedFiles,
     targets: targets.map((target) => target.id),
     fallbackFiles: [],
-    commands: uniqueCommands(targets.flatMap((target) => target.commands)),
+    commands: uniqueCommands([...lockCommands, ...targets.flatMap((target) => target.commands)]),
   };
 }
 

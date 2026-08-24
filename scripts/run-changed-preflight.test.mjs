@@ -54,7 +54,6 @@ test('docs-only changes are an explicit package preflight no-op', () => {
 test('shared packages, CI validate surfaces and unknown paths fail safe to full checks', () => {
   for (const file of [
     'packages/contracts/src/index.ts',
-    'package.json',
     'README.md',
     'docs/superpowers/specs/example.md',
     'scripts/example.mjs',
@@ -65,6 +64,27 @@ test('shared packages, CI validate surfaces and unknown paths fail safe to full 
     assert.deepEqual(plan.commands.map((command) => command.id), ['test:ci', 'build:packages']);
     assert.deepEqual(plan.fallbackFiles, [file]);
   }
+});
+
+test('workspace manifests and lock files prepend one frozen-lock validation', () => {
+  const targeted = planChangedPreflight([
+    'apps/server-next/package.json',
+    'apps/server-next/src/index.ts',
+  ]);
+  assert.equal(targeted.mode, 'targeted');
+  assert.deepEqual(targeted.commands.map((command) => command.id), [
+    'frozen-lock',
+    'test:server-next-ci',
+    'build:server-next',
+  ]);
+
+  const full = planChangedPreflight(['package.json', 'package-lock.json']);
+  assert.equal(full.mode, 'full');
+  assert.deepEqual(full.commands.map((command) => command.id), [
+    'frozen-lock',
+    'test:ci',
+    'build:packages',
+  ]);
 });
 
 test('collects committed, staged, unstaged, untracked, deleted, renamed and type changes from git', () => {
