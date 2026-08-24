@@ -44,6 +44,7 @@ const FROZEN_LOCK_COMMAND = {
   display: 'npm ci --dry-run --ignore-scripts --no-audit --no-fund',
 };
 const RETAINED_BOUNDARY_COMMAND = npmCommand('test:retained-boundaries');
+const AGENT_CONFIG_EVAL_COMMAND = npmCommand('eval:agent-config');
 const FULL_COMMANDS = [npmCommand('test:ci'), npmCommand('build:packages')];
 const PACKAGE_NEUTRAL_PATH_RE = /^(?:docs\/|[^/]+\.md$|LICENSE(?:\.|$))/u;
 const PACKAGE_MANIFEST_PATH_RE = /(?:^|\/)package(?:-lock)?\.json$/u;
@@ -84,6 +85,9 @@ export function planChangedPreflight(files) {
   const lockCommands = normalizedFiles.some((file) => PACKAGE_MANIFEST_PATH_RE.test(file))
     ? [FROZEN_LOCK_COMMAND]
     : [];
+  const agentConfigCommands = classifyChangedFiles(normalizedFiles).should_agent_config_eval
+    ? [AGENT_CONFIG_EVAL_COMMAND]
+    : [];
   const targetIds = new Set();
   const fallbackFiles = [];
   for (const file of normalizedFiles) {
@@ -96,13 +100,21 @@ export function planChangedPreflight(files) {
   }
 
   if (fallbackFiles.length > 0) {
+    const webFreshnessCommands = targetIds.has('web-next')
+      ? TARGETS.find((target) => target.id === 'web-next').commands.slice(-1)
+      : [];
     return {
       mode: 'full',
       reason: '包含跨切面或未映射路径，回退完整 CI 等价检查',
       files: normalizedFiles,
       targets: [],
       fallbackFiles,
-      commands: [...lockCommands, ...FULL_COMMANDS],
+      commands: uniqueCommands([
+        ...lockCommands,
+        ...agentConfigCommands,
+        ...FULL_COMMANDS,
+        ...webFreshnessCommands,
+      ]),
     };
   }
 
@@ -110,15 +122,18 @@ export function planChangedPreflight(files) {
   const targetedCommands = targets.length > 0
     ? [RETAINED_BOUNDARY_COMMAND, ...targets.flatMap((target) => target.commands)]
     : [];
+  const commands = uniqueCommands([...lockCommands, ...agentConfigCommands, ...targetedCommands]);
   return {
-    mode: targets.length > 0 ? 'targeted' : 'none',
+    mode: commands.length > 0 ? 'targeted' : 'none',
     reason: targets.length > 0
       ? '按改动面运行对应 package 测试与 matching build'
+      : commands.length > 0
+        ? '按改动面运行专用配置检查'
       : '改动不涉及 package 执行面',
     files: normalizedFiles,
     targets: targets.map((target) => target.id),
     fallbackFiles: [],
-    commands: uniqueCommands([...lockCommands, ...targetedCommands]),
+    commands,
   };
 }
 

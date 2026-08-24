@@ -66,6 +66,34 @@ test('CHANGELOG.md is a web-next generated-data input', () => {
   ]);
 });
 
+test('Agent configuration surfaces retain their dedicated eval', () => {
+  const docsPlan = planChangedPreflight(['AGENTS.md', 'docs/agents/harness.md']);
+  assert.equal(docsPlan.mode, 'targeted');
+  assert.deepEqual(docsPlan.targets, []);
+  assert.deepEqual(docsPlan.commands.map((command) => command.id), ['eval:agent-config']);
+
+  const skillPlan = planChangedPreflight(['.agents/skills/example/SKILL.md']);
+  assert.equal(skillPlan.mode, 'full');
+  assert.deepEqual(skillPlan.commands.map((command) => command.id), [
+    'eval:agent-config',
+    'test:ci',
+    'build:packages',
+  ]);
+});
+
+test('full fallback retains web-next generated-file freshness', () => {
+  const plan = planChangedPreflight([
+    'apps/web-next/scripts/gen-changelog.ts',
+    'packages/contracts/src/index.ts',
+  ]);
+  assert.equal(plan.mode, 'full');
+  assert.deepEqual(plan.commands.map((command) => command.id), [
+    'test:ci',
+    'build:packages',
+    'verify:web-next-changelog-freshness',
+  ]);
+});
+
 test('shared packages, CI validate surfaces and unknown paths fail safe to full checks', () => {
   for (const file of [
     'packages/contracts/src/index.ts',
@@ -98,6 +126,7 @@ test('workspace manifests and lock files prepend one frozen-lock validation', ()
   assert.equal(full.mode, 'full');
   assert.deepEqual(full.commands.map((command) => command.id), [
     'frozen-lock',
+    'eval:agent-config',
     'test:ci',
     'build:packages',
   ]);
