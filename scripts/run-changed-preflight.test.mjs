@@ -43,6 +43,7 @@ test('deduplicates commands while preserving canonical package order', () => {
     'build:daemon-next',
     'test:web-next',
     'build:web-next',
+    'verify:web-next-changelog-freshness',
   ]);
 });
 

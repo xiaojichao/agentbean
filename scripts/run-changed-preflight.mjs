@@ -27,6 +27,12 @@ const TARGETS = [
     commands: [
       npmCommand('test:web-next', ['--api.host', '127.0.0.1']),
       npmCommand('build:web-next'),
+      {
+        id: 'verify:web-next-changelog-freshness',
+        executable: 'git',
+        argv: ['diff', '--exit-code', '--', 'apps/web-next/lib/releases.generated.ts'],
+        display: 'git diff --exit-code -- apps/web-next/lib/releases.generated.ts',
+      },
     ],
   },
 ];
