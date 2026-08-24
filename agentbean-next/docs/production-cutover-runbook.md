@@ -36,7 +36,7 @@ Release B 已通过 PR #485 合并到 `main`，merge commit 为 `b9238c5b8c14b7d
 
 ## 手动操作
 
-所有会读取生产或 npm 凭据的手动 job 都只允许从仓库默认分支触发；命令必须保留 `--ref main`，其他分支即使勾选输入也不会进入对应 job。
+所有会读取生产或 npm 凭据的手动 job 都只允许从仓库默认分支的完整 `refs/heads/...` ref 触发；命令必须保留 `--ref main`，其他分支或同名 tag 即使勾选输入也不会进入对应 job。
 
 ### 只读 Railway preflight
 

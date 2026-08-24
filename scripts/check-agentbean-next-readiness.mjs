@@ -227,7 +227,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes("AGENTBEAN_NEXT_ENTRY_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.agentbean_next_entry_url || vars.AGENTBEAN_NEXT_ENTRY_URL }}") &&
         workflow.includes('npm run smoke:agentbean-next-entry') &&
         workflow.includes('npm run smoke:agentbean-next-business') &&
-        workflow.includes("github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.run_agentbean_next_production_smoke") &&
+        workflow.includes("github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.run_agentbean_next_production_smoke") &&
         cutoverRunbook.includes('run_agentbean_next_production_smoke') &&
         cutoverRunbook.includes('agentbean_next_entry_url'),
       'CI must expose an explicit workflow_dispatch AgentBean Next production smoke gate',
@@ -312,7 +312,7 @@ export function collectAgentBeanNextReadinessChecks({
     check(
       'ci-deploys-production-on-main-push',
       workflow.includes("github.event_name == 'push'") &&
-        workflow.includes("github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.run_production_deploy") &&
+        workflow.includes("github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.run_production_deploy") &&
         workflow.includes('Deploy Railway backend') &&
         workflow.includes('RAILWAY_TOKEN') &&
         cutoverRunbook.includes('推送 `main` 触发生产部署'),
@@ -419,7 +419,7 @@ export function collectAgentBeanNextReadinessChecks({
         workflow.includes('run_railway_preflight') &&
         workflow.includes('Railway Next preflight') &&
         workflow.includes('npm run check:agentbean-next-railway-preflight') &&
-        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.run_railway_preflight") &&
+        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.run_railway_preflight") &&
         publishesOnMainPush &&
         workflow.includes('run: npm run check:agentbean-next-readiness -- --production'),
       'CI must allow read-only Railway Next preflight without running production deploy',
@@ -428,7 +428,7 @@ export function collectAgentBeanNextReadinessChecks({
       'ci-syncs-railway-next-env-without-deploy',
       workflow.includes('sync_railway_next_runtime_env') &&
         workflow.includes('Railway Next env sync') &&
-        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.sync_railway_next_runtime_env") &&
+        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.sync_railway_next_runtime_env") &&
         workflow.includes('railway variable set "AGENTBEAN_NEXT_DATA_DIR=${AGENTBEAN_NEXT_DATA_DIR}"') &&
         workflow.includes('railway variable set AGENTBEAN_NEXT_SESSION_SECRET') &&
         workflow.includes('railway variable set AGENTBEAN_PI_SECRET_KEY') &&
@@ -476,7 +476,7 @@ export function collectAgentBeanNextReadinessChecks({
       'ci-promotes-canonical-daemon-latest-on-demand',
       workflow.includes('promote_agentbean_daemon_latest') &&
         workflow.includes('Promote canonical daemon npm latest') &&
-        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref_name == github.event.repository.default_branch && inputs.promote_agentbean_daemon_latest") &&
+        workflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && inputs.promote_agentbean_daemon_latest") &&
         workflow.includes('Require NPM_TOKEN for latest promotion') &&
         workflow.includes('NPM_TOKEN is required when promote_agentbean_daemon_latest=true') &&
         workflow.includes('Verify legacy daemon historical archive before latest promotion') &&
@@ -1116,7 +1116,9 @@ export function hasPrivilegedManualDefaultBranchGuards(workflow) {
     const boundaries = [block.indexOf('\n    env:', ifStart), block.indexOf('\n    steps:', ifStart)]
       .filter((index) => index >= 0);
     const ifEnd = boundaries.length > 0 ? Math.min(...boundaries) : block.length;
-    return block.slice(ifStart, ifEnd).includes('github.ref_name == github.event.repository.default_branch');
+    return block.slice(ifStart, ifEnd).includes(
+      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+    );
   });
 }
 

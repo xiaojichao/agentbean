@@ -232,7 +232,14 @@ export function computeFirstPassCiMetrics(runs, pullRequests = [], window = null
   const ordered = [...eligibleRuns]
     .sort((left, right) => timestamp(left.created_at) - timestamp(right.created_at));
   for (const run of ordered) {
-    const number = run.pull_requests?.[0]?.number ?? prByCommit.get(run.head_sha);
+    const directPullRequests = run.pull_requests ?? [];
+    if (directPullRequests.length > 1) {
+      runsWithUnresolvedPullRequestAssociation += 1;
+      continue;
+    }
+    const number = directPullRequests.length === 1
+      ? directPullRequests[0]?.number
+      : prByCommit.get(run.head_sha);
     if (!number) {
       runsWithUnresolvedPullRequestAssociation += 1;
       continue;

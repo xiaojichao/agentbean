@@ -2,6 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const WORKFLOW_FILE = 'ci-cd.yml';
+const WORKFLOW_NAME = 'CI/CD';
+const WORKFLOW_PATH = '.github/workflows/ci-cd.yml';
 const PAGE_SIZE = 100;
 const MAX_JOB_PAGES = 10;
 const DEFAULT_MAX_LOG_CHARS = 20_000;
@@ -140,6 +142,17 @@ function fetchRun({ owner, name, runId }, runCommand) {
     '{id,name,path,html_url,event,status,conclusion,head_sha,head_branch,display_title,created_at,updated_at,run_attempt}',
   ]), 'GitHub Actions workflow run API');
   if (!Number.isInteger(payload.id) || !payload.status) throw new Error(`run #${runId} 响应缺少 id/status`);
+  if (payload.name !== WORKFLOW_NAME || payload.path !== WORKFLOW_PATH) {
+    throw new Error(
+      `run #${runId} 不是受支持的 ${WORKFLOW_NAME} workflow：name=${payload.name ?? 'missing'} path=${payload.path ?? 'missing'}`,
+    );
+  }
+  if (payload.status !== 'completed') {
+    throw new Error(`run #${runId} 尚未完成：status=${payload.status}`);
+  }
+  if (!FAILURE_CONCLUSIONS.has(payload.conclusion)) {
+    throw new Error(`run #${runId} 不是可诊断的失败结论：conclusion=${payload.conclusion ?? 'missing'}`);
+  }
   return payload;
 }
 

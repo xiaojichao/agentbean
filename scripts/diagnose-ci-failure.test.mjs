@@ -238,6 +238,29 @@ test('collector uses only read-only API and run-view commands', () => {
   assert.ok(calls.every((args) => !['rerun', 'cancel', 'delete', 'watch'].includes(args[1])));
 });
 
+test('collector rejects unsupported or non-failed runs before jobs and logs', () => {
+  const invalidRuns = [
+    [run({ id: 42, name: 'Other workflow' }), /不是受支持的 CI\/CD workflow/],
+    [run({ id: 42, path: '.github/workflows/other.yml' }), /不是受支持的 CI\/CD workflow/],
+    [run({ id: 42, conclusion: 'success' }), /不是可诊断的失败结论/],
+    [run({ id: 42, status: 'in_progress', conclusion: null }), /尚未完成/],
+  ];
+  for (const [payload, expected] of invalidRuns) {
+    const calls = [];
+    const runCommand = (args) => {
+      calls.push(args);
+      return JSON.stringify(payload);
+    };
+    assert.throws(() => collectCiFailureDiagnosis({
+      runId: 42,
+      repo: 'xiaojichao/agentbean',
+      maxLogChars: 20_000,
+    }, runCommand), expected);
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(calls[0][1], /\/jobs/);
+  }
+});
+
 test('formats Chinese output and validates CLI bounds', () => {
   const result = analyzeCiFailure({ repository: 'xiaojichao/agentbean', run: run(), jobs: [job()] });
   assert.match(formatCiFailureDiagnosis(result), /只读诊断/);

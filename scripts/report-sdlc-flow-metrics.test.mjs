@@ -129,6 +129,24 @@ test('first-pass CI falls back to PR commit SHA when Actions omits pull_requests
   assert.equal(result.runsWithoutPullRequest, 0);
 });
 
+test('first-pass CI refuses a run directly associated with multiple PRs', () => {
+  const result = computeFirstPassCiMetrics([{
+    id: 1,
+    head_sha: head,
+    created_at: '2026-08-01T01:00:00Z',
+    conclusion: 'success',
+    pull_requests: [{ number: 10 }, { number: 11 }],
+  }], [{
+    number: 10,
+    commits: { nodes: [{ commit: { oid: head } }] },
+  }]);
+  assert.equal(result.pullRequestsWithFirstRun, 0);
+  assert.equal(result.successRate, null);
+  assert.deepEqual(result.byConclusion, {});
+  assert.equal(result.runsWithUnresolvedPullRequestAssociation, 1);
+  assert.equal(result.runsWithoutPullRequest, 1);
+});
+
 test('first-pass CI excludes runs outside the explicit window', () => {
   const result = computeFirstPassCiMetrics([
     { created_at: '2026-08-02T00:00:00Z', conclusion: 'success', pull_requests: [{ number: 10 }] },

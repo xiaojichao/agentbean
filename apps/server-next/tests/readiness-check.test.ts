@@ -91,7 +91,8 @@ describe('AgentBean Next readiness checker', () => {
   });
 
   test('fails closed when a privileged manual job can run from a non-default branch', () => {
-    const guard = 'github.ref_name == github.event.repository.default_branch';
+    const guard = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
+    const tagUnsafeGuard = 'github.ref_name == github.event.repository.default_branch';
     const workflow = [
       '',
       '  deploy:',
@@ -110,6 +111,7 @@ describe('AgentBean Next readiness checker', () => {
 
     expect(hasPrivilegedManualDefaultBranchGuards(workflow)).toBe(true);
     expect(hasPrivilegedManualDefaultBranchGuards(workflow.replace(`    if: ${guard}`, '    if: true'))).toBe(false);
+    expect(hasPrivilegedManualDefaultBranchGuards(workflow.replace(guard, tagUnsafeGuard))).toBe(false);
   });
 
   test('fails closed when the Phase 0 root or CI gate is incomplete', () => {

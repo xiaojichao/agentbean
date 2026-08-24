@@ -12,7 +12,7 @@ npm run diagnose:ci-failure -- --run 32565939196 --json
 npm run diagnose:ci-failure -- --repo xiaojichao/agentbean
 ```
 
-未传 run ID 时，使用 `GITHUB_RUN_ID`；两者都没有时，从最近 100 个已完成 `CI/CD` run 中优先选择最近的 failure、timed_out、action_required 或 startup_failure；没有这些结果时才回退到 cancelled run。
+未传 run ID 时，使用 `GITHUB_RUN_ID`；两者都没有时，从最近 100 个已完成 `CI/CD` run 中优先选择最近的 failure、timed_out、action_required 或 startup_failure；没有这些结果时才回退到 cancelled run。无论 run ID 来自自动触发、环境变量还是手工输入，诊断器都会先验证 workflow name/path 精确为 `CI/CD` / `.github/workflows/ci-cd.yml`、run 已完成且 conclusion 属于上述失败集合或 cancelled；不匹配时会在读取 jobs/logs 前失败闭合。
 
 `.github/workflows/ci-failure-diagnosis.yml` 在 `CI/CD` workflow 完成且结果为 failure、timed_out、action_required、startup_failure 或 cancelled 时，自动对精确 run ID 生成 JSON artifact；也可手工输入 run ID。它始终 checkout 受信任的默认分支，不执行 PR head 代码，只有 Actions 与 contents 读取权限，artifact 保留 14 天。
 

@@ -34,7 +34,7 @@ npm run report:sdlc-flow-metrics -- --repo xiaojichao/agentbean
 - 单个 PR 的 ready/review 连接超过 100 项时，该 PR 会进入 `truncatedPrNumbers`，并从依赖这些连接的指标中排除。
 - GitHub 对带筛选条件的 workflow run 查询最多返回 1000 条；命中上限会写入 `dataQuality.warnings`。jobs 命中上限的 run 会从 outcome 与时延指标中排除。
 - 缺失 PR 关联、缺失 job/step、进行中的 run 和各类 conclusion 分开记录，不按成功或零时长处理。
-- Actions run 未返回 `pull_requests` 时，以该 run 的完整 `head_sha` 匹配窗口内 PR commit；同一 SHA 对应多个 PR 时拒绝猜测。GraphQL commit 连接超过 100 项时，报告先通过只读 REST 分页补全；只有补全失败或仍命中上限时，才把 `commitFallbackEvidenceComplete` 设为 false。此时未知 SHA 仅计入中性的 `runsWithUnresolvedPullRequestAssociation`，确定性字段 `runsWithoutPullRequest` 为 null，不把每个 run 猜成受某个截断 PR 影响。
+- Actions run 的 `pull_requests` 恰好一项时才采用直接关联；多项时计入 `runsWithUnresolvedPullRequestAssociation`，拒绝按数组顺序猜测。未返回关联时，以该 run 的完整 `head_sha` 匹配窗口内 PR commit；同一 SHA 对应多个 PR 时同样拒绝猜测。GraphQL commit 连接超过 100 项时，报告先通过只读 REST 分页补全；只有补全失败或仍命中上限时，才把 `commitFallbackEvidenceComplete` 设为 false。此时未知 SHA 仅计入中性的 `runsWithUnresolvedPullRequestAssociation`，确定性字段 `runsWithoutPullRequest` 为 null，不把每个 run 猜成受某个截断 PR 影响。
 - delivery job/step 只为窗口内 merge commit 对应的 `main` push run 拉取；其他 `main` push 只计入 `observedMainPushRuns`。
 - job 查询使用固定 6 路只读并发；并发度不是流程 KPI，也不会触发 workflow 操作。
 
