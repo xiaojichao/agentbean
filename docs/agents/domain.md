@@ -7,17 +7,20 @@
 依次检查：
 
 - 根目录 `CONTEXT-MAP.md`，确定与当前任务相关的业务上下文。
-- `CONTEXT-MAP.md` 指向的相关 `CONTEXT.md`。
+- `CONTEXT-MAP.md` 指向的相关 `CONTEXT.md` 或其中的精确章节；不要默认通读无关上下文。
 - `docs/adr/` 中影响当前领域的系统级 ADR。
 - 相关 context 内 `docs/adr/` 中的局部 ADR。
 
-如果这些文件尚不存在，继续工作，不将缺失本身作为错误，也不提前创建空文档。`domain-modeling` 等 skill 会在术语或架构决策真正形成时按需创建它们。
+当前根 `CONTEXT.md` 是共享 glossary，`CONTEXT-MAP.md` 先按业务上下文路由到其中的精确章节；
+当某个上下文形成独立边界时，再把对应术语迁入该 context 自己的 `CONTEXT.md`。如果地图指向的文件或章节尚不存在，
+继续工作，不将缺失本身作为错误，也不提前创建空文档。`domain-modeling` 等 skill 会在术语或架构决策真正形成时按需创建它们。
 
 ## 布局
 
 ```text
 /
 ├── CONTEXT-MAP.md
+├── CONTEXT.md              # 当前共享 glossary
 ├── docs/
 │   └── adr/
 ├── apps/
@@ -31,6 +34,7 @@
 ```
 
 `docs/adr/` 保存跨 context 的系统级决策。`apps/*` 或 `packages/*` 下的 ADR 只记录该 context 内部决策。
+地图可以在迁移期指向根 `CONTEXT.md` 的章节，但新增局部术语应优先进入已经存在的 context 文档。
 
 ## 使用 glossary 术语
 
