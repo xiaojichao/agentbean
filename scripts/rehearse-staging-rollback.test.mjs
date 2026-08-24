@@ -282,7 +282,7 @@ test('executes one staging rollback mutation, waits for success, then runs read-
   };
   const entryFetcher = async (url) => {
     if (url.pathname === '/healthz') return { ok: true, text: async () => JSON.stringify({ ok: true, service: 'agentbean-next-server' }) };
-    if (url.pathname === '/') return { ok: true, text: async () => '<title>AgentBean</title>Your AI Agent Platform /_next/static/chunks/app/page-a /_next/static/chunks/app/layout-b SocketProvider AppShell' };
+    if (url.pathname === '/') return { ok: true, text: async () => '<title>AgentBean：和你的 AI 同事，在一个团队里干活</title>三步，把 AI 请进团队 /_next/static/chunks/app/page-a /_next/static/chunks/app/layout-b SocketProvider AppShell' };
     return { ok: true, text: async () => 'socket.io io' };
   };
   const result = await executeStagingRollback({
