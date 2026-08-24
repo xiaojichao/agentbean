@@ -89,6 +89,7 @@ export function planChangedPreflight(files) {
   for (const file of normalizedFiles) {
     const target = TARGETS.find((candidate) => file.startsWith(candidate.prefix));
     if (target) targetIds.add(target.id);
+    else if (file === 'CHANGELOG.md') targetIds.add('web-next');
     else if (classifyChangedFiles([file]).should_validate || !PACKAGE_NEUTRAL_PATH_RE.test(file)) {
       fallbackFiles.push(file);
     }

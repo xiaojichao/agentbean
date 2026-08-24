@@ -48,10 +48,22 @@ test('deduplicates commands while preserving canonical package order', () => {
 });
 
 test('docs-only changes are an explicit package preflight no-op', () => {
-  const plan = planChangedPreflight(['CHANGELOG.md', 'docs/agents/example.md']);
+  const plan = planChangedPreflight(['RELEASE_NOTES.md', 'docs/agents/example.md']);
   assert.equal(plan.mode, 'none');
   assert.equal(plan.commands.length, 0);
   assert.match(plan.reason, /不涉及 package/);
+});
+
+test('CHANGELOG.md is a web-next generated-data input', () => {
+  const plan = planChangedPreflight(['CHANGELOG.md']);
+  assert.equal(plan.mode, 'targeted');
+  assert.deepEqual(plan.targets, ['web-next']);
+  assert.deepEqual(plan.commands.map((command) => command.id), [
+    'test:retained-boundaries',
+    'test:web-next',
+    'build:web-next',
+    'verify:web-next-changelog-freshness',
+  ]);
 });
 
 test('shared packages, CI validate surfaces and unknown paths fail safe to full checks', () => {
