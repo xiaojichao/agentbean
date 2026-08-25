@@ -104,3 +104,24 @@ PR #1136 合并(57feba3f gate 放宽 + d70c78ac Review 阻塞收敛);修复生�
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Browser smoke 重试证据与周报分类
+
+**Date**: 2026-08-25
+**Task**: Browser smoke 重试证据与周报分类
+**Branch**: `codex/browser-smoke-diagnostics`
+
+### Summary
+
+拆分 CI browser smoke 显式重试步骤，保留隔离 artifact 与结构化失败上下文，并在 SDLC 周报和 CI 诊断中增加保守的 retry outcome 分类；完整 preflight、真实 Chrome 53/53 与 28 天回放通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `777f2c1e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
