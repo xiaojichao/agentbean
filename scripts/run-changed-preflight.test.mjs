@@ -32,6 +32,58 @@ test('plans retained boundaries, matching tests and builds for one package surfa
   ]);
 });
 
+test('browser opt-in replaces targeted builds with one full build before the CI-equivalent smoke', () => {
+  const plan = planChangedPreflight([
+    'apps/server-next/src/application/usecases.ts',
+    'apps/web-next/app/page.tsx',
+  ], { browser: true });
+  assert.equal(plan.mode, 'targeted');
+  assert.deepEqual(plan.targets, ['server-next', 'web-next']);
+  assert.deepEqual(plan.commands.map((command) => command.display), [
+    'npm run check:agentbean-next-readiness',
+    'npm run test:team-terminology',
+    'npm run check:team-terminology',
+    'npm run build:packages',
+    'npm run test:retained-boundaries',
+    'npm run test:server-next-ci',
+    'npm run test:web-next -- --api.host 127.0.0.1',
+    'git diff --exit-code -- apps/web-next/lib/releases.generated.ts',
+    'npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000',
+  ]);
+});
+
+test('browser opt-in ignores daemon-only and docs-only changes', () => {
+  const daemonPlan = planChangedPreflight(['apps/daemon-next/src/executor.ts'], { browser: true });
+  assert.deepEqual(daemonPlan.commands.map((command) => command.id), [
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
+    'test:retained-boundaries',
+    'test:daemon-next',
+    'build:daemon-next',
+  ]);
+
+  const docsPlan = planChangedPreflight(['docs/agents/example.md'], { browser: true });
+  assert.equal(docsPlan.mode, 'none');
+  assert.equal(docsPlan.commands.length, 0);
+});
+
+test('browser opt-in survives full fallback when a server or web surface changed', () => {
+  const plan = planChangedPreflight([
+    'apps/server-next/src/application/usecases.ts',
+    'packages/contracts/src/index.ts',
+  ], { browser: true });
+  assert.equal(plan.mode, 'full');
+  assert.deepEqual(plan.commands.map((command) => command.id), [
+    'check:agentbean-next-readiness',
+    'test:team-terminology',
+    'check:team-terminology',
+    'build:packages',
+    'test:ci',
+    'smoke:agentbean-next-browser',
+  ]);
+});
+
 test('deduplicates commands while preserving canonical package order', () => {
   const plan = planChangedPreflight([
     'apps/web-next/app/page.tsx',
@@ -213,6 +265,17 @@ test('CLI plan mode prints commands without executing them', () => {
   ], { encoding: 'utf8' });
   assert.match(output, /AgentBean changed preflight：targeted/);
   assert.match(output, /npm run test:server-next-ci/);
+});
+
+test('CLI browser plan prints the opt-in smoke without running it', () => {
+  const output = execFileSync(process.execPath, [
+    scriptPath,
+    '--plan',
+    '--browser',
+    'apps/server-next/src/example.ts',
+  ], { encoding: 'utf8' });
+  assert.match(output, /npm run build:packages/);
+  assert.match(output, /npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000/);
 });
 
 test('CLI rejects unknown arguments and a missing base ref', () => {

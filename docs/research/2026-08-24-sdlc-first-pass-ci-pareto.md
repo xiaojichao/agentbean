@@ -42,7 +42,7 @@ gh api repos/xiaojichao/agentbean/actions/runs/30595768911/jobs --paginate \
 
 ### Browser smoke（7）
 
-6/7 是真实 UI/产品契约回归，1/7 是 runtime async/dispatch 异常。PR [#1190](https://github.com/xiaojichao/agentbean/pull/1190) 提供了同 SHA 后续成功的 flaky 旁证：该现象应被记录并定位，不宜直接把所有 browser smoke 失败视为基础设施噪声。
+6/7 是真实 UI/产品契约回归，1/7 是 runtime async/dispatch 异常。7 个 first-pass 失败在工作流内置的一次 retry 后仍失败；PR [#1190](https://github.com/xiaojichao/agentbean/pull/1190) 的同 SHA 只有并行 `PI SEA compatibility` 成功，不能作为 browser smoke 后续成功的旁证。因此这些样本不应被降格为基础设施噪声。
 
 ### Cancellations（15）
 
@@ -62,6 +62,10 @@ gh api repos/xiaojichao/agentbean/actions/runs/30595768911/jobs --paginate \
 `npm run preflight:changed` 因此采用保守选择：明确的 `server-next`、`daemon-next`、`web-next` 改动运行对应测试和 build；共享 packages、CI validate surface 与未知路径回退完整 `test:ci + build:packages`。它不替换远端 CI，也不安装 git hook。
 
 首次用该命令对自身改动执行 full 模式时，真实捕获了 `cli-all-profiles.test.ts` 读取开发机 Device Service runtime-owner 状态造成的 3 个 fixture 失败。测试改为显式注入 runtime-owner 后，daemon 套件与完整 preflight 通过。这为“fixture/setup 是第二大失败簇”提供了新的本地复现证据。
+
+## Browser preflight 落地基线
+
+PR [#1244](https://github.com/xiaojichao/agentbean/pull/1244) 的 CI run [32737950056](https://github.com/xiaojichao/agentbean/actions/runs/32737950056) 在基线窗口之后提供了可复现的 flaky 旁证：首次 browser smoke 因等待成员详情渲染超时失败，同一 run 的一次 retry 随后以 `53/53` 通过。远端 CI 继续保留一次 retry 用于区分瞬态竞争；本地 `npm run preflight:changed -- --browser` 不自动重试，第一次失败直接暴露，并仅在改动触及 `apps/server-next/**` 或 `apps/web-next/**` 时追加完整 browser gate。默认 preflight、daemon-only、docs-only 和 git hook 行为均不变。
 
 ## Primary sources
 
