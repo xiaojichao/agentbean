@@ -23,6 +23,7 @@ npm run diagnose:ci-failure -- --repo xiaojichao/agentbean
 分类包括 `test`、`build`、`configuration`、`browser_smoke`、`production_health`、`production_smoke`、`deployment`、`publishing`、`infrastructure`、`timeout`、`cancelled` 和 `unknown`。
 
 - 同一次 run 中出现 retry 且重试后重复失败，标为 `unlikely`，不能因为存在 retry 文案就叫 flaky。
+- 显式 `Run AgentBean Next browser smoke retry` step 失败同样标为 `unlikely`：该 step 只在首次尝试失败后运行，本身已证明同一 run 有两次失败尝试。
 - 明确断言、类型错误或产品契约失败标为 `unlikely`。
 - runner 中断、网络重置或外部服务 5xx 只标 `possible`，仍需跨 run 或同 head 证据确认。
 - 单次取消或证据不足标为 `insufficient_evidence`。

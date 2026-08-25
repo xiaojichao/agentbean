@@ -19,7 +19,8 @@ npm run report:sdlc-flow-metrics -- --repo xiaojichao/agentbean
 | 指标 | 口径 |
 | --- | --- |
 | first-pass CI success | 窗口内 `pull_request` 事件中，每个 PR 最早一次 `CI/CD` run 的 conclusion；取消、跳过、失败分别保留 |
-| first-pass CI failure Pareto | 只对失败 first-run 读取 GitHub jobs/steps，按固定优先级归一全部失败名称；不下载完整日志，无法识别时保留为 `other` |
+| first-pass CI failure Pareto | 对已完成 first-run 读取 GitHub jobs/steps，失败样本按固定优先级归一全部失败名称；不下载完整日志，无法识别时保留为 `other` |
+| browser smoke retry outcome | 从显式 attempt steps 区分 `no_retry`、`retry_recovered`、`retry_failed`；browser 未运行记为 `not_applicable`，历史或缺失证据记为 `unknown` |
 | first-pass CI cancellation Pareto | 取消 first-run 仅按是否存在同 PR 后续 run 分类；记为 `cancelled_followed_by_later_pr_run` 只表达可观测相关性，不直接断言取消原因 |
 | cancellation-adjusted first-pass CI success | 保留原始 first-pass 成功率，另用“已完成 first-run 减去存在同 PR 后续 run 的取消”作分母；该诊断值用于分离调度相关样本，不替代原始 KPI |
 | Draft → Ready | 窗口内创建且有 `ReadyForReviewEvent` 的 PR，从 `createdAt` 到首次 ready |
@@ -40,6 +41,7 @@ npm run report:sdlc-flow-metrics -- --repo xiaojichao/agentbean
 - Actions run 的 `pull_requests` 恰好一项时才采用直接关联；多项时计入 `runsWithUnresolvedPullRequestAssociation`，拒绝按数组顺序猜测。未返回关联时，以该 run 的完整 `head_sha` 匹配窗口内 PR commit；同一 SHA 对应多个 PR 时同样拒绝猜测。GraphQL commit 连接超过 100 项时，报告先通过只读 REST 分页补全；只有补全失败或仍命中上限时，才把 `commitFallbackEvidenceComplete` 设为 false。此时未知 SHA 仅计入中性的 `runsWithUnresolvedPullRequestAssociation`，确定性字段 `runsWithoutPullRequest` 为 null，不把每个 run 猜成受某个截断 PR 影响。
 - delivery job/step 只为窗口内 merge commit 对应的 `main` push run 拉取；其他 `main` push 只计入 `observedMainPushRuns`。
 - job 查询使用固定 6 路只读并发；并发度不是流程 KPI，也不会触发 workflow 操作。
+- browser retry 指标只读取 jobs/steps 元数据，不下载日志或截图 artifact；历史 run 没有显式 attempt steps 时保持 `unknown`，不按最终 job 结论反推。
 - `nonSuccessRuns` 仅保留 PR 号、run ID、SHA、conclusion、分类和失败 job/step 名称，不保留完整日志、环境变量或密钥。
 
 报告已接入周度只读 artifact，2026-08-24 生成了首份 28 天基线。累计获得至少四周产物后，再依据主要等待时间和失败 Pareto 决定下一项自动化，不以并行 Agent 数或代码行数作为主 KPI。
@@ -58,5 +60,7 @@ npm run preflight:changed -- --browser
 命令默认比较 `origin/main...HEAD`，并合并 staged、unstaged 与 untracked 文件。单一 `apps/{server-next,daemon-next,web-next}` 改动先运行 readiness 与 Team 术语检查，再运行一次 retained boundaries、对应测试和 Local Verification Contract 要求的 build，避免 migration registration 等跨目录守卫被 targeted 模式跳过；`web-next` build 后还会校验 `releases.generated.ts` 没有未提交漂移，作为其生成输入的根 `CHANGELOG.md` 也映射到同一执行面，即使混合改动触发 full fallback 也会保留 freshness 检查；Agent 配置执行面会保留专用 `eval:agent-config`；任意 workspace `package.json` 或锁文件改动会先运行只读的 `npm ci --dry-run` 校验清单与 lockfile 一致性；除此之外的普通文档-only 改动不运行 package 检查；共享 `packages/*`、CI validate 文档/配置、根脚本、工作流、锁文件或无法识别的路径会 fail-safe 回退 readiness、Team 术语、`npm run test:ci` 与 `npm run build:packages`。共享包默认完整回退，是因为其依赖扇出不能由目录名安全缩小。可用 `--base <ref>` 改变比较基线，也可直接传入文件路径检查计划。
 
 `--browser` 是显式 opt-in：只有改动触及 `apps/server-next/**` 或 `apps/web-next/**` 时，计划才先运行一次 `npm run build:packages`，确保干净 worktree 也具备 workspace 与 WebUI 产物，再运行 retained/对应测试，最后追加与 CI 相同的 `npm run smoke:agentbean-next-browser -- --skip-build --timeout-ms 60000`。daemon-only、docs-only 与仅根 `CHANGELOG.md` 改动不会追加 browser smoke；混合改动进入 full fallback 时，只要仍包含 server/web 路径就保留 browser smoke。本地入口不自动重试，第一次失败直接返回非零，便于保留 flaky 或契约回归的原始证据。
+
+远端 CI 将首次执行与一次条件 retry 拆成显式 step，分别保留在 `attempt-1` / `attempt-2` artifact 目录，并写入 `retry-outcome.json`。wait timeout 的 `failure-context.json` 记录业务 flow、当前 route、等待阶段、耗时、稳定 selector 或描述及可识别实体 ID；retry 不覆盖首次失败证据。
 
 这是提交前反馈辅助，不替代 PR 的完整 CI、review、merge-readiness 或 post-merge 验证，也不安装或强制启用 git hook。

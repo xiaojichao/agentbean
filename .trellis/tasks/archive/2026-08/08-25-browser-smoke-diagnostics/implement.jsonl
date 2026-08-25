@@ -1,0 +1,2 @@
+{"file":"docs/research/2026-08-24-sdlc-first-pass-ci-pareto.md","reason":"沿用现有 CI Pareto 基线，新增 browser retry outcome 观测而不改首轮成功率定义。"}
+{"file":"docs/agents/sdlc-flow-metrics.md","reason":"实现 jobs/steps 元数据分类、unknown 告警与人类报告输出。"}

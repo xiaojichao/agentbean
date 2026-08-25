@@ -162,6 +162,17 @@ export function collectAgentBeanNextReadinessChecks({
       'CI must create the production Web build through the canonical package build before the combined browser smoke starts',
     ),
     check(
+      'ci-preserves-browser-smoke-retry-evidence',
+      workflow.includes('id: browser_smoke_attempt_1') &&
+        workflow.includes('continue-on-error: true') &&
+        workflow.includes('steps.browser_smoke_attempt_1.outcome == \'failure\'') &&
+        workflow.includes('artifacts/agentbean-next-browser-smoke/attempt-1') &&
+        workflow.includes('artifacts/agentbean-next-browser-smoke/attempt-2') &&
+        workflow.includes('retry-outcome.json') &&
+        workflow.includes('if: always() && !cancelled()'),
+      'CI must retry browser smoke only after the first failure, preserve both attempt directories, and upload a machine-readable outcome on failure',
+    ),
+    check(
       'ci-runs-production-readiness-before-deploy',
       workflow.includes('npm run check:agentbean-next-readiness -- --production') &&
         workflow.includes('AGENTBEAN_NEXT_SESSION_SECRET') &&

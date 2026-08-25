@@ -92,6 +92,78 @@ export function webUiFlowSuffix(suffix, flow) {
   return `${suffix}-${flow}`;
 }
 
+const ENTITY_ID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+
+export function stableDataSmokeSelector(expression) {
+  const normalized = expression.replaceAll('\\"', '"');
+  const match = normalized.match(/\[data-smoke=(?:"|')([^"']+)(?:"|')\]/);
+  return match ? `[data-smoke="${match[1]}"]` : null;
+}
+
+function entityIdsFromDescription(description) {
+  return [...new Set(description.match(ENTITY_ID_PATTERN) ?? [])];
+}
+
+export function createBrowserSmokeWaitTimeoutError({
+  flow,
+  route,
+  waitStage,
+  selector = null,
+  description,
+  elapsedMs,
+  lastError,
+}) {
+  const suffix = lastError instanceof Error ? ` after ${lastError.message}` : '';
+  const error = new Error(`Timed out waiting for ${description}${suffix}`);
+  error.browserSmokeFailureContext = {
+    flow,
+    route,
+    waitStage,
+    selector,
+    description,
+    entityIds: entityIdsFromDescription(description),
+    elapsedMs,
+  };
+  return error;
+}
+
+function browserSmokeFailureContextFrom(error) {
+  const seen = new Set();
+  let current = error;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    if (current.browserSmokeFailureContext) return current.browserSmokeFailureContext;
+    current = current.cause;
+  }
+  return undefined;
+}
+
+export async function writeBrowserSmokeFailureContext({ artifacts, page, flow, error }) {
+  const message = error instanceof Error ? error.message : String(error);
+  const waitContext = browserSmokeFailureContextFrom(error);
+  let route = waitContext?.route ?? null;
+  if (page?.readCurrentRoute) {
+    try {
+      route = await page.readCurrentRoute() ?? route;
+    } catch {
+      // Preserve the original failure even if the page is already unavailable.
+    }
+  }
+  const context = {
+    schemaVersion: 1,
+    flow: waitContext?.flow ?? flow,
+    route,
+    waitStage: waitContext?.waitStage ?? null,
+    elapsedMs: waitContext?.elapsedMs ?? null,
+    selector: waitContext?.selector ?? null,
+    description: waitContext?.description ?? null,
+    entityIds: waitContext?.entityIds ?? [],
+    error: message,
+  };
+  writeFileSync(artifacts.failureContext, JSON.stringify(context, null, 2));
+  return context;
+}
+
 export async function runAgentBeanNextBrowserSmoke({
   baseUrl,
   chromeBin,
@@ -115,6 +187,7 @@ export async function runAgentBeanNextBrowserSmoke({
     consoleLog: join(resolvedArtifactsDir, 'browser-console.json'),
     screenshot: join(resolvedArtifactsDir, 'final-page.png'),
     failureScreenshot: join(resolvedArtifactsDir, 'failure-page.png'),
+    failureContext: join(resolvedArtifactsDir, 'failure-context.json'),
   };
 
   let page;
@@ -151,7 +224,7 @@ export async function runAgentBeanNextBrowserSmoke({
     cleanup.push(chrome.close);
     checks.push(check('browser-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
 
-    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs);
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs, { flow: 'preview-session' });
     cleanup.push(page.close);
     await page.setViewport(DEFAULT_VIEWPORT);
     await page.addScriptOnNewDocument(`
@@ -179,6 +252,7 @@ export async function runAgentBeanNextBrowserSmoke({
     assertSession(session);
     checks.push(check('browser-session-readable', true, 'Browser session exposes user and current team for daemon smoke'));
 
+    page.setDiagnosticFlow('preview-daemon');
     const daemon = await connectSmokeDaemon({
       baseUrl: target.baseUrl,
       ioFactory,
@@ -192,6 +266,7 @@ export async function runAgentBeanNextBrowserSmoke({
     });
     checks.push(check('browser-daemon-connected', true, 'Smoke daemon reports an online device and runtime'));
 
+    page.setDiagnosticFlow('preview-agent');
     await page.waitForFunction(
       `document.querySelector('#agent-create-form [name="runtimeId"]')?.options.length > 0`,
       'runtime options are visible in the browser after daemon report',
@@ -206,6 +281,7 @@ export async function runAgentBeanNextBrowserSmoke({
     await page.waitForText('#agents', agentName, timeoutMs);
     checks.push(check('browser-custom-agent-create', true, 'Browser creates a custom agent through the preview form'));
 
+    page.setDiagnosticFlow('preview-chat');
     const firstPrompt = `@${agentName} hello`;
     await sendBrowserMessage(page, firstPrompt);
     await page.waitForText('#messages', `browser-smoke:${firstPrompt}`, timeoutMs);
@@ -236,6 +312,7 @@ export async function runAgentBeanNextBrowserSmoke({
     await page.waitForText('#messages', `browser-smoke:${secondPrompt}`, timeoutMs);
     checks.push(check('browser-post-refresh-dispatch', true, 'Browser can dispatch and see replies after refresh'));
 
+    page.setDiagnosticFlow('preview-thread');
     const threadSmoke = await exerciseThreadBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
       check(
@@ -245,6 +322,7 @@ export async function runAgentBeanNextBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('preview-task');
     const taskSmoke = await exerciseTaskBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
       check('browser-task-create-visible', true, `Browser created and rendered task ${taskSmoke.title}`),
@@ -252,6 +330,7 @@ export async function runAgentBeanNextBrowserSmoke({
       check('browser-task-refresh-restore', true, 'Browser refresh restored the task list through task:list'),
     );
 
+    page.setDiagnosticFlow('preview-artifact');
     const artifactSmoke = await exerciseArtifactBrowserSmoke({ page, suffix, timeoutMs });
     checks.push(
       check('browser-artifact-upload-visible', true, 'Browser uploaded and rendered an artifact'),
@@ -277,6 +356,11 @@ export async function runAgentBeanNextBrowserSmoke({
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     checks.push(check('browser-smoke-runtime-error', false, message));
+    try {
+      await writeBrowserSmokeFailureContext({ artifacts, page, flow: 'preview', error });
+    } catch {
+      // Diagnostic writes must not replace the original smoke failure.
+    }
     if (page) {
       try {
         await page.screenshot(artifacts.failureScreenshot);
@@ -319,6 +403,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     consoleLog: join(resolvedArtifactsDir, 'webui-browser-console.json'),
     screenshot: join(resolvedArtifactsDir, 'webui-final-page.png'),
     failureScreenshot: join(resolvedArtifactsDir, 'webui-failure-page.png'),
+    failureContext: join(resolvedArtifactsDir, 'failure-context.json'),
   };
   let page;
   try {
@@ -337,7 +422,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     cleanup.push(chrome.close);
     checks.push(check('webui-chrome-ready', true, `Chrome DevTools is listening on ${chrome.debugUrl}`));
 
-    page = await openPage(chrome.debugUrl, browserEvents);
+    page = await openPage(chrome.debugUrl, browserEvents, timeoutMs, { flow: 'webui-public-routes' });
     cleanup.push(page.close);
     await page.setViewport(DEFAULT_VIEWPORT);
     const publicRoutes = await exerciseWebUiRouteSmoke({
@@ -360,6 +445,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     checks.push(check('webui-session-seeded', true, 'Created an isolated WebUI session for authenticated route smoke'));
 
     await seedWebUiAuthStorage({ page, session: seededSession.session });
+    page.setDiagnosticFlow('webui-authenticated-routes');
     const authenticatedRoutes = await exerciseWebUiAuthenticatedRouteSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -392,6 +478,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     }
     const isAdminSession = seededSession.session.user?.role === 'admin';
 
+    page.setDiagnosticFlow('webui-chat');
     const chatResult = await exerciseWebUiChatBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -406,6 +493,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
         `Sent chat message "${chatResult.body}" and restored it after refresh`,
       ),
     );
+    page.setDiagnosticFlow('webui-channel-files');
     const channelFilesResult = await exerciseWebUiChannelFilesBrowserSmoke({
       page,
       suffix,
@@ -422,6 +510,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-channels');
     const channelResult = await exerciseWebUiChannelsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -443,6 +532,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-tasks');
     const taskResult = await exerciseWebUiTaskBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -472,6 +562,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
 
     // 始终创建 workspace run 数据供 project collaboration 使用；
     // admin UI（/dashboard/runs）仅在管理员会话下验证。
+    page.setDiagnosticFlow('webui-runs');
     const runResult = await exerciseWebUiRunsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -492,6 +583,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-project-collaboration');
     const projectResult = await exerciseWebUiProjectCollaborationSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -554,6 +646,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-teams');
     const teamResult = await exerciseWebUiTeamsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -569,6 +662,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-members');
     const memberResult = await exerciseWebUiMembersBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -585,6 +679,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-devices');
     const deviceResult = await exerciseWebUiDevicesBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -602,6 +697,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       ),
     );
 
+    page.setDiagnosticFlow('webui-settings');
     const settingsResult = await exerciseWebUiSettingsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -618,6 +714,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     );
 
     if (isAdminSession) {
+      page.setDiagnosticFlow('webui-memory');
       const memoryResult = await exerciseWebUiMemoryBusinessSmoke({
         page,
         baseUrl: target.baseUrl,
@@ -642,6 +739,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
       );
     }
 
+    page.setDiagnosticFlow('webui-agents');
     const agentsResult = await exerciseWebUiAgentsBusinessSmoke({
       page,
       baseUrl: target.baseUrl,
@@ -660,6 +758,7 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
     );
 
     if (target.dataDir) {
+      page.setDiagnosticFlow('webui-admin');
       const adminResult = await exerciseWebUiAdminDashboardBusinessSmoke({
         page,
         baseUrl: target.baseUrl,
@@ -702,6 +801,11 @@ export async function runAgentBeanNextWebUiBrowserSmoke({
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     checks.push(check('webui-smoke-runtime-error', false, message));
+    try {
+      await writeBrowserSmokeFailureContext({ artifacts, page, flow: 'webui', error });
+    } catch {
+      // Diagnostic writes must not replace the original smoke failure.
+    }
     if (page) {
       try {
         await page.screenshot(artifacts.failureScreenshot);
@@ -3893,7 +3997,10 @@ async function waitForWebUiDeviceDetail({ page, deviceId, name, timeoutMs }) {
         };
       })()
     `).catch((debugError) => ({ debugError: debugError instanceof Error ? debugError.message : String(debugError) }));
-    throw new Error(`${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; current detail ${JSON.stringify(debug)}`,
+      { cause: error },
+    );
   }
 }
 
@@ -5246,19 +5353,24 @@ export async function launchChrome({ chromeBin, artifactsDir, headed, timeoutMs 
   };
 }
 
-export async function openPage(debugUrl, events, timeoutMs = DEFAULT_TIMEOUT_MS) {
+export async function openPage(debugUrl, events, timeoutMs = DEFAULT_TIMEOUT_MS, { flow = 'browser' } = {}) {
   const target = await fetchJson(`${debugUrl}/json/new?about:blank`, { method: 'PUT' });
   if (!target.webSocketDebuggerUrl) {
     throw new Error(`Chrome did not create a debuggable page: ${JSON.stringify(target)}`);
   }
-  const cdp = await connectCdp(target.webSocketDebuggerUrl, events, timeoutMs);
+  const cdp = await connectCdp(target.webSocketDebuggerUrl, events, timeoutMs, { flow });
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable');
   return cdp;
 }
 
-async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEOUT_MS) {
+async function connectCdp(
+  webSocketUrl,
+  events,
+  defaultTimeoutMs = DEFAULT_TIMEOUT_MS,
+  { flow = 'browser' } = {},
+) {
   const WebSocketCtor = globalThis.WebSocket;
   if (!WebSocketCtor) {
     throw new Error('This Node.js runtime does not provide global WebSocket; use Node 22+');
@@ -5268,6 +5380,7 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
   const pending = new Map();
   const listeners = new Map();
   const temporaryDirectories = new Set();
+  const diagnosticState = { flow, route: null };
   let nextId = 1;
   let closedError;
 
@@ -5376,7 +5489,15 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
   });
 
   return {
+    setDiagnosticFlow(nextFlow) {
+      diagnosticState.flow = nextFlow;
+    },
+    async readCurrentRoute() {
+      const route = await this.evaluateJson('window.location.href');
+      return typeof route === 'string' ? route : diagnosticState.route;
+    },
     async navigate(url) {
+      diagnosticState.route = url;
       const navigation = this.waitForEvent('Page.frameNavigated', (params) => !params.frame.parentId, 1_000).catch(() => undefined);
       await send('Page.navigate', { url });
       await navigation;
@@ -5414,7 +5535,7 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
       }
       return result.result?.value;
     },
-    async waitForFunction(expression, description, timeoutMs) {
+    async waitForFunction(expression, description, timeoutMs, diagnostics = {}) {
       const startedAt = Date.now();
       let lastError;
       while (Date.now() - startedAt < timeoutMs) {
@@ -5428,20 +5549,35 @@ async function connectCdp(webSocketUrl, events, defaultTimeoutMs = DEFAULT_TIMEO
         }
         await sleep(100);
       }
-      const suffix = lastError instanceof Error ? ` after ${lastError.message}` : '';
-      throw new Error(`Timed out waiting for ${description}${suffix}`);
+      throw createBrowserSmokeWaitTimeoutError({
+        flow: diagnosticState.flow,
+        route: diagnosticState.route,
+        waitStage: diagnostics.waitStage ?? 'waitForFunction',
+        selector: diagnostics.selector ?? stableDataSmokeSelector(expression),
+        description,
+        elapsedMs: Date.now() - startedAt,
+        lastError,
+      });
     },
     async waitForText(selector, text, timeoutMs) {
       await this.waitForFunction(
         `document.querySelector(${JSON.stringify(selector)})?.textContent.includes(${JSON.stringify(text)})`,
         `${selector} to contain ${text}`,
         timeoutMs,
+        { waitStage: 'waitForText', selector },
       );
     },
     async waitForEvent(method, predicate, timeoutMs) {
+      const startedAt = Date.now();
       await new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          reject(new Error(`Timed out waiting for ${method}`));
+          reject(createBrowserSmokeWaitTimeoutError({
+            flow: diagnosticState.flow,
+            route: diagnosticState.route,
+            waitStage: 'waitForEvent',
+            description: method,
+            elapsedMs: Date.now() - startedAt,
+          }));
         }, timeoutMs);
         const listener = (params) => {
           if (!predicate(params)) {

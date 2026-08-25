@@ -1,7 +1,55 @@
 import { describe, expect, test } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('AgentBean Next browser smoke script', () => {
+  test('writes structured wait failure context with the live route and entity id', async () => {
+    const {
+      createBrowserSmokeWaitTimeoutError,
+      stableDataSmokeSelector,
+      writeBrowserSmokeFailureContext,
+    } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
+    const dir = mkdtempSync(join(tmpdir(), 'agentbean-browser-failure-context-'));
+    const failureContext = join(dir, 'failure-context.json');
+    const memberId = '9f94e7b0-a6a8-4bd0-a5c9-4d69deed7465';
+
+    try {
+      const waitError = createBrowserSmokeWaitTimeoutError({
+        flow: 'webui-members',
+        route: 'http://127.0.0.1/team/settings/members',
+        waitStage: 'waitForFunction',
+        selector: '[data-smoke="human-member-detail"]',
+        description: `human member "${memberId}" detail to render with role member`,
+        elapsedMs: 60_021,
+      });
+      const error = new Error('device detail wrapper retained the wait failure', { cause: waitError });
+      const context = await writeBrowserSmokeFailureContext({
+        artifacts: { failureContext },
+        page: { readCurrentRoute: async () => 'http://127.0.0.1/team/settings/members?member=selected' },
+        flow: 'webui',
+        error,
+      });
+
+      expect(context).toEqual({
+        schemaVersion: 1,
+        flow: 'webui-members',
+        route: 'http://127.0.0.1/team/settings/members?member=selected',
+        waitStage: 'waitForFunction',
+        elapsedMs: 60_021,
+        selector: '[data-smoke="human-member-detail"]',
+        description: `human member "${memberId}" detail to render with role member`,
+        entityIds: [memberId],
+        error: 'device detail wrapper retained the wait failure',
+      });
+      expect(JSON.parse(readFileSync(failureContext, 'utf8'))).toEqual(context);
+      expect(stableDataSmokeSelector(`document.querySelector('[data-smoke="human-member-detail"]')`))
+        .toBe('[data-smoke="human-member-detail"]');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('runs preview and WebUI smoke as the default Release A browser gate', async () => {
     const { runAgentBeanNextReleaseABrowserGate } = await import('../../../scripts/smoke-agentbean-next-browser.mjs');
     const calls: string[] = [];
