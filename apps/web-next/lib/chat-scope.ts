@@ -69,6 +69,70 @@ export interface MessageId {
   id: string;
 }
 
+export interface ThreadMessageIndex<T extends MessageId> {
+  visibleMessagesById: Map<string, T>;
+  rootMessages: T[];
+  repliesByParentId: Map<string, T[]>;
+}
+
+export interface ChannelHistoryResult<T> {
+  ok: boolean;
+  messages?: T[];
+  error?: string;
+}
+
+export function recentActivityHistory<T>(messages: readonly T[], limit = 20): T[] {
+  return messages.slice(-limit);
+}
+
+export async function loadActiveChannelHistory<T>(
+  load: () => Promise<ChannelHistoryResult<T>>,
+  waitBeforeRetry: () => Promise<void>,
+  isCancelled: () => boolean,
+): Promise<ChannelHistoryResult<T> | null> {
+  let result = await load();
+  if (isCancelled()) return null;
+  if (result.ok) return result;
+
+  await waitBeforeRetry();
+  if (isCancelled()) return null;
+  result = await load();
+  return isCancelled() ? null : result;
+}
+
+/**
+ * 一次线性扫描建立聊天主线/讨论串索引，避免渲染每条根消息时再次扫描全部消息。
+ * sourceMessages 保留 transport 原始集合，供 parent resolver 判断被视图投影隐藏的 thread root；
+ * visibleMessages 只决定最终进入主线和回复计数的消息。
+ */
+export function buildThreadMessageIndex<T extends MessageId>(
+  sourceMessages: readonly T[],
+  visibleMessages: readonly T[],
+  resolveParentMessageId: (message: T, messagesById: ReadonlyMap<string, T>) => string | null,
+): ThreadMessageIndex<T> {
+  const messagesById = new Map(sourceMessages.map((message) => [message.id, message]));
+  const visibleMessagesById = new Map<string, T>();
+  const rootMessages: T[] = [];
+  const repliesByParentId = new Map<string, T[]>();
+
+  for (const message of visibleMessages) {
+    visibleMessagesById.set(message.id, message);
+    const parentId = resolveParentMessageId(message, messagesById);
+    if (!parentId) {
+      rootMessages.push(message);
+      continue;
+    }
+    const replies = repliesByParentId.get(parentId);
+    if (replies) {
+      replies.push(message);
+    } else {
+      repliesByParentId.set(parentId, [message]);
+    }
+  }
+
+  return { visibleMessagesById, rootMessages, repliesByParentId };
+}
+
 export function markMessagesDone<T extends MessageId>(doneIds: Set<string>, messages: T[]): Set<string> {
   const next = new Set(doneIds);
   for (const message of messages) next.add(message.id);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory, setMessageDone } from '../lib/chat-scope';
+import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, loadActiveChannelHistory, markMessagesDone, mergeChannelHistory, recentActivityHistory, setMessageDone } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -87,6 +87,89 @@ describe('setMessageDone', () => {
   test('可把单条消息重新标记为未读', () => {
     const done = setMessageDone(new Set(['message-1', 'old']), 'message-1', false);
     expect([...done]).toEqual(['old']);
+  });
+});
+
+describe('buildThreadMessageIndex', () => {
+  test('一次遍历建立主线与按根消息分组的回复索引', () => {
+    const source = [
+      { id: 'hidden-root', parentId: null },
+      { id: 'root-1', parentId: null },
+      { id: 'reply-1', parentId: 'root-1' },
+      { id: 'reply-hidden', parentId: 'hidden-root' },
+    ];
+    const visible = source.slice(1);
+    let resolveCount = 0;
+
+    const index = buildThreadMessageIndex(source, visible, (message, messagesById) => {
+      resolveCount += 1;
+      expect(messagesById.has('hidden-root')).toBe(true);
+      return message.parentId;
+    });
+
+    expect(resolveCount).toBe(visible.length);
+    expect(index.rootMessages.map((message) => message.id)).toEqual(['root-1']);
+    expect(index.repliesByParentId.get('root-1')?.map((message) => message.id)).toEqual(['reply-1']);
+    expect(index.repliesByParentId.get('hidden-root')?.map((message) => message.id)).toEqual(['reply-hidden']);
+    expect(index.visibleMessagesById.has('hidden-root')).toBe(false);
+  });
+});
+
+describe('recentActivityHistory', () => {
+  test('只取当前频道最近 20 条历史写入活动窗口', () => {
+    const messages = Array.from({ length: 30 }, (_, index) => ({ id: `m${index + 1}` }));
+
+    expect(recentActivityHistory(messages).map((message) => message.id)).toEqual(
+      Array.from({ length: 20 }, (_, index) => `m${index + 11}`),
+    );
+    expect(messages).toHaveLength(30);
+  });
+});
+
+describe('loadActiveChannelHistory', () => {
+  test('首次失败时等待一次后重试当前频道', async () => {
+    let attempts = 0;
+    let waits = 0;
+    const result = await loadActiveChannelHistory(
+      async () => {
+        attempts += 1;
+        return attempts === 1 ? { ok: false, error: 'timeout' } : { ok: true, messages: [{ id: 'm1' }] };
+      },
+      async () => { waits += 1; },
+      () => false,
+    );
+
+    expect(attempts).toBe(2);
+    expect(waits).toBe(1);
+    expect(result).toEqual({ ok: true, messages: [{ id: 'm1' }] });
+  });
+
+  test('连续失败后返回第二次结果，让调用方解除后台预取门槛', async () => {
+    let attempts = 0;
+    const result = await loadActiveChannelHistory(
+      async () => ({ ok: false, error: `failure-${++attempts}` }),
+      async () => {},
+      () => false,
+    );
+
+    expect(attempts).toBe(2);
+    expect(result).toEqual({ ok: false, error: 'failure-2' });
+  });
+
+  test('频道切换取消等待中的重试', async () => {
+    let cancelled = false;
+    let attempts = 0;
+    const result = await loadActiveChannelHistory(
+      async () => {
+        attempts += 1;
+        return { ok: false, error: 'timeout' };
+      },
+      async () => { cancelled = true; },
+      () => cancelled,
+    );
+
+    expect(attempts).toBe(1);
+    expect(result).toBeNull();
   });
 });
 
