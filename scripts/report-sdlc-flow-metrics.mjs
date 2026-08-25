@@ -355,7 +355,7 @@ export function computeBrowserSmokeRetryDiagnostics(resolution, jobResults = [])
           category = 'not_applicable';
         } else if (retryAttempt?.conclusion === 'success') {
           category = 'retry_recovered';
-        } else if (retryAttempt?.conclusion && !['skipped', 'success'].includes(retryAttempt.conclusion)) {
+        } else if (retryAttempt?.conclusion === 'failure') {
           category = 'retry_failed';
         } else if (firstAttempt?.conclusion === 'success' && retryAttempt?.conclusion === 'skipped') {
           category = 'no_retry';

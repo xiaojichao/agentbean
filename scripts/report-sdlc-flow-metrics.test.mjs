@@ -209,6 +209,7 @@ test('browser smoke retry diagnostics distinguish no retry, recovered retry, rep
     { id: 5, created_at: '2026-08-01T01:00:00Z', conclusion: 'success', pull_requests: [{ number: 14 }] },
     { id: 6, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 15 }] },
     { id: 7, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 16 }] },
+    { id: 8, created_at: '2026-08-01T01:00:00Z', conclusion: 'cancelled', pull_requests: [{ number: 17 }] },
   ]);
   const result = computeBrowserSmokeRetryDiagnostics(resolution, [
     { runId: 1, jobsCapped: false, jobs: [{ steps: [
@@ -234,6 +235,10 @@ test('browser smoke retry diagnostics distinguish no retry, recovered retry, rep
       { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'skipped' },
       { name: 'Run AgentBean Next browser smoke retry', conclusion: 'skipped' },
     ] }] },
+    { runId: 8, jobsCapped: false, jobs: [{ steps: [
+      { name: 'Run AgentBean Next browser smoke attempt 1', conclusion: 'failure' },
+      { name: 'Run AgentBean Next browser smoke retry', conclusion: 'cancelled' },
+    ] }] },
   ]);
 
   assert.deepEqual(result.counts, {
@@ -241,7 +246,7 @@ test('browser smoke retry diagnostics distinguish no retry, recovered retry, rep
     retryRecovered: 1,
     retryFailed: 1,
     notApplicable: 2,
-    unknown: 2,
+    unknown: 3,
   });
   assert.equal(result.applicableSampleSize, 3);
   assert.deepEqual(result.runs.map((run) => run.category), [
@@ -251,6 +256,7 @@ test('browser smoke retry diagnostics distinguish no retry, recovered retry, rep
     'not_applicable',
     'unknown',
     'not_applicable',
+    'unknown',
     'unknown',
   ]);
 });
