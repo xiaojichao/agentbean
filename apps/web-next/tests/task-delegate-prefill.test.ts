@@ -60,9 +60,10 @@ describe('Task 页「交给 Agent 处理」预填导航（#1064）', () => {
   });
 
   test('线程消息发送携带 selections，成功后清空；纯引用消息可发送', () => {
+    const sendThreadStart = chatSource.indexOf('const sendThreadMessage');
     const sendThreadRegion = chatSource.slice(
-      chatSource.indexOf('const sendThreadMessage'),
-      chatSource.indexOf('const messages = activeChannel'),
+      sendThreadStart,
+      chatSource.indexOf('// Chat-view 投影只影响呈现', sendThreadStart),
     );
     expect(sendThreadRegion).toContain('selections: threadSelections');
     expect(sendThreadRegion).toContain('setThreadSelections([])');
@@ -79,9 +80,10 @@ describe('Task 页「交给 Agent 处理」预填导航（#1064）', () => {
   });
 
   test('发送失败保留草稿与引用，仅成功路径清空（AC11）', () => {
+    const sendThreadStart = chatSource.indexOf('const sendThreadMessage');
     const sendThread = chatSource.slice(
-      chatSource.indexOf('const sendThreadMessage'),
-      chatSource.indexOf('const messages = activeChannel'),
+      sendThreadStart,
+      chatSource.indexOf('// Chat-view 投影只影响呈现', sendThreadStart),
     );
     // 清空只发生在 res.ok 分支内。
     const successStart = sendThread.indexOf('if (res?.ok)');
