@@ -21,7 +21,7 @@ import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfile
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
-import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, loadActiveChannelHistory, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, recentActivityHistory, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { chatMessageDecorationVisibility, shouldShowThreadTaskBadge } from '@/lib/chat-message-decorations';
@@ -350,7 +350,7 @@ export default function ChatPage() {
   } = useThreadPanelWidth(routeTeamPath, chatContainerWidth);
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
-  const [historyReadyChannelId, setHistoryReadyChannelId] = useState<string | null>(null);
+  const [historySettledChannelId, setHistorySettledChannelId] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
@@ -507,7 +507,7 @@ export default function ChatPage() {
   const activeChannelMuted = activeChannel ? mutedChannelIds.has(activeChannel) : false;
   const messages = activeChannel ? (messagesByChannel[activeChannel] ?? EMPTY_CHAT_MESSAGES) : EMPTY_CHAT_MESSAGES;
   const activityPrefetchedChannelIdsRef = useRef<Set<string>>(new Set());
-  const historyReadyChannelIdRef = useRef<string | null>(null);
+  const historySettledChannelIdRef = useRef<string | null>(null);
   const previousScrollRef = useRef<{ channelId: string | null; messageCount: number }>({
     channelId: null,
     messageCount: 0,
@@ -530,8 +530,8 @@ export default function ChatPage() {
 
   useEffect(() => {
     activityPrefetchedChannelIdsRef.current = new Set();
-    historyReadyChannelIdRef.current = null;
-    setHistoryReadyChannelId(null);
+    historySettledChannelIdRef.current = null;
+    setHistorySettledChannelId(null);
   }, [conn, currentTeamId]);
 
   useEffect(() => {
@@ -539,7 +539,7 @@ export default function ChatPage() {
       conn !== 'open'
       || !currentTeamId
       || !activeChannel
-      || historyReadyChannelIdRef.current !== activeChannel
+      || historySettledChannelIdRef.current !== activeChannel
       || activityVisibleList.length === 0
     ) return;
     let cancelled = false;
@@ -572,7 +572,7 @@ export default function ChatPage() {
         for (const channelId of channelIds) prefetched.delete(channelId);
       }
     };
-  }, [activeChannel, conn, currentTeamId, historyReadyChannelId, activityVisibleKey, upsertActivityMessages]);
+  }, [activeChannel, conn, currentTeamId, historySettledChannelId, activityVisibleKey, upsertActivityMessages]);
 
   useEffect(() => {
     if (chatTabParam === 'chat' || chatTabParam === 'tasks' || chatTabParam === 'files') {
@@ -622,14 +622,20 @@ export default function ChatPage() {
     if (!activeChannel || conn !== 'open') return;
     const socket = getWebSocket();
     let cancelled = false;
-    historyReadyChannelIdRef.current = null;
-    setHistoryReadyChannelId(null);
-    void channelEvents(socket).join(currentTeamId, activeChannel).then((result) => {
-      if (cancelled || !result.ok) return;
-      activityPrefetchedChannelIdsRef.current.add(activeChannel);
-      if (result.messages) upsertActivityMessages(result.messages);
-      historyReadyChannelIdRef.current = activeChannel;
-      setHistoryReadyChannelId(activeChannel);
+    historySettledChannelIdRef.current = null;
+    setHistorySettledChannelId(null);
+    void loadActiveChannelHistory(
+      () => channelEvents(socket).join(currentTeamId, activeChannel),
+      () => new Promise((resolve) => window.setTimeout(resolve, 500)),
+      () => cancelled,
+    ).then((result) => {
+      if (!result) return;
+      if (result.ok) {
+        activityPrefetchedChannelIdsRef.current.add(activeChannel);
+        if (result.messages) upsertActivityMessages(recentActivityHistory(result.messages));
+      }
+      historySettledChannelIdRef.current = activeChannel;
+      setHistorySettledChannelId(activeChannel);
     });
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);

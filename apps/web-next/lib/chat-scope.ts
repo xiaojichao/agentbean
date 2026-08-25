@@ -75,6 +75,31 @@ export interface ThreadMessageIndex<T extends MessageId> {
   repliesByParentId: Map<string, T[]>;
 }
 
+export interface ChannelHistoryResult<T> {
+  ok: boolean;
+  messages?: T[];
+  error?: string;
+}
+
+export function recentActivityHistory<T>(messages: readonly T[], limit = 20): T[] {
+  return messages.slice(-limit);
+}
+
+export async function loadActiveChannelHistory<T>(
+  load: () => Promise<ChannelHistoryResult<T>>,
+  waitBeforeRetry: () => Promise<void>,
+  isCancelled: () => boolean,
+): Promise<ChannelHistoryResult<T> | null> {
+  let result = await load();
+  if (isCancelled()) return null;
+  if (result.ok) return result;
+
+  await waitBeforeRetry();
+  if (isCancelled()) return null;
+  result = await load();
+  return isCancelled() ? null : result;
+}
+
 /**
  * 一次线性扫描建立聊天主线/讨论串索引，避免渲染每条根消息时再次扫描全部消息。
  * sourceMessages 保留 transport 原始集合，供 parent resolver 判断被视图投影隐藏的 thread root；
