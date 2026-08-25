@@ -50,7 +50,13 @@ const VALIDATE_PRECHECK_COMMANDS = [
   npmCommand('test:team-terminology'),
   npmCommand('check:team-terminology'),
 ];
-const FULL_COMMANDS = [npmCommand('test:ci'), npmCommand('build:packages')];
+const BUILD_PACKAGES_COMMAND = npmCommand('build:packages');
+const FULL_COMMANDS = [npmCommand('test:ci'), BUILD_PACKAGES_COMMAND];
+const BROWSER_SMOKE_COMMAND = npmCommand('smoke:agentbean-next-browser', [
+  '--skip-build',
+  '--timeout-ms',
+  '60000',
+]);
 const PACKAGE_NEUTRAL_PATH_RE = /^(?:docs\/|[^/]+\.md$|LICENSE(?:\.|$))/u;
 const PACKAGE_MANIFEST_PATH_RE = /(?:^|\/)package(?:-lock)?\.json$/u;
 
@@ -74,7 +80,7 @@ function uniqueCommands(commands) {
   });
 }
 
-export function planChangedPreflight(files) {
+export function planChangedPreflight(files, { browser = false } = {}) {
   const normalizedFiles = [...new Set((files ?? []).map(normalizePath).filter(Boolean))].sort();
   if (normalizedFiles.length === 0) {
     return {
@@ -103,6 +109,9 @@ export function planChangedPreflight(files) {
       fallbackFiles.push(file);
     }
   }
+  const browserEligible = browser && normalizedFiles.some((file) => (
+    file.startsWith('apps/server-next/') || file.startsWith('apps/web-next/')
+  ));
 
   if (fallbackFiles.length > 0) {
     const webFreshnessCommands = targetIds.has('web-next')
@@ -118,18 +127,32 @@ export function planChangedPreflight(files) {
         ...lockCommands,
         ...agentConfigCommands,
         ...VALIDATE_PRECHECK_COMMANDS,
-        ...FULL_COMMANDS,
+        ...(browserEligible
+          ? [BUILD_PACKAGES_COMMAND, FULL_COMMANDS[0]]
+          : FULL_COMMANDS),
         ...webFreshnessCommands,
+        ...(browserEligible ? [BROWSER_SMOKE_COMMAND] : []),
       ]),
     };
   }
 
   const targets = TARGETS.filter((target) => targetIds.has(target.id));
+  const targetCommands = targets.flatMap((target) => target.commands);
   const targetedCommands = targets.length > 0
     ? [
         ...VALIDATE_PRECHECK_COMMANDS,
-        RETAINED_BOUNDARY_COMMAND,
-        ...targets.flatMap((target) => target.commands),
+        ...(browserEligible
+          ? [
+              BUILD_PACKAGES_COMMAND,
+              RETAINED_BOUNDARY_COMMAND,
+              ...targetCommands.filter((command) => (
+                !command.id.startsWith('build:')
+                && command.id !== 'verify:web-next-changelog-freshness'
+              )),
+              ...targetCommands.filter((command) => command.id === 'verify:web-next-changelog-freshness'),
+              BROWSER_SMOKE_COMMAND,
+            ]
+          : [RETAINED_BOUNDARY_COMMAND, ...targetCommands]),
       ]
     : [];
   const commands = uniqueCommands([...lockCommands, ...agentConfigCommands, ...targetedCommands]);
@@ -210,7 +233,7 @@ function formatPlan(plan) {
 }
 
 function parseArgs(argv) {
-  const options = { base: 'origin/main', planOnly: false, files: [] };
+  const options = { base: 'origin/main', planOnly: false, browser: false, files: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--base') {
@@ -219,6 +242,7 @@ function parseArgs(argv) {
       options.base = base;
       index += 1;
     } else if (value === '--plan') options.planOnly = true;
+    else if (value === '--browser') options.browser = true;
     else if (value === '--help' || value === '-h') options.help = true;
     else if (value.startsWith('-')) throw new Error(`未知参数：${value}`);
     else options.files.push(value);
@@ -239,6 +263,7 @@ function main() {
       console.log(`用法：
   npm run preflight:changed
   npm run preflight:changed -- --plan
+  npm run preflight:changed -- --browser
   npm run preflight:changed -- --base origin/main
   npm run preflight:changed -- apps/server-next/src/example.ts`);
       return;
@@ -247,7 +272,7 @@ function main() {
     const files = options.files.length > 0
       ? options.files
       : collectChangedFiles({ base: options.base });
-    const plan = planChangedPreflight(files);
+    const plan = planChangedPreflight(files, { browser: options.browser });
     console.log(formatPlan(plan));
     if (!options.planOnly) process.exitCode = executePreflight(plan);
   } catch (error) {
