@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory, setMessageDone } from '../lib/chat-scope';
+import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeChannelHistory, setMessageDone } from '../lib/chat-scope';
 
 const human = { senderKind: 'human', senderId: 'u', body: '' } as const;
 
@@ -87,6 +87,31 @@ describe('setMessageDone', () => {
   test('可把单条消息重新标记为未读', () => {
     const done = setMessageDone(new Set(['message-1', 'old']), 'message-1', false);
     expect([...done]).toEqual(['old']);
+  });
+});
+
+describe('buildThreadMessageIndex', () => {
+  test('一次遍历建立主线与按根消息分组的回复索引', () => {
+    const source = [
+      { id: 'hidden-root', parentId: null },
+      { id: 'root-1', parentId: null },
+      { id: 'reply-1', parentId: 'root-1' },
+      { id: 'reply-hidden', parentId: 'hidden-root' },
+    ];
+    const visible = source.slice(1);
+    let resolveCount = 0;
+
+    const index = buildThreadMessageIndex(source, visible, (message, messagesById) => {
+      resolveCount += 1;
+      expect(messagesById.has('hidden-root')).toBe(true);
+      return message.parentId;
+    });
+
+    expect(resolveCount).toBe(visible.length);
+    expect(index.rootMessages.map((message) => message.id)).toEqual(['root-1']);
+    expect(index.repliesByParentId.get('root-1')?.map((message) => message.id)).toEqual(['reply-1']);
+    expect(index.repliesByParentId.get('hidden-root')?.map((message) => message.id)).toEqual(['reply-hidden']);
+    expect(index.visibleMessagesById.has('hidden-root')).toBe(false);
   });
 });
 

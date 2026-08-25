@@ -21,7 +21,7 @@ import { agentProfileCacheKeys, resolveAgentProfileSnapshot, resolveAgentProfile
 import { messageSpeakerName, type SpeakerSources } from '@/lib/display-names';
 import { buildFailedDispatchHintInput, formatChannelDispatchFailureHint } from '@/lib/dispatch-failure';
 import { activeMentionDraft, extractMentions, replaceActiveMention, resolveMentionByName, structuredMentionPattern } from '@/lib/mention';
-import { activityConversationIds, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
+import { activityConversationIds, buildThreadMessageIndex, inboxActivityMessages, isTopLevelAgentReply, markMessagesDone, mergeSavedMessages, messagesForVisibleConversations, visibleConversationIds } from '@/lib/chat-scope';
 import { loadMutedChannelIds, loadReadIds, mutedChannelKey, readKey, saveMutedChannelIds, saveReadIds } from '@/lib/chat-read-state';
 import { displayMessageBody } from '@/lib/chat-message-text';
 import { chatMessageDecorationVisibility, shouldShowThreadTaskBadge } from '@/lib/chat-message-decorations';
@@ -112,6 +112,7 @@ type ReactionEmojiMap = Map<string, string>;
 type SearchChannelScope = { channelId: string; label: string };
 
 const MESSAGE_REACTION_CHOICES = ['👍', '❤️', '🎉', '👀', '🔥', '😂', '✅'] as const;
+const EMPTY_CHAT_MESSAGES: ChatMessage[] = [];
 
 interface SendMessageAck {
   ok?: boolean;
@@ -306,7 +307,10 @@ export default function ChatPage() {
   const channels = useAgentBeanStore((s) => s.channels);
   const agents = useAgentBeanStore((s) => s.agents);
   const visibleAgents = useAgentBeanStore((s) => s.visibleAgents);
-  const agentNameSignature = useAgentBeanStore((s) => Object.values(s.agents).map((a) => `${a.id}:${a.name}`).sort().join(''));
+  const agentNameSignature = useMemo(
+    () => Object.values(agents).map((agent) => `${agent.id}:${agent.name}`).sort().join('\u0001'),
+    [agents],
+  );
   const currentUser = useAgentBeanStore((s) => s.currentUser);
   const currentTeamId = useAgentBeanStore((s) => s.currentTeamId);
   const messagesByChannel = useAgentBeanStore((s) => s.messagesByChannel);
@@ -346,6 +350,7 @@ export default function ChatPage() {
   } = useThreadPanelWidth(routeTeamPath, chatContainerWidth);
 
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
+  const [historyReadyChannelId, setHistoryReadyChannelId] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const dmParam = searchParams.get('dm');
   const chatTabParam = searchParams.get('chatTab');
@@ -393,13 +398,20 @@ export default function ChatPage() {
   const [loadedDoneKey, setLoadedDoneKey] = useState<string | null>(null);
   const [mutedChannelIds, setMutedChannelIds] = useState<Set<string>>(new Set());
   const [loadedMutedChannelKey, setLoadedMutedChannelKey] = useState<string | null>(null);
-  const conversationVisibleIds = visibleConversationIds(channels, dms);
+  const conversationVisibleIds = useMemo(() => visibleConversationIds(channels, dms), [channels, dms]);
   const mutedChannelStorageKey = mutedChannelKey(routeTeamPath);
   const mutedChannelsReady = loadedMutedChannelKey === mutedChannelStorageKey;
-  const activityVisibleIds = activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady);
-  const activityVisibleList = [...activityVisibleIds];
+  const activityVisibleIds = useMemo(
+    () => activityConversationIds(conversationVisibleIds, mutedChannelIds, mutedChannelsReady),
+    [conversationVisibleIds, mutedChannelIds, mutedChannelsReady],
+  );
+  const activityVisibleList = useMemo(() => [...activityVisibleIds], [activityVisibleIds]);
   const activityVisibleKey = activityVisibleList.join('\u001f');
-  const inboxUnread = inboxActivityMessages(projectChatViewMessages(activityMessages), activityVisibleIds).filter((m) => !doneIds.has(m.id)).length;
+  const inboxUnread = useMemo(
+    () => inboxActivityMessages(projectChatViewMessages(activityMessages), activityVisibleIds)
+      .filter((message) => !doneIds.has(message.id)).length,
+    [activityMessages, activityVisibleIds, doneIds],
+  );
   const [profileAgentCache, setProfileAgentCache] = useState<Record<string, AgentSnapshot>>({});
   const [showMention, setShowMention] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
@@ -493,6 +505,13 @@ export default function ChatPage() {
   const savedKey = `agentbean:chat:saved:${routeTeamPath}`;
   const reactionsKey = `agentbean:chat:reactions:${routeTeamPath}`;
   const activeChannelMuted = activeChannel ? mutedChannelIds.has(activeChannel) : false;
+  const messages = activeChannel ? (messagesByChannel[activeChannel] ?? EMPTY_CHAT_MESSAGES) : EMPTY_CHAT_MESSAGES;
+  const activityPrefetchedChannelIdsRef = useRef<Set<string>>(new Set());
+  const historyReadyChannelIdRef = useRef<string | null>(null);
+  const previousScrollRef = useRef<{ channelId: string | null; messageCount: number }>({
+    channelId: null,
+    messageCount: 0,
+  });
 
   const refreshOutputPackageProjection = useCallback(async (channelId: string) => {
     const requestId = ++outputPackageProjectionRequestRef.current;
@@ -510,20 +529,50 @@ export default function ChatPage() {
   }, [dms]);
 
   useEffect(() => {
-    if (conn !== 'open' || !currentTeamId || activityVisibleList.length === 0) return;
+    activityPrefetchedChannelIdsRef.current = new Set();
+    historyReadyChannelIdRef.current = null;
+    setHistoryReadyChannelId(null);
+  }, [conn, currentTeamId]);
+
+  useEffect(() => {
+    if (
+      conn !== 'open'
+      || !currentTeamId
+      || !activeChannel
+      || historyReadyChannelIdRef.current !== activeChannel
+      || activityVisibleList.length === 0
+    ) return;
     let cancelled = false;
-    Promise.all(activityVisibleList.map((channelId) => channelEvents().join(currentTeamId, channelId, 20))).then((results) => {
+    let completed = false;
+    const prefetched = activityPrefetchedChannelIdsRef.current;
+    const channelIds = activityVisibleList.filter(
+      (channelId) => channelId !== activeChannel && !prefetched.has(channelId),
+    );
+    if (channelIds.length === 0) return;
+    for (const channelId of channelIds) prefetched.add(channelId);
+    Promise.all(channelIds.map(async (channelId) => ({
+      channelId,
+      result: await channelEvents().join(currentTeamId, channelId, 20),
+    }))).then((results) => {
       if (cancelled) return;
       const joined: ChatMessage[] = [];
-      for (const res of results) {
-        if (res.ok && res.messages) joined.push(...res.messages);
+      for (const { channelId, result } of results) {
+        if (result.ok && result.messages) {
+          joined.push(...result.messages);
+        } else {
+          prefetched.delete(channelId);
+        }
       }
       upsertActivityMessages(joined);
+      completed = true;
     });
     return () => {
       cancelled = true;
+      if (!completed) {
+        for (const channelId of channelIds) prefetched.delete(channelId);
+      }
     };
-  }, [conn, currentTeamId, activityVisibleKey, upsertActivityMessages]);
+  }, [activeChannel, conn, currentTeamId, historyReadyChannelId, activityVisibleKey, upsertActivityMessages]);
 
   useEffect(() => {
     if (chatTabParam === 'chat' || chatTabParam === 'tasks' || chatTabParam === 'files') {
@@ -572,7 +621,16 @@ export default function ChatPage() {
   useEffect(() => {
     if (!activeChannel || conn !== 'open') return;
     const socket = getWebSocket();
-    void channelEvents(socket).join(currentTeamId, activeChannel);
+    let cancelled = false;
+    historyReadyChannelIdRef.current = null;
+    setHistoryReadyChannelId(null);
+    void channelEvents(socket).join(currentTeamId, activeChannel).then((result) => {
+      if (cancelled || !result.ok) return;
+      activityPrefetchedChannelIdsRef.current.add(activeChannel);
+      if (result.messages) upsertActivityMessages(result.messages);
+      historyReadyChannelIdRef.current = activeChannel;
+      setHistoryReadyChannelId(activeChannel);
+    });
     const onHistory = (payload: { channelId: string; messages: ChatMessage[] }) => {
       if (payload.channelId === activeChannel) applyChannelHistory(activeChannel, payload.messages);
     };
@@ -599,12 +657,13 @@ export default function ChatPage() {
     socket.on('message:dispatch-status', onDispatchStatus);
     socket.on(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     return () => {
+      cancelled = true;
       socket.off('channel:history', onHistory);
       socket.off('channel:message', handleMessage);
       socket.off('message:dispatch-status', onDispatchStatus);
       socket.off(WEB_EVENTS.message.pinnedUpdated, onPinnedUpdated);
     };
-  }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage]);
+  }, [activeChannel, conn, currentTeamId, applyChannelHistory, applyDispatchStatus, handleMessage, upsertActivityMessages]);
 
   const loadChannelFiles = useCallback(async (reset = true) => {
     if (!activeChannel || conn !== 'open') return;
@@ -749,8 +808,13 @@ export default function ChatPage() {
   }, [agentNameSignature]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messagesByChannel]);
+    const previous = previousScrollRef.current;
+    const shouldAnimate = previous.channelId === activeChannel
+      && previous.messageCount > 0
+      && messages.length > previous.messageCount;
+    messagesEndRef.current?.scrollIntoView({ behavior: shouldAnimate ? 'smooth' : 'auto' });
+    previousScrollRef.current = { channelId: activeChannel, messageCount: messages.length };
+  }, [activeChannel, messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2039,16 +2103,20 @@ export default function ChatPage() {
       .finally(releaseContinuationLock);
   };
 
-  const messages = activeChannel ? (messagesByChannel[activeChannel] ?? []) : [];
   // Chat-view 投影只影响呈现：原始 messages 仍保留状态事件，供 TaskDetail 恢复完整历史。
-  const visibleMessages = projectChatViewMessages(messages);
-  const messagesById = new Map<string, ChatMessage>();
-  for (const msg of messages) messagesById.set(msg.id, msg);
-  const threadRoot = threadRootId ? visibleMessages.find((msg) => msg.id === threadRootId) ?? null : null;
-  const rootMessages = visibleMessages.filter((msg) => !parentMessageId(msg, messagesById));
-  const threadReplies = threadRootId ? visibleMessages.filter((msg) => parentMessageId(msg, messagesById) === threadRootId) : [];
-  const taskDetailMessage = taskDetailMessageId
-    ? visibleMessages.find((msg) => msg.id === taskDetailMessageId && metaTaskId(msg)) ?? null
+  const visibleMessages = useMemo(() => projectChatViewMessages(messages), [messages]);
+  const messageIndex = useMemo(
+    () => buildThreadMessageIndex(messages, visibleMessages, parentMessageId),
+    [messages, visibleMessages],
+  );
+  const { rootMessages, repliesByParentId } = messageIndex;
+  const threadRoot = threadRootId ? messageIndex.visibleMessagesById.get(threadRootId) ?? null : null;
+  const threadReplies = threadRootId ? repliesByParentId.get(threadRootId) ?? [] : [];
+  const taskDetailCandidate = taskDetailMessageId
+    ? messageIndex.visibleMessagesById.get(taskDetailMessageId)
+    : undefined;
+  const taskDetailMessage = taskDetailCandidate && metaTaskId(taskDetailCandidate)
+    ? taskDetailCandidate
     : null;
   const taskDetailTaskId = taskDetailMessage ? metaTaskId(taskDetailMessage) : null;
   const taskDetailTask = taskDetailTaskId ? tasks.find((task) => task.id === taskDetailTaskId) ?? null : null;
@@ -2863,7 +2931,7 @@ export default function ChatPage() {
                           onUnfollowThread={() => unfollowThreadLocally(msg)}
                           onTaskMenu={(open) => setChatTaskMenuTarget(open && task ? { surface: 'main', messageId: msg.id } : null)}
                           onTaskStatus={(status) => { if (task) updateTaskStatus(task, status); }}
-                          replyCount={visibleMessages.filter((item) => parentMessageId(item, messagesById) === msg.id).length}
+                          replyCount={repliesByParentId.get(msg.id)?.length ?? 0}
                         />
                       </Fragment>
                     );
@@ -6591,7 +6659,7 @@ function metaTaskId(msg: ChatMessage): string | null {
   return taskRootIdFromMessageMeta(parseMeta(msg));
 }
 
-function parentMessageId(msg: ChatMessage, messagesById?: Map<string, ChatMessage>): string | null {
+function parentMessageId(msg: ChatMessage, messagesById?: ReadonlyMap<string, ChatMessage>): string | null {
   const meta = parseMeta(msg);
   const explicitParentMessageId = typeof meta.parentMessageId === 'string'
     ? meta.parentMessageId
